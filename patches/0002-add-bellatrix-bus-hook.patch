@@ -1,15 +1,15 @@
-From 0afceb036071694228a2a9b7574c73ee3434696d Mon Sep 17 00:00:00 2001
+From 5c76336686da13b15bb0ddc3c55d0a09d6357666 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
-Date: Tue, 14 Apr 2026 05:11:55 -0300
-Subject: [PATCH 2/2] Add bellatrix bus hook and startup init
+Date: Tue, 14 Apr 2026 05:41:24 -0300
+Subject: [PATCH 2/2] Add bellatrix bus hook, FIQ VBL handler and startup init
 
 ---
- src/aarch64/start.c   | 22 +++++++++++++++++-----
- src/aarch64/vectors.c | 24 +++++++++++++++++++++++-
- 2 files changed, 40 insertions(+), 6 deletions(-)
+ src/aarch64/start.c   | 26 +++++++++++-----
+ src/aarch64/vectors.c | 69 +++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 86 insertions(+), 9 deletions(-)
 
 diff --git a/src/aarch64/start.c b/src/aarch64/start.c
-index f2060ad..32c620a 100644
+index f2060ad..d04113a 100644
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
 @@ -1189,7 +1189,7 @@ void boot(void *dtree)
@@ -56,6 +56,24 @@ index f2060ad..32c620a 100644
      M68K_StartEmu(0, NULL);
  
  #endif
+@@ -1887,7 +1897,7 @@ void  __attribute__((used)) stub_ExecutionLoop()
+ "       ldp     x29, x30, [sp], #128        \n"
+ "       ret                                 \n"
+ 
+-#ifdef PISTORM
++#if defined(PISTORM) || defined(BELLATRIX)
+ "9:                                         \n"
+ "       ldrb    w10, [x0, #%[err]]          \n" // If INT.ARM_err is set then it is serror, map it to NMI
+ "       cbz     w10, 991f                   \n"
+@@ -1901,7 +1911,7 @@ void  __attribute__((used)) stub_ExecutionLoop()
+ "992:                                       \n"
+ 
+ // No need to do anything on PiStorm32 - the w1 contains the IPL value already (see few lines above)
+-#ifndef PISTORM32
++#if !defined(PISTORM32) && !defined(BELLATRIX)
+ 
+ #if PISTORM_WRITE_BUFFER
+ "       adrp    x5, bus_lock                \n"
 @@ -2078,9 +2088,9 @@ void M68K_StartEmu(void *addr, void *fdt)
          __m68k.FP[fp].u64 = 0x7fffffffffffffffULL;
      }
@@ -79,10 +97,90 @@ index f2060ad..32c620a 100644
  #else
      __m68k.D[0].u32 = BE32((uint32_t)pitch);
 diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 329d470..84f83cc 100644
+index 329d470..855c005 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -661,12 +661,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -142,6 +142,26 @@ void  __attribute__((used)) __stub_vectors()
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
++#ifdef BELLATRIX
++"       mrs  x0, CNTV_CTL_EL0           \n" // Check virtual timer ISTATUS
++"       tbz  x0, #2, 1f                 \n" // Not our timer — skip
++"       adrp x0, bellatrix_vbl_interval \n" // Reload timer for next VBL
++"       ldr  x1, [x0, :lo12:bellatrix_vbl_interval] \n"
++"       msr  CNTV_TVAL_EL0, x1          \n"
++"       adrp x0, bellatrix_intreq       \n" // Set INTREQ[VERTB] (bit 5)
++"       ldrh w1, [x0, :lo12:bellatrix_intreq] \n"
++"       orr  w1, w1, #0x0020            \n"
++"       strh w1, [x0, :lo12:bellatrix_intreq] \n"
++"       adrp x0, bellatrix_intena       \n" // Read INTENA
++"       ldrh w0, [x0, :lo12:bellatrix_intena] \n"
++"       tbz  w0, #14, 1f                \n" // Master enable off
++"       tbz  w0, #5, 1f                 \n" // INTENA[VERTB] disabled
++"       mrs  x1, TPIDRRO_EL0            \n" // M68KState pointer
++"       cbz  x1, 1f                     \n"
++"       mov  w0, #3                     \n" // VBL = IPL 3
++"       strb w0, [x1, #%[ipl]]          \n" // INT.IPL = 3
++"       strb w0, [x1, #%[pint]]         \n" // INT.ARM = 3
++#else
+ "       adrp x1, INT_shadow             \n" // Load INTENA shadow
+ "       add x1, x1, :lo12:INT_shadow    \n"
+ "       ldrh w0, [x1, #%[intena]]       \n"
+@@ -153,6 +173,7 @@ void  __attribute__((used)) __stub_vectors()
+ "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
+ "       mov w0, #6                      \n" // Set level 6 IRQ
+ "       strb w0, [x1, #%[pint]]         \n"
++#endif
+ "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "                                       \n"
+@@ -162,6 +183,26 @@ void  __attribute__((used)) __stub_vectors()
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x0c0              \n" // Disable IRQ and FIQ interrupts so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
++#ifdef BELLATRIX
++"       mrs  x0, CNTV_CTL_EL0           \n" // Check virtual timer ISTATUS
++"       tbz  x0, #2, 1f                 \n" // Not our timer — skip
++"       adrp x0, bellatrix_vbl_interval \n" // Reload timer for next VBL
++"       ldr  x1, [x0, :lo12:bellatrix_vbl_interval] \n"
++"       msr  CNTV_TVAL_EL0, x1          \n"
++"       adrp x0, bellatrix_intreq       \n" // Set INTREQ[VERTB] (bit 5)
++"       ldrh w1, [x0, :lo12:bellatrix_intreq] \n"
++"       orr  w1, w1, #0x0020            \n"
++"       strh w1, [x0, :lo12:bellatrix_intreq] \n"
++"       adrp x0, bellatrix_intena       \n" // Read INTENA
++"       ldrh w0, [x0, :lo12:bellatrix_intena] \n"
++"       tbz  w0, #14, 1f                \n" // Master enable off
++"       tbz  w0, #5, 1f                 \n" // INTENA[VERTB] disabled
++"       mrs  x1, TPIDRRO_EL0            \n" // M68KState pointer
++"       cbz  x1, 1f                     \n"
++"       mov  w0, #3                     \n" // VBL = IPL 3
++"       strb w0, [x1, #%[ipl]]          \n" // INT.IPL = 3
++"       strb w0, [x1, #%[pint]]         \n" // INT.ARM = 3
++#else
+ "       adrp x1, INT_shadow             \n" // Load INTENA shadow
+ "       add x1, x1, :lo12:INT_shadow    \n"
+ "       ldrh w0, [x1, #%[intena]]       \n"
+@@ -173,6 +214,7 @@ void  __attribute__((used)) __stub_vectors()
+ "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
+ "       mov w0, #6                      \n" // Set level 6 IRQ
+ "       strb w0, [x1, #%[pint]]         \n"
++#endif
+ "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "                                       \n"
+@@ -261,7 +303,8 @@ void  __attribute__((used)) __stub_vectors()
+ :[pint]"i"(__builtin_offsetof(struct M68KState, INT.ARM)),
+  [perr]"i"(__builtin_offsetof(struct M68KState, INT.ARM_err)),
+  [intena]"i"(__builtin_offsetof(struct INT_shadow, INTENA)),
+- [armpend]"i"(__builtin_offsetof(struct INT_shadow, ARMPending))
++ [armpend]"i"(__builtin_offsetof(struct INT_shadow, ARMPending)),
++ [ipl]"i"(__builtin_offsetof(struct M68KState, INT.IPL))
+ 
+ );}
+ 
+@@ -661,12 +704,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
      return 1;
  }
  
