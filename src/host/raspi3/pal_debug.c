@@ -1,4 +1,4 @@
-// src/variants/bellatrix/platform/raspi3/pal_debug.c
+// src/host/raspi3/pal_debug.c
 //
 // PAL debug output — wraps Emu68's kprintf so we reuse its
 // already-configured UART without reinitialising it.

@@ -1,4 +1,4 @@
-// src/variants/bellatrix/platform/raspi3/pal_ipl.c
+// src/host/raspi3/pal_ipl.c
 //
 // IPL injection into the Emu68 JIT loop.
 // The chipset core calls PAL_IPL_Set() after updating INTREQ/INTENA;
@@ -18,10 +18,13 @@ static inline struct M68KState *get_m68k_ctx(void)
 void PAL_IPL_Set(uint8_t ipl_level)
 {
     struct M68KState *ctx = get_m68k_ctx();
+    if (!ctx) return;
     ctx->INT.IPL = ipl_level;
-    // DMB ensures the JIT sees the IPL write before the ARM flag.
+    // DMB ensures the JIT sees IPL before ARM. INT.ARM carries the IPL
+    // value so the execution-loop label-9 comparison at 998 works correctly:
+    //   cmp w1(IPL), w10(ARM) — both hold the same value, highest wins.
     asm volatile("dmb ish" ::: "memory");
-    ctx->INT.ARM = 1;
+    ctx->INT.ARM = ipl_level;
 }
 
 void PAL_IPL_Clear(void)

@@ -1,4 +1,4 @@
-// src/variants/bellatrix/chipset/btrace.c
+// src/core/btrace.c
 //
 // Bus trace — logs every chipset/CIA access as JSON Lines via
 // PAL_Debug_Print. Output is consumed by tools/btrace/btrace.py
@@ -9,7 +9,7 @@
 //    "dir":"R|W","size":N,"val":"0xXXXX","impl":true|false}
 
 #include "btrace.h"
-#include "platform/pal.h"
+#include "host/pal.h"
 #include "M68k.h"
 
 // ---------------------------------------------------------------------------
@@ -50,8 +50,9 @@ static uint32_t read_m68k_pc(void)
     struct M68KState *ctx;
     asm volatile("mrs %0, TPIDRRO_EL0" : "=r"(ctx));
     if (!ctx) return 0;
-    // PC is stored big-endian in the M68KState.
-    return __builtin_bswap32(ctx->PC);
+    // The whole build is -mbig-endian: BE32 is a no-op, ctx->PC is the
+    // natural M68K address. No byte-swap needed.
+    return ctx->PC;
 }
 
 // Minimal hex formatter — avoids printf/sprintf (not available bare-metal).
@@ -110,7 +111,7 @@ static void emit_event(uint32_t addr, uint32_t value, int size,
 
 void btrace_init(void)
 {
-    s_filter   = BTRACE_UNIMPL;
+    s_filter   = BTRACE_ALL;
     s_ring_head = 0;
     s_watchdog  = WATCHDOG_VBL_LIMIT;
 }
