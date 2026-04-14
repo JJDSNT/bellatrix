@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# scripts/setup.sh
+# bellatrix/scripts/setup.sh
 #
-# Apply Bellatrix patches to the emu68 submodule and install build
-# prerequisites. Safe to run multiple times.
+# Apply Bellatrix patches to the emu68 submodule, ensure ignore rules
+# for generated artifacts, and install build prerequisites.
+# Safe to run multiple times.
 
 set -euo pipefail
 
@@ -10,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
 EMU68="$ROOT/emu68"
 PATCHES="$ROOT/patches"
+EMU68_GITIGNORE="$EMU68/.gitignore"
 
 check_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -38,15 +40,35 @@ apply_patch_if_needed() {
     exit 1
 }
 
-hide_modified_files() {
-    local modified
+ensure_gitignore_entry() {
+    local entry="$1"
 
-    modified="$(git ls-files -m || true)"
-    if [ -n "$modified" ]; then
-        echo "Silencing patched files from git status..."
-        while IFS= read -r file; do
-            [ -n "$file" ] && git update-index --assume-unchanged "$file"
-        done <<< "$modified"
+    touch "$EMU68_GITIGNORE"
+
+    if ! grep -Fxq "$entry" "$EMU68_GITIGNORE"; then
+        echo "Adding $entry to emu68/.gitignore"
+        printf '%s\n' "$entry" >> "$EMU68_GITIGNORE"
+    fi
+}
+
+ensure_emu68_gitignore() {
+    ensure_gitignore_entry "/build-bellatrix/"
+    ensure_gitignore_entry "/install-bellatrix/"
+}
+
+hide_local_gitignore_change() {
+    if [ -f "$EMU68_GITIGNORE" ]; then
+        git update-index --assume-unchanged "$EMU68_GITIGNORE" || true
+    fi
+}
+
+install_be_stub_if_needed() {
+    local stubs
+    stubs=/usr/aarch64-linux-gnu/include/gnu/stubs-lp64_be.h
+
+    if [ ! -f "$stubs" ]; then
+        echo "Installing big-endian stub header..."
+        sudo cp /usr/aarch64-linux-gnu/include/gnu/stubs-lp64.h "$stubs"
     fi
 }
 
@@ -57,17 +79,15 @@ check_cmd aarch64-linux-gnu-gcc
 cd "$ROOT"
 git submodule update --init --recursive
 
+ensure_emu68_gitignore
+
 cd "$EMU68"
 
 apply_patch_if_needed "$PATCHES/0001-add-bellatrix-variant-cmake.patch"
 apply_patch_if_needed "$PATCHES/0002-add-bellatrix-bus-hook.patch"
 
-hide_modified_files
+hide_local_gitignore_change
 
-STUBS=/usr/aarch64-linux-gnu/include/gnu/stubs-lp64_be.h
-if [ ! -f "$STUBS" ]; then
-    echo "Installing big-endian stub header..."
-    sudo cp /usr/aarch64-linux-gnu/include/gnu/stubs-lp64.h "$STUBS"
-fi
+install_be_stub_if_needed
 
 echo "Setup complete. Run scripts/build.sh to compile."

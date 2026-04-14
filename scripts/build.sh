@@ -68,18 +68,6 @@ BUILD="$EMU68/build-bellatrix"
 INSTALL="$EMU68/install-bellatrix"
 TOOLCHAIN="$EMU68/toolchains/aarch64-linux-gnu.cmake"
 
-hide_modified_files() {
-    local modified
-
-    modified="$(git -C "$ROOT" ls-files -m -- "$EMU68" || true)"
-    if [ -n "$modified" ]; then
-        echo "Silencing modified emu68 files from git status..."
-        while IFS= read -r file; do
-            [ -n "$file" ] && git -C "$ROOT" update-index --assume-unchanged "$file"
-        done <<< "$modified"
-    fi
-}
-
 if [ "${1:-}" = "clean" ]; then
     echo "Cleaning build directory..."
     rm -rf "$BUILD" "$INSTALL"
@@ -96,8 +84,6 @@ cmake "$EMU68" \
 
 make -j"$(nproc)"
 make install
-
-hide_modified_files
 
 echo ""
 echo "Build complete. Image: $INSTALL/Emu68.img"
