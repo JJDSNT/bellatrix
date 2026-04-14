@@ -2,6 +2,6 @@ referencias
 src/roms
 
 # launcher build
-tools/launcher/bin/*out/
+tools/launcher/bin/
 
 out/
