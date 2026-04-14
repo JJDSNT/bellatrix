@@ -1,4 +1,4 @@
-// src/variants/bellatrix/platform/raspi3/pal_ipl.c
+// src/host/raspi3/pal_ipl.c
 //
 // IPL injection into the Emu68 JIT loop.
 // The chipset core calls PAL_IPL_Set() after updating INTREQ/INTENA;

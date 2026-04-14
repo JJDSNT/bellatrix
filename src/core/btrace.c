@@ -1,4 +1,4 @@
-// src/variants/bellatrix/chipset/btrace.c
+// src/core/btrace.c
 //
 // Bus trace — logs every chipset/CIA access as JSON Lines via
 // PAL_Debug_Print. Output is consumed by tools/btrace/btrace.py
@@ -9,7 +9,7 @@
 //    "dir":"R|W","size":N,"val":"0xXXXX","impl":true|false}
 
 #include "btrace.h"
-#include "platform/pal.h"
+#include "host/pal.h"
 #include "M68k.h"
 
 // ---------------------------------------------------------------------------

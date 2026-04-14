@@ -1,4 +1,4 @@
-// src/variants/bellatrix/platform/raspi3/pal_core.c
+// src/host/raspi3/pal_core.c
 //
 // Dedicated ARM core management — Phase 0 stub.
 // PAL_Core_LaunchChipset is implemented in Phase 3 when the chipset

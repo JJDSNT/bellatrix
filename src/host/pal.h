@@ -1,4 +1,4 @@
-// src/variants/bellatrix/platform/pal.h
+// src/host/pal.h
 //
 // Platform Abstraction Layer — public interface.
 // The chipset code includes only this header; it never references

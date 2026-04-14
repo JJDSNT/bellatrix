@@ -1,4 +1,4 @@
-// src/variants/bellatrix/chipset/cia.c
+// src/chipset/cia/cia.c
 //
 // MOS 8520 CIA emulation.
 //

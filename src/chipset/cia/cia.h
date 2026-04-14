@@ -1,4 +1,4 @@
-// src/variants/bellatrix/chipset/cia.h
+// src/chipset/cia/cia.h
 //
 // MOS 8520 CIA emulation.
 // Reference: Amiga Hardware Reference Manual, 3rd Ed. Chapter 9.
