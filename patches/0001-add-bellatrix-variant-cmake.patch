@@ -4,23 +4,23 @@ Date: Tue, 14 Apr 2026 05:40:31 -0300
 Subject: [PATCH 1/2] Add bellatrix to SUPPORTED_VARIANTS and configure sources
 
 ---
- CMakeLists.txt | 22 ++++++++++++++++++++--
- 1 file changed, 20 insertions(+), 2 deletions(-)
+ CMakeLists.txt | 23 +++++++++++++++++++++++--
+ 1 file changed, 21 insertions(+), 2 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..3b88738 100644
+index eb89404..3fc29ec 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
  set(TARGET "raspi64" CACHE STRING "One of target machines: ${SUPPORTED_TARGETS}")
  set_property(CACHE TARGET PROPERTY STRINGS ${SUPPORTED_TARGETS})
- 
+
 -set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm32lite")
 +set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm32lite" "bellatrix")
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
- 
-@@ -167,8 +167,26 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+
+@@ -167,8 +167,27 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -35,6 +35,7 @@ index eb89404..3b88738 100644
 +                ${CMAKE_SOURCE_DIR}/../src/core/btrace.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/agnus.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/denise/denise.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_debug.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_ipl.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_core.c
@@ -48,6 +49,5 @@ index eb89404..3b88738 100644
  else()
      message(FATAL_ERROR "Wrong variant selected: ${VARIANT}")
  endif()
--- 
+--
 2.34.1
-

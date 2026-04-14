@@ -6,6 +6,8 @@
 #include "agnus.h"
 #include "host/pal.h"
 #include "chipset/cia/cia.h"
+#include "chipset/denise/denise.h"
+#include "core/btrace.h"
 
 // ---------------------------------------------------------------------------
 // Global state — accessible by name from FIQ handler assembly (via adrp).
@@ -82,8 +84,10 @@ extern void bellatrix_cia_vbl_tick(void);
 void agnus_vbl_fire(void)
 {
     s_frame_start = read_cntpct();
+    denise_render_frame();
     agnus_intreq_set(INT_VERTB);
     bellatrix_cia_vbl_tick();
+    btrace_watchdog_tick();
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +128,7 @@ void agnus_init(void)
     bellatrix_intreq = 0;
     bellatrix_dmacon = 0;
     s_frame_start    = read_cntpct();
+    denise_init();
 }
 
 uint32_t agnus_read(uint32_t addr)
@@ -150,7 +155,7 @@ uint32_t agnus_read(uint32_t addr)
         return bellatrix_intreq;
 
     default:
-        return 0;
+        return denise_read(addr);
     }
 }
 
@@ -179,6 +184,7 @@ void agnus_write(uint32_t addr, uint32_t value, int size)
         break;
 
     default:
+        denise_write(addr, v);
         break;
     }
 }
