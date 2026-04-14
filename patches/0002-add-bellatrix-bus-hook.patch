@@ -97,7 +97,7 @@ index f2060ad..d04113a 100644
  #else
      __m68k.D[0].u32 = BE32((uint32_t)pitch);
 diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 329d470..855c005 100644
+index 329d470..c6af4d0 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
 @@ -142,6 +142,26 @@ void  __attribute__((used)) __stub_vectors()
@@ -127,7 +127,7 @@ index 329d470..855c005 100644
  "       adrp x1, INT_shadow             \n" // Load INTENA shadow
  "       add x1, x1, :lo12:INT_shadow    \n"
  "       ldrh w0, [x1, #%[intena]]       \n"
-@@ -153,6 +173,7 @@ void  __attribute__((used)) __stub_vectors()
+@@ -153,12 +173,52 @@ void  __attribute__((used)) __stub_vectors()
  "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
  "       mov w0, #6                      \n" // Set level 6 IRQ
  "       strb w0, [x1, #%[pint]]         \n"
@@ -135,42 +135,62 @@ index 329d470..855c005 100644
  "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
  "       eret                            \n"
  "                                       \n"
-@@ -162,6 +183,26 @@ void  __attribute__((used)) __stub_vectors()
+ "       .balign 0x80                    \n"
+-"curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from 
+-"       stp x0, x1, [sp, -16]!          \n" // the current EL using the current SP.
++"curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from
++                                            // the current EL using the current SP.
++#ifdef BELLATRIX
++// Save all caller-saved registers + link register so we can call C.
++// x18 (M68K PC) is the platform register — C never touches it.
++// x19–x29 (M68K regs) are callee-saved — C preserves them.
++// We must save x0–x17 and x30.
++"       sub  sp, sp, #160               \n"
++"       stp  x0,  x1,  [sp, #0]        \n"
++"       stp  x2,  x3,  [sp, #16]       \n"
++"       stp  x4,  x5,  [sp, #32]       \n"
++"       stp  x6,  x7,  [sp, #48]       \n"
++"       stp  x8,  x9,  [sp, #64]       \n"
++"       stp  x10, x11, [sp, #80]       \n"
++"       stp  x12, x13, [sp, #96]       \n"
++"       stp  x14, x15, [sp, #112]      \n"
++"       stp  x16, x17, [sp, #128]      \n"
++"       str  x30,      [sp, #144]      \n"
++"       mrs  x0, SPSR_EL1              \n" // Mask FIQ+IRQ in SPSR so ERET won't re-enable
++"       orr  x0, x0, #0x0c0            \n"
++"       msr  SPSR_EL1, x0              \n"
++"       mrs  x0, CNTV_CTL_EL0          \n" // Check virtual timer ISTATUS bit
++"       tbz  x0, #2, 1f                \n" // Not our timer — skip
++"       adrp x0, bellatrix_vbl_interval \n" // Reload timer for next VBL
++"       ldr  x1, [x0, :lo12:bellatrix_vbl_interval] \n"
++"       msr  CNTV_TVAL_EL0, x1         \n"
++"       bl   agnus_vbl_fire             \n" // render frame, set INTREQ[VERTB], tick CIA
++"1:     ldr  x30,      [sp, #144]      \n"
++"       ldp  x16, x17, [sp, #128]      \n"
++"       ldp  x14, x15, [sp, #112]      \n"
++"       ldp  x12, x13, [sp, #96]       \n"
++"       ldp  x10, x11, [sp, #80]       \n"
++"       ldp  x8,  x9,  [sp, #64]       \n"
++"       ldp  x6,  x7,  [sp, #48]       \n"
++"       ldp  x4,  x5,  [sp, #32]       \n"
++"       ldp  x2,  x3,  [sp, #16]       \n"
++"       ldp  x0,  x1,  [sp, #0]        \n"
++"       add  sp, sp, #160              \n"
++"       eret                           \n"
++#else
++"       stp x0, x1, [sp, -16]!          \n"
  "       mrs x0, SPSR_EL1                \n" // Get SPSR
  "       orr x0, x0, #0x0c0              \n" // Disable IRQ and FIQ interrupts so that we are not disturbed on return
  "       msr SPSR_EL1, x0                \n"
-+#ifdef BELLATRIX
-+"       mrs  x0, CNTV_CTL_EL0           \n" // Check virtual timer ISTATUS
-+"       tbz  x0, #2, 1f                 \n" // Not our timer — skip
-+"       adrp x0, bellatrix_vbl_interval \n" // Reload timer for next VBL
-+"       ldr  x1, [x0, :lo12:bellatrix_vbl_interval] \n"
-+"       msr  CNTV_TVAL_EL0, x1          \n"
-+"       adrp x0, bellatrix_intreq       \n" // Set INTREQ[VERTB] (bit 5)
-+"       ldrh w1, [x0, :lo12:bellatrix_intreq] \n"
-+"       orr  w1, w1, #0x0020            \n"
-+"       strh w1, [x0, :lo12:bellatrix_intreq] \n"
-+"       adrp x0, bellatrix_intena       \n" // Read INTENA
-+"       ldrh w0, [x0, :lo12:bellatrix_intena] \n"
-+"       tbz  w0, #14, 1f                \n" // Master enable off
-+"       tbz  w0, #5, 1f                 \n" // INTENA[VERTB] disabled
-+"       mrs  x1, TPIDRRO_EL0            \n" // M68KState pointer
-+"       cbz  x1, 1f                     \n"
-+"       mov  w0, #3                     \n" // VBL = IPL 3
-+"       strb w0, [x1, #%[ipl]]          \n" // INT.IPL = 3
-+"       strb w0, [x1, #%[pint]]         \n" // INT.ARM = 3
-+#else
- "       adrp x1, INT_shadow             \n" // Load INTENA shadow
- "       add x1, x1, :lo12:INT_shadow    \n"
- "       ldrh w0, [x1, #%[intena]]       \n"
-@@ -173,6 +214,7 @@ void  __attribute__((used)) __stub_vectors()
- "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
- "       mov w0, #6                      \n" // Set level 6 IRQ
+@@ -175,6 +235,7 @@ void  __attribute__((used)) __stub_vectors()
  "       strb w0, [x1, #%[pint]]         \n"
-+#endif
  "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
  "       eret                            \n"
++#endif
  "                                       \n"
-@@ -261,7 +303,8 @@ void  __attribute__((used)) __stub_vectors()
+ "       .balign 0x80                    \n"
+ "curr_el_spx_serror:                    \n" // The exception handler for a System Error 
+@@ -261,7 +322,8 @@ void  __attribute__((used)) __stub_vectors()
  :[pint]"i"(__builtin_offsetof(struct M68KState, INT.ARM)),
   [perr]"i"(__builtin_offsetof(struct M68KState, INT.ARM_err)),
   [intena]"i"(__builtin_offsetof(struct INT_shadow, INTENA)),
@@ -180,7 +200,7 @@ index 329d470..855c005 100644
  
  );}
  
-@@ -661,12 +704,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -661,12 +723,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
      return 1;
  }
  
@@ -216,6 +236,6 @@ index 329d470..855c005 100644
      switch(size)
      {
          case 1:
+
 -- 
 2.34.1
-
