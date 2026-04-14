@@ -1,0 +1,113 @@
+From 1a72cfb4c7bdd32aada67f2bab3cd19a32790bb9 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 14 Apr 2026 00:44:13 -0300
+Subject: [PATCH 2/2] Add bellatrix bus hook and startup init
+
+---
+ src/aarch64/start.c   | 20 +++++++++++++++-----
+ src/aarch64/vectors.c | 24 +++++++++++++++++++++++-
+ 2 files changed, 38 insertions(+), 6 deletions(-)
+
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+index f2060ad..efb48ec 100644
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -1189,7 +1189,7 @@ void boot(void *dtree)
+         InitFunctions++;
+     }
+ 
+-#ifndef PISTORM
++#if !defined(PISTORM) && !defined(BELLATRIX)
+     if (initramfs_loc != NULL && initramfs_size != 0)
+     {
+         void *image_start, *image_end;
+@@ -1305,6 +1305,7 @@ void boot(void *dtree)
+ 
+ #else
+ 
++#ifdef PISTORM
+     if (rom_copy != 0)
+     {
+         kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
+@@ -1351,7 +1352,9 @@ void boot(void *dtree)
+             mmu_map(0xf80000, 0xe00000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+         }
+     }
+-    else if (initramfs_loc != NULL && initramfs_size != 0)
++    else
++#endif /* PISTORM */
++    if (initramfs_loc != NULL && initramfs_size != 0)
+     {
+         extern uint32_t rom_mapped;
+ 
+@@ -1499,7 +1502,14 @@ void boot(void *dtree)
+     if (fast_page0) {
+         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+     }
+-    
++
++#ifdef BELLATRIX
++    {
++        extern void bellatrix_init(void);
++        bellatrix_init();
++    }
++#endif
++
+     M68K_StartEmu(0, NULL);
+ 
+ #endif
+@@ -2078,9 +2088,9 @@ void M68K_StartEmu(void *addr, void *fdt)
+         __m68k.FP[fp].u64 = 0x7fffffffffffffffULL;
+     }
+ 
+-#ifdef PISTORM
++#if defined(PISTORM) || defined(BELLATRIX)
+     (void)fdt;
+-    
++
+     asm volatile("mov %0, #0":"=r"(addr));
+ 
+     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+index 329d470..84f83cc 100644
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -661,12 +661,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+     return 1;
+ }
+ 
++#elif defined(BELLATRIX)
++
++#include "bellatrix.h"
++
++int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
++{
++    (void)value2;
++    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff)
++        far &= 0xffffffff;
++    bellatrix_bus_access((uint32_t)far, (uint32_t)value, size, BUS_WRITE);
++    return 1;
++}
++
++int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
++{
++    (void)value2;
++    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff)
++        far &= 0xffffffff;
++    *value = bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);
++    return 1;
++}
++
+ #else
+ 
+ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
+ {
+     D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
+-    
++
+     switch(size)
+     {
+         case 1:
+-- 
+2.34.1
+
