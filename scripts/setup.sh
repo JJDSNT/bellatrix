@@ -30,7 +30,13 @@ else
     echo "Applying Bellatrix patches..."
     git apply "$PATCHES/0001-add-bellatrix-variant-cmake.patch"
     git apply "$PATCHES/0002-add-bellatrix-bus-hook.patch"
-    echo "Patches applied."
+    
+    # ---- Automação total: Esconde TODOS os arquivos modificados ----
+    echo "Silencing all patched files from git status..."
+    # 'git ls-files -m' lista apenas os arquivos que sofreram modificações
+    git ls-files -m | xargs -r git update-index --assume-unchanged
+    
+    echo "Patches applied and index cleaned."
 fi
 
 # ---- Big-endian stub header ----
