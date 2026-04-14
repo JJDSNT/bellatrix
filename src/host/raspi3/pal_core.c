@@ -1,26 +1,44 @@
 // src/host/raspi3/pal_core.c
 //
-// Dedicated ARM core management — Phase 0 stub.
-// PAL_Core_LaunchChipset is implemented in Phase 3 when the chipset
-// loop moves to a dedicated ARM core via the RPi spin-table.
+// Platform timer, core management and video stubs for RPi3.
+// PAL_ChipsetTimer_Init configures the ARM EL1 virtual timer as FIQ at
+// the given frequency (50 Hz for PAL VBL). The FIQ fires to the Bellatrix
+// handler in vectors.c (curr_el_spx_fiq / #ifdef BELLATRIX).
 
 #include "pal.h"
+#include "chipset/agnus/agnus.h"  // bellatrix_vbl_interval
+
+// ---------------------------------------------------------------------------
+// BCM2836 local interrupt controller (RPi3, mapped at 0xF3000000 by Emu68)
+// ---------------------------------------------------------------------------
+#define LOCAL_INTC_BASE       0xF3000000UL
+#define LOCAL_TIMER_FIQ_CTRL0 (*(volatile uint32_t*)(LOCAL_INTC_BASE + 0x60))
+#define CNTVIRQ_FIQ_BIT       (1u << 3)  // CNTVIRQ as FIQ on core 0
 
 void PAL_ChipsetTimer_Init(uint32_t hz, void (*cb)(void))
 {
-    (void)hz;
-    (void)cb;
-    // Phase 3
+    (void)cb; // FIQ handler is inline assembly in vectors.c
+
+    uint64_t cntfrq;
+    asm volatile("mrs %0, CNTFRQ_EL0" : "=r"(cntfrq));
+    if (!cntfrq) cntfrq = 62500000ULL; // QEMU raspi3b default
+
+    bellatrix_vbl_interval = cntfrq / hz;
+
+    asm volatile("msr CNTV_TVAL_EL0, %0" :: "r"(bellatrix_vbl_interval));
+    asm volatile("msr CNTV_CTL_EL0,  %0" :: "r"((uint64_t)1)); // enable
+
+    LOCAL_TIMER_FIQ_CTRL0 = CNTVIRQ_FIQ_BIT;
 }
 
 void PAL_ChipsetTimer_Start(void)
 {
-    // Phase 3
+    asm volatile("msr CNTV_CTL_EL0, %0" :: "r"((uint64_t)1));
 }
 
 void PAL_ChipsetTimer_Stop(void)
 {
-    // Phase 3
+    asm volatile("msr CNTV_CTL_EL0, %0" :: "r"((uint64_t)0));
 }
 
 int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
