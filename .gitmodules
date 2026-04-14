@@ -1,3 +1,4 @@
 [submodule "emu68"]
 	path = emu68
 	url = https://github.com/michalsc/Emu68
+	ignore = all
