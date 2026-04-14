@@ -1,14 +1,14 @@
-From ebf5a8a81e45e1f07b1a6caf8d99ec2930d00e9e Mon Sep 17 00:00:00 2001
+From 7bb40f5a64be826112cbc85e2ede909e837e2644 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
-Date: Tue, 14 Apr 2026 00:44:13 -0300
+Date: Tue, 14 Apr 2026 05:11:27 -0300
 Subject: [PATCH 1/2] Add bellatrix to SUPPORTED_VARIANTS and configure sources
 
 ---
- CMakeLists.txt | 20 ++++++++++++++++++--
- 1 file changed, 18 insertions(+), 2 deletions(-)
+ CMakeLists.txt | 21 +++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..163c894 100644
+index eb89404..303d1a0 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
@@ -20,22 +20,23 @@ index eb89404..163c894 100644
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
  
-@@ -167,8 +167,24 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+@@ -167,8 +167,25 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
 +    elseif(${VARIANT} STREQUAL "bellatrix")
 +        if(${TARGET} STREQUAL "raspi64")
 +            add_compile_definitions(BELLATRIX)
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/variants/bellatrix)
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/platform)
++            include_directories(${CMAKE_SOURCE_DIR}/../src)
++            include_directories(${CMAKE_SOURCE_DIR}/../src/cpu)
++            include_directories(${CMAKE_SOURCE_DIR}/../src/host)
 +            list(APPEND BASE_FILES
-+                ${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/bellatrix.c
-+                ${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/chipset/btrace.c
-+                ${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/chipset/cia.c
-+                ${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/platform/raspi3/pal_debug.c
-+                ${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/platform/raspi3/pal_ipl.c
-+                ${CMAKE_SOURCE_DIR}/../src/variants/bellatrix/platform/raspi3/pal_core.c
++                ${CMAKE_SOURCE_DIR}/../src/cpu/bellatrix.c
++                ${CMAKE_SOURCE_DIR}/../src/core/btrace.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia.c
++                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_debug.c
++                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_ipl.c
++                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_core.c
 +            )
 +        else()
 +            message(FATAL_ERROR "Bellatrix variant is supported on raspi64 target only.")
