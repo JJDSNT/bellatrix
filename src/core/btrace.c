@@ -111,7 +111,7 @@ static void emit_event(uint32_t addr, uint32_t value, int size,
 
 void btrace_init(void)
 {
-    s_filter   = BTRACE_ALL;
+    s_filter    = BTRACE_UNIMPL;
     s_ring_head = 0;
     s_watchdog  = WATCHDOG_VBL_LIMIT;
 }
