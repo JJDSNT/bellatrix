@@ -1,9 +1,10 @@
 // src/chipset/agnus/agnus.c
 //
-// Agnus/Alice — INTENA, INTREQ, DMACON, beam position simulation.
-// Phase 3: interrupt routing only.
+// Agnus/Alice — INTENA, INTREQ, DMACON, beam position, copper dispatch.
+// Phase 4: copper execution added.
 
 #include "agnus.h"
+#include "copper.h"
 #include "host/pal.h"
 #include "chipset/cia/cia.h"
 #include "chipset/denise/denise.h"
@@ -84,7 +85,8 @@ extern void bellatrix_cia_vbl_tick(void);
 void agnus_vbl_fire(void)
 {
     s_frame_start = read_cntpct();
-    denise_render_frame();
+    copper_vbl_execute();      // run copper list → updates palette + bitplane ptrs
+    denise_render_frame();     // render frame using updated state
     agnus_intreq_set(INT_VERTB);
     bellatrix_cia_vbl_tick();
     btrace_watchdog_tick();
@@ -128,6 +130,7 @@ void agnus_init(void)
     bellatrix_intreq = 0;
     bellatrix_dmacon = 0;
     s_frame_start    = read_cntpct();
+    copper_init();
     denise_init();
 }
 
@@ -181,6 +184,17 @@ void agnus_write(uint32_t addr, uint32_t value, int size)
     case AGNUS_DMACON:
         if (v & 0x8000) bellatrix_dmacon |=  (v & 0x7FFF);
         else            bellatrix_dmacon &= ~(v & 0x7FFF);
+        break;
+
+    // Copper pointer and strobe registers
+    case COPPER_COP1LCH:
+    case COPPER_COP1LCL:
+    case COPPER_COP2LCH:
+    case COPPER_COP2LCL:
+    case COPPER_COPJMP1:
+    case COPPER_COPJMP2:
+    case COPPER_COPINS:
+        copper_write(addr, v);
         break;
 
     default:
