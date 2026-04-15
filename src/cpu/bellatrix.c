@@ -76,6 +76,19 @@ static void set_overlay(int new_overlay)
 }
 
 // ---------------------------------------------------------------------------
+// ROM physical base in Emu68 kernel virtual space.
+// mmu_map(0xf80000, ...) places 512 KB of ROM data here.
+// ---------------------------------------------------------------------------
+#define ROM_KVIRT  0xffffff9000f80000ULL
+
+// Read a big-endian 32-bit word directly from a kernel-virtual byte pointer.
+static inline uint32_t read_be32(const uint8_t *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] <<  8) |  (uint32_t)p[3];
+}
+
+// ---------------------------------------------------------------------------
 // Initialisation
 // ---------------------------------------------------------------------------
 void bellatrix_init(void)
@@ -90,19 +103,94 @@ void bellatrix_init(void)
     s_cia_a.ddra = 0x03;  // OVL (bit 0) and LED (bit 1) are outputs
     s_cia_b.pra  = 0xFF;
 
+    // -----------------------------------------------------------------------
+    // ROM diagnostic — run before the overlay is set up so we read physical
+    // memory directly, not through the mapping.
+    // -----------------------------------------------------------------------
+    {
+        const uint8_t *rom = (const uint8_t *)ROM_KVIRT;
+        kprintf("[BELA] rom_mapped=%d\n", (int)rom_mapped);
+        if (rom_mapped) {
+            uint32_t isp = read_be32(rom);
+            uint32_t pc  = read_be32(rom + 4);
+            kprintf("[BELA] ROM @ 0xf80000: %02x %02x %02x %02x  %02x %02x %02x %02x\n",
+                    rom[0], rom[1], rom[2], rom[3],
+                    rom[4], rom[5], rom[6], rom[7]);
+            kprintf("[BELA] Reset vectors: ISP=0x%08x  PC=0x%08x\n", isp, pc);
+            // For OCS/ECS ROMs (KS 1.x–2.x) the "ISP" is 0x1111_4EF9 and
+            // for AGA ROMs it is 0x1114_4EF9.  This is the standard Amiga
+            // ROM format: bytes 0-1 = ROM type, bytes 2-3 = JMP opcode.
+            // The Kickstart overrides SP in its very first instruction.
+            // PC is the real entry point: 0x00FC00D2 (KS 1.x) or
+            // 0x00F800D2 / 0x00F800FC (KS 2.x+, AGA, AROS).
+            if (pc < 0x00f80000 || pc > 0x00ffffff)
+                kprintf("[BELA] WARNING: PC 0x%08x is outside ROM range "
+                        "(0xf80000-0xffffff) -- ROM may be corrupted!\n", pc);
+        } else {
+            kprintf("[BELA] WARNING: rom_mapped=0. "
+                    "No ROM loaded via initrd -- M68K will start at PC=0.\n");
+        }
+    }
+
     // Chip RAM: 2 MB R/W → RPi physical 0x000000
     mmu_map(0x000000, 0x000000, 0x200000,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 
-    // ROM overlay at address 0 (overlay=1): reset vectors visible at 0x000000
+    // ROM overlay at address 0 (overlay=1): reset vectors visible at 0x000000.
+    // M68K_StartEmu reads ISP and PC from virtual address 0; with the overlay
+    // active this returns the ROM reset vectors.
     mmu_map(0xf80000, 0x000000, 4096,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     s_overlay = 1;
 
+    // -----------------------------------------------------------------------
+    // Chipset trap mappings — map unmapped Amiga address ranges as read-only
+    // WITHOUT the Access Flag (no MMU_ACCESS).  In AArch64, a page entry with
+    // AF=0 causes an Access Flag Fault on ANY access (read or write), even
+    // though the physical backing exists in RAM.  This is required in QEMU
+    // (TCG mode) because QEMU does not inject guest Translation Faults for
+    // addresses within the guest's physical RAM window; it only injects guest
+    // exceptions for Access Flag / Permission faults.
+    //
+    // With these mappings every CIA, custom-chip and expansion-ROM access
+    // reaches bellatrix_bus_access through SYSPageFaultReadHandler /
+    // SYSPageFaultWriteHandler, exactly as it does on real hardware.
+    //
+    // Ranges (physical = virtual — identity map, content irrelevant since the
+    // fault handler always returns emulated values):
+    //   0x200000-0xBFFFFF  slow RAM, CIA-B ($BFD000), CIA-A ($BFE000)   10 MB
+    //   0xC00000-0xDFFFFF  custom chips: Agnus ($DFF000), Paula, etc.    2 MB
+    //   0xF00000-0xF7FFFF  expansion ROM check area ($F00000)          512 KB
+    // -----------------------------------------------------------------------
+    mmu_map(0x200000, 0x200000, 0xA00000,   // 0x200000–0xBFFFFF
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+    mmu_map(0xC00000, 0xC00000, 0x200000,   // 0xC00000–0xDFFFFF
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+    mmu_map(0xF00000, 0xF00000, 0x80000,    // 0xF00000–0xF7FFFF
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+
+    // Overlay sanity-check: virt 0 must now read back the ROM first word.
+    // In AArch64 BE mode EL1 and EL0 share TTBR0_EL1, so this read is valid.
+    // We use inline asm (ldr from xzr) instead of a C null pointer dereference
+    // to avoid GCC's UB trap insertion for known-zero pointer literals.
+    if (rom_mapped) {
+        uint32_t word0;
+        /* xzr cannot be a base register; use a scratch reg forced to 0. */
+        asm volatile("mov x9, #0\n\t"
+                     "ldr %w0, [x9]\n"
+                     : "=r"(word0) : : "x9", "memory");
+        kprintf("[BELA] Overlay check virt[0:3]: %02x %02x %02x %02x  "
+                "(expect same as ROM bytes above)\n",
+                (word0 >> 24) & 0xff,
+                (word0 >> 16) & 0xff,
+                (word0 >>  8) & 0xff,
+                 word0        & 0xff);
+    }
+
     // ARM generic timer → VBL FIQ at 50 Hz
     PAL_ChipsetTimer_Init(50, NULL);
 
-    PAL_Debug_Print("{\"t\":\"init\",\"msg\":\"Bellatrix Phase 3 ready\"}\n");
+    PAL_Debug_Print("{\"t\":\"init\",\"msg\":\"Bellatrix Phase 4 ready\"}\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +214,7 @@ static void chip_ram_write(uint32_t addr, uint32_t value, int size)
 // ---------------------------------------------------------------------------
 // Bus dispatch
 // ---------------------------------------------------------------------------
+
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 {
     uint32_t result = 0;
