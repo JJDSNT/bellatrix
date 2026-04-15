@@ -1,4 +1,3 @@
-// bellatrix/tools/launcher/tui.go
 package main
 
 import (
@@ -10,6 +9,7 @@ import (
 )
 
 type launchResult struct {
+	emuProfile  string
 	kickstart   string
 	displayMode string
 	cancelled   bool
@@ -19,6 +19,7 @@ type model struct {
 	roms        []ROM
 	cursor      int
 	displayMode string
+	emuProfile  string
 	width       int
 	height      int
 	quitting    bool
@@ -30,6 +31,7 @@ func runLauncher(roms []ROM) (launchResult, error) {
 		roms:        roms,
 		cursor:      defaultROMIndex(roms),
 		displayMode: "gtk",
+		emuProfile:  "bellatrix",
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -50,6 +52,7 @@ func runLauncher(roms []ROM) (launchResult, error) {
 	}
 
 	return launchResult{
+		emuProfile:  fm.emuProfile,
 		kickstart:   kickstart,
 		displayMode: fm.displayMode,
 	}, nil
@@ -106,6 +109,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
+		case "e":
+			if m.emuProfile == "bellatrix" {
+				m.emuProfile = "emu68"
+			} else {
+				m.emuProfile = "bellatrix"
+			}
+			return m, nil
+
 		case "enter":
 			m.quitting = true
 			return m, tea.Quit
@@ -143,7 +154,7 @@ func (m model) renderPanel() string {
 	b.WriteString(headerBlockStyle.Render(header))
 	b.WriteString("\n")
 
-	b.WriteString(sectionTitleStyle.Render("Kickstart"))
+	b.WriteString(sectionTitleStyle.Render("Kickstart / payload"))
 	b.WriteString("\n")
 
 	for i, rom := range m.roms {
@@ -161,6 +172,13 @@ func (m model) renderPanel() string {
 	b.WriteString(sectionTitleStyle.Render("Options"))
 	b.WriteString("\n")
 
+	profileBadge := offBadgeStyle.Render("EMU68")
+	if m.emuProfile == "bellatrix" {
+		profileBadge = onBadgeStyle.Render("BELLATRIX")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emulator:"), profileBadge))
+	b.WriteString("\n")
+
 	displayBadge := onBadgeStyle.Render("GTK")
 	if m.displayMode == "none" {
 		displayBadge = offBadgeStyle.Render("HEADLESS")
@@ -168,33 +186,43 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Display:"), displayBadge))
 	b.WriteString("\n\n")
 
-	b.WriteString(sectionTitleStyle.Render("Preview"))
+	b.WriteString(sectionTitleStyle.Render("QEMU command"))
 	b.WriteString("\n")
-	b.WriteString(commandStyle.Render(m.previewCommand()))
+	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • D Toggle Display • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • E Toggle Emulator • D Toggle Display • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
 
-func (m model) previewCommand() string {
+func (m model) qemuCommand() string {
 	displayArg := "gtk,zoom-to-fit=on,window-close=on"
 	if m.displayMode == "none" {
 		displayArg = "none"
 	}
 
-	selected := m.roms[m.cursor]
-	if selected.None {
-		return fmt.Sprintf(
-			"qemu-system-aarch64 -M raspi3b -kernel Emu68.img -dtb bcm2710-rpi-3-b.dtb -serial stdio -display %s -append console=ttyAMA0",
-			displayArg,
-		)
+	image := "emu68/install-bellatrix/Emu68.img"
+	dtb := "emu68/install-bellatrix/bcm2710-rpi-3-b.dtb"
+	if m.emuProfile == "emu68" {
+		image = "emu68/build/Emu68.img"
+		dtb = "emu68/build/firmware/bcm2710-rpi-3-b.dtb"
 	}
 
-	return fmt.Sprintf(
-		"qemu-system-aarch64 -M raspi3b -kernel Emu68.img -dtb bcm2710-rpi-3-b.dtb -serial stdio -display %s -append console=ttyAMA0 -initrd %s",
+	bootArgs := "console=ttyAMA0"
+
+	base := fmt.Sprintf(
+		`qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"`,
+		image,
+		dtb,
 		displayArg,
-		selected.Path,
+		bootArgs,
 	)
+
+	selected := m.roms[m.cursor]
+	if selected.None {
+		return base
+	}
+
+	return fmt.Sprintf("%s -initrd %s", base, selected.Path)
 }

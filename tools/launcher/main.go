@@ -40,7 +40,8 @@ func main() {
 	}
 
 	output := fmt.Sprintf(
-		"KICKSTART=%s\nDISPLAY_MODE=%s\n",
+		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\n",
+		result.emuProfile,
 		result.kickstart,
 		result.displayMode,
 	)

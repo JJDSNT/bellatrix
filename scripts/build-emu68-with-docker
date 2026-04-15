@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+EMU68_DIR="${ROOT_DIR}/emu68"
+BUILD_DIR="${EMU68_DIR}/build"
+EXAMPLES_BUILD_DIR="${EMU68_DIR}/Build"
+
+MODE="${1:-all}"
+TARGET_EXAMPLE="${2:-}"
+
+echo "[EMU68] Root: ${EMU68_DIR}"
+
+if [[ "${MODE}" == "examples" ]]; then
+    echo "[EMU68] Building examples"
+
+    cd "${EMU68_DIR}/examples"
+    mkdir -p "${EXAMPLES_BUILD_DIR}"
+
+    if [[ -n "${TARGET_EXAMPLE}" ]]; then
+        echo "[EMU68] Target example: ${TARGET_EXAMPLE}"
+        "${EMU68_DIR}/build-scripts/build-m68k-amigaos" make "${TARGET_EXAMPLE}"
+    else
+        echo "[EMU68] Building all examples"
+        "${EMU68_DIR}/build-scripts/build-m68k-amigaos" make
+    fi
+
+    echo
+    echo "[EMU68] Examples build finished"
+    echo "[EMU68] Artifacts directory:"
+    echo "  ${EXAMPLES_BUILD_DIR}"
+    echo
+
+    ls -lah "${EXAMPLES_BUILD_DIR}" || true
+
+    exit 0
+fi
+
+echo "[EMU68] Building Emu68"
+
+mkdir -p "${BUILD_DIR}"
+cd "${BUILD_DIR}"
+
+"${EMU68_DIR}/build-scripts/build-with-docker" -t raspi64 -v none -c
+
+echo
+echo "[EMU68] Build finished"
+echo "[EMU68] Artifacts directory:"
+echo "  ${BUILD_DIR}"
+echo
+
+ls -lah "${BUILD_DIR}" || true
