@@ -175,6 +175,28 @@ void bellatrix_init(void)
 
     PAL_Runtime_Init();
 
+    /* "Pau de Cego": paint framebuffer solid red to confirm VC4 pipeline is alive.
+     * If screen shows red, VC4 is working. If black/nothing, display chain issue. */
+    extern uint16_t *framebuffer;
+    extern uint32_t  pitch;
+    extern uint32_t  fb_width;
+    extern uint32_t  fb_height;
+
+    if (framebuffer && pitch && fb_width && fb_height) {
+        for (uint32_t y = 0; y < fb_height; y++) {
+            uint16_t *row = (uint16_t *)((uintptr_t)framebuffer + y * pitch);
+            for (uint32_t x = 0; x < fb_width; x++)
+                row[x] = 0x00F8u;  /* red — LE16 RGB565 on big-endian ARM */
+        }
+        kprintf("[BELA] Pau de Cego: painted %ux%u red (fb=%p pitch=%u)\n",
+                (unsigned)fb_width, (unsigned)fb_height,
+                (void *)framebuffer, (unsigned)pitch);
+    } else {
+        kprintf("[BELA] Pau de Cego: framebuffer not ready (fb=%p pitch=%u w=%u h=%u)\n",
+                (void *)framebuffer, (unsigned)pitch,
+                (unsigned)fb_width, (unsigned)fb_height);
+    }
+
     kprintf("[BELA] Initialized (single-core mode)\n");
 }
 

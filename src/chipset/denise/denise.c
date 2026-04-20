@@ -140,10 +140,18 @@ static inline uint16_t chip_read16(uint32_t addr)
 
 void denise_render_frame(Denise *d, const AgnusState *agnus)
 {
-    if (!framebuffer || !pitch) return;
-
     int nplanes = (d->bplcon0 >> 12) & 7;
     if (nplanes > 6) nplanes = 6;
+
+    kprintf("[DENISE] render: fb=%p pitch=%u bplcon0=0x%04x nplanes=%d"
+            " bpt0=0x%05x dmacon=0x%04x\n",
+            (void *)framebuffer, (unsigned)pitch,
+            (unsigned)d->bplcon0, nplanes,
+            (unsigned)((((uint32_t)agnus->bplpth[0] & 0x1Fu) << 16) |
+                        ((uint32_t)agnus->bplptl[0] & 0xFFFEu)),
+            (unsigned)agnus->dmacon);
+
+    if (!framebuffer || !pitch) return;
     if (nplanes == 0) return;
 
     int hires = (d->bplcon0 >> 15) & 1;
