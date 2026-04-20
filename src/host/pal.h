@@ -45,11 +45,26 @@ uint32_t *PAL_Video_GetBuffer(void);
 void     PAL_Video_Flip(void);
 void     PAL_Video_SetPalette(uint8_t idx, uint32_t rgb);
 
+/* ---- Runtime lifecycle ---- */
+
+void PAL_Runtime_Init(void);
+void PAL_Runtime_Shutdown(void);
+void PAL_Runtime_Poll(void);
+void PAL_Runtime_ReportCpuProgress(uint32_t cycles);
+uint32_t PAL_Runtime_GetPendingIPL(void);
+void PAL_Runtime_WakeupChipset(void);
+void PAL_Runtime_MmioBarrier(void);
+
+uint64_t PAL_Time_ReadCounter(void);
+uint64_t PAL_Time_GetFrequency(void);
+
 /* ---- Dedicated ARM core ---- */
 
 /* Launch chipset loop on a secondary ARM core via spin-table.
    Stub in Phase 0. */
 void PAL_Core_LaunchChipset(void (*entry)(void));
+void PAL_Core_SetMulticoreEnabled(int enabled);
+int  PAL_Core_IsMulticoreEnabled(void);
 void PAL_Core_Sync(void);
 
 #endif /* _BELLATRIX_PAL_H */
