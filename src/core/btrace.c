@@ -34,6 +34,13 @@ static int         s_ring_head = 0;
 #define WATCHDOG_VBL_LIMIT 250
 static int s_watchdog = WATCHDOG_VBL_LIMIT;
 
+// Dedup table for unimplemented-register events.
+// Once an address has been logged once, we suppress further occurrences.
+// 128 slots — enough to cover all unique unimpl addresses a KS boot touches.
+#define SEEN_SIZE 128
+static uint32_t s_seen[SEEN_SIZE];
+static int      s_seen_count = 0;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -114,6 +121,7 @@ void btrace_init(void)
     s_filter    = BTRACE_UNIMPL;
     s_ring_head = 0;
     s_watchdog  = WATCHDOG_VBL_LIMIT;
+    s_seen_count = 0;
 }
 
 void btrace_set_filter(uint16_t filter)
@@ -145,10 +153,24 @@ void btrace_log(uint32_t addr, uint32_t value, int size, int dir, int impl)
         return;
     if (!impl && !(s_filter & BTRACE_UNIMPL))
         return;
-    if ((addr == 0xBFE001 || addr == 0xBFD000) && !(s_filter & BTRACE_CIA))
-        return;
+    // CIA-A: 0xBFExxx (odd bytes), CIA-B: 0xBFDxxx (even bytes)
+    if ((addr >= 0xBFD000 && addr <= 0xBFDFFF) ||
+        (addr >= 0xBFE001 && addr <= 0xBFEFFF)) {
+        if (!(s_filter & BTRACE_CIA)) return;
+    }
     if (addr >= 0xDFF000 && addr <= 0xDFF1FF && !(s_filter & BTRACE_CHIPSET))
         return;
+
+    // Dedup: for unimplemented addresses, only emit the first occurrence.
+    // This suppresses repeated slow-RAM probes and KS polling without losing
+    // the initial discovery of each new unimplemented register.
+    if (!impl) {
+        for (int i = 0; i < s_seen_count; i++) {
+            if (s_seen[i] == addr) return;
+        }
+        if (s_seen_count < SEEN_SIZE)
+            s_seen[s_seen_count++] = addr;
+    }
 
     emit_event(addr, value, size, dir, impl, tick, pc);
 }
