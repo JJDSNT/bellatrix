@@ -1,58 +1,46 @@
 // src/chipset/denise/denise.h
-//
-// Denise — bitplane compositor and colour palette.
-// Phase 4: up to 6 bitplanes, 32-colour palette, PAL low-res / hi-res.
 
 #ifndef _BELLATRIX_DENISE_H
 #define _BELLATRIX_DENISE_H
 
 #include <stdint.h>
 
+// Forward declare to avoid circular include (agnus.h ← denise.h ← agnus.h)
+typedef struct AgnusState AgnusState;
+
 // ---------------------------------------------------------------------------
-// Register addresses (Denise-side and shared Agnus/Denise)
+// Register offsets (decoded, same convention as agnus.h)
 // ---------------------------------------------------------------------------
 
-// Display window / data fetch (written by CPU/copper, used by Agnus+Denise)
-#define DENISE_DIWSTRT  0xDFF08E
-#define DENISE_DIWSTOP  0xDFF090
-#define DENISE_DDFSTRT  0xDFF092
-#define DENISE_DDFSTOP  0xDFF094
+// Display window / data fetch — written by CPU/copper, used by Agnus+Denise.
+// Offset definitions live in agnus.h (AGNUS_DIWSTRT etc); Denise reads them
+// from AgnusState at render time.
 
-// Bitplane DMA pointers (Agnus-side, written by CPU/copper)
-#define AGNUS_BPL1PTH   0xDFF0E0
-#define AGNUS_BPL1PTL   0xDFF0E2
-#define AGNUS_BPL2PTH   0xDFF0E4
-#define AGNUS_BPL2PTL   0xDFF0E6
-#define AGNUS_BPL3PTH   0xDFF0E8
-#define AGNUS_BPL3PTL   0xDFF0EA
-#define AGNUS_BPL4PTH   0xDFF0EC
-#define AGNUS_BPL4PTL   0xDFF0EE
-#define AGNUS_BPL5PTH   0xDFF0F0
-#define AGNUS_BPL5PTL   0xDFF0F2
-#define AGNUS_BPL6PTH   0xDFF0F4
-#define AGNUS_BPL6PTL   0xDFF0F6
+// Bitplane control (Denise-owned)
+#define DENISE_BPLCON0  0x0100u
+#define DENISE_BPLCON1  0x0102u
+#define DENISE_BPLCON2  0x0104u
+#define DENISE_BPL1MOD  0x0108u
+#define DENISE_BPL2MOD  0x010Au
 
-// Bitplane control (Denise)
-#define DENISE_BPLCON0  0xDFF100
-#define DENISE_BPLCON1  0xDFF102
-#define DENISE_BPLCON2  0xDFF104
-#define DENISE_BPL1MOD  0xDFF108
-#define DENISE_BPL2MOD  0xDFF10A
-
-// Colour registers (Denise) — 32 entries at 2-byte intervals
-#define DENISE_COLOR00  0xDFF180
-#define DENISE_COLOR31  0xDFF1BE
+// Colour registers: 32 entries at 2-byte intervals starting at offset 0x180
+#define DENISE_COLOR_BASE 0x0180u
+#define DENISE_COLOR_END  0x01BEu
 
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
 
 void     denise_init(void);
-void     denise_write(uint32_t addr, uint32_t value);
-uint32_t denise_read(uint32_t addr);
 
-// Render one Amiga frame into the VC4 framebuffer.
-// Called from agnus_vbl_fire() before raising INT_VERTB.
-void     denise_render_frame(void);
+// Write a Denise register.  reg is the decoded offset (addr & 0x1FE),
+// matching the convention used by agnus_write_reg.
+void     denise_write(uint16_t reg, uint16_t value);
+
+// Render one Amiga frame into the Emu68 framebuffer.
+// BPLxPT, DIW, and DDF are read from agnus (Agnus-owned DMA config).
+// BPLCON, MOD, and COLOR are read from Denise's own state.
+// Called from agnus_step() after copper_vbl_execute().
+void     denise_render_frame(const AgnusState *agnus);
 
 #endif /* _BELLATRIX_DENISE_H */
