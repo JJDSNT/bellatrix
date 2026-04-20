@@ -1,204 +1,315 @@
 // src/chipset/agnus/agnus.c
-//
-// Agnus/Alice — INTENA, INTREQ, DMACON, beam position, copper dispatch.
-// Phase 4: copper execution added.
 
 #include "agnus.h"
-#include "copper.h"
-#include "host/pal.h"
-#include "chipset/cia/cia.h"
 #include "chipset/denise/denise.h"
-#include "core/btrace.h"
+#include "host/pal.h"
+#include "support.h"
 
 // ---------------------------------------------------------------------------
-// Global state — accessible by name from FIQ handler assembly (via adrp).
-// ---------------------------------------------------------------------------
-uint16_t bellatrix_intena    = 0;
-uint16_t bellatrix_intreq    = 0;
-uint16_t bellatrix_dmacon    = 0;
-uint64_t bellatrix_vbl_interval = 0; // set by pal_timer_init
-
-// Frame start tick for beam position simulation.
-static uint64_t s_frame_start = 0;
-
-// ---------------------------------------------------------------------------
-// Helpers
+// Internal helpers
 // ---------------------------------------------------------------------------
 
-static uint64_t read_cntpct(void)
+static inline void agnus_apply_setclr_15(uint16_t *dst, uint16_t raw, uint16_t writable_mask)
 {
-    uint64_t v;
-    asm volatile("mrs %0, CNTPCT_EL0" : "=r"(v));
-    return v;
+    uint16_t bits = (uint16_t)(raw & writable_mask);
+
+    if (raw & 0x8000u) {
+        *dst |= bits;
+    } else {
+        *dst &= (uint16_t)~bits;
+    }
+}
+
+static inline void agnus_notify_ipl(const AgnusState *s)
+{
+    uint8_t ipl = agnus_compute_ipl(s);
+
+    if (ipl) {
+        PAL_IPL_Set(ipl);
+    } else {
+        PAL_IPL_Clear();
+    }
+}
+
+static inline void agnus_get_beam(const AgnusState *s, uint16_t *vposr_out, uint16_t *vhposr_out)
+{
+    *vposr_out  = (s->vpos >= 256u) ? 1u : 0u;
+    *vhposr_out = (uint16_t)(((s->vpos & 0xFFu) << 8) | (s->hpos & 0xFFu));
+}
+
+static inline int agnus_is_blitter_reg(uint16_t reg)
+{
+    switch (reg) {
+    case AGNUS_BLTCON0:
+    case AGNUS_BLTCON1:
+    case AGNUS_BLTCPTH:
+    case AGNUS_BLTCPTL:
+    case AGNUS_BLTBPTH:
+    case AGNUS_BLTBPTL:
+    case AGNUS_BLTAPTH:
+    case AGNUS_BLTAPTL:
+    case AGNUS_BLTDPTH:
+    case AGNUS_BLTDPTL:
+    case AGNUS_BLTSIZE:
+    case AGNUS_BLTCMOD:
+    case AGNUS_BLTBMOD:
+    case AGNUS_BLTAMOD:
+    case AGNUS_BLTDMOD:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static inline int agnus_is_copper_reg(uint16_t reg)
+{
+    switch (reg) {
+    case AGNUS_COP1LCH:
+    case AGNUS_COP1LCL:
+    case AGNUS_COP2LCH:
+    case AGNUS_COP2LCL:
+    case AGNUS_COPJMP1:
+    case AGNUS_COPJMP2:
+    case AGNUS_COPINS:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
-// IPL priority encoder
+// Lifecycle
 // ---------------------------------------------------------------------------
 
-uint8_t agnus_compute_ipl(void)
+void agnus_init(AgnusState *s)
 {
-    if (!(bellatrix_intena & INT_INTEN)) return 0;
-    uint16_t pending = bellatrix_intena & bellatrix_intreq & 0x3FFF;
-    if (!pending) return 0;
-    if (pending & INT_EXTER)                    return 6;
-    if (pending & (INT_RBF   | INT_DSKBYT))    return 5;
-    if (pending & (INT_AUD0  | INT_AUD1 |
-                   INT_AUD2  | INT_AUD3))       return 4;
-    if (pending & (INT_VERTB | INT_BLIT | INT_COPER)) return 3;
-    if (pending & INT_PORTS)                    return 2;
-    if (pending & (INT_TBE   | INT_DSKBLK | INT_SOFTINT)) return 1;
+    s->intena    = 0;
+    s->intreq    = 0;
+    s->dmacon    = 0;
+    s->hpos      = 0;
+    s->vpos      = 0;
+    s->vbl_count = 0;
+
+    s->diwstrt = 0x2C81;  // PAL default: line 44, hpos 0x81
+    s->diwstop = 0xF4C1;  // PAL default: line 300 (0xF4 wraps), hpos 0xC1
+    s->ddfstrt = 0x0038;
+    s->ddfstop = 0x00D0;
+
+    for (int i = 0; i < 6; i++) {
+        s->bplpth[i] = 0;
+        s->bplptl[i] = 0;
+    }
+
+    blitter_init(&s->blitter);
+    copper_init(&s->copper);
+}
+
+// ---------------------------------------------------------------------------
+// IPL
+// ---------------------------------------------------------------------------
+
+uint8_t agnus_compute_ipl(const AgnusState *s)
+{
+    int master = !!(s->intena & INT_INTEN);
+    uint16_t pending = (uint16_t)(s->intena & s->intreq & 0x3FFFu);
+
+    if (!master || !pending) {
+        return 0;
+    }
+
+    if (pending & INT_EXTER)                                    return 6;
+    if (pending & INT_RBF)                                      return 5;
+    if (pending & (INT_AUD0 | INT_AUD1 | INT_AUD2 | INT_AUD3)) return 4;
+    if (pending & INT_VERTB)                                    return 3;
+    if (pending & INT_PORTS)                                    return 2;
+    if (pending & (INT_TBE | INT_DSKBLK | INT_SOFTINT))         return 1;
+
     return 0;
 }
 
-// Notify the JIT loop of the current IPL.
-static void notify_ipl(void)
+// ---------------------------------------------------------------------------
+// INTREQ
+// ---------------------------------------------------------------------------
+
+void agnus_intreq_set(AgnusState *s, uint16_t bits)
 {
-    uint8_t ipl = agnus_compute_ipl();
-    if (ipl) PAL_IPL_Set(ipl);
-    else     PAL_IPL_Clear();
+    s->intreq |= (uint16_t)(bits & 0x3FFFu);
+    agnus_notify_ipl(s);
+}
+
+void agnus_intreq_clear(AgnusState *s, uint16_t bits)
+{
+    s->intreq &= (uint16_t)~(bits & 0x3FFFu);
+    agnus_notify_ipl(s);
 }
 
 // ---------------------------------------------------------------------------
-// Public: set / clear INTREQ bits
+// Busy state
 // ---------------------------------------------------------------------------
 
-void agnus_intreq_set(uint16_t bits)
+int agnus_blitter_busy(const AgnusState *s)
 {
-    bellatrix_intreq |= bits;
-    notify_ipl();
-}
+    if (!blitter_is_busy(&s->blitter)) {
+        return 0;
+    }
 
-void agnus_intreq_clear(uint16_t bits)
-{
-    bellatrix_intreq &= ~bits;
-    notify_ipl();
-}
+    if (!(s->dmacon & DMAF_DMAEN)) {
+        return 0;
+    }
 
-// ---------------------------------------------------------------------------
-// VBL — called from FIQ handler (via pal_timer.c) or beam-position polling.
-// ---------------------------------------------------------------------------
+    if (!(s->dmacon & DMAF_BLTEN)) {
+        return 0;
+    }
 
-// Forward declaration from bellatrix.c / chipset integration.
-extern void bellatrix_cia_vbl_tick(void);
-
-void agnus_vbl_fire(void)
-{
-    s_frame_start = read_cntpct();
-    copper_vbl_execute();      // run copper list → updates palette + bitplane ptrs
-    denise_render_frame();     // render frame using updated state
-    agnus_intreq_set(INT_VERTB);
-    bellatrix_cia_vbl_tick();
-    btrace_watchdog_tick();
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
-// Beam position (simulated from real time)
+// Step
 // ---------------------------------------------------------------------------
 
-// PAL: 313 lines × 227 colour clocks = 71051 ticks per frame
-// We simulate using ARM CNTPCT relative to frame start.
-static void get_beam(uint16_t *vposr_out, uint16_t *vhposr_out)
+void agnus_step(AgnusState *s, uint64_t ticks)
 {
-    if (!bellatrix_vbl_interval) {
-        *vposr_out = 0; *vhposr_out = 0x0100; // line 1
+    if (!ticks) {
         return;
     }
-    uint64_t elapsed = read_cntpct() - s_frame_start;
-    if (elapsed > bellatrix_vbl_interval)
-        elapsed = bellatrix_vbl_interval - 1;
 
-    // Scale to 313 lines
-    uint32_t line = (uint32_t)((elapsed * 313) / bellatrix_vbl_interval);
-    // Scale to 227 colour clocks within line
-    uint64_t line_ticks = bellatrix_vbl_interval / 313;
-    uint32_t hpos = line_ticks ? (uint32_t)((elapsed % line_ticks) * 227 / line_ticks) : 0;
+    // Blitter progresses with Agnus time.
+    blitter_step(&s->blitter, s, ticks);
 
-    // VPOSR: bit 0 = bit 8 of vertical counter (set when line >= 256)
-    *vposr_out  = (line >= 256) ? 0x0001 : 0x0000;
-    // VHPOSR: [15:8] = line [7:0], [7:0] = horizontal position
-    *vhposr_out = (uint16_t)(((line & 0xFF) << 8) | (hpos & 0xFF));
-}
+    // Simplified PAL beam progression.
+    uint64_t total_h = (uint64_t)s->hpos + ticks;
+    uint64_t lines_advanced = total_h / AGNUS_PAL_HPOS;
+    s->hpos = (uint32_t)(total_h % AGNUS_PAL_HPOS);
 
-// ---------------------------------------------------------------------------
-// Register dispatch
-// ---------------------------------------------------------------------------
+    uint64_t total_v = (uint64_t)s->vpos + lines_advanced;
+    uint32_t frames = (uint32_t)(total_v / AGNUS_PAL_LINES);
+    s->vpos = (uint32_t)(total_v % AGNUS_PAL_LINES);
 
-void agnus_init(void)
-{
-    bellatrix_intena = 0;
-    bellatrix_intreq = 0;
-    bellatrix_dmacon = 0;
-    s_frame_start    = read_cntpct();
-    copper_init();
-    denise_init();
-}
+    while (frames--) {
+        s->vbl_count++;
 
-uint32_t agnus_read(uint32_t addr)
-{
-    switch (addr) {
-    case AGNUS_DMACONR:
-        return bellatrix_dmacon;
+        kprintf("[VBL] frame=%u hpos=%u vpos=%u intena=0x%04x intreq=0x%04x dmacon=0x%04x\n",
+                (unsigned)s->vbl_count,
+                (unsigned)s->hpos,
+                (unsigned)s->vpos,
+                (unsigned)s->intena,
+                (unsigned)s->intreq,
+                (unsigned)s->dmacon);
 
-    case AGNUS_VPOSR: {
-        uint16_t vposr, vhposr;
-        get_beam(&vposr, &vhposr);
-        return vposr;
+        // Raise VERTB
+        agnus_intreq_set(s, INT_VERTB);
+
+        // Copper runs first — sets up BPLxPT, COLOR, BPLCON for this frame.
+        copper_vbl_execute(&s->copper, s);
+
+        // Render the frame into the Emu68 framebuffer.
+        denise_render_frame(s);
     }
-    case AGNUS_VHPOSR: {
-        uint16_t vposr, vhposr;
-        get_beam(&vposr, &vhposr);
-        return vhposr;
+
+    // Future:
+    // copper_step_scanline(...)
+    // DMA scheduler
+    // audio timing hooks
+}
+
+// ---------------------------------------------------------------------------
+// MMIO
+// ---------------------------------------------------------------------------
+
+uint32_t agnus_read_reg(AgnusState *s, uint16_t reg)
+{
+    switch (reg) {
+    case AGNUS_DMACONR:
+        return s->dmacon;
+
+    case AGNUS_VPOSR:
+    {
+        uint16_t v, h;
+        agnus_get_beam(s, &v, &h);
+        return v;
+    }
+
+    case AGNUS_VHPOSR:
+    {
+        uint16_t v, h;
+        agnus_get_beam(s, &v, &h);
+        return h;
     }
 
     case AGNUS_INTENAR:
-        return bellatrix_intena;
+        return s->intena;
 
     case AGNUS_INTREQR:
-        return bellatrix_intreq;
+        return s->intreq;
 
     default:
-        return denise_read(addr);
+        return 0;
     }
 }
 
-void agnus_write(uint32_t addr, uint32_t value, int size)
+void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
 {
     (void)size;
-    uint16_t v = (uint16_t)value;
 
-    switch (addr) {
+    uint16_t raw = (uint16_t)value;
+
+    switch (reg) {
     case AGNUS_INTENA:
-        if (v & 0x8000) bellatrix_intena |=  (v & 0x7FFF);
-        else            bellatrix_intena &= ~(v & 0x7FFF);
-        notify_ipl();
-        break;
+        agnus_apply_setclr_15(&s->intena, raw, 0x7FFFu);
+        agnus_notify_ipl(s);
+        return;
 
     case AGNUS_INTREQ:
-        // Bit 15=1 → set bits; bit 15=0 → clear bits (acknowledge).
-        if (v & 0x8000) bellatrix_intreq |=  (v & 0x3FFF);
-        else            bellatrix_intreq &= ~(v & 0x3FFF);
-        notify_ipl();
-        break;
+        agnus_apply_setclr_15(&s->intreq, raw, 0x3FFFu);
+        agnus_notify_ipl(s);
+        return;
 
     case AGNUS_DMACON:
-        if (v & 0x8000) bellatrix_dmacon |=  (v & 0x7FFF);
-        else            bellatrix_dmacon &= ~(v & 0x7FFF);
-        break;
+        agnus_apply_setclr_15(&s->dmacon, raw, 0x7FFFu);
+        return;
 
-    // Copper pointer and strobe registers
-    case COPPER_COP1LCH:
-    case COPPER_COP1LCL:
-    case COPPER_COP2LCH:
-    case COPPER_COP2LCL:
-    case COPPER_COPJMP1:
-    case COPPER_COPJMP2:
-    case COPPER_COPINS:
-        copper_write(addr, v);
-        break;
+    // Display window / data fetch
+    case AGNUS_DIWSTRT: s->diwstrt = raw; return;
+    case AGNUS_DIWSTOP: s->diwstop = raw; return;
+    case AGNUS_DDFSTRT: s->ddfstrt = raw; return;
+    case AGNUS_DDFSTOP: s->ddfstop = raw; return;
+
+    // Bitplane pointers
+    case AGNUS_BPL1PTH: s->bplpth[0] = raw; return;
+    case AGNUS_BPL1PTL: s->bplptl[0] = raw; return;
+    case AGNUS_BPL2PTH: s->bplpth[1] = raw; return;
+    case AGNUS_BPL2PTL: s->bplptl[1] = raw; return;
+    case AGNUS_BPL3PTH: s->bplpth[2] = raw; return;
+    case AGNUS_BPL3PTL: s->bplptl[2] = raw; return;
+    case AGNUS_BPL4PTH: s->bplpth[3] = raw; return;
+    case AGNUS_BPL4PTL: s->bplptl[3] = raw; return;
+    case AGNUS_BPL5PTH: s->bplpth[4] = raw; return;
+    case AGNUS_BPL5PTL: s->bplptl[4] = raw; return;
+    case AGNUS_BPL6PTH: s->bplpth[5] = raw; return;
+    case AGNUS_BPL6PTL: s->bplptl[5] = raw; return;
 
     default:
-        denise_write(addr, v);
         break;
     }
+
+    if (agnus_is_blitter_reg(reg)) {
+        blitter_write_reg(&s->blitter, s, reg, raw);
+        return;
+    }
+
+    if (agnus_is_copper_reg(reg)) {
+        copper_write_reg(&s->copper, reg, raw);
+        return;
+    }
+
+    // Denise-owned: BPLCON, BPL1/2MOD, COLOR palette
+    if (reg == 0x0100u || reg == 0x0102u || reg == 0x0104u ||
+        reg == 0x0108u || reg == 0x010Au ||
+        (reg >= 0x0180u && reg <= 0x01BEu && (reg & 1) == 0)) {
+        denise_write(reg, raw);
+        return;
+    }
+
+    (void)raw;
 }

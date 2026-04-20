@@ -1,29 +1,21 @@
 // src/chipset/agnus/copper.c
 //
-// Copper co-processor — batch execution at VBL time.
+// Copper co-processor — simplified VBL-batch model.
 //
-// Model (Phase 4, simplified):
-//   - At each VBL the PC is reloaded from COP1LC.
-//   - MOVE instructions are dispatched immediately to agnus_write().
-//   - WAIT instructions are skipped through (all MOVEs execute regardless of
-//     beam position), except the end-of-list sentinel $FFFF/$FFFE which stops
-//     execution.
-//   - SKIP instructions are ignored.
+// Current model:
+//   - At each VBL, PC is reloaded from COP1LC.
+//   - MOVE instructions write directly to Agnus-owned register API.
+//   - WAIT/SKIP are executed through, except the standard end sentinel
+//     FFFF / FFFE which stops execution.
+//   - This is enough for static-frame setup before final render.
 //
-// This gives the correct final state of all palette and bitplane-pointer
-// registers before denise_render_frame() is called — which is all that
-// matters for a static-frame render without mid-scanline colour effects.
-//
-// Future: for per-scanline copper effects, copper_vbl_execute() can be
-// replaced by a scanline-driven scheduler.
+// Future:
+//   - Convert to scanline/raster scheduler if mid-frame copper effects are needed.
 
 #include "copper.h"
-#include "chipset/agnus/agnus.h"
-#include <stdint.h>
 
-// ---------------------------------------------------------------------------
-// Chip RAM access
-// ---------------------------------------------------------------------------
+#include "agnus.h"
+#include "support.h"
 
 #define CHIP_RAM_VIRT  0xffffff9000000000ULL
 #define CHIP_RAM_MASK  0x001FFFFFUL   // 2 MB
@@ -33,82 +25,102 @@ static inline uint16_t chip_read16(uint32_t addr)
     return *(const volatile uint16_t *)(CHIP_RAM_VIRT + (addr & CHIP_RAM_MASK));
 }
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
-
-static uint32_t s_cop1lc = 0;
-static uint32_t s_cop2lc = 0;
-
-// ---------------------------------------------------------------------------
-// API
-// ---------------------------------------------------------------------------
-
-void copper_init(void)
+void copper_init(CopperState *c)
 {
-    s_cop1lc = 0;
-    s_cop2lc = 0;
+    c->cop1lc = 0;
+    c->cop2lc = 0;
+    c->pc     = 0;
 }
 
-void copper_write(uint32_t addr, uint16_t value)
+void copper_write_reg(CopperState *c, uint16_t reg, uint16_t value)
 {
-    switch (addr) {
+    switch (reg) {
     case COPPER_COP1LCH:
-        s_cop1lc = (s_cop1lc & 0x0000FFFFU) | ((uint32_t)(value & 0x001F) << 16);
-        break;
+        c->cop1lc = (c->cop1lc & 0x0000FFFFu) | ((uint32_t)(value & 0x001Fu) << 16);
+        return;
+
     case COPPER_COP1LCL:
-        s_cop1lc = (s_cop1lc & 0x001F0000U) | (uint32_t)(value & 0xFFFEU);
-        break;
+        c->cop1lc = (c->cop1lc & 0x001F0000u) | (uint32_t)(value & 0xFFFEu);
+        return;
+
     case COPPER_COP2LCH:
-        s_cop2lc = (s_cop2lc & 0x0000FFFFU) | ((uint32_t)(value & 0x001F) << 16);
-        break;
+        c->cop2lc = (c->cop2lc & 0x0000FFFFu) | ((uint32_t)(value & 0x001Fu) << 16);
+        return;
+
     case COPPER_COP2LCL:
-        s_cop2lc = (s_cop2lc & 0x001F0000U) | (uint32_t)(value & 0xFFFEU);
-        break;
+        c->cop2lc = (c->cop2lc & 0x001F0000u) | (uint32_t)(value & 0xFFFEu);
+        return;
+
     case COPPER_COPJMP1:
+        c->pc = c->cop1lc;
+        return;
+
     case COPPER_COPJMP2:
+        c->pc = c->cop2lc;
+        return;
+
     case COPPER_COPINS:
-        // Strobes and direct writes: no persistent state needed here.
-        break;
+        // no persistent behavior in this simplified model
+        return;
+
     default:
-        break;
+        kprintf("[COPPER] unhandled write reg=%04x value=%04x\n",
+                (unsigned)reg,
+                (unsigned)value);
+        return;
     }
 }
 
-uint32_t copper_read(uint32_t addr)
+uint32_t copper_read_reg(CopperState *c, uint16_t reg)
 {
-    (void)addr;
-    return 0; // copper registers are write-only on real hardware
+    (void)c;
+    (void)reg;
+
+    // Copper regs are effectively write-only for our current model.
+    return 0;
 }
 
-void copper_vbl_execute(void)
+void copper_vbl_execute(CopperState *c, AgnusState *agnus)
 {
-    // Reload from COP1LC at every VBL — standard Amiga behaviour.
-    uint32_t pc = s_cop1lc;
-    if (!pc) return;
+    uint32_t pc = c->cop1lc;
 
-    // Safety limit: prevent infinite loops from corrupt copper lists.
+    if (!pc) {
+        return;
+    }
+
+    // Safety guard against corrupted lists / loops.
     int limit = 8192;
 
-    pc &= CHIP_RAM_MASK & ~1U; // word-aligned, chip RAM bounds
+    pc &= CHIP_RAM_MASK & ~1u;
+    c->pc = pc;
 
     while (limit-- > 0) {
-        if ((pc + 3) > CHIP_RAM_MASK) break;
+        if ((pc + 3u) > CHIP_RAM_MASK) {
+            break;
+        }
 
         uint16_t ir1 = chip_read16(pc);
-        uint16_t ir2 = chip_read16(pc + 2);
-        pc += 4;
+        uint16_t ir2 = chip_read16(pc + 2u);
+        pc += 4u;
 
-        if (!(ir1 & 1)) {
-            // MOVE: destination register = $DFF000 | (ir1 & $01FE)
-            // Only allow addresses >= $DFF040 (copper DANGER disabled).
-            uint32_t reg = 0xDFF000U | (uint32_t)(ir1 & 0x01FEU);
-            if ((ir1 & 0x01FEU) >= 0x0040U)
-                agnus_write(reg, ir2, 2);
+        if (!(ir1 & 1u)) {
+            // MOVE
+            uint16_t reg = (uint16_t)(ir1 & 0x01FEu);
+
+            // DANGER bit emulation simplificada:
+            // só permitimos writes a partir de $40.
+            if (reg >= 0x0040u) {
+                agnus_write_reg(agnus, reg, ir2, 2);
+            }
         } else {
-            // WAIT or SKIP: stop only on the end-of-list sentinel.
-            if (ir1 == 0xFFFFU && (ir2 & 0xFFFEU) == 0xFFFEU) break;
-            // Other WAITs/SKIPs: execute through.
+            // WAIT or SKIP
+            if (ir1 == 0xFFFFu && (ir2 & 0xFFFEu) == 0xFFFEu) {
+                break;
+            }
+
+            // Other WAIT/SKIP are ignored in this simplified phase.
         }
     }
+
+    c->pc = pc;
 }
