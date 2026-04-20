@@ -8,27 +8,62 @@ Bellatrix is a software Amiga chipset emulator that replaces the PiStorm hardwar
 
 Emu68 handles M68K→AArch64 JIT translation; Bellatrix replaces only its bus backend. The JIT core is untouched.
 
+## Architectural Principles
+
+The authoritative architecture is documented in `docs/timing_and_architetura.md` and `docs/roadmap.md`.
+
+Key rules:
+- **The chipset owns observable time** — not the machine, not Emu68.
+- **The machine integrates** — init, reset, wiring, IPL publication.
+- **The bus is a synchronisation protocol** — not just address decode.
+- **Paula owns INTREQ/INTENA** — CIA and Agnus raise events; Paula consolidates.
+- **DMA belongs to Agnus** — arbitration, copper, blitter, beam.
+- **Denise is an explicit instance** — not a singleton global.
+- **Copper is subordinate to Agnus** — not an independent subsystem.
+
+Component composition:
+```
+BellatrixMachine
+ ├── cpu   (struct M68KState *)
+ ├── cia_a (CIA)
+ ├── cia_b (CIA)
+ ├── paula (Paula)
+ ├── agnus (Agnus / AgnusState)
+ │    └── copper, blitter, dma
+ └── denise (Denise)
+```
+
 ## Repository Structure
 
 ```
 bellatrix/
-  emu68/                          # git submodule → michalsc/Emu68 (READ-ONLY upstream)
-  src/variants/bellatrix/         # all new Bellatrix code
-    bellatrix.h / bellatrix.c     # bus entry point: init + dispatch
+  emu68/                    # git submodule → michalsc/Emu68 (READ-ONLY upstream)
+  src/
+    cpu/
+      bellatrix.h/.c        # Emu68 bus entry point: init + bus dispatch
+      cpu_iface.h/.c        # CPU interface helpers
+    core/
+      machine.h/.c          # BellatrixMachine — integration and bus protocol
+      btrace.h/.c           # bus trace — JSON Lines logging
     chipset/
-      btrace.h / btrace.c         # bus trace — JSON Lines logging
-      cia.h / cia.c               # (Phase 2+) CIA 8520 emulation
-      agnus.h / agnus.c           # (Phase 3+) Agnus, copper, DMA
-      ...
-    platform/
-      pal.h                       # Platform Abstraction Layer — only include
+      cia/cia.h/.c          # CIA 8520 (CIA_State / CIA typedef)
+      agnus/
+        agnus.h/.c          # Agnus beam, DMA, copper, blitter (AgnusState / Agnus typedef)
+        copper.h/.c         # Copper co-processor (subordinate to Agnus)
+        blitter.h/.c        # Blitter (subordinate to Agnus)
+        dma.h/.c            # DMA arbitration
+      denise/denise.h/.c    # Denise bitplane render (instance-based)
+      paula/paula.h/.c      # Paula: INTREQ/INTENA ownership, IRQ consolidation
+    host/
+      pal.h                 # Platform Abstraction Layer
       raspi3/
-        pal_debug.c               # PAL_Debug_* via Emu68's kprintf
-        pal_ipl.c                 # PAL_IPL_Set/Clear → M68KState.INT
-        pal_core.c                # stubs (Phase 3: dedicated ARM core)
+        pal_debug.c         # PAL_Debug_* via Emu68's kprintf
+        pal_ipl.c           # PAL_IPL_Set/Clear → M68KState.INT
+        pal_core.c          # runtime poll + single-core stubs
+        time.c/.h           # host timer abstraction
   patches/
-    0001-add-bellatrix-variant-cmake.patch   # CMakeLists.txt changes
-    0002-add-bellatrix-bus-hook.patch        # vectors.c + start.c changes
+    0001-add-bellatrix-variant-cmake.patch
+    0002-add-bellatrix-bus-hook.patch
   scripts/
     setup.sh    # apply patches + prerequisite check
     build.sh    # cmake + make with VARIANT=bellatrix
@@ -38,6 +73,10 @@ bellatrix/
       btrace.py    # serial capture → JSON Lines
       analyze.py   # log analysis → unimplemented register report
   referencias/Emu68/   # reference copy of Emu68 source — READ ONLY, never modify
+  docs/
+    roadmap.md                  # migration roadmap — architectural decisions
+    timing_and_architetura.md   # timing model and component responsibilities
+  AI_context/                   # sprint-style session logs
 ```
 
 ## Build Commands
@@ -115,7 +154,8 @@ Btrace verbosity is controlled at runtime by writing to address `0xDFFF00`:
 ## Session Continuity
 
 - `AI_context/` — sprint-style session log. Read all files here before starting work.
-- `docs/bellatrix_arquitetura.docx` — authoritative architecture document (Revision 3).
+- `docs/roadmap.md` — architectural decisions and migration plan.
+- `docs/timing_and_architetura.md` — timing model and component contract.
 - `referencias/Emu68/` — reference copy of Emu68 for reading only.
 
 ## Implementation Phases
