@@ -1,21 +1,24 @@
 // src/chipset/cia/cia.c
 
 #include "cia.h"
+#include "chipset/paula/paula.h"
 #include "support.h"
 
-static inline void cia_raise_icr(CIA_State *cia, uint8_t bits)
+static inline void cia_raise_icr(CIA *cia, uint8_t bits)
 {
     cia->icr_data |= (uint8_t)(bits & 0x1Fu);
+
+    if (cia_irq_pending(cia) && cia->paula)
+        paula_irq_raise(cia->paula, cia->paula_irq_bit);
 }
 
 static int cia_timer_advance(uint16_t *counter,
-                             uint16_t latch,
-                             bool continuous,
-                             uint64_t ticks)
+                             uint16_t  latch,
+                             bool      continuous,
+                             uint64_t  ticks)
 {
-    if (ticks == 0) {
+    if (ticks == 0)
         return 0;
-    }
 
     int underflows = 0;
 
@@ -28,9 +31,9 @@ static int cia_timer_advance(uint16_t *counter,
             return underflows;
         }
 
-        if (latch > 0) {
+        if (latch > 0)
             *counter = latch;
-        } else {
+        else {
             *counter = 0;
             return underflows;
         }
@@ -40,17 +43,20 @@ static int cia_timer_advance(uint16_t *counter,
     return underflows;
 }
 
-static void cia_tod_increment(CIA_State *cia, uint32_t increments)
+static void cia_tod_increment(CIA *cia, uint32_t increments)
 {
     while (increments--) {
         cia->tod = (cia->tod + 1u) & 0x00FFFFFFu;
-        if (cia->tod == cia->tod_alarm) {
+        if (cia->tod == cia->tod_alarm)
             cia_raise_icr(cia, CIA_ICR_ALRM);
-        }
     }
 }
 
-void cia_init(CIA_State *cia)
+/* ---------------------------------------------------------------------------
+ * Lifecycle
+ * ------------------------------------------------------------------------- */
+
+void cia_init(CIA *cia, CIA_ID id)
 {
     cia->pra  = 0xFF;
     cia->prb  = 0xFF;
@@ -69,72 +75,120 @@ void cia_init(CIA_State *cia)
     cia->tb_latch   = 0xFFFF;
     cia->tb_counter = 0xFFFF;
 
-    cia->tod        = 0x000000u;
-    cia->tod_alarm  = 0x00FFFFu;
-    cia->tod_latch  = 0x000000u;
+    cia->tod         = 0x000000u;
+    cia->tod_alarm   = 0x00FFFFu;
+    cia->tod_latch   = 0x000000u;
     cia->tod_latched = false;
     cia->tod_subticks = 0;
+
+    cia->irq_level    = (id == CIA_PORT_A) ? 2u : 6u;
+    cia->paula_irq_bit = (id == CIA_PORT_A) ? (uint16_t)PAULA_INT_PORTS
+                                              : (uint16_t)PAULA_INT_EXTER;
+    cia->paula = NULL;
 }
 
-void cia_step(CIA_State *cia, uint64_t ticks)
+void cia_reset(CIA *cia)
 {
-    if (!ticks) {
+    uint8_t       saved_irq_level    = cia->irq_level;
+    uint16_t      saved_paula_irq    = cia->paula_irq_bit;
+    struct Paula *saved_paula        = cia->paula;
+
+    cia->pra  = 0xFF;
+    cia->prb  = 0xFF;
+    cia->ddra = 0x00;
+    cia->ddrb = 0x00;
+    cia->sdr  = 0x00;
+
+    cia->icr_mask = 0x00;
+    cia->icr_data = 0x00;
+
+    cia->cra = 0x00;
+    cia->crb = 0x00;
+
+    cia->ta_latch   = 0xFFFF;
+    cia->ta_counter = 0xFFFF;
+    cia->tb_latch   = 0xFFFF;
+    cia->tb_counter = 0xFFFF;
+
+    cia->tod         = 0x000000u;
+    cia->tod_alarm   = 0x00FFFFu;
+    cia->tod_latch   = 0x000000u;
+    cia->tod_latched = false;
+    cia->tod_subticks = 0;
+
+    cia->irq_level    = saved_irq_level;
+    cia->paula_irq_bit = saved_paula_irq;
+    cia->paula        = saved_paula;
+}
+
+/* ---------------------------------------------------------------------------
+ * Wiring
+ * ------------------------------------------------------------------------- */
+
+void cia_attach_paula(CIA *cia, struct Paula *paula)
+{
+    cia->paula = paula;
+}
+
+/* ---------------------------------------------------------------------------
+ * Step
+ * ------------------------------------------------------------------------- */
+
+void cia_step(CIA *cia, uint64_t ticks)
+{
+    if (!ticks)
         return;
-    }
 
     if ((cia->cra & CIA_CRA_START) && !(cia->cra & CIA_CRA_INMODE)) {
         bool continuous = !(cia->cra & CIA_CRA_RUNMODE);
-
-        int uf = cia_timer_advance(&cia->ta_counter,
-                                   cia->ta_latch,
-                                   continuous,
-                                   ticks);
-
+        int uf = cia_timer_advance(&cia->ta_counter, cia->ta_latch, continuous, ticks);
         if (uf > 0) {
             cia_raise_icr(cia, CIA_ICR_TA);
-
-            if (cia->cra & CIA_CRA_RUNMODE) {
+            if (cia->cra & CIA_CRA_RUNMODE)
                 cia->cra &= (uint8_t)~CIA_CRA_START;
-            }
         }
     }
 
     if (cia->crb & CIA_CRB_START) {
         uint8_t inmode = (uint8_t)((cia->crb >> 5) & 0x03u);
-
         if (inmode == 0) {
             bool continuous = !(cia->crb & CIA_CRB_RUNMODE);
-
-            int uf = cia_timer_advance(&cia->tb_counter,
-                                       cia->tb_latch,
-                                       continuous,
-                                       ticks);
-
+            int uf = cia_timer_advance(&cia->tb_counter, cia->tb_latch, continuous, ticks);
             if (uf > 0) {
                 cia_raise_icr(cia, CIA_ICR_TB);
-
-                if (cia->crb & CIA_CRB_RUNMODE) {
+                if (cia->crb & CIA_CRB_RUNMODE)
                     cia->crb &= (uint8_t)~CIA_CRB_START;
-                }
             }
         }
     }
 
     cia->tod_subticks += (uint32_t)ticks;
-
     if (cia->tod_subticks >= CIA_TOD_TICKS_PER_INCREMENT) {
-        uint32_t increments = cia->tod_subticks / CIA_TOD_TICKS_PER_INCREMENT;
+        uint32_t inc = cia->tod_subticks / CIA_TOD_TICKS_PER_INCREMENT;
         cia->tod_subticks %= CIA_TOD_TICKS_PER_INCREMENT;
-        cia_tod_increment(cia, increments);
+        cia_tod_increment(cia, inc);
     }
 }
 
-int cia_irq_pending(const CIA_State *cia)
+/* ---------------------------------------------------------------------------
+ * IRQ status
+ * ------------------------------------------------------------------------- */
+
+int cia_irq_pending(const CIA *cia)
 {
     return (cia->icr_data & cia->icr_mask) != 0;
 }
 
-uint8_t cia_read_reg(CIA_State *cia, uint8_t reg)
+uint8_t cia_compute_ipl(const CIA *cia)
+{
+    return cia_irq_pending(cia) ? cia->irq_level : 0u;
+}
+
+/* ---------------------------------------------------------------------------
+ * MMIO
+ * ------------------------------------------------------------------------- */
+
+uint8_t cia_read_reg(CIA *cia, uint8_t reg)
 {
     switch (reg) {
     case CIA_REG_PRA:
@@ -170,9 +224,8 @@ uint8_t cia_read_reg(CIA_State *cia, uint8_t reg)
         return (uint8_t)(cia->tod & 0xFFu);
 
     case CIA_REG_TODMID:
-        if (cia->tod_latched) {
+        if (cia->tod_latched)
             return (uint8_t)((cia->tod_latch >> 8) & 0xFFu);
-        }
         return (uint8_t)((cia->tod >> 8) & 0xFFu);
 
     case CIA_REG_TODHI:
@@ -183,20 +236,16 @@ uint8_t cia_read_reg(CIA_State *cia, uint8_t reg)
     case CIA_REG_SDR:
         return cia->sdr;
 
-    case CIA_REG_ICR:
-    {
+    case CIA_REG_ICR: {
         uint8_t val = cia->icr_data;
-
-        if (cia->icr_data & cia->icr_mask) {
+        if (cia->icr_data & cia->icr_mask)
             val |= CIA_ICR_IRQ;
-        }
-
         kprintf("[CIA] ICR read -> %02x (mask=%02x data=%02x), clearing latched data\n",
-                (unsigned)val,
-                (unsigned)cia->icr_mask,
-                (unsigned)cia->icr_data);
-
+                (unsigned)val, (unsigned)cia->icr_mask, (unsigned)cia->icr_data);
         cia->icr_data = 0x00;
+        /* Clear Paula bit since CPU acknowledged */
+        if (cia->paula)
+            paula_irq_clear(cia->paula, cia->paula_irq_bit);
         return val;
     }
 
@@ -212,24 +261,13 @@ uint8_t cia_read_reg(CIA_State *cia, uint8_t reg)
     }
 }
 
-void cia_write_reg(CIA_State *cia, uint8_t reg, uint8_t val)
+void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
 {
     switch (reg) {
-    case CIA_REG_PRA:
-        cia->pra = val;
-        return;
-
-    case CIA_REG_PRB:
-        cia->prb = val;
-        return;
-
-    case CIA_REG_DDRA:
-        cia->ddra = val;
-        return;
-
-    case CIA_REG_DDRB:
-        cia->ddrb = val;
-        return;
+    case CIA_REG_PRA:   cia->pra  = val; return;
+    case CIA_REG_PRB:   cia->prb  = val; return;
+    case CIA_REG_DDRA:  cia->ddra = val; return;
+    case CIA_REG_DDRB:  cia->ddrb = val; return;
 
     case CIA_REG_TALO:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0xFF00u) | val);
@@ -237,9 +275,8 @@ void cia_write_reg(CIA_State *cia, uint8_t reg, uint8_t val)
 
     case CIA_REG_TAHI:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0x00FFu) | ((uint16_t)val << 8));
-        if (!(cia->cra & CIA_CRA_START)) {
+        if (!(cia->cra & CIA_CRA_START))
             cia->ta_counter = cia->ta_latch;
-        }
         return;
 
     case CIA_REG_TBLO:
@@ -248,9 +285,8 @@ void cia_write_reg(CIA_State *cia, uint8_t reg, uint8_t val)
 
     case CIA_REG_TBHI:
         cia->tb_latch = (uint16_t)((cia->tb_latch & 0x00FFu) | ((uint16_t)val << 8));
-        if (!(cia->crb & CIA_CRB_START)) {
+        if (!(cia->crb & CIA_CRB_START))
             cia->tb_counter = cia->tb_latch;
-        }
         return;
 
     case CIA_REG_TODLO:
@@ -282,48 +318,33 @@ void cia_write_reg(CIA_State *cia, uint8_t reg, uint8_t val)
         return;
 
     case CIA_REG_ICR:
-        if (val & CIA_ICR_SETCLR) {
+        if (val & CIA_ICR_SETCLR)
             cia->icr_mask |= (uint8_t)(val & 0x1Fu);
-        } else {
+        else
             cia->icr_mask &= (uint8_t)~(val & 0x1Fu);
-        }
-
         kprintf("[CIA] ICR write val=%02x -> mask=%02x\n",
-                (unsigned)val,
-                (unsigned)cia->icr_mask);
+                (unsigned)val, (unsigned)cia->icr_mask);
         return;
 
     case CIA_REG_CRA:
         cia->cra = (uint8_t)(val & (uint8_t)~CIA_CRA_LOAD);
-
-        if (val & CIA_CRA_LOAD) {
+        if (val & CIA_CRA_LOAD)
             cia->ta_counter = cia->ta_latch;
-        }
-
         kprintf("[CIA] CRA <- %02x  counter=%04x latch=%04x\n",
-                (unsigned)cia->cra,
-                (unsigned)cia->ta_counter,
-                (unsigned)cia->ta_latch);
+                (unsigned)cia->cra, (unsigned)cia->ta_counter, (unsigned)cia->ta_latch);
         return;
 
     case CIA_REG_CRB:
         cia->crb = (uint8_t)(val & (uint8_t)~CIA_CRB_LOAD);
-
-        if (val & CIA_CRB_LOAD) {
+        if (val & CIA_CRB_LOAD)
             cia->tb_counter = cia->tb_latch;
-        }
-
         kprintf("[CIA] CRB <- %02x  counter=%04x latch=%04x alarm_mode=%d\n",
-                (unsigned)cia->crb,
-                (unsigned)cia->tb_counter,
-                (unsigned)cia->tb_latch,
-                !!(cia->crb & CIA_CRB_ALARM));
+                (unsigned)cia->crb, (unsigned)cia->tb_counter,
+                (unsigned)cia->tb_latch, !!(cia->crb & CIA_CRB_ALARM));
         return;
 
     default:
-        kprintf("[CIA] unhandled write reg=%02x val=%02x\n",
-                (unsigned)reg,
-                (unsigned)val);
+        kprintf("[CIA] unhandled write reg=%02x val=%02x\n", (unsigned)reg, (unsigned)val);
         return;
     }
 }

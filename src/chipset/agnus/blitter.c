@@ -2,6 +2,7 @@
 
 #include "blitter.h"
 #include "agnus.h"
+#include "chipset/paula/paula.h"
 #include "support.h"
 
 // ---------------------------------------------------------------------------
@@ -34,7 +35,7 @@ static void blitter_start(BlitterState *b, AgnusState *agnus)
             (unsigned)b->cycles_remaining);
 
     // while busy, clear any previous completion interrupt latch
-    agnus_intreq_clear(agnus, INT_BLIT);
+    agnus_intreq_clear(agnus, PAULA_INT_BLIT);
 }
 
 // ---------------------------------------------------------------------------
@@ -65,9 +66,9 @@ void blitter_step(BlitterState *b, AgnusState *agnus, uint64_t ticks)
         b->busy = 0;
         b->cycles_remaining = 0;
 
-        kprintf("[BLITTER] complete -> INT_BLIT\n");
+        kprintf("[BLITTER] complete -> PAULA_INT_BLIT\n");
 
-        agnus_intreq_set(agnus, INT_BLIT);
+        agnus_intreq_set(agnus, PAULA_INT_BLIT);
         return;
     }
 

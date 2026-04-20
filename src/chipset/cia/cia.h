@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+struct Paula;
+
 enum {
     CIA_REG_PRA    = 0x0,
     CIA_REG_PRB    = 0x1,
@@ -51,6 +53,11 @@ enum {
 
 #define CIA_TOD_TICKS_PER_INCREMENT 227u
 
+typedef enum {
+    CIA_PORT_A = 0,   /* CIA-A: raises PORTS (IPL 2) */
+    CIA_PORT_B = 1    /* CIA-B: raises EXTER (IPL 6) */
+} CIA_ID;
+
 typedef struct CIA_State {
     uint8_t pra;
     uint8_t prb;
@@ -74,16 +81,26 @@ typedef struct CIA_State {
     uint32_t tod_alarm;
 
     uint32_t tod_latch;
-    bool tod_latched;
+    bool     tod_latched;
 
     uint32_t tod_subticks;
+
+    /* wiring */
+    uint8_t       irq_level;     /* 2 = CIA-A (PORTS), 6 = CIA-B (EXTER)       */
+    uint16_t      paula_irq_bit; /* PAULA_INT_PORTS or PAULA_INT_EXTER          */
+    struct Paula *paula;         /* attached Paula; NULL until cia_attach_paula */
 } CIA_State;
 
-void cia_init(CIA_State *cia);
-void cia_step(CIA_State *cia, uint64_t ticks);
-int cia_irq_pending(const CIA_State *cia);
+typedef CIA_State CIA;
 
-uint8_t cia_read_reg(CIA_State *cia, uint8_t reg);
-void cia_write_reg(CIA_State *cia, uint8_t reg, uint8_t val);
+void    cia_init(CIA *cia, CIA_ID id);
+void    cia_reset(CIA *cia);
+void    cia_step(CIA *cia, uint64_t ticks);
+int     cia_irq_pending(const CIA *cia);
+uint8_t cia_compute_ipl(const CIA *cia);
+void    cia_attach_paula(CIA *cia, struct Paula *paula);
+
+uint8_t cia_read_reg(CIA *cia, uint8_t reg);
+void    cia_write_reg(CIA *cia, uint8_t reg, uint8_t val);
 
 #endif

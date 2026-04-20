@@ -1,100 +1,189 @@
 // src/core/machine.c
 
-#include "machine.h"
+#include "core/machine.h"
 
 #include <string.h>
 
-/*
- * Instância global única da máquina.
- * Por enquanto Bellatrix segue singleton no nível da máquina inteira.
- */
 static BellatrixMachine g_machine;
 
-/* ------------------------------------------------------------------------- */
-/* Accessor                                                                  */
-/* ------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+ * Address decode
+ * ------------------------------------------------------------------------- */
+
+static inline bool is_custom_addr(uint32_t addr)
+{
+    return (addr >= 0x00dff000u && addr <= 0x00dfffffu);
+}
+
+static inline bool is_cia_a_addr(uint32_t addr)
+{
+    return (addr >= 0x00bfe001u && addr <= 0x00bfef01u);
+}
+
+static inline bool is_cia_b_addr(uint32_t addr)
+{
+    return (addr >= 0x00bfd000u && addr <= 0x00bfdf00u);
+}
+
+/* ---------------------------------------------------------------------------
+ * Internal sync
+ * ------------------------------------------------------------------------- */
+
+static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
+{
+    if (ipl > 7) ipl = 7;
+    m->current_ipl = ipl;
+    if (m->cpu)
+        m->cpu->INT.IPL = ipl;
+}
+
+static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
+{
+    uint8_t ipl = paula_compute_ipl(&m->paula);
+    uint8_t a   = cia_compute_ipl(&m->cia_a);
+    uint8_t b   = cia_compute_ipl(&m->cia_b);
+    if (a > ipl) ipl = a;
+    if (b > ipl) ipl = b;
+    return ipl;
+}
+
+static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
+{
+    if (ticks == 0) return;
+
+    agnus_step(&m->agnus, ticks);
+    cia_step(&m->cia_a, ticks);
+    cia_step(&m->cia_b, ticks);
+    paula_step(&m->paula, ticks);
+    denise_step(&m->denise, ticks);
+
+    m->tick_count += ticks;
+}
+
+/* ---------------------------------------------------------------------------
+ * Lifecycle
+ * ------------------------------------------------------------------------- */
 
 BellatrixMachine *bellatrix_machine_get(void)
 {
     return &g_machine;
 }
 
-/* ------------------------------------------------------------------------- */
-/* Init                                                                      */
-/* ------------------------------------------------------------------------- */
-
 void bellatrix_machine_init(struct M68KState *cpu)
 {
-    memset(&g_machine, 0, sizeof(g_machine));
+    BellatrixMachine *m = &g_machine;
 
-    g_machine.master_ticks = 0;
-    g_machine.cpu = cpu;
+    memset(m, 0, sizeof(*m));
+    m->cpu = cpu;
 
-    // CIA
-    cia_init(&g_machine.cia_a);
-    cia_init(&g_machine.cia_b);
+    agnus_init(&m->agnus);
+    denise_init(&m->denise);
+    paula_init(&m->paula);
+    cia_init(&m->cia_a, CIA_PORT_A);
+    cia_init(&m->cia_b, CIA_PORT_B);
 
-    // Agnus
-    agnus_init(&g_machine.agnus);
+    agnus_attach_denise(&m->agnus, &m->denise);
+    agnus_attach_paula(&m->agnus, &m->paula);
+
+    denise_attach_agnus(&m->denise, &m->agnus);
+
+    paula_attach_agnus(&m->paula, &m->agnus);
+    paula_attach_cia_a(&m->paula, &m->cia_a);
+    paula_attach_cia_b(&m->paula, &m->cia_b);
+
+    cia_attach_paula(&m->cia_a, &m->paula);
+    cia_attach_paula(&m->cia_b, &m->paula);
+
+    m->tick_count = 0;
+    machine_publish_ipl(m, 0);
 }
 
-/* ------------------------------------------------------------------------- */
-/* CIA -> Agnus INTREQ bridge                                                */
-/* ------------------------------------------------------------------------- */
-
-static void machine_update_interrupts(BellatrixMachine *m)
+void bellatrix_machine_reset(void)
 {
-    /*
-     * CIA-A -> INT2 (PORTS)
-     * CIA-B -> INT6 (EXTER)
-     *
-     * INTREQ é nível/latch no Agnus, então re-setar o mesmo bit não quebra
-     * o modelo, mas evitamos churn desnecessário de log.
-     */
+    BellatrixMachine *m = &g_machine;
 
-    if (cia_irq_pending(&m->cia_a)) {
-        if (!(m->agnus.intreq & INT_PORTS)) {
-            agnus_intreq_set(&m->agnus, INT_PORTS);
-        }
-    }
+    agnus_reset(&m->agnus);
+    denise_reset(&m->denise);
+    paula_reset(&m->paula);
+    cia_reset(&m->cia_a);
+    cia_reset(&m->cia_b);
 
-    if (cia_irq_pending(&m->cia_b)) {
-        if (!(m->agnus.intreq & INT_EXTER)) {
-            agnus_intreq_set(&m->agnus, INT_EXTER);
-        }
-    }
+    m->tick_count = 0;
+    machine_publish_ipl(m, 0);
 }
 
-/* ------------------------------------------------------------------------- */
-/* Step (master temporal evolution of the machine)                           */
-/* ------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+ * Synchronization
+ * ------------------------------------------------------------------------- */
 
-void machine_step(BellatrixMachine *m, uint64_t ticks)
+void bellatrix_machine_advance(uint32_t ticks)
 {
-    if (!ticks) {
-        return;
+    machine_step_components(&g_machine, ticks);
+    bellatrix_machine_sync_ipl();
+}
+
+void bellatrix_machine_sync_ipl(void)
+{
+    BellatrixMachine *m = &g_machine;
+    machine_publish_ipl(m, machine_compute_ipl(m));
+}
+
+/* ---------------------------------------------------------------------------
+ * Bus protocol
+ * ------------------------------------------------------------------------- */
+
+uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
+{
+    BellatrixMachine *m = &g_machine;
+    uint32_t value = 0;
+
+    machine_step_components(m, 1);
+
+    if (is_custom_addr(addr)) {
+        if (paula_handles_read(&m->paula, addr))
+            value = paula_read(&m->paula, addr, size);
+        else if (agnus_handles_read(&m->agnus, addr))
+            value = agnus_read(&m->agnus, addr, size);
+        else if (denise_handles_read(&m->denise, addr))
+            value = denise_read(&m->denise, addr, size);
+    } else if (is_cia_a_addr(addr)) {
+        value = cia_read_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0xF));
+    } else if (is_cia_b_addr(addr)) {
+        value = cia_read_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0xF));
     }
 
-    m->master_ticks += ticks;
-
-    // ---------------------------------------------------------
-    // Deterministic order
-    // ---------------------------------------------------------
-
-    // 1. CIA
-    cia_step(&m->cia_a, ticks);
-    cia_step(&m->cia_b, ticks);
-
-    // 2. Agnus (beam + blitter + VBL)
-    agnus_step(&m->agnus, ticks);
-
-    // 3. CIA -> INTREQ integration
-    machine_update_interrupts(m);
-
-    // ---------------------------------------------------------
-    // FUTURE
-    // ---------------------------------------------------------
-    // denise_step(&m->denise, ticks);
-    // paula_step(&m->paula, ticks);
-    // copper_step(...)
+    bellatrix_machine_sync_ipl();
+    return value;
 }
+
+void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
+{
+    BellatrixMachine *m = &g_machine;
+
+    machine_step_components(m, 1);
+
+    if (is_custom_addr(addr)) {
+        if (paula_handles_write(&m->paula, addr))
+            paula_write(&m->paula, addr, value, size);
+        else if (agnus_handles_write(&m->agnus, addr))
+            agnus_write(&m->agnus, addr, value, size);
+        else if (denise_handles_write(&m->denise, addr))
+            denise_write(&m->denise, addr, value, size);
+    } else if (is_cia_a_addr(addr)) {
+        cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0xF), (uint8_t)value);
+    } else if (is_cia_b_addr(addr)) {
+        cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0xF), (uint8_t)value);
+    }
+
+    bellatrix_machine_sync_ipl();
+}
+
+/* ---------------------------------------------------------------------------
+ * Raw access to owned components
+ * ------------------------------------------------------------------------- */
+
+Agnus  *bellatrix_machine_agnus(void)  { return &g_machine.agnus; }
+Denise *bellatrix_machine_denise(void) { return &g_machine.denise; }
+Paula  *bellatrix_machine_paula(void)  { return &g_machine.paula; }
+CIA    *bellatrix_machine_cia_a(void)  { return &g_machine.cia_a; }
+CIA    *bellatrix_machine_cia_b(void)  { return &g_machine.cia_b; }
