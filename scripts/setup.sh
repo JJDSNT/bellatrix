@@ -25,6 +25,11 @@ apply_patch_if_needed() {
     local name
     name="$(basename "$patch")"
 
+    if [ ! -f "$patch" ]; then
+        echo "Skipping missing patch: $name"
+        return 0
+    fi
+
     if git apply --reverse --check "$patch" >/dev/null 2>&1; then
         echo "Patch already applied: $name"
         return 0
@@ -83,8 +88,10 @@ ensure_emu68_gitignore
 
 cd "$EMU68"
 
-apply_patch_if_needed "$PATCHES/0001-add-bellatrix-variant-cmake.patch"
-apply_patch_if_needed "$PATCHES/0002-add-bellatrix-bus-hook.patch"
+for patch in "$PATCHES"/000*.patch; do
+    [ -e "$patch" ] || continue
+    apply_patch_if_needed "$patch"
+done
 
 hide_local_gitignore_change
 

@@ -1,18 +1,16 @@
-From 5c76336686da13b15bb0ddc3c55d0a09d6357666 Mon Sep 17 00:00:00 2001
-From: Jaime Dias <jaimejosediasnt@gmail.com>
-Date: Tue, 14 Apr 2026 05:41:24 -0300
-Subject: [PATCH 2/2] Add bellatrix bus hook, FIQ VBL handler and startup init
-
----
- src/aarch64/start.c   | 26 +++++++++++-----
- src/aarch64/vectors.c | 69 +++++++++++++++++++++++++++++++++++++++++--
- 2 files changed, 86 insertions(+), 9 deletions(-)
-
-diff --git a/src/aarch64/start.c b/src/aarch64/start.c
-index f2060ad..d04113a 100644
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
-@@ -1189,7 +1189,7 @@ void boot(void *dtree)
+@@ -28,6 +28,9 @@
+ #include "version.h"
+ #include "cache.h"
+ #include "sponsoring.h"
++#ifdef BELLATRIX
++#include "bellatrix.h"
++#endif
+ 
+ void _start();
+ void _boot();
+@@ -1189,7 +1192,7 @@
          InitFunctions++;
      }
  
@@ -21,7 +19,7 @@ index f2060ad..d04113a 100644
      if (initramfs_loc != NULL && initramfs_size != 0)
      {
          void *image_start, *image_end;
-@@ -1305,6 +1305,7 @@ void boot(void *dtree)
+@@ -1305,6 +1308,7 @@
  
  #else
  
@@ -29,178 +27,32 @@ index f2060ad..d04113a 100644
      if (rom_copy != 0)
      {
          kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
-@@ -1351,7 +1352,9 @@ void boot(void *dtree)
+@@ -1351,7 +1355,8 @@
              mmu_map(0xf80000, 0xe00000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
          }
      }
 -    else if (initramfs_loc != NULL && initramfs_size != 0)
-+    else
 +#endif /* PISTORM */
 +    if (initramfs_loc != NULL && initramfs_size != 0)
      {
          extern uint32_t rom_mapped;
  
-@@ -1499,7 +1502,14 @@ void boot(void *dtree)
+@@ -1499,7 +1504,11 @@
      if (fast_page0) {
          mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
      }
 -    
 +
 +#ifdef BELLATRIX
-+    {
-+        extern void bellatrix_init(void);
-+        bellatrix_init();
-+    }
++    bellatrix_init();
 +#endif
 +
      M68K_StartEmu(0, NULL);
  
  #endif
-@@ -1887,7 +1897,7 @@ void  __attribute__((used)) stub_ExecutionLoop()
- "       ldp     x29, x30, [sp], #128        \n"
- "       ret                                 \n"
- 
--#ifdef PISTORM
-+#if defined(PISTORM) || defined(BELLATRIX)
- "9:                                         \n"
- "       ldrb    w10, [x0, #%[err]]          \n" // If INT.ARM_err is set then it is serror, map it to NMI
- "       cbz     w10, 991f                   \n"
-@@ -1901,7 +1911,7 @@ void  __attribute__((used)) stub_ExecutionLoop()
- "992:                                       \n"
- 
- // No need to do anything on PiStorm32 - the w1 contains the IPL value already (see few lines above)
--#ifndef PISTORM32
-+#if !defined(PISTORM32) && !defined(BELLATRIX)
- 
- #if PISTORM_WRITE_BUFFER
- "       adrp    x5, bus_lock                \n"
-@@ -2078,9 +2088,9 @@ void M68K_StartEmu(void *addr, void *fdt)
-         __m68k.FP[fp].u64 = 0x7fffffffffffffffULL;
-     }
- 
--#ifdef PISTORM
-+#if defined(PISTORM) || defined(BELLATRIX)
-     (void)fdt;
--    
-+
-     asm volatile("mov %0, #0":"=r"(addr));
- 
-     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
-@@ -2099,7 +2109,9 @@ void M68K_StartEmu(void *addr, void *fdt)
-     __m68k.JIT_CONTROL2 |= dbf_slowdown ? JC2F_DBF_SLOWDOWN : 0;
-     __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH); 
-     __m68k.JIT_CONTROL2 |= ((cs_dist - 1) << JC2B_CHIP_SLOWDOWN_RATIO);
-+#ifdef PISTORM
-     __m68k.JIT_CONTROL2 |= blitwait ? JC2F_BLITWAIT : 0;
-+#endif
- 
- #else
-     __m68k.D[0].u32 = BE32((uint32_t)pitch);
-diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 329d470..c6af4d0 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -142,6 +142,26 @@ void  __attribute__((used)) __stub_vectors()
- "       mrs x0, SPSR_EL1                \n" // Get SPSR
- "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
- "       msr SPSR_EL1, x0                \n"
-+#ifdef BELLATRIX
-+"       mrs  x0, CNTV_CTL_EL0           \n" // Check virtual timer ISTATUS
-+"       tbz  x0, #2, 1f                 \n" // Not our timer — skip
-+"       adrp x0, bellatrix_vbl_interval \n" // Reload timer for next VBL
-+"       ldr  x1, [x0, :lo12:bellatrix_vbl_interval] \n"
-+"       msr  CNTV_TVAL_EL0, x1          \n"
-+"       adrp x0, bellatrix_intreq       \n" // Set INTREQ[VERTB] (bit 5)
-+"       ldrh w1, [x0, :lo12:bellatrix_intreq] \n"
-+"       orr  w1, w1, #0x0020            \n"
-+"       strh w1, [x0, :lo12:bellatrix_intreq] \n"
-+"       adrp x0, bellatrix_intena       \n" // Read INTENA
-+"       ldrh w0, [x0, :lo12:bellatrix_intena] \n"
-+"       tbz  w0, #14, 1f                \n" // Master enable off
-+"       tbz  w0, #5, 1f                 \n" // INTENA[VERTB] disabled
-+"       mrs  x1, TPIDRRO_EL0            \n" // M68KState pointer
-+"       cbz  x1, 1f                     \n"
-+"       mov  w0, #3                     \n" // VBL = IPL 3
-+"       strb w0, [x1, #%[ipl]]          \n" // INT.IPL = 3
-+"       strb w0, [x1, #%[pint]]         \n" // INT.ARM = 3
-+#else
- "       adrp x1, INT_shadow             \n" // Load INTENA shadow
- "       add x1, x1, :lo12:INT_shadow    \n"
- "       ldrh w0, [x1, #%[intena]]       \n"
-@@ -153,12 +173,52 @@ void  __attribute__((used)) __stub_vectors()
- "       mrs x1, TPIDRRO_EL0             \n" // Load CPU context
- "       mov w0, #6                      \n" // Set level 6 IRQ
- "       strb w0, [x1, #%[pint]]         \n"
-+#endif
- "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
- "       eret                            \n"
- "                                       \n"
- "       .balign 0x80                    \n"
--"curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from 
--"       stp x0, x1, [sp, -16]!          \n" // the current EL using the current SP.
-+"curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from
-+                                            // the current EL using the current SP.
-+#ifdef BELLATRIX
-+// Save all caller-saved registers + link register so we can call C.
-+// x18 (M68K PC) is the platform register — C never touches it.
-+// x19–x29 (M68K regs) are callee-saved — C preserves them.
-+// We must save x0–x17 and x30.
-+"       sub  sp, sp, #160               \n"
-+"       stp  x0,  x1,  [sp, #0]        \n"
-+"       stp  x2,  x3,  [sp, #16]       \n"
-+"       stp  x4,  x5,  [sp, #32]       \n"
-+"       stp  x6,  x7,  [sp, #48]       \n"
-+"       stp  x8,  x9,  [sp, #64]       \n"
-+"       stp  x10, x11, [sp, #80]       \n"
-+"       stp  x12, x13, [sp, #96]       \n"
-+"       stp  x14, x15, [sp, #112]      \n"
-+"       stp  x16, x17, [sp, #128]      \n"
-+"       str  x30,      [sp, #144]      \n"
-+"       mrs  x0, SPSR_EL1              \n" // Mask FIQ+IRQ in SPSR so ERET won't re-enable
-+"       orr  x0, x0, #0x0c0            \n"
-+"       msr  SPSR_EL1, x0              \n"
-+"       mrs  x0, CNTV_CTL_EL0          \n" // Check virtual timer ISTATUS bit
-+"       tbz  x0, #2, 1f                \n" // Not our timer — skip
-+"       adrp x0, bellatrix_vbl_interval \n" // Reload timer for next VBL
-+"       ldr  x1, [x0, :lo12:bellatrix_vbl_interval] \n"
-+"       msr  CNTV_TVAL_EL0, x1         \n"
-+"       bl   agnus_vbl_fire             \n" // render frame, set INTREQ[VERTB], tick CIA
-+"1:     ldr  x30,      [sp, #144]      \n"
-+"       ldp  x16, x17, [sp, #128]      \n"
-+"       ldp  x14, x15, [sp, #112]      \n"
-+"       ldp  x12, x13, [sp, #96]       \n"
-+"       ldp  x10, x11, [sp, #80]       \n"
-+"       ldp  x8,  x9,  [sp, #64]       \n"
-+"       ldp  x6,  x7,  [sp, #48]       \n"
-+"       ldp  x4,  x5,  [sp, #32]       \n"
-+"       ldp  x2,  x3,  [sp, #16]       \n"
-+"       ldp  x0,  x1,  [sp, #0]        \n"
-+"       add  sp, sp, #160              \n"
-+"       eret                           \n"
-+#else
-+"       stp x0, x1, [sp, -16]!          \n"
- "       mrs x0, SPSR_EL1                \n" // Get SPSR
- "       orr x0, x0, #0x0c0              \n" // Disable IRQ and FIQ interrupts so that we are not disturbed on return
- "       msr SPSR_EL1, x0                \n"
-@@ -175,6 +235,7 @@ void  __attribute__((used)) __stub_vectors()
- "       strb w0, [x1, #%[pint]]         \n"
- "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
- "       eret                            \n"
-+#endif
- "                                       \n"
- "       .balign 0x80                    \n"
- "curr_el_spx_serror:                    \n" // The exception handler for a System Error 
-@@ -261,7 +322,8 @@ void  __attribute__((used)) __stub_vectors()
- :[pint]"i"(__builtin_offsetof(struct M68KState, INT.ARM)),
-  [perr]"i"(__builtin_offsetof(struct M68KState, INT.ARM_err)),
-  [intena]"i"(__builtin_offsetof(struct INT_shadow, INTENA)),
-- [armpend]"i"(__builtin_offsetof(struct INT_shadow, ARMPending))
-+ [armpend]"i"(__builtin_offsetof(struct INT_shadow, ARMPending)),
-+ [ipl]"i"(__builtin_offsetof(struct M68KState, INT.IPL))
- 
- );}
- 
-@@ -661,12 +723,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -661,6 +661,34 @@
      return 1;
  }
  
@@ -210,32 +62,28 @@ index 329d470..c6af4d0 100644
 +
 +int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
 +{
++    D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
 +    (void)value2;
++
 +    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff)
 +        far &= 0xffffffff;
++
 +    bellatrix_bus_access((uint32_t)far, (uint32_t)value, size, BUS_WRITE);
 +    return 1;
 +}
 +
 +int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
 +{
-+    (void)value2;
++    D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
++
 +    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff)
 +        far &= 0xffffffff;
++
 +    *value = bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);
++    if (value2) *value2 = 0;
 +    return 1;
 +}
 +
  #else
  
  int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
- {
-     D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
--    
-+
-     switch(size)
-     {
-         case 1:
-
--- 
-2.34.1
