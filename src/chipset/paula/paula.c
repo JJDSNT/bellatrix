@@ -4,6 +4,7 @@
 // Audio DMA and disk I/O are stubs for future phases.
 
 #include "paula.h"
+#include "support.h"
 
 /* Custom chip register addresses */
 #define REG_INTENAR  0xDFF01Cu
@@ -115,11 +116,16 @@ int paula_handles_write(const Paula *p, uint32_t addr)
 uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
 {
     (void)size;
+    uint32_t ret = 0;
     switch (addr) {
-    case REG_INTENAR: return p->intena;
-    case REG_INTREQR: return p->intreq;
-    default:          return 0;
+    case REG_INTENAR: ret = p->intena; break;
+    case REG_INTREQR: ret = p->intreq; break;
+    default:          break;
     }
+    kprintf("[PAULA-R] %s -> %04x  (intena=%04x intreq=%04x)\n",
+            addr == REG_INTENAR ? "INTENAR" : "INTREQR",
+            (unsigned)ret, (unsigned)p->intena, (unsigned)p->intreq);
+    return ret;
 }
 
 void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
@@ -133,6 +139,12 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
             p->intena |= (uint16_t)(raw & 0x7FFFu);
         else
             p->intena &= (uint16_t)~(raw & 0x7FFFu);
+        {
+            uint16_t pending = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
+            kprintf("[PAULA-W] INTENA raw=%04x -> intena=%04x intreq=%04x pending=%04x\n",
+                    (unsigned)raw, (unsigned)p->intena,
+                    (unsigned)p->intreq, (unsigned)pending);
+        }
         break;
 
     case REG_INTREQ:
@@ -140,6 +152,12 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
             p->intreq |= (uint16_t)(raw & 0x3FFFu);
         else
             p->intreq &= (uint16_t)~(raw & 0x3FFFu);
+        {
+            uint16_t pending = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
+            kprintf("[PAULA-W] INTREQ raw=%04x -> intreq=%04x intena=%04x pending=%04x\n",
+                    (unsigned)raw, (unsigned)p->intreq,
+                    (unsigned)p->intena, (unsigned)pending);
+        }
         break;
 
     default:
