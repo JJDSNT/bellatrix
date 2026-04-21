@@ -1,5 +1,5 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
-index 732a176..10973fd 100644
+index 732a176..a9d6209 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
 @@ -152,6 +152,13 @@ void MainLoop()
@@ -37,3 +37,59 @@ index 732a176..10973fd 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
+@@ -236,6 +244,45 @@ void MainLoop()
+                 SR &= ~SR_IPL;
+                 SR |= ((level & 7) << SRB_IPL);
+ 
++
++#ifdef BELLATRIX
++                {
++                    uint32_t _old_pc  = (uint32_t)(uintptr_t)PC;
++                    uint32_t _old_sp  = (uint32_t)sp;
++                    uint32_t _vec_addr = ctx->VBR + (uint32_t)vector;
++                    uint32_t _vec_val = 0;
++                    asm volatile("ldr %w0, [%1, %2]" : "=r"(_vec_val) : "r"(ctx->VBR), "r"(vector));
++                    kprintf("[EXC-REQ] kind=irq lvl=%d vec=%04x old_pc=%08x old_sr=%04x old_sp=%08x vec_addr=%08x vec_val=%08x\n",
++                            level, (unsigned)vector, _old_pc, (unsigned)SRcopy, _old_sp, _vec_addr, _vec_val);
++
++                    /* Push exception frame */
++                    asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
++                    asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
++                    asm volatile("strh %w1, [%0, #6]"::"r"(sp),"r"(vector));
++
++                    uint32_t _sp_after = (uint32_t)sp;
++                    uint16_t _w0, _w2; uint32_t _w1;
++                    asm volatile("ldrh %w0, [%1]"     : "=r"(_w0) : "r"(sp));
++                    asm volatile("ldr  %w0, [%1, #2]" : "=r"(_w1) : "r"(sp));
++                    asm volatile("ldrh %w0, [%1, #6]" : "=r"(_w2) : "r"(sp));
++                    kprintf("[EXC-FRAME] fmt=68000 sp=%08x w0=%04x w1=%08x w2=%04x\n",
++                            _sp_after, (unsigned)_w0, _w1, (unsigned)_w2);
++
++                    /* Set SR */
++                    setSR(SR);
++
++                    /* Get VBR */
++                    vbr = ctx->VBR;
++
++                    /* Load PC */
++                    asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector));
++
++                    uint32_t _new_pc = (uint32_t)(uintptr_t)PC;
++                    kprintf("[EXC-PC] old_pc=%08x new_pc=%08x\n", _old_pc, _new_pc);
++                    kprintf("[EXC-DISPATCH] pc=%08x sr=%04x sp=%08x\n",
++                            _new_pc, (unsigned)SR, (uint32_t)sp);
++                }
++#else
+                 /* Push exception frame */
+                 asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
+                 asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
+@@ -248,7 +295,8 @@ void MainLoop()
+                 vbr = ctx->VBR;
+ 
+                 /* Load PC */
+-                asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector)); 
++                asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector));
++#endif /* BELLATRIX */
+             }
+ 
+             /* All interrupts masked or new PC loaded and stack swapped, continue with code execution */
