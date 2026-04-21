@@ -1,3 +1,5 @@
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+index f2060ad..b47f6ed 100644
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
 @@ -28,6 +28,9 @@
@@ -10,7 +12,7 @@
  
  void _start();
  void _boot();
-@@ -1189,7 +1192,7 @@
+@@ -1189,7 +1192,7 @@ void boot(void *dtree)
          InitFunctions++;
      }
  
@@ -19,7 +21,7 @@
      if (initramfs_loc != NULL && initramfs_size != 0)
      {
          void *image_start, *image_end;
-@@ -1305,6 +1308,7 @@
+@@ -1305,6 +1308,7 @@ void boot(void *dtree)
  
  #else
  
@@ -27,7 +29,7 @@
      if (rom_copy != 0)
      {
          kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
-@@ -1351,7 +1355,8 @@
+@@ -1351,7 +1355,8 @@ void boot(void *dtree)
              mmu_map(0xf80000, 0xe00000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
          }
      }
@@ -37,7 +39,7 @@
      {
          extern uint32_t rom_mapped;
  
-@@ -1499,7 +1504,11 @@
+@@ -1499,7 +1504,11 @@ void boot(void *dtree)
      if (fast_page0) {
          mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
      }
@@ -50,9 +52,53 @@
      M68K_StartEmu(0, NULL);
  
  #endif
+@@ -2080,7 +2089,7 @@ void M68K_StartEmu(void *addr, void *fdt)
+ 
+ #ifdef PISTORM
+     (void)fdt;
+-    
++
+     asm volatile("mov %0, #0":"=r"(addr));
+ 
+     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
+@@ -2097,10 +2106,31 @@ void M68K_StartEmu(void *addr, void *fdt)
+     __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
+     __m68k.JIT_CONTROL2 = chip_slowdown ? JC2F_CHIP_SLOWDOWN : 0;
+     __m68k.JIT_CONTROL2 |= dbf_slowdown ? JC2F_DBF_SLOWDOWN : 0;
+-    __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH); 
++    __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH);
+     __m68k.JIT_CONTROL2 |= ((cs_dist - 1) << JC2B_CHIP_SLOWDOWN_RATIO);
+     __m68k.JIT_CONTROL2 |= blitwait ? JC2F_BLITWAIT : 0;
+ 
++#elif defined(BELLATRIX)
++    (void)fdt;
++    (void)addr;
++
++    {
++        extern uint32_t bellatrix_reset_isp;
++        extern uint32_t bellatrix_reset_pc;
++        __m68k.ISP.u32 = BE32(bellatrix_reset_isp);
++        __m68k.PC      = BE32(bellatrix_reset_pc);
++    }
++    __m68k.SR   = BE16(SR_S | SR_IPL);
++    __m68k.FPCR = 0;
++    __m68k.JIT_CACHE_TOTAL = tlsf_get_total_size(jit_tlsf);
++    __m68k.JIT_CACHE_FREE  = tlsf_get_free_size(jit_tlsf);
++    __m68k.JIT_UNIT_COUNT  = 0;
++    __m68k.JIT_SOFTFLUSH_THRESH = EMU68_WEAK_CFLUSH_LIMIT;
++    __m68k.JIT_CONTROL = EMU68_WEAK_CFLUSH ? JCCF_SOFT : 0;
++    __m68k.JIT_CONTROL |= (emu68_icnt & JCCB_INSN_DEPTH_MASK) << JCCB_INSN_DEPTH;
++    __m68k.JIT_CONTROL |= (emu68_irng & JCCB_INLINE_RANGE_MASK) << JCCB_INLINE_RANGE;
++    __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
++
+ #else
+     __m68k.D[0].u32 = BE32((uint32_t)pitch);
+     __m68k.D[1].u32 = BE32((uint32_t)fb_width);
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+index 329d470..28e7cfa 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -661,6 +661,34 @@
+@@ -661,6 +661,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
      return 1;
  }
  

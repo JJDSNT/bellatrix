@@ -1,0 +1,39 @@
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+index 732a176..10973fd 100644
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -152,6 +152,13 @@ void MainLoop()
+             uint32_t vbr;
+ 
+             /* Find out requested IPL level based on ARM state and real IPL line */
++#ifdef BELLATRIX
++            /* Bellatrix writes the actual IPL level into INT.IPL directly.
++             * INT.ARM is not used for level; clear it so this block is not re-entered. */
++            level = (int)ctx->INT.IPL;
++            ctx->INT.ARM = 0;
++            ctx->INT.ARM_err = 0;
++#else
+             if (ctx->INT.ARM_err)
+             {
+                 level = 7;
+@@ -169,7 +176,7 @@ void MainLoop()
+                 if (ctx->INT.IPL > level)
+                 {
+                     level = ctx->INT.IPL;
+-                }    
++                }
+ #else
+                 /* On classic pistorm we need to obtain IPL from PiStorm status register */
+                 if (ctx->INT.IPL)
+@@ -190,9 +197,10 @@ void MainLoop()
+                     {
+                         level = ipl_level;
+                     }
+-                }           
++                }
+ #endif
+             }
++#endif /* BELLATRIX */
+ 
+             /* Get SR and test the IPL mask value */
+             SR = getSR();
