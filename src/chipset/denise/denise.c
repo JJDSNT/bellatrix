@@ -1,22 +1,20 @@
 // src/chipset/denise/denise.c
 //
-// Denise — bitplane fetch and composite to VC4 framebuffer.
+// Denise — bitplane compositor.
 //
-// ARM runs big-endian (-mbig-endian).  Chip RAM is also big-endian (M68K
-// native), so uint16_t reads from chip RAM give the correct M68K word value
-// directly.  The VC4 display controller expects little-endian pixels, so
-// palette entries are pre-converted with LE16() at write time; the hot render
-// path then writes them without any further byte manipulation.
+// Denise does NOT access chip RAM directly.  Bitplane data is fetched by
+// Agnus/bitplanes.c via the BellatrixMemory API and handed to
+// denise_render_line() one scanline at a time.
+//
+// The VC4 display controller expects little-endian pixels, so palette entries
+// are pre-converted with LE16() at write time; the hot render path writes them
+// without further byte manipulation.
 
 #include "denise.h"
 #include "chipset/agnus/agnus.h"
 #include "support.h"
 #include <stdint.h>
 #include <string.h>
-
-/* Chip RAM virtual base (Emu68 kernel space maps physical 0 here) */
-#define CHIP_RAM_VIRT  0xffffff9000000000ULL
-#define CHIP_RAM_MASK  0x001FFFFFUL
 
 /* Framebuffer globals defined in emu68/src/aarch64/start.c */
 extern uint16_t *framebuffer;
@@ -90,6 +88,9 @@ int denise_handles_write(const Denise *d, uint32_t addr)
     if (addr < 0xDFF000u || addr > 0xDFF1FFu)
         return 0;
     uint16_t reg = (uint16_t)(addr & 0x1FEu);
+    /* BPL1MOD/BPL2MOD (0x108/0x10A) are Agnus registers, not Denise */
+    if (reg == 0x0108u || reg == 0x010Au)
+        return 0;
     return reg >= 0x0100u;
 }
 
@@ -120,101 +121,62 @@ void denise_write_reg(Denise *d, uint16_t reg, uint16_t value)
     }
 
     switch (reg) {
-    case DENISE_BPLCON0: d->bplcon0 = value;          return;
-    case DENISE_BPLCON1: d->bplcon1 = value;          return;
-    case DENISE_BPLCON2: d->bplcon2 = value;          return;
-    case DENISE_BPL1MOD: d->bpl1mod = (int16_t)value; return;
-    case DENISE_BPL2MOD: d->bpl2mod = (int16_t)value; return;
+    case DENISE_BPLCON0:
+        d->bplcon0 = value;
+        kprintf("[DENISE] BPLCON0=0x%04x nplanes=%d hires=%d\n",
+                (unsigned)value, (value >> 12) & 7, (value >> 15) & 1);
+        return;
+    case DENISE_BPLCON1: d->bplcon1 = value; return;
+    case DENISE_BPLCON2: d->bplcon2 = value; return;
     default: return;
     }
 }
 
 /* ---------------------------------------------------------------------------
- * Frame render
+ * Render — one scanline from Agnus-provided bitplane data
  * ------------------------------------------------------------------------- */
 
-static inline uint16_t chip_read16(uint32_t addr)
+void denise_render_line(Denise *d, const BitplaneState *bp,
+                        int line_idx, int vheight)
 {
-    return *(const volatile uint16_t *)(CHIP_RAM_VIRT + (addr & CHIP_RAM_MASK));
-}
+    if (!framebuffer || !pitch)
+        return;
+    if (bp->nplanes <= 0)
+        return;
 
-void denise_render_frame(Denise *d, const AgnusState *agnus)
-{
-    int nplanes = (d->bplcon0 >> 12) & 7;
-    if (nplanes > 6) nplanes = 6;
+    int nplanes  = bp->nplanes;
+    int ddf_words = bp->ddf_words;
+    int scale    = bp->hires ? 1 : 2;
 
-    kprintf("[DENISE] render: fb=%p pitch=%u bplcon0=0x%04x nplanes=%d"
-            " bpt0=0x%05x dmacon=0x%04x\n",
-            (void *)framebuffer, (unsigned)pitch,
-            (unsigned)d->bplcon0, nplanes,
-            (unsigned)((((uint32_t)agnus->bplpth[0] & 0x1Fu) << 16) |
-                        ((uint32_t)agnus->bplptl[0] & 0xFFFEu)),
-            (unsigned)agnus->dmacon);
-
-    if (!framebuffer || !pitch) return;
-    if (nplanes == 0) return;
-
-    int hires = (d->bplcon0 >> 15) & 1;
-
-    int vstrt   = (agnus->diwstrt >> 8) & 0xFF;
-    int vstop   = (agnus->diwstop >> 8) & 0xFF;
-    if (vstop <= vstrt) vstop += 256;
-    int vheight = vstop - vstrt;
-    if (vheight <= 0 || vheight > 512) return;
-
-    int ddf_words = ((int)(agnus->ddfstop & 0xFE) - (int)(agnus->ddfstrt & 0xFC)) / 8 + 2;
-    if (ddf_words < 1)  ddf_words = 20;
-    if (ddf_words > 80) ddf_words = 80;
     int pix_per_line = ddf_words * 16;
-
-    int scale = hires ? 1 : 2;
     int out_w = pix_per_line * scale;
-    int out_h = vheight     * scale;
+    int out_h = vheight      * scale;
 
     uint32_t fb_x0 = ((uint32_t)out_w < fb_width)  ? (fb_width  - (uint32_t)out_w) / 2 : 0;
     uint32_t fb_y0 = ((uint32_t)out_h < fb_height) ? (fb_height - (uint32_t)out_h) / 2 : 0;
 
-    uint32_t bpt[6];
-    for (int p = 0; p < nplanes; p++) {
-        bpt[p] = (((uint32_t)agnus->bplpth[p] & 0x001Fu) << 16)
-               | ((uint32_t)agnus->bplptl[p] & 0xFFFEu);
-        bpt[p] &= CHIP_RAM_MASK;
-    }
+    for (int sy = 0; sy < scale; sy++) {
+        uint32_t fb_y = fb_y0 + (uint32_t)(line_idx * scale + sy);
+        if (fb_y >= fb_height)
+            continue;
+        uint16_t *row = (uint16_t *)((uintptr_t)framebuffer + fb_y * pitch);
 
-    for (int line = 0; line < vheight; line++) {
-        uint16_t plane_row[6][80];
-        for (int p = 0; p < nplanes; p++)
-            for (int w = 0; w < ddf_words; w++)
-                plane_row[p][w] = chip_read16(bpt[p] + (uint32_t)(w * 2));
+        for (int w = 0; w < ddf_words; w++) {
+            uint16_t pdata[6] = {0};
+            for (int p = 0; p < nplanes; p++)
+                pdata[p] = bp->line_words[p][w];
 
-        for (int sy = 0; sy < scale; sy++) {
-            uint32_t fb_y = fb_y0 + (uint32_t)(line * scale + sy);
-            if (fb_y >= fb_height) break;
-            uint16_t *row = (uint16_t *)((uintptr_t)framebuffer + fb_y * pitch);
-
-            for (int w = 0; w < ddf_words; w++) {
-                uint16_t pdata[6];
+            for (int b = 15; b >= 0; b--) {
+                int cidx = 0;
                 for (int p = 0; p < nplanes; p++)
-                    pdata[p] = plane_row[p][w];
+                    cidx |= (((pdata[p] >> b) & 1) << p);
 
-                for (int b = 15; b >= 0; b--) {
-                    int cidx = 0;
-                    for (int p = 0; p < nplanes; p++)
-                        cidx |= (((pdata[p] >> b) & 1) << p);
-
-                    uint16_t pixel = d->palette[cidx & 31];
-                    uint32_t fb_x = fb_x0 + (uint32_t)((w * 16 + (15 - b)) * scale);
-                    for (int sx = 0; sx < scale; sx++)
-                        if (fb_x + (uint32_t)sx < fb_width)
-                            row[fb_x + (uint32_t)sx] = pixel;
-                }
+                uint16_t pixel = d->palette[cidx & 31];
+                uint32_t fb_x = fb_x0 + (uint32_t)((w * 16 + (15 - b)) * scale);
+                for (int sx = 0; sx < scale; sx++)
+                    if (fb_x + (uint32_t)sx < fb_width)
+                        row[fb_x + (uint32_t)sx] = pixel;
             }
-        }
-
-        for (int p = 0; p < nplanes; p++) {
-            bpt[p] = (bpt[p] + (uint32_t)(ddf_words * 2)) & CHIP_RAM_MASK;
-            int16_t mod = (p & 1) ? d->bpl2mod : d->bpl1mod;
-            bpt[p] = (uint32_t)((int32_t)bpt[p] + (int32_t)mod) & CHIP_RAM_MASK;
         }
     }
 }

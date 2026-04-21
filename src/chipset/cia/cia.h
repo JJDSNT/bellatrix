@@ -51,7 +51,10 @@ enum {
 #define CIA_CRB_INMODE1   0x40u
 #define CIA_CRB_ALARM     0x80u
 
-#define CIA_TOD_TICKS_PER_INCREMENT 227u
+/* CIA-A TOD clocked by VBL (50 Hz PAL): one increment per full frame */
+#define CIA_A_TOD_TICKS_PER_INCREMENT (454u * 313u)  /* = 142102 */
+/* CIA-B TOD clocked by H-sync (313 lines/frame * 50 Hz = 15650 Hz): one per line */
+#define CIA_B_TOD_TICKS_PER_INCREMENT 454u
 
 typedef enum {
     CIA_PORT_A = 0,   /* CIA-A: raises PORTS (IPL 2) */
@@ -84,6 +87,7 @@ typedef struct CIA_State {
     bool     tod_latched;
 
     uint32_t tod_subticks;
+    uint32_t tod_ticks_per_inc;  /* CIA-A: per VBL; CIA-B: per H-sync line */
 
     /* wiring */
     uint8_t       irq_level;     /* 2 = CIA-A (PORTS), 6 = CIA-B (EXTER)       */

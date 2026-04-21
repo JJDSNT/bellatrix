@@ -47,8 +47,12 @@ static void cia_tod_increment(CIA *cia, uint32_t increments)
 {
     while (increments--) {
         cia->tod = (cia->tod + 1u) & 0x00FFFFFFu;
-        if (cia->tod == cia->tod_alarm)
+        if (cia->tod == cia->tod_alarm) {
+            kprintf("[CIA-B ALARM-HIT] tod=%06x alarm=%06x mask=%02x icr_before=%02x\n",
+                    (unsigned)cia->tod, (unsigned)cia->tod_alarm,
+                    (unsigned)cia->icr_mask, (unsigned)cia->icr_data);
             cia_raise_icr(cia, CIA_ICR_ALRM);
+        }
     }
 }
 
@@ -84,6 +88,8 @@ void cia_init(CIA *cia, CIA_ID id)
     cia->irq_level    = (id == CIA_PORT_A) ? 2u : 6u;
     cia->paula_irq_bit = (id == CIA_PORT_A) ? (uint16_t)PAULA_INT_PORTS
                                               : (uint16_t)PAULA_INT_EXTER;
+    cia->tod_ticks_per_inc = (id == CIA_PORT_A) ? CIA_A_TOD_TICKS_PER_INCREMENT
+                                                 : CIA_B_TOD_TICKS_PER_INCREMENT;
     cia->paula = NULL;
 }
 
@@ -91,6 +97,7 @@ void cia_reset(CIA *cia)
 {
     uint8_t       saved_irq_level    = cia->irq_level;
     uint16_t      saved_paula_irq    = cia->paula_irq_bit;
+    uint32_t      saved_tod_rate     = cia->tod_ticks_per_inc;
     struct Paula *saved_paula        = cia->paula;
 
     cia->pra  = 0xFF;
@@ -116,9 +123,10 @@ void cia_reset(CIA *cia)
     cia->tod_latched = false;
     cia->tod_subticks = 0;
 
-    cia->irq_level    = saved_irq_level;
-    cia->paula_irq_bit = saved_paula_irq;
-    cia->paula        = saved_paula;
+    cia->irq_level        = saved_irq_level;
+    cia->paula_irq_bit    = saved_paula_irq;
+    cia->tod_ticks_per_inc = saved_tod_rate;
+    cia->paula            = saved_paula;
 }
 
 /* ---------------------------------------------------------------------------
@@ -163,9 +171,9 @@ void cia_step(CIA *cia, uint64_t ticks)
     }
 
     cia->tod_subticks += (uint32_t)ticks;
-    if (cia->tod_subticks >= CIA_TOD_TICKS_PER_INCREMENT) {
-        uint32_t inc = cia->tod_subticks / CIA_TOD_TICKS_PER_INCREMENT;
-        cia->tod_subticks %= CIA_TOD_TICKS_PER_INCREMENT;
+    if (cia->tod_subticks >= cia->tod_ticks_per_inc) {
+        uint32_t inc = cia->tod_subticks / cia->tod_ticks_per_inc;
+        cia->tod_subticks %= cia->tod_ticks_per_inc;
         cia_tod_increment(cia, inc);
     }
 }
@@ -290,23 +298,31 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
         return;
 
     case CIA_REG_TODLO:
-        if (cia->crb & CIA_CRB_ALARM)
+        if (cia->crb & CIA_CRB_ALARM) {
             cia->tod_alarm = (cia->tod_alarm & 0xFFFF00u) | (uint32_t)val;
-        else
+            kprintf("[CIA-B ALARM-WRITE] TODLO=%02x -> alarm=%06x tod=%06x\n",
+                    (unsigned)val, (unsigned)cia->tod_alarm, (unsigned)cia->tod);
+        } else {
             cia->tod = (cia->tod & 0xFFFF00u) | (uint32_t)val;
+        }
         return;
 
     case CIA_REG_TODMID:
-        if (cia->crb & CIA_CRB_ALARM)
+        if (cia->crb & CIA_CRB_ALARM) {
             cia->tod_alarm = (cia->tod_alarm & 0xFF00FFu) | ((uint32_t)val << 8);
-        else
+            kprintf("[CIA-B ALARM-WRITE] TODMID=%02x -> alarm=%06x tod=%06x\n",
+                    (unsigned)val, (unsigned)cia->tod_alarm, (unsigned)cia->tod);
+        } else {
             cia->tod = (cia->tod & 0xFF00FFu) | ((uint32_t)val << 8);
+        }
         return;
 
     case CIA_REG_TODHI:
         if (cia->crb & CIA_CRB_ALARM) {
             cia->tod_alarm = (cia->tod_alarm & 0x00FFFFu) | ((uint32_t)val << 16);
             cia->tod_alarm &= 0x00FFFFFFu;
+            kprintf("[CIA-B ALARM-WRITE] TODHI=%02x -> alarm=%06x tod=%06x\n",
+                    (unsigned)val, (unsigned)cia->tod_alarm, (unsigned)cia->tod);
         } else {
             cia->tod = (cia->tod & 0x00FFFFu) | ((uint32_t)val << 16);
             cia->tod &= 0x00FFFFFFu;

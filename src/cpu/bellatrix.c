@@ -271,6 +271,10 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         return result;
     }
 
+    /* Expansion ROM 0xF00000-0xF7FFFF: silent zero, don't flood UART */
+    if (addr >= 0xF00000u && addr <= 0xF7FFFFu)
+        return 0;
+
     /* Everything else: unimplemented */
     btrace_log(addr, value, size, dir, 0);
     return 0;

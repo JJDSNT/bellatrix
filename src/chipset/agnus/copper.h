@@ -5,7 +5,10 @@
 
 struct AgnusState;
 
-// Copper register offsets (already decoded by bus/router)
+/* ------------------------------------------------------------------------- */
+/* Register offsets                                                          */
+/* ------------------------------------------------------------------------- */
+
 #define COPPER_COP1LCH 0x0080u
 #define COPPER_COP1LCL 0x0082u
 #define COPPER_COP2LCH 0x0084u
@@ -14,17 +17,45 @@ struct AgnusState;
 #define COPPER_COPJMP2 0x008Au
 #define COPPER_COPINS  0x008Cu
 
-typedef struct CopperState {
+/* ------------------------------------------------------------------------- */
+/* State                                                                     */
+/* ------------------------------------------------------------------------- */
+
+typedef struct CopperState
+{
     uint32_t cop1lc;
     uint32_t cop2lc;
     uint32_t pc;
+
+    uint16_t ir1;
+    uint16_t ir2;
+
+    uint16_t waitpos;
+    uint16_t waitmask;
+
+    uint8_t state;
+    uint8_t cdang;
 } CopperState;
 
-void copper_init(CopperState *c);
+/* ------------------------------------------------------------------------- */
+/* Lifecycle                                                                 */
+/* ------------------------------------------------------------------------- */
 
-void copper_write_reg(CopperState *c, uint16_t reg, uint16_t value);
+void copper_init(CopperState *c);
+void copper_reset(CopperState *c);
+
+/* ------------------------------------------------------------------------- */
+/* MMIO                                                                      */
+/* ------------------------------------------------------------------------- */
+
+void     copper_write_reg(CopperState *c, uint16_t reg, uint16_t value);
 uint32_t copper_read_reg(CopperState *c, uint16_t reg);
 
-void copper_vbl_execute(CopperState *c, struct AgnusState *agnus);
+/* ------------------------------------------------------------------------- */
+/* Execution                                                                 */
+/* ------------------------------------------------------------------------- */
+
+void copper_vbl_reload(CopperState *c);
+void copper_step(CopperState *c, struct AgnusState *agnus);
 
 #endif

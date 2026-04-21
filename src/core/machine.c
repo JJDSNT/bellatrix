@@ -1,6 +1,7 @@
 // src/core/machine.c
 
 #include "core/machine.h"
+#include "support.h"
 
 #include <string.h>
 
@@ -32,6 +33,8 @@ static inline bool is_cia_b_addr(uint32_t addr)
 static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 {
     if (ipl > 7) ipl = 7;
+    if (ipl != m->current_ipl)
+        kprintf("[IPL] %u -> %u\n", (unsigned)m->current_ipl, (unsigned)ipl);
     m->current_ipl = ipl;
     if (m->cpu)
         m->cpu->INT.IPL = ipl;
@@ -39,12 +42,7 @@ static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 
 static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
 {
-    uint8_t ipl = paula_compute_ipl(&m->paula);
-    uint8_t a   = cia_compute_ipl(&m->cia_a);
-    uint8_t b   = cia_compute_ipl(&m->cia_b);
-    if (a > ipl) ipl = a;
-    if (b > ipl) ipl = b;
-    return ipl;
+    return paula_compute_ipl(&m->paula);
 }
 
 static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
@@ -76,6 +74,8 @@ void bellatrix_machine_init(struct M68KState *cpu)
     memset(m, 0, sizeof(*m));
     m->cpu = cpu;
 
+    bellatrix_memory_init(&m->memory);
+
     agnus_init(&m->agnus);
     denise_init(&m->denise);
     paula_init(&m->paula);
@@ -84,6 +84,7 @@ void bellatrix_machine_init(struct M68KState *cpu)
 
     agnus_attach_denise(&m->agnus, &m->denise);
     agnus_attach_paula(&m->agnus, &m->paula);
+    agnus_attach_memory(&m->agnus, &m->memory);
 
     denise_attach_agnus(&m->denise, &m->agnus);
 

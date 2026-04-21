@@ -79,7 +79,7 @@ uint8_t paula_compute_ipl(const Paula *p)
     if (pending & PAULA_INT_EXTER)                                              return 6;
     if (pending & PAULA_INT_RBF)                                                return 5;
     if (pending & (PAULA_INT_AUD0|PAULA_INT_AUD1|PAULA_INT_AUD2|PAULA_INT_AUD3)) return 4;
-    if (pending & PAULA_INT_VERTB)                                              return 3;
+    if (pending & (PAULA_INT_COPER|PAULA_INT_VERTB|PAULA_INT_BLIT))              return 3;
     if (pending & PAULA_INT_PORTS)                                              return 2;
     if (pending & (PAULA_INT_TBE|PAULA_INT_DSKBLK|PAULA_INT_SOFT))             return 1;
 

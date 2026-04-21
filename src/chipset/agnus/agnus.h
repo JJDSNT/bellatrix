@@ -5,6 +5,9 @@
 
 #include "blitter.h"
 #include "copper.h"
+#include "beam.h"
+#include "bitplanes.h"
+#include "memory/memory.h"
 
 struct Denise;
 struct Paula;
@@ -38,6 +41,19 @@ struct Paula;
 #define AGNUS_BPL6PTH 0x00F4u
 #define AGNUS_BPL6PTL 0x00F6u
 
+/* Bitplane control */
+#define AGNUS_BPLCON0 0x0100u
+#define AGNUS_BPLCON1 0x0102u
+#define AGNUS_BPLCON2 0x0104u
+#define AGNUS_BPL1MOD 0x0108u
+#define AGNUS_BPL2MOD 0x010Au
+#define AGNUS_BPL1DAT 0x0110u
+#define AGNUS_BPL2DAT 0x0112u
+#define AGNUS_BPL3DAT 0x0114u
+#define AGNUS_BPL4DAT 0x0116u
+#define AGNUS_BPL5DAT 0x0118u
+#define AGNUS_BPL6DAT 0x011Au
+
 /* Blitter */
 #define AGNUS_BLTCON0 0x0040u
 #define AGNUS_BLTCON1 0x0042u
@@ -63,6 +79,7 @@ struct Paula;
 #define AGNUS_COPJMP1 0x0088u
 #define AGNUS_COPJMP2 0x008Au
 #define AGNUS_COPINS  0x008Cu
+#define AGNUS_COPCON 0x002Eu
 
 /* ---------------------------------------------------------------------------
  * DMACON bits
@@ -77,23 +94,15 @@ struct Paula;
 #endif
 
 /* ---------------------------------------------------------------------------
- * Timing — units are M68K CPU cycles (7.09 MHz PAL)
- * PAL: 313 lines × 454 cycles/line
- * ------------------------------------------------------------------------- */
-
-#define AGNUS_PAL_LINES 313u
-#define AGNUS_PAL_HPOS  454u
-
-/* ---------------------------------------------------------------------------
  * State
  * ------------------------------------------------------------------------- */
 
 typedef struct AgnusState {
     uint16_t dmacon;
 
-    uint32_t hpos;
-    uint32_t vpos;
-    uint32_t vbl_count;
+    BeamState      beam;
+    BitplaneState  bitplanes;
+    BellatrixMemory *memory;
 
     /* Display window / data fetch */
     uint16_t diwstrt;
@@ -105,15 +114,61 @@ typedef struct AgnusState {
     uint16_t bplpth[6];
     uint16_t bplptl[6];
 
+    /* Bitplane modulos — Agnus-owned hardware registers */
+    int16_t  bpl1mod;
+    int16_t  bpl2mod;
+
     BlitterState blitter;
     CopperState  copper;
 
     /* Wiring */
-    struct Denise *denise;
-    struct Paula  *paula;
+    struct Denise  *denise;
+    struct Paula   *paula;
 } AgnusState;
 
 typedef AgnusState Agnus;
+
+/* ---------------------------------------------------------------------------
+ * Blitter register predicate (includes all blitter-accessible registers)
+ * ------------------------------------------------------------------------- */
+
+static inline int agnus_is_blitter_reg(uint16_t reg)
+{
+    switch (reg) {
+    case AGNUS_BLTCON0:
+    case AGNUS_BLTCON1:
+    /* BLTAFWM=0x044, BLTALWM=0x046 — enum constants from blitter.h */
+    case AGNUS_BLTAFWM:
+    case AGNUS_BLTALWM:
+    case AGNUS_BLTCPTH: case AGNUS_BLTCPTL:
+    case AGNUS_BLTBPTH: case AGNUS_BLTBPTL:
+    case AGNUS_BLTAPTH: case AGNUS_BLTAPTL:
+    case AGNUS_BLTDPTH: case AGNUS_BLTDPTL:
+    case AGNUS_BLTSIZE:
+    case AGNUS_BLTCMOD: case AGNUS_BLTBMOD:
+    case AGNUS_BLTAMOD: case AGNUS_BLTDMOD:
+    /* BLTCDAT=0x070, BLTBDAT=0x072, BLTADAT=0x074 — enum constants */
+    case AGNUS_BLTCDAT:
+    case AGNUS_BLTBDAT:
+    case AGNUS_BLTADAT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static inline int agnus_is_copper_reg(uint16_t reg)
+{
+    switch (reg) {
+    case AGNUS_COP1LCH: case AGNUS_COP1LCL:
+    case AGNUS_COP2LCH: case AGNUS_COP2LCL:
+    case AGNUS_COPJMP1: case AGNUS_COPJMP2:
+    case AGNUS_COPINS:
+        return 1;
+    default:
+        return 0;
+    }
+}
 
 /* ---------------------------------------------------------------------------
  * Lifecycle
@@ -128,6 +183,7 @@ void agnus_reset(Agnus *s);
 
 void agnus_attach_denise(Agnus *s, struct Denise *d);
 void agnus_attach_paula(Agnus *s, struct Paula *p);
+void agnus_attach_memory(Agnus *s, BellatrixMemory *m);
 
 /* ---------------------------------------------------------------------------
  * Time

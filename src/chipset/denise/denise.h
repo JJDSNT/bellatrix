@@ -5,6 +5,8 @@
 
 #include <stdint.h>
 
+#include "chipset/agnus/bitplanes.h"
+
 /* Forward declare to avoid circular include */
 typedef struct AgnusState AgnusState;
 
@@ -15,8 +17,6 @@ typedef struct AgnusState AgnusState;
 #define DENISE_BPLCON0   0x0100u
 #define DENISE_BPLCON1   0x0102u
 #define DENISE_BPLCON2   0x0104u
-#define DENISE_BPL1MOD   0x0108u
-#define DENISE_BPL2MOD   0x010Au
 
 #define DENISE_COLOR_BASE 0x0180u
 #define DENISE_COLOR_END  0x01BEu
@@ -29,8 +29,6 @@ typedef struct Denise {
     uint16_t bplcon0;
     uint16_t bplcon1;
     uint16_t bplcon2;
-    int16_t  bpl1mod;
-    int16_t  bpl2mod;
     uint16_t palette[32];   /* pre-converted to LE16 RGB565 */
 
     const AgnusState *agnus; /* attached Agnus (read-only at render time) */
@@ -71,6 +69,14 @@ void denise_write_reg(Denise *d, uint16_t reg, uint16_t value);
  * Render
  * ------------------------------------------------------------------------- */
 
-void denise_render_frame(Denise *d, const AgnusState *agnus);
+/*
+ * Render one scanline from pre-fetched bitplane data.
+ * Called by Agnus per line after bitplanes_fetch_line.
+ *
+ * line_idx: 0-based line index within the display window
+ * vheight:  total display window height in lines (for framebuffer centering)
+ */
+void denise_render_line(Denise *d, const BitplaneState *bp,
+                        int line_idx, int vheight);
 
 #endif /* BELLATRIX_CHIPSET_DENISE_H */

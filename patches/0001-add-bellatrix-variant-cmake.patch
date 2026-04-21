@@ -9,7 +9,7 @@
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
  
-@@ -167,8 +167,32 @@
+@@ -167,8 +167,35 @@
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -30,6 +30,9 @@
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/denise/denise.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/dma.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/beam.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/bitplanes.c
++                ${CMAKE_SOURCE_DIR}/../src/memory/memory.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_debug.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_ipl.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_core.c

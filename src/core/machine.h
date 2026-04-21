@@ -9,10 +9,13 @@
 #include "chipset/cia/cia.h"
 #include "chipset/denise/denise.h"
 #include "chipset/paula/paula.h"
+#include "memory/memory.h"
 
 typedef struct BellatrixMachine
 {
     struct M68KState *cpu;
+
+    BellatrixMemory memory;
 
     Agnus  agnus;
     Denise denise;
