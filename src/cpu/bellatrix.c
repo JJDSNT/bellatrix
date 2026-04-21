@@ -122,15 +122,26 @@ static void set_overlay(int new_overlay)
 
         if (!new_overlay)
         {
-            /* OVL going low: chip RAM now at 0x000000 — dump interrupt vectors */
+            /* OVL going low: chip RAM now at 0x000000 — dump key vectors */
             BellatrixMemory *_mem = &bellatrix_machine_get()->memory;
-            kprintf("[OVL->RAM] vec[60]=%08x [64]=%08x [68]=%08x [6c]=%08x [70]=%08x [78]=%08x\n",
+            kprintf("[OVL->RAM] reset isp=%08x pc=%08x\n",
+                    (unsigned)bellatrix_chip_read32(_mem, 0x00u),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x04u));
+            kprintf("[OVL->RAM] vec08=%08x vec0c=%08x vec10=%08x vec14=%08x\n",
+                    (unsigned)bellatrix_chip_read32(_mem, 0x08u),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x0cu),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x10u),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x14u));
+            kprintf("[OVL->RAM] vec60=%08x vec64=%08x vec68=%08x vec6c=%08x\n",
                     (unsigned)bellatrix_chip_read32(_mem, 0x60u),
                     (unsigned)bellatrix_chip_read32(_mem, 0x64u),
                     (unsigned)bellatrix_chip_read32(_mem, 0x68u),
-                    (unsigned)bellatrix_chip_read32(_mem, 0x6cu),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x6cu));
+            kprintf("[OVL->RAM] vec70=%08x vec74=%08x vec78=%08x vec7c=%08x\n",
                     (unsigned)bellatrix_chip_read32(_mem, 0x70u),
-                    (unsigned)bellatrix_chip_read32(_mem, 0x78u));
+                    (unsigned)bellatrix_chip_read32(_mem, 0x74u),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x78u),
+                    (unsigned)bellatrix_chip_read32(_mem, 0x7cu));
         }
     }
 
@@ -443,8 +454,13 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         if (dir == BUS_WRITE)
         {
             cia_write_reg(&m->cia_a, (uint8_t)reg, (uint8_t)value);
-            if (reg == 0)
-                set_overlay((int)(m->cia_a.pra & 1));
+            if (reg == 0) {
+                int _new_ovl = (int)(m->cia_a.pra & 1);
+                if (_new_ovl != s_overlay)
+                    kprintf("[OVL-TRIG] ciaa_pra_write addr=%08x val=%02x pra=%02x new_ovl=%d\n",
+                            addr, (unsigned)(value & 0xFFu), (unsigned)m->cia_a.pra, _new_ovl);
+                set_overlay(_new_ovl);
+            }
         }
         else
         {
