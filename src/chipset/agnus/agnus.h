@@ -99,6 +99,7 @@ struct Paula;
 
 typedef struct AgnusState {
     uint16_t dmacon;
+    uint16_t bplcon0;
 
     BeamState      beam;
     BitplaneState  bitplanes;
@@ -127,6 +128,21 @@ typedef struct AgnusState {
 } AgnusState;
 
 typedef AgnusState Agnus;
+
+/* ---------------------------------------------------------------------------
+ * Chip RAM helpers — thin wrappers so blitter/copper can read/write chip RAM
+ * through the Agnus pointer without accessing BellatrixMemory directly.
+ * ------------------------------------------------------------------------- */
+
+static inline uint16_t agnus_chip_read16(AgnusState *s, uint32_t addr)
+{
+    return bellatrix_chip_read16(s->memory, addr);
+}
+
+static inline void agnus_chip_write16(AgnusState *s, uint32_t addr, uint16_t value)
+{
+    bellatrix_chip_write16(s->memory, addr, value);
+}
 
 /* ---------------------------------------------------------------------------
  * Blitter register predicate (includes all blitter-accessible registers)

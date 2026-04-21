@@ -18,23 +18,65 @@ struct AgnusState;
 #define COPPER_COPINS  0x008Cu
 
 /* ------------------------------------------------------------------------- */
+/* Internal state machine                                                    */
+/* ------------------------------------------------------------------------- */
+
+typedef enum CopperExecState
+{
+    COPPER_STATE_FETCH_IR1 = 0,
+    COPPER_STATE_FETCH_IR2_WAIT_SKIP,
+    COPPER_STATE_FETCH_IR2_MOVE,
+    COPPER_STATE_WAITING_RASTER,
+    COPPER_STATE_WAITING_BLITTER,
+    COPPER_STATE_HALTED
+
+} CopperExecState;
+
+/* ------------------------------------------------------------------------- */
 /* State                                                                     */
 /* ------------------------------------------------------------------------- */
 
 typedef struct CopperState
 {
+    /*
+     * List pointers
+     */
     uint32_t cop1lc;
     uint32_t cop2lc;
+
+    /*
+     * Program counter
+     */
     uint32_t pc;
 
+    /*
+     * Instruction registers
+     */
     uint16_t ir1;
     uint16_t ir2;
 
+    /*
+     * WAIT state
+     */
     uint16_t waitpos;
     uint16_t waitmask;
+    uint8_t  wait_bfd;   /* wait for blitter done */
 
+    /*
+     * Execution state
+     */
     uint8_t state;
+
+    /*
+     * COPCON (CDANG)
+     */
     uint8_t cdang;
+
+    /*
+     * Debug / bring-up helper
+     */
+    uint8_t after_vbl_reload;
+
 } CopperState;
 
 /* ------------------------------------------------------------------------- */
@@ -56,6 +98,15 @@ uint32_t copper_read_reg(CopperState *c, uint16_t reg);
 /* ------------------------------------------------------------------------- */
 
 void copper_vbl_reload(CopperState *c);
-void copper_step(CopperState *c, struct AgnusState *agnus);
+
+/*
+ * Called by blitter when it finishes (for BFD WAIT)
+ */
+void copper_blitter_done(CopperState *c);
+
+/*
+ * Step Copper execution by 'ticks'
+ */
+void copper_step(CopperState *c, struct AgnusState *agnus, uint64_t ticks);
 
 #endif

@@ -10,6 +10,17 @@
 /* Helpers                                                                   */
 /* ------------------------------------------------------------------------- */
 
+#define BLTCON0_ASH_MASK   0xF000u
+#define BLTCON1_BSH_MASK   0xF000u
+
+#define BLTCON0_USEA       0x0800u
+#define BLTCON0_USEB       0x0400u
+#define BLTCON0_USEC       0x0200u
+#define BLTCON0_USED       0x0100u
+
+#define BLTCON1_LINE       0x0001u
+#define BLTCON1_DESC       0x0002u
+
 static inline uint32_t make_ptr(uint16_t hi, uint16_t lo)
 {
     return ((uint32_t)hi << 16) | (uint32_t)lo;
@@ -28,13 +39,13 @@ static inline uint16_t ptr_lo(uint32_t ptr)
 static inline uint16_t blitter_width_words(const BlitterState *b)
 {
     uint16_t width = b->bltsize & 0x003fu;
-    return width ? width : 64;
+    return width ? width : 64u;
 }
 
 static inline uint16_t blitter_height_rows(const BlitterState *b)
 {
     uint16_t height = (b->bltsize >> 6) & 0x03ffu;
-    return height ? height : 1024;
+    return height ? height : 1024u;
 }
 
 static inline uint32_t blitter_compute_cycles(uint16_t bltsize)
@@ -43,18 +54,14 @@ static inline uint32_t blitter_compute_cycles(uint16_t bltsize)
     uint16_t height = (bltsize >> 6) & 0x03ffu;
 
     if (width == 0)
-        width = 64;
+        width = 64u;
 
     if (height == 0)
-        height = 1024;
+        height = 1024u;
 
     return (uint32_t)width * (uint32_t)height;
 }
 
-/*
- * BBUSY/BZERO are read-back bits in DMACONR, NOT part of the written dmacon.
- * They live in blitter struct only; agnus_read_reg(DMACONR) OR-s them in.
- */
 static inline void blitter_set_busy(BlitterState *b, AgnusState *agnus, int busy)
 {
     (void)agnus;
@@ -67,86 +74,262 @@ static inline void blitter_set_zero(BlitterState *b, AgnusState *agnus, int zero
     b->zero = zero ? 1 : 0;
 }
 
-/*
- * Execução pragmática:
- *
- * - aceita e mantém todos os registradores relevantes
- * - consome tempo proporcional ao BLTSIZE
- * - atualiza ponteiros/modulos de forma coerente
- * - reflete busy/zero
- * - gera INT_BLIT
- *
- * Não tenta acessar chip RAM diretamente porque o teu AgnusState atual
- * não expõe esse contrato.
- */
-static void blitter_execute_pragmatic(BlitterState *b, AgnusState *agnus)
+static inline uint16_t blitter_ash(const BlitterState *b)
 {
-    const int desc = (b->bltcon1 & 0x0002u) != 0;
+    return (uint16_t)((b->bltcon0 & BLTCON0_ASH_MASK) >> 12);
+}
+
+static inline uint16_t blitter_bsh(const BlitterState *b)
+{
+    return (uint16_t)((b->bltcon1 & BLTCON1_BSH_MASK) >> 12);
+}
+
+static inline int blitter_use_a(const BlitterState *b)
+{
+    return (b->bltcon0 & BLTCON0_USEA) ? 1 : 0;
+}
+
+static inline int blitter_use_b(const BlitterState *b)
+{
+    return (b->bltcon0 & BLTCON0_USEB) ? 1 : 0;
+}
+
+static inline int blitter_use_c(const BlitterState *b)
+{
+    return (b->bltcon0 & BLTCON0_USEC) ? 1 : 0;
+}
+
+static inline int blitter_use_d(const BlitterState *b)
+{
+    return (b->bltcon0 & BLTCON0_USED) ? 1 : 0;
+}
+
+static inline int blitter_desc(const BlitterState *b)
+{
+    return (b->bltcon1 & BLTCON1_DESC) ? 1 : 0;
+}
+
+static inline int blitter_line_mode(const BlitterState *b)
+{
+    return (b->bltcon1 & BLTCON1_LINE) ? 1 : 0;
+}
+
+static inline uint16_t blitter_chip_read16(AgnusState *agnus, uint32_t addr)
+{
+    return agnus_chip_read16(agnus, addr);
+}
+
+static inline void blitter_chip_write16(AgnusState *agnus, uint32_t addr, uint16_t value)
+{
+    agnus_chip_write16(agnus, addr, value);
+}
+
+static inline uint16_t blitter_barrel_shift(uint16_t anew, uint16_t aold,
+                                            uint16_t shift, int desc)
+{
+    uint32_t pair;
+
+    if (shift == 0)
+        return anew;
+
+    if (desc) {
+        pair = ((uint32_t)anew << 16) | (uint32_t)aold;
+        return (uint16_t)(pair >> (16u - shift));
+    } else {
+        pair = ((uint32_t)aold << 16) | (uint32_t)anew;
+        return (uint16_t)(pair >> shift);
+    }
+}
+
+static inline uint16_t blitter_do_minterm(uint16_t a, uint16_t b,
+                                          uint16_t c, uint8_t minterm)
+{
+    uint16_t result = 0;
+
+    if (minterm & 0x80u) result |=  (uint16_t)( a &  b &  c);
+    if (minterm & 0x40u) result |=  (uint16_t)( a &  b & ~c);
+    if (minterm & 0x20u) result |=  (uint16_t)( a & ~b &  c);
+    if (minterm & 0x10u) result |=  (uint16_t)( a & ~b & ~c);
+    if (minterm & 0x08u) result |=  (uint16_t)(~a &  b &  c);
+    if (minterm & 0x04u) result |=  (uint16_t)(~a &  b & ~c);
+    if (minterm & 0x02u) result |=  (uint16_t)(~a & ~b &  c);
+    if (minterm & 0x01u) result |=  (uint16_t)(~a & ~b & ~c);
+
+    return result;
+}
+
+/*
+ * Pragmatic line-mode fallback.
+ *
+ * We keep this because line mode is a separate machine and should not be
+ * conflated with copy blit logic. For now we preserve coherent pointer
+ * progression, BLTDDAT determinism and Z handling.
+ */
+static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
+{
+    const int desc = blitter_desc(b);
     const int xinc = desc ? -2 : 2;
 
     const uint16_t width_words = blitter_width_words(b);
     const uint16_t height_rows = blitter_height_rows(b);
-
-    const uint32_t row_bytes = (uint32_t)width_words * 2u;
 
     uint32_t apt = b->bltapt;
     uint32_t bpt = b->bltbpt;
     uint32_t cpt = b->bltcpt;
     uint32_t dpt = b->bltdpt;
 
-    /*
-     * Sem acesso real à RAM, usamos um critério simples para Z:
-     * se o minterm for zero e os dados latched forem zero, o resultado
-     * permanece zero; caso contrário consideramos operação não-zero.
-     *
-     * Isso é imperfeito, mas muito melhor do que não manter nada.
-     */
-    {
-        uint8_t minterm = (uint8_t)(b->bltcon0 & 0x00ffu);
-        int maybe_zero = (minterm == 0x00) &&
-                         (b->bltadat == 0) &&
-                         (b->bltbdat == 0) &&
-                         (b->bltcdat == 0);
+    blitter_set_zero(b, agnus, 0);
 
-        blitter_set_zero(b, agnus, maybe_zero ? 1 : 0);
-    }
+    for (uint16_t y = 0; y < height_rows; ++y) {
 
-    for (uint16_t y = 0; y < height_rows; ++y)
-    {
         apt = (uint32_t)(apt + (uint32_t)(xinc * (int)width_words));
         bpt = (uint32_t)(bpt + (uint32_t)(xinc * (int)width_words));
         cpt = (uint32_t)(cpt + (uint32_t)(xinc * (int)width_words));
         dpt = (uint32_t)(dpt + (uint32_t)(xinc * (int)width_words));
 
-        if (desc)
-        {
-            apt = (uint32_t)(apt - b->bltamod);
-            bpt = (uint32_t)(bpt - b->bltbmod);
-            cpt = (uint32_t)(cpt - b->bltcmod);
-            dpt = (uint32_t)(dpt - b->bltdmod);
-        }
-        else
-        {
-            apt = (uint32_t)(apt + b->bltamod);
-            bpt = (uint32_t)(bpt + b->bltbmod);
-            cpt = (uint32_t)(cpt + b->bltcmod);
-            dpt = (uint32_t)(dpt + b->bltdmod);
+        if (desc) {
+            apt = (uint32_t)(apt - (uint32_t)(int32_t)b->bltamod);
+            bpt = (uint32_t)(bpt - (uint32_t)(int32_t)b->bltbmod);
+            cpt = (uint32_t)(cpt - (uint32_t)(int32_t)b->bltcmod);
+            dpt = (uint32_t)(dpt - (uint32_t)(int32_t)b->bltdmod);
+        } else {
+            apt = (uint32_t)(apt + (uint32_t)(int32_t)b->bltamod);
+            bpt = (uint32_t)(bpt + (uint32_t)(int32_t)b->bltbmod);
+            cpt = (uint32_t)(cpt + (uint32_t)(int32_t)b->bltcmod);
+            dpt = (uint32_t)(dpt + (uint32_t)(int32_t)b->bltdmod);
         }
     }
 
-    /*
-     * Mantém BLTDDAT com um valor determinístico simples.
-     */
-    b->bltddat = (uint16_t)(
-        (b->bltadat ^ b->bltbdat ^ b->bltcdat) ^
-        b->bltafwm ^ b->bltalwm ^
-        (uint16_t)row_bytes
-    );
+    b->bltddat = (uint16_t)(b->bltadat ^ b->bltbdat ^ b->bltcdat ^
+                            b->bltafwm ^ b->bltalwm);
 
     b->bltapt = apt;
     b->bltbpt = bpt;
     b->bltcpt = cpt;
     b->bltdpt = dpt;
+}
+
+static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
+{
+    const int desc = blitter_desc(b);
+    const int xinc = desc ? -2 : 2;
+
+    const int useA = blitter_use_a(b);
+    const int useB = blitter_use_b(b);
+    const int useC = blitter_use_c(b);
+    const int useD = blitter_use_d(b);
+
+    const uint16_t ash = blitter_ash(b);
+    const uint16_t bsh = blitter_bsh(b);
+    const uint8_t  minterm = (uint8_t)(b->bltcon0 & 0x00ffu);
+
+    const uint16_t width_words = blitter_width_words(b);
+    const uint16_t height_rows = blitter_height_rows(b);
+
+    uint32_t apt = b->bltapt;
+    uint32_t bpt = b->bltbpt;
+    uint32_t cpt = b->bltcpt;
+    uint32_t dpt = b->bltdpt;
+
+    uint16_t aold = b->bltadat;
+    uint16_t bold = b->bltbdat;
+
+    int all_zero = 1;
+
+    for (uint16_t y = 0; y < height_rows; ++y) {
+
+        for (uint16_t x = 0; x < width_words; ++x) {
+
+            uint16_t araw = b->bltadat;
+            uint16_t braw = b->bltbdat;
+            uint16_t cval = b->bltcdat;
+            uint16_t aval;
+            uint16_t bval;
+            uint16_t dval;
+
+            if (useA) {
+                uint16_t mask = 0xFFFFu;
+
+                araw = blitter_chip_read16(agnus, apt);
+                apt = (uint32_t)(apt + xinc);
+
+                if (x == 0)
+                    mask &= b->bltafwm;
+                if (x == (uint16_t)(width_words - 1))
+                    mask &= b->bltalwm;
+
+                araw &= mask;
+                b->bltadat = araw;
+
+                aval = blitter_barrel_shift(araw, aold, ash, desc);
+                aold = araw;
+            } else {
+                aval = b->bltadat;
+            }
+
+            if (useB) {
+                braw = blitter_chip_read16(agnus, bpt);
+                bpt = (uint32_t)(bpt + xinc);
+
+                b->bltbdat = braw;
+                bval = blitter_barrel_shift(braw, bold, bsh, desc);
+                bold = braw;
+            } else {
+                bval = b->bltbdat;
+            }
+
+            if (useC) {
+                cval = blitter_chip_read16(agnus, cpt);
+                cpt = (uint32_t)(cpt + xinc);
+                b->bltcdat = cval;
+            }
+
+            dval = blitter_do_minterm(aval, bval, cval, minterm);
+            b->bltddat = dval;
+
+            if (dval != 0)
+                all_zero = 0;
+
+            if (useD) {
+                blitter_chip_write16(agnus, dpt, dval);
+                dpt = (uint32_t)(dpt + xinc);
+            }
+        }
+
+        if (useA)
+            apt = desc ? (uint32_t)(apt - (uint32_t)(int32_t)b->bltamod)
+                       : (uint32_t)(apt + (uint32_t)(int32_t)b->bltamod);
+
+        if (useB)
+            bpt = desc ? (uint32_t)(bpt - (uint32_t)(int32_t)b->bltbmod)
+                       : (uint32_t)(bpt + (uint32_t)(int32_t)b->bltbmod);
+
+        if (useC)
+            cpt = desc ? (uint32_t)(cpt - (uint32_t)(int32_t)b->bltcmod)
+                       : (uint32_t)(cpt + (uint32_t)(int32_t)b->bltcmod);
+
+        if (useD)
+            dpt = desc ? (uint32_t)(dpt - (uint32_t)(int32_t)b->bltdmod)
+                       : (uint32_t)(dpt + (uint32_t)(int32_t)b->bltdmod);
+    }
+
+    blitter_set_zero(b, agnus, all_zero);
+
+    b->bltapt = apt;
+    b->bltbpt = bpt;
+    b->bltcpt = cpt;
+    b->bltdpt = dpt;
+}
+
+static void blitter_execute(BlitterState *b, AgnusState *agnus)
+{
+    if (blitter_line_mode(b)) {
+        kprintf("[BLITTER] line mode fallback\n");
+        blitter_execute_line_fallback(b, agnus);
+        return;
+    }
+
+    blitter_execute_copy(b, agnus);
 }
 
 static void blitter_start(BlitterState *b, AgnusState *agnus)
@@ -190,11 +373,10 @@ void blitter_step(BlitterState *b, AgnusState *agnus, uint64_t ticks)
     if (!b->busy)
         return;
 
-    if (ticks >= b->cycles_remaining)
-    {
+    if (ticks >= b->cycles_remaining) {
         b->cycles_remaining = 0;
 
-        blitter_execute_pragmatic(b, agnus);
+        blitter_execute(b, agnus);
         blitter_set_busy(b, agnus, 0);
 
         kprintf("[BLITTER] complete -> PAULA_INT_BLIT\n");
