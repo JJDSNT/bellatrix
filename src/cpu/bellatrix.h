@@ -15,6 +15,12 @@
 // Called once at startup before M68K_StartEmu().
 void bellatrix_init(void);
 
+// Reset vectors captured by bellatrix_init() directly from the ROM ARM
+// address — stable before any Emu68 JIT/cache init runs.
+// Both are M68K-side values (big-endian already decoded to host uint32_t).
+extern uint32_t bellatrix_reset_isp;
+extern uint32_t bellatrix_reset_pc;
+
 // Called from SYSWriteValToAddr / SYSReadValFromAddr for every
 // access to an unmapped Amiga address (chipset, CIA, slow RAM, etc.).
 //

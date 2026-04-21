@@ -1,6 +1,7 @@
 // src/core/machine.c
 
 #include "core/machine.h"
+#include "host/pal.h"
 #include "support.h"
 
 #include <string.h>
@@ -33,11 +34,30 @@ static inline bool is_cia_b_addr(uint32_t addr)
 static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 {
     if (ipl > 7) ipl = 7;
+
     if (ipl != m->current_ipl)
-        kprintf("[IPL] %u -> %u\n", (unsigned)m->current_ipl, (unsigned)ipl);
+    {
+        extern struct M68KState *__m68k_state;
+        uint32_t pc = __m68k_state ? BE32(__m68k_state->PC) : 0;
+
+        if (ipl > m->current_ipl && ipl > 0)
+        {
+            uint32_t vec_off  = 0x60u + (uint32_t)ipl * 4u;
+            uint32_t chip_val = bellatrix_chip_read32(&m->memory, vec_off);
+            kprintf("[IPL-RISE] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n",
+                    (unsigned)m->current_ipl, (unsigned)ipl,
+                    (unsigned)vec_off, (unsigned)vec_off, (unsigned)chip_val,
+                    (unsigned)pc);
+        }
+        else
+        {
+            kprintf("[IPL] %u -> %u  m68k_pc=%08x\n",
+                    (unsigned)m->current_ipl, (unsigned)ipl, pc);
+        }
+    }
+
     m->current_ipl = ipl;
-    if (m->cpu)
-        m->cpu->INT.IPL = ipl;
+    PAL_IPL_Set(ipl);
 }
 
 static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
@@ -81,6 +101,7 @@ void bellatrix_machine_init(struct M68KState *cpu)
     paula_init(&m->paula);
     cia_init(&m->cia_a, CIA_PORT_A);
     cia_init(&m->cia_b, CIA_PORT_B);
+    rtc_init(&m->rtc, RTC_MODEL_OKI);
 
     agnus_attach_denise(&m->agnus, &m->denise);
     agnus_attach_paula(&m->agnus, &m->paula);
@@ -108,6 +129,7 @@ void bellatrix_machine_reset(void)
     paula_reset(&m->paula);
     cia_reset(&m->cia_a);
     cia_reset(&m->cia_b);
+    rtc_reset(&m->rtc);
 
     m->tick_count = 0;
     machine_publish_ipl(m, 0);
@@ -183,8 +205,9 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
  * Raw access to owned components
  * ------------------------------------------------------------------------- */
 
-Agnus  *bellatrix_machine_agnus(void)  { return &g_machine.agnus; }
-Denise *bellatrix_machine_denise(void) { return &g_machine.denise; }
-Paula  *bellatrix_machine_paula(void)  { return &g_machine.paula; }
-CIA    *bellatrix_machine_cia_a(void)  { return &g_machine.cia_a; }
-CIA    *bellatrix_machine_cia_b(void)  { return &g_machine.cia_b; }
+Agnus    *bellatrix_machine_agnus(void)  { return &g_machine.agnus; }
+Denise   *bellatrix_machine_denise(void) { return &g_machine.denise; }
+Paula    *bellatrix_machine_paula(void)  { return &g_machine.paula; }
+CIA      *bellatrix_machine_cia_a(void)  { return &g_machine.cia_a; }
+CIA      *bellatrix_machine_cia_b(void)  { return &g_machine.cia_b; }
+RTCState *bellatrix_machine_rtc(void)    { return &g_machine.rtc; }

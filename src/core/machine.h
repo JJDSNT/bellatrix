@@ -9,6 +9,7 @@
 #include "chipset/cia/cia.h"
 #include "chipset/denise/denise.h"
 #include "chipset/paula/paula.h"
+#include "chipset/rtc/rtc.h"
 #include "memory/memory.h"
 
 typedef struct BellatrixMachine
@@ -17,11 +18,12 @@ typedef struct BellatrixMachine
 
     BellatrixMemory memory;
 
-    Agnus  agnus;
-    Denise denise;
-    Paula  paula;
-    CIA    cia_a;
-    CIA    cia_b;
+    Agnus    agnus;
+    Denise   denise;
+    Paula    paula;
+    CIA      cia_a;
+    CIA      cia_b;
+    RTCState rtc;
 
     uint64_t tick_count;
     uint8_t  current_ipl;
@@ -54,8 +56,9 @@ void     bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int siz
 /* raw access to owned components                                             */
 /* ------------------------------------------------------------------------- */
 
-Agnus  *bellatrix_machine_agnus(void);
-Denise *bellatrix_machine_denise(void);
-Paula  *bellatrix_machine_paula(void);
-CIA    *bellatrix_machine_cia_a(void);
-CIA    *bellatrix_machine_cia_b(void);
+Agnus    *bellatrix_machine_agnus(void);
+Denise   *bellatrix_machine_denise(void);
+Paula    *bellatrix_machine_paula(void);
+CIA      *bellatrix_machine_cia_a(void);
+CIA      *bellatrix_machine_cia_b(void);
+RTCState *bellatrix_machine_rtc(void);

@@ -23,9 +23,11 @@ void PAL_IPL_Set(uint8_t ipl_level)
     struct M68KState *ctx = __m68k_state;
     if (!ctx) return;
     ctx->INT.IPL = ipl_level;
-    // DMB ensures the JIT sees IPL before ARM.
+    // ARM field is only for PiStorm GPIO async signal.
+    // Bellatrix reads INT.IPL directly; INT32 != 0 when IPL != 0, so the JIT
+    // loop wakes up without needing ARM to be set.
+    ctx->INT.ARM = 0;
     asm volatile("dmb ish" ::: "memory");
-    ctx->INT.ARM = ipl_level;
     // SEV wakes Core 0 from WFE (STOP) so it sees the new IPL immediately.
     asm volatile("dsb sy\n\t" "sev\n" ::: "memory");
 }
