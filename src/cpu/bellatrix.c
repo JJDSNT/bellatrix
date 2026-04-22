@@ -263,6 +263,12 @@ void bellatrix_init(void)
     mmu_map(0x000000, 0x000000, 0x200000,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 
+    /* Write-trap 0x1000-0x1FFF so MakeFunctions writes to the Exec JMP table
+     * are intercepted by bellatrix_bus_access and logged as [JMP-W].
+     * chip_ram_write() bypasses this mapping via CHIP_RAM_VIRT. */
+    mmu_map(0x1000, 0x1000, 0x1000,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+
     /* ROM overlay at address 0 (overlay=1): reset vectors visible at 0x000000 */
     mmu_map(0xf80000, 0x000000, 4096,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
@@ -365,6 +371,9 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         {
             if (addr < 0x400u)
                 kprintf("[VEC-W] %05x[%d]=%08x\n",
+                        (unsigned)addr, size, (unsigned)value);
+            else if (addr >= 0x1000u && addr < 0x2000u)
+                kprintf("[JMP-W] %05x[%d]=%08x\n",
                         (unsigned)addr, size, (unsigned)value);
             else if (addr >= 0x02368u && addr < 0x02420u)
                 kprintf("[CHIPRAM-W] addr=%05x size=%d value=%08x\n",
