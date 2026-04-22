@@ -97,6 +97,9 @@ load_launcher_selection() {
             EMU_PROFILE)
                 EMU_PROFILE="$value"
                 ;;
+            BOOTARGS)
+                BOOTARGS="$value"
+                ;;
         esac
     done < "$tmpfile"
 

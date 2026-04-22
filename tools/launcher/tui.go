@@ -12,6 +12,7 @@ type launchResult struct {
 	emuProfile  string
 	kickstart   string
 	displayMode string
+	bootArgs    string
 	cancelled   bool
 }
 
@@ -20,6 +21,7 @@ type model struct {
 	cursor      int
 	displayMode string
 	emuProfile  string
+	debugMode   string // "", "debug", "disassemble"
 	width       int
 	height      int
 	quitting    bool
@@ -51,10 +53,16 @@ func runLauncher(roms []ROM) (launchResult, error) {
 		kickstart = selected.Path
 	}
 
+	bootArgs := "enable_cache"
+	if fm.debugMode != "" {
+		bootArgs = "enable_cache " + fm.debugMode
+	}
+
 	return launchResult{
 		emuProfile:  fm.emuProfile,
 		kickstart:   kickstart,
 		displayMode: fm.displayMode,
+		bootArgs:    bootArgs,
 	}, nil
 }
 
@@ -114,6 +122,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.emuProfile = "emu68"
 			} else {
 				m.emuProfile = "bellatrix"
+			}
+			return m, nil
+
+		case "b":
+			switch m.debugMode {
+			case "":
+				m.debugMode = "debug"
+			case "debug":
+				m.debugMode = "disassemble"
+			default:
+				m.debugMode = ""
 			}
 			return m, nil
 
@@ -184,6 +203,18 @@ func (m model) renderPanel() string {
 		displayBadge = offBadgeStyle.Render("HEADLESS")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Display:"), displayBadge))
+	b.WriteString("\n")
+
+	var debugBadge string
+	switch m.debugMode {
+	case "debug":
+		debugBadge = onBadgeStyle.Render("DEBUG")
+	case "disassemble":
+		debugBadge = onBadgeStyle.Render("DISASM")
+	default:
+		debugBadge = offBadgeStyle.Render("OFF")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Debug:"), debugBadge))
 	b.WriteString("\n\n")
 
 	b.WriteString(sectionTitleStyle.Render("QEMU command"))
@@ -191,7 +222,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • E Toggle Emulator • D Toggle Display • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • E Toggle Emulator • D Toggle Display • B Toggle Debug • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -209,7 +240,10 @@ func (m model) qemuCommand() string {
 		dtb = "emu68/build/firmware/bcm2710-rpi-3-b.dtb"
 	}
 
-	bootArgs := "console=ttyAMA0"
+	bootArgs := "enable_cache"
+	if m.debugMode != "" {
+		bootArgs = "enable_cache " + m.debugMode
+	}
 
 	base := fmt.Sprintf(
 		`qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"`,

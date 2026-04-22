@@ -40,10 +40,11 @@ func main() {
 	}
 
 	output := fmt.Sprintf(
-		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\n",
+		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\n",
 		result.emuProfile,
 		result.kickstart,
 		result.displayMode,
+		result.bootArgs,
 	)
 
 	if outputFile != "" {
