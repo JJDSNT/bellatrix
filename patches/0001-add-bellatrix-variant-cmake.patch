@@ -1,17 +1,17 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..127844d 100644
+index eb89404..55ff98a 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
  set(TARGET "raspi64" CACHE STRING "One of target machines: ${SUPPORTED_TARGETS}")
  set_property(CACHE TARGET PROPERTY STRINGS ${SUPPORTED_TARGETS})
- 
+
 -set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm32lite")
 +set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm32lite" "bellatrix")
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
- 
-@@ -167,8 +167,41 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+
+@@ -167,8 +167,46 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -24,7 +24,11 @@ index eb89404..127844d 100644
 +            list(APPEND BASE_FILES
 +                ${CMAKE_SOURCE_DIR}/../src/cpu/bellatrix.c
 +                ${CMAKE_SOURCE_DIR}/../src/core/machine.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/btrace.c
++                ${CMAKE_SOURCE_DIR}/../src/debug/btrace.c
++                ${CMAKE_SOURCE_DIR}/../src/debug/probe.c
++                ${CMAKE_SOURCE_DIR}/../src/debug/debug.c
++                ${CMAKE_SOURCE_DIR}/../src/debug/emu_debug.c
++                ${CMAKE_SOURCE_DIR}/../src/debug/os_debug.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_a.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_b.c
@@ -35,6 +39,7 @@ index eb89404..127844d 100644
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/denise/denise.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/paula/uart.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/dma.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/beam.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/bitplanes.c
@@ -49,7 +54,7 @@ index eb89404..127844d 100644
 +            message(FATAL_ERROR "Bellatrix variant is supported on raspi64 target only.")
 +        endif()
      endif()
--    
+-
 +
  else()
      message(FATAL_ERROR "Wrong variant selected: ${VARIANT}")
