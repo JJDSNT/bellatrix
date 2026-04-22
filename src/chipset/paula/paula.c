@@ -140,10 +140,12 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
         else
             p->intena &= (uint16_t)~(raw & 0x7FFFu);
         {
+            int inten = !!(p->intena & PAULA_INT_MASTER);
             uint16_t pending = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
-            kprintf("[PAULA-W] INTENA raw=%04x -> intena=%04x intreq=%04x pending=%04x\n",
+            kprintf("[PAULA-W] INTENA raw=%04x -> intena=%04x intreq=%04x pending=%04x%s\n",
                     (unsigned)raw, (unsigned)p->intena,
-                    (unsigned)p->intreq, (unsigned)pending);
+                    (unsigned)p->intreq, (unsigned)pending,
+                    inten ? "" : " (INTEN OFF)");
         }
         break;
 
@@ -153,10 +155,12 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
         else
             p->intreq &= (uint16_t)~(raw & 0x3FFFu);
         {
+            int inten = !!(p->intena & PAULA_INT_MASTER);
             uint16_t pending = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
-            kprintf("[PAULA-W] INTREQ raw=%04x -> intreq=%04x intena=%04x pending=%04x\n",
+            kprintf("[PAULA-W] INTREQ raw=%04x -> intreq=%04x intena=%04x pending=%04x%s\n",
                     (unsigned)raw, (unsigned)p->intreq,
-                    (unsigned)p->intena, (unsigned)pending);
+                    (unsigned)p->intena, (unsigned)pending,
+                    inten ? "" : " (INTEN OFF)");
         }
         break;
 
