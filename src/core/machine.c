@@ -1,6 +1,9 @@
 // src/core/machine.c
 
 #include "core/machine.h"
+
+#include "debug/btrace.h"
+#include "debug/probe.h"
 #include "host/pal.h"
 #include "support.h"
 
@@ -28,31 +31,161 @@ static inline bool is_cia_b_addr(uint32_t addr)
 }
 
 /* ---------------------------------------------------------------------------
+ * Debug helpers
+ * ------------------------------------------------------------------------- */
+
+static void machine_debug_init(BellatrixMachine *m)
+{
+    BellatrixDebug *d = &m->debug;
+
+    probe_init(&d->probe);
+    btrace_init(&d->btrace);
+
+    d->enable_probe   = true;
+    d->enable_btrace  = true;
+
+    d->dump_on_watchdog   = true;
+    d->dump_on_cpu_stop   = true;
+    d->dump_on_cpu_except = true;
+    d->dump_on_ipl_change = false;
+
+    d->probe_last_n     = 128;
+    d->btrace_last_n    = 128;
+    d->copper_max_insn  = 32;
+
+    d->btrace_reads         = true;
+    d->btrace_writes        = true;
+    d->btrace_only_chipset  = true;
+    d->btrace_addr_lo       = 0x00dff000u;
+    d->btrace_addr_hi       = 0x00dfffffu;
+}
+
+static void machine_debug_reset(BellatrixMachine *m)
+{
+    probe_reset(&m->debug.probe);
+    btrace_reset(&m->debug.btrace);
+}
+
+static inline uint32_t machine_cpu_pc(const BellatrixMachine *m)
+{
+    return (m && m->cpu) ? BE32(m->cpu->PC) : 0;
+}
+
+static inline uint16_t machine_vpos(const BellatrixMachine *m)
+{
+    /*
+     * Ajuste aqui se o nome real do campo em Agnus for outro.
+     */
+    return (uint16_t)m->agnus.beam.vpos;
+}
+
+static inline bool machine_btrace_addr_match(const BellatrixMachine *m, uint32_t addr)
+{
+    const BellatrixDebug *d = &m->debug;
+
+    if (d->btrace_only_chipset) {
+        return is_custom_addr(addr) || is_cia_a_addr(addr) || is_cia_b_addr(addr);
+    }
+
+    return (addr >= d->btrace_addr_lo && addr <= d->btrace_addr_hi);
+}
+
+static inline void machine_btrace_read(BellatrixMachine *m,
+                                       uint32_t addr,
+                                       unsigned int size,
+                                       uint32_t value)
+{
+    BellatrixDebug *d = &m->debug;
+
+    if (!d->enable_btrace || !d->btrace_reads) {
+        return;
+    }
+
+    if (!machine_btrace_addr_match(m, addr)) {
+        return;
+    }
+
+    btrace_log_read(&d->btrace,
+                    (uint32_t)m->tick_count,
+                    machine_cpu_pc(m),
+                    addr,
+                    size,
+                    value);
+}
+
+static inline void machine_btrace_write(BellatrixMachine *m,
+                                        uint32_t addr,
+                                        unsigned int size,
+                                        uint32_t value)
+{
+    BellatrixDebug *d = &m->debug;
+
+    if (!d->enable_btrace || !d->btrace_writes) {
+        return;
+    }
+
+    if (!machine_btrace_addr_match(m, addr)) {
+        return;
+    }
+
+    btrace_log_write(&d->btrace,
+                     (uint32_t)m->tick_count,
+                     machine_cpu_pc(m),
+                     addr,
+                     size,
+                     value);
+}
+
+static inline void machine_probe_emit(BellatrixMachine *m,
+                                      ProbeEventType type,
+                                      uint32_t a,
+                                      uint32_t b)
+{
+    if (!m->debug.enable_probe) {
+        return;
+    }
+
+    probe_emit(&m->debug.probe,
+               type,
+               (uint32_t)m->tick_count,
+               machine_vpos(m),
+               a,
+               b);
+}
+
+/* ---------------------------------------------------------------------------
  * Internal sync
  * ------------------------------------------------------------------------- */
 
 static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 {
-    if (ipl > 7) ipl = 7;
+    if (ipl > 7) {
+        ipl = 7;
+    }
 
-    if (ipl != m->current_ipl)
-    {
-        extern struct M68KState *__m68k_state;
-        uint32_t pc = __m68k_state ? BE32(__m68k_state->PC) : 0;
+    if (ipl != m->current_ipl) {
+        uint32_t pc = machine_cpu_pc(m);
 
-        if (ipl > m->current_ipl && ipl > 0)
-        {
+        if (ipl > m->current_ipl && ipl > 0) {
             uint32_t vec_off  = 0x60u + (uint32_t)ipl * 4u;
             uint32_t chip_val = bellatrix_chip_read32(&m->memory, vec_off);
+
             kprintf("[IPL-RISE] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n",
                     (unsigned)m->current_ipl, (unsigned)ipl,
                     (unsigned)vec_off, (unsigned)vec_off, (unsigned)chip_val,
                     (unsigned)pc);
-        }
-        else
-        {
-            kprintf("[IPL] %u -> %u  m68k_pc=%08x\n",
-                    (unsigned)m->current_ipl, (unsigned)ipl, pc);
+
+            machine_probe_emit(m, PROBE_EVT_IPL_RISE, (uint32_t)ipl, pc);
+        } else {
+            uint32_t vec_off  = 0x60u + (uint32_t)m->current_ipl * 4u;
+            uint32_t chip_val = bellatrix_chip_read32(&m->memory, vec_off);
+
+            kprintf("[IPL-DROP] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n",
+                    (unsigned)m->current_ipl, (unsigned)ipl,
+                    (unsigned)vec_off, (unsigned)vec_off, (unsigned)chip_val,
+                    (unsigned)pc);
+
+            machine_probe_emit(m, PROBE_EVT_IPL_DROP, (uint32_t)ipl, pc);
         }
     }
 
@@ -67,7 +200,13 @@ static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
 
 static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
 {
-    if (ticks == 0) return;
+    uint16_t old_vpos;
+
+    if (ticks == 0) {
+        return;
+    }
+
+    old_vpos = machine_vpos(m);
 
     agnus_step(&m->agnus, ticks);
     cia_step(&m->cia_a, ticks);
@@ -76,6 +215,15 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     denise_step(&m->denise, ticks);
 
     m->tick_count += ticks;
+
+    /*
+     * Heurística simples de VBL:
+     * se o vpos "voltou" ou caiu, registramos um marco de frame.
+     * Ajuste se você tiver um evento de VBL mais explícito no Agnus.
+     */
+    if (machine_vpos(m) < old_vpos) {
+        machine_probe_emit(m, PROBE_EVT_VBL, 0x20u, 0);
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -85,6 +233,11 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
 BellatrixMachine *bellatrix_machine_get(void)
 {
     return &g_machine;
+}
+
+BellatrixDebug *bellatrix_machine_debug(void)
+{
+    return &g_machine.debug;
 }
 
 void bellatrix_machine_init(struct M68KState *cpu)
@@ -116,6 +269,8 @@ void bellatrix_machine_init(struct M68KState *cpu)
     cia_attach_paula(&m->cia_a, &m->paula);
     cia_attach_paula(&m->cia_b, &m->paula);
 
+    machine_debug_init(m);
+
     m->tick_count = 0;
     machine_publish_ipl(m, 0);
 }
@@ -130,6 +285,8 @@ void bellatrix_machine_reset(void)
     cia_reset(&m->cia_a);
     cia_reset(&m->cia_b);
     rtc_reset(&m->rtc);
+
+    machine_debug_reset(m);
 
     m->tick_count = 0;
     machine_publish_ipl(m, 0);
@@ -163,17 +320,22 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
     machine_step_components(m, 1);
 
     if (is_custom_addr(addr)) {
-        if (paula_handles_read(&m->paula, addr))
+        if (paula_handles_read(&m->paula, addr)) {
             value = paula_read(&m->paula, addr, size);
-        else if (agnus_handles_read(&m->agnus, addr))
+        } else if (agnus_handles_read(&m->agnus, addr)) {
             value = agnus_read(&m->agnus, addr, size);
-        else if (denise_handles_read(&m->denise, addr))
+        } else if (denise_handles_read(&m->denise, addr)) {
             value = denise_read(&m->denise, addr, size);
+        }
     } else if (is_cia_a_addr(addr)) {
-        value = cia_read_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0xF));
+        value = cia_read_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F));
+        machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     } else if (is_cia_b_addr(addr)) {
-        value = cia_read_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0xF));
+        value = cia_read_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F));
+        machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     }
+
+    machine_btrace_read(m, addr, size, value);
 
     bellatrix_machine_sync_ipl();
     return value;
@@ -184,18 +346,51 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
     BellatrixMachine *m = &g_machine;
 
     machine_step_components(m, 1);
+    machine_btrace_write(m, addr, size, value);
 
     if (is_custom_addr(addr)) {
-        if (paula_handles_write(&m->paula, addr))
+        /*
+         * Antes da escrita, guardamos alguns registradores sensíveis para gerar
+         * eventos semânticos depois.
+         */
+        uint16_t old_intena = m->paula.intena;
+        uint16_t old_intreq = m->paula.intreq;
+
+        if (paula_handles_write(&m->paula, addr)) {
             paula_write(&m->paula, addr, value, size);
-        else if (agnus_handles_write(&m->agnus, addr))
+        } else if (agnus_handles_write(&m->agnus, addr)) {
             agnus_write(&m->agnus, addr, value, size);
-        else if (denise_handles_write(&m->denise, addr))
+        } else if (denise_handles_write(&m->denise, addr)) {
             denise_write(&m->denise, addr, value, size);
+        }
+
+        /*
+         * Eventos semânticos básicos de Paula.
+         * Endereços:
+         *   INTENA 0xDFF09A
+         *   INTREQ 0xDFF09C
+         */
+        if ((addr & 0x00fffffeu) == 0x00dff09au) {
+            machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.intena);
+        }
+
+        if ((addr & 0x00fffffeu) == 0x00dff09cu) {
+            if (m->paula.intreq != old_intreq) {
+                if (m->paula.intreq > old_intreq) {
+                    machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
+                } else {
+                    machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
+                }
+            }
+        }
+
+        (void)old_intena;
     } else if (is_cia_a_addr(addr)) {
-        cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0xF), (uint8_t)value);
+        cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
+        machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     } else if (is_cia_b_addr(addr)) {
-        cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0xF), (uint8_t)value);
+        cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
+        machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
 
     bellatrix_machine_sync_ipl();
@@ -205,9 +400,55 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
  * Raw access to owned components
  * ------------------------------------------------------------------------- */
 
-Agnus    *bellatrix_machine_agnus(void)  { return &g_machine.agnus; }
-Denise   *bellatrix_machine_denise(void) { return &g_machine.denise; }
-Paula    *bellatrix_machine_paula(void)  { return &g_machine.paula; }
-CIA      *bellatrix_machine_cia_a(void)  { return &g_machine.cia_a; }
-CIA      *bellatrix_machine_cia_b(void)  { return &g_machine.cia_b; }
-RTCState *bellatrix_machine_rtc(void)    { return &g_machine.rtc; }
+Agnus *bellatrix_machine_agnus(void)
+{
+    return &g_machine.agnus;
+}
+
+Denise *bellatrix_machine_denise(void)
+{
+    return &g_machine.denise;
+}
+
+Paula *bellatrix_machine_paula(void)
+{
+    return &g_machine.paula;
+}
+
+CIA *bellatrix_machine_cia_a(void)
+{
+    return &g_machine.cia_a;
+}
+
+CIA *bellatrix_machine_cia_b(void)
+{
+    return &g_machine.cia_b;
+}
+
+RTCState *bellatrix_machine_rtc(void)
+{
+    return &g_machine.rtc;
+}
+
+/* ---------------------------------------------------------------------------
+ * btrace wrappers for callers that don't own the BTraceState
+ * ------------------------------------------------------------------------- */
+
+void bellatrix_machine_btrace_log(uint32_t addr, uint32_t value,
+                                  unsigned int size, uint8_t dir, uint8_t impl)
+{
+    BellatrixMachine *m = &g_machine;
+
+    if (!m->debug.enable_btrace)
+        return;
+
+    btrace_log(&m->debug.btrace,
+               (uint32_t)m->tick_count,
+               machine_cpu_pc(m),
+               addr, value, size, dir, impl);
+}
+
+void bellatrix_machine_btrace_set_filter(uint16_t filter)
+{
+    btrace_set_filter(&g_machine.debug.btrace, filter);
+}
