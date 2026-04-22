@@ -5,7 +5,6 @@
 
 #include "bellatrix.h"
 #include "core/machine.h"
-#include "core/btrace.h"
 #include "chipset/agnus/agnus.h"
 #include "chipset/cia/cia.h"
 #include "chipset/denise/denise.h"
@@ -156,9 +155,13 @@ static void set_overlay(int new_overlay)
     }
     else
     {
+        /* Keep page 0 write-protected so KS writes to the vector table
+         * (0x00–0xFF) still fault through bellatrix_bus_access and are
+         * captured by [VEC-W] logging.  Reads succeed (AF=1 is set).
+         * chip_ram_write() uses CHIP_RAM_VIRT and bypasses this mapping. */
         mmu_map(0x000000, 0x000000, 4096,
                 MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
-                    MMU_ATTR_CACHED,
+                    MMU_READ_ONLY | MMU_ATTR_CACHED,
                 0);
     }
 }
@@ -218,7 +221,6 @@ void bellatrix_init(void)
     extern struct M68KState *__m68k_state;
 
     PAL_Debug_Init(115200);
-    btrace_init();
 
     bellatrix_machine_init(__m68k_state);
 
@@ -350,7 +352,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     /* Btrace verbosity control */
     if (addr == BTRACE_CONTROL_ADDR && dir == BUS_WRITE)
     {
-        btrace_set_filter((uint16_t)value);
+        bellatrix_machine_btrace_set_filter((uint16_t)value);
         return 0;
     }
 
@@ -361,7 +363,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     {
         if (dir == BUS_WRITE)
         {
-            if (addr < 0x100u)
+            if (addr < 0x400u)
                 kprintf("[VEC-W] %05x[%d]=%08x\n",
                         (unsigned)addr, size, (unsigned)value);
             else if (addr >= 0x02368u && addr < 0x02420u)
@@ -373,7 +375,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         else
         {
             result = chip_ram_read(addr, size);
-            btrace_log(addr, result, size, dir, 1);
+            bellatrix_machine_btrace_log(addr, result, size, dir, 1);
             return result;
         }
     }
@@ -442,7 +444,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         }
 
         bellatrix_machine_sync_ipl();
-        btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
+        bellatrix_machine_btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
         return result;
     }
 
@@ -468,7 +470,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         }
 
         update_ipl();
-        btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
+        bellatrix_machine_btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
         return result;
     }
 
@@ -483,7 +485,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
             result = cia_read_reg(&m->cia_b, (uint8_t)reg);
 
         update_ipl();
-        btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
+        bellatrix_machine_btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
         return result;
     }
 
@@ -499,7 +501,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         else
             result = rtc_read_reg(&m->rtc, reg);
 
-        btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
+        bellatrix_machine_btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);
         return result;
     }
 
@@ -508,7 +510,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         return 0;
 
     /* Everything else: unimplemented */
-    btrace_log(addr, value, size, dir, 0);
+    bellatrix_machine_btrace_log(addr, value, size, dir, 0);
     return 0;
 }
 
