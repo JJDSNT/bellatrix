@@ -95,10 +95,10 @@ index f2060ad..b47f6ed 100644
      __m68k.D[0].u32 = BE32((uint32_t)pitch);
      __m68k.D[1].u32 = BE32((uint32_t)fb_width);
 diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 329d470..28e7cfa 100644
+index 329d470..f65c170 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -661,6 +661,34 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -661,6 +661,42 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
      return 1;
  }
  
@@ -114,7 +114,11 @@ index 329d470..28e7cfa 100644
 +    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff)
 +        far &= 0xffffffff;
 +
++    /* kprintf inside bellatrix_bus_access clobbers x18 (M68K PC). Save/restore. */
++    uint64_t _x18_save;
++    asm volatile("mov %0, x18" : "=r"(_x18_save));
 +    bellatrix_bus_access((uint32_t)far, (uint32_t)value, size, BUS_WRITE);
++    asm volatile("mov x18, %0" :: "r"(_x18_save));
 +    return 1;
 +}
 +
@@ -125,7 +129,11 @@ index 329d470..28e7cfa 100644
 +    if ((far >> 32) == 1 || (far >> 32) == 0xffffffff)
 +        far &= 0xffffffff;
 +
++    /* kprintf inside bellatrix_bus_access clobbers x18 (M68K PC). Save/restore. */
++    uint64_t _x18_save;
++    asm volatile("mov %0, x18" : "=r"(_x18_save));
 +    *value = bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);
++    asm volatile("mov x18, %0" :: "r"(_x18_save));
 +    if (value2) *value2 = 0;
 +    return 1;
 +}
