@@ -4,6 +4,7 @@
 // Routes every unmapped M68K bus access to the appropriate chipset module.
 
 #include "bellatrix.h"
+#include "cpu_backend.h"
 #include "core/machine.h"
 #include "chipset/agnus/agnus.h"
 #include "chipset/cia/cia.h"
@@ -13,6 +14,7 @@
 #include "mmu.h"
 #include "A64.h"
 #include "support.h"
+#include "M68k.h"
 
 /* extern'd by start.c ROM loading code */
 uint32_t rom_mapped = 0;
@@ -21,6 +23,30 @@ uint32_t rom_mapped = 0;
  * JIT/cache initialisation.  Used by M68K_StartEmu() BELLATRIX path. */
 uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc  = 0;
+
+/* ---------------------------------------------------------------------------
+ * Emu68 CpuBackend — wires machine's two CPU callbacks to Emu68 internals
+ * ------------------------------------------------------------------------- */
+
+extern struct M68KState *__m68k_state;
+
+static uint32_t emu68_get_pc(void *ctx)
+{
+    (void)ctx;
+    return __m68k_state ? BE32(__m68k_state->PC) : 0u;
+}
+
+static void emu68_set_ipl(void *ctx, int level)
+{
+    (void)ctx;
+    PAL_IPL_Set((uint8_t)level);
+}
+
+static CpuBackend g_emu68_backend = {
+    .ctx     = NULL,
+    .get_pc  = emu68_get_pc,
+    .set_ipl = emu68_set_ipl,
+};
 
 /* ---------------------------------------------------------------------------
  * Wall-clock driven machine step (strong override of pal_core.c weak stub).
@@ -222,7 +248,7 @@ void bellatrix_init(void)
 
     PAL_Debug_Init(115200);
 
-    bellatrix_machine_init(__m68k_state);
+    bellatrix_machine_init(&g_emu68_backend);
 
     /* Bellatrix-specific CIA-A defaults: OVL and LED are outputs */
     BellatrixMachine *m = bellatrix_machine_get();

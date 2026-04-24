@@ -2,3 +2,6 @@
 	path = emu68
 	url = https://github.com/michalsc/Emu68
 	ignore = all
+[submodule "external/musashi"]
+	path = external/musashi
+	url = https://github.com/kstenerud/musashi

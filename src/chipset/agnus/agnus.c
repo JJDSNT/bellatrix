@@ -3,9 +3,9 @@
 #include "agnus.h"
 #include "chipset/denise/denise.h"
 #include "chipset/paula/paula.h"
+#include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "support.h"
-#include "M68k.h"
 
 /* ---------------------------------------------------------------------------
  * Internal helpers
@@ -167,8 +167,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
             uint16_t _intena = s->paula ? s->paula->intena : 0u;
             uint16_t _intreq = s->paula ? s->paula->intreq : 0u;
             uint16_t _pend   = (uint16_t)(_intena & _intreq & 0x3FFFu);
-            extern struct M68KState *__m68k_state;
-            uint32_t _pc = __m68k_state ? BE32(__m68k_state->PC) : 0u;
+            uint32_t _pc = bellatrix_debug_cpu_pc();
             kprintf("[VBL-ENTER] frame=%u hpos=%u vpos=%u dmacon=0x%04x intena=0x%04x intreq=0x%04x pending=0x%04x m68k_pc=%08x\n",
                     (unsigned)s->beam.frame,
                     (unsigned)s->beam.hpos,
@@ -307,6 +306,8 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                             bitplanes_clear_line_ready(&s->bitplanes);
                         }
                     }
+
+                    PAL_Video_Flip();
                 }
             }
         }

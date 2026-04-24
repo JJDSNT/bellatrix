@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "M68k.h"
+#include "cpu/cpu_backend.h"
 
 #include "chipset/agnus/agnus.h"
 #include "chipset/cia/cia.h"
@@ -56,7 +56,7 @@ typedef struct BellatrixDebug
 
 typedef struct BellatrixMachine
 {
-    struct M68KState *cpu;
+    CpuBackend *cpu_backend;
 
     BellatrixMemory memory;
 
@@ -79,7 +79,7 @@ typedef struct BellatrixMachine
 
 BellatrixMachine *bellatrix_machine_get(void);
 
-void bellatrix_machine_init(struct M68KState *cpu);
+void bellatrix_machine_init(CpuBackend *cpu_backend);
 void bellatrix_machine_reset(void);
 
 /* ------------------------------------------------------------------------- */

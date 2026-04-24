@@ -3,8 +3,8 @@
 #include "core/machine.h"
 
 #include "debug/btrace.h"
+#include "debug/cpu_pc.h"
 #include "debug/probe.h"
-#include "host/pal.h"
 #include "support.h"
 
 #include <string.h>
@@ -68,7 +68,15 @@ static void machine_debug_reset(BellatrixMachine *m)
 
 static inline uint32_t machine_cpu_pc(const BellatrixMachine *m)
 {
-    return (m && m->cpu) ? BE32(m->cpu->PC) : 0;
+    (void)m;
+    return bellatrix_debug_cpu_pc();
+}
+
+uint32_t bellatrix_debug_cpu_pc(void)
+{
+    const BellatrixMachine *m = &g_machine;
+    if (!m->cpu_backend || !m->cpu_backend->get_pc) return 0u;
+    return m->cpu_backend->get_pc(m->cpu_backend->ctx);
 }
 
 static inline uint16_t machine_vpos(const BellatrixMachine *m)
@@ -190,7 +198,8 @@ static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
     }
 
     m->current_ipl = ipl;
-    PAL_IPL_Set(ipl);
+    if (m->cpu_backend && m->cpu_backend->set_ipl)
+        m->cpu_backend->set_ipl(m->cpu_backend->ctx, (int)ipl);
 }
 
 static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
@@ -240,12 +249,12 @@ BellatrixDebug *bellatrix_machine_debug(void)
     return &g_machine.debug;
 }
 
-void bellatrix_machine_init(struct M68KState *cpu)
+void bellatrix_machine_init(CpuBackend *cpu_backend)
 {
     BellatrixMachine *m = &g_machine;
 
     memset(m, 0, sizeof(*m));
-    m->cpu = cpu;
+    m->cpu_backend = cpu_backend;
 
     bellatrix_memory_init(&m->memory);
 
