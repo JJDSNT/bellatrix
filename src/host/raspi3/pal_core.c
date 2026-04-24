@@ -430,3 +430,9 @@ void PAL_Core_Sync(void)
 {
     pal_dmb_ish();
 }
+
+// ---------------------------------------------------------------------------
+// Host display event helpers (no-op on bare metal)
+// ---------------------------------------------------------------------------
+int pal_sdl_poll_events(void) { return 1; }
+void pal_sdl_set_title(const char *title) { (void)title; }

@@ -67,4 +67,13 @@ void PAL_Core_SetMulticoreEnabled(int enabled);
 int  PAL_Core_IsMulticoreEnabled(void);
 void PAL_Core_Sync(void);
 
+/* ---- Host display event helpers (harness / posix only) ---- */
+
+/* Returns 1 to keep running, 0 if the user closed the window or pressed Esc.
+ * No-op stub on bare-metal targets. */
+int  pal_sdl_poll_events(void);
+
+/* Update window title (e.g. show FPS). No-op on bare-metal. */
+void pal_sdl_set_title(const char *title);
+
 #endif /* _BELLATRIX_PAL_H */

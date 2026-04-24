@@ -9,6 +9,9 @@ LAUNCHER_DIR="$ROOT/tools/launcher"
 LAUNCHER_BIN="$LAUNCHER_DIR/bin/bellatrix-launcher"
 ROMS_DIR="$ROOT/src/roms"
 
+HARNESS_BUILD_DIR="$ROOT/out/harness"
+HARNESS_BIN="$HARNESS_BUILD_DIR/harness"
+
 usage() {
     cat <<EOF
 Usage:
@@ -16,6 +19,7 @@ Usage:
 
 Modes:
   qemu                Build and run in QEMU (default)
+  harness             Build and run the Musashi validation harness (Linux host)
   raspi <mount>       Flash to SD card
   tftp                Upload via TFTP
 
@@ -28,9 +32,19 @@ QEMU options (env vars):
                       debug (JIT block stats), disassemble (M68k+ARM side-by-side)
   NO_TUI=1            Skip launcher TUI even if KICKSTART/DISPLAY_MODE are unset
 
+Harness options (env vars):
+  KICKSTART=<file>    ROM to run (required, or selected via TUI)
+  FRAMES=<n>          Stop after N frames and exit (headless mode)
+  CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
+  (no FRAMES/CYCLES)  Interactive: SDL2 window, runs until closed or Esc
+
 Examples:
   ./run.sh
   ./run.sh qemu
+  ./run.sh harness
+  KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+  KICKSTART=src/roms/aros.rom FRAMES=50 ./run.sh harness
+  KICKSTART=src/roms/KS31.rom CYCLES=5000000 ./run.sh harness
   EMU_PROFILE=emu68 ./run.sh qemu
   EMU_PROFILE=bellatrix KICKSTART=src/roms/KS13.rom ./run.sh qemu
   DISPLAY_MODE=none ./run.sh qemu
@@ -47,6 +61,15 @@ build_launcher() {
         cd "$LAUNCHER_DIR"
         go mod download
         go build -o "$LAUNCHER_BIN" .
+    )
+}
+
+build_harness() {
+    mkdir -p "$HARNESS_BUILD_DIR"
+    (
+        cd "$HARNESS_BUILD_DIR"
+        cmake "$ROOT/tools/harness" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF > /dev/null
+        make -j"$(nproc)"
     )
 }
 
@@ -114,7 +137,7 @@ case "$MODE" in
         usage
         exit 0
         ;;
-    qemu|raspi|tftp)
+    qemu|raspi|tftp|harness)
         shift || true
         ;;
     *)
@@ -125,6 +148,37 @@ case "$MODE" in
         ;;
 esac
 
+# ---------------------------------------------------------------------------
+# Harness mode — handled entirely here, no Emu68 build needed
+# ---------------------------------------------------------------------------
+if [ "$MODE" = "harness" ]; then
+    echo "[BUILD] Harness (Musashi, native)"
+    build_harness
+
+    # Pick ROM via TUI if not set
+    if [ -z "${KICKSTART:-}" ]; then
+        load_launcher_selection
+    fi
+
+    [ -n "${KICKSTART:-}" ] || { echo "ERROR: no ROM selected"; exit 1; }
+    [ -f "$KICKSTART" ]     || { echo "ERROR: ROM not found: $KICKSTART"; exit 1; }
+
+    HARNESS_ARGS=("$KICKSTART")
+
+    if [ -n "${CYCLES:-}" ]; then
+        HARNESS_ARGS+=(--cycles "$CYCLES")
+    elif [ -n "${FRAMES:-}" ]; then
+        HARNESS_ARGS+=(--frames "$FRAMES")
+    fi
+    # Without FRAMES or CYCLES: interactive SDL2 window (default)
+
+    echo "[RUN] Harness: $KICKSTART"
+    exec "$HARNESS_BIN" "${HARNESS_ARGS[@]}"
+fi
+
+# ---------------------------------------------------------------------------
+# QEMU / raspi / tftp modes — Emu68 build path
+# ---------------------------------------------------------------------------
 EMU_PROFILE="${EMU_PROFILE:-bellatrix}"
 set_profile_paths "$EMU_PROFILE"
 
