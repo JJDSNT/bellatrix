@@ -29,6 +29,7 @@ typedef struct Paula {
     uint16_t intreq;
     uint16_t intena;
     uint8_t  ipl;
+    uint32_t disk_dma_countdown;   /* CPU cycles until DSKBLK fires (0 = inactive) */
 } Paula;
 
 /* lifecycle */

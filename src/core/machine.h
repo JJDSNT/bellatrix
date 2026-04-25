@@ -71,6 +71,7 @@ typedef struct BellatrixMachine
 
     uint64_t tick_count;
     uint8_t  current_ipl;
+    uint32_t cia_tick_acc;   /* fractional CPU→E-clock accumulator (÷10) */
 } BellatrixMachine;
 
 /* ------------------------------------------------------------------------- */

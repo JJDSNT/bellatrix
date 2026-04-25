@@ -218,8 +218,21 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     old_vpos = machine_vpos(m);
 
     agnus_step(&m->agnus, ticks);
-    cia_step(&m->cia_a, ticks);
-    cia_step(&m->cia_b, ticks);
+
+    /*
+     * CIA runs at E-clock = CPU / 10.  Accumulate fractional ticks to
+     * avoid drift on small quanta (e.g. ticks = 1 from bus access path).
+     */
+    m->cia_tick_acc += ticks;
+    {
+        uint64_t cia_ticks = m->cia_tick_acc / 10u;
+        m->cia_tick_acc   %= 10u;
+        if (cia_ticks > 0) {
+            cia_step(&m->cia_a, cia_ticks);
+            cia_step(&m->cia_b, cia_ticks);
+        }
+    }
+
     paula_step(&m->paula, ticks);
     denise_step(&m->denise, ticks);
 
@@ -321,21 +334,24 @@ void bellatrix_machine_sync_ipl(void)
  * Bus protocol
  * ------------------------------------------------------------------------- */
 
-uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
+/* ---------------------------------------------------------------------------
+ * Chipset register dispatch (no tick advance, no btrace — called by read/write)
+ * The 68000 has a 16-bit bus; a size-4 access is always two word cycles.
+ * bellatrix_machine_read/write split size=4 before calling these helpers so
+ * chipset components (Agnus, Paula, Denise, CIA) only ever see size 1 or 2.
+ * ------------------------------------------------------------------------- */
+
+static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int size)
 {
-    BellatrixMachine *m = &g_machine;
     uint32_t value = 0;
 
-    machine_step_components(m, 1);
-
     if (is_custom_addr(addr)) {
-        if (paula_handles_read(&m->paula, addr)) {
+        if (paula_handles_read(&m->paula, addr))
             value = paula_read(&m->paula, addr, size);
-        } else if (agnus_handles_read(&m->agnus, addr)) {
+        else if (agnus_handles_read(&m->agnus, addr))
             value = agnus_read(&m->agnus, addr, size);
-        } else if (denise_handles_read(&m->denise, addr)) {
+        else if (denise_handles_read(&m->denise, addr))
             value = denise_read(&m->denise, addr, size);
-        }
     } else if (is_cia_a_addr(addr)) {
         value = cia_read_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F));
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
@@ -344,8 +360,57 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     }
 
-    machine_btrace_read(m, addr, size, value);
+    return value;
+}
 
+static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, unsigned int size)
+{
+    if (is_custom_addr(addr)) {
+        uint16_t old_intreq = m->paula.intreq;
+
+        if (paula_handles_write(&m->paula, addr))
+            paula_write(&m->paula, addr, value, size);
+        else if (agnus_handles_write(&m->agnus, addr))
+            agnus_write(&m->agnus, addr, value, size);
+        else if (denise_handles_write(&m->denise, addr))
+            denise_write(&m->denise, addr, value, size);
+
+        if ((addr & 0x00fffffeu) == 0x00dff09au)
+            machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.intena);
+
+        if ((addr & 0x00fffffeu) == 0x00dff09cu) {
+            if (m->paula.intreq != old_intreq) {
+                if (m->paula.intreq > old_intreq)
+                    machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
+                else
+                    machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
+            }
+        }
+    } else if (is_cia_a_addr(addr)) {
+        cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
+        machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
+    } else if (is_cia_b_addr(addr)) {
+        cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
+        machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
+    }
+}
+
+uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
+{
+    BellatrixMachine *m = &g_machine;
+    uint32_t value;
+
+    machine_step_components(m, 1);
+
+    if (size == 4) {
+        uint32_t hi = machine_dispatch_read(m, addr,     2);
+        uint32_t lo = machine_dispatch_read(m, addr + 2, 2);
+        value = (hi << 16) | lo;
+    } else {
+        value = machine_dispatch_read(m, addr, size);
+    }
+
+    machine_btrace_read(m, addr, size, value);
     bellatrix_machine_sync_ipl();
     return value;
 }
@@ -357,49 +422,11 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
     machine_step_components(m, 1);
     machine_btrace_write(m, addr, size, value);
 
-    if (is_custom_addr(addr)) {
-        /*
-         * Antes da escrita, guardamos alguns registradores sensíveis para gerar
-         * eventos semânticos depois.
-         */
-        uint16_t old_intena = m->paula.intena;
-        uint16_t old_intreq = m->paula.intreq;
-
-        if (paula_handles_write(&m->paula, addr)) {
-            paula_write(&m->paula, addr, value, size);
-        } else if (agnus_handles_write(&m->agnus, addr)) {
-            agnus_write(&m->agnus, addr, value, size);
-        } else if (denise_handles_write(&m->denise, addr)) {
-            denise_write(&m->denise, addr, value, size);
-        }
-
-        /*
-         * Eventos semânticos básicos de Paula.
-         * Endereços:
-         *   INTENA 0xDFF09A
-         *   INTREQ 0xDFF09C
-         */
-        if ((addr & 0x00fffffeu) == 0x00dff09au) {
-            machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.intena);
-        }
-
-        if ((addr & 0x00fffffeu) == 0x00dff09cu) {
-            if (m->paula.intreq != old_intreq) {
-                if (m->paula.intreq > old_intreq) {
-                    machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
-                } else {
-                    machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
-                }
-            }
-        }
-
-        (void)old_intena;
-    } else if (is_cia_a_addr(addr)) {
-        cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
-        machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
-    } else if (is_cia_b_addr(addr)) {
-        cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
-        machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
+    if (size == 4) {
+        machine_dispatch_write(m, addr,     value >> 16,    2);
+        machine_dispatch_write(m, addr + 2, value & 0xFFFF, 2);
+    } else {
+        machine_dispatch_write(m, addr, value, size);
     }
 
     bellatrix_machine_sync_ipl();

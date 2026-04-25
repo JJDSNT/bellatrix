@@ -2,6 +2,7 @@
 
 #include "cia.h"
 #include "chipset/paula/paula.h"
+#include "support.h"
 
 #include <string.h>
 
@@ -16,9 +17,19 @@ static inline void cia_sync_irq_line(CIA *cia)
 
     if (cia_irq_pending(cia)) {
         paula_irq_raise(cia->paula, cia->paula_irq_bit);
+        if (!cia->irq_asserted) {
+            kprintf("[CIA%c-IRQ] raised data=%02x mask=%02x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)cia->icr_data,
+                    (unsigned)cia->icr_mask);
+        }
         cia->irq_asserted = 1u;
     } else {
         paula_irq_clear(cia->paula, cia->paula_irq_bit);
+        if (cia->irq_asserted) {
+            kprintf("[CIA%c-IRQ] cleared\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B');
+        }
         cia->irq_asserted = 0u;
     }
 }
@@ -352,6 +363,11 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
 
             cia->icr_data = 0x00u;
             cia_sync_irq_line(cia);
+
+            kprintf("[CIA%c-ICR-R] returned=%02x (mask=%02x)\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)val,
+                    (unsigned)cia->icr_mask);
             return val;
         }
 
@@ -425,6 +441,10 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
             else
                 cia->icr_mask &= (uint8_t)~(val & 0x1Fu);
 
+            kprintf("[CIA%c-ICR-W] raw=%02x -> mask=%02x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)val,
+                    (unsigned)cia->icr_mask);
             cia_sync_irq_line(cia);
             return;
 

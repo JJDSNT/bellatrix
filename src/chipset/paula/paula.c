@@ -7,10 +7,20 @@
 #include "support.h"
 
 /* Custom chip register addresses */
+#define REG_ADKCONR  0xDFF010u
+#define REG_DSKBYTR  0xDFF01Au
 #define REG_INTENAR  0xDFF01Cu
 #define REG_INTREQR  0xDFF01Eu
+#define REG_DSKPTH   0xDFF020u
+#define REG_DSKPTL   0xDFF022u
+#define REG_DSKLEN   0xDFF024u
+#define REG_DSKSYNC  0xDFF07Eu
 #define REG_INTENA   0xDFF09Au
 #define REG_INTREQ   0xDFF09Cu
+#define REG_ADKCON   0xDFF09Eu
+
+/* Cycles until a fake DSKBLK fires after DMA enable (≈6ms at 7 MHz) */
+#define DISK_DMA_FAKE_CYCLES 46000u
 
 /* ---------------------------------------------------------------------------
  * Lifecycle
@@ -23,9 +33,10 @@ void paula_init(Paula *p)
 
 void paula_reset(Paula *p)
 {
-    p->intreq = 0;
-    p->intena = 0;
-    p->ipl    = 0;
+    p->intreq             = 0;
+    p->intena             = 0;
+    p->ipl                = 0;
+    p->disk_dma_countdown = 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -77,7 +88,7 @@ uint8_t paula_compute_ipl(const Paula *p)
     if (!master || !pending)
         return 0;
 
-    if (pending & PAULA_INT_EXTER)                                              return 6;
+    if (pending & (PAULA_INT_EXTER | PAULA_INT_DSKSYN))                        return 6;
     if (pending & PAULA_INT_RBF)                                                return 5;
     if (pending & (PAULA_INT_AUD0|PAULA_INT_AUD1|PAULA_INT_AUD2|PAULA_INT_AUD3)) return 4;
     if (pending & (PAULA_INT_COPER|PAULA_INT_VERTB|PAULA_INT_BLIT))              return 3;
@@ -93,8 +104,16 @@ uint8_t paula_compute_ipl(const Paula *p)
 
 void paula_step(Paula *p, uint32_t ticks)
 {
-    (void)p;
-    (void)ticks;
+    if (p->disk_dma_countdown == 0)
+        return;
+
+    if (ticks >= p->disk_dma_countdown) {
+        p->disk_dma_countdown = 0;
+        kprintf("[PAULA-DISK] DSKBLK fired (fake)\n");
+        paula_irq_raise(p, PAULA_INT_DSKBLK);
+    } else {
+        p->disk_dma_countdown -= ticks;
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -104,13 +123,22 @@ void paula_step(Paula *p, uint32_t ticks)
 int paula_handles_read(const Paula *p, uint32_t addr)
 {
     (void)p;
-    return addr == REG_INTENAR || addr == REG_INTREQR;
+    return addr == REG_ADKCONR
+        || addr == REG_DSKBYTR
+        || addr == REG_INTENAR
+        || addr == REG_INTREQR;
 }
 
 int paula_handles_write(const Paula *p, uint32_t addr)
 {
     (void)p;
-    return addr == REG_INTENA || addr == REG_INTREQ;
+    return addr == REG_DSKPTH
+        || addr == REG_DSKPTL
+        || addr == REG_DSKLEN
+        || addr == REG_DSKSYNC
+        || addr == REG_INTENA
+        || addr == REG_INTREQ
+        || addr == REG_ADKCON;
 }
 
 uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
@@ -118,13 +146,26 @@ uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
     (void)size;
     uint32_t ret = 0;
     switch (addr) {
-    case REG_INTENAR: ret = p->intena; break;
-    case REG_INTREQR: ret = p->intreq; break;
-    default:          break;
+    case REG_ADKCONR:
+        ret = 0;
+        break;
+    case REG_DSKBYTR:
+        /* No disk: DMAON=0, WORDSYNC=0, data=0 */
+        ret = 0;
+        break;
+    case REG_INTENAR:
+        ret = p->intena;
+        kprintf("[PAULA-R] INTENAR -> %04x  (intreq=%04x)\n",
+                (unsigned)p->intena, (unsigned)p->intreq);
+        break;
+    case REG_INTREQR:
+        ret = p->intreq;
+        kprintf("[PAULA-R] INTREQR -> %04x  (intena=%04x)\n",
+                (unsigned)p->intreq, (unsigned)p->intena);
+        break;
+    default:
+        break;
     }
-    kprintf("[PAULA-R] %s -> %04x  (intena=%04x intreq=%04x)\n",
-            addr == REG_INTENAR ? "INTENAR" : "INTREQR",
-            (unsigned)ret, (unsigned)p->intena, (unsigned)p->intreq);
     return ret;
 }
 
@@ -134,6 +175,31 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
     uint16_t raw = (uint16_t)value;
 
     switch (addr) {
+    case REG_DSKPTH:
+    case REG_DSKPTL:
+        /* Store silently — no disk DMA implemented at the chip level */
+        break;
+
+    case REG_DSKLEN:
+        if (raw & 0x8000u) {
+            /* DMA enable: schedule fake DSKBLK after a short delay */
+            p->disk_dma_countdown = DISK_DMA_FAKE_CYCLES;
+            kprintf("[PAULA-W] DSKLEN=%04x -> DMA armed (fake countdown=%u)\n",
+                    (unsigned)raw, DISK_DMA_FAKE_CYCLES);
+        } else {
+            p->disk_dma_countdown = 0;
+        }
+        break;
+
+    case REG_DSKSYNC:
+        /* Word sync value — logged, ignored */
+        kprintf("[PAULA-W] DSKSYNC=%04x\n", (unsigned)raw);
+        break;
+
+    case REG_ADKCON:
+        /* Audio/disk control — SET/CLR; accept silently for now */
+        break;
+
     case REG_INTENA:
         if (raw & 0x8000u)
             p->intena |= (uint16_t)(raw & 0x7FFFu);
