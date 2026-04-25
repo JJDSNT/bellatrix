@@ -72,9 +72,11 @@ enum {
 /* ------------------------------------------------------------------------- */
 
 /*
- * CIA-A TOD: increment once per frame (VBL)
+ * CIA-A TOD: increment once per frame (VBL).
+ * Value in E-clock ticks (CIA runs at CPU/10).
+ * PAL: 454*313 CPU cycles/frame / 10 = 14220 E-clock ticks/frame.
  */
-#define CIA_A_TOD_TICKS_PER_INCREMENT (454u * 313u)
+#define CIA_A_TOD_TICKS_PER_INCREMENT (454u * 313u / 10u)
 
 /*
  * CIA-B TOD: driven by floppy /INDEX pulse, not CPU cycles.

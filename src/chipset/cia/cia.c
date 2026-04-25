@@ -320,11 +320,34 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
 {
     switch (reg & 0x0Fu) {
 
-        case CIA_REG_PRA:
-            return cia_port_a_value(cia);
+        case CIA_REG_PRA: {
+            uint8_t v = cia_port_a_value(cia);
+            /* log only on value change to avoid flooding tight polling loops */
+            static uint8_t last_pra_a, last_pra_b;
+            uint8_t *last = (cia->id == CIA_PORT_A) ? &last_pra_a : &last_pra_b;
+            if (v != *last) {
+                kprintf("[CIA%c-PRA-R] -> %02x  (pra=%02x ddra=%02x ext=%02x)\n",
+                        cia->id == CIA_PORT_A ? 'A' : 'B',
+                        (unsigned)v, (unsigned)cia->pra,
+                        (unsigned)cia->ddra, (unsigned)cia->ext_pra);
+                *last = v;
+            }
+            return v;
+        }
 
-        case CIA_REG_PRB:
-            return cia_port_b_value(cia);
+        case CIA_REG_PRB: {
+            uint8_t v = cia_port_b_value(cia);
+            static uint8_t last_prb_a, last_prb_b;
+            uint8_t *last = (cia->id == CIA_PORT_A) ? &last_prb_a : &last_prb_b;
+            if (v != *last) {
+                kprintf("[CIA%c-PRB-R] -> %02x  (prb=%02x ddrb=%02x ext=%02x)\n",
+                        cia->id == CIA_PORT_A ? 'A' : 'B',
+                        (unsigned)v, (unsigned)cia->prb,
+                        (unsigned)cia->ddrb, (unsigned)cia->ext_prb);
+                *last = v;
+            }
+            return v;
+        }
 
         case CIA_REG_DDRA:
             return cia->ddra;
