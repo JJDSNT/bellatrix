@@ -514,10 +514,12 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     {
         int reg = cia_reg(addr);
 
-        if (dir == BUS_WRITE)
+        if (dir == BUS_WRITE) {
             cia_write_reg(&m->cia_b, (uint8_t)reg, (uint8_t)value);
-        else
+            bellatrix_machine_floppy_update();  /* PRB drives motor/select → CIA-A ext_pra */
+        } else {
             result = cia_read_reg(&m->cia_b, (uint8_t)reg);
+        }
 
         update_ipl();
         bellatrix_machine_btrace_log(addr, dir == BUS_WRITE ? value : result, size, dir, 1);

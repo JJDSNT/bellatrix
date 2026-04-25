@@ -2,6 +2,8 @@
 
 #include "core/machine.h"
 
+#include "chipset/floppy/floppy_drive.h"
+
 #include "debug/btrace.h"
 #include "debug/cpu_pc.h"
 #include "debug/probe.h"
@@ -162,6 +164,51 @@ static inline void machine_probe_emit(BellatrixMachine *m,
 }
 
 /* ---------------------------------------------------------------------------
+ * Floppy ↔ CIA-A glue
+ * ------------------------------------------------------------------------- */
+
+static void machine_sync_floppy_pra(BellatrixMachine *m)
+{
+    int motor_on = !(m->cia_b.prb & 0x80u);
+    uint8_t ext  = m->cia_a.ext_pra;
+
+    /* /CHNG (bit 2): floppy_get_dskchg returns wire level (0=LOW=change pending) */
+    if (floppy_get_dskchg(&m->df0, motor_on))
+        ext |=  0x04u;
+    else
+        ext &= ~0x04u;
+
+    /* /TK0 (bit 4): active LOW when head is at track 0 */
+    if (floppy_get_track0(&m->df0))
+        ext &= ~0x10u;
+    else
+        ext |=  0x10u;
+
+    /* /RDY (bit 5): active LOW when motor is at speed */
+    if (floppy_get_ready(&m->df0))
+        ext &= ~0x20u;
+    else
+        ext |=  0x20u;
+
+    cia_set_external_pra(&m->cia_a, ext);
+}
+
+static void machine_floppy_update(BellatrixMachine *m)
+{
+    uint8_t prb = m->cia_b.prb;
+
+    FloppySignals sig;
+    sig.selected  = !(prb & 0x08u);   /* /SEL0 active LOW */
+    sig.motor     = !(prb & 0x80u);   /* /MTR  active LOW */
+    sig.step      = !(prb & 0x01u);   /* /STEP active LOW */
+    sig.direction =  (prb & 0x02u) ? 1 : 0;
+    sig.side      = !(prb & 0x04u);   /* /SIDE active LOW */
+
+    floppy_step(&m->df0, &sig);
+    machine_sync_floppy_pra(m);
+}
+
+/* ---------------------------------------------------------------------------
  * Internal sync
  * ------------------------------------------------------------------------- */
 
@@ -287,9 +334,14 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     paula_attach_agnus(&m->paula, &m->agnus);
     paula_attach_cia_a(&m->paula, &m->cia_a);
     paula_attach_cia_b(&m->paula, &m->cia_b);
+    paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
 
     cia_attach_paula(&m->cia_a, &m->paula);
     cia_attach_paula(&m->cia_b, &m->paula);
+
+    floppy_init(&m->df0);
+    paula_attach_drive(&m->paula, &m->df0);
+    machine_sync_floppy_pra(m);   /* set initial /CHNG, /TK0, /RDY on CIA-A ext_pra */
 
     machine_debug_init(m);
 
@@ -309,6 +361,7 @@ void bellatrix_machine_reset(void)
     rtc_reset(&m->rtc);
 
     machine_debug_reset(m);
+    machine_sync_floppy_pra(m);
 
     m->tick_count = 0;
     machine_publish_ipl(m, 0);
@@ -391,6 +444,7 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     } else if (is_cia_b_addr(addr)) {
         cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
+        machine_floppy_update(m);   /* PRB controls motor/select/step → update CIA-A ext_pra */
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
 }
@@ -464,6 +518,15 @@ CIA *bellatrix_machine_cia_b(void)
 RTCState *bellatrix_machine_rtc(void)
 {
     return &g_machine.rtc;
+}
+
+/* ---------------------------------------------------------------------------
+ * Public floppy sync (called from bellatrix.c after CIA-B writes in Emu68 path)
+ * ------------------------------------------------------------------------- */
+
+void bellatrix_machine_floppy_update(void)
+{
+    machine_floppy_update(&g_machine);
 }
 
 /* ---------------------------------------------------------------------------

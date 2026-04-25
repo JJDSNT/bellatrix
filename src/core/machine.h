@@ -7,6 +7,7 @@
 
 #include "chipset/agnus/agnus.h"
 #include "chipset/cia/cia.h"
+#include "chipset/floppy/floppy_drive.h"
 #include "chipset/denise/denise.h"
 #include "chipset/paula/paula.h"
 #include "chipset/rtc/rtc.h"
@@ -72,6 +73,8 @@ typedef struct BellatrixMachine
     uint64_t tick_count;
     uint8_t  current_ipl;
     uint32_t cia_tick_acc;   /* fractional CPU→E-clock accumulator (÷10) */
+
+    FloppyDrive df0;         /* DF0 drive state — signals CIA-A ext_pra */
 } BellatrixMachine;
 
 /* ------------------------------------------------------------------------- */
@@ -113,6 +116,9 @@ RTCState *bellatrix_machine_rtc(void);
 /* ------------------------------------------------------------------------- */
 
 BellatrixDebug *bellatrix_machine_debug(void);
+
+/* floppy — call after any CIA-B PRB write so CIA-A ext_pra is updated */
+void bellatrix_machine_floppy_update(void);
 
 /* btrace wrappers — route calls through the machine's debug.btrace instance */
 void bellatrix_machine_btrace_log(uint32_t addr, uint32_t value,

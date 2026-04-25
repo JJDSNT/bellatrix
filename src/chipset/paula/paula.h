@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+#include "chipset/paula/uart.h"
+#include "chipset/paula/paula_disk.h"
+
 struct AgnusState;
 struct CIA_State;
 
@@ -29,7 +32,9 @@ typedef struct Paula {
     uint16_t intreq;
     uint16_t intena;
     uint8_t  ipl;
-    uint32_t disk_dma_countdown;   /* CPU cycles until DSKBLK fires (0 = inactive) */
+
+    UARTState uart;
+    PaulaDisk disk;
 } Paula;
 
 /* lifecycle */
@@ -43,13 +48,15 @@ void paula_irq_clear(Paula *p, uint16_t bits);
 /* IPL derivation — called by machine to compute CPU interrupt level */
 uint8_t paula_compute_ipl(const Paula *p);
 
-/* time advance — no-op for now; reserved for audio DMA */
+/* time advance */
 void paula_step(Paula *p, uint32_t ticks);
 
 /* wiring — machine calls these during init */
 void paula_attach_agnus(Paula *p, struct AgnusState *agnus);
 void paula_attach_cia_a(Paula *p, struct CIA_State *cia);
 void paula_attach_cia_b(Paula *p, struct CIA_State *cia);
+void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size);
+void paula_attach_drive(Paula *p, FloppyDrive *drive);
 
 /* bus protocol — called by machine.c read/write dispatch */
 int      paula_handles_read(const Paula *p, uint32_t addr);

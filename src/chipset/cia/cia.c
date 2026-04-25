@@ -410,18 +410,34 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
     switch (reg & 0x0Fu) {
 
         case CIA_REG_PRA:
+            kprintf("[CIA%c-PRA-W] old=%02x new=%02x ddra=%02x ext=%02x result=%02x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)cia->pra, (unsigned)val,
+                    (unsigned)cia->ddra, (unsigned)cia->ext_pra,
+                    (unsigned)((val & cia->ddra) | (cia->ext_pra & (uint8_t)~cia->ddra)));
             cia->pra = val;
             return;
 
         case CIA_REG_PRB:
+            kprintf("[CIA%c-PRB-W] old=%02x new=%02x ddrb=%02x ext=%02x result=%02x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)cia->prb, (unsigned)val,
+                    (unsigned)cia->ddrb, (unsigned)cia->ext_prb,
+                    (unsigned)((val & cia->ddrb) | (cia->ext_prb & (uint8_t)~cia->ddrb)));
             cia->prb = val;
             return;
 
         case CIA_REG_DDRA:
+            kprintf("[CIA%c-DDRA-W] old=%02x new=%02x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)cia->ddra, (unsigned)val);
             cia->ddra = val;
             return;
 
         case CIA_REG_DDRB:
+            kprintf("[CIA%c-DDRB-W] old=%02x new=%02x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    (unsigned)cia->ddrb, (unsigned)val);
             cia->ddrb = val;
             return;
 
@@ -456,6 +472,9 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
 
         case CIA_REG_SDR:
             cia->sdr = val;
+            /* In output mode (CRA bit 6), writing SDR starts a shift; fire SP immediately */
+            if (cia->cra & CIA_CRA_SPMODE)
+                cia_raise_icr(cia, CIA_ICR_SP);
             return;
 
         case CIA_REG_ICR:
