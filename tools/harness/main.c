@@ -14,6 +14,7 @@
 #include "musashi_backend.h"
 
 #include "core/machine.h"
+#include "chipset/paula/paula.h"
 #include "debug/debug.h"
 #include "host/pal.h"
 #include "memory/memory.h"
@@ -153,6 +154,10 @@ int main(int argc, char **argv)
     bellatrix_machine_init(musashi_backend_get());
     BellatrixMachine *m = bellatrix_machine_get();
     harness_memory_init(&m->memory);
+
+    /* Re-wire Paula disk DMA to the harness chip RAM buffer.
+     * machine_init wires Paula before harness_memory_init replaces the pointer. */
+    paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
 
     /* CIA-A defaults: OVL and LED are outputs */
     m->cia_a.ddra = 0x03u;

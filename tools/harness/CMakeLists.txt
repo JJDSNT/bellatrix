@@ -60,7 +60,9 @@ set(BELLATRIX_SOURCES
     ${SRC}/chipset/cia/cia_b.c
     ${SRC}/chipset/cia/cia_tod.c
     ${SRC}/chipset/denise/denise.c
+    ${SRC}/chipset/floppy/floppy_drive.c
     ${SRC}/chipset/paula/paula.c
+    ${SRC}/chipset/paula/paula_disk.c
     ${SRC}/chipset/paula/uart.c
     ${SRC}/chipset/rtc/rtc.c
     ${SRC}/debug/btrace.c

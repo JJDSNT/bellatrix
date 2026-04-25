@@ -97,6 +97,19 @@ static uint32_t rom_read_at(uint32_t byte_off, int size)
     return 0;
 }
 
+/* AROS-LOOP: count SERDATR reads near the TBE poll loop at 0xFE85FA */
+static void aros_loop_check(uint32_t addr, uint32_t ret)
+{
+    if (addr != 0x00DFF018u) return;
+    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+    if (pc < 0x00FE85E0u || pc > 0x00FE8610u) return;
+    static int count = 0;
+    count++;
+    if (count <= 20 || count % 100000 == 0)
+        printf("[AROS-LOOP] count=%-8d pc=%08x SERDATR=%04x TBE=%d\n",
+               count, pc, (unsigned)ret, (ret >> 13) & 1);
+}
+
 static uint32_t harness_read(uint32_t addr, int size)
 {
     addr &= 0x00FFFFFFu;
@@ -126,7 +139,11 @@ static uint32_t harness_read(uint32_t addr, int size)
     }
 
     /* Chipset / CIA / RTC */
-    return bellatrix_machine_read(addr, (unsigned int)size);
+    {
+        uint32_t ret = bellatrix_machine_read(addr, (unsigned int)size);
+        aros_loop_check(addr, ret);
+        return ret;
+    }
 }
 
 static void harness_write(uint32_t addr, uint32_t value, int size)
