@@ -5,3 +5,7 @@ src/roms
 tools/launcher/bin/
 
 out/
+
+# harness build directories
+build-harness/
+tools/harness/build/
