@@ -20,11 +20,16 @@ static inline void agnus_apply_setclr_15(uint16_t *dst, uint16_t raw, uint16_t w
         *dst &= (uint16_t)~bits;
 }
 
+/* ECS Fat Agnus 8372A PAL — bits [14:8] of VPOSR */
+#define AGNUS_CHIP_ID 0x20u
+
 static inline void agnus_get_beam(const AgnusState *s,
                                   uint16_t *vposr_out,
                                   uint16_t *vhposr_out)
 {
-    *vposr_out = (s->beam.vpos >= 256u) ? 1u : 0u;
+    uint16_t lof   = s->beam.lof ? 0x8000u : 0u;
+    uint16_t vpos8 = (uint16_t)((s->beam.vpos >> 8) & 0x01u);
+    *vposr_out  = (uint16_t)(lof | (AGNUS_CHIP_ID << 8) | vpos8);
     *vhposr_out = (uint16_t)(((s->beam.vpos & 0xFFu) << 8) | (s->beam.hpos & 0xFFu));
 }
 

@@ -78,6 +78,15 @@ void uart_reset(UARTState *u)
 
 void uart_write_serdat(UARTState *u, uint16_t value)
 {
+    if (u->tx_instant) {
+        /* No shift-register timing: emit byte and signal TBE immediately.
+         * tx_buffer_valid and tx_shift_busy stay false, so SERDATR always
+         * reports TBE=1 / TSRE=1. */
+        uart_emit_tx_byte(u, value);
+        uart_raise_irq(u, UART_INTREQ_TBE);
+        return;
+    }
+
     u->tx_buffer = value;
     u->tx_buffer_valid = true;
 
