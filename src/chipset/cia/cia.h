@@ -77,9 +77,11 @@ enum {
 #define CIA_A_TOD_TICKS_PER_INCREMENT (454u * 313u)
 
 /*
- * CIA-B TOD: increment once per line (HSync)
+ * CIA-B TOD: driven by floppy /INDEX pulse, not CPU cycles.
+ * With no disk attached the counter never increments, so use 0
+ * (cia_tod_step returns immediately when ticks_per_inc == 0).
  */
-#define CIA_B_TOD_TICKS_PER_INCREMENT 454u
+#define CIA_B_TOD_TICKS_PER_INCREMENT 0u
 
 /* ------------------------------------------------------------------------- */
 /* identity                                                                  */

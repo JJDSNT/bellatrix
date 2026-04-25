@@ -202,6 +202,9 @@ static uint32_t musashi_get_pc(void *ctx)
 static void musashi_set_ipl(void *ctx, int level)
 {
     (void)ctx;
+    if (level > 0)
+        printf("[IPL] set_ipl level=%d  pc=0x%08x\n", level,
+               (unsigned)m68k_get_reg(NULL, M68K_REG_PC));
     m68k_set_irq((unsigned int)level);
 }
 
