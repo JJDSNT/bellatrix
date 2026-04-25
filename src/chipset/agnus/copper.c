@@ -360,40 +360,56 @@ void copper_write_reg(CopperState *c, uint16_t reg, uint16_t value)
     switch (reg)
     {
     case COPPER_COP1LCH:
-        c->cop1lc = (c->cop1lc & 0x0000FFFFu) |
-                    ((uint32_t)(value & 0x001Fu) << 16);
-        kprintf("[COPPER] COP1LCH=%04x cop1lc=0x%05x\n",
+        c->cop1lc = (c->cop1lc & 0x0000FFFFu) | ((uint32_t)value << 16);
+        kprintf("[COPPER] COP1LCH=%04x cop1lc=0x%06x\n",
                 (unsigned)value,
-                (unsigned)c->cop1lc);
+                (unsigned)(c->cop1lc & CHIP_RAM_MASK));
         return;
 
     case COPPER_COP1LCL:
-        c->cop1lc = (c->cop1lc & 0x001F0000u) |
-                    (uint32_t)(value & 0xFFFEu);
-        kprintf("[COPPER] COP1LCL=%04x cop1lc=0x%05x\n",
+        c->cop1lc = (c->cop1lc & 0xFFFF0000u) | (uint32_t)(value & 0xFFFEu);
+        kprintf("[COPPER] COP1LCL=%04x cop1lc=0x%06x\n",
                 (unsigned)value,
-                (unsigned)c->cop1lc);
+                (unsigned)(c->cop1lc & CHIP_RAM_MASK));
         return;
 
     case COPPER_COP2LCH:
-        c->cop2lc = (c->cop2lc & 0x0000FFFFu) |
-                    ((uint32_t)(value & 0x001Fu) << 16);
+        c->cop2lc = (c->cop2lc & 0x0000FFFFu) | ((uint32_t)value << 16);
+        kprintf("[COPPER] COP2LCH=%04x cop2lc=0x%06x\n",
+                (unsigned)value,
+                (unsigned)(c->cop2lc & CHIP_RAM_MASK));
         return;
 
     case COPPER_COP2LCL:
-        c->cop2lc = (c->cop2lc & 0x001F0000u) |
-                    (uint32_t)(value & 0xFFFEu);
+        c->cop2lc = (c->cop2lc & 0xFFFF0000u) | (uint32_t)(value & 0xFFFEu);
+        kprintf("[COPPER] COP2LCL=%04x cop2lc=0x%06x\n",
+                (unsigned)value,
+                (unsigned)(c->cop2lc & CHIP_RAM_MASK));
         return;
 
     case COPPER_COPJMP1:
+    {
+        uint32_t old_pc = c->pc;
         c->pc = c->cop1lc & CHIP_RAM_MASK & ~1u;
         c->state = COPPER_STATE_FETCH_IR1;
+        kprintf("[COPPER-JMP1] old_pc=%05x new_pc=%05x cop1lc=%05x\n",
+                (unsigned)old_pc,
+                (unsigned)c->pc,
+                (unsigned)(c->cop1lc & CHIP_RAM_MASK));
         return;
+    }
 
     case COPPER_COPJMP2:
+    {
+        uint32_t old_pc = c->pc;
         c->pc = c->cop2lc & CHIP_RAM_MASK & ~1u;
         c->state = COPPER_STATE_FETCH_IR1;
+        kprintf("[COPPER-JMP2] old_pc=%05x new_pc=%05x cop2lc=%05x\n",
+                (unsigned)old_pc,
+                (unsigned)c->pc,
+                (unsigned)(c->cop2lc & CHIP_RAM_MASK));
         return;
+    }
 
     case COPPER_COPINS:
         return;
@@ -429,18 +445,13 @@ uint32_t copper_read_reg(CopperState *c, uint16_t reg)
 
 void copper_vbl_reload(CopperState *c)
 {
-    if (!c->cop1lc)
-    {
-        kprintf("[COPPER] vbl_reload skipped — cop1lc=0\n");
-        c->state = COPPER_STATE_HALTED;
-        return;
-    }
-
     c->pc = c->cop1lc & CHIP_RAM_MASK & ~1u;
     c->state = COPPER_STATE_FETCH_IR1;
     c->after_vbl_reload = 1;
 
-    kprintf("[COPPER] vbl_reload pc=0x%05x\n", (unsigned)c->pc);
+    kprintf("[COPPER] vbl_reload cop1lc=0x%06x pc=0x%05x\n",
+            (unsigned)(c->cop1lc & CHIP_RAM_MASK),
+            (unsigned)c->pc);
 }
 
 void copper_blitter_done(CopperState *c)

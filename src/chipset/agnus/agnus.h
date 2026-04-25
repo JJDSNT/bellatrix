@@ -89,6 +89,10 @@ struct Paula;
 #define DMAF_BLTEN (1u << 6)
 #endif
 
+#ifndef DMAF_COPEN
+#define DMAF_COPEN (1u << 7)
+#endif
+
 #ifndef DMAF_DMAEN
 #define DMAF_DMAEN (1u << 9)
 #endif
@@ -180,6 +184,7 @@ static inline int agnus_is_copper_reg(uint16_t reg)
     case AGNUS_COP2LCH: case AGNUS_COP2LCL:
     case AGNUS_COPJMP1: case AGNUS_COPJMP2:
     case AGNUS_COPINS:
+    case AGNUS_COPCON:
         return 1;
     default:
         return 0;

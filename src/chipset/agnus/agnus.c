@@ -146,22 +146,26 @@ void agnus_step(AgnusState *s, uint64_t ticks)
     /*
      * Advance beam first, because Copper timing and VBL edge detection
      * depend on current raster position.
+     *
+     * Capture the VBL state BEFORE beam_step — beam_step calls
+     * beam_sync_vblank_state internally, so beam_vblank_entered would
+     * see the post-step state as "old" and never detect the entry edge.
      */
+    int vbl_before = beam_is_in_vblank(&s->beam);
     beam_step(&s->beam, ticks);
 
     /*
-     * Copper now runs as a state machine driven by beam position.
-     * Do not batch-execute the list at VBL anymore.
-     *
-     * For now, we give it one execution slice per agnus_step call.
-     * If later needed, this can be scaled to multiple micro-steps.
+     * Copper runs one micro-step per agnus_step tick, but only when
+     * DMAEN (master) and COPEN (copper) are both set in DMACON.
      */
-    copper_step(&s->copper, s, 1);
+    if ((s->dmacon & DMAF_DMAEN) && (s->dmacon & DMAF_COPEN))
+        copper_step(&s->copper, s, 1);
 
     /*
      * Check for vertical blank entry — fires once per VBL transition.
+     * Compare pre-step state to current state to detect the rising edge.
      */
-    if (beam_vblank_entered(&s->beam))
+    if (!vbl_before && beam_is_in_vblank(&s->beam))
     {
         {
             uint16_t _intena = s->paula ? s->paula->intena : 0u;
@@ -201,56 +205,43 @@ void agnus_step(AgnusState *s, uint64_t ticks)
          * This replaces the old copper_vbl_execute() batch model.
          */
 
-        kprintf("[FRAME] pre-reload  bplcon0=%04x bpl1=%04x/%04x\n",
+        kprintf("[FRAME] pre-reload  bplcon0=%04x bpl1=%04x/%04x dmacon=%04x\n",
                 s->denise ? s->denise->bplcon0 : 0,
-                s->bplpth[0], s->bplptl[0]);
+                s->bplpth[0], s->bplptl[0], (unsigned)s->dmacon);
 
-        copper_vbl_reload(&s->copper);
-
-        if (s->memory)
+        if ((s->dmacon & DMAF_DMAEN) && (s->dmacon & DMAF_COPEN))
         {
-            uint32_t _lc = s->copper.pc & 0x1FFFEu;
-            kprintf("[COPPER-DUMP] lc=%05x : "
-                    "%04x %04x %04x %04x %04x %04x %04x %04x "
-                    "%04x %04x %04x %04x\n",
-                    (unsigned)_lc,
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x00u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x02u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x04u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x06u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x08u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0au) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0cu) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0eu) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x10u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x12u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x14u) & 0x1FFFEu),
-                    (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x16u) & 0x1FFFEu));
+            copper_vbl_reload(&s->copper);
 
-            /* dump sub-list target — cop1lc points there via MOVE COP2LCH/L */
+            if (s->memory)
             {
-                uint32_t _sub = 0x023c0u;
+                uint32_t _lc = s->copper.pc & 0x1FFFEu;
                 kprintf("[COPPER-DUMP] lc=%05x : "
                         "%04x %04x %04x %04x %04x %04x %04x %04x "
                         "%04x %04x %04x %04x\n",
-                        (unsigned)_sub,
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x00u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x02u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x04u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x06u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x08u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x0au) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x0cu) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x0eu) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x10u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x12u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x14u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_sub + 0x16u) & 0x1FFFEu));
+                        (unsigned)_lc,
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x00u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x02u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x04u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x06u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x08u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0au) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0cu) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0eu) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x10u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x12u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x14u) & 0x1FFFEu),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x16u) & 0x1FFFEu));
             }
-        }
 
-        for (int i = 0; i < 256; ++i)
-            copper_step(&s->copper, s, 1);
+            for (int i = 0; i < 256; ++i)
+                copper_step(&s->copper, s, 1);
+        }
+        else
+        {
+            kprintf("[COPPER] vbl_reload skipped — COPEN off (dmacon=%04x)\n",
+                    (unsigned)s->dmacon);
+        }
 
         kprintf("[FRAME] post-copper bplcon0=%04x bpl1=%04x/%04x\n",
                 s->denise ? s->denise->bplcon0 : 0,
@@ -313,10 +304,6 @@ void agnus_step(AgnusState *s, uint64_t ticks)
         }
     }
 
-    /*
-     * Track VBL exit so the next entry edge can be detected.
-     */
-    beam_vblank_exited(&s->beam);
 }
 
 /* ---------------------------------------------------------------------------
@@ -406,8 +393,14 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
     switch (reg)
     {
     case AGNUS_DMACON:
+    {
+        uint16_t old = s->dmacon;
         agnus_apply_setclr_15(&s->dmacon, raw, 0x7FFFu);
+        kprintf("[DMACON-W] pc=%08x raw=%04x old=%04x new=%04x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)raw, (unsigned)old, (unsigned)s->dmacon);
         return;
+    }
 
     case AGNUS_DIWSTRT:
         s->diwstrt = raw;
