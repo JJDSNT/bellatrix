@@ -112,14 +112,20 @@ CIA      *bellatrix_machine_cia_b(void);
 RTCState *bellatrix_machine_rtc(void);
 
 /* ------------------------------------------------------------------------- */
+/* floppy media                                                              */
+/* ------------------------------------------------------------------------- */
+
+/* call after any CIA-B PRB write so CIA-A ext_pra is updated */
+void bellatrix_machine_floppy_update(void);
+
+int  bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size);
+void bellatrix_machine_eject_df0(void);
+
+/* ------------------------------------------------------------------------- */
 /* debug access                                                              */
 /* ------------------------------------------------------------------------- */
 
 BellatrixDebug *bellatrix_machine_debug(void);
-
-/* floppy — call after any CIA-B PRB write so CIA-A ext_pra is updated */
-void bellatrix_machine_floppy_update(void);
-
 /* btrace wrappers — route calls through the machine's debug.btrace instance */
 void bellatrix_machine_btrace_log(uint32_t addr, uint32_t value,
                                   unsigned int size, uint8_t dir, uint8_t impl);

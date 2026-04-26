@@ -43,23 +43,23 @@ static void machine_debug_init(BellatrixMachine *m)
     probe_init(&d->probe);
     btrace_init(&d->btrace);
 
-    d->enable_probe   = true;
-    d->enable_btrace  = true;
+    d->enable_probe = true;
+    d->enable_btrace = true;
 
-    d->dump_on_watchdog   = true;
-    d->dump_on_cpu_stop   = true;
+    d->dump_on_watchdog = true;
+    d->dump_on_cpu_stop = true;
     d->dump_on_cpu_except = true;
     d->dump_on_ipl_change = false;
 
-    d->probe_last_n     = 128;
-    d->btrace_last_n    = 128;
-    d->copper_max_insn  = 32;
+    d->probe_last_n = 128;
+    d->btrace_last_n = 128;
+    d->copper_max_insn = 32;
 
-    d->btrace_reads         = true;
-    d->btrace_writes        = true;
-    d->btrace_only_chipset  = true;
-    d->btrace_addr_lo       = 0x00dff000u;
-    d->btrace_addr_hi       = 0x00dfffffu;
+    d->btrace_reads = true;
+    d->btrace_writes = true;
+    d->btrace_only_chipset = true;
+    d->btrace_addr_lo = 0x00dff000u;
+    d->btrace_addr_hi = 0x00dfffffu;
 }
 
 static void machine_debug_reset(BellatrixMachine *m)
@@ -77,7 +77,8 @@ static inline uint32_t machine_cpu_pc(const BellatrixMachine *m)
 uint32_t bellatrix_debug_cpu_pc(void)
 {
     const BellatrixMachine *m = &g_machine;
-    if (!m->cpu_backend || !m->cpu_backend->get_pc) return 0u;
+    if (!m->cpu_backend || !m->cpu_backend->get_pc)
+        return 0u;
     return m->cpu_backend->get_pc(m->cpu_backend->ctx);
 }
 
@@ -93,7 +94,8 @@ static inline bool machine_btrace_addr_match(const BellatrixMachine *m, uint32_t
 {
     const BellatrixDebug *d = &m->debug;
 
-    if (d->btrace_only_chipset) {
+    if (d->btrace_only_chipset)
+    {
         return is_custom_addr(addr) || is_cia_a_addr(addr) || is_cia_b_addr(addr);
     }
 
@@ -107,11 +109,13 @@ static inline void machine_btrace_read(BellatrixMachine *m,
 {
     BellatrixDebug *d = &m->debug;
 
-    if (!d->enable_btrace || !d->btrace_reads) {
+    if (!d->enable_btrace || !d->btrace_reads)
+    {
         return;
     }
 
-    if (!machine_btrace_addr_match(m, addr)) {
+    if (!machine_btrace_addr_match(m, addr))
+    {
         return;
     }
 
@@ -130,11 +134,13 @@ static inline void machine_btrace_write(BellatrixMachine *m,
 {
     BellatrixDebug *d = &m->debug;
 
-    if (!d->enable_btrace || !d->btrace_writes) {
+    if (!d->enable_btrace || !d->btrace_writes)
+    {
         return;
     }
 
-    if (!machine_btrace_addr_match(m, addr)) {
+    if (!machine_btrace_addr_match(m, addr))
+    {
         return;
     }
 
@@ -151,7 +157,8 @@ static inline void machine_probe_emit(BellatrixMachine *m,
                                       uint32_t a,
                                       uint32_t b)
 {
-    if (!m->debug.enable_probe) {
+    if (!m->debug.enable_probe)
+    {
         return;
     }
 
@@ -169,26 +176,66 @@ static inline void machine_probe_emit(BellatrixMachine *m,
 
 static void machine_sync_floppy_pra(BellatrixMachine *m)
 {
-    int motor_on = !(m->cia_b.prb & 0x80u);
-    uint8_t ext  = m->cia_a.ext_pra;
+    uint8_t prb = m->cia_b.prb;
+    uint8_t ext = m->cia_a.ext_pra;
 
-    /* /CHNG (bit 2): floppy_get_dskchg returns wire level (0=LOW=change pending) */
-    if (floppy_get_dskchg(&m->df0, motor_on))
-        ext |=  0x04u;
-    else
-        ext &= ~0x04u;
+    bool sel0 = !(prb & 0x08u);
+    bool sel1 = !(prb & 0x10u);
+    bool sel2 = !(prb & 0x20u);
+    bool sel3 = !(prb & 0x40u);
+    bool motor_on = !(prb & 0x80u);
 
-    /* /TK0 (bit 4): active LOW when head is at track 0 */
-    if (floppy_get_track0(&m->df0))
-        ext &= ~0x10u;
-    else
-        ext |=  0x10u;
+    bool selected_df0 = sel0 && !sel1 && !sel2 && !sel3;
 
-    /* /RDY (bit 5): active LOW when motor is at speed */
-    if (floppy_get_ready(&m->df0))
-        ext &= ~0x20u;
-    else
-        ext |=  0x20u;
+    /* Reset lines (active LOW → default HIGH) */
+    ext |= 0x04u; /* /CHNG */
+    ext |= 0x10u; /* /TK0  */
+    ext |= 0x20u; /* /RDY  */
+
+    if (selected_df0)
+    {
+        int track0 = floppy_get_track0(&m->df0);
+        int dskchg = floppy_get_dskchg(&m->df0, motor_on);
+
+        /* /CHNG */
+        if (!dskchg)
+            /*
+             * BOOT HACK:
+             * During trackdisk probe, keep /CHNG HIGH.
+             * If /CHNG stays LOW, trackdisk may keep probing forever
+             * and never reaches DSKLEN.
+             */
+            ext |= 0x04u; /* /CHNG HIGH */
+
+        /* /TK0 */
+        if (track0)
+            ext &= (uint8_t)~0x10u; /* LOW */
+
+        /*
+         * BOOT HACK (CRÍTICO):
+         * trackdisk.device não avança se /RDY ficar HIGH durante probe.
+         * Forçamos LOW enquanto DF0 estiver selecionado.
+         */
+        ext &= (uint8_t)~0x20u; /* /RDY LOW */
+
+        /*
+         * (Futuro correto — substituir depois)
+         *
+         * if (motor_on) {
+         *     if (floppy_get_ready(&m->df0))
+         *         ext &= ~0x20u;
+         * } else {
+         *     if (!floppy_get_idbit(&m->df0))
+         *         ext &= ~0x20u;
+         * }
+         */
+    }
+
+    kprintf("[FLOPPY-PRA-SYNC] prb=%02x sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d dskchg=%d\n",
+            prb, sel0, sel1, sel2, sel3, motor_on, ext,
+            selected_df0 ? floppy_get_ready(&m->df0) : 0,
+            selected_df0 ? floppy_get_track0(&m->df0) : 0,
+            selected_df0 ? floppy_get_dskchg(&m->df0, motor_on) : 1);
 
     cia_set_external_pra(&m->cia_a, ext);
 }
@@ -198,11 +245,11 @@ static void machine_floppy_update(BellatrixMachine *m)
     uint8_t prb = m->cia_b.prb;
 
     FloppySignals sig;
-    sig.selected  = !(prb & 0x08u);   /* /SEL0 active LOW */
-    sig.motor     = !(prb & 0x80u);   /* /MTR  active LOW */
-    sig.step      = !(prb & 0x01u);   /* /STEP active LOW */
-    sig.direction =  (prb & 0x02u) ? 1 : 0;
-    sig.side      = !(prb & 0x04u);   /* /SIDE active LOW */
+    sig.selected = !(prb & 0x08u); /* /SEL0 active LOW */
+    sig.motor = !(prb & 0x80u);    /* /MTR  active LOW */
+    sig.step = !(prb & 0x01u);     /* /STEP active LOW */
+    sig.direction = (prb & 0x02u) ? 1 : 0;
+    sig.side = !(prb & 0x04u); /* /SIDE active LOW */
 
     floppy_step(&m->df0, &sig);
     machine_sync_floppy_pra(m);
@@ -214,15 +261,18 @@ static void machine_floppy_update(BellatrixMachine *m)
 
 static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 {
-    if (ipl > 7) {
+    if (ipl > 7)
+    {
         ipl = 7;
     }
 
-    if (ipl != m->current_ipl) {
+    if (ipl != m->current_ipl)
+    {
         uint32_t pc = machine_cpu_pc(m);
 
-        if (ipl > m->current_ipl && ipl > 0) {
-            uint32_t vec_off  = 0x60u + (uint32_t)ipl * 4u;
+        if (ipl > m->current_ipl && ipl > 0)
+        {
+            uint32_t vec_off = 0x60u + (uint32_t)ipl * 4u;
             uint32_t chip_val = bellatrix_chip_read32(&m->memory, vec_off);
 
             kprintf("[IPL-RISE] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n",
@@ -231,8 +281,10 @@ static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
                     (unsigned)pc);
 
             machine_probe_emit(m, PROBE_EVT_IPL_RISE, (uint32_t)ipl, pc);
-        } else {
-            uint32_t vec_off  = 0x60u + (uint32_t)m->current_ipl * 4u;
+        }
+        else
+        {
+            uint32_t vec_off = 0x60u + (uint32_t)m->current_ipl * 4u;
             uint32_t chip_val = bellatrix_chip_read32(&m->memory, vec_off);
 
             kprintf("[IPL-DROP] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n",
@@ -258,7 +310,8 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
 {
     uint16_t old_vpos;
 
-    if (ticks == 0) {
+    if (ticks == 0)
+    {
         return;
     }
 
@@ -273,8 +326,9 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     m->cia_tick_acc += ticks;
     {
         uint64_t cia_ticks = m->cia_tick_acc / 10u;
-        m->cia_tick_acc   %= 10u;
-        if (cia_ticks > 0) {
+        m->cia_tick_acc %= 10u;
+        if (cia_ticks > 0)
+        {
             cia_step(&m->cia_a, cia_ticks);
             cia_step(&m->cia_b, cia_ticks);
         }
@@ -285,12 +339,17 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
 
     m->tick_count += ticks;
 
-    /*
-     * Heurística simples de VBL:
-     * se o vpos "voltou" ou caiu, registramos um marco de frame.
-     * Ajuste se você tiver um evento de VBL mais explícito no Agnus.
+    /* VBL: beam rollover -> SET VERTB in INTREQ once per frame.
+     *
+     * Do not call paula_irq_raise() here.
+     * VBL is not an external level line; it is a custom-chip INTREQ latch bit.
+     *
+     * The guest clears it by writing INTREQ raw=0x0020.
+     * The beam sets it again at the next frame rollover.
      */
-    if (machine_vpos(m) < old_vpos) {
+    if (machine_vpos(m) < old_vpos)
+    {
+        paula_write(&m->paula, 0xDFF09Cu, 0x8020u, 2);
         machine_probe_emit(m, PROBE_EVT_VBL, 0x20u, 0);
     }
 }
@@ -341,7 +400,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
 
     floppy_init(&m->df0);
     paula_attach_drive(&m->paula, &m->df0);
-    machine_sync_floppy_pra(m);   /* set initial /CHNG, /TK0, /RDY on CIA-A ext_pra */
+    machine_sync_floppy_pra(m); /* set initial /CHNG, /TK0, /RDY on CIA-A ext_pra */
 
     machine_debug_init(m);
 
@@ -398,17 +457,22 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
 {
     uint32_t value = 0;
 
-    if (is_custom_addr(addr)) {
+    if (is_custom_addr(addr))
+    {
         if (paula_handles_read(&m->paula, addr))
             value = paula_read(&m->paula, addr, size);
         else if (agnus_handles_read(&m->agnus, addr))
             value = agnus_read(&m->agnus, addr, size);
         else if (denise_handles_read(&m->denise, addr))
             value = denise_read(&m->denise, addr, size);
-    } else if (is_cia_a_addr(addr)) {
+    }
+    else if (is_cia_a_addr(addr))
+    {
         value = cia_read_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F));
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
-    } else if (is_cia_b_addr(addr)) {
+    }
+    else if (is_cia_b_addr(addr))
+    {
         value = cia_read_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F));
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     }
@@ -418,7 +482,8 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
 
 static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, unsigned int size)
 {
-    if (is_custom_addr(addr)) {
+    if (is_custom_addr(addr))
+    {
         uint16_t old_intreq = m->paula.intreq;
 
         if (paula_handles_write(&m->paula, addr))
@@ -431,20 +496,43 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
         if ((addr & 0x00fffffeu) == 0x00dff09au)
             machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.intena);
 
-        if ((addr & 0x00fffffeu) == 0x00dff09cu) {
-            if (m->paula.intreq != old_intreq) {
+        if ((addr & 0x00fffffeu) == 0x00dff09cu)
+        {
+            if (m->paula.intreq != old_intreq)
+            {
                 if (m->paula.intreq > old_intreq)
                     machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
                 else
                     machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
             }
         }
-    } else if (is_cia_a_addr(addr)) {
+    }
+    else if (is_cia_a_addr(addr))
+    {
         cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
-    } else if (is_cia_b_addr(addr)) {
-        cia_write_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
-        machine_floppy_update(m);   /* PRB controls motor/select/step → update CIA-A ext_pra */
+    }
+    else if (is_cia_b_addr(addr))
+    {
+        uint8_t cia_b_reg = (uint8_t)((addr >> 8) & 0x0Fu);
+        cia_write_reg(&m->cia_b, cia_b_reg, (uint8_t)value);
+        machine_floppy_update(m);
+        if (cia_b_reg == 1u)
+        { /* PRB = floppy control */
+            uint8_t prb = m->cia_b.prb;
+            kprintf("[FLOPPY-CTRL] pc=%08x prb=%02x motor=%d sel0=%d sel1=%d sel2=%d sel3=%d step=%d dir=%d side=%d\n",
+                    (unsigned)machine_cpu_pc(m), (unsigned)prb,
+                    !(prb & 0x80u),
+                    !(prb & 0x08u),
+                    !(prb & 0x10u),
+                    !(prb & 0x20u),
+                    !(prb & 0x40u),
+                    !(prb & 0x01u),
+                    (prb & 0x02u) ? 1 : 0,
+                    !(prb & 0x04u));
+            kprintf("[FLOPPY-STAT] ready=%d track0=%d changed=%d\n",
+                    m->df0.ready, m->df0.track0, m->df0.disk_changed);
+        }
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
 }
@@ -456,11 +544,14 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
 
     machine_step_components(m, 1);
 
-    if (size == 4) {
-        uint32_t hi = machine_dispatch_read(m, addr,     2);
+    if (size == 4)
+    {
+        uint32_t hi = machine_dispatch_read(m, addr, 2);
         uint32_t lo = machine_dispatch_read(m, addr + 2, 2);
         value = (hi << 16) | lo;
-    } else {
+    }
+    else
+    {
         value = machine_dispatch_read(m, addr, size);
     }
 
@@ -476,10 +567,13 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
     machine_step_components(m, 1);
     machine_btrace_write(m, addr, size, value);
 
-    if (size == 4) {
-        machine_dispatch_write(m, addr,     value >> 16,    2);
+    if (size == 4)
+    {
+        machine_dispatch_write(m, addr, value >> 16, 2);
         machine_dispatch_write(m, addr + 2, value & 0xFFFF, 2);
-    } else {
+    }
+    else
+    {
         machine_dispatch_write(m, addr, value, size);
     }
 
@@ -527,6 +621,31 @@ RTCState *bellatrix_machine_rtc(void)
 void bellatrix_machine_floppy_update(void)
 {
     machine_floppy_update(&g_machine);
+}
+
+int bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size)
+{
+    BellatrixMachine *m = &g_machine;
+
+    if (!adf || adf_size == 0)
+        return 0;
+
+    floppy_insert(&m->df0, adf, adf_size);
+    machine_sync_floppy_pra(m);
+
+    kprintf("[FLOPPY] DF0 ADF inserted size=%u\n", (unsigned)adf_size);
+
+    return 1;
+}
+
+void bellatrix_machine_eject_df0(void)
+{
+    BellatrixMachine *m = &g_machine;
+
+    floppy_eject(&m->df0);
+    machine_sync_floppy_pra(m);
+
+    kprintf("[FLOPPY] DF0 ejected\n");
 }
 
 /* ---------------------------------------------------------------------------
