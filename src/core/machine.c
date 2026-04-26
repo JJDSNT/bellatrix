@@ -197,38 +197,25 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
         int track0 = floppy_get_track0(&m->df0);
         int dskchg = floppy_get_dskchg(&m->df0, motor_on);
 
-        /* /CHNG */
+        /* /CHNG: active LOW */
         if (!dskchg)
-            /*
-             * BOOT HACK:
-             * During trackdisk probe, keep /CHNG HIGH.
-             * If /CHNG stays LOW, trackdisk may keep probing forever
-             * and never reaches DSKLEN.
-             */
-            ext |= 0x04u; /* /CHNG HIGH */
+            ext &= (uint8_t)~0x04u;
 
-        /* /TK0 */
+        /* /TK0: active LOW */
         if (track0)
-            ext &= (uint8_t)~0x10u; /* LOW */
+            ext &= (uint8_t)~0x10u;
 
-        /*
-         * BOOT HACK (CRÍTICO):
-         * trackdisk.device não avança se /RDY ficar HIGH durante probe.
-         * Forçamos LOW enquanto DF0 estiver selecionado.
-         */
-        ext &= (uint8_t)~0x20u; /* /RDY LOW */
-
-        /*
-         * (Futuro correto — substituir depois)
-         *
-         * if (motor_on) {
-         *     if (floppy_get_ready(&m->df0))
-         *         ext &= ~0x20u;
-         * } else {
-         *     if (!floppy_get_idbit(&m->df0))
-         *         ext &= ~0x20u;
-         * }
-         */
+        /* /RDY: active LOW */
+        if (motor_on)
+        {
+            if (floppy_get_ready(&m->df0))
+                ext &= (uint8_t)~0x20u;
+        }
+        else
+        {
+            if (!floppy_get_idbit(&m->df0))
+                ext &= (uint8_t)~0x20u;
+        }
     }
 
     kprintf("[FLOPPY-PRA-SYNC] prb=%02x sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d dskchg=%d\n",
