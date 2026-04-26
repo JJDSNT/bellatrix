@@ -1,5 +1,6 @@
 referencias
 src/roms
+src/disks
 
 # launcher build
 tools/launcher/bin/
