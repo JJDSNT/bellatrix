@@ -21,16 +21,15 @@ void floppy_init(FloppyDrive *d)
     d->step_latch = 1;
 
     /*
-     * 3.5" DD drive ID = 0x00000000.
+     * Drive ID model follows Omega/vAmiga-style behavior:
      *
-     * During the ID phase (motor OFF, /SEL toggled), /DKRDY is pulled LOW
-     * when the current id_data bit is 0. The ROM accumulates: if(/DKRDY LOW) ID|=1.
-     * All-zero id_data → all /DKRDY LOW → ROM accumulates 0xFFFFFFFF = "3.5 DD drive".
+     * - The drive ID is shifted through /DSKCHG, not /DKRDY.
+     * - A standard Amiga 3.5" DD drive has no explicit ID chip.
+     * - Therefore the line is pulled HIGH during ID reads.
      *
-     * 0xFFFFFFFF would keep /DKRDY HIGH for every bit, and the ROM would
-     * accumulate 0x00000000 = "no drive present".
+     * 0xFFFFFFFF means every ID bit reads as 1.
      */
-    d->id_data = 0x00000000;
+    d->id_data = 0xFFFFFFFFu;
     d->id_count = 0;
 
     d->adf = 0;
@@ -48,10 +47,12 @@ void floppy_insert(FloppyDrive *d, const uint8_t *adf, uint32_t adf_size)
     d->adf_size = adf_size;
 
     d->disk_inserted = (adf != 0 && adf_size > 0);
-    d->disk_changed = 1; /* LOW até primeiro STEP */
+    d->disk_changed = 1; /* LOW until first STEP */
 
     d->read_offset = 0;
 }
+
+/* ------------------------------------------------------------------------- */
 
 void floppy_eject(FloppyDrive *d)
 {
@@ -60,6 +61,9 @@ void floppy_eject(FloppyDrive *d)
 
     d->disk_inserted = 0;
     d->disk_changed = 1;
+
+    d->ready = 0;
+    d->motor = 0;
 
     d->read_offset = 0;
 }
@@ -75,13 +79,15 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
         /*
          * Deselection behavior for drive ID.
          *
-         * Keep previous motor/ready state. Selection is external to the drive;
-         * deselecting DF0 must not mechanically stop the motor by itself.
+         * Selection is external to the drive; deselecting DF0 must not
+         * mechanically stop the motor by itself.
+         *
+         * Omega advances the ID shift counter on select -> deselect cycles
+         * while the motor is OFF.
          */
         if (d->motor == 0)
-        {
             d->id_count++;
-        }
+
         return;
     }
 
@@ -124,16 +130,12 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
         if (sig->direction)
         {
             if (d->cylinder < (int)(FLOPPY_ADF_CYLINDERS - 1))
-            {
                 d->cylinder++;
-            }
         }
         else
         {
             if (d->cylinder > 0)
-            {
                 d->cylinder--;
-            }
         }
 
         /*
@@ -143,9 +145,7 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
     }
 
     if (!sig->step)
-    {
         d->step_latch = 1;
-    }
 
     /* ------------------------------------------------------------- */
     /* Track0                                                        */
@@ -174,27 +174,19 @@ uint32_t floppy_read_linear(FloppyDrive *d, uint8_t *dst, uint32_t bytes)
     uint32_t i;
 
     if (!floppy_has_media(d))
-    {
         return 0;
-    }
 
     if (dst == 0 || bytes == 0)
-    {
         return 0;
-    }
 
     if (d->read_offset >= d->adf_size)
-    {
         return 0;
-    }
 
     available = d->adf_size - d->read_offset;
     to_copy = (bytes < available) ? bytes : available;
 
     for (i = 0; i < to_copy; i++)
-    {
         dst[i] = d->adf[d->read_offset + i];
-    }
 
     d->read_offset += to_copy;
 
@@ -213,20 +205,17 @@ uint32_t floppy_read_linear(FloppyDrive *d, uint8_t *dst, uint32_t bytes)
 
 int floppy_get_ready(const FloppyDrive *d)
 {
-    /*
-     * /DKRDY reflects motor speed, not disk presence.
-     * Without a disk the spindle can still reach speed.
-     */
     return d->ready;
 }
 
+/* ------------------------------------------------------------------------- */
+
 int floppy_get_track0(const FloppyDrive *d)
 {
-    /*
-     * /TK0 is a mechanical sensor; it does not depend on disk presence.
-     */
     return d->track0;
 }
+
+/* ------------------------------------------------------------------------- */
 
 int floppy_get_dskchg(const FloppyDrive *d, int motor_on)
 {
@@ -241,7 +230,9 @@ int floppy_get_dskchg(const FloppyDrive *d, int motor_on)
     return d->disk_changed ? 0 : 1;
 }
 
+/* ------------------------------------------------------------------------- */
+
 int floppy_get_idbit(const FloppyDrive *d)
 {
-    return (d->id_data >> (31 - (d->id_count & 31))) & 1;
+    return (int)((d->id_data >> (31u - (d->id_count & 31u))) & 1u);
 }

@@ -185,44 +185,92 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
     bool sel3 = !(prb & 0x40u);
     bool motor_on = !(prb & 0x80u);
 
-    bool selected_df0 = sel0 && !sel1 && !sel2 && !sel3;
+    uint8_t sel_mask = (uint8_t)((sel0 ? 0x1u : 0u) |
+                                 (sel1 ? 0x2u : 0u) |
+                                 (sel2 ? 0x4u : 0u) |
+                                 (sel3 ? 0x8u : 0u));
 
-    /* Reset lines (active LOW → default HIGH) */
-    ext |= 0x04u; /* /CHNG */
-    ext |= 0x10u; /* /TK0  */
-    ext |= 0x20u; /* /RDY  */
+    int selected_drive = -1;
+
+    switch (sel_mask)
+    {
+    case 0x1:
+        selected_drive = 0;
+        break;
+    case 0x2:
+        selected_drive = 1;
+        break;
+    case 0x4:
+        selected_drive = 2;
+        break;
+    case 0x8:
+        selected_drive = 3;
+        break;
+    default:
+        selected_drive = -1;
+        break;
+    }
+
+    bool selected_df0 = (selected_drive == 0);
+
+    /* Reset lines: active LOW, default HIGH */
+    ext |= 0x04u; /* /DSKCHG */
+    ext |= 0x10u; /* /TK0    */
+    ext |= 0x20u; /* /RDY    */
+
+    int ready = 0;
+    int track0 = 0;
+    int dskchg = 1;
+    int idbit = 1;
+    int idmode = 0;
 
     if (selected_df0)
     {
-        int track0 = floppy_get_track0(&m->df0);
-        int dskchg = floppy_get_dskchg(&m->df0, motor_on);
+        ready = floppy_get_ready(&m->df0);
+        track0 = floppy_get_track0(&m->df0);
+        dskchg = floppy_get_dskchg(&m->df0, motor_on);
+        idbit = floppy_get_idbit(&m->df0);
 
-        /* /CHNG: active LOW */
-        if (!dskchg)
-            ext &= (uint8_t)~0x04u;
+        /* ID mode = motor OFF */
+        idmode = !motor_on;
+
+        /* /DSKCHG: active LOW */
+        if (idmode)
+        {
+            if (!idbit)
+                ext &= (uint8_t)~0x04u;
+        }
+        else
+        {
+            if (!dskchg)
+                ext &= (uint8_t)~0x04u;
+        }
 
         /* /TK0: active LOW */
         if (track0)
             ext &= (uint8_t)~0x10u;
 
-        /* /RDY: active LOW */
-        if (motor_on)
-        {
-            if (floppy_get_ready(&m->df0))
-                ext &= (uint8_t)~0x20u;
-        }
-        else
-        {
-            if (!floppy_get_idbit(&m->df0))
-                ext &= (uint8_t)~0x20u;
-        }
+        /* /RDY: active LOW
+         *
+         * Motor OFF (ID mode): pull LOW to signal drive presence.
+         * Motor ON:            reflect the ready flag (motor at speed).
+         */
+        if (idmode || ready)
+            ext &= (uint8_t)~0x20u;
     }
 
-    kprintf("[FLOPPY-PRA-SYNC] prb=%02x sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d dskchg=%d\n",
-            prb, sel0, sel1, sel2, sel3, motor_on, ext,
-            selected_df0 ? floppy_get_ready(&m->df0) : 0,
-            selected_df0 ? floppy_get_track0(&m->df0) : 0,
-            selected_df0 ? floppy_get_dskchg(&m->df0, motor_on) : 1);
+    kprintf("[FLOPPY-PRA-SYNC] prb=%02x selmask=%x drive=%d sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d dskchg=%d idmode=%d idbit=%d\n",
+            prb,
+            sel_mask,
+            selected_drive,
+            sel0, sel1, sel2, sel3,
+            motor_on,
+            ext,
+            ready,
+            track0,
+            dskchg,
+            idmode,
+            idbit);
 
     cia_set_external_pra(&m->cia_a, ext);
 }
@@ -455,12 +503,46 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
     }
     else if (is_cia_a_addr(addr))
     {
-        value = cia_read_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F));
+        uint8_t reg = (uint8_t)((addr >> 8) & 0x0F);
+
+        value = cia_read_reg(&m->cia_a, reg);
+
+        if (reg == 0u) /* CIA-A PRA */
+        {
+            kprintf("[CIAA-PRA-R-PC] pc=%08x addr=%06x size=%u val=%02x pra=%02x ddra=%02x ext=%02x\n",
+                    (unsigned)machine_cpu_pc(m),
+                    (unsigned)addr,
+                    size,
+                    (unsigned)(value & 0xFFu),
+                    (unsigned)m->cia_a.pra,
+                    (unsigned)m->cia_a.ddra,
+                    (unsigned)m->cia_a.ext_pra);
+        }
+
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     }
     else if (is_cia_b_addr(addr))
     {
-        value = cia_read_reg(&m->cia_b, (uint8_t)((addr >> 8) & 0x0F));
+        uint8_t reg = (uint8_t)((addr >> 8) & 0x0F);
+
+        value = cia_read_reg(&m->cia_b, reg);
+
+        if (reg == 0u || reg == 1u) /* CIA-B PRA/PRB */
+        {
+            kprintf("[CIAB-R-PC] pc=%08x addr=%06x reg=%u size=%u val=%02x pra=%02x prb=%02x ddra=%02x ddrb=%02x extA=%02x extB=%02x\n",
+                    (unsigned)machine_cpu_pc(m),
+                    (unsigned)addr,
+                    (unsigned)reg,
+                    size,
+                    (unsigned)(value & 0xFFu),
+                    (unsigned)m->cia_b.pra,
+                    (unsigned)m->cia_b.prb,
+                    (unsigned)m->cia_b.ddra,
+                    (unsigned)m->cia_b.ddrb,
+                    (unsigned)m->cia_b.ext_pra,
+                    (unsigned)m->cia_b.ext_prb);
+        }
+
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     }
 
@@ -501,12 +583,28 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
     }
     else if (is_cia_b_addr(addr))
     {
+        static const char *const cia_reg_names[16] = {
+            "PRA", "PRB", "DDRA", "DDRB",
+            "TALO", "TAHI", "TBLO", "TBHI",
+            "TODLO", "TODMID", "TODHI", "UNUSED",
+            "SDR", "ICR", "CRA", "CRB"
+        };
+
         uint8_t cia_b_reg = (uint8_t)((addr >> 8) & 0x0Fu);
+
+        kprintf("[CIAB-W] pc=%08x reg=%u (%s) val=%02x\n",
+                (unsigned)machine_cpu_pc(m),
+                (unsigned)cia_b_reg,
+                cia_reg_names[cia_b_reg],
+                (unsigned)(value & 0xFFu));
+
         cia_write_reg(&m->cia_b, cia_b_reg, (uint8_t)value);
         machine_floppy_update(m);
+
         if (cia_b_reg == 1u)
-        { /* PRB = floppy control */
+        {
             uint8_t prb = m->cia_b.prb;
+
             kprintf("[FLOPPY-CTRL] pc=%08x prb=%02x motor=%d sel0=%d sel1=%d sel2=%d sel3=%d step=%d dir=%d side=%d\n",
                     (unsigned)machine_cpu_pc(m), (unsigned)prb,
                     !(prb & 0x80u),
@@ -517,9 +615,17 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
                     !(prb & 0x01u),
                     (prb & 0x02u) ? 1 : 0,
                     !(prb & 0x04u));
-            kprintf("[FLOPPY-STAT] ready=%d track0=%d changed=%d\n",
-                    m->df0.ready, m->df0.track0, m->df0.disk_changed);
+
+            kprintf("[FLOPPY-STAT] ready=%d track0=%d changed=%d cyl=%d id_count=%u motor=%d side=%d\n",
+                    m->df0.ready,
+                    m->df0.track0,
+                    m->df0.disk_changed,
+                    m->df0.cylinder,
+                    m->df0.id_count,
+                    m->df0.motor,
+                    m->df0.side);
         }
+
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
 }

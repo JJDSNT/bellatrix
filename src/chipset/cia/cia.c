@@ -463,22 +463,17 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
 
     case CIA_REG_PRA:
     {
-        /*
-         * On CIA-A, only bits 0-1 should be writable as normal output bits here.
-         * Bits 2-7 are external Amiga lines; floppy status lives there.
-         */
+        uint8_t old = cia->pra;
         uint8_t stored = val;
 
         if (cia->id == CIA_PORT_A)
-        {
             stored = (uint8_t)((cia->pra & 0xFCu) | (val & 0x03u));
-        }
 
         cia->pra = stored;
 
         kprintf("[CIA%c-PRA-W] old=%02x new=%02x stored=%02x ddra=%02x ext=%02x result=%02x\n",
                 cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)cia->pra,
+                (unsigned)old,
                 (unsigned)val,
                 (unsigned)stored,
                 (unsigned)cia->ddra,
@@ -488,13 +483,19 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
     }
 
     case CIA_REG_PRB:
+    {
+        uint8_t old = cia->prb;
+        cia->prb = val;
+
         kprintf("[CIA%c-PRB-W] old=%02x new=%02x ddrb=%02x ext=%02x result=%02x\n",
                 cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)cia->prb, (unsigned)val,
-                (unsigned)cia->ddrb, (unsigned)cia->ext_prb,
-                (unsigned)((val & cia->ddrb) | (cia->ext_prb & (uint8_t)~cia->ddrb)));
-        cia->prb = val;
+                (unsigned)old,
+                (unsigned)val,
+                (unsigned)cia->ddrb,
+                (unsigned)cia->ext_prb,
+                (unsigned)cia_port_b_value(cia));
         return;
+    }
 
     case CIA_REG_DDRA:
     {
@@ -576,6 +577,9 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
         return;
 
     case CIA_REG_CRA:
+    {
+        uint8_t old = cia->cra;
+
         cia->cra = (uint8_t)(val & (uint8_t)~CIA_CRA_LOAD);
 
         if (val & CIA_CRA_LOAD)
@@ -584,9 +588,20 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
         if (!(cia->cra & CIA_CRA_START) && (cia->cra & CIA_CRA_RUNMODE))
             cia->ta_counter = cia->ta_latch;
 
+        kprintf("[CIA%c-CRA-W] old=%02x new=%02x stored=%02x ta=%04x latch=%04x\n",
+                cia->id == CIA_PORT_A ? 'A' : 'B',
+                (unsigned)old,
+                (unsigned)val,
+                (unsigned)cia->cra,
+                (unsigned)cia->ta_counter,
+                (unsigned)cia->ta_latch);
         return;
+    }
 
     case CIA_REG_CRB:
+    {
+        uint8_t old = cia->crb;
+
         cia->crb = (uint8_t)(val & (uint8_t)~CIA_CRB_LOAD);
 
         if (val & CIA_CRB_LOAD)
@@ -595,7 +610,15 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
         if (!(cia->crb & CIA_CRB_START) && (cia->crb & CIA_CRB_RUNMODE))
             cia->tb_counter = cia->tb_latch;
 
+        kprintf("[CIA%c-CRB-W] old=%02x new=%02x stored=%02x tb=%04x latch=%04x\n",
+                cia->id == CIA_PORT_A ? 'A' : 'B',
+                (unsigned)old,
+                (unsigned)val,
+                (unsigned)cia->crb,
+                (unsigned)cia->tb_counter,
+                (unsigned)cia->tb_latch);
         return;
+    }
 
     default:
         return;
