@@ -21,8 +21,10 @@ typedef struct PaulaDisk {
     uint16_t adkcon;
 
     int dma_active;
+    int dma_armed;
     int write_mode;
 
+    uint16_t armed_dsklen;
     uint32_t countdown;
 
     FloppyDrive *drive;

@@ -2,6 +2,7 @@
 
 #include "paula_disk.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define DSKLEN_DMAEN  0x8000u
@@ -18,6 +19,7 @@
 #define ADF_TRACK_BYTES        5632u
 #define AMIGA_SECTORS_TRACK    11u
 #define AMIGA_SECTOR_BYTES     512u
+#define MFM_SECTOR_BYTES       1088u
 
 static void emit_intreq(PaulaDisk *pd, uint16_t bits)
 {
@@ -34,10 +36,15 @@ static int valid_chip_range(PaulaDisk *pd, uint32_t addr, uint32_t len)
     return 1;
 }
 
-static void __attribute__((unused)) write_be16(uint8_t *p, uint16_t v)
+static int valid_adf_track(PaulaDisk *pd, uint32_t adf_offset)
 {
-    p[0] = (uint8_t)(v >> 8);
-    p[1] = (uint8_t)(v & 0xFF);
+    if (!pd->drive) return 0;
+    if (!pd->drive->adf) return 0;
+    if (!pd->drive->disk_inserted) return 0;
+    if (pd->drive->adf_size == 0) return 0;
+    if (adf_offset >= pd->drive->adf_size) return 0;
+    if (ADF_TRACK_BYTES > pd->drive->adf_size - adf_offset) return 0;
+    return 1;
 }
 
 static void encode_even_odd(const uint8_t *src, uint8_t *dst, int size)
@@ -74,7 +81,7 @@ static void encode_adf_track_to_mfm(
     memset(dst, 0, dst_len);
 
     for (unsigned int sec = 0; sec < AMIGA_SECTORS_TRACK; sec++) {
-        if (s + 1088 > dst_len) break;
+        if (s + MFM_SECTOR_BYTES > dst_len) break;
 
         memset(sector, 0, sizeof(sector));
 
@@ -119,7 +126,7 @@ static void encode_adf_track_to_mfm(
         encode_even_odd(&sector[24], &dst[s + 48], 4);
 
         uint8_t dcheck[4] = {0, 0, 0, 0};
-        for (unsigned i = 64; i < 1088; i += 4) {
+        for (unsigned i = 64; i < MFM_SECTOR_BYTES; i += 4) {
             dcheck[0] ^= dst[s + i + 0];
             dcheck[1] ^= dst[s + i + 1];
             dcheck[2] ^= dst[s + i + 2];
@@ -132,12 +139,14 @@ static void encode_adf_track_to_mfm(
         sector[31] = dcheck[3];
         encode_even_odd(&sector[28], &dst[s + 56], 4);
 
-        for (int i = 8; i < 1088; i++) {
+        for (int i = 8; i < (int)MFM_SECTOR_BYTES; i++) {
             dst[s + i] = add_clock_bits(dst[s + i - 1], dst[s + i]);
         }
 
-        s += 1088;
+        s += MFM_SECTOR_BYTES;
     }
+
+    if (s == 0) return;
 
     for (uint32_t i = s; i < dst_len; i++) {
         dst[i] = add_clock_bits(dst[i - 1], 0);
@@ -198,45 +207,123 @@ uint16_t paula_disk_read_dskbytr(PaulaDisk *pd)
     return pd->dskbytr;
 }
 
-void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
+static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
 {
-    pd->dsklen = value;
-
-    if (!(value & DSKLEN_DMAEN)) {
-        pd->dma_active = 0;
-        pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
-        return;
-    }
-
-    pd->write_mode = (value & DSKLEN_WRITE) ? 1 : 0;
-    pd->dma_active = 1;
-    pd->countdown = FLOPPY_FAKE_DMA_CYCLES;
-    pd->dskbytr |= DSKBYTR_DMAON;
-
     uint16_t len_words = value & DSKLEN_LEN;
     uint32_t len_bytes = (uint32_t)len_words << 1;
 
-    if (!pd->write_mode && pd->drive && pd->drive->adf) {
-        int cyl = pd->drive->cylinder;
-        int side = pd->drive->side ? 1 : 0;
+    pd->dsklen = value;
+    pd->write_mode = (value & DSKLEN_WRITE) ? 1 : 0;
+    pd->dma_active = 1;
+    pd->dma_armed = 0;
+    pd->countdown = FLOPPY_FAKE_DMA_CYCLES;
+    pd->dskbytr |= DSKBYTR_DMAON;
+    pd->dskbytr &= (uint16_t)~DSKBYTR_WORDSYNC;
 
-        uint32_t adf_offset = (uint32_t)(((cyl << 1) | side) * ADF_TRACK_BYTES);
+    printf("[DSKDMA] start value=%04x write=%d words=%u bytes=%u dskptr=%06x\n",
+           value,
+           pd->write_mode,
+           len_words,
+           len_bytes,
+           pd->dskptr);
 
-        if (valid_chip_range(pd, pd->dskptr, len_bytes)) {
-            encode_adf_track_to_mfm(
-                pd->drive->adf + adf_offset,
-                cyl,
-                side,
-                &pd->chipram[pd->dskptr],
-                len_bytes
-            );
-        }
-
-        if (pd->adkcon & ADKCON_WORDSYNC) {
-            pd->dskbytr |= DSKBYTR_WORDSYNC;
-            emit_intreq(pd, PAULA_INTREQ_DSKSYNC);
-        }
+    if (pd->write_mode) {
+        printf("[DSKDMA] write mode ignored for now\n");
+        return;
     }
+
+    if (len_words == 0) {
+        printf("[DSKDMA] zero length\n");
+        return;
+    }
+
+    if (!pd->drive || !floppy_has_media(pd->drive)) {
+        printf("[DSKDMA] no media\n");
+        return;
+    }
+
+    int cyl = pd->drive->cylinder;
+    int side = pd->drive->side ? 1 : 0;
+
+    uint32_t adf_offset = (uint32_t)(((cyl << 1) | side) * ADF_TRACK_BYTES);
+
+    if (!valid_adf_track(pd, adf_offset)) {
+        printf("[DSKDMA] invalid ADF range cyl=%d side=%d offset=%u size=%u\n",
+               cyl,
+               side,
+               adf_offset,
+               pd->drive ? pd->drive->adf_size : 0);
+        return;
+    }
+
+    if (!valid_chip_range(pd, pd->dskptr, len_bytes)) {
+        printf("[DSKDMA] invalid chip range addr=%06x len=%u chip=%zu\n",
+               pd->dskptr,
+               len_bytes,
+               pd->chipram_size);
+        return;
+    }
+
+    encode_adf_track_to_mfm(
+        pd->drive->adf + adf_offset,
+        cyl,
+        side,
+        &pd->chipram[pd->dskptr],
+        len_bytes
+    );
+
+    pd->drive->disk_changed = 0;
+
+    printf("[DSKDMA] encoded cyl=%d side=%d adf_offset=%u -> chip=%06x len=%u\n",
+           cyl,
+           side,
+           adf_offset,
+           pd->dskptr,
+           len_bytes);
+
+    if (pd->adkcon & ADKCON_WORDSYNC) {
+        pd->dskbytr |= DSKBYTR_WORDSYNC;
+        printf("[DSKIRQ] DSKSYNC fired\n");
+        emit_intreq(pd, PAULA_INTREQ_DSKSYNC);
+    }
+}
+
+void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
+{
+    printf("[DSKLEN] write value=%04x armed=%d active=%d ptr=%06x\n",
+           value,
+           pd->dma_armed,
+           pd->dma_active,
+           pd->dskptr);
+
+    if (!(value & DSKLEN_DMAEN)) {
+        pd->dsklen = value;
+        pd->dma_active = 0;
+        pd->dma_armed = 0;
+        pd->armed_dsklen = 0;
+        pd->countdown = 0;
+        pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
+
+        printf("[DSKLEN] stop/disarm\n");
+        return;
+    }
+
+    /*
+     * Disk DMA start protocol:
+     *
+     * The Amiga disk DMA is normally started by writing DSKLEN twice with
+     * DMAEN set. The first write arms, the second write starts.
+     */
+    if (!pd->dma_armed) {
+        pd->dsklen = value;
+        pd->armed_dsklen = value;
+        pd->dma_armed = 1;
+
+        printf("[DSKLEN] armed value=%04x\n", value);
+        return;
+    }
+
+    paula_disk_start_dma(pd, value);
 }
 
 void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
@@ -254,6 +341,8 @@ void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
     uint16_t len_words = pd->dsklen & DSKLEN_LEN;
 
     pd->dma_active = 0;
+    pd->dma_armed = 0;
+    pd->armed_dsklen = 0;
     pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
     pd->dsklen &= (uint16_t)~DSKLEN_DMAEN;
 
@@ -261,5 +350,6 @@ void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
         pd->dskptr += ((uint32_t)len_words << 1);
     }
 
+    printf("[DSKIRQ] DSKBLK fired ptr=%06x\n", pd->dskptr);
     emit_intreq(pd, PAULA_INTREQ_DSKBLK);
 }

@@ -230,7 +230,7 @@ uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
         ret = uart_read_serdatr(&p->uart);
         break;
     case REG_ADKCONR:
-        ret = 0;
+        ret = p->disk.adkcon;
         break;
     case REG_POTGOR:
         /* All buttons up, all lines pulled high */
