@@ -107,37 +107,50 @@ static void encode_adf_track_to_mfm(
         dst[s + 6] = 0x44;
         dst[s + 7] = 0x89;
 
-        encode_even_odd(&sector[4],  &dst[s + 8],  4);
-        encode_even_odd(&sector[8],  &dst[s + 16], 16);
-        encode_even_odd(&sector[32], &dst[s + 64], 512);
-
-        uint8_t hcheck[4] = {0, 0, 0, 0};
-        for (unsigned i = 8; i < 48; i += 4) {
-            hcheck[0] ^= dst[s + i + 0];
-            hcheck[1] ^= dst[s + i + 1];
-            hcheck[2] ^= dst[s + i + 2];
-            hcheck[3] ^= dst[s + i + 3];
+        /*
+         * Header checksum: XOR of raw header info + label (sector[4..23])
+         * as 32-bit big-endian long words.
+         *
+         * Must be computed on raw bytes, not on MFM-encoded bytes.
+         * trackdisk decodes the MFM stream, XORs the decoded long words,
+         * and expects the result to equal the decoded checksum field.
+         */
+        {
+            uint8_t hcheck[4] = {0, 0, 0, 0};
+            for (int k = 4; k < 24; k += 4) {
+                hcheck[0] ^= sector[k + 0];
+                hcheck[1] ^= sector[k + 1];
+                hcheck[2] ^= sector[k + 2];
+                hcheck[3] ^= sector[k + 3];
+            }
+            sector[24] = hcheck[0];
+            sector[25] = hcheck[1];
+            sector[26] = hcheck[2];
+            sector[27] = hcheck[3];
         }
 
-        sector[24] = hcheck[0];
-        sector[25] = hcheck[1];
-        sector[26] = hcheck[2];
-        sector[27] = hcheck[3];
-        encode_even_odd(&sector[24], &dst[s + 48], 4);
-
-        uint8_t dcheck[4] = {0, 0, 0, 0};
-        for (unsigned i = 64; i < MFM_SECTOR_BYTES; i += 4) {
-            dcheck[0] ^= dst[s + i + 0];
-            dcheck[1] ^= dst[s + i + 1];
-            dcheck[2] ^= dst[s + i + 2];
-            dcheck[3] ^= dst[s + i + 3];
+        /*
+         * Data checksum: XOR of raw sector data (sector[32..543]).
+         */
+        {
+            uint8_t dcheck[4] = {0, 0, 0, 0};
+            for (int k = 32; k < 32 + (int)AMIGA_SECTOR_BYTES; k += 4) {
+                dcheck[0] ^= sector[k + 0];
+                dcheck[1] ^= sector[k + 1];
+                dcheck[2] ^= sector[k + 2];
+                dcheck[3] ^= sector[k + 3];
+            }
+            sector[28] = dcheck[0];
+            sector[29] = dcheck[1];
+            sector[30] = dcheck[2];
+            sector[31] = dcheck[3];
         }
 
-        sector[28] = dcheck[0];
-        sector[29] = dcheck[1];
-        sector[30] = dcheck[2];
-        sector[31] = dcheck[3];
-        encode_even_odd(&sector[28], &dst[s + 56], 4);
+        encode_even_odd(&sector[4],  &dst[s + 8],  4);   /* header info */
+        encode_even_odd(&sector[8],  &dst[s + 16], 16);  /* label */
+        encode_even_odd(&sector[24], &dst[s + 48], 4);   /* header checksum */
+        encode_even_odd(&sector[28], &dst[s + 56], 4);   /* data checksum */
+        encode_even_odd(&sector[32], &dst[s + 64], 512); /* data */
 
         for (int i = 8; i < (int)MFM_SECTOR_BYTES; i++) {
             dst[s + i] = add_clock_bits(dst[s + i - 1], dst[s + i]);
