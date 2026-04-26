@@ -11,27 +11,44 @@ import (
 type launchResult struct {
 	emuProfile  string
 	kickstart   string
+	adf         string
 	displayMode string
 	bootArgs    string
 	cancelled   bool
 }
 
+type activePane int
+
+const (
+	paneKickstart activePane = iota
+	paneADF
+)
+
 type model struct {
-	roms        []ROM
-	cursor      int
+	roms []FileEntry
+	adfs []FileEntry
+
+	romCursor int
+	adfCursor int
+	active    activePane
+
 	displayMode string
 	emuProfile  string
 	debugMode   string // "", "debug", "disassemble"
-	width       int
-	height      int
-	quitting    bool
-	cancelled   bool
+
+	width     int
+	height    int
+	quitting  bool
+	cancelled bool
 }
 
-func runLauncher(roms []ROM) (launchResult, error) {
+func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 	m := model{
 		roms:        roms,
-		cursor:      defaultROMIndex(roms),
+		adfs:        adfs,
+		romCursor:   defaultROMIndex(roms),
+		adfCursor:   0,
+		active:      paneKickstart,
 		displayMode: "gtk",
 		emuProfile:  "bellatrix",
 	}
@@ -47,10 +64,16 @@ func runLauncher(roms []ROM) (launchResult, error) {
 		return launchResult{cancelled: true}, nil
 	}
 
-	selected := fm.roms[fm.cursor]
+	selectedROM := fm.roms[fm.romCursor]
 	kickstart := ""
-	if !selected.None {
-		kickstart = selected.Path
+	if !selectedROM.None {
+		kickstart = selectedROM.Path
+	}
+
+	selectedADF := fm.adfs[fm.adfCursor]
+	adf := ""
+	if !selectedADF.None {
+		adf = selectedADF.Path
 	}
 
 	bootArgs := "enable_cache"
@@ -61,12 +84,13 @@ func runLauncher(roms []ROM) (launchResult, error) {
 	return launchResult{
 		emuProfile:  fm.emuProfile,
 		kickstart:   kickstart,
+		adf:         adf,
 		displayMode: fm.displayMode,
 		bootArgs:    bootArgs,
 	}, nil
 }
 
-func defaultROMIndex(roms []ROM) int {
+func defaultROMIndex(roms []FileEntry) int {
 	for i, rom := range roms {
 		if rom.None {
 			continue
@@ -97,15 +121,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 
+		case "tab":
+			if m.active == paneKickstart {
+				m.active = paneADF
+			} else {
+				m.active = paneKickstart
+			}
+			return m, nil
+
 		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
+			switch m.active {
+			case paneKickstart:
+				if m.romCursor > 0 {
+					m.romCursor--
+				}
+			case paneADF:
+				if m.adfCursor > 0 {
+					m.adfCursor--
+				}
 			}
 			return m, nil
 
 		case "down", "j":
-			if m.cursor < len(m.roms)-1 {
-				m.cursor++
+			switch m.active {
+			case paneKickstart:
+				if m.romCursor < len(m.roms)-1 {
+					m.romCursor++
+				}
+			case paneADF:
+				if m.adfCursor < len(m.adfs)-1 {
+					m.adfCursor++
+				}
 			}
 			return m, nil
 
@@ -174,12 +220,35 @@ func (m model) renderPanel() string {
 	b.WriteString("\n")
 
 	b.WriteString(sectionTitleStyle.Render("Kickstart / payload"))
+	if m.active == paneKickstart {
+		b.WriteString(" ")
+		b.WriteString(onBadgeStyle.Render("ACTIVE"))
+	}
 	b.WriteString("\n")
 
 	for i, rom := range m.roms {
 		line := "  " + rom.Name
-		if i == m.cursor {
+		if i == m.romCursor {
 			line = "> " + rom.Name
+			b.WriteString(selectedItemStyle.Render(line))
+		} else {
+			b.WriteString(itemStyle.Render(line))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(sectionTitleStyle.Render("DF0 floppy"))
+	if m.active == paneADF {
+		b.WriteString(" ")
+		b.WriteString(onBadgeStyle.Render("ACTIVE"))
+	}
+	b.WriteString("\n")
+
+	for i, adf := range m.adfs {
+		line := "  " + adf.Name
+		if i == m.adfCursor {
+			line = "> " + adf.Name
 			b.WriteString(selectedItemStyle.Render(line))
 		} else {
 			b.WriteString(itemStyle.Render(line))
@@ -222,7 +291,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • E Toggle Emulator • D Toggle Display • B Toggle Debug • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • E Toggle Emulator • D Toggle Display • B Toggle Debug • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -253,7 +322,7 @@ func (m model) qemuCommand() string {
 		bootArgs,
 	)
 
-	selected := m.roms[m.cursor]
+	selected := m.roms[m.romCursor]
 	if selected.None {
 		return base
 	}

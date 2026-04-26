@@ -34,6 +34,7 @@ QEMU options (env vars):
 
 Harness options (env vars):
   KICKSTART=<file>    ROM to run (required, or selected via TUI)
+  ADF=<file>          Mount ADF image as DF0 (optional)
   FRAMES=<n>          Stop after N frames and exit (headless mode)
   CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
   (no FRAMES/CYCLES)  Interactive: SDL2 window, runs until closed or Esc
@@ -45,6 +46,7 @@ Examples:
   KICKSTART=src/roms/DiagROM.rom ./run.sh harness
   KICKSTART=src/roms/aros.rom FRAMES=50 ./run.sh harness
   KICKSTART=src/roms/KS31.rom CYCLES=5000000 ./run.sh harness
+  KICKSTART=src/roms/KS13.rom ADF=disks/Workbench13.adf ./run.sh harness
   EMU_PROFILE=emu68 ./run.sh qemu
   EMU_PROFILE=bellatrix KICKSTART=src/roms/KS13.rom ./run.sh qemu
   DISPLAY_MODE=none ./run.sh qemu
@@ -165,6 +167,11 @@ if [ "$MODE" = "harness" ]; then
 
     HARNESS_ARGS=("$KICKSTART")
 
+    if [ -n "${ADF:-}" ]; then
+        [ -f "$ADF" ] || { echo "ERROR: ADF not found: $ADF"; exit 1; }
+        HARNESS_ARGS+=(--adf "$ADF")
+    fi
+
     if [ -n "${CYCLES:-}" ]; then
         HARNESS_ARGS+=(--cycles "$CYCLES")
     elif [ -n "${FRAMES:-}" ]; then
@@ -172,7 +179,13 @@ if [ "$MODE" = "harness" ]; then
     fi
     # Without FRAMES or CYCLES: interactive SDL2 window (default)
 
-    echo "[RUN] Harness: $KICKSTART"
+    echo "[RUN] Harness ROM: $KICKSTART"
+    if [ -n "${ADF:-}" ]; then
+        echo "[RUN] Harness DF0: $ADF"
+    else
+        echo "[RUN] Harness DF0: no disk"
+    fi
+
     exec "$HARNESS_BIN" "${HARNESS_ARGS[@]}"
 fi
 
