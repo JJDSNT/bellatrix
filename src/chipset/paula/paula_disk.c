@@ -2,7 +2,7 @@
 
 #include "paula_disk.h"
 
-#include <stdio.h>
+#include "support.h"
 #include <string.h>
 
 #define DSKLEN_DMAEN  0x8000u
@@ -220,7 +220,7 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
     pd->dskbytr |= DSKBYTR_DMAON;
     pd->dskbytr &= (uint16_t)~DSKBYTR_WORDSYNC;
 
-    printf("[DSKDMA] start value=%04x write=%d words=%u bytes=%u dskptr=%06x\n",
+    kprintf("[DSKDMA] start value=%04x write=%d words=%u bytes=%u dskptr=%06x\n",
            value,
            pd->write_mode,
            len_words,
@@ -228,17 +228,17 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
            pd->dskptr);
 
     if (pd->write_mode) {
-        printf("[DSKDMA] write mode ignored for now\n");
+        kprintf("[DSKDMA] write mode ignored for now\n");
         return;
     }
 
     if (len_words == 0) {
-        printf("[DSKDMA] zero length\n");
+        kprintf("[DSKDMA] zero length\n");
         return;
     }
 
     if (!pd->drive || !floppy_has_media(pd->drive)) {
-        printf("[DSKDMA] no media\n");
+        kprintf("[DSKDMA] no media\n");
         return;
     }
 
@@ -248,7 +248,7 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
     uint32_t adf_offset = (uint32_t)(((cyl << 1) | side) * ADF_TRACK_BYTES);
 
     if (!valid_adf_track(pd, adf_offset)) {
-        printf("[DSKDMA] invalid ADF range cyl=%d side=%d offset=%u size=%u\n",
+        kprintf("[DSKDMA] invalid ADF range cyl=%d side=%d offset=%u size=%u\n",
                cyl,
                side,
                adf_offset,
@@ -257,7 +257,7 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
     }
 
     if (!valid_chip_range(pd, pd->dskptr, len_bytes)) {
-        printf("[DSKDMA] invalid chip range addr=%06x len=%u chip=%zu\n",
+        kprintf("[DSKDMA] invalid chip range addr=%06x len=%u chip=%zu\n",
                pd->dskptr,
                len_bytes,
                pd->chipram_size);
@@ -274,7 +274,7 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
 
     pd->drive->disk_changed = 0;
 
-    printf("[DSKDMA] encoded cyl=%d side=%d adf_offset=%u -> chip=%06x len=%u\n",
+    kprintf("[DSKDMA] encoded cyl=%d side=%d adf_offset=%u -> chip=%06x len=%u\n",
            cyl,
            side,
            adf_offset,
@@ -283,14 +283,14 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
 
     if (pd->adkcon & ADKCON_WORDSYNC) {
         pd->dskbytr |= DSKBYTR_WORDSYNC;
-        printf("[DSKIRQ] DSKSYNC fired\n");
+        kprintf("[DSKIRQ] DSKSYNC fired\n");
         emit_intreq(pd, PAULA_INTREQ_DSKSYNC);
     }
 }
 
 void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
 {
-    printf("[DSKLEN] write value=%04x armed=%d active=%d ptr=%06x\n",
+    kprintf("[DSKLEN] write value=%04x armed=%d active=%d ptr=%06x\n",
            value,
            pd->dma_armed,
            pd->dma_active,
@@ -304,7 +304,7 @@ void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
         pd->countdown = 0;
         pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
 
-        printf("[DSKLEN] stop/disarm\n");
+        kprintf("[DSKLEN] stop/disarm\n");
         return;
     }
 
@@ -319,7 +319,7 @@ void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
         pd->armed_dsklen = value;
         pd->dma_armed = 1;
 
-        printf("[DSKLEN] armed value=%04x\n", value);
+        kprintf("[DSKLEN] armed value=%04x\n", value);
         return;
     }
 
@@ -350,6 +350,6 @@ void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
         pd->dskptr += ((uint32_t)len_words << 1);
     }
 
-    printf("[DSKIRQ] DSKBLK fired ptr=%06x\n", pd->dskptr);
+    kprintf("[DSKIRQ] DSKBLK fired ptr=%06x\n", pd->dskptr);
     emit_intreq(pd, PAULA_INTREQ_DSKBLK);
 }
