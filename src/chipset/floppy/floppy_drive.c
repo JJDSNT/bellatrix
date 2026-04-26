@@ -20,7 +20,17 @@ void floppy_init(FloppyDrive *d)
 
     d->step_latch = 1;
 
-    d->id_data = 0xFFFFFFFF; /* standard DD drive */
+    /*
+     * 3.5" DD drive ID = 0x00000000.
+     *
+     * During the ID phase (motor OFF, /SEL toggled), /DKRDY is pulled LOW
+     * when the current id_data bit is 0. The ROM accumulates: if(/DKRDY LOW) ID|=1.
+     * All-zero id_data → all /DKRDY LOW → ROM accumulates 0xFFFFFFFF = "3.5 DD drive".
+     *
+     * 0xFFFFFFFF would keep /DKRDY HIGH for every bit, and the ROM would
+     * accumulate 0x00000000 = "no drive present".
+     */
+    d->id_data = 0x00000000;
     d->id_count = 0;
 
     d->adf = 0;
