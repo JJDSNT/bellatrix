@@ -10,11 +10,11 @@
  *
  * This is the logical disk image geometry, not the raw MFM stream.
  */
-#define FLOPPY_ADF_DD_SIZE            901120u
-#define FLOPPY_ADF_SECTOR_SIZE       512u
+#define FLOPPY_ADF_DD_SIZE 901120u
+#define FLOPPY_ADF_SECTOR_SIZE 512u
 #define FLOPPY_ADF_SECTORS_PER_TRACK 11u
-#define FLOPPY_ADF_SIDES             2u
-#define FLOPPY_ADF_CYLINDERS         80u
+#define FLOPPY_ADF_SIDES 2u
+#define FLOPPY_ADF_CYLINDERS 80u
 
 /*
  * Sinais vindos do CIA-B (PRB)
@@ -22,15 +22,16 @@
  * /SELx   -> seleção de drive (ativo LOW no hardware, já normalizado aqui)
  * /MTR    -> motor (1 = ON, já normalizado aqui)
  * /STEP   -> pulso de step
- * DIR     -> direção (1 = +, 0 = -)
+ * DIR     -> direção (1 = step out / cylinder--, 0 = step in / cylinder++)
  * SIDE    -> lado (0/1)
  */
-typedef struct {
-    int selected;   /* 1 se este drive está selecionado */
-    int motor;      /* 1 = ligado */
-    int step;       /* pulso */
-    int direction;  /* 1 = forward */
-    int side;       /* 0 ou 1 */
+typedef struct
+{
+    int selected;  /* 1 se este drive está selecionado */
+    int motor;     /* 1 = ligado */
+    int step;      /* pulso */
+    int direction; /* 1 = step out, 0 = step in */
+    int side;      /* 0 ou 1 */
 } FloppySignals;
 
 /*
@@ -44,7 +45,8 @@ typedef struct {
  * A leitura linear é propositalmente temporária: serve para fechar o ciclo
  * inicial DSKLEN -> ADF -> Chip RAM -> DSKBLK antes da emulação MFM/trilha.
  */
-typedef struct {
+typedef struct
+{
 
     int motor;
     int cylinder;
@@ -54,7 +56,9 @@ typedef struct {
     int track0;
 
     int disk_inserted;
-    int disk_changed;   /* /DSKCHG latched until step */
+    int disk_changed; /* /DSKCHG latched until step */
+
+    int write_protected; /* /WPRO active LOW when disk is protected */
 
     int step_latch;
 
@@ -112,14 +116,22 @@ int floppy_has_media(const FloppyDrive *d);
 uint32_t floppy_read_linear(
     FloppyDrive *d,
     uint8_t *dst,
-    uint32_t bytes
-);
+    uint32_t bytes);
 
 /*
  * Sinais de saída para CIA/Paula.
  */
 int floppy_get_ready(const FloppyDrive *d);
 int floppy_get_track0(const FloppyDrive *d);
+
+/*
+ * /WPRO ativo LOW.
+ *
+ * Retorna:
+ *   0 = LOW  = write protected
+ *   1 = HIGH = writable / no disk
+ */
+int floppy_get_wpro(const FloppyDrive *d);
 
 /*
  * /DSKCHG ativo LOW.

@@ -17,6 +17,7 @@ void floppy_init(FloppyDrive *d)
 
     d->disk_inserted = 0;
     d->disk_changed = 1; /* power-on: change latch set, no disk */
+    d->write_protected = 1;
 
     d->step_latch = 1;
 
@@ -48,6 +49,7 @@ void floppy_insert(FloppyDrive *d, const uint8_t *adf, uint32_t adf_size)
 
     d->disk_inserted = (adf != 0 && adf_size > 0);
     d->disk_changed = 1; /* LOW until first STEP */
+    d->write_protected = 1;
 
     d->read_offset = 0;
 }
@@ -61,6 +63,7 @@ void floppy_eject(FloppyDrive *d)
 
     d->disk_inserted = 0;
     d->disk_changed = 1;
+    d->write_protected = 0;
 
     d->ready = 0;
     d->motor = 0;
@@ -129,19 +132,21 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
 
         if (sig->direction)
         {
-            if (d->cylinder < (int)(FLOPPY_ADF_CYLINDERS - 1))
-                d->cylinder++;
-        }
-        else
-        {
+            /* DIR=1 means step out, toward cylinder 0. */
             if (d->cylinder > 0)
                 d->cylinder--;
         }
+        else
+        {
+            /* DIR=0 means step in, toward higher cylinders. */
+            if (d->cylinder < (int)(FLOPPY_ADF_CYLINDERS - 1))
+                d->cylinder++;
+        }
 
-        /*
-         * STEP clears the disk-change latch.
-         */
-        d->disk_changed = 0;
+        if (floppy_has_media(d))
+            d->disk_changed = 0;
+        else
+            d->disk_changed = 1;
     }
 
     if (!sig->step)
@@ -231,6 +236,20 @@ int floppy_get_dskchg(const FloppyDrive *d, int motor_on)
 }
 
 /* ------------------------------------------------------------------------- */
+
+int floppy_get_wpro(const FloppyDrive *d)
+{
+    /*
+     * /WPRO is active LOW.
+     *
+     * LOW  = inserted disk is write-protected
+     * HIGH = writable / no disk
+     */
+    if (!floppy_has_media(d))
+        return 1;
+
+    return d->write_protected ? 0 : 1;
+}
 
 int floppy_get_idbit(const FloppyDrive *d)
 {
