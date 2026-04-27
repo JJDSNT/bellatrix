@@ -215,12 +215,14 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
 
     /* Reset lines: active LOW, default HIGH */
     ext |= 0x04u; /* /DSKCHG */
+    ext |= 0x08u; /* /WPRO   */
     ext |= 0x10u; /* /TK0    */
     ext |= 0x20u; /* /RDY    */
 
     int ready = 0;
     int track0 = 0;
     int dskchg = 1;
+    int wpro = 1;
     int idbit = 1;
     int idmode = 0;
 
@@ -229,37 +231,46 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
         ready = floppy_get_ready(&m->df0);
         track0 = floppy_get_track0(&m->df0);
         dskchg = floppy_get_dskchg(&m->df0, motor_on);
+        wpro = floppy_get_wpro(&m->df0);
         idbit = floppy_get_idbit(&m->df0);
 
         /* ID mode = motor OFF */
         idmode = !motor_on;
 
-        /* /DSKCHG: active LOW */
-        if (idmode)
-        {
-            if (!idbit)
-                ext &= (uint8_t)~0x04u;
-        }
-        else
-        {
-            if (!dskchg)
-                ext &= (uint8_t)~0x04u;
-        }
+        /* /DSKCHG: active LOW — reflects disk_changed in all motor states.
+         *
+         * This is real hardware behavior: the change latch fires on insert/eject
+         * regardless of motor state, cleared by a STEP pulse.
+         * AROS reads /CHNG LOW = disk present/changed; HIGH = acknowledged.
+         */
+        if (!dskchg)
+            ext &= (uint8_t)~0x04u;
+
+        /* /WPRO: active LOW */
+        if (!wpro)
+            ext &= (uint8_t)~0x08u;
 
         /* /TK0: active LOW */
         if (track0)
             ext &= (uint8_t)~0x10u;
 
-        /* /RDY: active LOW
+        /* /RDY (/DKRDY): active LOW.
          *
-         * Motor OFF (ID mode): pull LOW to signal drive presence.
-         * Motor ON:            reflect the ready flag (motor at speed).
+         * Motor ON:  LOW when drive is at speed (ready).
+         * Motor OFF: the drive ID shift register is clocked; each bit is
+         *            reflected on /DKRDY.  A '1' id_data bit = line released
+         *            (HIGH); a '0' id_data bit = line asserted (LOW).
+         *
+         * id_data=0xFFFFFFFF (standard 3.5" DD, no ID chip) → line always
+         * HIGH during motor-off probe → host accumulates 0xFFFFFFFF.
          */
-        if (idmode || ready)
+        if (ready)
+            ext &= (uint8_t)~0x20u;
+        else if (idmode && !idbit)
             ext &= (uint8_t)~0x20u;
     }
 
-    kprintf("[FLOPPY-PRA-SYNC] prb=%02x selmask=%x drive=%d sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d dskchg=%d idmode=%d idbit=%d\n",
+    kprintf("[FLOPPY-PRA-SYNC] prb=%02x selmask=%x drive=%d sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d wpro=%d dskchg=%d idmode=%d idbit=%d\n",
             prb,
             sel_mask,
             selected_drive,
@@ -268,6 +279,7 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
             ext,
             ready,
             track0,
+            wpro,
             dskchg,
             idmode,
             idbit);
@@ -578,7 +590,18 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
     }
     else if (is_cia_a_addr(addr))
     {
-        cia_write_reg(&m->cia_a, (uint8_t)((addr >> 8) & 0x0F), (uint8_t)value);
+        static const char *const ciaa_reg_names[16] = {
+            "PRA", "PRB", "DDRA", "DDRB",
+            "TALO", "TAHI", "TBLO", "TBHI",
+            "TODLO", "TODMID", "TODHI", "UNUSED",
+            "SDR", "ICR", "CRA", "CRB"};
+        uint8_t ciaa_reg = (uint8_t)((addr >> 8) & 0x0Fu);
+        kprintf("[CIAA-W] pc=%08x reg=%u (%s) val=%02x\n",
+                (unsigned)machine_cpu_pc(m),
+                (unsigned)ciaa_reg,
+                ciaa_reg_names[ciaa_reg],
+                (unsigned)(value & 0xFFu));
+        cia_write_reg(&m->cia_a, ciaa_reg, (uint8_t)value);
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
     else if (is_cia_b_addr(addr))
@@ -587,8 +610,7 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
             "PRA", "PRB", "DDRA", "DDRB",
             "TALO", "TAHI", "TBLO", "TBHI",
             "TODLO", "TODMID", "TODHI", "UNUSED",
-            "SDR", "ICR", "CRA", "CRB"
-        };
+            "SDR", "ICR", "CRA", "CRB"};
 
         uint8_t cia_b_reg = (uint8_t)((addr >> 8) & 0x0Fu);
 
