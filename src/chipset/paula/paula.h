@@ -10,28 +10,31 @@ struct AgnusState;
 struct CIA_State;
 
 /* INTREQ / INTENA bit definitions */
-enum {
-    PAULA_INT_TBE    = 1u << 0,
+enum
+{
+    PAULA_INT_TBE = 1u << 0,
     PAULA_INT_DSKBLK = 1u << 1,
-    PAULA_INT_SOFT   = 1u << 2,
-    PAULA_INT_PORTS  = 1u << 3,
-    PAULA_INT_COPER  = 1u << 4,
-    PAULA_INT_VERTB  = 1u << 5,
-    PAULA_INT_BLIT   = 1u << 6,
-    PAULA_INT_AUD0   = 1u << 7,
-    PAULA_INT_AUD1   = 1u << 8,
-    PAULA_INT_AUD2   = 1u << 9,
-    PAULA_INT_AUD3   = 1u << 10,
-    PAULA_INT_RBF    = 1u << 11,
+    PAULA_INT_SOFT = 1u << 2,
+    PAULA_INT_PORTS = 1u << 3,
+    PAULA_INT_COPER = 1u << 4,
+    PAULA_INT_VERTB = 1u << 5,
+    PAULA_INT_BLIT = 1u << 6,
+    PAULA_INT_AUD0 = 1u << 7,
+    PAULA_INT_AUD1 = 1u << 8,
+    PAULA_INT_AUD2 = 1u << 9,
+    PAULA_INT_AUD3 = 1u << 10,
+    PAULA_INT_RBF = 1u << 11,
     PAULA_INT_DSKSYN = 1u << 12,
-    PAULA_INT_EXTER  = 1u << 13,
-    PAULA_INT_MASTER = 1u << 14,   /* INTENA master enable (SET/CLR bit 15 on write) */
+    PAULA_INT_EXTER = 1u << 13,
+    PAULA_INT_MASTER = 1u << 14, /* INTENA master enable (SET/CLR bit 15 on write) */
 };
 
-typedef struct Paula {
+typedef struct Paula
+{
     uint16_t intreq;
     uint16_t intena;
-    uint8_t  ipl;
+    uint8_t ipl;
+    uint16_t irq_line_level;
 
     UARTState uart;
     PaulaDisk disk;
@@ -59,9 +62,9 @@ void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size);
 void paula_attach_drive(Paula *p, FloppyDrive *drive);
 
 /* bus protocol — called by machine.c read/write dispatch */
-int      paula_handles_read(const Paula *p, uint32_t addr);
-int      paula_handles_write(const Paula *p, uint32_t addr);
+int paula_handles_read(const Paula *p, uint32_t addr);
+int paula_handles_write(const Paula *p, uint32_t addr);
 uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size);
-void     paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size);
+void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size);
 
 #endif
