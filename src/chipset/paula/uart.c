@@ -43,7 +43,7 @@ static void uart_start_tx_shift(UARTState *u)
         uart_emit_tx_byte(u, u->tx_shift_reg);
     }
 
-    uart_raise_irq(u, UART_INTREQ_TBE);
+    //uart_raise_irq(u, UART_INTREQ_TBE);
 }
 
 void uart_init(UARTState *u, void *opaque,
@@ -83,7 +83,7 @@ void uart_write_serdat(UARTState *u, uint16_t value)
          * tx_buffer_valid and tx_shift_busy stay false, so SERDATR always
          * reports TBE=1 / TSRE=1. */
         uart_emit_tx_byte(u, value);
-        uart_raise_irq(u, UART_INTREQ_TBE);
+        //uart_raise_irq(u, UART_INTREQ_TBE);
         return;
     }
 
