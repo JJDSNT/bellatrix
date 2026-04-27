@@ -66,25 +66,26 @@ static void encode_even_odd(const uint8_t *src, uint8_t *dst, int size)
     }
 }
 
-static void checksum_even_odd(const uint8_t *encoded, int size, uint8_t out[4])
+static uint32_t mfm_checksum(const uint8_t *data, int bytes)
 {
-    out[0] = 0;
-    out[1] = 0;
-    out[2] = 0;
-    out[3] = 0;
-
-    for (int k = 0; k < size; k += 4)
+    uint32_t chk = 0;
+    for (int i = 0; i < bytes; i += 4)
     {
-        out[0] ^= encoded[k + 0];
-        out[1] ^= encoded[k + 1];
-        out[2] ^= encoded[k + 2];
-        out[3] ^= encoded[k + 3];
+        uint32_t w = ((uint32_t)data[i + 0] << 24) |
+                     ((uint32_t)data[i + 1] << 16) |
+                     ((uint32_t)data[i + 2] <<  8) |
+                      (uint32_t)data[i + 3];
+        chk ^= w;
     }
+    return chk;
+}
 
-    out[0] &= 0x55u;
-    out[1] &= 0x55u;
-    out[2] &= 0x55u;
-    out[3] &= 0x55u;
+static void put_u32be(uint8_t *dst, uint32_t v)
+{
+    dst[0] = (uint8_t)(v >> 24);
+    dst[1] = (uint8_t)(v >> 16);
+    dst[2] = (uint8_t)(v >>  8);
+    dst[3] = (uint8_t)v;
 }
 
 static uint8_t add_clock_bits(uint8_t previous, uint8_t value)
@@ -107,7 +108,6 @@ static void encode_adf_track_to_mfm(
     uint32_t dst_len)
 {
     uint32_t s = 0;
-    uint8_t sector[544];
 
     memset(dst, 0, dst_len);
 
@@ -116,85 +116,59 @@ static void encode_adf_track_to_mfm(
         if (s + MFM_SECTOR_BYTES > dst_len)
             break;
 
-        memset(sector, 0, sizeof(sector));
+        const uint8_t *sector_data = adf_track + sec * AMIGA_SECTOR_BYTES;
 
-        sector[0] = 0x00;
-        sector[1] = 0x00;
-        sector[2] = 0xA1;
-        sector[3] = 0xA1;
+        uint8_t header[4] = {
+            0xFF,
+            (uint8_t)((cylinder << 1) | side),
+            (uint8_t)sec,
+            (uint8_t)(AMIGA_SECTORS_TRACK - sec)
+        };
+        uint8_t label[16];
+        memset(label, 0, sizeof(label));
 
-        sector[4] = 0xFF;
-        sector[5] = (uint8_t)((cylinder << 1) | side);
-        sector[6] = (uint8_t)sec;
-        sector[7] = (uint8_t)(11 - sec);
-
-        memcpy(&sector[32], &adf_track[sec * AMIGA_SECTOR_BYTES], AMIGA_SECTOR_BYTES);
-
+        /* Preamble + sync words */
         dst[s + 0] = 0xAA;
         dst[s + 1] = 0xAA;
         dst[s + 2] = 0xAA;
         dst[s + 3] = 0xAA;
-
         dst[s + 4] = 0x44;
         dst[s + 5] = 0x89;
         dst[s + 6] = 0x44;
         dst[s + 7] = 0x89;
 
-        encode_even_odd(&sector[4], &dst[s + 8], 4);     /* header info */
-        encode_even_odd(&sector[8], &dst[s + 16], 16);   /* label */
-        encode_even_odd(&sector[32], &dst[s + 64], 512); /* data */
+        /* Header info, label, data (even/odd encoded, no clock bits yet) */
+        encode_even_odd(header,      &dst[s +   8], 4);
+        encode_even_odd(label,       &dst[s +  16], 16);
+        encode_even_odd(sector_data, &dst[s +  64], 512);
 
         /*
-         * AmigaDOS checksum is computed over the already even/odd encoded
-         * bytes, before clock bits are added.
-         *
-         * Header checksum covers encoded header info + encoded label:
-         * dst[s + 8 .. s + 47]
+         * AmigaDOS checksum: XOR of raw (pre-encode) long words in each region.
+         * The decoder reconstitutes raw bytes from even/odd halves, then XORs
+         * as big-endian 32-bit words. Checksum stored as normal even/odd field.
          */
         {
-            uint8_t hcheck[4];
-
-            checksum_even_odd(&dst[s + 8], 40, hcheck);
-
-            sector[24] = hcheck[0];
-            sector[25] = hcheck[1];
-            sector[26] = hcheck[2];
-            sector[27] = hcheck[3];
+            uint8_t hchk_b[4];
+            /* header + label (label is all-zero, contributes 0) */
+            put_u32be(hchk_b, mfm_checksum(header, 4));
+            encode_even_odd(hchk_b, &dst[s + 48], 4);
         }
-
-        /*
-         * Data checksum covers encoded data:
-         * dst[s + 64 .. s + 1087]
-         */
         {
-            uint8_t dcheck[4];
-
-            checksum_even_odd(&dst[s + 64], 1024, dcheck);
-
-            sector[28] = dcheck[0];
-            sector[29] = dcheck[1];
-            sector[30] = dcheck[2];
-            sector[31] = dcheck[3];
+            uint8_t dchk_b[4];
+            put_u32be(dchk_b, mfm_checksum(sector_data, AMIGA_SECTOR_BYTES));
+            encode_even_odd(dchk_b, &dst[s + 56], 4);
         }
 
-        encode_even_odd(&sector[24], &dst[s + 48], 4); /* header checksum */
-        encode_even_odd(&sector[28], &dst[s + 56], 4); /* data checksum */
-
+        /* Add clock bits to all bytes after the sync words */
         for (int i = 8; i < (int)MFM_SECTOR_BYTES; i++)
-        {
             dst[s + i] = add_clock_bits(dst[s + i - 1], dst[s + i]);
-        }
 
         s += MFM_SECTOR_BYTES;
     }
 
-    if (s == 0)
-        return;
-
+    /* Trailing gap: clock-only bytes (0xAA = MFM zeros) */
     for (uint32_t i = s; i < dst_len; i++)
-    {
-        dst[i] = add_clock_bits(dst[i - 1], 0);
-    }
+        dst[i] = add_clock_bits(dst[i > 0 ? i - 1 : 0], 0);
 }
 
 void paula_disk_init(PaulaDisk *pd)
