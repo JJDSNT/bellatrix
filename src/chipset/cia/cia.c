@@ -76,35 +76,38 @@ static int cia_timer_advance(uint16_t *counter,
                              bool continuous,
                              uint64_t ticks)
 {
-    int underflows = 0;
+    uint32_t c;
 
     if (ticks == 0)
         return 0;
 
-    while (ticks >= (uint64_t)(*counter + 1u))
+    c = (uint32_t)(*counter);
+
+    if (ticks <= c)
     {
-        ticks -= (uint64_t)(*counter + 1u);
-        underflows++;
-
-        if (!continuous)
-        {
-            *counter = 0;
-            return underflows;
-        }
-
-        if (latch > 0)
-        {
-            *counter = latch;
-        }
-        else
-        {
-            *counter = 0;
-            return underflows;
-        }
+        *counter = (uint16_t)(c - (uint32_t)ticks);
+        return 0;
     }
 
-    *counter -= (uint16_t)ticks;
-    return underflows;
+    ticks -= (uint64_t)c + 1u;
+
+    if (!continuous)
+    {
+        *counter = 0;
+        return 1;
+    }
+
+    *counter = latch;
+
+    if (ticks > 0)
+    {
+        if (ticks <= (uint32_t)(*counter))
+            *counter = (uint16_t)((uint32_t)(*counter) - (uint32_t)ticks);
+        else
+            *counter = 0;
+    }
+
+    return 1;
 }
 
 static int cia_timer_advance_events(uint16_t *counter,
@@ -116,43 +119,24 @@ static int cia_timer_advance_events(uint16_t *counter,
 
     while (events > 0)
     {
-        if (*counter == 0)
+        uint32_t until_underflow = (uint32_t)(*counter) + 1u;
+
+        if (events < until_underflow)
         {
-            underflows++;
-
-            if (!continuous)
-                return underflows;
-
-            if (latch == 0)
-                return underflows;
-
-            *counter = latch;
+            *counter = (uint16_t)(*counter - (uint16_t)events);
+            break;
         }
 
-        if (events > (uint32_t)(*counter + 1u))
+        events -= until_underflow;
+        underflows++;
+
+        if (!continuous)
         {
-            events -= (uint32_t)(*counter + 1u);
-            underflows++;
-
-            if (!continuous)
-            {
-                *counter = 0;
-                return underflows;
-            }
-
-            if (latch == 0)
-            {
-                *counter = 0;
-                return underflows;
-            }
-
-            *counter = latch;
+            *counter = 0;
+            break;
         }
-        else
-        {
-            *counter = (uint16_t)(*counter - events);
-            events = 0;
-        }
+
+        *counter = latch;
     }
 
     return underflows;
@@ -252,6 +236,7 @@ uint8_t cia_port_a_value(const CIA *cia)
      *
      * Important floppy bits:
      * bit 2 = /DSKCHG
+     * bit 3 = /WPRO
      * bit 4 = /TK0
      * bit 5 = /RDY
      */
@@ -332,7 +317,14 @@ void cia_step(CIA *cia, uint64_t ticks)
                                      cia->tb_latch,
                                      continuous,
                                      ticks);
-        }
+
+            kprintf("[CIA%c-TB-ADV] ret=%d ticks=%llu counter=%04x latch=%04x\n",
+                    cia->id == CIA_PORT_A ? 'A' : 'B',
+                    uf_b,
+                    (unsigned long long)ticks,
+                    (unsigned)cia->tb_counter,
+                    (unsigned)cia->tb_latch);
+                }
         else if (inmode == 2u && uf_a > 0)
         {
             uf_b = cia_timer_advance_events(&cia->tb_counter,
@@ -343,10 +335,16 @@ void cia_step(CIA *cia, uint64_t ticks)
 
         if (uf_b > 0)
         {
-            kprintf("[CIA%c-TB-FIRE] counter=%04x latch=%04x crb=%02x icr_data=%02x mask=%02x\n",
+            kprintf("[CIA%c-TB-FIRE] uf_b=%d ticks=%llu counter=%04x latch=%04x crb=%02x icr_data=%02x mask=%02x\n",
                     cia->id == CIA_PORT_A ? 'A' : 'B',
-                    (unsigned)cia->tb_counter, (unsigned)cia->tb_latch,
-                    (unsigned)cia->crb, (unsigned)cia->icr_data, (unsigned)cia->icr_mask);
+                    uf_b,
+                    (unsigned long long)ticks,
+                    (unsigned)cia->tb_counter,
+                    (unsigned)cia->tb_latch,
+                    (unsigned)cia->crb,
+                    (unsigned)cia->icr_data,
+                    (unsigned)cia->icr_mask);
+
             cia_raise_icr(cia, CIA_ICR_TB);
 
             if (cia->crb & CIA_CRB_RUNMODE)
@@ -529,22 +527,43 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
 
     case CIA_REG_TALO:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0xFF00u) | (uint16_t)val);
+        kprintf("[CIA%c-TALO-W] val=%02x latch=%04x cra=%02x\n",
+                cia->id == CIA_PORT_A ? 'A' : 'B',
+                val, cia->ta_latch, cia->cra);
         return;
 
     case CIA_REG_TAHI:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0x00FFu) | ((uint16_t)val << 8));
-        if (!(cia->cra & CIA_CRA_START))
+        if (!(cia->cra & CIA_CRA_START)) {
             cia->ta_counter = cia->ta_latch;
+            /* CIA-8520: writing TAHI while stopped auto-starts in one-shot mode */
+            if (cia->cra & CIA_CRA_RUNMODE)
+                cia->cra |= CIA_CRA_START;
+        }
+        kprintf("[CIA%c-TAHI-W] val=%02x latch=%04x counter=%04x cra=%02x\n",
+                cia->id == CIA_PORT_A ? 'A' : 'B',
+                val, cia->ta_latch, cia->ta_counter, cia->cra);
         return;
 
     case CIA_REG_TBLO:
         cia->tb_latch = (uint16_t)((cia->tb_latch & 0xFF00u) | (uint16_t)val);
+        kprintf("[CIA%c-TBLO-W] val=%02x latch=%04x counter=%04x crb=%02x\n",
+                cia->id == CIA_PORT_A ? 'A' : 'B',
+                val, cia->tb_latch, cia->tb_counter, cia->crb);
         return;
 
     case CIA_REG_TBHI:
         cia->tb_latch = (uint16_t)((cia->tb_latch & 0x00FFu) | ((uint16_t)val << 8));
-        if (!(cia->crb & CIA_CRB_START))
+        if (!(cia->crb & CIA_CRB_START)) {
             cia->tb_counter = cia->tb_latch;
+            /* CIA-8520: writing TBHI while stopped auto-starts in one-shot mode */
+            if (cia->crb & CIA_CRB_RUNMODE)
+                cia->crb |= CIA_CRB_START;
+        }
+        kprintf("[CIA%c-TBHI-W] val=%02x latch=%04x counter=%04x crb=%02x\n",
+                cia->id == CIA_PORT_A ? 'A' : 'B',
+                val, cia->tb_latch, cia->tb_counter, cia->crb);
+
         return;
 
     case CIA_REG_TODLO:
