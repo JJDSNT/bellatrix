@@ -11,6 +11,9 @@
  * Internal helpers
  * ------------------------------------------------------------------------- */
 
+#define CHIP_RAM_ADDR_MASK 0x001FFFFFu
+#define CHIP_RAM_WORD_MASK 0x001FFFFEu
+
 static inline void agnus_apply_setclr_15(uint16_t *dst, uint16_t raw, uint16_t writable_mask)
 {
     uint16_t bits = (uint16_t)(raw & writable_mask);
@@ -27,9 +30,9 @@ static inline void agnus_get_beam(const AgnusState *s,
                                   uint16_t *vposr_out,
                                   uint16_t *vhposr_out)
 {
-    uint16_t lof   = s->beam.lof ? 0x8000u : 0u;
+    uint16_t lof = s->beam.lof ? 0x8000u : 0u;
     uint16_t vpos8 = (uint16_t)((s->beam.vpos >> 8) & 0x01u);
-    *vposr_out  = (uint16_t)(lof | (AGNUS_CHIP_ID << 8) | vpos8);
+    *vposr_out = (uint16_t)(lof | (AGNUS_CHIP_ID << 8) | vpos8);
     *vhposr_out = (uint16_t)(((s->beam.vpos & 0xFFu) << 8) | (s->beam.hpos & 0xFFu));
 }
 
@@ -104,7 +107,8 @@ void agnus_attach_memory(AgnusState *s, BellatrixMemory *m)
 
 void agnus_intreq_set(AgnusState *s, uint16_t bits)
 {
-    if (s->paula) {
+    if (s->paula)
+    {
         paula_irq_raise(s->paula, bits);
         uint16_t pending = (uint16_t)(s->paula->intena & s->paula->intreq & 0x3FFFu);
         kprintf("[IRQSET] bits=%04x intena=%04x intreq=%04x pending=%04x\n",
@@ -143,39 +147,29 @@ void agnus_step(AgnusState *s, uint64_t ticks)
     if (!ticks)
         return;
 
-    /*
-     * Step subcomponents that consume elapsed time directly.
-     */
+    /* Step subcomponents that consume elapsed time directly. */
     blitter_step(&s->blitter, s, ticks);
 
-    /*
-     * Advance beam first, because Copper timing and VBL edge detection
-     * depend on current raster position.
-     *
-     * Capture the VBL state BEFORE beam_step — beam_step calls
-     * beam_sync_vblank_state internally, so beam_vblank_entered would
-     * see the post-step state as "old" and never detect the entry edge.
-     */
     int vbl_before = beam_is_in_vblank(&s->beam);
     beam_step(&s->beam, ticks);
 
-    /*
-     * Copper runs one micro-step per agnus_step tick, but only when
-     * DMAEN (master) and COPEN (copper) are both set in DMACON.
-     */
     if ((s->dmacon & DMAF_DMAEN) && (s->dmacon & DMAF_COPEN))
         copper_step(&s->copper, s, 1);
 
-    /*
-     * Check for vertical blank entry — fires once per VBL transition.
-     * Compare pre-step state to current state to detect the rising edge.
-     */
+    bitplanes_step(&s->bitplanes, s);
+    if (bitplanes_line_ready(&s->bitplanes))
+    {
+        if (s->denise)
+            denise_render_line(s->denise, s, &s->bitplanes);
+        bitplanes_clear_line_ready(&s->bitplanes);
+    }
+
     if (!vbl_before && beam_is_in_vblank(&s->beam))
     {
         {
             uint16_t _intena = s->paula ? s->paula->intena : 0u;
             uint16_t _intreq = s->paula ? s->paula->intreq : 0u;
-            uint16_t _pend   = (uint16_t)(_intena & _intreq & 0x3FFFu);
+            uint16_t _pend = (uint16_t)(_intena & _intreq & 0x3FFFu);
             uint32_t _pc = bellatrix_debug_cpu_pc();
             kprintf("[VBL-ENTER] frame=%u hpos=%u vpos=%u dmacon=0x%04x intena=0x%04x intreq=0x%04x pending=0x%04x m68k_pc=%08x\n",
                     (unsigned)s->beam.frame,
@@ -188,7 +182,6 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                     (unsigned)_pc);
         }
 
-        /* Dump interrupt autovector slots before raising VERTB */
         if (s->memory)
         {
             kprintf("[VBL-VECS] chip[60]=%08x [64]=%08x [68]=%08x [6c]=%08x [70]=%08x [78]=%08x\n",
@@ -200,15 +193,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                     (unsigned)bellatrix_chip_read32(s->memory, 0x78u));
         }
 
-        /*
-         * Paula VERTB interrupt.
-         */
         agnus_intreq_set(s, PAULA_INT_VERTB);
-
-        /*
-         * Reload Copper from COP1LC at VBL.
-         * This replaces the old copper_vbl_execute() batch model.
-         */
 
         kprintf("[FRAME] pre-reload  bplcon0=%04x bpl1=%04x/%04x dmacon=%04x\n",
                 s->denise ? s->denise->bplcon0 : 0,
@@ -220,27 +205,25 @@ void agnus_step(AgnusState *s, uint64_t ticks)
 
             if (s->memory)
             {
-                uint32_t _lc = s->copper.pc & 0x1FFFEu;
+                uint32_t _lc = s->copper.pc & CHIP_RAM_WORD_MASK;
+
                 kprintf("[COPPER-DUMP] lc=%05x : "
                         "%04x %04x %04x %04x %04x %04x %04x %04x "
                         "%04x %04x %04x %04x\n",
                         (unsigned)_lc,
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x00u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x02u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x04u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x06u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x08u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0au) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0cu) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0eu) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x10u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x12u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x14u) & 0x1FFFEu),
-                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x16u) & 0x1FFFEu));
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x00u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x02u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x04u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x06u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x08u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0au) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0cu) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x0eu) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x10u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x12u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x14u) & CHIP_RAM_WORD_MASK),
+                        (unsigned)bellatrix_chip_read16(s->memory, (_lc + 0x16u) & CHIP_RAM_WORD_MASK));
             }
-
-            for (int i = 0; i < 256; ++i)
-                copper_step(&s->copper, s, 1);
         }
         else
         {
@@ -248,67 +231,14 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                     (unsigned)s->dmacon);
         }
 
-        kprintf("[FRAME] post-copper bplcon0=%04x bpl1=%04x/%04x\n",
-                s->denise ? s->denise->bplcon0 : 0,
-                s->bplpth[0], s->bplptl[0]);
+        kprintf("[DENISE] frame=%u bpt0=0x%05x dmacon=0x%04x\n",
+                (unsigned)s->beam.frame,
+                (unsigned)((((uint32_t)(s->bplpth[0] & 0x1Fu)) << 16) |
+                           ((uint32_t)(s->bplptl[0] & 0xFFFEu))),
+                (unsigned)s->dmacon);
 
-        /*
-         * Keep current simplified frame render path for now.
-         * Denise still renders a full frame snapshot at VBL in this phase.
-         *
-         * Later, once bitplane fetch is fully beam-driven, this block should
-         * move out of VBL and become scanline/raster driven too.
-         */
-        if (s->denise && s->memory)
-        {
-            int nplanes = (s->denise->bplcon0 >> 12) & 7;
-            if (nplanes > 6)
-                nplanes = 6;
-
-            {
-                int hires = (s->denise->bplcon0 >> 15) & 1;
-
-                int vstart = (s->diwstrt >> 8) & 0xFF;
-                int vstop = (s->diwstop >> 8) & 0xFF;
-                if (vstop <= vstart)
-                    vstop += 256;
-
-                {
-                    int vheight = vstop - vstart;
-                    if (vheight <= 0)
-                        vheight = 1;
-                    if (vheight > 512)
-                        vheight = 512;
-
-                    kprintf("[DENISE] render frame=%u nplanes=%d hires=%d vheight=%d"
-                            " bpt0=0x%05x dmacon=0x%04x\n",
-                            (unsigned)s->beam.frame,
-                            nplanes,
-                            hires,
-                            vheight,
-                            (unsigned)((((uint32_t)(s->bplpth[0] & 0x1Fu)) << 16) |
-                                       ((uint32_t)(s->bplptl[0] & 0xFFFEu))),
-                            (unsigned)s->dmacon);
-
-                    bitplanes_begin_frame(&s->bitplanes, s, nplanes, hires);
-
-                    for (int line = 0; line < vheight; ++line)
-                    {
-                        bitplanes_fetch_line(&s->bitplanes, s, vstart + line);
-
-                        if (bitplanes_line_ready(&s->bitplanes))
-                        {
-                            denise_render_line(s->denise, &s->bitplanes, line, vheight);
-                            bitplanes_clear_line_ready(&s->bitplanes);
-                        }
-                    }
-
-                    PAL_Video_Flip();
-                }
-            }
-        }
+        PAL_Video_Flip();
     }
-
 }
 
 /* ---------------------------------------------------------------------------
@@ -321,11 +251,8 @@ int agnus_handles_read(const AgnusState *s, uint32_t addr)
     if (addr < 0xDFF000u || addr > 0xDFF1FFu)
         return 0;
     uint16_t reg = (uint16_t)(addr & 0x1FEu);
-    /* Paula owns INTENAR (0x1C) and INTREQR (0x1E) */
     if (reg == 0x001Cu || reg == 0x001Eu)
         return 0;
-    /* Denise owns colour/bitplane control registers (>= 0x100),
-     * except BPL1MOD/BPL2MOD which are Agnus-owned DMA registers */
     if (reg >= 0x0100u && reg != AGNUS_BPL1MOD && reg != AGNUS_BPL2MOD)
         return 0;
     return 1;
@@ -337,11 +264,8 @@ int agnus_handles_write(const AgnusState *s, uint32_t addr)
     if (addr < 0xDFF000u || addr > 0xDFF1FFu)
         return 0;
     uint16_t reg = (uint16_t)(addr & 0x1FEu);
-    /* Paula owns INTENA (0x9A) and INTREQ (0x9C) */
     if (reg == 0x009Au || reg == 0x009Cu)
         return 0;
-    /* Denise owns colour/bitplane control registers (>= 0x100),
-     * except BPL1MOD/BPL2MOD which are Agnus-owned DMA registers */
     if (reg >= 0x0100u && reg != AGNUS_BPL1MOD && reg != AGNUS_BPL2MOD)
         return 0;
     return 1;
@@ -367,7 +291,9 @@ uint32_t agnus_read_reg(AgnusState *s, uint16_t reg)
     switch (reg)
     {
     case AGNUS_DMACONR:
-        return (uint32_t)(s->dmacon | (uint16_t)(blitter_is_busy(&s->blitter) ? AGNUS_DMACON_BBUSY : 0u) | (uint16_t)(s->blitter.zero ? AGNUS_DMACON_BZERO : 0u));
+        return (uint32_t)((uint16_t)(s->dmacon & ~(AGNUS_DMACON_BBUSY | AGNUS_DMACON_BZERO)) |
+                          (uint16_t)(blitter_is_busy(&s->blitter) ? AGNUS_DMACON_BBUSY : 0u) |
+                          (uint16_t)(s->blitter.zero ? AGNUS_DMACON_BZERO : 0u));
 
     case AGNUS_VPOSR:
     {
@@ -383,6 +309,12 @@ uint32_t agnus_read_reg(AgnusState *s, uint16_t reg)
         return h;
     }
 
+    case AGNUS_COP1LCH:
+    case AGNUS_COP1LCL:
+    case AGNUS_COP2LCH:
+    case AGNUS_COP2LCL:
+        return copper_read_reg(&s->copper, reg);
+
     default:
         if (agnus_is_blitter_reg(reg))
             return blitter_read_reg(&s->blitter, reg);
@@ -395,6 +327,12 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
     (void)size;
     uint16_t raw = (uint16_t)value;
 
+    if (reg >= AGNUS_BPL1PTH && reg <= AGNUS_BPL6PTL)
+    {
+        kprintf("[BPL-WRITE] reg=%04x value=%04x pc=%08x\n",
+                reg, raw, bellatrix_debug_cpu_pc());
+    }
+
     switch (reg)
     {
     case AGNUS_DMACON:
@@ -406,6 +344,42 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
                 (unsigned)raw, (unsigned)old, (unsigned)s->dmacon);
         return;
     }
+
+        /* ---------------------------------------------------------------------------
+         * Copper pointer registers (IMPORTANT FIX)
+         * ------------------------------------------------------------------------- */
+
+    case COPPER_COP1LCH:
+        s->copper.cop1lc = (s->copper.cop1lc & 0x0000FFFFu) | ((uint32_t)raw << 16);
+        kprintf("[AGNUS] COP1LCH pc=%08x value=%04x cop1lc=0x%06x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)raw,
+                (unsigned)(s->copper.cop1lc & CHIP_RAM_ADDR_MASK));
+        return;
+
+    case COPPER_COP1LCL:
+        s->copper.cop1lc = (s->copper.cop1lc & 0xFFFF0000u) | (uint32_t)(raw & 0xFFFEu);
+        kprintf("[AGNUS] COP1LCL pc=%08x value=%04x cop1lc=0x%06x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)raw,
+                (unsigned)(s->copper.cop1lc & CHIP_RAM_ADDR_MASK));
+        return;
+
+    case COPPER_COP2LCH:
+        s->copper.cop2lc = (s->copper.cop2lc & 0x0000FFFFu) | ((uint32_t)raw << 16);
+        kprintf("[AGNUS] COP2LCH pc=%08x value=%04x cop2lc=0x%06x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)raw,
+                (unsigned)(s->copper.cop2lc & CHIP_RAM_ADDR_MASK));
+        return;
+
+    case COPPER_COP2LCL:
+        s->copper.cop2lc = (s->copper.cop2lc & 0xFFFF0000u) | (uint32_t)(raw & 0xFFFEu);
+        kprintf("[AGNUS] COP2LCL pc=%08x value=%04x cop2lc=0x%06x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)raw,
+                (unsigned)(s->copper.cop2lc & CHIP_RAM_ADDR_MASK));
+        return;
 
     case AGNUS_DIWSTRT:
         s->diwstrt = raw;
@@ -471,7 +445,6 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
         kprintf("[AGNUS] BPL6PTL=%04x\n", (unsigned)raw);
         return;
 
-    /* BPL modulos — Agnus-owned DMA registers */
     case AGNUS_BPL1MOD:
         s->bpl1mod = (int16_t)raw;
         return;
@@ -483,7 +456,6 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
         break;
     }
 
-    /* INTENA/INTREQ — forwarded to Paula (Copper may write these directly) */
     if (reg == 0x009Au || reg == 0x009Cu)
     {
         if (s->paula)
@@ -497,13 +469,16 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
         return;
     }
 
+    /*
+     * COPJMP1/COPJMP2/COPINS remain Copper-side commands.
+     * COP1LC/COP2LC are handled above as Agnus-owned pointer registers.
+     */
     if (agnus_is_copper_reg(reg))
     {
         copper_write_reg(&s->copper, reg, raw);
         return;
     }
 
-    /* Denise-owned registers — forward via attached pointer */
     if (reg >= 0x0100u &&
         reg != AGNUS_BPL1MOD && reg != AGNUS_BPL2MOD)
     {

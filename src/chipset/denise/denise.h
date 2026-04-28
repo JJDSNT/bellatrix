@@ -99,13 +99,10 @@ void denise_write_reg(Denise *d, uint16_t reg, uint16_t value);
 /*
  * Render one scanline from pre-fetched bitplane data.
  *
- * line_idx:
- *   0-based line index inside the current display window
- *
- * vheight:
- *   total display-window height in lines, used for framebuffer centering
+ * line_idx and vheight are derived from agnus->diwstrt/diwstop and
+ * bp->line_vpos internally, so the caller does not need to track them.
  */
-void denise_render_line(Denise *d, const BitplaneState *bp,
-                        int line_idx, int vheight);
+void denise_render_line(Denise *d, const AgnusState *agnus,
+                        const BitplaneState *bp);
 
 #endif /* BELLATRIX_CHIPSET_DENISE_H */
