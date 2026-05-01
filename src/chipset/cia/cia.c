@@ -56,6 +56,7 @@ static inline void cia_reset_core_state(CIA *cia)
     cia->ext_prb = 0xFFu;
 
     cia->sdr = 0x00u;
+    cia->sdr_full = 0u;
 
     cia->icr_mask = 0x00u;
     cia->icr_data = 0x00u;
@@ -424,7 +425,11 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
         return 0xFFu;
 
     case CIA_REG_SDR:
-        return cia->sdr;
+    {
+        uint8_t v = cia->sdr;
+        cia->sdr_full = 0u;
+        return v;
+    }
 
     case CIA_REG_ICR:
     {
@@ -452,6 +457,17 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
     default:
         return 0xFFu;
     }
+}
+
+int cia_receive_sdr(CIA *cia, uint8_t val)
+{
+    if (cia->sdr_full)
+        return 0;
+
+    cia->sdr = val;
+    cia->sdr_full = 1u;
+    cia_raise_icr(cia, CIA_ICR_SP);
+    return 1;
 }
 
 void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)

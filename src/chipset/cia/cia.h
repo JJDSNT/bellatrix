@@ -134,6 +134,7 @@ typedef struct CIA_State {
      * Serial
      */
     uint8_t sdr;
+    uint8_t sdr_full;
 
     /*
      * Interrupt
@@ -220,6 +221,7 @@ uint8_t cia_port_b_value(const CIA *cia);
 
 uint8_t cia_read_reg(CIA *cia, uint8_t reg);
 void    cia_write_reg(CIA *cia, uint8_t reg, uint8_t val);
+int     cia_receive_sdr(CIA *cia, uint8_t val);
 
 /* ------------------------------------------------------------------------- */
 /* TOD (implemented in cia_tod.c)                                            */
@@ -227,6 +229,7 @@ void    cia_write_reg(CIA *cia, uint8_t reg, uint8_t val);
 
 void    cia_tod_reset(CIA_TOD_State *tod, uint32_t ticks_per_inc);
 void    cia_tod_step(CIA *cia, uint64_t ticks);
+void    cia_tod_pulse(CIA *cia, uint32_t pulses);
 uint8_t cia_tod_read(CIA *cia, uint8_t reg);
 void    cia_tod_write(CIA *cia, uint8_t reg, uint8_t val);
 

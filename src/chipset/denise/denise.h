@@ -52,6 +52,10 @@ typedef struct Denise
      * Attached Agnus reference (read-only during rendering).
      */
     const AgnusState *agnus;
+    int diag_bit_reverse;
+    int diag_phase_bias;
+    int diag_force_src0;
+    int diag_show_fetch_all;
 
 } Denise;
 

@@ -35,6 +35,9 @@ typedef struct Paula
     uint16_t intena;
     uint8_t ipl;
     uint16_t irq_line_level;
+    uint16_t potgo;
+    uint8_t mouse_right[2];
+    uint8_t mouse_right_seen[2];
 
     UARTState uart;
     PaulaDisk disk;
@@ -60,6 +63,8 @@ void paula_attach_cia_a(Paula *p, struct CIA_State *cia);
 void paula_attach_cia_b(Paula *p, struct CIA_State *cia);
 void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size);
 void paula_attach_drive(Paula *p, FloppyDrive *drive);
+void paula_set_mouse_right(Paula *p, unsigned port, int pressed);
+void paula_serial_set_mode(Paula *p, UARTLinkMode mode);
 
 /* bus protocol — called by machine.c read/write dispatch */
 int paula_handles_read(const Paula *p, uint32_t addr);

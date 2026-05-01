@@ -11,6 +11,17 @@ extern "C" {
 typedef void (*uart_tx_byte_cb)(void *opaque, uint8_t byte);
 typedef void (*uart_irq_raise_cb)(void *opaque, uint16_t mask);
 
+typedef enum UARTLinkMode {
+    /* Backend representa a outra ponta do cabo:
+     * Amiga SERDAT TX -> backend/parceiro RX
+     * Amiga SERDATR RX <- backend/parceiro TX */
+    UART_LINK_NULL_MODEM = 0,
+
+    /* Backend já expõe o lado fisico cruzado e quer apenas observar/
+     * encaminhar o fluxo sem cruzamento adicional no software. */
+    UART_LINK_STRAIGHT_THROUGH = 1,
+} UARTLinkMode;
+
 typedef struct UARTState {
     void *opaque;
     uart_tx_byte_cb tx_cb;
@@ -31,6 +42,7 @@ typedef struct UARTState {
     bool rxd_level;
 
     bool tx_instant;
+    UARTLinkMode link_mode;
 } UARTState;
 
 /* Paula INTREQ bits relevantes */
@@ -42,6 +54,8 @@ void uart_init(UARTState *u, void *opaque,
                uart_irq_raise_cb irq_raise_cb);
 
 void uart_reset(UARTState *u);
+void uart_set_link_mode(UARTState *u, UARTLinkMode mode);
+UARTLinkMode uart_link_mode(const UARTState *u);
 
 void uart_write_serdat(UARTState *u, uint16_t value);
 void uart_write_serper(UARTState *u, uint16_t value);

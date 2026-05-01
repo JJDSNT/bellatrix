@@ -23,8 +23,22 @@ static void uart_raise_irq(UARTState *u, uint16_t mask)
 
 static void uart_emit_tx_byte(UARTState *u, uint16_t word)
 {
+    uint8_t byte = (uint8_t)(word & 0xFFu);
+
+    switch (u->link_mode) {
+    case UART_LINK_STRAIGHT_THROUGH:
+        /* Straight-through backends already model the physical crossing
+         * outside the emulator, so SERDAT still leaves Bellatrix here. */
+        break;
+    case UART_LINK_NULL_MODEM:
+    default:
+        /* Null-modem backends represent the remote endpoint directly:
+         * SERDAT TX must be delivered to the partner RX. */
+        break;
+    }
+
     if (u->tx_cb) {
-        u->tx_cb(u->opaque, (uint8_t)(word & 0xFFu));
+        u->tx_cb(u->opaque, byte);
     }
 }
 
@@ -43,7 +57,7 @@ static void uart_start_tx_shift(UARTState *u)
         uart_emit_tx_byte(u, u->tx_shift_reg);
     }
 
-    //uart_raise_irq(u, UART_INTREQ_TBE);
+    uart_raise_irq(u, UART_INTREQ_TBE);
 }
 
 void uart_init(UARTState *u, void *opaque,
@@ -74,6 +88,17 @@ void uart_reset(UARTState *u)
     u->rxd_level = true;
 
     u->tx_instant = true;
+    u->link_mode = UART_LINK_NULL_MODEM;
+}
+
+void uart_set_link_mode(UARTState *u, UARTLinkMode mode)
+{
+    u->link_mode = mode;
+}
+
+UARTLinkMode uart_link_mode(const UARTState *u)
+{
+    return u->link_mode;
 }
 
 void uart_write_serdat(UARTState *u, uint16_t value)
@@ -83,7 +108,7 @@ void uart_write_serdat(UARTState *u, uint16_t value)
          * tx_buffer_valid and tx_shift_busy stay false, so SERDATR always
          * reports TBE=1 / TSRE=1. */
         uart_emit_tx_byte(u, value);
-        //uart_raise_irq(u, UART_INTREQ_TBE);
+        uart_raise_irq(u, UART_INTREQ_TBE);
         return;
     }
 
@@ -111,10 +136,6 @@ uint16_t uart_read_serdatr(const UARTState *u)
     if (!u->tx_buffer_valid) v |= 0x2000u;
     if (!u->tx_shift_busy)   v |= 0x1000u;
     if (u->rxd_level)        v |= 0x0800u;
-
-    if (!u->rx_buffer_full) {
-        v |= 0x0300u;
-    }
 
     return v;
 }
@@ -147,7 +168,9 @@ void uart_receive_byte(UARTState *u, uint8_t byte)
         u->overrun = true;
     }
 
-    u->rx_buffer = (uint16_t)byte | 0x0300u;
+    /* Present incoming data in the same 9-bit shape expected by Paula
+     * software paths that sample SERDATR directly. */
+    u->rx_buffer = (uint16_t)byte | 0x0100u;
     u->rx_buffer_full = true;
     u->rxd_level = true;
 

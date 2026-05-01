@@ -10,7 +10,7 @@
 #define DSKLEN_LEN 0x3FFFu
 
 #define DSKBYTR_DMAON 0x2000u
-#define DSKBYTR_WORDSYNC 0x1000u
+#define DSKBYTR_WORDSYNC 0x0800u
 
 #define ADKCON_SETCLR 0x8000u
 #define ADKCON_WORDSYNC 0x0400u
@@ -20,6 +20,7 @@
 #define AMIGA_SECTORS_TRACK 11u
 #define AMIGA_SECTOR_BYTES 512u
 #define MFM_SECTOR_BYTES 1088u
+#define MFM_TRACK_BYTES_PAL 12668u
 
 static void emit_intreq(PaulaDisk *pd, uint16_t bits)
 {
@@ -57,29 +58,6 @@ static int valid_adf_track(PaulaDisk *pd, uint32_t adf_offset)
     return 1;
 }
 
-static void encode_even_odd(const uint8_t *src, uint8_t *dst, int size)
-{
-    for (int i = 0; i < size; i++)
-    {
-        dst[i] = (src[i] >> 1) & 0x55;
-        dst[i + size] = src[i] & 0x55;
-    }
-}
-
-static uint32_t mfm_checksum(const uint8_t *data, int bytes)
-{
-    uint32_t chk = 0;
-    for (int i = 0; i < bytes; i += 4)
-    {
-        uint32_t w = ((uint32_t)data[i + 0] << 24) |
-                     ((uint32_t)data[i + 1] << 16) |
-                     ((uint32_t)data[i + 2] <<  8) |
-                      (uint32_t)data[i + 3];
-        chk ^= w;
-    }
-    return chk;
-}
-
 static void put_u32be(uint8_t *dst, uint32_t v)
 {
     dst[0] = (uint8_t)(v >> 24);
@@ -88,16 +66,81 @@ static void put_u32be(uint8_t *dst, uint32_t v)
     dst[3] = (uint8_t)v;
 }
 
-static uint8_t add_clock_bits(uint8_t previous, uint8_t value)
+static uint32_t get_u32be(const uint8_t *src)
 {
-    value &= 0x55;
+    return ((uint32_t)src[0] << 24) |
+           ((uint32_t)src[1] << 16) |
+           ((uint32_t)src[2] << 8)  |
+           (uint32_t)src[3];
+}
 
-    uint8_t l = (uint8_t)(value << 1);
-    uint8_t r = (uint8_t)((value >> 1) | (previous << 7));
-    uint8_t inv = (uint8_t)(l | r);
-    uint8_t clk = (uint8_t)(inv ^ 0xAA);
+static uint16_t get_u16be(const uint8_t *src)
+{
+    return ((uint16_t)src[0] << 8) | (uint16_t)src[1];
+}
 
-    return (uint8_t)(value | clk);
+static void mfmcode_u32(uint32_t *mfm, uint32_t longs)
+{
+    uint32_t prev = mfm[-1];
+
+    while (longs-- > 0)
+    {
+        uint32_t v = *mfm & 0x55555555u;
+        uint32_t mask1 = (prev << 31) | (v >> 1);
+        uint32_t mask2 = v << 1;
+        uint32_t mfmbits = ((~mask1) & (~mask2)) & 0xAAAAAAAAu;
+
+        prev = v;
+        v |= mfmbits;
+        *mfm++ = v;
+    }
+}
+
+static int mfm_track_contains_sync(const uint8_t *src, uint32_t len, uint16_t sync)
+{
+    if (!src || len < 2)
+        return 0;
+
+    for (uint32_t i = 0; i + 1 < len; i += 2)
+    {
+        if (get_u16be(src + i) == sync)
+            return 1;
+    }
+
+    return 0;
+}
+
+static uint32_t mfm_track_find_sync_offset(const uint8_t *src, uint32_t len, uint16_t sync)
+{
+    if (!src || len < 2)
+        return UINT32_MAX;
+
+    for (uint32_t i = 0; i + 1 < len; i += 2)
+    {
+        if (get_u16be(src + i) == sync)
+            return i;
+    }
+
+    return UINT32_MAX;
+}
+
+static void paula_disk_load_dskbytr(PaulaDisk *pd, uint16_t word)
+{
+    pd->dskbytr_data = (uint16_t)(0x8000u | (word & 0x00FFu));
+}
+
+static void paula_disk_maybe_emit_sync(PaulaDisk *pd)
+{
+    if (!pd->sync_seen)
+        return;
+    if (!(pd->adkcon & ADKCON_WORDSYNC))
+        return;
+    if (pd->sync_irq_fired)
+        return;
+
+    pd->sync_irq_fired = 1;
+    kprintf("[DSKIRQ] DSKSYNC fired sync=%04x\n", pd->dsksync);
+    emit_intreq(pd, PAULA_INTREQ_DSKSYNC);
 }
 
 static void encode_adf_track_to_mfm(
@@ -107,68 +150,73 @@ static void encode_adf_track_to_mfm(
     uint8_t *dst,
     uint32_t dst_len)
 {
-    uint32_t s = 0;
+    uint8_t track = (uint8_t)((cylinder << 1) | side);
+    uint32_t total_words = dst_len / 4u;
+    uint32_t mfm_words[total_words];
+    uint32_t *mfmbuf = mfm_words;
+    uint32_t data_bytes = AMIGA_SECTORS_TRACK * MFM_SECTOR_BYTES;
+    uint32_t gapsize = (dst_len > data_bytes) ? (dst_len - data_bytes) : 0u;
 
-    memset(dst, 0, dst_len);
+    memset(mfm_words, 0, sizeof(mfm_words));
 
-    for (unsigned int sec = 0; sec < AMIGA_SECTORS_TRACK; sec++)
+    for (uint32_t i = 0; i < gapsize / 4u - 1u; i++)
+        *mfmbuf++ = 0xAAAAAAAAu;
+
+    for (uint32_t sec = 0; sec < AMIGA_SECTORS_TRACK; sec++)
     {
-        if (s + MFM_SECTOR_BYTES > dst_len)
-            break;
-
+        uint32_t even, odd;
+        uint32_t hck = 0;
+        uint32_t dck = 0;
         const uint8_t *sector_data = adf_track + sec * AMIGA_SECTOR_BYTES;
 
-        uint8_t header[4] = {
-            0xFF,
-            (uint8_t)((cylinder << 1) | side),
-            (uint8_t)sec,
-            (uint8_t)(AMIGA_SECTORS_TRACK - sec)
-        };
-        uint8_t label[16];
-        memset(label, 0, sizeof(label));
+        if (mfmbuf[-1] & 1u)
+            mfmbuf[0] = 0x2AAAAAAAu;
+        else
+            mfmbuf[0] = 0xAAAAAAAAu;
+        mfmbuf[1] = 0x44894489u;
 
-        /* Preamble + sync words */
-        dst[s + 0] = 0xAA;
-        dst[s + 1] = 0xAA;
-        dst[s + 2] = 0xAA;
-        dst[s + 3] = 0xAA;
-        dst[s + 4] = 0x44;
-        dst[s + 5] = 0x89;
-        dst[s + 6] = 0x44;
-        dst[s + 7] = 0x89;
+        even = (0xFFu << 24) | ((uint32_t)track << 16) |
+               (sec << 8) | (AMIGA_SECTORS_TRACK - sec);
+        odd = (even >> 1) & 0x55555555u;
+        even &= 0x55555555u;
+        mfmbuf[2] = odd;
+        mfmbuf[3] = even;
+        hck ^= odd;
+        hck ^= even;
 
-        /* Header info, label, data (even/odd encoded, no clock bits yet) */
-        encode_even_odd(header,      &dst[s +   8], 4);
-        encode_even_odd(label,       &dst[s +  16], 16);
-        encode_even_odd(sector_data, &dst[s +  64], 512);
+        for (uint32_t i = 4; i < 12; i++)
+            mfmbuf[i] = 0;
 
-        /*
-         * AmigaDOS checksum: XOR of raw (pre-encode) long words in each region.
-         * The decoder reconstitutes raw bytes from even/odd halves, then XORs
-         * as big-endian 32-bit words. Checksum stored as normal even/odd field.
-         */
+        for (uint32_t i = 0; i < 128; i++)
         {
-            uint8_t hchk_b[4];
-            /* header + label (label is all-zero, contributes 0) */
-            put_u32be(hchk_b, mfm_checksum(header, 4));
-            encode_even_odd(hchk_b, &dst[s + 48], 4);
-        }
-        {
-            uint8_t dchk_b[4];
-            put_u32be(dchk_b, mfm_checksum(sector_data, AMIGA_SECTOR_BYTES));
-            encode_even_odd(dchk_b, &dst[s + 56], 4);
+            uint32_t data_long = get_u32be(sector_data + i * 4u);
+            odd = (data_long >> 1) & 0x55555555u;
+            even = data_long & 0x55555555u;
+            mfmbuf[16 + i] = odd;
+            mfmbuf[16 + 128 + i] = even;
+            dck ^= odd;
+            dck ^= even;
         }
 
-        /* Add clock bits to all bytes after the sync words */
-        for (int i = 8; i < (int)MFM_SECTOR_BYTES; i++)
-            dst[s + i] = add_clock_bits(dst[s + i - 1], dst[s + i]);
+        even = hck;
+        odd = even >> 1;
+        mfmbuf[12] = odd;
+        mfmbuf[13] = even;
 
-        s += MFM_SECTOR_BYTES;
+        even = dck;
+        odd = even >> 1;
+        mfmbuf[14] = odd;
+        mfmbuf[15] = even;
+
+        mfmcode_u32(mfmbuf + 2, 2u * 128u + 16u - 2u);
+        mfmbuf += 2u * 128u + 16u;
     }
 
-    /* Trailing gap: clock-only bytes (0xAA = MFM zeros) */
-    for (uint32_t i = s; i < dst_len; i++)
-        dst[i] = add_clock_bits(dst[i > 0 ? i - 1 : 0], 0);
+    mfmbuf[0] = 0;
+    mfmcode_u32(mfmbuf, 1u);
+
+    for (uint32_t i = 0; i < total_words; i++)
+        put_u32be(dst + i * 4u, mfm_words[i]);
 }
 
 void paula_disk_init(PaulaDisk *pd)
@@ -207,6 +255,9 @@ void paula_disk_write_dskptl(PaulaDisk *pd, uint16_t value)
 void paula_disk_write_dsksync(PaulaDisk *pd, uint16_t value)
 {
     pd->dsksync = value;
+    pd->sync_irq_fired = 0;
+    kprintf("[DSKSYNC] set=%04x sync_seen=%d\n", value, pd->sync_seen);
+    paula_disk_maybe_emit_sync(pd);
 }
 
 void paula_disk_write_adkcon(PaulaDisk *pd, uint16_t value)
@@ -221,11 +272,28 @@ void paula_disk_write_adkcon(PaulaDisk *pd, uint16_t value)
     {
         pd->adkcon &= (uint16_t)~bits;
     }
+
+    kprintf("[ADKCON] raw=%04x now=%04x wordsync=%d\n",
+            value,
+            pd->adkcon,
+            !!(pd->adkcon & ADKCON_WORDSYNC));
+
+    paula_disk_maybe_emit_sync(pd);
 }
 
 uint16_t paula_disk_read_dskbytr(PaulaDisk *pd)
 {
-    return pd->dskbytr;
+    uint16_t v = (uint16_t)(pd->dskbytr_data & 0x80FFu);
+
+    if (pd->sync_seen)
+        v |= DSKBYTR_WORDSYNC;
+
+    if (pd->dma_active)
+        v |= DSKBYTR_DMAON;
+
+    pd->dskbytr_data &= (uint16_t)~0x8000u;
+
+    return v;
 }
 
 static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
@@ -237,6 +305,9 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
     pd->write_mode = (value & DSKLEN_WRITE) ? 1 : 0;
     pd->dma_active = 1;
     pd->dma_armed = 0;
+    pd->sync_seen = 0;
+    pd->sync_irq_fired = 0;
+    pd->dskbytr_data = 0;
     pd->countdown = FLOPPY_FAKE_DMA_CYCLES;
     pd->dskbytr |= DSKBYTR_DMAON;
     pd->dskbytr &= (uint16_t)~DSKBYTR_WORDSYNC;
@@ -290,12 +361,39 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
         return;
     }
 
-    encode_adf_track_to_mfm(
-        pd->drive->adf + adf_offset,
-        cyl,
-        side,
-        &pd->chipram[pd->dskptr],
-        len_bytes);
+    {
+        uint8_t track_buf[MFM_TRACK_BYTES_PAL];
+
+        encode_adf_track_to_mfm(
+            pd->drive->adf + adf_offset,
+            cyl,
+            side,
+            track_buf,
+            sizeof(track_buf));
+
+        for (uint32_t i = 0; i < len_bytes; ++i)
+            pd->chipram[pd->dskptr + i] = track_buf[i % sizeof(track_buf)];
+
+        pd->sync_seen = mfm_track_contains_sync(track_buf, sizeof(track_buf), pd->dsksync);
+
+        {
+            uint32_t sync_off = mfm_track_find_sync_offset(track_buf, sizeof(track_buf), pd->dsksync);
+            if (sync_off != UINT32_MAX && sync_off + 16u <= sizeof(track_buf))
+            {
+                paula_disk_load_dskbytr(pd, get_u16be(track_buf + sync_off));
+                kprintf("[DSKDMA-SECTOR] sync_off=%u words=%04x %04x %04x %04x %04x %04x %04x %04x\n",
+                        sync_off,
+                        get_u16be(track_buf + sync_off + 0u),
+                        get_u16be(track_buf + sync_off + 2u),
+                        get_u16be(track_buf + sync_off + 4u),
+                        get_u16be(track_buf + sync_off + 6u),
+                        get_u16be(track_buf + sync_off + 8u),
+                        get_u16be(track_buf + sync_off + 10u),
+                        get_u16be(track_buf + sync_off + 12u),
+                        get_u16be(track_buf + sync_off + 14u));
+            }
+        }
+    }
 
     pd->drive->disk_changed = 0;
 
@@ -305,13 +403,16 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
             adf_offset,
             pd->dskptr,
             len_bytes);
+    kprintf("[DSKDMA] sync word=%04x found=%d adkcon=%04x head=%04x %04x %04x %04x\n",
+            pd->dsksync,
+            pd->sync_seen,
+            pd->adkcon,
+            get_u16be(&pd->chipram[pd->dskptr + 0u]),
+            get_u16be(&pd->chipram[pd->dskptr + 2u]),
+            get_u16be(&pd->chipram[pd->dskptr + 4u]),
+            get_u16be(&pd->chipram[pd->dskptr + 6u]));
 
-    if (pd->adkcon & ADKCON_WORDSYNC)
-    {
-        pd->dskbytr |= DSKBYTR_WORDSYNC;
-        kprintf("[DSKIRQ] DSKSYNC fired\n");
-        emit_intreq(pd, PAULA_INTREQ_DSKSYNC);
-    }
+    paula_disk_maybe_emit_sync(pd);
 }
 
 void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
@@ -329,6 +430,9 @@ void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
         pd->dma_armed = 0;
         pd->armed_dsklen = 0;
         pd->countdown = 0;
+        pd->sync_seen = 0;
+        pd->sync_irq_fired = 0;
+        pd->dskbytr_data = 0;
         pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
 
         kprintf("[DSKLEN] stop/disarm\n");
@@ -376,6 +480,9 @@ void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
     pd->dma_active = 0;
     pd->dma_armed = 0;
     pd->armed_dsklen = 0;
+    pd->sync_seen = 0;
+    pd->sync_irq_fired = 0;
+    pd->dskbytr_data &= (uint16_t)~0x8000u;
     pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
     pd->dsklen &= (uint16_t)~DSKLEN_DMAEN;
 

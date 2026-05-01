@@ -83,6 +83,14 @@ void cia_tod_step(CIA *cia, uint64_t ticks)
     }
 }
 
+void cia_tod_pulse(CIA *cia, uint32_t pulses)
+{
+    if (!cia || pulses == 0)
+        return;
+
+    cia_tod_increment(cia, pulses);
+}
+
 /* ------------------------------------------------------------------------- */
 /* register access                                                           */
 /* ------------------------------------------------------------------------- */

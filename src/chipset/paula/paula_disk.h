@@ -23,6 +23,9 @@ typedef struct PaulaDisk {
     int dma_active;
     int dma_armed;
     int write_mode;
+    int sync_seen;
+    int sync_irq_fired;
+    uint16_t dskbytr_data;
 
     uint16_t armed_dsklen;
     uint32_t countdown;

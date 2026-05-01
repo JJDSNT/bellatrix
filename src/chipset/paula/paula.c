@@ -3,6 +3,7 @@
 // Paula — INTREQ/INTENA, UART (SERDAT/SERPER/SERDATR), disk DMA.
 
 #include "paula.h"
+#include "debug/cpu_pc.h"
 #include "support.h"
 
 #include <stdio.h>
@@ -19,6 +20,7 @@
 #define REG_DSKLEN 0xDFF024u
 #define REG_SERDAT 0xDFF030u
 #define REG_SERPER 0xDFF032u
+#define REG_POTGO  0xDFF034u
 #define REG_DSKSYNC 0xDFF07Eu
 #define REG_INTENA 0xDFF09Au
 #define REG_INTREQ 0xDFF09Cu
@@ -32,6 +34,13 @@
 static void uart_tx_cb(void *opaque, uint8_t byte)
 {
     (void)opaque;
+
+#ifdef BELLATRIX_HARNESS
+    if (strcmp(PAL_HarnessSerial_ModeName(), "line") != 0) {
+        PAL_HarnessSerial_WriteByte(byte);
+        return;
+    }
+#endif
 
     static char buf[256];
     static int pos = 0;
@@ -75,6 +84,51 @@ static void disk_intreq_cb(void *opaque, uint16_t bits)
     paula_irq_raise(p, bits);
 }
 
+static uint16_t paula_read_potgor(const Paula *p)
+{
+    uint16_t v = 0xFFFFu;
+
+    /* Port 0/first mouse right button: pin 9 -> DATLY.
+     * Only drive it low when guest configured the line as output-high,
+     * which matches how DiagROM probes RMB through POTGO/POTGOR. */
+    if ((p->potgo & 0x0800u) && (p->potgo & 0x0400u) && p->mouse_right[0]) {
+        v &= (uint16_t)~0x0400u;
+    }
+
+    /* Port 1/second controller right button: pin 9 -> DATRY. */
+    if ((p->potgo & 0x8000u) && (p->potgo & 0x4000u) && p->mouse_right[1]) {
+        v &= (uint16_t)~0x4000u;
+    }
+
+    return v;
+}
+
+static void paula_log_mouse_right_consumed(Paula *p, uint16_t potgor)
+{
+#ifdef BELLATRIX_HARNESS
+    if (p->mouse_right[0] && !p->mouse_right_seen[0] &&
+        (p->potgo & 0x0800u) && (p->potgo & 0x0400u) &&
+        !(potgor & 0x0400u)) {
+        p->mouse_right_seen[0] = 1u;
+        kprintf("[MOUSE-RMB] pc=%08x port=0 read POTGOR=%04x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)potgor);
+    }
+
+    if (p->mouse_right[1] && !p->mouse_right_seen[1] &&
+        (p->potgo & 0x8000u) && (p->potgo & 0x4000u) &&
+        !(potgor & 0x4000u)) {
+        p->mouse_right_seen[1] = 1u;
+        kprintf("[MOUSE-RMB] pc=%08x port=1 read POTGOR=%04x\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)potgor);
+    }
+#else
+    (void)p;
+    (void)potgor;
+#endif
+}
+
 /* ---------------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------------- */
@@ -83,6 +137,7 @@ void paula_init(Paula *p)
 {
     memset(p, 0, sizeof(*p));
     uart_init(&p->uart, p, uart_tx_cb, uart_irq_cb);
+    uart_set_link_mode(&p->uart, UART_LINK_NULL_MODEM);
     paula_disk_init(&p->disk);
     paula_disk_set_intreq_callback(&p->disk, disk_intreq_cb, p);
 }
@@ -96,12 +151,18 @@ void paula_reset(Paula *p)
     p->irq_line_level = 0;
     p->intena = 0;
     p->ipl = 0;
+    p->potgo = 0xFFFFu;
+    p->mouse_right[0] = 0u;
+    p->mouse_right[1] = 0u;
+    p->mouse_right_seen[0] = 0u;
+    p->mouse_right_seen[1] = 0u;
 
     uart_reset(&p->uart);
     /* restore wiring */
     p->uart.opaque = saved_uart.opaque;
     p->uart.tx_cb = saved_uart.tx_cb;
     p->uart.irq_raise_cb = saved_uart.irq_raise_cb;
+    p->uart.link_mode = saved_uart.link_mode;
 
     paula_disk_init(&p->disk);
     /* restore wiring */
@@ -142,6 +203,22 @@ void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size)
 void paula_attach_drive(Paula *p, FloppyDrive *drive)
 {
     paula_disk_attach_drive(&p->disk, drive);
+}
+
+void paula_set_mouse_right(Paula *p, unsigned port, int pressed)
+{
+    if (port > 1u)
+        return;
+
+    p->mouse_right[port] = pressed ? 1u : 0u;
+    if (!pressed) {
+        p->mouse_right_seen[port] = 0u;
+    }
+}
+
+void paula_serial_set_mode(Paula *p, UARTLinkMode mode)
+{
+    uart_set_link_mode(&p->uart, mode);
 }
 
 /* ---------------------------------------------------------------------------
@@ -227,7 +304,10 @@ int paula_handles_read(const Paula *p, uint32_t addr)
 int paula_handles_write(const Paula *p, uint32_t addr)
 {
     (void)p;
-    return addr == REG_DSKPTH || addr == REG_DSKPTL || addr == REG_DSKLEN || addr == REG_SERDAT || addr == REG_SERPER || addr == REG_DSKSYNC || addr == REG_INTENA || addr == REG_INTREQ || addr == REG_ADKCON;
+    return addr == REG_DSKPTH || addr == REG_DSKPTL || addr == REG_DSKLEN ||
+           addr == REG_SERDAT || addr == REG_SERPER || addr == REG_POTGO ||
+           addr == REG_DSKSYNC || addr == REG_INTENA || addr == REG_INTREQ ||
+           addr == REG_ADKCON;
 }
 
 uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
@@ -238,13 +318,22 @@ uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
     {
     case REG_SERDATR:
         ret = uart_read_serdatr(&p->uart);
+#ifdef BELLATRIX_HARNESS
+        if (p->uart.rx_buffer_full) {
+            kprintf("[UART-RX] pc=%08x read SERDATR=%04x byte=%02x\n",
+                    (unsigned)bellatrix_debug_cpu_pc(),
+                    (unsigned)ret,
+                    (unsigned)(ret & 0xFFu));
+        }
+#endif
+        uart_clear_rbf(&p->uart);
         break;
     case REG_ADKCONR:
         ret = p->disk.adkcon;
         break;
     case REG_POTGOR:
-        /* All buttons up, all lines pulled high */
-        ret = 0xFFFFu;
+        ret = paula_read_potgor(p);
+        paula_log_mouse_right_consumed(p, (uint16_t)ret);
         break;
     case REG_DSKBYTR:
         ret = paula_disk_read_dskbytr(&p->disk);
@@ -295,6 +384,10 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
 
     case REG_SERPER:
         uart_write_serper(&p->uart, raw);
+        break;
+
+    case REG_POTGO:
+        p->potgo = raw;
         break;
 
     case REG_ADKCON:
