@@ -110,9 +110,239 @@ static void aros_loop_check(uint32_t addr, uint32_t ret)
                count, pc, (unsigned)ret, (ret >> 13) & 1);
 }
 
+static void aros_wait2_check(uint32_t addr, uint32_t ret)
+{
+    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+    if (pc < 0x00FE9800u || pc > 0x00FE9820u) return;
+    static int count = 0;
+    count++;
+    if (count <= 40 || count % 100000 == 0)
+        printf("[AROS-WAIT2] count=%-8d pc=%08x addr=%06x ret=%08x\n",
+               count, pc, addr & 0x00FFFFFFu, ret);
+}
+
+static int harness_watch_gfx_pc(uint32_t pc)
+{
+    if (pc >= 0x00FC17C0u && pc <= 0x00FC18F0u)
+        return 1;
+    if (pc >= 0x00FC9C00u && pc <= 0x00FC9E40u)
+        return 1;
+    if (pc >= 0x00FCAC80u && pc <= 0x00FCAE40u)
+        return 1;
+    if (pc >= 0x00FCC980u && pc <= 0x00FCD620u)
+        return 1;
+    if (pc >= 0x00FC6300u && pc <= 0x00FC6500u)
+        return 1;
+    if (pc >= 0x00FE8800u && pc <= 0x00FE8848u)
+        return 1;
+    if (pc >= 0x00FCA480u && pc <= 0x00FCA568u)
+        return 1;
+    return 0;
+}
+
+static int harness_watch_gfx_addr(uint32_t addr)
+{
+    addr &= 0x00FFFFFFu;
+
+    if (addr >= 0x0000A4C0u && addr <= 0x0000A580u)
+        return 1;
+    if (addr >= 0x0000A572u && addr <= 0x0000A8C0u)
+        return 1;
+    if (addr >= 0x0000C4B2u && addr <= 0x0000C800u)
+        return 1;
+
+    return 0;
+}
+
+static int harness_is_a4d0_abort_pc(uint32_t pc)
+{
+    switch (pc)
+    {
+        case 0x00FCC992u:
+        case 0x00FCC9E8u:
+        case 0x00FCCB3Au:
+        case 0x00FCCBF2u:
+        case 0x00FCCF98u:
+        case 0x00FCA660u:
+        case 0x00FCD5BCu:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static uint32_t harness_chip_read(uint32_t addr, int size)
+{
+    const BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+
+    if (size == 1) return bellatrix_chip_read8(mem, addr);
+    if (size == 2) return bellatrix_chip_read16(mem, addr);
+    return bellatrix_chip_read32(mem, addr);
+}
+
+static void harness_dump_regs(void)
+{
+    printf("[A4D0-REGS] SR=%04x"
+           " D0=%08x D1=%08x D2=%08x D3=%08x D4=%08x D5=%08x D6=%08x D7=%08x"
+           " A0=%08x A1=%08x A2=%08x A3=%08x A4=%08x A5=%08x A6=%08x A7=%08x\n",
+           (unsigned)m68k_get_reg(NULL, M68K_REG_SR),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D0),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D1),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D2),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D3),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D4),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D5),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D6),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D7),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A0),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A1),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A2),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A3),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A4),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A5),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A6),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_A7));
+}
+
+static void harness_dump_disasm(const char *tag, uint32_t pc)
+{
+    char buff[256];
+    unsigned int ppc = (unsigned int)m68k_get_reg(NULL, M68K_REG_PPC);
+
+    m68k_disassemble(buff, pc, M68K_CPU_TYPE_68000);
+    printf("[A4D0-%s] PC %08x: %s\n", tag, (unsigned)pc, buff);
+
+    if (ppc && ppc != pc)
+    {
+        m68k_disassemble(buff, ppc, M68K_CPU_TYPE_68000);
+        printf("[A4D0-%s] PPC %08x: %s\n", tag, ppc, buff);
+    }
+}
+
+static void harness_dump_callers(void)
+{
+    uint32_t sp = (uint32_t)m68k_get_reg(NULL, M68K_REG_A7) & 0x00FFFFFFu;
+    uint32_t ret0 = 0;
+    uint32_t ret1 = 0;
+    uint32_t ret2 = 0;
+
+    if (sp + 12u < bellatrix_machine_get()->memory.chip_ram_size)
+    {
+        ret0 = harness_chip_read(sp + 0u, 4);
+        ret1 = harness_chip_read(sp + 4u, 4);
+        ret2 = harness_chip_read(sp + 8u, 4);
+    }
+
+    printf("[A4D0-CALLER] A7=%08x RET0=%08x RET1=%08x RET2=%08x\n",
+           (unsigned)sp,
+           (unsigned)ret0,
+           (unsigned)ret1,
+           (unsigned)ret2);
+}
+
+static void harness_dump_a4d0_state(uint32_t pc)
+{
+    uint32_t addr;
+
+    printf("[A4D0-DUMP] pc=%08x range=00a4c0..00a560\n", (unsigned)pc);
+    for (addr = 0x0000A4C0u; addr <= 0x0000A560u; addr += 0x10u)
+    {
+        printf("[A4D0-DUMP] %06x: %08x %08x %08x %08x\n",
+               (unsigned)addr,
+               (unsigned)harness_chip_read(addr + 0x0u, 4),
+               (unsigned)harness_chip_read(addr + 0x4u, 4),
+               (unsigned)harness_chip_read(addr + 0x8u, 4),
+               (unsigned)harness_chip_read(addr + 0xCu, 4));
+    }
+
+    printf("[A4D0-DUMP] a542.long=%08x a542.word=%04x a552=%08x a556=%08x a4d0.word=%04x a4d0.long=%08x\n",
+           (unsigned)harness_chip_read(0x0000A542u, 4),
+           (unsigned)harness_chip_read(0x0000A542u, 2),
+           (unsigned)harness_chip_read(0x0000A552u, 4),
+           (unsigned)harness_chip_read(0x0000A556u, 4),
+           (unsigned)harness_chip_read(0x0000A4D0u, 2),
+           (unsigned)harness_chip_read(0x0000A4D0u, 4));
+}
+
+static void harness_watch_a4d0(const char *tag, uint32_t pc, uint32_t addr, int size, uint32_t value)
+{
+    if ((addr & 0x00FFFFFFu) != 0x0000A4D0u)
+        return;
+
+    printf("[A4D0-%s] pc=%08x addr=%06x size=%d val=%08x\n",
+           tag,
+           (unsigned)pc,
+           (unsigned)addr,
+           size,
+           (unsigned)value);
+    harness_dump_disasm(tag, pc);
+    harness_dump_regs();
+    harness_dump_callers();
+
+    if (strstr(tag, "-R") != NULL && value == 0 && harness_is_a4d0_abort_pc(pc))
+        harness_dump_a4d0_state(pc);
+}
+
+static void harness_watch_rw(const char *tag, uint32_t pc, uint32_t addr, int size, uint32_t value)
+{
+    harness_watch_a4d0(tag, pc, addr, size, value);
+
+    if (!harness_watch_gfx_pc(pc) && !harness_watch_gfx_addr(addr))
+        return;
+
+    printf("[%s] pc=%08x addr=%08x size=%d val=%08x\n",
+           tag,
+           (unsigned)pc,
+           (unsigned)(addr & 0x00FFFFFFu),
+           size,
+           (unsigned)value);
+}
+
+static void harness_probe_happy_builder(void)
+{
+    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+
+    if (pc < 0x00FCA484u || pc > 0x00FCA568u)
+        return;
+
+    if (pc == 0x00FCA484u || pc == 0x00FCA4B0u || pc == 0x00FCA4C6u ||
+        pc == 0x00FCA4CCu || pc == 0x00FCA4F0u || pc == 0x00FCA528u ||
+        pc == 0x00FCA52Cu || pc == 0x00FCA556u)
+    {
+        printf("[HH-BUILD] pc=%08x A1=%08x A2=%08x A3=%08x "
+               "D0=%08x D1=%08x D2=%08x D3=%08x D4=%08x "
+               "a2+0e=%04x a2+10=%04x a2+11=%02x a2+13=%02x a2+18=%04x "
+               "a3+02=%04x a3+04=%04x\n",
+               (unsigned)pc,
+               (unsigned)m68k_get_reg(NULL, M68K_REG_A1),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_A2),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_A3),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_D0),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_D1),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_D2),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_D3),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_D4),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A2)) + 0x0Eu) & 0x00FFFFFFu, 2),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A2)) + 0x10u) & 0x00FFFFFFu, 2),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A2)) + 0x11u) & 0x00FFFFFFu, 1),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A2)) + 0x13u) & 0x00FFFFFFu, 1),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A2)) + 0x18u) & 0x00FFFFFFu, 2),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A3)) + 0x02u) & 0x00FFFFFFu, 2),
+               (unsigned)harness_chip_read((((uint32_t)m68k_get_reg(NULL, M68K_REG_A3)) + 0x04u) & 0x00FFFFFFu, 2));
+    }
+}
+
+static void harness_instr_hook(unsigned int pc)
+{
+    (void)pc;
+    harness_probe_happy_builder();
+}
+
 static uint32_t harness_read(uint32_t addr, int size)
 {
     addr &= 0x00FFFFFFu;
+    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+    uint32_t ret = 0;
 
     /* Standard ROM window (0xF80000 or 0xFC0000) */
     if (s_rom_std_size && addr >= s_rom_std_base &&
@@ -132,23 +362,25 @@ static uint32_t harness_read(uint32_t addr, int size)
             return rom_read_at(rom_off, size);
         }
         const BellatrixMemory *mem = &bellatrix_machine_get()->memory;
-        if (size == 1) return bellatrix_chip_read8 (mem, addr);
-        if (size == 2) return bellatrix_chip_read16(mem, addr);
-        if (size == 4) return bellatrix_chip_read32(mem, addr);
-        return 0;
+        if (size == 1) ret = bellatrix_chip_read8(mem, addr);
+        else if (size == 2) ret = bellatrix_chip_read16(mem, addr);
+        else if (size == 4) ret = bellatrix_chip_read32(mem, addr);
+        harness_watch_rw("WATCH-BUS-R", pc, addr, size, ret);
+        return ret;
     }
 
     /* Chipset / CIA / RTC */
-    {
-        uint32_t ret = bellatrix_machine_read(addr, (unsigned int)size);
-        aros_loop_check(addr, ret);
-        return ret;
-    }
+    ret = bellatrix_machine_read(addr, (unsigned int)size);
+    harness_watch_rw("WATCH-BUS-R", pc, addr, size, ret);
+    aros_loop_check(addr, ret);
+    aros_wait2_check(addr, ret);
+    return ret;
 }
 
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
     addr &= 0x00FFFFFFu;
+    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
 
     /* ROM windows are read-only */
     if (s_rom_std_size && addr >= s_rom_std_base && addr < s_rom_std_base + s_rom_std_size) return;
@@ -157,6 +389,9 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     /* Chip RAM */
     if (addr < 0x200000u) {
         BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+        harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
+        if (addr >= 0x00000800u && addr < 0x00012000u && value != 0)
+            harness_watch_rw("WATCH-BPL-RAM-W", pc, addr, size, value);
         if (size == 1) bellatrix_chip_write8 (mem, addr, (uint8_t)value);
         if (size == 2) bellatrix_chip_write16(mem, addr, (uint16_t)value);
         if (size == 4) bellatrix_chip_write32(mem, addr, value);
@@ -164,6 +399,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     }
 
     /* Chipset / CIA / RTC */
+    harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
     bellatrix_machine_write(addr, value, (unsigned int)size);
 }
 
@@ -244,6 +480,7 @@ void musashi_backend_init(void)
 {
     m68k_init();
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
+    m68k_set_instr_hook_callback(harness_instr_hook);
 }
 
 void musashi_backend_reset(void)
