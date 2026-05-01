@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "memory/memory.h"
 #include "agnus.h"
 #include "chipset/paula/paula.h"
 #include "support.h"
@@ -116,12 +117,18 @@ static inline int blitter_line_mode(const BlitterState *b)
 
 static inline uint16_t blitter_chip_read16(AgnusState *agnus, uint32_t addr)
 {
-    return agnus_chip_read16(agnus, addr);
+    if (!agnus || !agnus->memory)
+        return 0xFFFFu;
+
+    return bellatrix_chip_read16(agnus->memory, addr);
 }
 
 static inline void blitter_chip_write16(AgnusState *agnus, uint32_t addr, uint16_t value)
 {
-    agnus_chip_write16(agnus, addr, value);
+    if (!agnus || !agnus->memory)
+        return;
+
+    bellatrix_chip_write16(agnus->memory, addr, value);
 }
 
 static inline uint16_t blitter_barrel_shift(uint16_t anew, uint16_t aold,
@@ -158,55 +165,176 @@ static inline uint16_t blitter_do_minterm(uint16_t a, uint16_t b,
     return result;
 }
 
-/*
- * Pragmatic line-mode fallback.
- *
- * We keep this because line mode is a separate machine and should not be
- * conflated with copy blit logic. For now we preserve coherent pointer
- * progression, BLTDDAT determinism and Z handling.
- */
-static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
+static uint16_t blitter_fill_word(uint16_t d, uint8_t *carry,
+                                  int inclusive, int desc)
 {
-    const int desc = blitter_desc(b);
-    const int xinc = desc ? -2 : 2;
+    uint16_t result = 0;
+    uint8_t c = *carry;
 
-    const uint16_t width_words = blitter_width_words(b);
-    const uint16_t height_rows = blitter_height_rows(b);
+    if (!desc)
+    {
+        for (int i = 15; i >= 0; --i)
+        {
+            uint8_t bit = (uint8_t)((d >> i) & 1u);
 
-    uint32_t apt = b->bltapt;
-    uint32_t bpt = b->bltbpt;
-    uint32_t cpt = b->bltcpt;
-    uint32_t dpt = b->bltdpt;
+            if (inclusive)
+            {
+                if (bit)
+                    c ^= 1u;
+                if (c)
+                    result |= (uint16_t)(1u << i);
+            }
+            else
+            {
+                if ((c ^ bit) != 0)
+                    result |= (uint16_t)(1u << i);
+                if (bit)
+                    c ^= 1u;
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i <= 15; ++i)
+        {
+            uint8_t bit = (uint8_t)((d >> i) & 1u);
 
-    blitter_set_zero(b, agnus, 0);
-
-    for (uint16_t y = 0; y < height_rows; ++y) {
-
-        apt = (uint32_t)(apt + (uint32_t)(xinc * (int)width_words));
-        bpt = (uint32_t)(bpt + (uint32_t)(xinc * (int)width_words));
-        cpt = (uint32_t)(cpt + (uint32_t)(xinc * (int)width_words));
-        dpt = (uint32_t)(dpt + (uint32_t)(xinc * (int)width_words));
-
-        if (desc) {
-            apt = (uint32_t)(apt - (uint32_t)(int32_t)b->bltamod);
-            bpt = (uint32_t)(bpt - (uint32_t)(int32_t)b->bltbmod);
-            cpt = (uint32_t)(cpt - (uint32_t)(int32_t)b->bltcmod);
-            dpt = (uint32_t)(dpt - (uint32_t)(int32_t)b->bltdmod);
-        } else {
-            apt = (uint32_t)(apt + (uint32_t)(int32_t)b->bltamod);
-            bpt = (uint32_t)(bpt + (uint32_t)(int32_t)b->bltbmod);
-            cpt = (uint32_t)(cpt + (uint32_t)(int32_t)b->bltcmod);
-            dpt = (uint32_t)(dpt + (uint32_t)(int32_t)b->bltdmod);
+            if (inclusive)
+            {
+                if (bit)
+                    c ^= 1u;
+                if (c)
+                    result |= (uint16_t)(1u << i);
+            }
+            else
+            {
+                if ((c ^ bit) != 0)
+                    result |= (uint16_t)(1u << i);
+                if (bit)
+                    c ^= 1u;
+            }
         }
     }
 
-    b->bltddat = (uint16_t)(b->bltadat ^ b->bltbdat ^ b->bltcdat ^
-                            b->bltafwm ^ b->bltalwm);
+    *carry = c;
+    return result;
+}
 
-    b->bltapt = apt;
-    b->bltbpt = bpt;
-    b->bltcpt = cpt;
-    b->bltdpt = dpt;
+static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
+{
+    const uint16_t height_rows = blitter_height_rows(b);
+    const unsigned int oct = (unsigned int)((b->bltcon1 >> 2) & 0x7u);
+    int16_t error = (int16_t)(b->bltapt & 0xFFFFu);
+    int start_pixel = (int)blitter_ash(b);
+    int pattern_shift = (int)blitter_bsh(b);
+    uint16_t pattern = b->bltbdat;
+    uint8_t minterm = (uint8_t)(b->bltcon0 & 0x00FFu);
+    uint32_t plane_addr = b->bltcpt & 0x001FFFFEu;
+    uint32_t last_addr = plane_addr;
+    int plane_mod = (int)b->bltcmod;
+    int d = 0;
+    int any_nonzero = 0;
+
+    if (height_rows == 0)
+    {
+        blitter_set_zero(b, agnus, 1);
+        return;
+    }
+
+    if (pattern_shift != 0)
+        pattern = (uint16_t)((pattern >> pattern_shift) |
+                             (pattern << (16 - pattern_shift)));
+
+    for (uint16_t i = 0; i < height_rows; ++i)
+    {
+        int offset;
+        uint32_t addr = plane_addr;
+        uint16_t pixel;
+        uint16_t bitmask;
+        uint16_t dval;
+
+        switch (oct)
+        {
+        case 0:
+            offset = d + start_pixel;
+            addr = plane_addr + (uint32_t)(offset >> 3) + (uint32_t)(i * plane_mod);
+            bitmask = (uint16_t)(0x8000u >> (offset & 15));
+            break;
+
+        case 1:
+            offset = d + start_pixel;
+            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(i * plane_mod);
+            bitmask = (uint16_t)(0x8000u >> (offset & 15));
+            break;
+
+        case 2:
+            offset = d + (15 - start_pixel);
+            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) + (uint32_t)(i * plane_mod);
+            bitmask = (uint16_t)(0x0001u << (offset & 15));
+            break;
+
+        case 3:
+            offset = d + start_pixel;
+            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(i * plane_mod);
+            bitmask = (uint16_t)(0x8000u >> (offset & 15));
+            break;
+
+        case 4:
+            offset = (int)i + start_pixel;
+            addr = plane_addr + (uint32_t)(offset >> 3) + (uint32_t)(d * plane_mod);
+            bitmask = (uint16_t)(0x8000u >> (offset & 15));
+            break;
+
+        case 5:
+            offset = (int)i + (15 - start_pixel);
+            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) + (uint32_t)(d * plane_mod);
+            bitmask = (uint16_t)(0x0001u << (offset & 15));
+            break;
+
+        case 6:
+            offset = (int)i + start_pixel;
+            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(d * plane_mod);
+            bitmask = (uint16_t)(0x8000u >> (offset & 15));
+            break;
+
+        case 7:
+        default:
+            offset = (int)i + (15 - start_pixel);
+            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) - (uint32_t)(d * plane_mod);
+            bitmask = (uint16_t)(0x0001u << (offset & 15));
+            break;
+        }
+
+        pixel = blitter_chip_read16(agnus, addr);
+        dval = blitter_do_minterm(bitmask, pattern, pixel, minterm);
+
+        blitter_chip_write16(agnus, addr, dval);
+        b->bltddat = dval;
+
+        if (dval != 0)
+            any_nonzero = 1;
+
+        last_addr = addr;
+
+        if (error > 0)
+        {
+            error = (int16_t)(error + b->bltamod);
+
+            if (oct == 3)
+                d -= 1;
+            else
+                d += 1;
+        }
+        else
+        {
+            error = (int16_t)(error + b->bltbmod);
+        }
+    }
+
+    blitter_set_zero(b, agnus, any_nonzero ? 0 : 1);
+    b->bltapt = (b->bltapt & 0xFFFF0000u) | (uint16_t)error;
+    b->bltcpt = last_addr;
+    b->bltdpt = last_addr;
 }
 
 static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
@@ -222,6 +350,9 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
     const uint16_t ash = blitter_ash(b);
     const uint16_t bsh = blitter_bsh(b);
     const uint8_t  minterm = (uint8_t)(b->bltcon0 & 0x00ffu);
+    const int ife = (b->bltcon1 & 0x0008u) ? 1 : 0;
+    const int efe = (b->bltcon1 & 0x0010u) ? 1 : 0;
+    const uint8_t fci = (b->bltcon1 & 0x0004u) ? 1u : 0u;
 
     const uint16_t width_words = blitter_width_words(b);
     const uint16_t height_rows = blitter_height_rows(b);
@@ -237,6 +368,7 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
     int all_zero = 1;
 
     for (uint16_t y = 0; y < height_rows; ++y) {
+        uint8_t fill_carry = fci;
 
         for (uint16_t x = 0; x < width_words; ++x) {
 
@@ -285,6 +417,12 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
             }
 
             dval = blitter_do_minterm(aval, bval, cval, minterm);
+
+            if (ife)
+                dval = blitter_fill_word(dval, &fill_carry, 1, desc);
+            else if (efe)
+                dval = blitter_fill_word(dval, &fill_carry, 0, desc);
+
             b->bltddat = dval;
 
             if (dval != 0)
@@ -339,9 +477,20 @@ static void blitter_start(BlitterState *b, AgnusState *agnus)
     blitter_set_busy(b, agnus, 1);
     blitter_set_zero(b, agnus, 1);
 
-    kprintf("[BLITTER] start bltsize=%04x cycles=%u\n",
+    kprintf("[BLITTER] start bltsize=%04x cycles=%u con0=%04x con1=%04x "
+            "A=%05x B=%05x C=%05x D=%05x mod=%04x/%04x/%04x/%04x\n",
             (unsigned)b->bltsize,
-            (unsigned)b->cycles_remaining);
+            (unsigned)b->cycles_remaining,
+            (unsigned)b->bltcon0,
+            (unsigned)b->bltcon1,
+            (unsigned)(b->bltapt & 0x1FFFFFu),
+            (unsigned)(b->bltbpt & 0x1FFFFFu),
+            (unsigned)(b->bltcpt & 0x1FFFFFu),
+            (unsigned)(b->bltdpt & 0x1FFFFFu),
+            (uint16_t)b->bltamod,
+            (uint16_t)b->bltbmod,
+            (uint16_t)b->bltcmod,
+            (uint16_t)b->bltdmod);
 
     agnus_intreq_clear(agnus, PAULA_INT_BLIT);
 }
