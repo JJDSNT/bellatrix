@@ -9,6 +9,45 @@
 
 #include <stdint.h>
 
+typedef struct PAL_KeyEvent {
+    uint32_t keycode;
+    uint32_t scancode;
+    uint32_t host_key;
+    uint8_t pressed;
+} PAL_KeyEvent;
+
+enum {
+    PAL_HOST_KEY_NONE = 0,
+    PAL_HOST_KEY_0,
+    PAL_HOST_KEY_1,
+    PAL_HOST_KEY_2,
+    PAL_HOST_KEY_3,
+    PAL_HOST_KEY_4,
+    PAL_HOST_KEY_5,
+    PAL_HOST_KEY_6,
+    PAL_HOST_KEY_7,
+    PAL_HOST_KEY_8,
+    PAL_HOST_KEY_9,
+    PAL_HOST_KEY_SPACE,
+    PAL_HOST_KEY_RETURN,
+    PAL_HOST_KEY_KP_ENTER,
+    PAL_HOST_KEY_ESCAPE,
+    PAL_HOST_KEY_UP,
+    PAL_HOST_KEY_DOWN,
+    PAL_HOST_KEY_LEFT,
+    PAL_HOST_KEY_RIGHT,
+    PAL_HOST_KEY_KP_0,
+    PAL_HOST_KEY_KP_1,
+    PAL_HOST_KEY_KP_2,
+    PAL_HOST_KEY_KP_3,
+    PAL_HOST_KEY_KP_4,
+    PAL_HOST_KEY_KP_5,
+    PAL_HOST_KEY_KP_6,
+    PAL_HOST_KEY_KP_7,
+    PAL_HOST_KEY_KP_8,
+    PAL_HOST_KEY_KP_9,
+};
+
 /* ---- Debug / Serial ---- */
 
 /* Initialize UART for debug output. baud is informational on platforms
@@ -72,8 +111,24 @@ void PAL_Core_Sync(void);
 /* Returns 1 to keep running, 0 if the user closed the window or pressed Esc.
  * No-op stub on bare-metal targets. */
 int  pal_sdl_poll_events(void);
+int  pal_sdl_mouse_right_down(void);
+int  pal_sdl_any_key_down(void);
+int  pal_sdl_pop_key_event(PAL_KeyEvent *event);
 
 /* Update window title (e.g. show FPS). No-op on bare-metal. */
 void pal_sdl_set_title(const char *title);
+
+/* ---- Harness serial helpers (posix only) ---- */
+
+/* Configure serial presentation for the host harness from env var
+ * HARNESS_SERIAL_MODE=line|raw|ansi. No-op on bare-metal. */
+void PAL_HarnessSerial_ConfigureFromEnv(void);
+
+/* Return current harness serial mode name. Bare-metal returns "line". */
+const char *PAL_HarnessSerial_ModeName(void);
+
+/* Emit one UART TX byte according to the configured harness serial mode. */
+void PAL_HarnessSerial_WriteByte(uint8_t byte);
+int  PAL_HarnessSerial_ReadByte(uint8_t *byte);
 
 #endif /* _BELLATRIX_PAL_H */

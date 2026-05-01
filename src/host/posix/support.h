@@ -16,3 +16,8 @@
 /* LE16: Amiga palette is big-endian; on x86 host no swap is needed
  * (we have no real framebuffer in the harness anyway). */
 #define LE16(x)           (x)
+
+void PAL_HarnessSerial_ConfigureFromEnv(void);
+const char *PAL_HarnessSerial_ModeName(void);
+void PAL_HarnessSerial_WriteByte(uint8_t byte);
+int PAL_HarnessSerial_ReadByte(uint8_t *byte);
