@@ -6,7 +6,9 @@ src/disks
 tools/launcher/bin/
 
 out/
-
-# harness build directories
-build-harness/
 tools/harness/build/
+
+# local notes / scratch
+docs/temp/
+temp/
+findings.md

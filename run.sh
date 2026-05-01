@@ -20,6 +20,7 @@ Usage:
 Modes:
   qemu                Build and run in QEMU (default)
   harness             Build and run the Musashi validation harness (Linux host)
+  harness-serial      Run harness with DiagROM serial PTY and open screen
   raspi <mount>       Flash to SD card
   tftp                Upload via TFTP
 
@@ -37,12 +38,52 @@ Harness options (env vars):
   ADF=<file>          Mount ADF image as DF0 (optional)
   FRAMES=<n>          Stop after N frames and exit (headless mode)
   CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
+  HARNESS_SERIAL_MODE=<mode>
+                      Serial presentation: line, raw, ansi, pty (default: line)
+  HARNESS_SERIAL_NOWAIT=1
+                      In pty mode, do not wait for Enter before boot
+  HARNESS_SERIAL_BOOTKEY=<char>
+                      Inject one early RX byte into Paula UART (default frame 5)
+  HARNESS_SERIAL_BOOTKEY_FRAME=<n>
+                      Frame to inject HARNESS_SERIAL_BOOTKEY (default: 5)
+  HARNESS_SERIAL_INJECT=<char>
+                      Inject one later RX byte into Paula UART (for example: 4)
+  HARNESS_SERIAL_INJECT_FRAME=<n>
+                      Frame to inject HARNESS_SERIAL_INJECT (default: 300)
+  HARNESS_SERIAL_SCRIPT=<frame:char,...>
+                      Inject a serial sequence, for example: 900:0x20,1050:4
+  HARNESS_SERIAL_HOLD=<char>
+                      Repeat one serial byte across multiple frames
+  HARNESS_SERIAL_HOLD_FRAME=<n>
+                      First frame for HARNESS_SERIAL_HOLD
+  HARNESS_SERIAL_HOLD_COUNT=<n>
+                      Number of repeated injections for HARNESS_SERIAL_HOLD
+  HARNESS_SERIAL_HOLD_STEP=<n>
+                      Frame delta between repeated injections (default: 1)
+  HARNESS_MOUSE_RMB_FRAME=<n>
+                      First frame to hold the Amiga right mouse button down
+  HARNESS_MOUSE_RMB_COUNT=<n>
+                      Number of frames to keep the Amiga right mouse button down
+  HARNESS_MOUSE_RMB_PORT=<0|1>
+                      Controller port for RMB hold (default: 0)
+  HARNESS_SERIAL_AFTER_RMB=<char>
+                      After a real SDL right-click, inject this serial byte
+  HARNESS_SERIAL_AFTER_RMB_DELAY=<n>
+                      Frames to wait after the SDL right-click before injection
+  HARNESS_SERIAL_AFTER_RMB_PORT=<0|1>
+                      Mouse port that arms HARNESS_SERIAL_AFTER_RMB (default: 0)
   (no FRAMES/CYCLES)  Interactive: SDL2 window, runs until closed or Esc
 
 Examples:
   ./run.sh
   ./run.sh qemu
   ./run.sh harness
+  KICKSTART=src/roms/DiagROM.rom ./run.sh harness-serial
+  HARNESS_SERIAL_BOOTKEY=' ' HARNESS_SERIAL_INJECT=4 ./run.sh harness
+  HARNESS_SERIAL_SCRIPT="900:0x20,1050:4" KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+  HARNESS_SERIAL_HOLD=0x20 HARNESS_SERIAL_HOLD_FRAME=900 HARNESS_SERIAL_HOLD_COUNT=40 HARNESS_SERIAL_INJECT=4 HARNESS_SERIAL_INJECT_FRAME=1050 KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+  HARNESS_MOUSE_RMB_FRAME=900 HARNESS_MOUSE_RMB_COUNT=60 HARNESS_SERIAL_INJECT=4 HARNESS_SERIAL_INJECT_FRAME=1050 KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+  HARNESS_SERIAL_AFTER_RMB=4 HARNESS_SERIAL_AFTER_RMB_DELAY=80 KICKSTART=src/roms/DiagROM.rom ./run.sh harness
   KICKSTART=src/roms/DiagROM.rom ./run.sh harness
   KICKSTART=src/roms/aros.rom FRAMES=50 ./run.sh harness
   KICKSTART=src/roms/KS31.rom CYCLES=5000000 ./run.sh harness
@@ -139,7 +180,7 @@ case "$MODE" in
         usage
         exit 0
         ;;
-    qemu|raspi|tftp|harness)
+    qemu|raspi|tftp|harness|harness-serial)
         shift || true
         ;;
     *)
@@ -187,6 +228,69 @@ if [ "$MODE" = "harness" ]; then
     fi
 
     exec "$HARNESS_BIN" "${HARNESS_ARGS[@]}"
+fi
+
+if [ "$MODE" = "harness-serial" ]; then
+    echo "[BUILD] Harness (Musashi, native)"
+    build_harness
+
+    if [ -z "${KICKSTART:-}" ]; then
+        load_launcher_selection
+    fi
+
+    [ -n "${KICKSTART:-}" ] || { echo "ERROR: no ROM selected"; exit 1; }
+    [ -f "$KICKSTART" ]     || { echo "ERROR: ROM not found: $KICKSTART"; exit 1; }
+    HARNESS_ARGS=("$KICKSTART")
+
+    if [ -n "${ADF:-}" ]; then
+        [ -f "$ADF" ] || { echo "ERROR: ADF not found: $ADF"; exit 1; }
+        HARNESS_ARGS+=(--adf "$ADF")
+    fi
+
+    if [ -n "${CYCLES:-}" ]; then
+        HARNESS_ARGS+=(--cycles "$CYCLES")
+    elif [ -n "${FRAMES:-}" ]; then
+        HARNESS_ARGS+=(--frames "$FRAMES")
+    fi
+
+    echo "[RUN] Harness ROM: $KICKSTART"
+    if [ -n "${ADF:-}" ]; then
+        echo "[RUN] Harness DF0: $ADF"
+    else
+        echo "[RUN] Harness DF0: no disk"
+    fi
+
+    tmpfile="$(mktemp)"
+    trap 'rm -f "$tmpfile"; [ -n "${HARNESS_PID:-}" ] && kill "$HARNESS_PID" 2>/dev/null || true' EXIT
+
+    env HARNESS_SERIAL_MODE=pty "${HARNESS_BIN}" "${HARNESS_ARGS[@]}" \
+        > >(tee "$tmpfile") 2> >(tee -a "$tmpfile" >&2) &
+    HARNESS_PID=$!
+
+    pty_path=""
+    for _ in $(seq 1 200); do
+        if grep -q 'Serial PTY ready:' "$tmpfile"; then
+            pty_path="$(sed -n 's/.*Serial PTY ready: \(\/dev\/pts\/[0-9][0-9]*\).*/\1/p' "$tmpfile" | tail -n1)"
+            break
+        fi
+        sleep 0.05
+    done
+
+    [ -n "$pty_path" ] || {
+        echo "ERROR: could not discover harness serial PTY"
+        wait "$HARNESS_PID"
+        exit 1
+    }
+
+    echo
+    echo "[SERIAL] Open another terminal and run:"
+    echo "  screen $pty_path 9600"
+    echo
+    printf '[SERIAL] Press Enter here after attaching to continue boot... '
+    read -r _
+    printf '\n' > /proc/"$HARNESS_PID"/fd/0
+    wait "$HARNESS_PID"
+    exit $?
 fi
 
 # ---------------------------------------------------------------------------
