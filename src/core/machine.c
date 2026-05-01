@@ -7,6 +7,7 @@
 #include "debug/btrace.h"
 #include "debug/cpu_pc.h"
 #include "debug/probe.h"
+#include "input/keyboard.h"
 #include "support.h"
 
 #include <string.h>
@@ -30,6 +31,11 @@ static inline bool is_cia_a_addr(uint32_t addr)
 static inline bool is_cia_b_addr(uint32_t addr)
 {
     return (addr >= 0x00bfd000u && addr <= 0x00bfdf00u);
+}
+
+static inline bool is_rtc_addr(uint32_t addr)
+{
+    return (addr >= 0x00dc0000u && addr <= 0x00dcffffu);
 }
 
 /* ---------------------------------------------------------------------------
@@ -100,6 +106,29 @@ static inline bool machine_btrace_addr_match(const BellatrixMachine *m, uint32_t
     }
 
     return (addr >= d->btrace_addr_lo && addr <= d->btrace_addr_hi);
+}
+
+static inline int machine_watch_suspicious_pc(uint32_t pc)
+{
+    return pc >= 0x00fc9c00u && pc <= 0x00fc9e40u;
+}
+
+static inline int machine_watch_custom_reg(uint32_t addr)
+{
+    switch (addr)
+    {
+    case 0x00dff002u: /* DMACONR */
+    case 0x00dff004u: /* VPOSR   */
+    case 0x00dff006u: /* VHPOSR  */
+    case 0x00dff02au: /* VPOSW   */
+    case 0x00dff09au: /* INTENA  */
+    case 0x00dff09cu: /* INTREQ  */
+    case 0x00dff084u: /* COP2LCH */
+    case 0x00dff086u: /* COP2LCL */
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static inline void machine_btrace_read(BellatrixMachine *m,
@@ -355,14 +384,10 @@ static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
 
 static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
 {
-    uint16_t old_vpos;
-
     if (ticks == 0)
     {
         return;
     }
-
-    old_vpos = machine_vpos(m);
 
     agnus_step(&m->agnus, ticks);
 
@@ -381,24 +406,18 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
         }
     }
 
+    if (m->agnus.hsync_pulses > 0)
+    {
+        cia_tod_pulse(&m->cia_b, m->agnus.hsync_pulses);
+        m->agnus.hsync_pulses = 0;
+    }
+
+    bellatrix_keyboard_step(&m->keyboard, &m->cia_a);
+
     paula_step(&m->paula, ticks);
     denise_step(&m->denise, ticks);
 
     m->tick_count += ticks;
-
-    /* VBL: beam rollover -> SET VERTB in INTREQ once per frame.
-     *
-     * Do not call paula_irq_raise() here.
-     * VBL is not an external level line; it is a custom-chip INTREQ latch bit.
-     *
-     * The guest clears it by writing INTREQ raw=0x0020.
-     * The beam sets it again at the next frame rollover.
-     */
-    if (machine_vpos(m) < old_vpos)
-    {
-        paula_write(&m->paula, 0xDFF09Cu, 0x8020u, 2);
-        machine_probe_emit(m, PROBE_EVT_VBL, 0x20u, 0);
-    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -413,6 +432,11 @@ BellatrixMachine *bellatrix_machine_get(void)
 BellatrixDebug *bellatrix_machine_debug(void)
 {
     return &g_machine.debug;
+}
+
+void bellatrix_machine_attach_rom(const uint8_t *rom, uint32_t rom_size)
+{
+    bellatrix_memory_attach_rom(&g_machine.memory, rom, rom_size);
 }
 
 void bellatrix_machine_init(CpuBackend *cpu_backend)
@@ -430,6 +454,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     cia_init(&m->cia_a, CIA_PORT_A);
     cia_init(&m->cia_b, CIA_PORT_B);
     rtc_init(&m->rtc, RTC_MODEL_OKI);
+    bellatrix_keyboard_init(&m->keyboard);
 
     agnus_attach_denise(&m->agnus, &m->denise);
     agnus_attach_paula(&m->agnus, &m->paula);
@@ -465,6 +490,7 @@ void bellatrix_machine_reset(void)
     cia_reset(&m->cia_a);
     cia_reset(&m->cia_b);
     rtc_reset(&m->rtc);
+    bellatrix_keyboard_reset(&m->keyboard);
 
     machine_debug_reset(m);
     machine_sync_floppy_pra(m);
@@ -558,6 +584,28 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
         machine_probe_emit(m, PROBE_EVT_CIA_READ, addr, value);
     }
 
+    else if (is_rtc_addr(addr))
+    {
+        uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
+        value = rtc_read_reg(&m->rtc, reg);
+    }
+
+    else
+    {
+        switch (size)
+        {
+        case 1:
+            value = bellatrix_mem_read8(&m->memory, addr);
+            break;
+        case 2:
+            value = bellatrix_mem_read16(&m->memory, addr);
+            break;
+        default:
+            value = 0xFFFFFFFFu;
+            break;
+        }
+    }
+
     return value;
 }
 
@@ -565,6 +613,7 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
 {
     if (is_custom_addr(addr))
     {
+        uint16_t reg = (uint16_t)(addr & 0x1FEu);
         uint16_t old_intreq = m->paula.intreq;
 
         if (paula_handles_write(&m->paula, addr))
@@ -574,19 +623,18 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
         else if (denise_handles_write(&m->denise, addr))
             denise_write(&m->denise, addr, value, size);
 
-        if ((addr & 0x00fffffeu) == 0x00dff09au)
+        if (reg == 0x009Au)
             machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.intena);
 
-        if ((addr & 0x00fffffeu) == 0x00dff09cu)
+        if (reg == 0x009Cu && m->paula.intreq != old_intreq)
         {
-            if (m->paula.intreq != old_intreq)
-            {
-                if (m->paula.intreq > old_intreq)
-                    machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
-                else
-                    machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
-            }
+            if (m->paula.intreq > old_intreq)
+                machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
+            else
+                machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
         }
+
+        return;
     }
     else if (is_cia_a_addr(addr))
     {
@@ -650,14 +698,37 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
 
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
+
+    else if (is_rtc_addr(addr))
+    {
+        uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
+        rtc_write_reg(&m->rtc, reg, (uint8_t)(value & 0x0Fu));
+    }
+
+    else
+    {
+        switch (size)
+        {
+        case 1:
+            bellatrix_mem_write8(&m->memory, addr, (uint8_t)value);
+            break;
+        case 2:
+            bellatrix_mem_write16(&m->memory, addr, (uint16_t)value);
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
 {
     BellatrixMachine *m = &g_machine;
     uint32_t value;
+    uint32_t pc_before;
 
     machine_step_components(m, 1);
+    pc_before = machine_cpu_pc(m);
 
     if (size == 4)
     {
@@ -670,6 +741,29 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
         value = machine_dispatch_read(m, addr, size);
     }
 
+    if (machine_watch_suspicious_pc(pc_before))
+    {
+        if (is_custom_addr(addr) && machine_watch_custom_reg(addr))
+        {
+            kprintf("[WATCH-R-CUSTOM] pc=%08x addr=%08x size=%u val=%08x\n",
+                    (unsigned)pc_before,
+                    (unsigned)addr,
+                    size,
+                    (unsigned)value);
+        }
+        else if (addr < 0x00f80000u &&
+                 !is_cia_a_addr(addr) &&
+                 !is_cia_b_addr(addr) &&
+                 !is_rtc_addr(addr))
+        {
+            kprintf("[WATCH-R] pc=%08x addr=%08x size=%u val=%08x\n",
+                    (unsigned)pc_before,
+                    (unsigned)addr,
+                    size,
+                    (unsigned)value);
+        }
+    }
+
     machine_btrace_read(m, addr, size, value);
     bellatrix_machine_sync_ipl();
     return value;
@@ -678,8 +772,10 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
 void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
 {
     BellatrixMachine *m = &g_machine;
+    uint32_t pc_before;
 
     machine_step_components(m, 1);
+    pc_before = machine_cpu_pc(m);
     machine_btrace_write(m, addr, size, value);
 
     if (size == 4)
@@ -692,12 +788,40 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
         machine_dispatch_write(m, addr, value, size);
     }
 
+    if (machine_watch_suspicious_pc(pc_before))
+    {
+        if (is_custom_addr(addr) && machine_watch_custom_reg(addr))
+        {
+            kprintf("[WATCH-W-CUSTOM] pc=%08x addr=%08x size=%u val=%08x\n",
+                    (unsigned)pc_before,
+                    (unsigned)addr,
+                    size,
+                    (unsigned)value);
+        }
+        else if (addr < 0x00f80000u &&
+                 !is_cia_a_addr(addr) &&
+                 !is_cia_b_addr(addr) &&
+                 !is_rtc_addr(addr))
+        {
+            kprintf("[WATCH-W] pc=%08x addr=%08x size=%u val=%08x\n",
+                    (unsigned)pc_before,
+                    (unsigned)addr,
+                    size,
+                    (unsigned)value);
+        }
+    }
+
     bellatrix_machine_sync_ipl();
 }
 
 /* ---------------------------------------------------------------------------
  * Raw access to owned components
  * ------------------------------------------------------------------------- */
+
+BellatrixMemory *bellatrix_machine_memory(void)
+{
+    return &g_machine.memory;
+}
 
 Agnus *bellatrix_machine_agnus(void)
 {
@@ -736,6 +860,11 @@ RTCState *bellatrix_machine_rtc(void)
 void bellatrix_machine_floppy_update(void)
 {
     machine_floppy_update(&g_machine);
+}
+
+int bellatrix_machine_keyboard_rawkey(uint8_t rawkey, int pressed)
+{
+    return bellatrix_keyboard_enqueue_raw(&g_machine.keyboard, rawkey, pressed);
 }
 
 int bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size)
