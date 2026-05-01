@@ -4,7 +4,9 @@
 #include <stdint.h>
 
 #include "blitter.h"
-#include "copper.h"
+#include "copper/copper.h"
+#include "copper/copper_service.h"
+#include "copper/copper_regs.h"
 #include "beam.h"
 #include "bitplanes.h"
 #include "memory/memory.h"
@@ -93,6 +95,10 @@ struct Paula;
 #define DMAF_COPEN (1u << 7)
 #endif
 
+#ifndef DMAF_BPLEN
+#define DMAF_BPLEN (1u << 8)
+#endif
+
 #ifndef DMAF_DMAEN
 #define DMAF_DMAEN (1u << 9)
 #endif
@@ -114,6 +120,7 @@ typedef struct AgnusState {
     uint16_t diwstop;
     uint16_t ddfstrt;
     uint16_t ddfstop;
+    uint32_t hsync_pulses;
 
     /* Bitplane pointers (6 planes, high/low word) */
     uint16_t bplpth[6];
@@ -125,6 +132,7 @@ typedef struct AgnusState {
 
     BlitterState blitter;
     CopperState  copper;
+    CopperService copper_service;
 
     /* Wiring */
     struct Denise  *denise;

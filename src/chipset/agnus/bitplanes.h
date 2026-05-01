@@ -84,6 +84,9 @@ void bitplanes_reset(BitplaneState *bp);
 void bitplanes_begin_frame(BitplaneState *bp, const struct AgnusState *agnus,
                            int nplanes, int hires);
 
+void bitplanes_begin_line(BitplaneState *bp, const struct AgnusState *agnus,
+                          int vpos_abs);
+
 /*
  * Completa o fetch da linha atual.
  * Mantida por compatibilidade; o modelo principal agora é incremental.
