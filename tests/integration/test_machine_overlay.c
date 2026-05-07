@@ -121,14 +121,14 @@ static void test_cia_irq_routes_to_paula(void)
 
     m = test_machine_init();
 
-    m->paula.intena = (uint16_t)(PAULA_INT_MASTER | PAULA_INT_PORTS | PAULA_INT_EXTER);
+    m->paula.irq.intena = (uint16_t)(PAULA_INT_MASTER | PAULA_INT_PORTS | PAULA_INT_EXTER);
 
     cia_write_reg(&m->cia_a, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
     cia_write_reg(&m->cia_a, CIA_REG_CRA, CIA_CRA_SPMODE);
     cia_write_reg(&m->cia_a, CIA_REG_SDR, 0x55u);
 
     CHECK_INT("cia-a irq pending", 1, cia_irq_pending(&m->cia_a));
-    CHECK_INT("paula intreq has PORTS", PAULA_INT_PORTS, m->paula.intreq & PAULA_INT_PORTS);
+    CHECK_INT("paula intreq has PORTS", PAULA_INT_PORTS, m->paula.irq.intreq & PAULA_INT_PORTS);
     CHECK_INT("paula computes ipl2", 2, paula_compute_ipl(&m->paula));
 
     bellatrix_machine_sync_ipl();
@@ -138,7 +138,7 @@ static void test_cia_irq_routes_to_paula(void)
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("cia-a irq cleared after icr read", 0, cia_irq_pending(&m->cia_a));
-    CHECK_INT("paula ports line cleared", 0, m->paula.intreq & PAULA_INT_PORTS);
+    CHECK_INT("paula ports line cleared", 0, m->paula.irq.intreq & PAULA_INT_PORTS);
     CHECK_INT("machine ipl returns to 0", 0, m->current_ipl);
 
     cia_write_reg(&m->cia_b, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
@@ -146,7 +146,7 @@ static void test_cia_irq_routes_to_paula(void)
     cia_write_reg(&m->cia_b, CIA_REG_SDR, 0xAAu);
 
     CHECK_INT("cia-b irq pending", 1, cia_irq_pending(&m->cia_b));
-    CHECK_INT("paula intreq has EXTER", PAULA_INT_EXTER, m->paula.intreq & PAULA_INT_EXTER);
+    CHECK_INT("paula intreq has EXTER", PAULA_INT_EXTER, m->paula.irq.intreq & PAULA_INT_EXTER);
     CHECK_INT("paula computes ipl6", 6, paula_compute_ipl(&m->paula));
 
     bellatrix_machine_sync_ipl();
@@ -156,7 +156,7 @@ static void test_cia_irq_routes_to_paula(void)
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("cia-b irq cleared after icr read", 0, cia_irq_pending(&m->cia_b));
-    CHECK_INT("paula exter line cleared", 0, m->paula.intreq & PAULA_INT_EXTER);
+    CHECK_INT("paula exter line cleared", 0, m->paula.irq.intreq & PAULA_INT_EXTER);
     CHECK_INT("machine ipl returns to 0 after cia-b", 0, m->current_ipl);
 }
 
@@ -206,7 +206,7 @@ static void test_paula_intreq_ack_reasserts_level_lines(void)
     cia_write_reg(&m->cia_a, CIA_REG_SDR, 0x55u);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("ports irq reaches paula", PAULA_INT_PORTS, m->paula.intreq & PAULA_INT_PORTS);
+    CHECK_INT("ports irq reaches paula", PAULA_INT_PORTS, m->paula.irq.intreq & PAULA_INT_PORTS);
     CHECK_INT("ports irq publishes ipl2", 2, m->current_ipl);
 
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_PORTS, 2);
@@ -214,14 +214,14 @@ static void test_paula_intreq_ack_reasserts_level_lines(void)
 
     CHECK_INT("ack reasserts level-triggered ports irq",
               PAULA_INT_PORTS,
-              m->paula.intreq & PAULA_INT_PORTS);
+              m->paula.irq.intreq & PAULA_INT_PORTS);
     CHECK_INT("ipl stays asserted while cia source is active", 2, m->current_ipl);
 
     (void)cia_read_reg(&m->cia_a, CIA_REG_ICR);
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("cia source cleared", 0, cia_irq_pending(&m->cia_a));
-    CHECK_INT("paula line clears after cia source drops", 0, m->paula.intreq & PAULA_INT_PORTS);
+    CHECK_INT("paula line clears after cia source drops", 0, m->paula.irq.intreq & PAULA_INT_PORTS);
     CHECK_INT("ipl returns to idle", 0, m->current_ipl);
 }
 
@@ -255,7 +255,7 @@ static void test_paula_disk_dma_irq_contract(void)
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("second dsklen write starts dma", 1, m->paula.disk.dma_active);
-    CHECK_INT("sync irq latched immediately", PAULA_INT_DSKSYN, m->paula.intreq & PAULA_INT_DSKSYN);
+    CHECK_INT("sync irq latched immediately", PAULA_INT_DSKSYN, m->paula.irq.intreq & PAULA_INT_DSKSYN);
     CHECK_INT("sync irq publishes ipl5", 5, m->current_ipl);
 
     dskbytr = (uint16_t)bellatrix_machine_read(REG_DSKBYTR, 2);
@@ -266,14 +266,14 @@ static void test_paula_disk_dma_irq_contract(void)
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_DSKSYN, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("sync irq can be acked like edge event", 0, m->paula.intreq & PAULA_INT_DSKSYN);
+    CHECK_INT("sync irq can be acked like edge event", 0, m->paula.irq.intreq & PAULA_INT_DSKSYN);
     CHECK_INT("ipl drops after sync ack while dma still runs", 0, m->current_ipl);
 
     bellatrix_machine_advance(46000u);
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("dma completes after countdown", 0, m->paula.disk.dma_active);
-    CHECK_INT("dskblk irq latched on completion", PAULA_INT_DSKBLK, m->paula.intreq & PAULA_INT_DSKBLK);
+    CHECK_INT("dskblk irq latched on completion", PAULA_INT_DSKBLK, m->paula.irq.intreq & PAULA_INT_DSKBLK);
     CHECK_INT("dskptr advanced by transfer length", dskptr + 64u, (int)m->paula.disk.dskptr);
     CHECK_INT("chip ram received encoded mfm bytes", 0xAA, s_chip_ram[dskptr]);
     CHECK_INT("dskblk publishes level 1", 1, m->current_ipl);
@@ -281,7 +281,7 @@ static void test_paula_disk_dma_irq_contract(void)
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_DSKBLK, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("dskblk ack clears latch", 0, m->paula.intreq & PAULA_INT_DSKBLK);
+    CHECK_INT("dskblk ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_DSKBLK);
     CHECK_INT("ipl returns to idle after dskblk ack", 0, m->current_ipl);
 }
 
@@ -302,19 +302,19 @@ static void test_agnus_vblank_irq_real_path(void)
     CHECK_INT("beam leaves initial vblank before edge test",
               0,
               beam_is_in_vblank(&m->agnus.beam));
-    CHECK_INT("no vertb latched before next edge", 0, m->paula.intreq & PAULA_INT_VERTB);
+    CHECK_INT("no vertb latched before next edge", 0, m->paula.irq.intreq & PAULA_INT_VERTB);
 
     bellatrix_machine_advance(ticks_to_next_vblank);
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("beam re-enters vblank", 1, beam_is_in_vblank(&m->agnus.beam));
-    CHECK_INT("vertb latched on vblank entry", PAULA_INT_VERTB, m->paula.intreq & PAULA_INT_VERTB);
+    CHECK_INT("vertb latched on vblank entry", PAULA_INT_VERTB, m->paula.irq.intreq & PAULA_INT_VERTB);
     CHECK_INT("vertb publishes ipl3", 3, m->current_ipl);
 
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_VERTB, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("vertb ack clears latch", 0, m->paula.intreq & PAULA_INT_VERTB);
+    CHECK_INT("vertb ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_VERTB);
     CHECK_INT("ipl returns to idle after vertb ack", 0, m->current_ipl);
 }
 
@@ -330,19 +330,19 @@ static void test_agnus_blitter_irq_real_path(void)
 
     bellatrix_machine_write(0x00dff058u, 0x0041u, 2);
     CHECK_INT("blitter becomes busy after bltsize write", 1, m->agnus.blitter.busy);
-    CHECK_INT("blitter irq starts cleared", 0, m->paula.intreq & PAULA_INT_BLIT);
+    CHECK_INT("blitter irq starts cleared", 0, m->paula.irq.intreq & PAULA_INT_BLIT);
 
     bellatrix_machine_advance(1u);
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("blitter completes after programmed cycles", 0, m->agnus.blitter.busy);
-    CHECK_INT("blit irq latched on completion", PAULA_INT_BLIT, m->paula.intreq & PAULA_INT_BLIT);
+    CHECK_INT("blit irq latched on completion", PAULA_INT_BLIT, m->paula.irq.intreq & PAULA_INT_BLIT);
     CHECK_INT("blit publishes ipl3", 3, m->current_ipl);
 
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_BLIT, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("blit ack clears latch", 0, m->paula.intreq & PAULA_INT_BLIT);
+    CHECK_INT("blit ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_BLIT);
     CHECK_INT("ipl returns to idle after blit ack", 0, m->current_ipl);
 }
 
@@ -431,14 +431,14 @@ static void test_agnus_copper_irq_real_path(void)
     bellatrix_machine_advance(4u);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("copper move raises copper irq", PAULA_INT_COPER, m->paula.intreq & PAULA_INT_COPER);
+    CHECK_INT("copper move raises copper irq", PAULA_INT_COPER, m->paula.irq.intreq & PAULA_INT_COPER);
     CHECK_INT("copper irq publishes ipl3", 3, m->current_ipl);
     CHECK_INT("copper program halts after sentinel", COPPER_STATE_HALTED, m->agnus.copper.state);
 
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_COPER, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("copper irq ack clears latch", 0, m->paula.intreq & PAULA_INT_COPER);
+    CHECK_INT("copper irq ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_COPER);
     CHECK_INT("ipl returns to idle after copper ack", 0, m->current_ipl);
 }
 
@@ -454,7 +454,7 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
 
     CHECK_INT("vertb latch exists even when source mask is off",
               PAULA_INT_VERTB,
-              m->paula.intreq & PAULA_INT_VERTB);
+              m->paula.irq.intreq & PAULA_INT_VERTB);
     CHECK_INT("masked vertb does not publish ipl", 0, m->current_ipl);
 
     bellatrix_machine_write(REG_INTENA, 0x8000u | PAULA_INT_VERTB, 2);
@@ -468,7 +468,7 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
     CHECK_INT("clearing vertb source mask drops ipl", 0, m->current_ipl);
     CHECK_INT("clearing source mask does not clear latched intreq",
               PAULA_INT_VERTB,
-              m->paula.intreq & PAULA_INT_VERTB);
+              m->paula.irq.intreq & PAULA_INT_VERTB);
 
     bellatrix_machine_write(REG_INTENA, 0x8000u | PAULA_INT_VERTB, 2);
     bellatrix_machine_sync_ipl();
@@ -481,7 +481,7 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
     CHECK_INT("clearing master drops ipl even with latched vertb", 0, m->current_ipl);
     CHECK_INT("clearing master does not clear latched vertb",
               PAULA_INT_VERTB,
-              m->paula.intreq & PAULA_INT_VERTB);
+              m->paula.irq.intreq & PAULA_INT_VERTB);
 
     bellatrix_machine_write(REG_INTENA, 0xC000u, 2);
     bellatrix_machine_sync_ipl();
@@ -491,7 +491,7 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_VERTB, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("vertb ack finally clears latch", 0, m->paula.intreq & PAULA_INT_VERTB);
+    CHECK_INT("vertb ack finally clears latch", 0, m->paula.irq.intreq & PAULA_INT_VERTB);
     CHECK_INT("ipl returns to idle after ack", 0, m->current_ipl);
 
     bellatrix_machine_write(REG_INTENA, PAULA_INT_MASTER, 2);
@@ -501,7 +501,7 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
     agnus_intreq_set(&m->agnus, PAULA_INT_BLIT);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("blit masked by missing master stays latched", PAULA_INT_BLIT, m->paula.intreq & PAULA_INT_BLIT);
+    CHECK_INT("blit masked by missing master stays latched", PAULA_INT_BLIT, m->paula.irq.intreq & PAULA_INT_BLIT);
     CHECK_INT("blit masked by missing master keeps ipl idle", 0, m->current_ipl);
 
     bellatrix_machine_write(REG_INTENA, 0xC000u, 2);
@@ -512,7 +512,7 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_BLIT, 2);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("blit ack clears latch after master restore", 0, m->paula.intreq & PAULA_INT_BLIT);
+    CHECK_INT("blit ack clears latch after master restore", 0, m->paula.irq.intreq & PAULA_INT_BLIT);
     CHECK_INT("ipl returns to idle after blit ack", 0, m->current_ipl);
 }
 
@@ -574,7 +574,7 @@ static void test_paula_irq_priority_matrix(void)
     CHECK_INT("ipl returns to idle after highest source clears", 0, m->current_ipl);
     CHECK_INT("all tested paula latches cleared",
               0,
-              m->paula.intreq & (PAULA_INT_VERTB |
+              m->paula.irq.intreq & (PAULA_INT_VERTB |
                                  PAULA_INT_BLIT |
                                  PAULA_INT_COPER |
                                  PAULA_INT_DSKSYN |

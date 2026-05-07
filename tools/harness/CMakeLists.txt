@@ -57,6 +57,7 @@ set(BELLATRIX_SOURCES
 
     # Core
     ${SRC}/core/machine.c
+    ${SRC}/bridge/bellatrix_bridge.c
 
     # Memory (nova base)
     ${SRC}/core/memory/memory.c
@@ -92,8 +93,14 @@ set(BELLATRIX_SOURCES
 
     # Paula
     ${SRC}/chipset/paula/paula.c
+    ${SRC}/chipset/paula/paula_input.c
+    ${SRC}/chipset/paula/paula_interrupt.c
     ${SRC}/chipset/paula/paula_disk.c
-    ${SRC}/chipset/paula/uart.c
+    ${SRC}/chipset/paula/paula_serial.c
+    ${SRC}/io/serial/null_modem.c
+    ${SRC}/io/serial/serial_backend.c
+    ${SRC}/io/serial/pty_backend.c
+    ${SRC}/io/serial/uart_host.c
 
     # RTC
     ${SRC}/chipset/rtc/rtc.c
@@ -110,6 +117,8 @@ set(BELLATRIX_SOURCES
 
     # Host
     ${SRC}/host/posix/pal_posix.c
+    ${SRC}/host/raspi3/miniuart_backend.c
+    ${SRC}/host/raspi3/pl011_backend.c
 )
 
 # ---------------------------------------------------------------------------
@@ -134,6 +143,7 @@ target_include_directories(harness PRIVATE
 
 target_compile_definitions(harness PRIVATE
     BELLATRIX_HARNESS=1
+    BELLATRIX_ENABLE_PTY_BACKEND=1
 )
 
 # ---------------------------------------------------------------------------
@@ -190,7 +200,7 @@ add_test(NAME bellatrix_unit_memory
 
 add_executable(bellatrix_unit_uart
     ${ROOT}/tests/unit/test_uart_null_modem.c
-    ${SRC}/chipset/paula/uart.c
+    ${SRC}/chipset/paula/paula_serial.c
 )
 
 target_include_directories(bellatrix_unit_uart PRIVATE
@@ -225,6 +235,7 @@ target_include_directories(bellatrix_integration_overlay PRIVATE
 
 target_compile_definitions(bellatrix_integration_overlay PRIVATE
     BELLATRIX_HARNESS=1
+    BELLATRIX_ENABLE_PTY_BACKEND=1
 )
 
 target_link_libraries(bellatrix_integration_overlay PRIVATE m)

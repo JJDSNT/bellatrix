@@ -28,47 +28,10 @@
 #define REG_POTGOR 0xDFF016u
 
 /* ---------------------------------------------------------------------------
- * UART callbacks
+ * Serial / IRQ callbacks
  * ------------------------------------------------------------------------- */
 
-static void uart_tx_cb(void *opaque, uint8_t byte)
-{
-    (void)opaque;
-
-#ifdef BELLATRIX_HARNESS
-    if (strcmp(PAL_HarnessSerial_ModeName(), "line") != 0) {
-        PAL_HarnessSerial_WriteByte(byte);
-        return;
-    }
-#endif
-
-    static char buf[256];
-    static int pos = 0;
-
-    if (byte == '\0')
-        return;
-
-    /* filtra lixo */
-    if (byte < 32 && byte != '\n' && byte != '\r')
-    {
-        return;
-    }
-
-    if (byte == '\n' || byte == '\r' || pos >= (int)(sizeof(buf) - 1))
-    {
-        buf[pos] = '\0';
-        if (pos > 0)
-        {
-            kprintf("[SERIAL] %s\n", buf);
-        }
-        pos = 0;
-        return;
-    }
-
-    buf[pos++] = (char)byte;
-}
-
-static void uart_irq_cb(void *opaque, uint16_t mask)
+static void serial_irq_cb(void *opaque, uint16_t mask)
 {
     Paula *p = (Paula *)opaque;
     paula_irq_raise(p, mask);
@@ -84,51 +47,6 @@ static void disk_intreq_cb(void *opaque, uint16_t bits)
     paula_irq_raise(p, bits);
 }
 
-static uint16_t paula_read_potgor(const Paula *p)
-{
-    uint16_t v = 0xFFFFu;
-
-    /* Port 0/first mouse right button: pin 9 -> DATLY.
-     * Only drive it low when guest configured the line as output-high,
-     * which matches how DiagROM probes RMB through POTGO/POTGOR. */
-    if ((p->potgo & 0x0800u) && (p->potgo & 0x0400u) && p->mouse_right[0]) {
-        v &= (uint16_t)~0x0400u;
-    }
-
-    /* Port 1/second controller right button: pin 9 -> DATRY. */
-    if ((p->potgo & 0x8000u) && (p->potgo & 0x4000u) && p->mouse_right[1]) {
-        v &= (uint16_t)~0x4000u;
-    }
-
-    return v;
-}
-
-static void paula_log_mouse_right_consumed(Paula *p, uint16_t potgor)
-{
-#ifdef BELLATRIX_HARNESS
-    if (p->mouse_right[0] && !p->mouse_right_seen[0] &&
-        (p->potgo & 0x0800u) && (p->potgo & 0x0400u) &&
-        !(potgor & 0x0400u)) {
-        p->mouse_right_seen[0] = 1u;
-        kprintf("[MOUSE-RMB] pc=%08x port=0 read POTGOR=%04x\n",
-                (unsigned)bellatrix_debug_cpu_pc(),
-                (unsigned)potgor);
-    }
-
-    if (p->mouse_right[1] && !p->mouse_right_seen[1] &&
-        (p->potgo & 0x8000u) && (p->potgo & 0x4000u) &&
-        !(potgor & 0x4000u)) {
-        p->mouse_right_seen[1] = 1u;
-        kprintf("[MOUSE-RMB] pc=%08x port=1 read POTGOR=%04x\n",
-                (unsigned)bellatrix_debug_cpu_pc(),
-                (unsigned)potgor);
-    }
-#else
-    (void)p;
-    (void)potgor;
-#endif
-}
-
 /* ---------------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------------- */
@@ -136,33 +54,27 @@ static void paula_log_mouse_right_consumed(Paula *p, uint16_t potgor)
 void paula_init(Paula *p)
 {
     memset(p, 0, sizeof(*p));
-    uart_init(&p->uart, p, uart_tx_cb, uart_irq_cb);
-    uart_set_link_mode(&p->uart, UART_LINK_NULL_MODEM);
+    paula_interrupt_init(&p->irq);
+    paula_input_init(&p->input);
+    paula_serial_init(&p->serial, p, serial_irq_cb);
     paula_disk_init(&p->disk);
     paula_disk_set_intreq_callback(&p->disk, disk_intreq_cb, p);
 }
 
 void paula_reset(Paula *p)
 {
-    UARTState saved_uart = p->uart;
+    PaulaSerial saved_serial = p->serial;
     PaulaDisk saved_disk = p->disk;
 
-    p->intreq = 0;
+    paula_interrupt_reset(&p->irq);
     p->irq_line_level = 0;
-    p->intena = 0;
-    p->ipl = 0;
-    p->potgo = 0xFFFFu;
-    p->mouse_right[0] = 0u;
-    p->mouse_right[1] = 0u;
-    p->mouse_right_seen[0] = 0u;
-    p->mouse_right_seen[1] = 0u;
+    paula_input_reset(&p->input);
 
-    uart_reset(&p->uart);
+    paula_serial_reset(&p->serial);
     /* restore wiring */
-    p->uart.opaque = saved_uart.opaque;
-    p->uart.tx_cb = saved_uart.tx_cb;
-    p->uart.irq_raise_cb = saved_uart.irq_raise_cb;
-    p->uart.link_mode = saved_uart.link_mode;
+    p->serial.opaque = saved_serial.opaque;
+    p->serial.irq_raise_cb = saved_serial.irq_raise_cb;
+    p->serial.tx_instant = saved_serial.tx_instant;
 
     paula_disk_init(&p->disk);
     /* restore wiring */
@@ -207,18 +119,7 @@ void paula_attach_drive(Paula *p, FloppyDrive *drive)
 
 void paula_set_mouse_right(Paula *p, unsigned port, int pressed)
 {
-    if (port > 1u)
-        return;
-
-    p->mouse_right[port] = pressed ? 1u : 0u;
-    if (!pressed) {
-        p->mouse_right_seen[port] = 0u;
-    }
-}
-
-void paula_serial_set_mode(Paula *p, UARTLinkMode mode)
-{
-    uart_set_link_mode(&p->uart, mode);
+    paula_input_set_mouse_right(&p->input, port, pressed);
 }
 
 /* ---------------------------------------------------------------------------
@@ -229,7 +130,7 @@ void paula_irq_raise(Paula *p, uint16_t bits)
 {
     uint16_t b = (uint16_t)(bits & 0x3FFFu);
 
-    p->intreq |= b;
+    paula_interrupt_raise(&p->irq, b);
 
     /*
      * Only external interrupt input lines are level-like here.
@@ -243,7 +144,7 @@ void paula_irq_clear(Paula *p, uint16_t bits)
     uint16_t b = (uint16_t)(bits & 0x3FFFu);
 
     p->irq_line_level &= (uint16_t)~(b & (PAULA_INT_PORTS | PAULA_INT_EXTER));
-    p->intreq &= (uint16_t)~b;
+    paula_interrupt_clear(&p->irq, b);
 }
 
 /* ---------------------------------------------------------------------------
@@ -259,26 +160,7 @@ void paula_irq_clear(Paula *p, uint16_t bits)
 
 uint8_t paula_compute_ipl(const Paula *p)
 {
-    int master = !!(p->intena & PAULA_INT_MASTER);
-    uint16_t pending = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
-
-    if (!master || !pending)
-        return 0;
-
-    if (pending & PAULA_INT_EXTER)
-        return 6;
-    if (pending & (PAULA_INT_DSKSYN | PAULA_INT_RBF))
-        return 5;
-    if (pending & (PAULA_INT_AUD0 | PAULA_INT_AUD1 | PAULA_INT_AUD2 | PAULA_INT_AUD3))
-        return 4;
-    if (pending & (PAULA_INT_COPER | PAULA_INT_VERTB | PAULA_INT_BLIT))
-        return 3;
-    if (pending & PAULA_INT_PORTS)
-        return 2;
-    if (pending & (PAULA_INT_TBE | PAULA_INT_DSKBLK | PAULA_INT_SOFT))
-        return 1;
-
-    return 0;
+    return paula_interrupt_current_ipl(&p->irq);
 }
 
 /* ---------------------------------------------------------------------------
@@ -287,7 +169,6 @@ uint8_t paula_compute_ipl(const Paula *p)
 
 void paula_step(Paula *p, uint32_t ticks)
 {
-    uart_step(&p->uart, ticks);
     paula_disk_step(&p->disk, ticks);
 }
 
@@ -317,36 +198,48 @@ uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
     switch (addr)
     {
     case REG_SERDATR:
-        ret = uart_read_serdatr(&p->uart);
+        ret = paula_serial_read_serdatr(&p->serial);
+        {
+            static int s_first_serdatr_logged = 0;
+            if (!s_first_serdatr_logged) {
+                s_first_serdatr_logged = 1;
+                kprintf("[SERIAL-RX] first SERDATR=%04x TBE=%u TSRE=%u RBF=%u\n",
+                        (unsigned)ret,
+                        (unsigned)((ret & 0x2000u) ? 1u : 0u),
+                        (unsigned)((ret & 0x1000u) ? 1u : 0u),
+                        (unsigned)((ret & 0x4000u) ? 1u : 0u));
+            }
+        }
 #ifdef BELLATRIX_HARNESS
-        if (p->uart.rx_buffer_full) {
+        if (p->serial.rx_buffer_full) {
             kprintf("[UART-RX] pc=%08x read SERDATR=%04x byte=%02x\n",
                     (unsigned)bellatrix_debug_cpu_pc(),
                     (unsigned)ret,
                     (unsigned)(ret & 0xFFu));
         }
 #endif
-        uart_clear_rbf(&p->uart);
+        paula_serial_clear_rbf(&p->serial);
         break;
     case REG_ADKCONR:
         ret = p->disk.adkcon;
         break;
     case REG_POTGOR:
-        ret = paula_read_potgor(p);
-        paula_log_mouse_right_consumed(p, (uint16_t)ret);
+        ret = paula_input_read_potgor(&p->input);
         break;
     case REG_DSKBYTR:
         ret = paula_disk_read_dskbytr(&p->disk);
         break;
     case REG_INTENAR:
-        ret = p->intena;
+        ret = paula_interrupt_read_intena(&p->irq);
         kprintf("[PAULA-R] INTENAR -> %04x  (intreq=%04x)\n",
-                (unsigned)p->intena, (unsigned)p->intreq);
+                (unsigned)ret,
+                (unsigned)paula_interrupt_read_intreq(&p->irq));
         break;
     case REG_INTREQR:
-        ret = p->intreq;
+        ret = paula_interrupt_read_intreq(&p->irq);
         kprintf("[PAULA-R] INTREQR -> %04x  (intena=%04x)\n",
-                (unsigned)p->intreq, (unsigned)p->intena);
+                (unsigned)ret,
+                (unsigned)paula_interrupt_read_intena(&p->irq));
         break;
     default:
         break;
@@ -379,15 +272,31 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
         break;
 
     case REG_SERDAT:
-        uart_write_serdat(&p->uart, raw);
+    {
+        static int s_first_serdat_logged = 0;
+        if (!s_first_serdat_logged) {
+            s_first_serdat_logged = 1;
+            kprintf("[SERIAL-TX] first SERDAT=%04x byte=%02x\n",
+                    (unsigned)raw,
+                    (unsigned)(raw & 0xFFu));
+        }
+        paula_serial_write_serdat(&p->serial, raw);
         break;
+    }
 
     case REG_SERPER:
-        uart_write_serper(&p->uart, raw);
+    {
+        static int s_first_serper_logged = 0;
+        if (!s_first_serper_logged) {
+            s_first_serper_logged = 1;
+            kprintf("[SERIAL-CFG] first SERPER=%04x\n", (unsigned)raw);
+        }
+        paula_serial_write_serper(&p->serial, raw);
         break;
+    }
 
     case REG_POTGO:
-        p->potgo = raw;
+        paula_input_write_potgo(&p->input, raw);
         break;
 
     case REG_ADKCON:
@@ -395,54 +304,44 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
         break;
 
     case REG_INTENA:
-        if (raw & 0x8000u)
-            p->intena |= (uint16_t)(raw & 0x7FFFu);
-        else
-            p->intena &= (uint16_t)~(raw & 0x7FFFu);
+        paula_interrupt_write_intena(&p->irq, raw);
         {
-            int inten = !!(p->intena & PAULA_INT_MASTER);
-            uint16_t pd = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
+            uint16_t intena = paula_interrupt_read_intena(&p->irq);
+            uint16_t intreq = paula_interrupt_read_intreq(&p->irq);
+            int inten = !!(intena & PAULA_INT_MASTER);
+            uint16_t pd = (uint16_t)(intena & intreq & 0x3FFFu);
             kprintf("[PAULA-W] INTENA raw=%04x -> intena=%04x intreq=%04x pending=%04x%s\n",
-                    (unsigned)raw, (unsigned)p->intena,
-                    (unsigned)p->intreq, (unsigned)pd,
+                    (unsigned)raw, (unsigned)intena,
+                    (unsigned)intreq, (unsigned)pd,
                     inten ? "" : " (INTEN OFF)");
         }
         break;
 
     case REG_INTREQ:
     {
-        uint16_t bits = (uint16_t)(raw & 0x3FFFu);
+        paula_interrupt_write_intreq(&p->irq, raw);
 
-        if (raw & 0x8000u)
-        {
-            /* Set bits */
-            p->intreq |= bits;
-        }
-        else
-        {
-            /* Clear bits (ACK) */
-            p->intreq &= (uint16_t)~bits;
-
+        if (!(raw & 0x8000u) && p->irq_line_level != 0u) {
             /*
-             * CRÍTICO:
-             * Reaplica linhas ainda ativas (CIA, UART, etc).
-             *
-             * Se a fonte do IRQ ainda estiver levantando a linha,
-             * o bit precisa voltar — comportamento level-triggered.
+             * Reassert level-triggered sources after ACK.
              */
-            p->intreq |= p->irq_line_level;
+            paula_interrupt_raise(&p->irq, p->irq_line_level);
         }
 
-        int inten = !!(p->intena & PAULA_INT_MASTER);
-        uint16_t pd = (uint16_t)(p->intena & p->intreq & 0x3FFFu);
+        {
+        uint16_t intena = paula_interrupt_read_intena(&p->irq);
+        uint16_t intreq = paula_interrupt_read_intreq(&p->irq);
+        int inten = !!(intena & PAULA_INT_MASTER);
+        uint16_t pd = (uint16_t)(intena & intreq & 0x3FFFu);
 
         kprintf("[PAULA-W] INTREQ raw=%04x -> intreq=%04x intena=%04x pending=%04x line=%04x%s\n",
                 (unsigned)raw,
-                (unsigned)p->intreq,
-                (unsigned)p->intena,
+                (unsigned)intreq,
+                (unsigned)intena,
                 (unsigned)pd,
                 (unsigned)p->irq_line_level,
                 inten ? "" : " (INTEN OFF)");
+        }
     }
     break;
 

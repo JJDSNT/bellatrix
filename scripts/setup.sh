@@ -35,6 +35,14 @@ apply_patch_if_needed() {
         return 0
     fi
 
+    if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
+        if grep -Fq 'bellatrix_bridge_cpu_access((uint32_t)far, 0, (unsigned)size, BELLATRIX_BUS_READ);' src/aarch64/vectors.c &&
+           grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
+            echo "Patch already applied (built-in integration detected): $name"
+            return 0
+        fi
+    fi
+
     if git apply --check "$patch" >/dev/null 2>&1; then
         echo "Applying patch: $name"
         git apply "$patch"
@@ -82,7 +90,7 @@ check_cmd cmake
 check_cmd aarch64-linux-gnu-gcc
 
 cd "$ROOT"
-git submodule update --init --recursive
+git submodule update --init emu68 external/musashi
 
 ensure_emu68_gitignore
 

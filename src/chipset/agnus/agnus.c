@@ -142,12 +142,12 @@ void agnus_intreq_set(AgnusState *s, uint16_t bits)
         paula_irq_raise(s->paula, bits);
 
         uint16_t pending =
-            (uint16_t)(s->paula->intena & s->paula->intreq & 0x3FFFu);
+            (uint16_t)(s->paula->irq.intena & s->paula->irq.intreq & 0x3FFFu);
 
         kprintf("[IRQSET] bits=%04x intena=%04x intreq=%04x pending=%04x\n",
                 (unsigned)bits,
-                (unsigned)s->paula->intena,
-                (unsigned)s->paula->intreq,
+                (unsigned)s->paula->irq.intena,
+                (unsigned)s->paula->irq.intreq,
                 (unsigned)pending);
     }
 }
@@ -225,13 +225,16 @@ static void agnus_dump_copper_list(AgnusState *s)
 
 static void agnus_log_vbl_enter(AgnusState *s)
 {
-    uint16_t intena = s->paula ? s->paula->intena : 0u;
-    uint16_t intreq = s->paula ? s->paula->intreq : 0u;
+    uint16_t intena = s->paula ? s->paula->irq.intena : 0u;
+    uint16_t intreq = s->paula ? s->paula->irq.intreq : 0u;
     uint16_t pending = (uint16_t)(intena & intreq & 0x3FFFu);
-    uint32_t pc = bellatrix_debug_cpu_pc();
+    uint32_t stale_pc = bellatrix_debug_cpu_pc();
+    extern volatile uint32_t g_bellatrix_exec_pc;
+    extern volatile uint32_t g_bellatrix_fault_pc;
 
     kprintf("[VBL-ENTER] frame=%u hpos=%u vpos=%u dmacon=0x%04x "
-            "intena=0x%04x intreq=0x%04x pending=0x%04x m68k_pc=%08x\n",
+            "intena=0x%04x intreq=0x%04x pending=0x%04x "
+            "exec_pc=%08x fault_pc=%08x stale_pc=%08x\n",
             (unsigned)s->beam.frame,
             (unsigned)s->beam.hpos,
             (unsigned)s->beam.vpos,
@@ -239,7 +242,9 @@ static void agnus_log_vbl_enter(AgnusState *s)
             (unsigned)intena,
             (unsigned)intreq,
             (unsigned)pending,
-            (unsigned)pc);
+            (unsigned)g_bellatrix_exec_pc,
+            (unsigned)g_bellatrix_fault_pc,
+            (unsigned)stale_pc);
 
     if (s->memory)
     {

@@ -33,4 +33,14 @@ extern uint32_t bellatrix_reset_pc;
 // or 0 (BUS_WRITE).
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir);
 
+// Actual M68K PC (x18) captured by SYSWriteValToAddr/SYSReadValFromAddr
+// immediately before calling bellatrix_bus_access.  More accurate than
+// __m68k_state->PC which is only updated at JIT cache misses.
+extern volatile uint32_t g_bellatrix_fault_pc;
+
+// Most recent M68K PC (x18) captured by the ExecutionLoop cycle-ownership
+// block just before bellatrix_machine_advance().  Updated each MainLoop
+// iteration; useful for VBL and other periodic logs.
+extern volatile uint32_t g_bellatrix_exec_pc;
+
 #endif /* _BELLATRIX_H */

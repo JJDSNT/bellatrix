@@ -19,6 +19,7 @@
 #include "debug/btrace.h"
 
 #include "memory/memory.h"
+#include "io/serial/uart_host.h"
 
 typedef struct BellatrixDebug
 {
@@ -80,6 +81,13 @@ typedef struct BellatrixMachine
      * DF0 drive state — signals CIA-A ext_pra.
      */
     FloppyDrive df0;
+
+    /*
+     * Host serial bridge used by the current machine-driven path.
+     * This lets Emu68/Harness clock Paula serial without depending on the
+     * separate runtime loop.
+     */
+    UARTHost uart_host;
 
 } BellatrixMachine;
 

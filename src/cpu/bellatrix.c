@@ -4,14 +4,17 @@
 // Routes every unmapped M68K bus access to the appropriate chipset module.
 
 #include "bellatrix.h"
+#include "bridge/bellatrix_bridge.h"
 #include "cpu_backend.h"
 #include "core/machine.h"
+#include "memory/autoconfig.h"
 #include "chipset/agnus/agnus.h"
 #include "chipset/cia/cia.h"
 #include "chipset/denise/denise.h"
 #include "chipset/rtc/rtc.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
+#include "io/serial/uart_host.h"
 #include "mmu.h"
 #include "A64.h"
 #include "support.h"
@@ -54,29 +57,13 @@ static CpuBackend g_emu68_backend = {
  * Called by PAL_Runtime_Poll() on every bus access.
  * ------------------------------------------------------------------------- */
 
-#define BELLATRIX_M68K_CLOCK_HZ 7093790ULL
-
 void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
 {
-    static uint64_t s_last = 0;
-
-    if (!s_last)
-    {
-        s_last = host_now;
-        return;
-    }
-
-    uint64_t delta = host_now - s_last;
-    s_last = host_now;
-
-    if (host_freq && delta > host_freq)
-        delta = host_freq;
-    if (!host_freq)
-        return;
-
-    uint64_t m68k_cycles = (delta * BELLATRIX_M68K_CLOCK_HZ) / host_freq;
-    if (m68k_cycles)
-        bellatrix_machine_advance((uint32_t)m68k_cycles);
+    /* The current Emu68 integration is validated with ExecutionLoop-driven
+     * machine time. Keep the host-clock runtime path inert until the
+     * refactored scheduler is intentionally wired in. */
+    (void)host_now;
+    (void)host_freq;
 }
 
 /* ---------------------------------------------------------------------------
@@ -96,40 +83,9 @@ static inline int cia_reg(uint32_t addr)
  * Address normalization / alias collapse
  * ------------------------------------------------------------------------- */
 
-static inline uint32_t bellatrix_normalize_addr(uint32_t addr)
+static void __attribute__((unused)) update_ipl(void)
 {
-    addr &= 0x00FFFFFFu;
-
-    /*
-     * Emu68 / Kickstart may hit mirrored custom-chip addresses instead of the
-     * canonical 0xDFFxxx window.
-     *
-     * Example observed in logs:
-     *   0x00C3F09A -> should behave like 0x00DFF09A
-     *   0x00C3F01C -> should behave like 0x00DFF01C
-     *
-     * For now we normalize the commonly observed mirror:
-     *   0x00C?Fxxx -> 0x00DFFxxx
-     *
-     * This preserves the low register offset and reanchors the access in the
-     * canonical custom register page.
-     */
-    if ((addr & 0x00F00000u) == 0x00C00000u)
-    {
-        if ((addr & 0x0000F000u) == 0x0000F000u)
-            addr = 0x00DFF000u | (addr & 0x00000FFFu);
-    }
-
-    return addr;
-}
-
-/* ---------------------------------------------------------------------------
- * IPL sync — call after any CIA/chipset register access
- * ------------------------------------------------------------------------- */
-
-static void update_ipl(void)
-{
-    bellatrix_machine_sync_ipl();
+    bellatrix_bridge_cpu_sync_ipl();
 }
 
 /* ---------------------------------------------------------------------------
@@ -198,7 +154,15 @@ static void set_overlay(int new_overlay)
  * ROM physical base in Emu68 kernel virtual space
  * ------------------------------------------------------------------------- */
 
-#define ROM_KVIRT 0xffffff9000f80000ULL
+#define CHIP_RAM_KVIRT 0xffffff9000000000ULL
+/*
+ * For Fast RAM on the real Emu68 target, use the same low identity-mapped
+ * alias the CPU/JIT fetch path uses. Using the 0xffffff900... physical alias
+ * here can observe stale/divergent data due to aliasing, while ICache fetches
+ * are performed from the low 32-bit mapping.
+ */
+#define FAST_RAM_KVIRT 0x0000000000200000ULL
+#define ROM_KVIRT      0xffffff9000f80000ULL
 
 static inline uint32_t read_be32(const uint8_t *p)
 {
@@ -216,6 +180,7 @@ void bellatrix_init(void)
 
     PAL_Debug_Init(115200);
 
+    autoconfig_enable_z2_ram(BELLATRIX_FAST_RAM_SIZE);
     bellatrix_machine_init(&g_emu68_backend);
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
@@ -223,6 +188,18 @@ void bellatrix_init(void)
 
     /* Bellatrix-specific CIA-A defaults: OVL and LED are outputs */
     BellatrixMachine *m = bellatrix_machine_get();
+    /*
+     * Reuse Emu68's tested RAM backing instead of maintaining a parallel
+     * Bellatrix-only Fast RAM buffer. This keeps CPU fetch/store and machine
+     * reads/writes coherent on the real target.
+     */
+    m->memory.chip_ram = (uint8_t *)CHIP_RAM_KVIRT;
+    m->memory.chip_ram_size = BELLATRIX_CHIP_RAM_SIZE;
+    m->memory.chip_ram_mask = BELLATRIX_CHIP_RAM_MASK;
+    m->memory.fast_ram = (uint8_t *)FAST_RAM_KVIRT;
+    m->memory.fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
+    m->memory.fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
+    memset(m->memory.fast_ram, 0, m->memory.fast_ram_size);
     m->cia_a.ddra = 0x03;
 
     /* ROM diagnostic */
@@ -273,16 +250,26 @@ void bellatrix_init(void)
             0);
     s_overlay = 1;
 
-    /* Fast RAM + expansion trap window.
-     * Fast RAM 0x200000–0x9FFFFF is served by bellatrix_machine_read/write
-     * through memory_map. Later this can become a direct RW MMU mapping.
+    /* Fast RAM is plain Emu68-backed RAM on the real target.
+     * Keep it directly accessible instead of trapping it through Bellatrix.
+     * Bellatrix observes the same backing through FAST_RAM_KVIRT.
      */
     mmu_map(0x200000, 0x200000, 0xA00000,
-            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
     mmu_map(0xC00000, 0xC00000, 0x200000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     mmu_map(0xF00000, 0xF00000, 0x80000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+
+    /*
+     * Autoconfig window must fault through the Emu68 vectors path. The global
+     * 1:1 RAM map established by Emu68 startup would otherwise satisfy
+     * 0x00e80000 accesses directly and Bellatrix would never see the config
+     * ROM traffic. Re-map the 64 KiB Z2 config page range without AF set so
+     * both reads and writes trap cleanly.
+     */
+    mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 
     /* Overlay sanity-check */
     if (rom_mapped)
@@ -301,6 +288,56 @@ void bellatrix_init(void)
     }
 
     PAL_Runtime_Init();
+
+#if defined(BELLATRIX_UART_PL011)
+#ifndef BELLATRIX_UART_BAUD
+#define BELLATRIX_UART_BAUD 115200
+#endif
+    if (uart_host_open_pl011(&m->uart_host, BELLATRIX_UART_BAUD))
+    {
+#if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
+        uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK);
+#elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
+        uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
+#endif
+        kprintf("[SERIAL] PL011 host bridge open at %u baud — GPIO 14/15 (USB-TTL adapter)\n",
+                (unsigned)BELLATRIX_UART_BAUD);
+#if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
+        kprintf("[SERIAL] internal serial loopback enabled\n");
+#elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
+        kprintf("[SERIAL] internal serial probe loopback enabled\n");
+#endif
+    }
+    else
+    {
+        kprintf("[SERIAL] PL011 open failed\n");
+    }
+#else
+    if (uart_host_open_pty(&m->uart_host))
+    {
+        const char *pty_name = uart_host_pty_name(&m->uart_host);
+        if (pty_name)
+        {
+            kprintf("[SERIAL] PTY ready: %s\n", pty_name);
+        }
+    }
+    else if (uart_host_open_miniuart(&m->uart_host, 9600))
+    {
+#if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
+        uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK);
+#elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
+        uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
+#endif
+        uint32_t lsr = miniuart_backend_read_lsr();
+        kprintf("[SERIAL] mini-UART open at 9600 baud  LSR=0x%08x TX_ready=%s\n",
+                lsr, (lsr & 0x20u) ? "yes" : "no (QEMU AUX UART may be unresponsive)");
+#if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
+        kprintf("[SERIAL] internal serial loopback enabled\n");
+#elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
+        kprintf("[SERIAL] internal serial probe loopback enabled\n");
+#endif
+    }
+#endif
 
     /* "Pau de Cego": paint framebuffer solid red to confirm VC4 pipeline is alive.
      * If screen shows red, VC4 is working. If black/nothing, display chain issue. */
@@ -343,22 +380,41 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     uint32_t result = 0;
     BellatrixMachine *m = bellatrix_machine_get();
 
-    addr = bellatrix_normalize_addr(addr);
+    addr = bellatrix_bridge_normalize_addr(addr);
 
-    /* PC trap */
+    /* First-N trace: log every bus access unconditionally for the first 120
+     * calls.  This captures the exact order of accesses at boot and shows
+     * where the CPU gets stuck relative to expected CIA/custom writes. */
     {
-        extern struct M68KState *__m68k_state;
-        uint32_t pc = __m68k_state ? BE32(__m68k_state->PC) : 0u;
-
-        if (pc >= 0xfc5e00u && pc <= 0xfc5fffu)
+        static int s_bus_n = 0;
+        if (s_bus_n < 120)
         {
-            kprintf("[PC-TRAP] pc=%08x addr=%06x %s size=%d val=%08x\n",
-                    (unsigned)pc,
-                    (unsigned)addr,
+            kprintf("[BUS%03d] %s %06x[%d]=%08x\n",
+                    s_bus_n,
                     dir == BUS_READ ? "R" : "W",
-                    size,
-                    (unsigned)value);
+                    (unsigned)addr, size, (unsigned)value);
+            s_bus_n++;
         }
+    }
+
+    /* Use the fault-time PC captured by vectors.c (x18 at MMIO fault).
+     * Falls back to the stale ctx->PC when called outside a fault context. */
+    uint32_t real_pc = g_bellatrix_fault_pc;
+
+    /* Warn if the CPU has strayed into chip RAM — usually means a bad vector. */
+    if (real_pc != 0u && real_pc < 0x200000u)
+    {
+        kprintf("[PC-CHIPMEM] fault_pc=%08x addr=%06x %s size=%d\n",
+                (unsigned)real_pc, (unsigned)addr,
+                dir == BUS_READ ? "R" : "W", size);
+    }
+
+    /* PC trap for a specific ROM range of interest */
+    if (real_pc >= 0xfc5e00u && real_pc <= 0xfc5fffu)
+    {
+        kprintf("[PC-TRAP] pc=%08x addr=%06x %s size=%d val=%08x\n",
+                (unsigned)real_pc, (unsigned)addr,
+                dir == BUS_READ ? "R" : "W", size, (unsigned)value);
     }
 
     /* Btrace verbosity control */
@@ -401,7 +457,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
          * - Fast RAM
          * - ROM/overlay reads
          */
-        bellatrix_machine_write(addr, value, (unsigned)size);
+        bellatrix_bridge_cpu_write(addr, value, (unsigned)size);
 
         /*
          * CIA-A PRA bit 0 controls the host MMU overlay mapping.
@@ -429,7 +485,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         return 0;
     }
 
-    result = bellatrix_machine_read(addr, (unsigned)size);
+    result = bellatrix_bridge_cpu_read(addr, (unsigned)size);
     return result;
 }
 
@@ -439,5 +495,5 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 
 void bellatrix_cpu_step(uint32_t cycles)
 {
-    bellatrix_machine_advance(cycles);
+    bellatrix_bridge_cpu_progress(cycles);
 }

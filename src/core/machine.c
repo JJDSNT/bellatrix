@@ -8,9 +8,18 @@
 #include "debug/cpu_pc.h"
 #include "debug/probe.h"
 #include "input/keyboard.h"
+#include "chipset/paula/paula_serial.h"
+#include "io/serial/uart_host.h"
 #include "support.h"
 
 #include <string.h>
+
+/* Actual M68K PC captured in vectors.c before each bellatrix_bus_access call.
+ * Defined here so both the harness and the Emu68 build share the same symbol. */
+volatile uint32_t g_bellatrix_fault_pc = 0;
+
+/* Most recent M68K PC captured in ExecutionLoop.c before bellatrix_machine_advance. */
+volatile uint32_t g_bellatrix_exec_pc = 0;
 
 static BellatrixMachine g_machine;
 
@@ -25,12 +34,18 @@ static inline bool is_custom_addr(uint32_t addr)
 
 static inline bool is_cia_a_addr(uint32_t addr)
 {
-    return (addr >= 0x00bfe001u && addr <= 0x00bfef01u);
+    /* CIA-A occupies odd bytes in $BFE000–$BFEFFF (A0=1) */
+    return (addr & 1u) && (addr >= 0x00bfe001u && addr <= 0x00bfef01u);
 }
 
 static inline bool is_cia_b_addr(uint32_t addr)
 {
-    return (addr >= 0x00bfd000u && addr <= 0x00bfdf00u);
+    /* CIA-B occupies even bytes.  The 8520 mirrors at both $BFD000 and
+     * $BFE000 (even) — DiagROM uses both ranges. */
+    if (addr & 1u)
+        return false;
+    return (addr >= 0x00bfd000u && addr <= 0x00bfdf00u) ||
+           (addr >= 0x00bfe000u && addr <= 0x00bfef00u);
 }
 
 static inline bool is_rtc_addr(uint32_t addr)
@@ -382,6 +397,40 @@ static inline uint8_t machine_compute_ipl(BellatrixMachine *m)
     return paula_compute_ipl(&m->paula);
 }
 
+static void machine_drain_serial_fallback(BellatrixMachine *m)
+{
+    /* When a real backend is open, uart_host_poll drains Paula TX via the
+     * backend; skip kprintf fallback to avoid double-consuming bytes. */
+    if (m->uart_host.enabled) return;
+
+    static char buf[256];
+    static int pos = 0;
+    uint8_t byte = 0;
+
+    while (paula_serial_pop_tx_byte(&m->paula.serial, &byte))
+    {
+        if (byte == '\0') {
+            continue;
+        }
+
+        if (byte < 32 && byte != '\n' && byte != '\r' && byte != '\t') {
+            continue;
+        }
+
+        if (byte == '\n' || byte == '\r' || pos >= (int)(sizeof(buf) - 1))
+        {
+            buf[pos] = '\0';
+            if (pos > 0) {
+                kprintf("[SERIAL] %s\n", buf);
+            }
+            pos = 0;
+            continue;
+        }
+
+        buf[pos++] = (char)byte;
+    }
+}
+
 static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
 {
     if (ticks == 0)
@@ -415,6 +464,9 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     bellatrix_keyboard_step(&m->keyboard, &m->cia_a);
 
     paula_step(&m->paula, ticks);
+    paula_serial_step(&m->paula.serial, ticks);
+    uart_host_poll(&m->uart_host);
+    machine_drain_serial_fallback(m);
     denise_step(&m->denise, ticks);
 
     m->tick_count += ticks;
@@ -473,6 +525,9 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     floppy_init(&m->df0);
     paula_attach_drive(&m->paula, &m->df0);
     machine_sync_floppy_pra(m); /* set initial /CHNG, /TK0, /RDY on CIA-A ext_pra */
+
+    uart_host_init(&m->uart_host);
+    uart_host_attach_paula(&m->uart_host, &m->paula.serial);
 
     machine_debug_init(m);
 
@@ -614,7 +669,7 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
     if (is_custom_addr(addr))
     {
         uint16_t reg = (uint16_t)(addr & 0x1FEu);
-        uint16_t old_intreq = m->paula.intreq;
+        uint16_t old_intreq = m->paula.irq.intreq;
 
         if (paula_handles_write(&m->paula, addr))
             paula_write(&m->paula, addr, value, size);
@@ -624,14 +679,19 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
             denise_write(&m->denise, addr, value, size);
 
         if (reg == 0x009Au)
-            machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.intena);
-
-        if (reg == 0x009Cu && m->paula.intreq != old_intreq)
         {
-            if (m->paula.intreq > old_intreq)
-                machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.intreq);
+            kprintf("[INTENA-W] fault_pc=%08x val=%04x -> intena=%04x\n",
+                    (unsigned)g_bellatrix_fault_pc, (unsigned)(value & 0xFFFFu),
+                    (unsigned)m->paula.irq.intena);
+            machine_probe_emit(m, PROBE_EVT_INTENA_WRITE, value, m->paula.irq.intena);
+        }
+
+        if (reg == 0x009Cu && m->paula.irq.intreq != old_intreq)
+        {
+            if (m->paula.irq.intreq > old_intreq)
+                machine_probe_emit(m, PROBE_EVT_INTREQ_SET, value, m->paula.irq.intreq);
             else
-                machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.intreq);
+                machine_probe_emit(m, PROBE_EVT_INTREQ_CLR, value, m->paula.irq.intreq);
         }
 
         return;
@@ -644,11 +704,15 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
             "TODLO", "TODMID", "TODHI", "UNUSED",
             "SDR", "ICR", "CRA", "CRB"};
         uint8_t ciaa_reg = (uint8_t)((addr >> 8) & 0x0Fu);
-        kprintf("[CIAA-W] pc=%08x reg=%u (%s) val=%02x\n",
-                (unsigned)machine_cpu_pc(m),
-                (unsigned)ciaa_reg,
-                ciaa_reg_names[ciaa_reg],
-                (unsigned)(value & 0xFFu));
+        {
+            extern volatile uint32_t g_bellatrix_fault_pc;
+            kprintf("[CIAA-W] fault_pc=%08x reg=%u (%s) val=%02x addr=%06x\n",
+                    (unsigned)g_bellatrix_fault_pc,
+                    (unsigned)ciaa_reg,
+                    ciaa_reg_names[ciaa_reg],
+                    (unsigned)(value & 0xFFu),
+                    (unsigned)addr);
+        }
         cia_write_reg(&m->cia_a, ciaa_reg, (uint8_t)value);
         machine_probe_emit(m, PROBE_EVT_CIA_WRITE, addr, value);
     }
@@ -662,11 +726,15 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
 
         uint8_t cia_b_reg = (uint8_t)((addr >> 8) & 0x0Fu);
 
-        kprintf("[CIAB-W] pc=%08x reg=%u (%s) val=%02x\n",
-                (unsigned)machine_cpu_pc(m),
-                (unsigned)cia_b_reg,
-                cia_reg_names[cia_b_reg],
-                (unsigned)(value & 0xFFu));
+        {
+            extern volatile uint32_t g_bellatrix_fault_pc;
+            kprintf("[CIAB-W] fault_pc=%08x reg=%u (%s) val=%02x addr=%06x\n",
+                    (unsigned)g_bellatrix_fault_pc,
+                    (unsigned)cia_b_reg,
+                    cia_reg_names[cia_b_reg],
+                    (unsigned)(value & 0xFFu),
+                    (unsigned)addr);
+        }
 
         cia_write_reg(&m->cia_b, cia_b_reg, (uint8_t)value);
         machine_floppy_update(m);
@@ -714,6 +782,9 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
             break;
         case 2:
             bellatrix_mem_write16(&m->memory, addr, (uint16_t)value);
+            break;
+        case 4:
+            bellatrix_mem_write32(&m->memory, addr, (uint32_t)value);
             break;
         default:
             break;

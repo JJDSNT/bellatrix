@@ -1,15 +1,13 @@
-#include "chipset/paula/uart.h"
+#include "chipset/paula/paula_serial.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-typedef struct TestUartSink {
-    uint8_t last_tx_byte;
+typedef struct TestSerialSink {
     uint16_t last_irq_mask;
-    int tx_count;
     int irq_count;
-} TestUartSink;
+} TestSerialSink;
 
 static void failf(const char *expr, const char *file, int line,
                   uint32_t expected, uint32_t actual)
@@ -29,63 +27,58 @@ static void failf(const char *expr, const char *file, int line,
             failf((expr), __FILE__, __LINE__, expected__, actual__);          \
     } while (0)
 
-static void test_tx_cb(void *opaque, uint8_t byte)
-{
-    TestUartSink *sink = (TestUartSink *)opaque;
-
-    sink->last_tx_byte = byte;
-    sink->tx_count += 1;
-}
-
 static void test_irq_cb(void *opaque, uint16_t mask)
 {
-    TestUartSink *sink = (TestUartSink *)opaque;
+    TestSerialSink *sink = (TestSerialSink *)opaque;
 
     sink->last_irq_mask = mask;
     sink->irq_count += 1;
 }
 
-static void test_default_mode_is_null_modem(void)
+static void test_serdat_queues_one_tx_byte(void)
 {
-    UARTState uart;
-    TestUartSink sink = {0};
+    PaulaSerial serial;
+    TestSerialSink sink = {0};
+    uint8_t tx_byte = 0;
 
-    uart_init(&uart, &sink, test_tx_cb, test_irq_cb);
+    paula_serial_init(&serial, &sink, test_irq_cb);
 
-    CHECK_EQ("default link mode", UART_LINK_NULL_MODEM, uart_link_mode(&uart));
+    paula_serial_write_serdat(&serial, 0x0141u);
 
-    uart_write_serdat(&uart, 0x0141u);
-
-    CHECK_EQ("SERDAT sends one byte to partner RX", 1u, sink.tx_count);
-    CHECK_EQ("SERDAT payload", 0x41u, sink.last_tx_byte);
-    CHECK_EQ("SERDAT raises TBE", UART_INTREQ_TBE, sink.last_irq_mask);
+    CHECK_EQ("SERDAT raises TBE", PAULA_SERIAL_INTREQ_TBE, sink.last_irq_mask);
+    CHECK_EQ("one TX byte is queued", 1u, paula_serial_tx_available(&serial) ? 1u : 0u);
+    CHECK_EQ("peek queued TX byte", 1u, paula_serial_peek_tx_byte(&serial, &tx_byte) ? 1u : 0u);
+    CHECK_EQ("SERDAT payload", 0x41u, tx_byte);
+    CHECK_EQ("pop queued TX byte", 1u, paula_serial_pop_tx_byte(&serial, &tx_byte) ? 1u : 0u);
+    CHECK_EQ("popped payload", 0x41u, tx_byte);
+    CHECK_EQ("queue empty after pop", 0u, paula_serial_tx_available(&serial) ? 1u : 0u);
 }
 
 static void test_receive_byte_appears_in_serdatr(void)
 {
-    UARTState uart;
-    TestUartSink sink = {0};
+    PaulaSerial serial;
+    TestSerialSink sink = {0};
     uint16_t serdatr;
 
-    uart_init(&uart, &sink, test_tx_cb, test_irq_cb);
+    paula_serial_init(&serial, &sink, test_irq_cb);
 
-    uart_receive_byte(&uart, 0x55u);
+    paula_serial_receive_byte(&serial, 0x55u);
 
-    CHECK_EQ("backend TX raises RBF", UART_INTREQ_RBF, sink.last_irq_mask);
-    serdatr = uart_read_serdatr(&uart);
+    CHECK_EQ("backend TX raises RBF", PAULA_SERIAL_INTREQ_RBF, sink.last_irq_mask);
+    serdatr = paula_serial_read_serdatr(&serial);
     CHECK_EQ("SERDATR byte visible", 0x55u, serdatr & 0x00ffu);
     CHECK_EQ("SERDATR marks receive full", 0x4000u, serdatr & 0x4000u);
 
-    uart_clear_rbf(&uart);
-    serdatr = uart_read_serdatr(&uart);
+    paula_serial_clear_rbf(&serial);
+    serdatr = paula_serial_read_serdatr(&serial);
     CHECK_EQ("SERDATR empty low data bits after read", 0x0000u, serdatr & 0x03ffu);
 }
 
 int main(void)
 {
-    test_default_mode_is_null_modem();
+    test_serdat_queues_one_tx_byte();
     test_receive_byte_appears_in_serdatr();
 
-    puts("bellatrix_unit_uart: ok");
+    puts("bellatrix_unit_paula_serial: ok");
     return 0;
 }
