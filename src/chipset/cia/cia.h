@@ -104,6 +104,7 @@ typedef struct CIA_TOD_State {
 
     uint32_t latch;
     bool     latched;
+    bool     stopped;
 
     uint32_t subticks;
     uint32_t ticks_per_inc;
@@ -135,6 +136,16 @@ typedef struct CIA_State {
      */
     uint8_t sdr;
     uint8_t sdr_full;
+    uint8_t sp_input_level;
+    uint8_t sp_output_level;
+    uint8_t cnt_output_level;
+    uint8_t serial_in_shift;
+    uint8_t serial_in_bits;
+    uint8_t serial_out_shift;
+    uint8_t serial_out_bits;
+    uint8_t serial_out_busy;
+    uint8_t serial_out_buffer;
+    uint8_t serial_out_buffer_full;
 
     /*
      * Interrupt
@@ -156,6 +167,11 @@ typedef struct CIA_State {
 
     uint16_t tb_latch;
     uint16_t tb_counter;
+    uint8_t  pb_timer_out;
+    uint8_t  pb_pulse_mask;
+
+    uint8_t cnt_level;
+    uint8_t flag_level;
 
     /*
      * TOD
@@ -200,6 +216,12 @@ void cia_attach_paula(CIA *cia, struct Paula *paula);
 
 void cia_set_external_pra(CIA *cia, uint8_t value);
 void cia_set_external_prb(CIA *cia, uint8_t value);
+void cia_set_sp_level(CIA *cia, uint8_t level);
+void cia_set_cnt_level(CIA *cia, uint8_t level);
+void cia_set_flag_level(CIA *cia, uint8_t level);
+void cia_pulse_cnt(CIA *cia, uint32_t pulses);
+uint8_t cia_serial_sp_output_level(const CIA *cia);
+uint8_t cia_serial_cnt_output_level(const CIA *cia);
 
 /* ------------------------------------------------------------------------- */
 /* IRQ                                                                       */
@@ -232,12 +254,5 @@ void    cia_tod_step(CIA *cia, uint64_t ticks);
 void    cia_tod_pulse(CIA *cia, uint32_t pulses);
 uint8_t cia_tod_read(CIA *cia, uint8_t reg);
 void    cia_tod_write(CIA *cia, uint8_t reg, uint8_t val);
-
-/* ------------------------------------------------------------------------- */
-/* CIA A/B specializations                                                   */
-/* ------------------------------------------------------------------------- */
-
-void cia_a_apply_defaults(CIA *cia);
-void cia_b_apply_defaults(CIA *cia);
 
 #endif

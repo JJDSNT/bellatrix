@@ -39,6 +39,7 @@ static void test_serdat_queues_one_tx_byte(void)
 {
     PaulaSerial serial;
     TestSerialSink sink = {0};
+    uint16_t serdatr = 0;
     uint8_t tx_byte = 0;
 
     paula_serial_init(&serial, &sink, test_irq_cb);
@@ -46,12 +47,32 @@ static void test_serdat_queues_one_tx_byte(void)
     paula_serial_write_serdat(&serial, 0x0141u);
 
     CHECK_EQ("SERDAT raises TBE", PAULA_SERIAL_INTREQ_TBE, sink.last_irq_mask);
-    CHECK_EQ("one TX byte is queued", 1u, paula_serial_tx_available(&serial) ? 1u : 0u);
+    CHECK_EQ("default Paula TX is not instant", 0u, paula_serial_tx_available(&serial) ? 1u : 0u);
+    serdatr = paula_serial_read_serdatr(&serial);
+    CHECK_EQ("SERDATR reports TBE after load into shift register", 0x2000u, serdatr & 0x2000u);
+    CHECK_EQ("SERDATR reports TSRE low while shift is active", 0x0000u, serdatr & 0x1000u);
+    paula_serial_step(&serial, 10u);
+    CHECK_EQ("one TX byte is queued after one frame", 1u, paula_serial_tx_available(&serial) ? 1u : 0u);
     CHECK_EQ("peek queued TX byte", 1u, paula_serial_peek_tx_byte(&serial, &tx_byte) ? 1u : 0u);
     CHECK_EQ("SERDAT payload", 0x41u, tx_byte);
     CHECK_EQ("pop queued TX byte", 1u, paula_serial_pop_tx_byte(&serial, &tx_byte) ? 1u : 0u);
     CHECK_EQ("popped payload", 0x41u, tx_byte);
     CHECK_EQ("queue empty after pop", 0u, paula_serial_tx_available(&serial) ? 1u : 0u);
+}
+
+static void test_serdat_instant_mode_still_available(void)
+{
+    PaulaSerial serial;
+    TestSerialSink sink = {0};
+    uint8_t tx_byte = 0;
+
+    paula_serial_init(&serial, &sink, test_irq_cb);
+    paula_serial_set_tx_instant(&serial, true);
+    paula_serial_write_serdat(&serial, 0x0142u);
+
+    CHECK_EQ("instant mode queues tx immediately", 1u, paula_serial_tx_available(&serial) ? 1u : 0u);
+    CHECK_EQ("instant mode payload visible", 1u, paula_serial_peek_tx_byte(&serial, &tx_byte) ? 1u : 0u);
+    CHECK_EQ("instant mode payload value", 0x42u, tx_byte);
 }
 
 static void test_receive_byte_appears_in_serdatr(void)
@@ -77,6 +98,7 @@ static void test_receive_byte_appears_in_serdatr(void)
 int main(void)
 {
     test_serdat_queues_one_tx_byte();
+    test_serdat_instant_mode_still_available();
     test_receive_byte_appears_in_serdatr();
 
     puts("bellatrix_unit_paula_serial: ok");

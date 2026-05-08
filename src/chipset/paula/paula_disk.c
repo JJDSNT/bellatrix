@@ -20,8 +20,6 @@
 #define AMIGA_SECTORS_TRACK 11u
 #define AMIGA_SECTOR_BYTES 512u
 #define MFM_SECTOR_BYTES 1088u
-#define MFM_TRACK_BYTES_PAL 12668u
-
 static void emit_intreq(PaulaDisk *pd, uint16_t bits)
 {
     if (pd->intreq_cb)
@@ -127,6 +125,7 @@ static uint32_t mfm_track_find_sync_offset(const uint8_t *src, uint32_t len, uin
 static void paula_disk_load_dskbytr(PaulaDisk *pd, uint16_t word)
 {
     pd->dskbytr_data = (uint16_t)(0x8000u | (word & 0x00FFu));
+    pd->dskdatr = word;
 }
 
 static void paula_disk_maybe_emit_sync(PaulaDisk *pd)
@@ -296,6 +295,14 @@ uint16_t paula_disk_read_dskbytr(PaulaDisk *pd)
     return v;
 }
 
+uint16_t paula_disk_read_dskdatr(const PaulaDisk *pd)
+{
+    if (!pd)
+        return 0x0000u;
+
+    return pd->dskdatr;
+}
+
 static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
 {
     uint16_t len_words = value & DSKLEN_LEN;
@@ -348,7 +355,7 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
                 cyl,
                 side,
                 adf_offset,
-                pd->drive ? pd->drive->adf_size : 0);
+            pd->drive ? pd->drive->adf_size : 0);
         return;
     }
 
@@ -362,42 +369,43 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
     }
 
     {
-        uint8_t track_buf[MFM_TRACK_BYTES_PAL];
-
         encode_adf_track_to_mfm(
             pd->drive->adf + adf_offset,
             cyl,
             side,
-            track_buf,
-            sizeof(track_buf));
+            pd->dma_track_buf,
+            sizeof(pd->dma_track_buf));
 
-        for (uint32_t i = 0; i < len_bytes; ++i)
-            pd->chipram[pd->dskptr + i] = track_buf[i % sizeof(track_buf)];
-
-        pd->sync_seen = mfm_track_contains_sync(track_buf, sizeof(track_buf), pd->dsksync);
+        pd->sync_seen = mfm_track_contains_sync(pd->dma_track_buf, sizeof(pd->dma_track_buf), pd->dsksync);
 
         {
-            uint32_t sync_off = mfm_track_find_sync_offset(track_buf, sizeof(track_buf), pd->dsksync);
-            if (sync_off != UINT32_MAX && sync_off + 16u <= sizeof(track_buf))
+            uint32_t sync_off = mfm_track_find_sync_offset(pd->dma_track_buf, sizeof(pd->dma_track_buf), pd->dsksync);
+            if (sync_off != UINT32_MAX && sync_off + 16u <= sizeof(pd->dma_track_buf))
             {
-                paula_disk_load_dskbytr(pd, get_u16be(track_buf + sync_off));
+                paula_disk_load_dskbytr(pd, get_u16be(pd->dma_track_buf + sync_off));
                 kprintf("[DSKDMA-SECTOR] sync_off=%u words=%04x %04x %04x %04x %04x %04x %04x %04x\n",
                         sync_off,
-                        get_u16be(track_buf + sync_off + 0u),
-                        get_u16be(track_buf + sync_off + 2u),
-                        get_u16be(track_buf + sync_off + 4u),
-                        get_u16be(track_buf + sync_off + 6u),
-                        get_u16be(track_buf + sync_off + 8u),
-                        get_u16be(track_buf + sync_off + 10u),
-                        get_u16be(track_buf + sync_off + 12u),
-                        get_u16be(track_buf + sync_off + 14u));
+                        get_u16be(pd->dma_track_buf + sync_off + 0u),
+                        get_u16be(pd->dma_track_buf + sync_off + 2u),
+                        get_u16be(pd->dma_track_buf + sync_off + 4u),
+                        get_u16be(pd->dma_track_buf + sync_off + 6u),
+                        get_u16be(pd->dma_track_buf + sync_off + 8u),
+                        get_u16be(pd->dma_track_buf + sync_off + 10u),
+                        get_u16be(pd->dma_track_buf + sync_off + 12u),
+                        get_u16be(pd->dma_track_buf + sync_off + 14u));
             }
         }
     }
 
+    pd->dma_ptr_base = pd->dskptr;
+    pd->dma_bytes_total = len_bytes;
+    pd->dma_bytes_done = 0;
+    pd->dma_src_offset = 0;
+    pd->dma_track_len = sizeof(pd->dma_track_buf);
+
     pd->drive->disk_changed = 0;
 
-    kprintf("[DSKDMA] encoded cyl=%d side=%d adf_offset=%u -> chip=%06x len=%u\n",
+    kprintf("[DSKDMA] prepared cyl=%d side=%d adf_offset=%u -> chip=%06x len=%u\n",
             cyl,
             side,
             adf_offset,
@@ -407,10 +415,10 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
             pd->dsksync,
             pd->sync_seen,
             pd->adkcon,
-            get_u16be(&pd->chipram[pd->dskptr + 0u]),
-            get_u16be(&pd->chipram[pd->dskptr + 2u]),
-            get_u16be(&pd->chipram[pd->dskptr + 4u]),
-            get_u16be(&pd->chipram[pd->dskptr + 6u]));
+            get_u16be(&pd->dma_track_buf[0u]),
+            get_u16be(&pd->dma_track_buf[2u]),
+            get_u16be(&pd->dma_track_buf[4u]),
+            get_u16be(&pd->dma_track_buf[6u]));
 
     paula_disk_maybe_emit_sync(pd);
 }
@@ -460,36 +468,58 @@ void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
 
 void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
 {
-    if (!pd->dma_active)
+    (void)pd;
+    (void)cycles;
+}
+
+int paula_disk_dma_wants_service(const PaulaDisk *pd)
+{
+    if (!pd)
+        return 0;
+    if (!pd->dma_active || pd->write_mode)
+        return 0;
+    if (pd->dma_bytes_done >= pd->dma_bytes_total)
+        return 0;
+    return 1;
+}
+
+void paula_disk_dma_service_grant(PaulaDisk *pd)
+{
+    uint32_t dst;
+    uint32_t src;
+    uint16_t word;
+
+    if (!paula_disk_dma_wants_service(pd))
         return;
 
-    if (cycles >= pd->countdown)
-    {
-        pd->countdown = 0;
-    }
-    else
-    {
-        pd->countdown -= cycles;
-    }
+    dst = pd->dma_ptr_base + pd->dma_bytes_done;
+    src = pd->dma_src_offset;
 
-    if (pd->countdown != 0)
+    if (!valid_chip_range(pd, dst, 2u))
         return;
+    if (src + 1u >= pd->dma_track_len)
+        src = 0;
 
-    uint16_t len_words = pd->dsklen & DSKLEN_LEN;
+    pd->chipram[dst + 0u] = pd->dma_track_buf[src + 0u];
+    pd->chipram[dst + 1u] = pd->dma_track_buf[src + 1u];
+
+    word = get_u16be(&pd->dma_track_buf[src]);
+    paula_disk_load_dskbytr(pd, word);
+
+    pd->dma_bytes_done += 2u;
+    pd->dma_src_offset = (src + 2u) % pd->dma_track_len;
+
+    if (pd->dma_bytes_done < pd->dma_bytes_total)
+        return;
 
     pd->dma_active = 0;
     pd->dma_armed = 0;
     pd->armed_dsklen = 0;
     pd->sync_seen = 0;
     pd->sync_irq_fired = 0;
-    pd->dskbytr_data &= (uint16_t)~0x8000u;
     pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
     pd->dsklen &= (uint16_t)~DSKLEN_DMAEN;
-
-    if (!pd->write_mode)
-    {
-        pd->dskptr += ((uint32_t)len_words << 1);
-    }
+    pd->dskptr = pd->dma_ptr_base + pd->dma_bytes_total;
 
     kprintf("[DSKIRQ] DSKBLK fired ptr=%06x\n", pd->dskptr);
     emit_intreq(pd, PAULA_INTREQ_DSKBLK);

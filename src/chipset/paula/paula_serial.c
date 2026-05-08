@@ -87,7 +87,7 @@ void paula_serial_reset(PaulaSerial *s)
     s->overrun = false;
     s->rxd_level = true;
 
-    s->tx_instant = true;
+    s->tx_instant = false;
 
     s->tx_fifo_head = 0;
     s->tx_fifo_tail = 0;

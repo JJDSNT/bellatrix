@@ -12,6 +12,11 @@
 /* Custom chip register addresses */
 #define REG_SERDATR 0xDFF018u
 #define REG_ADKCONR 0xDFF010u
+#define REG_JOY0DAT 0xDFF00Au
+#define REG_JOY1DAT 0xDFF00Cu
+#define REG_DSKDATR 0xDFF008u
+#define REG_POT0DAT 0xDFF012u
+#define REG_POT1DAT 0xDFF014u
 #define REG_DSKBYTR 0xDFF01Au
 #define REG_INTENAR 0xDFF01Cu
 #define REG_INTREQR 0xDFF01Eu
@@ -117,9 +122,19 @@ void paula_attach_drive(Paula *p, FloppyDrive *drive)
     paula_disk_attach_drive(&p->disk, drive);
 }
 
-void paula_set_mouse_right(Paula *p, unsigned port, int pressed)
+void paula_set_joydat(Paula *p, unsigned port, uint16_t value)
 {
-    paula_input_set_mouse_right(&p->input, port, pressed);
+    paula_input_set_joydat(&p->input, port, value);
+}
+
+void paula_set_pot_button_x(Paula *p, unsigned port, int pressed)
+{
+    paula_input_set_pot_button_x(&p->input, port, pressed);
+}
+
+void paula_set_pot_button_y(Paula *p, unsigned port, int pressed)
+{
+    paula_input_set_pot_button_y(&p->input, port, pressed);
 }
 
 /* ---------------------------------------------------------------------------
@@ -170,6 +185,7 @@ uint8_t paula_compute_ipl(const Paula *p)
 void paula_step(Paula *p, uint32_t ticks)
 {
     paula_disk_step(&p->disk, ticks);
+    paula_serial_step(&p->serial, ticks);
 }
 
 /* ---------------------------------------------------------------------------
@@ -179,7 +195,12 @@ void paula_step(Paula *p, uint32_t ticks)
 int paula_handles_read(const Paula *p, uint32_t addr)
 {
     (void)p;
-    return addr == REG_SERDATR || addr == REG_ADKCONR || addr == REG_DSKBYTR || addr == REG_INTENAR || addr == REG_INTREQR || addr == REG_POTGOR;
+    return addr == REG_DSKDATR || addr == REG_JOY0DAT ||
+           addr == REG_JOY1DAT || addr == REG_POT0DAT ||
+           addr == REG_POT1DAT || addr == REG_SERDATR ||
+           addr == REG_ADKCONR ||
+           addr == REG_DSKBYTR || addr == REG_INTENAR ||
+           addr == REG_INTREQR || addr == REG_POTGOR;
 }
 
 int paula_handles_write(const Paula *p, uint32_t addr)
@@ -197,6 +218,21 @@ uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
     uint32_t ret = 0;
     switch (addr)
     {
+    case REG_DSKDATR:
+        ret = paula_disk_read_dskdatr(&p->disk);
+        break;
+    case REG_JOY0DAT:
+        ret = paula_input_read_joydat(&p->input, 0u);
+        break;
+    case REG_JOY1DAT:
+        ret = paula_input_read_joydat(&p->input, 1u);
+        break;
+    case REG_POT0DAT:
+        ret = paula_input_read_potdat(&p->input, 0u);
+        break;
+    case REG_POT1DAT:
+        ret = paula_input_read_potdat(&p->input, 1u);
+        break;
     case REG_SERDATR:
         ret = paula_serial_read_serdatr(&p->serial);
         {

@@ -14,6 +14,7 @@
 #include "musashi_backend.h"
 
 #include "core/machine.h"
+#include "bridge/bellatrix_bridge.h"
 #include "chipset/paula/paula.h"
 #include "debug/debug.h"
 #include "host/pal.h"
@@ -180,7 +181,7 @@ static void harness_maybe_inject_serial(BellatrixMachine *m,
     if (!cfg->enabled || cfg->injected || frame_count < cfg->frame)
         return;
 
-    uart_receive_byte(&m->paula.uart, cfg->byte);
+    paula_serial_receive_byte(&m->paula.serial, cfg->byte);
     cfg->injected = 1;
 
     if (cfg->byte >= 32 && cfg->byte <= 126) {
@@ -202,7 +203,7 @@ static void harness_maybe_log_serial_consumed(BellatrixMachine *m,
     if (!cfg->enabled || !cfg->injected || cfg->consumed)
         return;
 
-    if (m->paula.uart.rx_buffer_full)
+    if (m->paula.serial.rx_buffer_full)
         return;
 
     cfg->consumed = 1;
@@ -474,12 +475,12 @@ static void harness_load_mouse_serial_trigger(HarnessMouseSerialTrigger *cfg)
     }
 }
 
-static int harness_map_host_key_to_amiga_raw(uint32_t host_key, uint8_t *rawkey)
+static int harness_map_host_key_to_amiga_raw(const PAL_KeyEvent *event, uint8_t *rawkey)
 {
     if (!rawkey)
         return 0;
 
-    switch (host_key) {
+    switch (event->host_key) {
     case PAL_HOST_KEY_1: *rawkey = 0x01u; return 1;
     case PAL_HOST_KEY_2: *rawkey = 0x02u; return 1;
     case PAL_HOST_KEY_3: *rawkey = 0x03u; return 1;
@@ -508,6 +509,71 @@ static int harness_map_host_key_to_amiga_raw(uint32_t host_key, uint8_t *rawkey)
     case PAL_HOST_KEY_KP_7: *rawkey = 0x3Du; return 1;
     case PAL_HOST_KEY_KP_8: *rawkey = 0x3Eu; return 1;
     case PAL_HOST_KEY_KP_9: *rawkey = 0x3Fu; return 1;
+    default:
+        break;
+    }
+
+    switch (event->scancode) {
+    case 4: *rawkey = 0x20u; return 1; /* A */
+    case 5: *rawkey = 0x35u; return 1; /* B */
+    case 6: *rawkey = 0x33u; return 1; /* C */
+    case 7: *rawkey = 0x22u; return 1; /* D */
+    case 8: *rawkey = 0x12u; return 1; /* E */
+    case 9: *rawkey = 0x23u; return 1; /* F */
+    case 10: *rawkey = 0x24u; return 1; /* G */
+    case 11: *rawkey = 0x25u; return 1; /* H */
+    case 12: *rawkey = 0x17u; return 1; /* I */
+    case 13: *rawkey = 0x26u; return 1; /* J */
+    case 14: *rawkey = 0x27u; return 1; /* K */
+    case 15: *rawkey = 0x28u; return 1; /* L */
+    case 16: *rawkey = 0x37u; return 1; /* M */
+    case 17: *rawkey = 0x36u; return 1; /* N */
+    case 18: *rawkey = 0x18u; return 1; /* O */
+    case 19: *rawkey = 0x19u; return 1; /* P */
+    case 20: *rawkey = 0x10u; return 1; /* Q */
+    case 21: *rawkey = 0x13u; return 1; /* R */
+    case 22: *rawkey = 0x21u; return 1; /* S */
+    case 23: *rawkey = 0x14u; return 1; /* T */
+    case 24: *rawkey = 0x16u; return 1; /* U */
+    case 25: *rawkey = 0x34u; return 1; /* V */
+    case 26: *rawkey = 0x11u; return 1; /* W */
+    case 27: *rawkey = 0x32u; return 1; /* X */
+    case 28: *rawkey = 0x15u; return 1; /* Y */
+    case 29: *rawkey = 0x31u; return 1; /* Z */
+    case 42: *rawkey = 0x41u; return 1; /* Backspace */
+    case 43: *rawkey = 0x42u; return 1; /* Tab */
+    case 45: *rawkey = 0x0Bu; return 1; /* - */
+    case 46: *rawkey = 0x0Cu; return 1; /* = */
+    case 47: *rawkey = 0x1Au; return 1; /* [ */
+    case 48: *rawkey = 0x1Bu; return 1; /* ] */
+    case 49: *rawkey = 0x0Du; return 1; /* \ */
+    case 51: *rawkey = 0x29u; return 1; /* ; */
+    case 52: *rawkey = 0x2Au; return 1; /* ' */
+    case 53: *rawkey = 0x00u; return 1; /* ` */
+    case 54: *rawkey = 0x38u; return 1; /* , */
+    case 55: *rawkey = 0x39u; return 1; /* . */
+    case 56: *rawkey = 0x3Au; return 1; /* / */
+    case 57: *rawkey = 0x62u; return 1; /* Caps Lock */
+    case 58: *rawkey = 0x50u; return 1; /* F1 */
+    case 59: *rawkey = 0x51u; return 1; /* F2 */
+    case 60: *rawkey = 0x52u; return 1; /* F3 */
+    case 61: *rawkey = 0x53u; return 1; /* F4 */
+    case 62: *rawkey = 0x54u; return 1; /* F5 */
+    case 63: *rawkey = 0x55u; return 1; /* F6 */
+    case 64: *rawkey = 0x56u; return 1; /* F7 */
+    case 65: *rawkey = 0x57u; return 1; /* F8 */
+    case 66: *rawkey = 0x58u; return 1; /* F9 */
+    case 67: *rawkey = 0x59u; return 1; /* F10 */
+    case 76: *rawkey = 0x46u; return 1; /* Delete */
+    case 79: *rawkey = 0x4Fu; return 1; /* Left */
+    case 80: *rawkey = 0x4Eu; return 1; /* Right */
+    case 81: *rawkey = 0x4Du; return 1; /* Down */
+    case 82: *rawkey = 0x4Cu; return 1; /* Up */
+    case 224: *rawkey = 0x63u; return 1; /* Left Ctrl */
+    case 225: *rawkey = 0x60u; return 1; /* Left Shift */
+    case 226: *rawkey = 0x64u; return 1; /* Left Alt */
+    case 229: *rawkey = 0x61u; return 1; /* Right Shift */
+    case 230: *rawkey = 0x65u; return 1; /* Right Alt */
     default:
         return 0;
     }
@@ -556,7 +622,7 @@ static void harness_pump_sdl_keyboard(void)
     while (pal_sdl_pop_key_event(&event)) {
         uint8_t rawkey = 0;
 
-        if (!harness_map_host_key_to_amiga_raw(event.host_key, &rawkey))
+        if (!harness_map_host_key_to_amiga_raw(&event, &rawkey))
             continue;
 
         if (!bellatrix_machine_keyboard_rawkey(rawkey, event.pressed)) {
@@ -581,7 +647,7 @@ static void harness_pump_serial_rx(BellatrixMachine *m)
     uint8_t byte = 0;
 
     while (PAL_HarnessSerial_ReadByte(&byte)) {
-        uart_receive_byte(&m->paula.uart, byte);
+        paula_serial_receive_byte(&m->paula.serial, byte);
         fprintf(stderr,
                 "[HARNESS] PTY serial RX -> UART 0x%02x%s\n",
                 (unsigned)byte,
@@ -846,26 +912,42 @@ int main(int argc, char **argv)
     harness_load_mouse_serial_trigger(&mouse_serial_trigger);
 
     while (running) {
+        int sdl_mouse_dx = 0;
+        int sdl_mouse_dy = 0;
+        int sdl_mouse_left = 0;
+        int sdl_mouse_middle = 0;
         int sdl_mouse_right = 0;
 
         if (!headless) {
             running = pal_sdl_poll_events();
             if (!running) break;
+            pal_sdl_consume_mouse_delta(&sdl_mouse_dx, &sdl_mouse_dy);
+            sdl_mouse_left = pal_sdl_mouse_button_down(0u);
+            sdl_mouse_middle = pal_sdl_mouse_button_down(1u);
             sdl_mouse_right = pal_sdl_mouse_right_down();
             harness_pump_sdl_keyboard();
         }
 
-        paula_set_mouse_right(&m->paula, 0u,
-                              sdl_mouse_right ||
-                              (mouse_rmb.enabled && mouse_rmb.port == 0u && mouse_rmb.active));
-        paula_set_mouse_right(&m->paula, 1u,
-                              (mouse_rmb.enabled && mouse_rmb.port == 1u && mouse_rmb.active));
+        bellatrix_machine_mouse_motion(0u, sdl_mouse_dx, sdl_mouse_dy);
+        bellatrix_machine_mouse_button(0u,
+                                       BELLATRIX_MOUSE_BUTTON_LEFT,
+                                       sdl_mouse_left);
+        bellatrix_machine_mouse_button(0u,
+                                       BELLATRIX_MOUSE_BUTTON_MIDDLE,
+                                       sdl_mouse_middle);
+        bellatrix_machine_mouse_button(0u,
+                                       BELLATRIX_MOUSE_BUTTON_RIGHT,
+                                       sdl_mouse_right ||
+                                       (mouse_rmb.enabled && mouse_rmb.port == 0u && mouse_rmb.active));
+        bellatrix_machine_mouse_button(1u,
+                                       BELLATRIX_MOUSE_BUTTON_RIGHT,
+                                       (mouse_rmb.enabled && mouse_rmb.port == 1u && mouse_rmb.active));
         harness_update_mouse_serial_trigger(frame_count, sdl_mouse_right,
                                             &mouse_serial_trigger);
         harness_pump_serial_rx(m);
 
         int used = musashi_backend_run(QUANTUM);
-        bellatrix_machine_advance((uint32_t)used);
+        bellatrix_bridge_cpu_progress((uint32_t)used);
         total_cycles += used;
 
         long cur_frame = (long)bellatrix_machine_agnus()->beam.frame;

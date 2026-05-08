@@ -112,11 +112,21 @@ void PAL_Core_Sync(void);
  * No-op stub on bare-metal targets. */
 int  pal_sdl_poll_events(void);
 int  pal_sdl_mouse_right_down(void);
+int  pal_sdl_mouse_button_down(unsigned button);
+void pal_sdl_consume_mouse_delta(int *dx, int *dy);
 int  pal_sdl_any_key_down(void);
 int  pal_sdl_pop_key_event(PAL_KeyEvent *event);
 
 /* Update window title (e.g. show FPS). No-op on bare-metal. */
 void pal_sdl_set_title(const char *title);
+
+/* ---- Diagnostic env-var helpers (stubs on bare-metal, env on harness) ---- */
+
+/* Return the integer value of env var `name`, or `default_val` if unset/invalid. */
+int PAL_Diag_GetEnvInt(const char *name, int default_val);
+
+/* Return 1 if env var `name` is set to a non-empty value other than "0". */
+int PAL_Diag_GetEnvBool(const char *name);
 
 /* ---- Harness serial helpers (posix only) ---- */
 

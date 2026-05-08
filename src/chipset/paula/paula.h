@@ -43,7 +43,9 @@ void paula_attach_cia_a(Paula *p, struct CIA_State *cia);
 void paula_attach_cia_b(Paula *p, struct CIA_State *cia);
 void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size);
 void paula_attach_drive(Paula *p, FloppyDrive *drive);
-void paula_set_mouse_right(Paula *p, unsigned port, int pressed);
+void paula_set_joydat(Paula *p, unsigned port, uint16_t value);
+void paula_set_pot_button_x(Paula *p, unsigned port, int pressed);
+void paula_set_pot_button_y(Paula *p, unsigned port, int pressed);
 
 /* bus protocol — called by machine.c read/write dispatch */
 int paula_handles_read(const Paula *p, uint32_t addr);

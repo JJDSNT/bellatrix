@@ -435,4 +435,23 @@ void PAL_Core_Sync(void)
 // Host display event helpers (no-op on bare metal)
 // ---------------------------------------------------------------------------
 int pal_sdl_poll_events(void) { return 1; }
+int pal_sdl_mouse_right_down(void) { return 0; }
+int pal_sdl_mouse_button_down(unsigned button)
+{
+    (void)button;
+    return 0;
+}
+void pal_sdl_consume_mouse_delta(int *dx, int *dy)
+{
+    if (dx)
+        *dx = 0;
+    if (dy)
+        *dy = 0;
+}
+int pal_sdl_any_key_down(void) { return 0; }
+int pal_sdl_pop_key_event(PAL_KeyEvent *event)
+{
+    (void)event;
+    return 0;
+}
 void pal_sdl_set_title(const char *title) { (void)title; }

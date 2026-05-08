@@ -287,6 +287,23 @@ void PAL_Core_SetMulticoreEnabled(int enabled) { (void)enabled; }
 int PAL_Core_IsMulticoreEnabled(void) { return 0; }
 void PAL_Core_Sync(void) {}
 
+int PAL_Diag_GetEnvInt(const char *name, int default_val)
+{
+    const char *env = getenv(name);
+    char *end = NULL;
+    long v;
+    if (!env || env[0] == '\0')
+        return default_val;
+    v = strtol(env, &end, 10);
+    return (end && *end == '\0') ? (int)v : default_val;
+}
+
+int PAL_Diag_GetEnvBool(const char *name)
+{
+    const char *env = getenv(name);
+    return (env && env[0] != '\0' && strcmp(env, "0") != 0) ? 1 : 0;
+}
+
 #ifdef BELLATRIX_SDL2
 #include <SDL2/SDL.h>
 
@@ -294,6 +311,9 @@ static SDL_Window *s_window = NULL;
 static SDL_Renderer *s_renderer = NULL;
 static SDL_Texture *s_texture = NULL;
 static int s_mouse_right_down = 0;
+static uint8_t s_mouse_buttons[3];
+static int s_mouse_dx = 0;
+static int s_mouse_dy = 0;
 static int s_any_key_down = 0;
 static PAL_KeyEvent s_key_events[64];
 static uint8_t s_key_head = 0;
@@ -484,6 +504,29 @@ int pal_sdl_poll_events(void)
 
         if (e.type == SDL_MOUSEBUTTONUP && e.button.button == SDL_BUTTON_RIGHT)
             s_mouse_right_down = 0;
+
+        if (e.type == SDL_MOUSEBUTTONDOWN) {
+            if (e.button.button == SDL_BUTTON_LEFT)
+                s_mouse_buttons[0] = 1u;
+            else if (e.button.button == SDL_BUTTON_MIDDLE)
+                s_mouse_buttons[1] = 1u;
+            else if (e.button.button == SDL_BUTTON_RIGHT)
+                s_mouse_buttons[2] = 1u;
+        }
+
+        if (e.type == SDL_MOUSEBUTTONUP) {
+            if (e.button.button == SDL_BUTTON_LEFT)
+                s_mouse_buttons[0] = 0u;
+            else if (e.button.button == SDL_BUTTON_MIDDLE)
+                s_mouse_buttons[1] = 0u;
+            else if (e.button.button == SDL_BUTTON_RIGHT)
+                s_mouse_buttons[2] = 0u;
+        }
+
+        if (e.type == SDL_MOUSEMOTION) {
+            s_mouse_dx += e.motion.xrel;
+            s_mouse_dy += e.motion.yrel;
+        }
     }
 
     return 1;
@@ -492,6 +535,25 @@ int pal_sdl_poll_events(void)
 int pal_sdl_mouse_right_down(void)
 {
     return s_mouse_right_down;
+}
+
+int pal_sdl_mouse_button_down(unsigned button)
+{
+    if (button > 2u)
+        return 0;
+
+    return s_mouse_buttons[button] ? 1 : 0;
+}
+
+void pal_sdl_consume_mouse_delta(int *dx, int *dy)
+{
+    if (dx)
+        *dx = s_mouse_dx;
+    if (dy)
+        *dy = s_mouse_dy;
+
+    s_mouse_dx = 0;
+    s_mouse_dy = 0;
 }
 
 int pal_sdl_any_key_down(void)
@@ -566,6 +628,18 @@ void PAL_Video_SetPalette(uint8_t idx, uint32_t rgb)
 
 int pal_sdl_poll_events(void) { return 1; }
 int pal_sdl_mouse_right_down(void) { return 0; }
+int pal_sdl_mouse_button_down(unsigned button)
+{
+    (void)button;
+    return 0;
+}
+void pal_sdl_consume_mouse_delta(int *dx, int *dy)
+{
+    if (dx)
+        *dx = 0;
+    if (dy)
+        *dy = 0;
+}
 int pal_sdl_any_key_down(void) { return 0; }
 int pal_sdl_pop_key_event(PAL_KeyEvent *event)
 {

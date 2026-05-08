@@ -13,6 +13,7 @@
 #include "chipset/denise/denise.h"
 #include "chipset/paula/paula.h"
 #include "chipset/rtc/rtc.h"
+#include "input/controller_port.h"
 #include "input/keyboard.h"
 
 #include "debug/probe.h"
@@ -66,6 +67,7 @@ typedef struct BellatrixMachine
     CIA        cia_b;
     RTCState   rtc;
     BellatrixKeyboard keyboard;
+    BellatrixControllerPorts controller_ports;
 
     BellatrixDebug debug;
 
@@ -135,6 +137,11 @@ BellatrixMemory *bellatrix_machine_memory(void);
 
 void bellatrix_machine_floppy_update(void);
 int  bellatrix_machine_keyboard_rawkey(uint8_t rawkey, int pressed);
+void bellatrix_machine_controller_set_device(unsigned port, unsigned device);
+void bellatrix_machine_mouse_button(unsigned port, unsigned button, int pressed);
+void bellatrix_machine_mouse_motion(unsigned port, int dx, int dy);
+void bellatrix_machine_joystick_button(unsigned port, unsigned button, int pressed);
+void bellatrix_machine_joystick_direction(unsigned port, unsigned direction, int pressed);
 
 int  bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size);
 void bellatrix_machine_eject_df0(void);

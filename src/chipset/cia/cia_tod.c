@@ -1,6 +1,7 @@
 // src/chipset/cia/cia_tod.c
 
 #include "cia.h"
+#include "chipset/cia/cia_interrupt.h"
 #include "chipset/paula/paula.h"
 
 /* ------------------------------------------------------------------------- */
@@ -24,21 +25,7 @@ static inline uint8_t cia_tod_hi(uint32_t v)
 
 static inline void cia_tod_raise_alarm(CIA *cia)
 {
-    /*
-     * Mirror the small helper behavior from cia.c without exporting a new
-     * internal symbol. This keeps TOD self-contained.
-     */
-    cia->icr_data |= CIA_ICR_ALRM;
-
-    if (cia->paula) {
-        if (cia_irq_pending(cia)) {
-            paula_irq_raise(cia->paula, cia->paula_irq_bit);
-            cia->irq_asserted = 1u;
-        } else {
-            paula_irq_clear(cia->paula, cia->paula_irq_bit);
-            cia->irq_asserted = 0u;
-        }
-    }
+    cia_interrupt_raise(cia, CIA_ICR_ALRM);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -51,6 +38,7 @@ void cia_tod_reset(CIA_TOD_State *tod, uint32_t ticks_per_inc)
     tod->alarm         = 0x00FFFFu;
     tod->latch         = 0x000000u;
     tod->latched       = false;
+    tod->stopped       = false;
     tod->subticks      = 0u;
     tod->ticks_per_inc = ticks_per_inc;
 }
@@ -71,7 +59,7 @@ static void cia_tod_increment(CIA *cia, uint32_t increments)
 
 void cia_tod_step(CIA *cia, uint64_t ticks)
 {
-    if (ticks == 0 || cia->tod.ticks_per_inc == 0)
+    if (ticks == 0 || cia->tod.ticks_per_inc == 0 || cia->tod.stopped)
         return;
 
     cia->tod.subticks += (uint32_t)ticks;
@@ -130,10 +118,15 @@ void cia_tod_write(CIA *cia, uint8_t reg, uint8_t val)
     uint32_t *target = (cia->crb & CIA_CRB_ALARM) ? &cia->tod.alarm
                                                   : &cia->tod.counter;
 
+    if (!(cia->crb & CIA_CRB_ALARM))
+        cia->tod.stopped = true;
+
     switch (reg) {
 
         case CIA_REG_TODLO:
             *target = (*target & 0xFFFF00u) | (uint32_t)val;
+            if (!(cia->crb & CIA_CRB_ALARM))
+                cia->tod.stopped = false;
             return;
 
         case CIA_REG_TODMID:

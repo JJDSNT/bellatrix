@@ -7,6 +7,7 @@
 #include "debug/btrace.h"
 #include "debug/cpu_pc.h"
 #include "debug/probe.h"
+#include "input/controller_port.h"
 #include "input/keyboard.h"
 #include "chipset/paula/paula_serial.h"
 #include "io/serial/uart_host.h"
@@ -22,6 +23,17 @@ volatile uint32_t g_bellatrix_fault_pc = 0;
 volatile uint32_t g_bellatrix_exec_pc = 0;
 
 static BellatrixMachine g_machine;
+
+static void machine_sync_controller_ports(BellatrixMachine *m)
+{
+    uint8_t ext = m->cia_a.ext_pra;
+
+    ext &= (uint8_t)~0xC0u;
+    ext |= bellatrix_controller_ports_cia_pra_bits(&m->controller_ports);
+
+    cia_set_external_pra(&m->cia_a, ext);
+    bellatrix_controller_ports_sync_paula(&m->controller_ports, &m->paula);
+}
 
 /* ---------------------------------------------------------------------------
  * Address decode
@@ -220,7 +232,7 @@ static inline void machine_probe_emit(BellatrixMachine *m,
 
 static void machine_sync_floppy_pra(BellatrixMachine *m)
 {
-    uint8_t prb = m->cia_b.prb;
+    uint8_t prb = cia_port_b_value(&m->cia_b);
     uint8_t ext = m->cia_a.ext_pra;
 
     bool sel0 = !(prb & 0x08u);
@@ -329,11 +341,12 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
             idbit);
 
     cia_set_external_pra(&m->cia_a, ext);
+    machine_sync_controller_ports(m);
 }
 
 static void machine_floppy_update(BellatrixMachine *m)
 {
-    uint8_t prb = m->cia_b.prb;
+    uint8_t prb = cia_port_b_value(&m->cia_b);
 
     FloppySignals sig;
     sig.selected = !(prb & 0x08u); /* /SEL0 active LOW */
@@ -464,7 +477,6 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     bellatrix_keyboard_step(&m->keyboard, &m->cia_a);
 
     paula_step(&m->paula, ticks);
-    paula_serial_step(&m->paula.serial, ticks);
     uart_host_poll(&m->uart_host);
     machine_drain_serial_fallback(m);
     denise_step(&m->denise, ticks);
@@ -507,6 +519,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     cia_init(&m->cia_b, CIA_PORT_B);
     rtc_init(&m->rtc, RTC_MODEL_OKI);
     bellatrix_keyboard_init(&m->keyboard);
+    bellatrix_controller_ports_init(&m->controller_ports);
 
     agnus_attach_denise(&m->agnus, &m->denise);
     agnus_attach_paula(&m->agnus, &m->paula);
@@ -546,6 +559,7 @@ void bellatrix_machine_reset(void)
     cia_reset(&m->cia_b);
     rtc_reset(&m->rtc);
     bellatrix_keyboard_reset(&m->keyboard);
+    bellatrix_controller_ports_reset(&m->controller_ports);
 
     machine_debug_reset(m);
     machine_sync_floppy_pra(m);
@@ -741,7 +755,7 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
 
         if (cia_b_reg == 1u)
         {
-            uint8_t prb = m->cia_b.prb;
+            uint8_t prb = cia_port_b_value(&m->cia_b);
 
             kprintf("[FLOPPY-CTRL] pc=%08x prb=%02x motor=%d sel0=%d sel1=%d sel2=%d sel3=%d step=%d dir=%d side=%d\n",
                     (unsigned)machine_cpu_pc(m), (unsigned)prb,
@@ -936,6 +950,51 @@ void bellatrix_machine_floppy_update(void)
 int bellatrix_machine_keyboard_rawkey(uint8_t rawkey, int pressed)
 {
     return bellatrix_keyboard_enqueue_raw(&g_machine.keyboard, rawkey, pressed);
+}
+
+void bellatrix_machine_controller_set_device(unsigned port, unsigned device)
+{
+    BellatrixMachine *m = &g_machine;
+
+    bellatrix_controller_port_set_device(&m->controller_ports,
+                                         port,
+                                         (BellatrixControllerPortDevice)device);
+    machine_sync_floppy_pra(m);
+}
+
+void bellatrix_machine_mouse_button(unsigned port, unsigned button, int pressed)
+{
+    BellatrixMachine *m = &g_machine;
+
+    bellatrix_controller_port_set_mouse_button(&m->controller_ports, port, button, pressed);
+    machine_sync_floppy_pra(m);
+}
+
+void bellatrix_machine_mouse_motion(unsigned port, int dx, int dy)
+{
+    BellatrixMachine *m = &g_machine;
+
+    bellatrix_controller_port_add_mouse_motion(&m->controller_ports, port, dx, dy);
+    machine_sync_floppy_pra(m);
+}
+
+void bellatrix_machine_joystick_button(unsigned port, unsigned button, int pressed)
+{
+    BellatrixMachine *m = &g_machine;
+
+    bellatrix_controller_port_set_joystick_button(&m->controller_ports, port, button, pressed);
+    machine_sync_floppy_pra(m);
+}
+
+void bellatrix_machine_joystick_direction(unsigned port, unsigned direction, int pressed)
+{
+    BellatrixMachine *m = &g_machine;
+
+    bellatrix_controller_port_set_joystick_direction(&m->controller_ports,
+                                                     port,
+                                                     direction,
+                                                     pressed);
+    machine_sync_floppy_pra(m);
 }
 
 int bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size)

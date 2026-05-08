@@ -81,8 +81,10 @@ set(BELLATRIX_SOURCES
 
     # CIA
     ${SRC}/chipset/cia/cia.c
-    ${SRC}/chipset/cia/cia_a.c
-    ${SRC}/chipset/cia/cia_b.c
+    ${SRC}/chipset/cia/cia_interrupt.c
+    ${SRC}/chipset/cia/cia_ports.c
+    ${SRC}/chipset/cia/cia_serial.c
+    ${SRC}/chipset/cia/cia_timers.c
     ${SRC}/chipset/cia/cia_tod.c
 
     # Denise
@@ -106,6 +108,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/chipset/rtc/rtc.c
 
     # Input
+    ${SRC}/input/controller_port.c
     ${SRC}/input/keyboard.c
 
     # Debug
@@ -219,6 +222,33 @@ target_compile_options(bellatrix_unit_uart PRIVATE
 
 add_test(NAME bellatrix_unit_uart
          COMMAND bellatrix_unit_uart)
+
+add_executable(bellatrix_unit_cia
+    ${ROOT}/tests/unit/test_cia_core.c
+    ${SRC}/chipset/cia/cia.c
+    ${SRC}/chipset/cia/cia_interrupt.c
+    ${SRC}/chipset/cia/cia_ports.c
+    ${SRC}/chipset/cia/cia_serial.c
+    ${SRC}/chipset/cia/cia_timers.c
+    ${SRC}/chipset/cia/cia_tod.c
+)
+
+target_include_directories(bellatrix_unit_cia PRIVATE
+    ${SRC}/host/posix
+    ${SRC}
+    ${SRC}/core
+)
+
+target_compile_definitions(bellatrix_unit_cia PRIVATE
+    BELLATRIX_HARNESS=1
+)
+
+target_compile_options(bellatrix_unit_cia PRIVATE
+    -Wall -Wextra -Wno-unused-parameter
+)
+
+add_test(NAME bellatrix_unit_cia
+         COMMAND bellatrix_unit_cia)
 
 add_executable(bellatrix_integration_overlay
     ${ROOT}/tests/integration/test_machine_overlay.c

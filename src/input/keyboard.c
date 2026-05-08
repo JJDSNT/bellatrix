@@ -1,6 +1,7 @@
 #include "input/keyboard.h"
 
 #include "chipset/cia/cia.h"
+#include "chipset/cia/cia_serial.h"
 
 #include <string.h>
 
@@ -46,12 +47,55 @@ int bellatrix_keyboard_enqueue_raw(BellatrixKeyboard *kbd, uint8_t rawkey, int p
 
 void bellatrix_keyboard_step(BellatrixKeyboard *kbd, struct CIA_State *cia)
 {
-    if (kbd->count == 0)
+    if (kbd->waiting_handshake)
+    {
+        if (!cia->sdr_full)
+        {
+            kbd->waiting_handshake = 0u;
+            kbd->handshake_low_seen = 0u;
+            kbd->handshake_timeout = 0u;
+        }
+
+        uint8_t sp = cia_serial_sp_output_level(cia);
+
+        if (!sp)
+            kbd->handshake_low_seen = 1u;
+        else if (kbd->handshake_low_seen)
+        {
+            kbd->waiting_handshake = 0u;
+            kbd->handshake_low_seen = 0u;
+            kbd->handshake_timeout = 0u;
+        }
+        else if (kbd->handshake_timeout < 0xFFFFu)
+        {
+            kbd->handshake_timeout++;
+        }
+
+        if (kbd->handshake_timeout > 4096u)
+        {
+            kbd->waiting_handshake = 0u;
+            kbd->handshake_low_seen = 0u;
+            kbd->handshake_timeout = 0u;
+        }
+
+        if (kbd->waiting_handshake)
+            return;
+    }
+
+    if (kbd->count == 0 || cia->sdr_full)
         return;
 
-    if (!cia_receive_sdr(cia, kbd->queue[kbd->head]))
+    if (!cia_serial_receive_byte(cia, kbd->queue[kbd->head]))
         return;
 
+    /* The host keyboard is modeled as an external device that has already
+     * serialized the wire byte. Keep the post-byte handshake so the guest
+     * can acknowledge before the next queued event is delivered. */
+    cia_set_sp_level(cia, 1u);
+    cia_set_cnt_level(cia, 1u);
     kbd->head = (uint8_t)((kbd->head + 1u) % BELLATRIX_KEYBOARD_QUEUE_CAP);
     kbd->count--;
+    kbd->waiting_handshake = 1u;
+    kbd->handshake_low_seen = 0u;
+    kbd->handshake_timeout = 0u;
 }

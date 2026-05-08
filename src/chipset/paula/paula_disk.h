@@ -10,6 +10,7 @@
 
 #define PAULA_INTREQ_DSKBLK  0x0002u
 #define PAULA_INTREQ_DSKSYNC 0x1000u
+#define PAULA_DISK_MFM_TRACK_BYTES_PAL 12668u
 
 typedef void (*PaulaDiskIntreqFn)(void *user, uint16_t bits);
 
@@ -17,6 +18,7 @@ typedef struct PaulaDisk {
     uint32_t dskptr;
     uint16_t dsklen;
     uint16_t dskbytr;
+    uint16_t dskdatr;
     uint16_t dsksync;
     uint16_t adkcon;
 
@@ -29,6 +31,12 @@ typedef struct PaulaDisk {
 
     uint16_t armed_dsklen;
     uint32_t countdown;
+    uint32_t dma_ptr_base;
+    uint32_t dma_bytes_total;
+    uint32_t dma_bytes_done;
+    uint32_t dma_src_offset;
+    uint32_t dma_track_len;
+    uint8_t dma_track_buf[PAULA_DISK_MFM_TRACK_BYTES_PAL];
 
     FloppyDrive *drive;
 
@@ -52,7 +60,10 @@ void paula_disk_write_dsksync(PaulaDisk *pd, uint16_t value);
 void paula_disk_write_adkcon(PaulaDisk *pd, uint16_t value);
 
 uint16_t paula_disk_read_dskbytr(PaulaDisk *pd);
+uint16_t paula_disk_read_dskdatr(const PaulaDisk *pd);
 
 void paula_disk_step(PaulaDisk *pd, uint32_t cycles);
+int  paula_disk_dma_wants_service(const PaulaDisk *pd);
+void paula_disk_dma_service_grant(PaulaDisk *pd);
 
 #endif
