@@ -1,41 +1,41 @@
-• Achados
 
-  1. Alta: o scroll fino em lowres está sendo lido do nibble errado de BPLCON1, então o alinhamento horizontal do display pode ficar deslocado ou sumir.
-     Em Bellatrix, src/chipset/denise/denise.c:135 usa bplcon1 >> 4 para lowres e o nibble baixo só para hires. No referencias/emu, o caminho de output usa *BPLCON1 & 0xF tanto no trecho hires quanto no
-     lowres, por exemplo em referencias/emu/c/omega2/chipset/agnus/Bitplane.c:514 e referencias/emu/c/omega2/chipset/agnus/Bitplane.c:707. Se o boot screen depende do scroll padrão da copperlist, o Bellatrix
-     começa a desenhar na fase errada.
-  2. Alta: o Bellatrix calcula a fase DIW/DDF, mas na prática ignora esse resultado e ancora sempre a imagem em src_first_pixel = 0.
-     A helper existe em src/chipset/denise/denise.c:148, mas no render ela nunca é usada; phase_pixels fica 0 e o código força src_first_pixel = 0 em src/chipset/denise/denise.c:683 e src/chipset/denise/
-     denise.c:698. No referencias/emu, o output nasce do relacionamento entre beam, DIWSTRT/DIWSTOP, DDFSTRT/DDFSTOP e BPLCON1, não de uma linha já pronta “ancorada” no zero, por exemplo em referencias/emu/c/
-     omega2/chipset/agnus/Bitplane.c:509 e referencias/emu/c/omega2/chipset/agnus/Bitplane.c:699. Isso é um candidato forte para explicar “CPU roda, mas o boot screen não aparece”.
-  3. Alta: DIWHIGH não existe no modelo do Bellatrix.
-     No referencias/emu, DIWHIGH é registrado em referencias/emu/c/omega2/chipset/Chipset.c:1564. No Bellatrix não há constante nem handler correspondente em src/chipset/agnus/agnus.h:21 e src/chipset/agnus/
-     agnus.c:523. Além disso, o cálculo de janela usa só os 8 bits baixos/altos de DIWSTRT/DIWSTOP em src/chipset/agnus/bitplanes.c:37 e src/chipset/denise/denise.c:102. Se a ROM ou a copperlist mexe nos bits
-     altos da janela, o Bellatrix simplesmente ignora.
-  4. Média: o Bellatrix está mascarando um problema de DMA de bitplane com um fallback não-hardware.
-     Em src/chipset/agnus/bitplanes.c:97, se DMAEN está ligado mas BPLEN não, o código ainda assim força fetch se achar BPLCON0 e ponteiros “coerentes”. O referencias/emu não faz isso; o fetch depende do
-     estado DMA real. Isso talvez não seja a causa direta da tela preta, mas mostra que o pipeline ainda não está fechado nos mesmos contratos do emu de referência.
-  5. Média: a arquitetura de vídeo do Bellatrix ainda é mais “linha pronta” do que “pipeline de fetch + output”.
-     O Bellatrix captura palavras da linha em src/chipset/agnus/bitplanes.c:328, marca line_ready e só depois compõe tudo em src/chipset/denise/denise.c:562. O referencias/emu mistura fetch e saída ao
-     framebuffer no mesmo fluxo de beam/DMA em referencias/emu/c/omega2/chipset/agnus/Bitplane.c:699. Isso importa para start/stop reais do display, reset de HAM, scroll e qualquer efeito de phase/window. Não
-     é um bug isolado, é uma diferença estrutural.
+● Encontrei o bug! agnus_read() usa (void)size — ignora o tamanho. Quando o CPU faz leitura de byte de $DFF002, o harness devolve a palavra completa de DMACONR, e o Musashi pega o byte baixo ($DFF003 = 0xd0
+  com BLTEN=1 no bit 6) em vez do byte alto ($DFF002). O bit 6 do byte errado está sempre 1 → loop infinito.
 
-  Leitura geral
+  Há também um erro secundário nas constantes de bit: BBUSY=0x4000 (bit 14) e BZERO=0x2000 (bit 13), mas no hardware real BBUSY=0x8000 (bit 15) e BZERO=0x4000 (bit 14).
 
-  Se eu tivesse que apostar em um motivo principal para o referencias/emu chegar no boot screen e o Bellatrix não, eu começaria por estes três pontos, nesta ordem:
+  Vou verificar se paula_read e denise_read têm o mesmo problema antes de corrigir tudo de uma vez.
 
-  1. BPLCON1 lowres interpretado errado.
-  2. Fase horizontal DIW/DDF efetivamente ignorada no Denise.
-  3. Ausência total de DIWHIGH.
+  Searched for 1 pattern (ctrl+o to expand)
 
-  O copper do Bellatrix não me parece o primeiro culpado por leitura estática; a discrepância mais gritante está mesmo no pipeline de vídeo.
+● Bash(sed -n '245,260p' /home/jaime/bellatrix/src/chipset/paula/paula.c && echo "---" && sed -n '263,278p' /home/jaime/bellatrix/src/chipset/denise/denise.c)
+  ⎿  uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
+     {
+         (void)size;
+     … +30 lines (ctrl+o to expand)
 
-  Próximo passo por código
+● Ambos têm (void)size. Vou corrigir tudo de uma vez: extração de byte em agnus_read/paula_read, e as constantes de bit BBUSY/BZERO nas definições.
 
-  Eu atacaria assim:
+  Primeiro vou verificar o estado inicial de blitter.zero:
 
-  1. Corrigir denise_fine_scroll_pixels() para lowres usar o mesmo nibble do referencias/emu.
-  2. Fazer o render usar de verdade a fase calculada entre DDFSTRT, DIWSTRT e BPLCON1, em vez de zerar src_first_pixel.
-  3. Adicionar DIWHIGH ao estado de Agnus/Denise e refazer os helpers de janela para considerar os bits altos.
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
 
-  Se quiser, eu posso implementar exatamente esses três ajustes agora.
+● blitter.zero = 1 no init, e a callback agnus_dma_blitter_zero_cb retorna s->blitter.zero. O loop vai continuar girando enquanto blitter.zero=1. Preciso ver se a blitter executa e atualiza esse flag. Vou ler
+  blitter.c ao redor do trecho onde zero é calculado:
+
+  Read 1 file (ctrl+o to expand)
+
+● Vou checar se a blitter está sendo acionada durante o boot, e depois fazer os dois fixes (extração de byte + constantes BBUSY/BZERO) de uma vez:
+
+
+When writing the low word of a Blitter pointer register, Omega keeps all 16 bits.
+SAE / UAE always deletes the least significant bit which makes the address even:
+
+bltapt = ((bltapt & 0xffff0000) | (v & 0xfffe)) >>> 0;
+Although it has no effect on the copy Blitter in Omega, the line Blitter sometimes computes different results if the least significant bit is set or cleared.
+
+Yeah, this is a known issue with my linedraw algorithm.
+
+Due to it internally using native CPU sized variables for the calculations, if you lose the least significant bit, then the lines don’t draw correctly under certain conditions.
+
+My linedraw algorithm is not what Angus actually uses... as I said before, it’s good enough to get you going, but you will probably have to replace it for accuracy in future 
