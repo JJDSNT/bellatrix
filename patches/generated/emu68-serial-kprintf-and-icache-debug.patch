@@ -1,0 +1,119 @@
+diff --git a/include/support.h b/include/support.h
+index 742d6c3..6eca088 100644
+--- a/include/support.h
++++ b/include/support.h
+@@ -117,6 +117,8 @@ void vkprintf_pc(putc_func putc_f, void *putc_data, const char * format, va_list
+ void kprintf_pc(putc_func putc_f, void *putc_data, const char * format, ...);
+ void vkprintf(const char * format, va_list args);
+ void kprintf(const char * format, ...);
++void kprintf_set_enabled(int enabled);
++int kprintf_get_enabled(void);
+ void arm_flush_cache(uintptr_t addr, uint32_t length);
+ void arm_icache_invalidate(uintptr_t addr, uint32_t length);
+ void arm_dcache_invalidate(uintptr_t addr, uint32_t length);
+diff --git a/src/cache.c b/src/cache.c
+index 3e5b953..b58f421 100644
+--- a/src/cache.c
++++ b/src/cache.c
+@@ -537,6 +537,8 @@ uint16_t cache_read_16(enum CacheType type, uint32_t address)
+     const uint32_t tag = GET_TAG(address);
+     const uint32_t set = GET_SET(address);
+     int way = -1;
++    int trace_addr = ((address >= 0x002e0000 && address < 0x002e0200) ||
++                      (address >= 0x0003f800 && address < 0x00040000));
+ 
+     if (address >= 0x01000000)
+         return *(uint16_t *)(uintptr_t)address;
+@@ -560,6 +562,13 @@ uint16_t cache_read_16(enum CacheType type, uint32_t address)
+ 
+     D(kprintf("[CACHE] %cCache read_16(%08lx)\n", type == ICACHE ? 'I':'D', address));
+ 
++    if (trace_addr)
++    {
++        kprintf("[ICACHE-R16-REQ] type=%c addr=%08x\n",
++                type == ICACHE ? 'I' : 'D',
++                address);
++    }
++
+     D(kprintf("[CACHE]   set = %u, ", set));
+     D(kprintf("tag = %08x, ", tag));
+ 
+@@ -610,6 +619,16 @@ uint16_t cache_read_16(enum CacheType type, uint32_t address)
+         //kprintf("[CACHE]   loading line from address %08x\n", address & 0xfffffff0);
+         cache->c_Lines[set][way].cl_128 = *(uint128_t *)(uintptr_t)(address & 0xfffffff0);
+ 
++        if (trace_addr)
++        {
++            uint32_t line = address & 0xfffffff0u;
++            uint16_t *w = (uint16_t *)(void *)&cache->c_Lines[set][way].cl_8[0];
++            kprintf("[ICACHE-LINE] addr=%08x words=%04x %04x %04x %04x %04x %04x %04x %04x\n",
++                    line,
++                    (unsigned)w[0], (unsigned)w[1], (unsigned)w[2], (unsigned)w[3],
++                    (unsigned)w[4], (unsigned)w[5], (unsigned)w[6], (unsigned)w[7]);
++        }
++
+         /* Update tag, mark page as valid */
+         cache->c_Flags[set][way] = F_VALID;
+         cache->c_Tags[set][way] = tag;
+@@ -621,6 +640,16 @@ uint16_t cache_read_16(enum CacheType type, uint32_t address)
+     uint16_t data = *(uint16_t *)(void *)&cache->c_Lines[set][way].cl_8[address & 15];
+     D(kprintf("[CACHE]   => %04x\n", data));
+ 
++    if (trace_addr)
++    {
++        kprintf("[ICACHE-R16] addr=%08x val=%04x way=%d set=%u tag=%08x\n",
++                address,
++                (unsigned)data,
++                way,
++                set,
++                tag);
++    }
++
+     return data;
+ }
+ 
+@@ -1281,4 +1310,3 @@ int cache_write_8(enum CacheType type, uint32_t address, uint8_t data, uint8_t w
+ 
+     return 1;
+ }
+-
+diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
+index 8e8bd73..e6d688d 100644
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -127,9 +127,24 @@ static inline void putByte(void *io_base, char chr)
+ #define ARM_PERIIOBASE 0xf2000000
+ 
+ volatile unsigned char print_lock = 0;
++static volatile int print_enabled = 1;
++
++void kprintf_set_enabled(int enabled)
++{
++    __atomic_store_n(&print_enabled, enabled ? 1 : 0, __ATOMIC_RELEASE);
++}
++
++int kprintf_get_enabled(void)
++{
++    return __atomic_load_n(&print_enabled, __ATOMIC_ACQUIRE);
++}
+ 
+ void kprintf(const char * restrict format, ...)
+ {
++    if (!kprintf_get_enabled()) {
++        return;
++    }
++
+     va_list v;
+     va_start(v, format);
+ 
+@@ -144,6 +159,10 @@ void kprintf(const char * restrict format, ...)
+ 
+ void vkprintf(const char * restrict format, va_list args)
+ {
++    if (!kprintf_get_enabled()) {
++        return;
++    }
++
+     while(__atomic_test_and_set(&print_lock, __ATOMIC_ACQUIRE)) asm volatile("yield");
+ 
+     vkprintf_pc(putByte, (void*)ARM_PERIIOBASE, format, args);

@@ -89,6 +89,7 @@ set(BELLATRIX_SOURCES
 
     # Denise
     ${SRC}/chipset/denise/denise.c
+    ${SRC}/chipset/denise/sprites.c
 
     # Floppy
     ${SRC}/chipset/floppy/floppy_drive.c
@@ -98,6 +99,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/chipset/paula/paula_input.c
     ${SRC}/chipset/paula/paula_interrupt.c
     ${SRC}/chipset/paula/paula_disk.c
+    ${SRC}/chipset/paula/paula_audio.c
     ${SRC}/chipset/paula/paula_serial.c
     ${SRC}/io/serial/null_modem.c
     ${SRC}/io/serial/serial_backend.c
@@ -122,6 +124,9 @@ set(BELLATRIX_SOURCES
     ${SRC}/host/posix/pal_posix.c
     ${SRC}/host/raspi3/miniuart_backend.c
     ${SRC}/host/raspi3/pl011_backend.c
+
+    # Runtime
+    ${SRC}/runtime/affinity.c
 )
 
 # ---------------------------------------------------------------------------
@@ -165,7 +170,8 @@ endif()
 # ---------------------------------------------------------------------------
 # Link
 # ---------------------------------------------------------------------------
-target_link_libraries(harness PRIVATE musashi m)
+find_package(Threads REQUIRED)
+target_link_libraries(harness PRIVATE musashi m Threads::Threads)
 
 target_compile_options(harness PRIVATE
     -Wall -Wextra -Wno-unused-parameter

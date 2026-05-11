@@ -34,8 +34,8 @@ static void failf(const char *expr, const char *file, int line,
 static void test_decode_regions(void)
 {
     CHECK_EQ("chip decode", MEM_REGION_CHIP_RAM, memory_map_decode(0x000100u));
-    CHECK_EQ("fast decode lo", MEM_REGION_FAST, memory_map_decode(0x00200000u));
-    CHECK_EQ("fast decode hi", MEM_REGION_FAST, memory_map_decode(0x009fffffu));
+    CHECK_EQ("fast decode lo", MEM_REGION_FAST, memory_map_decode(BELLATRIX_FAST_RAM_BASE));
+    CHECK_EQ("fast decode hi", MEM_REGION_FAST, memory_map_decode(BELLATRIX_FAST_RAM_END));
     CHECK_EQ("z2 decode", MEM_REGION_Z2, memory_map_decode(0x00e80000u));
     CHECK_EQ("exp rom check decode", MEM_REGION_EXP_ROM_CHECK, memory_map_decode(0x00f00000u));
     CHECK_EQ("rom decode", MEM_REGION_ROM, memory_map_decode(0x00f80000u));
@@ -86,13 +86,13 @@ static void test_fast_ram_big_endian(void)
 
     test_memory_init(&mem);
 
-    bellatrix_mem_write32(&mem, 0x00200000u, 0x12345678u);
+    bellatrix_mem_write32(&mem, BELLATRIX_FAST_RAM_BASE, 0x12345678u);
 
-    CHECK_EQ("fast read32", 0x12345678u, bellatrix_mem_read32(&mem, 0x00200000u));
-    CHECK_EQ("fast read16 hi", 0x1234u, bellatrix_mem_read16(&mem, 0x00200000u));
-    CHECK_EQ("fast read16 lo", 0x5678u, bellatrix_mem_read16(&mem, 0x00200002u));
-    CHECK_EQ("fast read8 b0", 0x12u, bellatrix_mem_read8(&mem, 0x00200000u));
-    CHECK_EQ("fast read8 b3", 0x78u, bellatrix_mem_read8(&mem, 0x00200003u));
+    CHECK_EQ("fast read32", 0x12345678u, bellatrix_mem_read32(&mem, BELLATRIX_FAST_RAM_BASE));
+    CHECK_EQ("fast read16 hi", 0x1234u, bellatrix_mem_read16(&mem, BELLATRIX_FAST_RAM_BASE));
+    CHECK_EQ("fast read16 lo", 0x5678u, bellatrix_mem_read16(&mem, BELLATRIX_FAST_RAM_BASE + 2u));
+    CHECK_EQ("fast read8 b0", 0x12u, bellatrix_mem_read8(&mem, BELLATRIX_FAST_RAM_BASE));
+    CHECK_EQ("fast read8 b3", 0x78u, bellatrix_mem_read8(&mem, BELLATRIX_FAST_RAM_BASE + 3u));
 }
 
 static void test_autoconfig_window_is_empty(void)
@@ -123,47 +123,49 @@ static void test_expansion_rom_probe_window_is_neutral(void)
 static void test_chip_ram_bank_independence(void)
 {
     BellatrixMemory mem;
+    const uint32_t stride = BELLATRIX_CHIP_RAM_SIZE / 4u;
 
     test_memory_init(&mem);
 
     bellatrix_chip_write32(&mem, 0x000000u, 0x11223344u);
-    bellatrix_chip_write32(&mem, 0x080000u, 0x55667788u);
-    bellatrix_chip_write32(&mem, 0x100000u, 0x99aabbccu);
-    bellatrix_chip_write32(&mem, 0x180000u, 0xddeeff00u);
+    bellatrix_chip_write32(&mem, stride, 0x55667788u);
+    bellatrix_chip_write32(&mem, stride * 2u, 0x99aabbccu);
+    bellatrix_chip_write32(&mem, stride * 3u, 0xddeeff00u);
 
     CHECK_EQ("chip bank 0 keeps own pattern",
              0x11223344u,
              bellatrix_chip_read32(&mem, 0x000000u));
     CHECK_EQ("chip bank 1 keeps own pattern",
              0x55667788u,
-             bellatrix_chip_read32(&mem, 0x080000u));
+             bellatrix_chip_read32(&mem, stride));
     CHECK_EQ("chip bank 2 keeps own pattern",
              0x99aabbccu,
-             bellatrix_chip_read32(&mem, 0x100000u));
+             bellatrix_chip_read32(&mem, stride * 2u));
     CHECK_EQ("chip bank 3 keeps own pattern",
              0xddeeff00u,
-             bellatrix_chip_read32(&mem, 0x180000u));
+             bellatrix_chip_read32(&mem, stride * 3u));
 }
 
 static void test_chip_ram_top_boundary_wrap(void)
 {
     BellatrixMemory mem;
+    const uint32_t top = BELLATRIX_CHIP_RAM_SIZE - 2u;
 
     test_memory_init(&mem);
 
     bellatrix_chip_write8(&mem, 0x000000u, 0x00u);
     bellatrix_chip_write8(&mem, 0x000001u, 0x00u);
-    bellatrix_chip_write32(&mem, 0x001ffffeu, 0xa1b2c3d4u);
+    bellatrix_chip_write32(&mem, top, 0xa1b2c3d4u);
 
     CHECK_EQ("chip top read32 wraps into low bytes",
              0xa1b2c3d4u,
-             bellatrix_chip_read32(&mem, 0x001ffffeu));
+             bellatrix_chip_read32(&mem, top));
     CHECK_EQ("chip top byte 0 written at last even address",
              0xa1u,
-             bellatrix_chip_read8(&mem, 0x001ffffeu));
+             bellatrix_chip_read8(&mem, top));
     CHECK_EQ("chip top byte 1 written at last odd address",
              0xb2u,
-             bellatrix_chip_read8(&mem, 0x001fffffu));
+             bellatrix_chip_read8(&mem, top + 1u));
     CHECK_EQ("chip wrap updates low byte 0",
              0xc3u,
              bellatrix_chip_read8(&mem, 0x000000u));
@@ -181,10 +183,10 @@ static void test_chip_ram_wrap_helper_and_overlay_probe_visibility(void)
 
     CHECK_EQ("chip wrap helper wraps exact size",
              0x000000u,
-             bellatrix_chip_wrap_addr(&mem, 0x00200000u));
+             bellatrix_chip_wrap_addr(&mem, BELLATRIX_CHIP_RAM_SIZE));
     CHECK_EQ("chip wrap helper wraps arbitrary offset",
              0x000123u,
-             bellatrix_chip_wrap_addr(&mem, 0x00200123u));
+             bellatrix_chip_wrap_addr(&mem, BELLATRIX_CHIP_RAM_SIZE + 0x123u));
 
     rom[0] = 0xdeu;
     rom[1] = 0xadu;

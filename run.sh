@@ -157,6 +157,9 @@ load_launcher_selection() {
             KICKSTART)
                 KICKSTART="$value"
                 ;;
+            ADF)
+                ADF="$value"
+                ;;
             DISPLAY_MODE)
                 DISPLAY_MODE="$value"
                 ;;
@@ -348,6 +351,13 @@ case "$MODE" in
         #   debug         — print JIT block stats for every compiled M68k block
         #   disassemble   — print M68k + AArch64 side-by-side for each compiled block
         # Default: enable_cache only (minimal noise, JIT works correctly)
+        #
+        # AMIGA_SERIAL (env var):
+        #   unset / log   — Amiga serial → mini-UART → second QEMU serial → /dev/stderr
+        #                   Output appears mixed with the kprintf debug log (default)
+        #   pty           — Amiga serial → mini-UART → second QEMU serial → PTY
+        #                   Script pauses until you connect screen, then boots guest:
+        #                     screen /dev/pts/X 9600
         QEMU_ARGS=(
             -M raspi3b
             -accel tcg,tb-size=64
@@ -371,6 +381,60 @@ case "$MODE" in
         echo "[RUN] Image: $IMAGE"
         echo "[RUN] DTB:   $DTB"
         echo "[RUN] Display mode: $DISPLAY_MODE"
+
+        if [ "${AMIGA_SERIAL:-log}" = "pty" ]; then
+            # Detect the PTY by watching /dev/pts/ for new entries — reliable regardless
+            # of which fd QEMU uses to print the "char device redirected" message.
+            _MON_SOCK="/tmp/bellatrix-qemu-mon-$$.sock"
+            trap 'rm -f "$_MON_SOCK"' EXIT
+
+            # Snapshot existing PTY numbers before starting QEMU
+            _PTS_BEFORE=$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort)
+
+            QEMU_ARGS+=(
+                -chardev pty,id=amiga_serial
+                -serial chardev:amiga_serial
+                -S
+                -monitor "unix:${_MON_SOCK},server=on,wait=off"
+            )
+
+            # stdin from /dev/null so QEMU doesn't compete with our read below
+            qemu-system-aarch64 "${QEMU_ARGS[@]}" </dev/null &
+            _QEMU_PID=$!
+
+            # wait up to 5 s for a new /dev/pts/N to appear
+            _PTY=""
+            for _ in $(seq 1 100); do
+                _PTS_AFTER=$(ls /dev/pts/ 2>/dev/null | grep -E '^[0-9]+$' | sort)
+                _NEW=$(comm -13 <(echo "$_PTS_BEFORE") <(echo "$_PTS_AFTER") | head -1)
+                if [ -n "$_NEW" ]; then
+                    _PTY="/dev/pts/$_NEW"
+                    break
+                fi
+                sleep 0.05
+            done
+
+            if [ -z "$_PTY" ]; then
+                echo "ERROR: no new PTY appeared after starting QEMU" >&2
+                kill "$_QEMU_PID" 2>/dev/null; wait "$_QEMU_PID" 2>/dev/null || true
+                exit 1
+            fi
+
+            echo "" >&2
+            echo "[SERIAL] Amiga serial PTY: $_PTY" >&2
+            echo "[SERIAL] Guest is PAUSED. In another terminal:" >&2
+            echo "[SERIAL]   screen $_PTY 9600" >&2
+            printf '[SERIAL] Press Enter here to boot... ' >&2
+            read -r _ </dev/tty
+
+            # resume guest via QEMU monitor
+            printf 'cont\n' | nc -U "$_MON_SOCK" >/dev/null 2>&1 || true
+
+            wait "$_QEMU_PID"
+            _QEMU_EXIT=$?
+            exit "$_QEMU_EXIT"
+        fi
+
         exec qemu-system-aarch64 "${QEMU_ARGS[@]}"
         ;;
     raspi)

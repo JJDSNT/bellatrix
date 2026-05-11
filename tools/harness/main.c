@@ -720,7 +720,7 @@ static uint8_t *load_file_limited(const char *path,
  * Chip RAM — static host buffer (replaces Emu68 kernel-virtual address)
  * ------------------------------------------------------------------------- */
 
-static uint8_t s_chip_ram[2 * 1024 * 1024];
+static uint8_t s_chip_ram[BELLATRIX_CHIP_RAM_SIZE];
 
 static void harness_memory_init(BellatrixMemory *m)
 {

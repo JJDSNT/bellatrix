@@ -43,6 +43,14 @@ apply_patch_if_needed() {
         fi
     fi
 
+    if [ "$name" = "0001-add-bellatrix-variant-cmake.patch" ]; then
+        if grep -Fq 'set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm32lite" "bellatrix")' CMakeLists.txt &&
+           grep -Fq 'elseif(${VARIANT} STREQUAL "bellatrix")' CMakeLists.txt; then
+            echo "Patch already applied (built-in Bellatrix variant detected): $name"
+            return 0
+        fi
+    fi
+
     if git apply --check "$patch" >/dev/null 2>&1; then
         echo "Applying patch: $name"
         git apply "$patch"

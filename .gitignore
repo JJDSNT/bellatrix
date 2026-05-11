@@ -7,6 +7,7 @@ tools/launcher/bin/
 
 out/
 tools/harness/build/
+build_harness/
 
 # local notes / scratch
 docs/temp/

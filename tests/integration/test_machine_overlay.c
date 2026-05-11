@@ -1,4 +1,5 @@
 #include "core/machine.h"
+#include "chipset/denise/sprites.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -6,6 +7,10 @@
 #include <string.h>
 
 #define REG_ADKCON 0x00dff09eu
+#define REG_JOY0DAT 0x00dff00au
+#define REG_JOY1DAT 0x00dff00cu
+#define REG_POTGOR 0x00dff016u
+#define REG_POTGO 0x00dff034u
 #define REG_DSKBYTR 0x00dff01au
 #define REG_DSKPTH 0x00dff020u
 #define REG_DSKPTL 0x00dff022u
@@ -15,7 +20,10 @@
 #define REG_COPJMP1 0x00dff088u
 #define REG_DMACON 0x00dff096u
 #define REG_DMACONR 0x00dff002u
+#define REG_DSKDATR 0x00dff008u
 #define REG_DSKSYNC 0x00dff07eu
+#define REG_POT0DAT 0x00dff012u
+#define REG_POT1DAT 0x00dff014u
 #define REG_INTENA 0x00dff09au
 #define REG_INTENAR 0x00dff01cu
 #define REG_INTREQ 0x00dff09cu
@@ -35,6 +43,16 @@
 #define REG_BLTAMOD 0x00dff064u
 #define REG_BLTDMOD 0x00dff066u
 #define REG_BLTBDAT 0x00dff072u
+#define REG_AUD0LCH 0x00dff0a0u
+#define REG_AUD0LCL 0x00dff0a2u
+#define REG_AUD0LEN 0x00dff0a4u
+#define REG_AUD0PER 0x00dff0a6u
+#define REG_AUD0VOL 0x00dff0a8u
+#define REG_AUD0DAT 0x00dff0aau
+#define REG_SPR0PTH 0x00dff120u
+#define REG_SPR0PTL 0x00dff122u
+#define REG_SPR0POS 0x00dff140u
+#define REG_SPR0CTL 0x00dff142u
 #define REG_VPOSR 0x00dff004u
 #define REG_VHPOSR 0x00dff006u
 
@@ -44,6 +62,10 @@
 #define DSKBYTR_DMAON 0x2000u
 #define DSKBYTR_WORDSYNC 0x0800u
 #define DSKLEN_DMAEN 0x8000u
+#define DMAF_DSKEN 0x0010u
+#define DMAF_SPREN 0x0020u
+#define DMAF_AUD0EN 0x0001u
+#define FLOPPY_FAKE_DMA_CYCLES 46000u
 
 static void failf(const char *expr, int expected, int actual, int line)
 {
@@ -89,6 +111,9 @@ static BellatrixMachine *test_machine_init(void)
     return m;
 }
 
+static void raise_cia_a_sp_irq(BellatrixMachine *m);
+static void raise_cia_b_sp_irq(BellatrixMachine *m);
+
 static void test_overlay_switch_via_cia_a(void)
 {
     BellatrixMachine *m;
@@ -123,9 +148,7 @@ static void test_cia_irq_routes_to_paula(void)
 
     m->paula.irq.intena = (uint16_t)(PAULA_INT_MASTER | PAULA_INT_PORTS | PAULA_INT_EXTER);
 
-    cia_write_reg(&m->cia_a, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
-    cia_write_reg(&m->cia_a, CIA_REG_CRA, CIA_CRA_SPMODE);
-    cia_write_reg(&m->cia_a, CIA_REG_SDR, 0x55u);
+    raise_cia_a_sp_irq(m);
 
     CHECK_INT("cia-a irq pending", 1, cia_irq_pending(&m->cia_a));
     CHECK_INT("paula intreq has PORTS", PAULA_INT_PORTS, m->paula.irq.intreq & PAULA_INT_PORTS);
@@ -141,9 +164,7 @@ static void test_cia_irq_routes_to_paula(void)
     CHECK_INT("paula ports line cleared", 0, m->paula.irq.intreq & PAULA_INT_PORTS);
     CHECK_INT("machine ipl returns to 0", 0, m->current_ipl);
 
-    cia_write_reg(&m->cia_b, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
-    cia_write_reg(&m->cia_b, CIA_REG_CRA, CIA_CRA_SPMODE);
-    cia_write_reg(&m->cia_b, CIA_REG_SDR, 0xAAu);
+    raise_cia_b_sp_irq(m);
 
     CHECK_INT("cia-b irq pending", 1, cia_irq_pending(&m->cia_b));
     CHECK_INT("paula intreq has EXTER", PAULA_INT_EXTER, m->paula.irq.intreq & PAULA_INT_EXTER);
@@ -168,6 +189,7 @@ static void test_floppy_signals_reflect_media_state(void)
     m = test_machine_init();
 
     CHECK_INT("insert dummy adf", 1, bellatrix_machine_insert_df0_adf(s_adf, sizeof(s_adf)));
+    bellatrix_machine_write(0x00bfd300u, 0xffu, 1);
 
     bellatrix_machine_write(0x00bfd100u, 0x77u, 1);
     pra = cia_port_a_value(&m->cia_a);
@@ -189,6 +211,134 @@ static void test_floppy_signals_reflect_media_state(void)
 
     CHECK_INT("/DSKCHG low after eject", 0x00, pra & 0x04u);
     CHECK_INT("/WPRO high with no disk", 0x08, pra & 0x08u);
+
+    bellatrix_machine_write(0x00bfd100u, 0x76u, 1);
+    bellatrix_machine_write(0x00bfd100u, 0x77u, 1);
+    pra = cia_port_a_value(&m->cia_a);
+
+    CHECK_INT("/DSKCHG stays low after step with no disk", 0x00, pra & 0x04u);
+}
+
+static void test_mouse_controller_port_wiring(void)
+{
+    BellatrixMachine *m;
+    uint8_t pra;
+    uint16_t joy0;
+    uint16_t joy1;
+    uint16_t pot0dat;
+    uint16_t pot1dat;
+    uint16_t potgor;
+
+    m = test_machine_init();
+
+    pra = cia_port_a_value(&m->cia_a);
+    CHECK_INT("left mouse button port0 idle high", 0x40, pra & 0x40u);
+    CHECK_INT("left mouse button port1 idle high", 0x80, pra & 0x80u);
+
+    bellatrix_machine_mouse_button(0u, 0u, 1);
+    bellatrix_machine_mouse_button(1u, 0u, 1);
+    pra = cia_port_a_value(&m->cia_a);
+    CHECK_INT("left mouse button port0 pulls CIAA PRA bit6 low", 0x00, pra & 0x40u);
+    CHECK_INT("left mouse button port1 pulls CIAA PRA bit7 low", 0x00, pra & 0x80u);
+
+    bellatrix_machine_mouse_button(0u, 0u, 0);
+    bellatrix_machine_mouse_button(1u, 0u, 0);
+    pra = cia_port_a_value(&m->cia_a);
+    CHECK_INT("left mouse button port0 releases CIAA PRA bit6 high", 0x40, pra & 0x40u);
+    CHECK_INT("left mouse button port1 releases CIAA PRA bit7 high", 0x80, pra & 0x80u);
+
+    bellatrix_machine_mouse_motion(0u, 3, -2);
+    bellatrix_machine_mouse_motion(1u, -4, 5);
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    joy1 = (uint16_t)bellatrix_machine_read(REG_JOY1DAT, 2);
+    CHECK_INT("JOY0DAT tracks mouse motion", 0xfe03, joy0);
+    CHECK_INT("JOY1DAT tracks mouse motion", 0x05fc, joy1);
+
+    bellatrix_machine_write(REG_POTGO, 0x0f00u, 2);
+    potgor = (uint16_t)bellatrix_machine_read(REG_POTGOR, 2);
+    pot0dat = (uint16_t)bellatrix_machine_read(REG_POT0DAT, 2);
+    CHECK_INT("POTGOR port0 middle idle high", 0x0100, potgor & 0x0100u);
+    CHECK_INT("POTGOR port0 right idle high", 0x0400, potgor & 0x0400u);
+    CHECK_INT("POT0DAT stays open-circuit in output mode", 0xffff, pot0dat);
+
+    bellatrix_machine_mouse_button(0u, 1u, 1);
+    bellatrix_machine_mouse_button(0u, 2u, 1);
+    CHECK_INT("mouse middle latched in controller port", 1, m->controller_ports.port[0].button2);
+    CHECK_INT("mouse right latched in controller port", 1, m->controller_ports.port[0].button3);
+    CHECK_INT("mouse middle propagated to Paula", 1, m->paula.input.pot_button_x[0]);
+    CHECK_INT("mouse right propagated to Paula", 1, m->paula.input.pot_button_y[0]);
+    bellatrix_machine_write(REG_POTGO, 0x0f00u, 2);
+    potgor = (uint16_t)bellatrix_machine_read(REG_POTGOR, 2);
+    CHECK_INT("middle mouse button pulls POTGOR DATLX low", 0x0000, potgor & 0x0100u);
+    CHECK_INT("right mouse button pulls POTGOR DATLY low", 0x0000, potgor & 0x0400u);
+
+    bellatrix_machine_write(REG_POTGO, 0x0000u, 2);
+    pot0dat = (uint16_t)bellatrix_machine_read(REG_POT0DAT, 2);
+    CHECK_INT("POT0DAT reflects both proportional button lines low", 0x0000, pot0dat);
+
+    bellatrix_machine_mouse_button(0u, 1u, 0);
+    bellatrix_machine_mouse_button(0u, 2u, 0);
+    bellatrix_machine_mouse_button(1u, 1u, 1);
+    bellatrix_machine_mouse_button(1u, 2u, 1);
+    bellatrix_machine_write(REG_POTGO, 0xf000u, 2);
+    potgor = (uint16_t)bellatrix_machine_read(REG_POTGOR, 2);
+    CHECK_INT("middle mouse button port1 pulls POTGOR DATRX low", 0x0000, potgor & 0x1000u);
+    CHECK_INT("right mouse button port1 pulls POTGOR DATRY low", 0x0000, potgor & 0x4000u);
+
+    bellatrix_machine_write(REG_POTGO, 0x0000u, 2);
+    pot1dat = (uint16_t)bellatrix_machine_read(REG_POT1DAT, 2);
+    CHECK_INT("POT1DAT reflects both proportional button lines low", 0x0000, pot1dat);
+}
+
+static void test_joystick_controller_port_wiring(void)
+{
+    BellatrixMachine *m;
+    uint8_t pra;
+    uint16_t joy0;
+    uint16_t potgor;
+
+    m = test_machine_init();
+
+    bellatrix_machine_controller_set_device(0u, BELLATRIX_CONTROLLER_PORT_JOYSTICK);
+
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    CHECK_INT("joystick port starts neutral", 0x0000, joy0);
+
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_UP, 1);
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    CHECK_INT("joystick up encodes forward on Y xor", 0x0100, joy0);
+
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_LEFT, 1);
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    CHECK_INT("joystick up-left encodes left and forward", 0x0200, joy0);
+
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_UP, 0);
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    CHECK_INT("joystick left encodes direct left bit", 0x0300, joy0);
+
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_LEFT, 0);
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_RIGHT, 1);
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    CHECK_INT("joystick right encodes direct right bit", 0x0003, joy0);
+
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_RIGHT, 0);
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_DOWN, 1);
+    joy0 = (uint16_t)bellatrix_machine_read(REG_JOY0DAT, 2);
+    CHECK_INT("joystick down encodes back on X xor", 0x0001, joy0);
+
+    bellatrix_machine_joystick_direction(0u, BELLATRIX_JOYSTICK_DOWN, 0);
+    bellatrix_machine_joystick_button(0u, BELLATRIX_CONTROLLER_BUTTON_PRIMARY, 1);
+    pra = cia_port_a_value(&m->cia_a);
+    CHECK_INT("joystick primary fire pulls CIAA PRA bit6 low", 0x0000, pra & 0x40u);
+
+    bellatrix_machine_write(REG_POTGO, 0x0f00u, 2);
+    bellatrix_machine_joystick_button(0u, BELLATRIX_CONTROLLER_BUTTON_SECONDARY, 1);
+    potgor = (uint16_t)bellatrix_machine_read(REG_POTGOR, 2);
+    CHECK_INT("joystick second button uses POTGOR DATLX", 0x0000, potgor & 0x0100u);
+
+    bellatrix_machine_joystick_button(0u, BELLATRIX_CONTROLLER_BUTTON_TERTIARY, 1);
+    potgor = (uint16_t)bellatrix_machine_read(REG_POTGOR, 2);
+    CHECK_INT("joystick third button uses POTGOR DATLY", 0x0000, potgor & 0x0400u);
 }
 
 static void test_paula_intreq_ack_reasserts_level_lines(void)
@@ -201,9 +351,7 @@ static void test_paula_intreq_ack_reasserts_level_lines(void)
                             PAULA_INT_MASTER | PAULA_INT_PORTS | 0x8000u,
                             2);
 
-    cia_write_reg(&m->cia_a, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
-    cia_write_reg(&m->cia_a, CIA_REG_CRA, CIA_CRA_SPMODE);
-    cia_write_reg(&m->cia_a, CIA_REG_SDR, 0x55u);
+    raise_cia_a_sp_irq(m);
     bellatrix_machine_sync_ipl();
 
     CHECK_INT("ports irq reaches paula", PAULA_INT_PORTS, m->paula.irq.intreq & PAULA_INT_PORTS);
@@ -231,6 +379,7 @@ static void test_paula_disk_dma_irq_contract(void)
     const uint32_t dskptr = 0x1000u;
     const uint16_t dsklen = (uint16_t)(DSKLEN_DMAEN | 32u);
     uint16_t dskbytr;
+    uint16_t dskdatr;
 
     m = test_machine_init();
     memset(s_chip_ram, 0, sizeof(s_chip_ram));
@@ -238,6 +387,8 @@ static void test_paula_disk_dma_irq_contract(void)
     CHECK_INT("insert dummy adf for disk dma",
               1,
               bellatrix_machine_insert_df0_adf(s_adf, sizeof(s_adf)));
+
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_DSKEN, 2);
 
     bellatrix_machine_write(REG_INTENA,
                             0x8000u | PAULA_INT_MASTER | PAULA_INT_DSKSYN | PAULA_INT_DSKBLK,
@@ -259,9 +410,12 @@ static void test_paula_disk_dma_irq_contract(void)
     CHECK_INT("sync irq publishes ipl5", 5, m->current_ipl);
 
     dskbytr = (uint16_t)bellatrix_machine_read(REG_DSKBYTR, 2);
+    dskdatr = (uint16_t)bellatrix_machine_read(REG_DSKDATR, 2);
     CHECK_INT("dskbytr reports latched data", DSKBYTR_DATA, dskbytr & DSKBYTR_DATA);
     CHECK_INT("dskbytr reports dma active", DSKBYTR_DMAON, dskbytr & DSKBYTR_DMAON);
     CHECK_INT("dskbytr reports wordsync", DSKBYTR_WORDSYNC, dskbytr & DSKBYTR_WORDSYNC);
+    CHECK_INT("dskdatr readback matches Paula disk latch", m->paula.disk.dskdatr, dskdatr);
+    CHECK_INT("dskdatr exposes a non-zero disk word", 1, dskdatr != 0u ? 1 : 0);
 
     bellatrix_machine_write(REG_INTREQ, PAULA_INT_DSKSYN, 2);
     bellatrix_machine_sync_ipl();
@@ -269,10 +423,10 @@ static void test_paula_disk_dma_irq_contract(void)
     CHECK_INT("sync irq can be acked like edge event", 0, m->paula.irq.intreq & PAULA_INT_DSKSYN);
     CHECK_INT("ipl drops after sync ack while dma still runs", 0, m->current_ipl);
 
-    bellatrix_machine_advance(46000u);
+    bellatrix_machine_advance(32u);
     bellatrix_machine_sync_ipl();
 
-    CHECK_INT("dma completes after countdown", 0, m->paula.disk.dma_active);
+    CHECK_INT("dma completes after 32 word grants", 0, m->paula.disk.dma_active);
     CHECK_INT("dskblk irq latched on completion", PAULA_INT_DSKBLK, m->paula.irq.intreq & PAULA_INT_DSKBLK);
     CHECK_INT("dskptr advanced by transfer length", dskptr + 64u, (int)m->paula.disk.dskptr);
     CHECK_INT("chip ram received encoded mfm bytes", 0xAA, s_chip_ram[dskptr]);
@@ -283,6 +437,142 @@ static void test_paula_disk_dma_irq_contract(void)
 
     CHECK_INT("dskblk ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_DSKBLK);
     CHECK_INT("ipl returns to idle after dskblk ack", 0, m->current_ipl);
+}
+
+static void test_paula_disk_no_media_fake_boot_path(void)
+{
+    BellatrixMachine *m;
+    const uint32_t dskptr = 0x1800u;
+    const uint16_t dsklen = (uint16_t)(DSKLEN_DMAEN | 32u);
+    uint16_t dskbytr;
+    uint16_t dskdatr;
+
+    m = test_machine_init();
+    memset(s_chip_ram, 0, sizeof(s_chip_ram));
+
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_DSKEN, 2);
+    bellatrix_machine_write(REG_INTENA,
+                            0x8000u | PAULA_INT_MASTER | PAULA_INT_DSKSYN | PAULA_INT_DSKBLK,
+                            2);
+    bellatrix_machine_write(REG_DSKSYNC, 0x4489u, 2);
+    bellatrix_machine_write(REG_ADKCON, ADKCON_SETCLR | ADKCON_WORDSYNC, 2);
+    bellatrix_machine_write(REG_DSKPTH, dskptr >> 16, 2);
+    bellatrix_machine_write(REG_DSKPTL, dskptr & 0xFFFFu, 2);
+
+    bellatrix_machine_write(REG_DSKLEN, dsklen, 2);
+    bellatrix_machine_write(REG_DSKLEN, dsklen, 2);
+    bellatrix_machine_sync_ipl();
+
+    CHECK_INT("no-media path still starts dma", 1, m->paula.disk.dma_active);
+    CHECK_INT("no-media path suppresses agnus disk service", 0, (int)m->paula.disk.dma_bytes_total);
+    CHECK_INT("no-media path does not fake sync irq", 0, m->paula.irq.intreq & PAULA_INT_DSKSYN);
+    CHECK_INT("no-media path stays idle before timeout", 0, m->current_ipl);
+
+    dskbytr = (uint16_t)bellatrix_machine_read(REG_DSKBYTR, 2);
+    dskdatr = (uint16_t)bellatrix_machine_read(REG_DSKDATR, 2);
+    CHECK_INT("no-media path reports no latched data", 0, dskbytr & DSKBYTR_DATA);
+    CHECK_INT("no-media path reports dma active", DSKBYTR_DMAON, dskbytr & DSKBYTR_DMAON);
+    CHECK_INT("no-media path reports no wordsync", 0, dskbytr & DSKBYTR_WORDSYNC);
+    CHECK_INT("no-media path leaves dskdatr clear", 0x0000, dskdatr);
+
+    bellatrix_machine_advance(FLOPPY_FAKE_DMA_CYCLES);
+    bellatrix_machine_sync_ipl();
+
+    CHECK_INT("no-media countdown completes dma", 0, m->paula.disk.dma_active);
+    CHECK_INT("no-media path raises dskblk", PAULA_INT_DSKBLK, m->paula.irq.intreq & PAULA_INT_DSKBLK);
+    CHECK_INT("no-media path does not advance dskptr", (int)dskptr, (int)m->paula.disk.dskptr);
+    CHECK_INT("no-media path publishes dskblk at level 1", 1, m->current_ipl);
+
+    bellatrix_machine_write(REG_INTREQ, PAULA_INT_DSKBLK, 2);
+    bellatrix_machine_sync_ipl();
+
+    CHECK_INT("fake dskblk ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_DSKBLK);
+    CHECK_INT("ipl returns to idle after fake dskblk ack", 0, m->current_ipl);
+}
+
+static void test_paula_audio_channel0_irq_real_path(void)
+{
+    BellatrixMachine *m;
+
+    m = test_machine_init();
+
+    bellatrix_machine_write(REG_INTENA,
+                            0x8000u | PAULA_INT_MASTER | PAULA_INT_AUD0,
+                            2);
+    bellatrix_machine_write(REG_DMACON,
+                            0x8000u | DMAF_DMAEN | DMAF_AUD0EN,
+                            2);
+
+    bellatrix_machine_write(REG_AUD0LCH, 0x0000u, 2);
+    bellatrix_machine_write(REG_AUD0LCL, 0x0200u, 2);
+    bellatrix_machine_write(REG_AUD0LEN, 0x0001u, 2);
+    bellatrix_machine_write(REG_AUD0PER, 0x0001u, 2);
+    bellatrix_machine_write(REG_AUD0VOL, 0x0040u, 2);
+    bellatrix_machine_write(REG_AUD0DAT, 0x7F00u, 2);
+
+    bellatrix_machine_advance(1u);
+    bellatrix_machine_sync_ipl();
+
+    CHECK_INT("aud0 irq latched after one sample period",
+              PAULA_INT_AUD0,
+              m->paula.irq.intreq & PAULA_INT_AUD0);
+    CHECK_INT("aud0 publishes level 4",
+              4,
+              m->current_ipl);
+    CHECK_INT("aud0 current sample decoded from auddat",
+              32512,
+              m->paula.audio.ch[0].current_sample);
+
+    bellatrix_machine_write(REG_INTREQ, PAULA_INT_AUD0, 2);
+    bellatrix_machine_sync_ipl();
+
+    CHECK_INT("aud0 ack clears latch", 0, m->paula.irq.intreq & PAULA_INT_AUD0);
+    CHECK_INT("ipl returns to idle after aud0 ack", 0, m->current_ipl);
+}
+
+static void test_agnus_sprite_dma_fetch_real_path(void)
+{
+    BellatrixMachine *m;
+    const uint32_t sprptr = 0x0600u;
+    uint8_t sprite_index = 0xffu;
+
+    m = test_machine_init();
+    memset(s_chip_ram, 0, sizeof(s_chip_ram));
+
+    bellatrix_mem_write16(&m->memory, sprptr + 0u, 0xF000u);
+    bellatrix_mem_write16(&m->memory, sprptr + 2u, 0x3000u);
+
+    bellatrix_machine_write(REG_DMACON,
+                            0x8000u | DMAF_DMAEN | DMAF_SPREN,
+                            2);
+    bellatrix_machine_write(REG_SPR0PTH, sprptr >> 16, 2);
+    bellatrix_machine_write(REG_SPR0PTL, sprptr & 0xFFFFu, 2);
+    bellatrix_machine_write(REG_SPR0POS, 0x0100u, 2);
+    bellatrix_machine_write(REG_SPR0CTL, 0x0200u, 2);
+
+    bellatrix_machine_advance(BEAM_PAL_HPOS);
+
+    CHECK_INT("sprite0 consumed both dma words for the line",
+              0,
+              m->denise.sprites.spr[0].dma_words_pending);
+    CHECK_INT("sprite0 fetched word A from chip ram",
+              0xF000,
+              m->denise.sprites.spr[0].data_a);
+    CHECK_INT("sprite0 fetched word B from chip ram",
+              0x3000,
+              m->denise.sprites.spr[0].data_b);
+    CHECK_INT("sprite0 pointer advanced by one sprite line payload",
+              sprptr + 4u,
+              (int)m->denise.sprites.spr[0].ptr);
+    CHECK_INT("sprite0 becomes armed after dma fetch",
+              1,
+              m->denise.sprites.spr[0].armed);
+    CHECK_INT("sprite0 exposes its first pixel through Denise sprite state",
+              1,
+              denise_sprites_pixel(&m->denise.sprites, 0, &sprite_index));
+    CHECK_INT("sprite0 wins the pixel lookup",
+              0,
+              sprite_index);
 }
 
 static void test_agnus_vblank_irq_real_path(void)
@@ -323,6 +613,7 @@ static void test_agnus_blitter_irq_real_path(void)
     BellatrixMachine *m;
 
     m = test_machine_init();
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_BLTEN, 2);
 
     bellatrix_machine_write(REG_INTENA,
                             0x8000u | PAULA_INT_MASTER | PAULA_INT_BLIT,
@@ -353,6 +644,7 @@ static void test_agnus_blitter_line_mode_writes_chip_ram(void)
 
     m = test_machine_init();
     memset(s_chip_ram, 0, sizeof(s_chip_ram));
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_BLTEN, 2);
 
     bellatrix_machine_write(REG_BLTCON0, 0x0BCAu, 2);
     bellatrix_machine_write(REG_BLTCON1, 0x0011u, 2);
@@ -375,6 +667,39 @@ static void test_agnus_blitter_line_mode_writes_chip_ram(void)
               bellatrix_chip_read16(&m->memory, dst));
 }
 
+static void test_agnus_blitter_line_mode_crosses_16_pixel_word_boundary(void)
+{
+    BellatrixMachine *m;
+    const uint32_t dst = 0x0120u;
+
+    m = test_machine_init();
+    memset(s_chip_ram, 0, sizeof(s_chip_ram));
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_BLTEN, 2);
+
+    bellatrix_machine_write(REG_BLTCON0, 0x0BCAu, 2);
+    bellatrix_machine_write(REG_BLTCON1, 0x0011u, 2);
+    bellatrix_machine_write(REG_BLTCPTH, dst >> 16, 2);
+    bellatrix_machine_write(REG_BLTCPTL, dst & 0xFFFFu, 2);
+    bellatrix_machine_write(REG_BLTDPTH, dst >> 16, 2);
+    bellatrix_machine_write(REG_BLTDPTL, dst & 0xFFFFu, 2);
+    bellatrix_machine_write(REG_BLTAPTL, 0xFFFDu, 2);
+    bellatrix_machine_write(REG_BLTBMOD, 0x0000u, 2);
+    bellatrix_machine_write(REG_BLTAMOD, 0xFFFAu, 2);
+    bellatrix_machine_write(REG_BLTDMOD, 0x0004u, 2);
+    bellatrix_machine_write(REG_BLTBDAT, 0xFFFFu, 2);
+    bellatrix_machine_write(REG_BLTSIZE, 0x0442u, 2);
+
+    bellatrix_machine_advance(34u);
+
+    CHECK_INT("17-pixel line blit completes", 0, m->agnus.blitter.busy);
+    CHECK_INT("first word is fully populated across 16 pixels",
+              0xFFFF,
+              bellatrix_chip_read16(&m->memory, dst));
+    CHECK_INT("17th pixel lands in the next word instead of an odd byte seam",
+              0x8000,
+              bellatrix_chip_read16(&m->memory, dst + 2u));
+}
+
 static void test_agnus_blitter_fill_mode_matches_reference(void)
 {
     BellatrixMachine *m;
@@ -383,6 +708,7 @@ static void test_agnus_blitter_fill_mode_matches_reference(void)
 
     m = test_machine_init();
     memset(s_chip_ram, 0, sizeof(s_chip_ram));
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_BLTEN, 2);
 
     bellatrix_mem_write16(&m->memory, src, 0x9009u);
 
@@ -404,6 +730,42 @@ static void test_agnus_blitter_fill_mode_matches_reference(void)
     CHECK_INT("inclusive fill expands the source edges as in reference",
               0xE00E,
               bellatrix_chip_read16(&m->memory, dst));
+}
+
+static void test_agnus_blitter_copy_preserves_word_continuity_with_first_word_mask(void)
+{
+    BellatrixMachine *m;
+    const uint32_t src = 0x0400u;
+    const uint32_t dst = 0x0500u;
+
+    m = test_machine_init();
+    memset(s_chip_ram, 0, sizeof(s_chip_ram));
+    bellatrix_machine_write(REG_DMACON, 0x8000u | DMAF_DMAEN | DMAF_BLTEN, 2);
+
+    bellatrix_mem_write16(&m->memory, src + 0u, 0x123Fu);
+    bellatrix_mem_write16(&m->memory, src + 2u, 0xABCDu);
+
+    bellatrix_machine_write(REG_BLTCON0, 0x49F0u, 2);
+    bellatrix_machine_write(REG_BLTCON1, 0x0000u, 2);
+    bellatrix_machine_write(REG_BLTAFWM, 0xFFF0u, 2);
+    bellatrix_machine_write(REG_BLTALWM, 0xFFFFu, 2);
+    bellatrix_machine_write(REG_BLTAPTH, src >> 16, 2);
+    bellatrix_machine_write(REG_BLTAPTL, src & 0xFFFFu, 2);
+    bellatrix_machine_write(REG_BLTDPTH, dst >> 16, 2);
+    bellatrix_machine_write(REG_BLTDPTL, dst & 0xFFFFu, 2);
+    bellatrix_machine_write(REG_BLTAMOD, 0x0000u, 2);
+    bellatrix_machine_write(REG_BLTDMOD, 0x0000u, 2);
+    bellatrix_machine_write(REG_BLTSIZE, 0x0042u, 2);
+
+    bellatrix_machine_advance(2u);
+
+    CHECK_INT("masked first word still completes", 0, m->agnus.blitter.busy);
+    CHECK_INT("first destination word reflects masked shifted source",
+              0x0120,
+              bellatrix_chip_read16(&m->memory, dst + 0u));
+    CHECK_INT("second destination word keeps continuity from raw previous source word",
+              0xFABC,
+              bellatrix_chip_read16(&m->memory, dst + 2u));
 }
 
 static void test_agnus_copper_irq_real_path(void)
@@ -519,15 +881,21 @@ static void test_paula_intena_masks_and_unmasks_latched_video_irqs(void)
 static void raise_cia_a_sp_irq(BellatrixMachine *m)
 {
     cia_write_reg(&m->cia_a, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
-    cia_write_reg(&m->cia_a, CIA_REG_CRA, CIA_CRA_SPMODE);
+    cia_write_reg(&m->cia_a, CIA_REG_TALO, 0x00u);
+    cia_write_reg(&m->cia_a, CIA_REG_TAHI, 0x00u);
+    cia_write_reg(&m->cia_a, CIA_REG_CRA, (uint8_t)(CIA_CRA_START | CIA_CRA_SPMODE));
     cia_write_reg(&m->cia_a, CIA_REG_SDR, 0x55u);
+    cia_step(&m->cia_a, 8u);
 }
 
 static void raise_cia_b_sp_irq(BellatrixMachine *m)
 {
     cia_write_reg(&m->cia_b, CIA_REG_ICR, (uint8_t)(CIA_ICR_SETCLR | CIA_ICR_SP));
-    cia_write_reg(&m->cia_b, CIA_REG_CRA, CIA_CRA_SPMODE);
+    cia_write_reg(&m->cia_b, CIA_REG_TALO, 0x00u);
+    cia_write_reg(&m->cia_b, CIA_REG_TAHI, 0x00u);
+    cia_write_reg(&m->cia_b, CIA_REG_CRA, (uint8_t)(CIA_CRA_START | CIA_CRA_SPMODE));
     cia_write_reg(&m->cia_b, CIA_REG_SDR, 0xAAu);
+    cia_step(&m->cia_b, 8u);
 }
 
 static void test_paula_irq_priority_matrix(void)
@@ -723,12 +1091,19 @@ int main(void)
     test_overlay_switch_via_cia_a();
     test_cia_irq_routes_to_paula();
     test_floppy_signals_reflect_media_state();
+    test_mouse_controller_port_wiring();
+    test_joystick_controller_port_wiring();
     test_paula_intreq_ack_reasserts_level_lines();
     test_paula_disk_dma_irq_contract();
+    test_paula_disk_no_media_fake_boot_path();
+    test_paula_audio_channel0_irq_real_path();
+    test_agnus_sprite_dma_fetch_real_path();
     test_agnus_vblank_irq_real_path();
     test_agnus_blitter_irq_real_path();
     test_agnus_blitter_line_mode_writes_chip_ram();
+    test_agnus_blitter_line_mode_crosses_16_pixel_word_boundary();
     test_agnus_blitter_fill_mode_matches_reference();
+    test_agnus_blitter_copy_preserves_word_continuity_with_first_word_mask();
     test_agnus_copper_irq_real_path();
     test_paula_intena_masks_and_unmasks_latched_video_irqs();
     test_paula_irq_priority_matrix();
