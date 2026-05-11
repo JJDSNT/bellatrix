@@ -212,19 +212,12 @@ static void apply_overlay_map(int overlay_enabled)
         return;
     }
 
+    /* Chip RAM is fully R/W: all pages 0x000000-0x07FFFF map directly to
+     * physical chip RAM.  No write-trap for pages 0-1 — the alias between
+     * CHIP_RAM_KVIRT (EL1 write) and the low virtual address (EL0 read)
+     * caused store-buffer coherency failures for programs testing $000400. */
     mmu_map(0x000000, 0x000000, BELLATRIX_ROM_SIZE,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-
-    /* Keep page 0 and the Exec JMP table write-trapped for debug logs.
-     * Reads still succeed because AF=1 stays set. */
-    mmu_map(0x000000, 0x000000, 0x1000,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
-                MMU_READ_ONLY | MMU_ATTR_CACHED,
-            0);
-    mmu_map(0x1000, 0x1000, 0x1000,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
-                MMU_READ_ONLY | MMU_ATTR_CACHED,
-            0);
 }
 
 static void set_overlay(int new_overlay)
@@ -364,9 +357,22 @@ void bellatrix_init(void)
     /* Fast RAM is plain Emu68-backed RAM on the real target.
      * Keep it directly accessible instead of trapping it through Bellatrix.
      * Bellatrix observes the same backing through FAST_RAM_KVIRT.
+     *
+     * NOTE: 0x200000-0xBFFFFF includes the CIA addresses (0xBFD000-0xBFEFFF).
+     * We override those 4K pages below so CIA accesses fault through
+     * bellatrix_bus_access instead of hitting physical DRAM directly.
      */
     mmu_map(0x200000, 0x200000, 0xA00000,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+
+    /* CIA-B ($BFD000) and CIA-A ($BFE000): override the direct Fast RAM
+     * mapping with AF=0 pages so every read and write faults into
+     * bellatrix_bus_access.  Same pattern as Autoconfig at 0xE80000. */
+    mmu_map(0xBFD000, 0xBFD000, 0x1000,
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+    mmu_map(0xBFE000, 0xBFE000, 0x1000,
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+
     mmu_map(0xC00000, 0xC00000, 0x200000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
     mmu_map(0xF00000, 0xF00000, 0x80000,
@@ -509,6 +515,7 @@ void bellatrix_sync_overlay_from_ciaa(void)
 
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 {
+    bellatrix_runtime_notify_cpu_progress(4);
     PAL_Runtime_Poll();
 
     uint32_t result = 0;
