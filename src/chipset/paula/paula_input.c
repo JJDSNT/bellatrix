@@ -104,7 +104,10 @@ static void paula_input_log_pot_buttons_consumed(PaulaInput *input, uint16_t pot
 
 uint16_t paula_input_read_potgor(PaulaInput *input)
 {
-    uint16_t value = 0xFFFFu;
+    /* Low byte (bits 7-0): POT counter idle bits — always 0 when not
+     * running a POT charge cycle.  Returning 0xFF here causes DiagROM's
+     * GetMouseData to set DISPAULA=1, blocking all serial/mouse input. */
+    uint16_t value = 0xFF00u;
 
     if ((input->potgo & 0x0200u) && (input->potgo & 0x0100u) &&
         input->pot_button_x[0]) {

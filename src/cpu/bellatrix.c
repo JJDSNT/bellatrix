@@ -315,6 +315,14 @@ void bellatrix_init(void)
     paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
     m->cia_a.ddra = 0x03;
 
+    /* Inject a space keypress so DiagROM enters serial mode during its
+     * boot-time "hold ANY key" window (diagrom.s waitloop ~line 2291,
+     * after RealLoopbacktest).  The byte sits in the keyboard FIFO and
+     * is delivered via CIA-A SDR on the first GetKey call in the waitloop.
+     * Amiga rawkey 0x40 = space bar. */
+    bellatrix_machine_keyboard_rawkey(0x40, 1); /* space down */
+    bellatrix_machine_keyboard_rawkey(0x40, 0); /* space up   */
+
     /* ROM diagnostic */
     {
         const uint8_t *rom = (const uint8_t *)ROM_KVIRT;
