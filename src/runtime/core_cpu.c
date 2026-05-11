@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "cpu/cpu_backend.h"
+#include "debug/core_log.h"
 
 static void core_cpu_publish_interrupts(RuntimeCoreCPU *core)
 {
@@ -11,8 +12,14 @@ static void core_cpu_publish_interrupts(RuntimeCoreCPU *core)
     }
 
     CpuBackend *be = core->machine->cpu_backend;
-    if (be && be->set_ipl)
-        be->set_ipl(be->ctx, (int)core->machine->current_ipl);
+    if (be && be->set_ipl) {
+        uint8_t ipl = (uint8_t)core->machine->current_ipl;
+        be->set_ipl(be->ctx, (int)ipl);
+        if (ipl != core->last_ipl) {
+            XCORE_LOG("PAULA->CPU", "IPL %u -> %u", (unsigned)core->last_ipl, (unsigned)ipl);
+            core->last_ipl = ipl;
+        }
+    }
 }
 
 bool core_cpu_init(RuntimeCoreCPU *core,
@@ -32,7 +39,9 @@ bool core_cpu_init(RuntimeCoreCPU *core,
 
     core->local_cycles = 0;
     core->halted = false;
+    core->last_ipl = 0;
 
+    CORE0_LOG("init");
     return true;
 }
 
@@ -42,6 +51,7 @@ void core_cpu_shutdown(RuntimeCoreCPU *core)
         return;
     }
 
+    CORE0_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->base.state = RUNTIME_CORE_STOPPED;
     core->halted = true;
 }
@@ -52,7 +62,9 @@ void core_cpu_reset(RuntimeCoreCPU *core)
         return;
     }
 
+    CORE0_LOG("reset");
     core->local_cycles = 0;
+    core->last_ipl = 0;
     core->halted = false;
     core->base.state = RUNTIME_CORE_RUNNING;
 

@@ -7,6 +7,7 @@
 #include "chipset/paula/paula_serial.h"
 #include "chipset/paula/paula_interrupt.h"
 #include "core/machine.h"
+#include "debug/core_log.h"
 
 /*
  * Core 2 — Paula domain.
@@ -35,6 +36,8 @@ static void core_audio_step_serial(RuntimeCoreAudio *core, uint32_t cycles)
 
 static void core_audio_step_interrupts(RuntimeCoreAudio *core)
 {
+    uint8_t ipl_before = (uint8_t)core->machine->current_ipl;
+
     paula_interrupt_update(&core->machine->paula.irq);
 
     /*
@@ -43,6 +46,16 @@ static void core_audio_step_interrupts(RuntimeCoreAudio *core)
      * valid since core->machine == &g_machine.
      */
     bellatrix_machine_sync_ipl();
+
+    uint8_t ipl_after = (uint8_t)core->machine->current_ipl;
+    if (ipl_after != ipl_before) {
+        CORE2_LOG("INTREQ update IPL %u -> %u intreq=%04x intena=%04x",
+                  (unsigned)ipl_before,
+                  (unsigned)ipl_after,
+                  (unsigned)core->machine->paula.irq.intreq,
+                  (unsigned)core->machine->paula.irq.intena);
+        XCORE_LOG("PAULA->CPU", "IPL=%u", (unsigned)ipl_after);
+    }
 }
 
 bool core_audio_init(RuntimeCoreAudio *core, BellatrixMachine *machine)
@@ -64,6 +77,7 @@ bool core_audio_init(RuntimeCoreAudio *core, BellatrixMachine *machine)
 
     core->enabled = true;
 
+    CORE2_LOG("init");
     return true;
 }
 
@@ -73,6 +87,7 @@ void core_audio_shutdown(RuntimeCoreAudio *core)
         return;
     }
 
+    CORE2_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->enabled = false;
     core->base.state = RUNTIME_CORE_STOPPED;
 }
@@ -83,6 +98,7 @@ void core_audio_reset(RuntimeCoreAudio *core)
         return;
     }
 
+    CORE2_LOG("reset");
     core->last_master_cycles = 0;
     core->local_cycles = 0;
     core->enabled = true;

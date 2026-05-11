@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "debug/core_log.h"
 #include "chipset/agnus/agnus.h"
 #include "chipset/agnus/beam.h"
 #include "chipset/agnus/copper/copper.h"
@@ -72,15 +73,14 @@ static void core_gfx_step_denise(RuntimeCoreGFX *core,
 
 static void core_gfx_handle_vblank(RuntimeCoreGFX *core)
 {
-    /*
-     * Optional future hook:
-     *
-     * publish VBL event
-     * wake CPU interrupt path
-     * trigger frame presentation
-     */
-
     core->frame_counter++;
+
+    /* Log every 50 frames (~1 s PAL) to confirm beam is alive without flooding. */
+    if (core->frame_counter % 50 == 0) {
+        CORE1_LOG("VBL frame=%llu master=%llu",
+                  (unsigned long long)core->frame_counter,
+                  (unsigned long long)core->master_cycles);
+    }
 }
 
 bool core_gfx_init(RuntimeCoreGFX *core,
@@ -102,6 +102,7 @@ bool core_gfx_init(RuntimeCoreGFX *core,
 
     core->frame_counter = 0;
 
+    CORE1_LOG("init");
     return true;
 }
 
@@ -111,6 +112,9 @@ void core_gfx_shutdown(RuntimeCoreGFX *core)
         return;
     }
 
+    CORE1_LOG("shutdown frames=%llu master=%llu",
+              (unsigned long long)core->frame_counter,
+              (unsigned long long)core->master_cycles);
     core->running = false;
 }
 

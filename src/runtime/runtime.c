@@ -2,6 +2,9 @@
 
 #include <string.h>
 
+#include "debug/core_log.h"
+#include "support.h"
+
 bool bellatrix_runtime_init(
     BellatrixRuntime *rt,
     BellatrixMachine *machine)
@@ -38,6 +41,7 @@ bool bellatrix_runtime_init(
 
     rt->running = true;
 
+    kprintf("[RUNTIME] init OK: Core0=CPU Core1=GFX Core2=PAULA Core3=IO\n");
     return true;
 }
 
@@ -48,6 +52,7 @@ void bellatrix_runtime_shutdown(
         return;
     }
 
+    kprintf("[RUNTIME] shutdown\n");
     core_cpu_shutdown(&rt->cpu);
     core_gfx_shutdown(&rt->gfx);
     core_audio_shutdown(&rt->audio);
@@ -63,6 +68,7 @@ void bellatrix_runtime_reset(
         return;
     }
 
+    kprintf("[RUNTIME] reset\n");
     bellatrix_machine_reset();
 
     rt->cpu.local_cycles = 0;

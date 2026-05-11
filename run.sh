@@ -24,6 +24,10 @@ Modes:
   raspi <mount>       Flash to SD card
   tftp                Upload via TFTP
 
+Common options (env vars):
+  CORE_LOG=1          Enable per-core runtime logs: [CORE0-CPU] [CORE1-GFX]
+                      [CORE2-PAULA] [CORE3-IO] [XCORE-*] (default: off)
+
 QEMU options (env vars):
   EMU_PROFILE=<name>  Runtime profile: bellatrix or emu68 (default: bellatrix)
   KICKSTART=<file>    Pass a Kickstart ROM as initrd (optional)
@@ -109,9 +113,20 @@ build_launcher() {
 
 build_harness() {
     mkdir -p "$HARNESS_BUILD_DIR"
+
+    local HARNESS_CFLAGS=""
+    if [ "${CORE_LOG:-0}" = "1" ]; then
+        HARNESS_CFLAGS="-DBELLATRIX_CORE_LOG"
+        echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
+    fi
+
     (
         cd "$HARNESS_BUILD_DIR"
-        cmake "$ROOT/tools/harness" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF > /dev/null
+        cmake "$ROOT/tools/harness" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
+            ${HARNESS_CFLAGS:+-DCMAKE_C_FLAGS="$HARNESS_CFLAGS"} \
+            > /dev/null
         make -j"$(nproc)"
     )
 }

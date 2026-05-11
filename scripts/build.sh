@@ -47,6 +47,11 @@ if [ -n "${BTRACE_FILTER:-}" ]; then
     echo "[BUILD] btrace init filter: ${BTRACE_FILTER}"
 fi
 
+if [ "${CORE_LOG:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_CORE_LOG"
+    echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
+fi
+
 # BELLATRIX_SERIAL=pl011           → use PL011 UART on GPIO 14/15
 # BELLATRIX_SERIAL_BAUD=115200     → host-side UART baud rate
 # BELLATRIX_SERIAL_LOOPBACK=1      → full internal TX->RX echo

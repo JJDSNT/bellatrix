@@ -5,6 +5,7 @@
 #include "chipset/cia/cia.h"
 #include "input/keyboard.h"
 #include "io/serial/uart_host.h"
+#include "debug/core_log.h"
 
 /*
  * Core 3 — Physical peripherals domain.
@@ -53,6 +54,7 @@ bool core_io_init(RuntimeCoreIO *core, BellatrixMachine *machine)
     core->running = true;
     core->local_cycles = 0;
 
+    CORE3_LOG("init");
     return true;
 }
 
@@ -62,6 +64,7 @@ void core_io_shutdown(RuntimeCoreIO *core)
         return;
     }
 
+    CORE3_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->running = false;
 }
 

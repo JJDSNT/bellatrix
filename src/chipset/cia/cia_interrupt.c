@@ -3,6 +3,7 @@
 #include "chipset/cia/cia.h"
 #include "chipset/paula/paula.h"
 #include "support.h"
+#include "debug/core_log.h"
 
 void cia_interrupt_sync_irq_line(CIA *cia)
 {
@@ -14,10 +15,12 @@ void cia_interrupt_sync_irq_line(CIA *cia)
         paula_irq_raise(cia->paula, cia->paula_irq_bit);
         if (!cia->irq_asserted)
         {
-            kprintf("[CIA%c-IRQ] raised data=%02x mask=%02x\n",
-                    cia->id == CIA_PORT_A ? 'A' : 'B',
-                    (unsigned)cia->icr_data,
-                    (unsigned)cia->icr_mask);
+            CORE3_LOG("CIA%c IRQ raised icr_data=%02x icr_mask=%02x",
+                      (cia->id == CIA_PORT_A ? 'A' : 'B'),
+                      (unsigned)cia->icr_data, (unsigned)cia->icr_mask);
+            XCORE_LOG("CIA->PAULA", "CIA%c IRQ -> INTREQ bit %u",
+                      (cia->id == CIA_PORT_A ? 'A' : 'B'),
+                      (unsigned)cia->paula_irq_bit);
         }
         cia->irq_asserted = 1u;
     }
@@ -26,8 +29,7 @@ void cia_interrupt_sync_irq_line(CIA *cia)
         paula_irq_clear(cia->paula, cia->paula_irq_bit);
         if (cia->irq_asserted)
         {
-            kprintf("[CIA%c-IRQ] cleared\n",
-                    cia->id == CIA_PORT_A ? 'A' : 'B');
+            CORE3_LOG("CIA%c IRQ cleared", (cia->id == CIA_PORT_A ? 'A' : 'B'));
         }
         cia->irq_asserted = 0u;
     }

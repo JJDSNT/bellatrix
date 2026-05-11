@@ -15,6 +15,8 @@ typedef struct RuntimeCoreCPU {
     uint64_t local_cycles;
 
     bool halted;
+
+    uint8_t last_ipl;
 } RuntimeCoreCPU;
 
 bool core_cpu_init(RuntimeCoreCPU *core,
