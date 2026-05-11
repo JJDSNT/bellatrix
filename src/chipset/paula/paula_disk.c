@@ -20,6 +20,16 @@
 #define AMIGA_SECTORS_TRACK 11u
 #define AMIGA_SECTOR_BYTES 512u
 #define MFM_SECTOR_BYTES 1088u
+static uint32_t adf_offset_to_track(uint32_t adf_offset)
+{
+    return adf_offset / ADF_TRACK_BYTES;
+}
+
+static uint32_t adf_offset_to_sector(uint32_t adf_offset)
+{
+    return (adf_offset % ADF_TRACK_BYTES) / AMIGA_SECTOR_BYTES;
+}
+
 static void emit_intreq(PaulaDisk *pd, uint16_t bits)
 {
     if (pd->intreq_cb)
@@ -318,6 +328,11 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
     pd->countdown = FLOPPY_FAKE_DMA_CYCLES;
     pd->dskbytr |= DSKBYTR_DMAON;
     pd->dskbytr &= (uint16_t)~DSKBYTR_WORDSYNC;
+    pd->dma_ptr_base = pd->dskptr;
+    pd->dma_bytes_total = 0;
+    pd->dma_bytes_done = 0;
+    pd->dma_src_offset = 0;
+    pd->dma_track_len = 0;
 
     kprintf("[DSKDMA] start value=%04x write=%d words=%u bytes=%u dskptr=%06x\n",
             value,
@@ -340,7 +355,13 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
 
     if (!pd->drive || !floppy_has_media(pd->drive))
     {
-        kprintf("[DSKDMA] no media\n");
+        pd->sync_seen = 0;
+        pd->sync_irq_fired = 0;
+        pd->dskbytr_data = 0;
+        pd->dskdatr = 0;
+
+        kprintf("[DSKDMA] no media countdown=%u\n",
+                pd->countdown);
         return;
     }
 
@@ -397,18 +418,17 @@ static void paula_disk_start_dma(PaulaDisk *pd, uint16_t value)
         }
     }
 
-    pd->dma_ptr_base = pd->dskptr;
     pd->dma_bytes_total = len_bytes;
-    pd->dma_bytes_done = 0;
-    pd->dma_src_offset = 0;
     pd->dma_track_len = sizeof(pd->dma_track_buf);
 
     pd->drive->disk_changed = 0;
 
-    kprintf("[DSKDMA] prepared cyl=%d side=%d adf_offset=%u -> chip=%06x len=%u\n",
+    kprintf("[DSKPATH] ADF->track->MFM->chip cyl=%d side=%d track=%u adf_offset=%u sector0=%u chip=%06x len=%u\n",
             cyl,
             side,
+            adf_offset_to_track(adf_offset),
             adf_offset,
+            adf_offset_to_sector(adf_offset),
             pd->dskptr,
             len_bytes);
     kprintf("[DSKDMA] sync word=%04x found=%d adkcon=%04x head=%04x %04x %04x %04x\n",
@@ -468,8 +488,34 @@ void paula_disk_write_dsklen(PaulaDisk *pd, uint16_t value)
 
 void paula_disk_step(PaulaDisk *pd, uint32_t cycles)
 {
-    (void)pd;
-    (void)cycles;
+    /*
+     * Only used for the no-media case: normal DMA completes via
+     * paula_disk_dma_service_grant(), which fires DSKBLK directly.
+     * When there is no media, service_grant is never called
+     * (dma_bytes_total == 0 → wants_service returns false), so we
+     * drive the countdown here and fire a fake DSKBLK so KS1.3 can
+     * conclude the boot attempt and fall through to the "no disk" display.
+     */
+    if (!pd->dma_active || pd->dma_bytes_total > 0 || pd->countdown == 0)
+        return;
+
+    if (pd->countdown > cycles)
+    {
+        pd->countdown -= cycles;
+        return;
+    }
+
+    pd->countdown = 0;
+    pd->dma_active = 0;
+    pd->dma_armed = 0;
+    pd->armed_dsklen = 0;
+    pd->sync_seen = 0;
+    pd->sync_irq_fired = 0;
+    pd->dskbytr &= (uint16_t)~DSKBYTR_DMAON;
+    pd->dsklen &= (uint16_t)~DSKLEN_DMAEN;
+
+    kprintf("[DSKIRQ] DSKBLK fired (no-media)\n");
+    emit_intreq(pd, PAULA_INTREQ_DSKBLK);
 }
 
 int paula_disk_dma_wants_service(const PaulaDisk *pd)
@@ -506,6 +552,21 @@ void paula_disk_dma_service_grant(PaulaDisk *pd)
     word = get_u16be(&pd->dma_track_buf[src]);
     paula_disk_load_dskbytr(pd, word);
 
+    if (pd->dma_bytes_done == 0)
+    {
+        int cyl = pd->drive ? pd->drive->cylinder : -1;
+        int side = (pd->drive && pd->drive->side) ? 1 : 0;
+        uint32_t track = (cyl >= 0) ? (uint32_t)((cyl << 1) | side) : 0u;
+
+        kprintf("[DSKACT] first word cyl=%d side=%d track=%u src=%u dst=%06x word=%04x\n",
+                cyl,
+                side,
+                track,
+                src,
+                dst,
+                word);
+    }
+
     pd->dma_bytes_done += 2u;
     pd->dma_src_offset = (src + 2u) % pd->dma_track_len;
 
@@ -521,6 +582,18 @@ void paula_disk_dma_service_grant(PaulaDisk *pd)
     pd->dsklen &= (uint16_t)~DSKLEN_DMAEN;
     pd->dskptr = pd->dma_ptr_base + pd->dma_bytes_total;
 
+    {
+        int cyl = pd->drive ? pd->drive->cylinder : -1;
+        int side = (pd->drive && pd->drive->side) ? 1 : 0;
+        uint32_t track = (cyl >= 0) ? (uint32_t)((cyl << 1) | side) : 0u;
+
+        kprintf("[DSKACT] complete cyl=%d side=%d track=%u bytes=%u ptr=%06x\n",
+                cyl,
+                side,
+                track,
+                pd->dma_bytes_total,
+                pd->dskptr);
+    }
     kprintf("[DSKIRQ] DSKBLK fired ptr=%06x\n", pd->dskptr);
     emit_intreq(pd, PAULA_INTREQ_DSKBLK);
 }

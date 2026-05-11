@@ -15,9 +15,8 @@
 
 #include "denise.h"
 #include "chipset/agnus/agnus.h"
+#include "host/pal.h"
 #include "support.h"
-
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +41,8 @@ extern uint32_t fb_height;
 static void denise_configure_diag_overrides(Denise *d);
 static int denise_diag_target_line(int slot);
 static int denise_diag_line_selected(int vpos);
+static int denise_sprite_ptr_index(uint16_t reg);
+static int denise_sprite_data_index(uint16_t reg);
 
 /* ------------------------------------------------------------------------- */
 /* Colour conversion helpers                                                 */
@@ -168,27 +169,10 @@ static int denise_diag_target_line(int slot)
     static int initialized = 0;
     static int line0 = -1;
     static int line1 = -1;
-    const char *env0;
-    const char *env1;
-    char *end = NULL;
 
     if (!initialized) {
-        env0 = getenv("HARNESS_DIAG_LINE");
-        env1 = getenv("HARNESS_DIAG_LINE2");
-
-        if (env0 && env0[0] != '\0') {
-            long v = strtol(env0, &end, 10);
-            if (end && *end == '\0')
-                line0 = (int)v;
-        }
-
-        end = NULL;
-        if (env1 && env1[0] != '\0') {
-            long v = strtol(env1, &end, 10);
-            if (end && *end == '\0')
-                line1 = (int)v;
-        }
-
+        line0 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE", -1);
+        line1 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE2", -1);
         initialized = 1;
     }
 
@@ -210,6 +194,7 @@ static int denise_diag_line_selected(int vpos)
 void denise_init(Denise *d)
 {
     memset(d, 0, sizeof(*d));
+    denise_sprites_init(&d->sprites);
     denise_configure_diag_overrides(d);
 }
 
@@ -220,6 +205,7 @@ void denise_reset(Denise *d)
     int saved_diag_phase_bias = d->diag_phase_bias;
     memset(d, 0, sizeof(*d));
     d->agnus = saved_agnus;
+    denise_sprites_reset(&d->sprites);
     d->diag_bit_reverse = saved_diag_bit_reverse;
     d->diag_phase_bias = saved_diag_phase_bias;
 }
@@ -294,6 +280,38 @@ void denise_write(Denise *d, uint32_t addr, uint32_t value, unsigned int size)
 
 void denise_write_reg(Denise *d, uint16_t reg, uint16_t value)
 {
+    int sprite_index = denise_sprite_ptr_index(reg);
+    if (sprite_index >= 0)
+    {
+        if ((reg & 0x0002u) == 0u)
+            denise_sprite_write_ptr_hi(&d->sprites, sprite_index, value);
+        else
+            denise_sprite_write_ptr_lo(&d->sprites, sprite_index, value);
+        return;
+    }
+
+    sprite_index = denise_sprite_data_index(reg);
+    if (sprite_index >= 0)
+    {
+        switch (reg & 0x0006u)
+        {
+        case 0x0000u:
+            denise_sprite_write_pos(&d->sprites, sprite_index, value);
+            return;
+        case 0x0002u:
+            denise_sprite_write_ctl(&d->sprites, sprite_index, value);
+            return;
+        case 0x0004u:
+            denise_sprite_write_data_a(&d->sprites, sprite_index, value);
+            return;
+        case 0x0006u:
+            denise_sprite_write_data_b(&d->sprites, sprite_index, value);
+            return;
+        default:
+            break;
+        }
+    }
+
     if (reg >= DENISE_COLOR_BASE &&
         reg <= DENISE_COLOR_END &&
         (reg & 1u) == 0u)
@@ -332,6 +350,22 @@ void denise_write_reg(Denise *d, uint16_t reg, uint16_t value)
     default:
         return;
     }
+}
+
+static int denise_sprite_ptr_index(uint16_t reg)
+{
+    if (reg < DENISE_SPR0PTH || reg > DENISE_SPR7PTL)
+        return -1;
+
+    return (int)((reg - DENISE_SPR0PTH) >> 2);
+}
+
+static int denise_sprite_data_index(uint16_t reg)
+{
+    if (reg < DENISE_SPR0POS || reg > DENISE_SPR7DATB)
+        return -1;
+
+    return (int)((reg - DENISE_SPR0POS) >> 3);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -430,11 +464,7 @@ static void denise_dump_diag_decode(const Denise *d,
                                     int dpf,
                                     int src_first_pixel)
 {
-    char idxbuf[(64 * 3) + 1];
-    int pos = 0;
-
-    idxbuf[0] = '\0';
-
+    kprintf("[DENISE-DECODE] bp_v=%d src0=%d idx64=", bp->line_vpos, src_first_pixel);
     for (int i = 0; i < 64; ++i) {
         int src_pixel = src_first_pixel + i;
         int w = src_pixel / 16;
@@ -453,19 +483,8 @@ static void denise_dump_diag_decode(const Denise *d,
         else
             idx = denise_decode_spf_index(pdata, nplanes, bit_in_word);
 
-        pos += snprintf(&idxbuf[pos],
-                        sizeof(idxbuf) - (size_t)pos,
-                        "%02x%s",
-                        (unsigned)idx,
-                        (i == 63) ? "" : " ");
-        if (pos >= (int)sizeof(idxbuf))
-            break;
+        kprintf("%02x%s", (unsigned)idx, (i == 63) ? "\n" : " ");
     }
-
-    kprintf("[DENISE-DECODE] bp_v=%d src0=%d idx64=%s\n",
-            bp->line_vpos,
-            src_first_pixel,
-            idxbuf);
 }
 
 static void denise_dump_diag_progression(const Denise *d,
@@ -475,11 +494,7 @@ static void denise_dump_diag_progression(const Denise *d,
                                          int src_first_pixel)
 {
     for (int chunk = 0; chunk < 4; ++chunk) {
-        char buf[16 * 16];
-        int pos = 0;
-
-        buf[0] = '\0';
-
+        kprintf("[DENISE-PROG] bp_v=%d src0=%d chunk=%d ", bp->line_vpos, src_first_pixel, chunk);
         for (int i = 0; i < 16; ++i) {
             int rel_pixel = chunk * 16 + i;
             int src_pixel = src_first_pixel + rel_pixel;
@@ -499,23 +514,9 @@ static void denise_dump_diag_progression(const Denise *d,
             else
                 idx = denise_decode_spf_index(pdata, nplanes, bit_in_word);
 
-            pos += snprintf(&buf[pos],
-                            sizeof(buf) - (size_t)pos,
-                            "%02d:%02d/%02d=%02x%s",
-                            rel_pixel,
-                            w,
-                            bit_in_word,
-                            (unsigned)idx,
-                            (i == 15) ? "" : " ");
-            if (pos >= (int)sizeof(buf))
-                break;
+            kprintf("%02d:%02d/%02d=%02x%s", rel_pixel, w, bit_in_word, (unsigned)idx,
+                    (i == 15) ? "\n" : " ");
         }
-
-        kprintf("[DENISE-PROG] bp_v=%d src0=%d chunk=%d %s\n",
-                bp->line_vpos,
-                src_first_pixel,
-                chunk,
-                buf);
     }
 }
 
@@ -529,30 +530,16 @@ static inline int denise_diagrom_window(const BitplaneState *bp, int line_idx)
 
 static void denise_configure_diag_overrides(Denise *d)
 {
-    const char *reverse = getenv("HARNESS_DENISE_BIT_REVERSE");
-    const char *bias = getenv("HARNESS_DENISE_PHASE_BIAS");
-    const char *force_src0 = getenv("HARNESS_DENISE_FORCE_SRC0");
-    const char *show_fetch_all = getenv("HARNESS_DENISE_SHOW_FETCH_ALL");
-    char *end = NULL;
+    int bias;
 
-    d->diag_bit_reverse = (reverse && reverse[0] != '\0' &&
-                           strcmp(reverse, "0") != 0) ? 1 : 0;
-    d->diag_phase_bias = 0;
-    d->diag_force_src0 = (force_src0 && force_src0[0] != '\0' &&
-                          strcmp(force_src0, "0") != 0) ? 1 : 0;
-    d->diag_show_fetch_all = (show_fetch_all && show_fetch_all[0] != '\0' &&
-                              strcmp(show_fetch_all, "0") != 0) ? 1 : 0;
+    d->diag_bit_reverse   = PAL_Diag_GetEnvBool("HARNESS_DENISE_BIT_REVERSE");
+    d->diag_force_src0    = PAL_Diag_GetEnvBool("HARNESS_DENISE_FORCE_SRC0");
+    d->diag_show_fetch_all = PAL_Diag_GetEnvBool("HARNESS_DENISE_SHOW_FETCH_ALL");
 
-    if (bias && bias[0] != '\0') {
-        long value = strtol(bias, &end, 10);
-        if (end && *end == '\0') {
-            if (value < -64)
-                value = -64;
-            if (value > 64)
-                value = 64;
-            d->diag_phase_bias = (int)value;
-        }
-    }
+    bias = PAL_Diag_GetEnvInt("HARNESS_DENISE_PHASE_BIAS", 0);
+    if (bias < -64) bias = -64;
+    if (bias >  64) bias =  64;
+    d->diag_phase_bias = bias;
 }
 
 /* ------------------------------------------------------------------------- */

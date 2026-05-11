@@ -161,15 +161,7 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
     }
 
     case CIA_REG_ICR:
-    {
-        uint8_t val = cia_interrupt_read_icr(cia);
-        /* log only on value change to avoid flooding tight polling loops */
-        kprintf("[CIA%c-ICR-R] returned=%02x (mask=%02x)\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)val,
-                (unsigned)cia->icr_mask);
-        return val;
-    }
+        return cia_interrupt_read_icr(cia);
 
     default:
         return 0xFFu;

@@ -34,6 +34,17 @@ static inline bool dma_has_bitplane(const AgnusDMA *dma)
     return (dma->dmacon & AGNUS_DMACON_BPLEN) != 0;
 }
 
+static inline bool dma_bitplane_allowed(const AgnusDMA *dma)
+{
+    if (dma_has_bitplane(dma))
+        return true;
+
+    if (dma->ops.bitplane_allowed)
+        return dma->ops.bitplane_allowed(dma->ctx);
+
+    return false;
+}
+
 static inline bool dma_has_copper(const AgnusDMA *dma)
 {
     return (dma->dmacon & AGNUS_DMACON_COPEN) != 0;
@@ -93,7 +104,7 @@ static inline uint32_t dma_filter_requests(const AgnusDMA *dma, uint32_t req)
         );
     }
 
-    if (dma_has_bitplane(dma))
+    if (dma_bitplane_allowed(dma))
     {
         out |= req & (
             AGNUS_DMA_REQ_BITPLANE1 |
@@ -239,10 +250,10 @@ uint16_t agnus_dma_read_dmaconr(const AgnusDMA *dma)
     uint16_t value = dma->dmacon & 0x07ff;
 
     if (dma_blitter_busy(dma))
-        value |= AGNUS_DMACON_BBUSY;
+        value |= AGNUS_DMA_DMACON_BBUSY;
 
     if (dma_blitter_zero(dma))
-        value |= AGNUS_DMACON_BZERO;
+        value |= AGNUS_DMA_DMACON_BZERO;
 
     return value;
 }

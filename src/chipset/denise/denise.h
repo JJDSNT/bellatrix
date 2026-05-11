@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "chipset/agnus/bitplanes.h"
+#include "chipset/denise/sprites.h"
 
 /* Forward declare to avoid circular include */
 typedef struct AgnusState AgnusState;
@@ -17,6 +18,19 @@ typedef struct AgnusState AgnusState;
 #define DENISE_BPLCON0    0x0100u
 #define DENISE_BPLCON1    0x0102u
 #define DENISE_BPLCON2    0x0104u
+
+#define DENISE_SPR0PTH    0x0120u
+#define DENISE_SPR0PTL    0x0122u
+#define DENISE_SPR7PTH    0x013Cu
+#define DENISE_SPR7PTL    0x013Eu
+#define DENISE_SPR0POS    0x0140u
+#define DENISE_SPR0CTL    0x0142u
+#define DENISE_SPR0DATA   0x0144u
+#define DENISE_SPR0DATB   0x0146u
+#define DENISE_SPR7POS    0x0178u
+#define DENISE_SPR7CTL    0x017Au
+#define DENISE_SPR7DATA   0x017Cu
+#define DENISE_SPR7DATB   0x017Eu
 
 #define DENISE_COLOR_BASE 0x0180u
 #define DENISE_COLOR_END  0x01BEu
@@ -52,6 +66,7 @@ typedef struct Denise
      * Attached Agnus reference (read-only during rendering).
      */
     const AgnusState *agnus;
+    DeniseSprites sprites;
     int diag_bit_reverse;
     int diag_phase_bias;
     int diag_force_src0;

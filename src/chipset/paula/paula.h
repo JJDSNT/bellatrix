@@ -7,9 +7,7 @@
 #include "chipset/paula/paula_interrupt.h"
 #include "chipset/paula/paula_serial.h"
 #include "chipset/paula/paula_disk.h"
-
-struct AgnusState;
-struct CIA_State;
+#include "chipset/paula/paula_audio.h"
 
 #define PAULA_INT_MASTER PAULA_INT_INTEN
 
@@ -21,6 +19,7 @@ typedef struct Paula
 
     PaulaSerial serial;
     PaulaDisk disk;
+    PaulaAudio audio;
 } Paula;
 
 /* lifecycle */
@@ -38,9 +37,6 @@ uint8_t paula_compute_ipl(const Paula *p);
 void paula_step(Paula *p, uint32_t ticks);
 
 /* wiring — machine calls these during init */
-void paula_attach_agnus(Paula *p, struct AgnusState *agnus);
-void paula_attach_cia_a(Paula *p, struct CIA_State *cia);
-void paula_attach_cia_b(Paula *p, struct CIA_State *cia);
 void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size);
 void paula_attach_drive(Paula *p, FloppyDrive *drive);
 void paula_set_joydat(Paula *p, unsigned port, uint16_t value);

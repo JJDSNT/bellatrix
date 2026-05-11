@@ -45,6 +45,7 @@ typedef struct BitplaneState
      * Vai de 0 até ddf_words.
      */
     int fetch_index;
+    int fetch_plane_index;
 
     /*
      * Linha atual e intervalo horizontal de fetch.
@@ -96,6 +97,16 @@ void bitplanes_fetch_line(BitplaneState *bp, struct AgnusState *agnus,
 
 void bitplanes_step(BitplaneState *bp, struct AgnusState *agnus);
 void bitplanes_end_line(BitplaneState *bp, struct AgnusState *agnus);
+
+/* ------------------------------------------------------------------------- */
+/* DMA integration                                                           */
+/* ------------------------------------------------------------------------- */
+
+int      bitplanes_dma_allowed(const struct AgnusState *agnus);
+uint32_t bitplanes_dma_request_mask(const BitplaneState *bp,
+                                    const struct AgnusState *agnus);
+void     bitplanes_dma_service_next(BitplaneState *bp,
+                                    struct AgnusState *agnus);
 
 /* ------------------------------------------------------------------------- */
 /* helpers for Denise                                                        */

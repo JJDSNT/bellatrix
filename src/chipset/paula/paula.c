@@ -31,6 +31,13 @@
 #define REG_INTREQ 0xDFF09Cu
 #define REG_ADKCON 0xDFF09Eu
 #define REG_POTGOR 0xDFF016u
+#define REG_AUD0LCH 0xDFF0A0u
+#define REG_AUD0LCL 0xDFF0A2u
+#define REG_AUD0LEN 0xDFF0A4u
+#define REG_AUD0PER 0xDFF0A6u
+#define REG_AUD0VOL 0xDFF0A8u
+#define REG_AUD0DAT 0xDFF0AAu
+#define REG_AUD3DAT 0xDFF0DAu
 
 /* ---------------------------------------------------------------------------
  * Serial / IRQ callbacks
@@ -52,6 +59,38 @@ static void disk_intreq_cb(void *opaque, uint16_t bits)
     paula_irq_raise(p, bits);
 }
 
+static void audio_intreq_cb(void *opaque, uint16_t bits)
+{
+    Paula *p = (Paula *)opaque;
+    paula_irq_raise(p, bits);
+}
+
+static int paula_is_audio_reg(uint32_t addr)
+{
+    if (addr < REG_AUD0LCH || addr > REG_AUD3DAT)
+        return 0;
+
+    return ((addr - REG_AUD0LCH) & 0x0Fu) <= 0x0Au;
+}
+
+static void paula_write_audio_reg(Paula *p, uint32_t addr, uint16_t raw)
+{
+    uint32_t slot = addr - REG_AUD0LCH;
+    int channel = (int)(slot >> 4);
+    uint32_t reg = slot & 0x0Fu;
+
+    switch (reg)
+    {
+    case 0x0u: paula_audio_write_lch(&p->audio, channel, raw); break;
+    case 0x2u: paula_audio_write_lcl(&p->audio, channel, raw); break;
+    case 0x4u: paula_audio_write_len(&p->audio, channel, raw); break;
+    case 0x6u: paula_audio_write_per(&p->audio, channel, raw); break;
+    case 0x8u: paula_audio_write_vol(&p->audio, channel, raw); break;
+    case 0xAu: paula_audio_write_dat(&p->audio, channel, raw); break;
+    default: break;
+    }
+}
+
 /* ---------------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------------- */
@@ -64,12 +103,16 @@ void paula_init(Paula *p)
     paula_serial_init(&p->serial, p, serial_irq_cb);
     paula_disk_init(&p->disk);
     paula_disk_set_intreq_callback(&p->disk, disk_intreq_cb, p);
+    paula_audio_init(&p->audio);
+    p->audio.irq_opaque = p;
+    p->audio.irq_raise_cb = audio_intreq_cb;
 }
 
 void paula_reset(Paula *p)
 {
     PaulaSerial saved_serial = p->serial;
     PaulaDisk saved_disk = p->disk;
+    PaulaAudio saved_audio = p->audio;
 
     paula_interrupt_reset(&p->irq);
     p->irq_line_level = 0;
@@ -88,29 +131,15 @@ void paula_reset(Paula *p)
     p->disk.drive = saved_disk.drive;
     p->disk.intreq_cb = saved_disk.intreq_cb;
     p->disk.intreq_user = saved_disk.intreq_user;
+
+    paula_audio_reset(&p->audio);
+    p->audio.irq_opaque = saved_audio.irq_opaque;
+    p->audio.irq_raise_cb = saved_audio.irq_raise_cb;
 }
 
 /* ---------------------------------------------------------------------------
  * Wiring
  * ------------------------------------------------------------------------- */
-
-void paula_attach_agnus(Paula *p, struct AgnusState *agnus)
-{
-    (void)p;
-    (void)agnus;
-}
-
-void paula_attach_cia_a(Paula *p, struct CIA_State *cia)
-{
-    (void)p;
-    (void)cia;
-}
-
-void paula_attach_cia_b(Paula *p, struct CIA_State *cia)
-{
-    (void)p;
-    (void)cia;
-}
 
 void paula_attach_memory(Paula *p, uint8_t *chipram, size_t size)
 {
@@ -185,6 +214,7 @@ uint8_t paula_compute_ipl(const Paula *p)
 void paula_step(Paula *p, uint32_t ticks)
 {
     paula_disk_step(&p->disk, ticks);
+    paula_audio_step(&p->audio, ticks);
     paula_serial_step(&p->serial, ticks);
 }
 
@@ -209,12 +239,11 @@ int paula_handles_write(const Paula *p, uint32_t addr)
     return addr == REG_DSKPTH || addr == REG_DSKPTL || addr == REG_DSKLEN ||
            addr == REG_SERDAT || addr == REG_SERPER || addr == REG_POTGO ||
            addr == REG_DSKSYNC || addr == REG_INTENA || addr == REG_INTREQ ||
-           addr == REG_ADKCON;
+           addr == REG_ADKCON || paula_is_audio_reg(addr);
 }
 
 uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
 {
-    (void)size;
     uint32_t ret = 0;
     switch (addr)
     {
@@ -280,6 +309,8 @@ uint32_t paula_read(Paula *p, uint32_t addr, unsigned int size)
     default:
         break;
     }
+    if (size == 1)
+        return (addr & 1u) ? (ret & 0xFFu) : ((ret >> 8) & 0xFFu);
     return ret;
 }
 
@@ -382,6 +413,11 @@ void paula_write(Paula *p, uint32_t addr, uint32_t value, unsigned int size)
     break;
 
     default:
+        if (paula_is_audio_reg(addr))
+        {
+            paula_write_audio_reg(p, addr, raw);
+            break;
+        }
         break;
     }
 }

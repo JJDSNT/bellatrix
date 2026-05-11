@@ -22,6 +22,8 @@
 #define BLTCON1_LINE       0x0001u
 #define BLTCON1_DESC       0x0002u
 
+#define CHIP_RAM_MASK      BELLATRIX_CHIP_RAM_MASK
+
 static inline uint32_t make_ptr(uint16_t hi, uint16_t lo)
 {
     return ((uint32_t)hi << 16) | (uint32_t)lo;
@@ -220,6 +222,11 @@ static uint16_t blitter_fill_word(uint16_t d, uint8_t *carry,
     return result;
 }
 
+static inline uint32_t blitter_line_word_offset(int offset)
+{
+    return (uint32_t)(((unsigned int)offset >> 4) << 1);
+}
+
 static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
 {
     const uint16_t height_rows = blitter_height_rows(b);
@@ -257,50 +264,50 @@ static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
         {
         case 0:
             offset = d + start_pixel;
-            addr = plane_addr + (uint32_t)(offset >> 3) + (uint32_t)(i * plane_mod);
+            addr = plane_addr + blitter_line_word_offset(offset) + (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 1:
             offset = d + start_pixel;
-            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(i * plane_mod);
+            addr = plane_addr + blitter_line_word_offset(offset) - (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 2:
             offset = d + (15 - start_pixel);
-            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) + (uint32_t)(i * plane_mod);
+            addr = plane_addr - blitter_line_word_offset(offset) + (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x0001u << (offset & 15));
             break;
 
         case 3:
             offset = d + start_pixel;
-            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(i * plane_mod);
+            addr = plane_addr + blitter_line_word_offset(offset) - (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 4:
             offset = (int)i + start_pixel;
-            addr = plane_addr + (uint32_t)(offset >> 3) + (uint32_t)(d * plane_mod);
+            addr = plane_addr + blitter_line_word_offset(offset) + (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 5:
             offset = (int)i + (15 - start_pixel);
-            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) + (uint32_t)(d * plane_mod);
+            addr = plane_addr - blitter_line_word_offset(offset) + (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x0001u << (offset & 15));
             break;
 
         case 6:
             offset = (int)i + start_pixel;
-            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(d * plane_mod);
+            addr = plane_addr + blitter_line_word_offset(offset) - (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 7:
         default:
             offset = (int)i + (15 - start_pixel);
-            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) - (uint32_t)(d * plane_mod);
+            addr = plane_addr - blitter_line_word_offset(offset) - (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x0001u << (offset & 15));
             break;
         }
@@ -372,7 +379,6 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
 
         for (uint16_t x = 0; x < width_words; ++x) {
 
-            uint16_t araw = b->bltadat;
             uint16_t braw = b->bltbdat;
             uint16_t cval = b->bltcdat;
             uint16_t aval;
@@ -381,8 +387,9 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
 
             if (useA) {
                 uint16_t mask = 0xFFFFu;
+                uint16_t afetched;
 
-                araw = blitter_chip_read16(agnus, apt);
+                afetched = blitter_chip_read16(agnus, apt);
                 apt = (uint32_t)(apt + xinc);
 
                 if (x == 0)
@@ -390,11 +397,10 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
                 if (x == (uint16_t)(width_words - 1))
                     mask &= b->bltalwm;
 
-                araw &= mask;
-                b->bltadat = araw;
-
-                aval = blitter_barrel_shift(araw, aold, ash, desc);
-                aold = araw;
+                aval = blitter_barrel_shift(afetched, aold, ash, desc);
+                aval &= mask;
+                b->bltadat = afetched;
+                aold = afetched;
             } else {
                 aval = b->bltadat;
             }
@@ -483,10 +489,10 @@ static void blitter_start(BlitterState *b, AgnusState *agnus)
             (unsigned)b->cycles_remaining,
             (unsigned)b->bltcon0,
             (unsigned)b->bltcon1,
-            (unsigned)(b->bltapt & 0x1FFFFFu),
-            (unsigned)(b->bltbpt & 0x1FFFFFu),
-            (unsigned)(b->bltcpt & 0x1FFFFFu),
-            (unsigned)(b->bltdpt & 0x1FFFFFu),
+            (unsigned)(b->bltapt & CHIP_RAM_MASK),
+            (unsigned)(b->bltbpt & CHIP_RAM_MASK),
+            (unsigned)(b->bltcpt & CHIP_RAM_MASK),
+            (unsigned)(b->bltdpt & CHIP_RAM_MASK),
             (uint16_t)b->bltamod,
             (uint16_t)b->bltbmod,
             (uint16_t)b->bltcmod,
@@ -522,23 +528,38 @@ void blitter_step(BlitterState *b, AgnusState *agnus, uint64_t ticks)
     if (!b->busy)
         return;
 
-    if (ticks >= b->cycles_remaining) {
-        b->cycles_remaining = 0;
-
-        blitter_execute(b, agnus);
-        blitter_set_busy(b, agnus, 0);
-
-        kprintf("[BLITTER] complete -> PAULA_INT_BLIT\n");
-        agnus_intreq_set(agnus, PAULA_INT_BLIT);
-        return;
-    }
-
-    b->cycles_remaining -= (uint32_t)ticks;
+    while (ticks-- > 0 && b->busy)
+        blitter_dma_service_grant(b, agnus);
 }
 
 int blitter_is_busy(const BlitterState *b)
 {
     return b->busy ? 1 : 0;
+}
+
+uint32_t blitter_dma_request_mask(const BlitterState *b)
+{
+    if (!b || !b->busy || b->cycles_remaining == 0)
+        return 0;
+
+    return AGNUS_DMA_REQ_BLITTER;
+}
+
+void blitter_dma_service_grant(BlitterState *b, AgnusState *agnus)
+{
+    if (!b || !b->busy || b->cycles_remaining == 0)
+        return;
+
+    b->cycles_remaining--;
+
+    if (b->cycles_remaining != 0)
+        return;
+
+    blitter_execute(b, agnus);
+    blitter_set_busy(b, agnus, 0);
+
+    kprintf("[BLITTER] complete -> PAULA_INT_BLIT\n");
+    agnus_intreq_set(agnus, PAULA_INT_BLIT);
 }
 
 /* ------------------------------------------------------------------------- */

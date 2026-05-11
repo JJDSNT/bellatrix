@@ -12,13 +12,14 @@
 #include "../agnus.h"
 #include "../beam.h"
 #include "../blitter.h"
+#include "host/pal.h"
 #include "support.h"
 
 /* ------------------------------------------------------------------------- */
 /* local constants                                                           */
 /* ------------------------------------------------------------------------- */
 
-#define CHIP_RAM_MASK 0x001FFFFFu
+#define CHIP_RAM_MASK BELLATRIX_CHIP_RAM_MASK
 
 /*
  * Small deterministic budget used when the Copper wakes at a beam position.
@@ -130,6 +131,9 @@ void copper_service_poll(CopperService *svc,
                          CopperState *c,
                          AgnusState *agnus)
 {
+    int diag_line0;
+    int diag_line1;
+
     if (!svc->enabled)
         return;
 
@@ -137,6 +141,21 @@ void copper_service_poll(CopperService *svc,
         return;
 
     const uint16_t vh = copper_service_vhpos(agnus);
+    diag_line0 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE", -1);
+    diag_line1 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE2", -1);
+
+    if ((int)agnus->beam.vpos == diag_line0 || (int)agnus->beam.vpos == diag_line1)
+    {
+        kprintf("[COPPER-POLL] v=%u h=%u state=%d pc=%05x wait=%04x mask=%04x bfd=%d match=%d\n",
+                (unsigned)agnus->beam.vpos,
+                (unsigned)agnus->beam.hpos,
+                c->state,
+                (unsigned)c->pc,
+                (unsigned)c->waitpos,
+                (unsigned)c->waitmask,
+                c->wait_bfd,
+                copper_service_wait_match(c->waitpos, c->waitmask, vh));
+    }
 
     if (c->state == COPPER_STATE_WAITING_BLITTER)
     {

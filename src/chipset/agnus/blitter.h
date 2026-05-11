@@ -40,8 +40,8 @@ enum
  */
 enum
 {
-    AGNUS_DMACON_BBUSY = 0x4000,
-    AGNUS_DMACON_BZERO = 0x2000
+    AGNUS_DMACON_BBUSY = 0x4000,   /* bit 14 — blitter busy */
+    AGNUS_DMACON_BZERO = 0x2000    /* bit 13 — blitter zero */
 };
 
 typedef struct BlitterState
@@ -88,6 +88,13 @@ void blitter_reset(BlitterState *b);
 
 void blitter_step(BlitterState *b, struct AgnusState *agnus, uint64_t ticks);
 int  blitter_is_busy(const BlitterState *b);
+
+/* ------------------------------------------------------------------------- */
+/* DMA integration                                                           */
+/* ------------------------------------------------------------------------- */
+
+uint32_t blitter_dma_request_mask(const BlitterState *b);
+void     blitter_dma_service_grant(BlitterState *b, struct AgnusState *agnus);
 
 /* ------------------------------------------------------------------------- */
 /* MMIO                                                                      */

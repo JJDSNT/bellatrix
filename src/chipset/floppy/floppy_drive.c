@@ -1,6 +1,7 @@
 // src/chipset/floppy/floppy_drive.c
 
 #include "floppy_drive.h"
+#include "support.h"
 
 /* ------------------------------------------------------------------------- */
 /* Init                                                                      */
@@ -16,7 +17,7 @@ void floppy_init(FloppyDrive *d)
     d->track0 = 1;
 
     d->disk_inserted = 0;
-    d->disk_changed = 1; /* power-on: change latch set, no disk */
+    d->disk_changed = 1; /* power-on: change latch set (no disk) */
     d->write_protected = 1;
 
     d->step_latch = 1;
@@ -52,6 +53,12 @@ void floppy_insert(FloppyDrive *d, const uint8_t *adf, uint32_t adf_size)
     d->write_protected = 1;
 
     d->read_offset = 0;
+
+    kprintf("[FLOPPY] media inserted size=%u bytes cyl=%d side=%d track0=%d\n",
+            adf_size,
+            d->cylinder,
+            d->side,
+            d->track0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -69,6 +76,8 @@ void floppy_eject(FloppyDrive *d)
     d->motor = 0;
 
     d->read_offset = 0;
+
+    kprintf("[FLOPPY] media ejected\n");
 }
 
 /* ------------------------------------------------------------------------- */
@@ -103,8 +112,19 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
         if (!d->motor)
         {
             d->motor = 1;
-            d->ready = 1;
+            /*
+             * /RDY should only assert once the drive is spinning a present
+             * disk. An empty drive with motor ON must still report not-ready,
+             * otherwise Kickstart treats DF0 as bootable media and follows an
+             * error path instead of falling back to the insert-disk screen.
+             */
+            d->ready = floppy_has_media(d) ? 1 : 0;
             d->id_count = 0;
+            kprintf("[FLOPPY] motor on ready=%d media=%d cyl=%d side=%d\n",
+                    d->ready,
+                    floppy_has_media(d),
+                    d->cylinder,
+                    d->side);
         }
     }
     else
@@ -113,6 +133,9 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
         {
             d->motor = 0;
             d->ready = 0;
+            kprintf("[FLOPPY] motor off cyl=%d side=%d\n",
+                    d->cylinder,
+                    d->side);
         }
     }
 
@@ -128,6 +151,9 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
 
     if (sig->step && d->step_latch)
     {
+        int old_cylinder = d->cylinder;
+        int old_dskchg = d->disk_changed;
+
         d->step_latch = 0;
 
         if (sig->direction)
@@ -143,10 +169,25 @@ void floppy_step(FloppyDrive *d, const FloppySignals *sig)
                 d->cylinder++;
         }
 
-        if (floppy_has_media(d))
-            d->disk_changed = 0;
-        else
-            d->disk_changed = 1;
+        /*
+         * /DSKCHG is a mechanical media-presence/change latch.
+         *
+         * A STEP pulse acknowledges a pending change only when there is
+         * actual media in the drive. On an empty drive, keeping /DSKCHG
+         * asserted LOW prevents the OS from treating DF0 as "disk present"
+         * after the motor-off probe sequence.
+         */
+        d->disk_changed = floppy_has_media(d) ? 0 : 1;
+
+        kprintf("[FLOPPY] step dir=%s cyl=%d->%d side=%d dskchg=%d->%d track0=%d media=%d\n",
+                sig->direction ? "out" : "in",
+                old_cylinder,
+                d->cylinder,
+                d->side,
+                old_dskchg,
+                d->disk_changed,
+                d->cylinder == 0,
+                floppy_has_media(d));
     }
 
     if (!sig->step)
@@ -200,6 +241,12 @@ uint32_t floppy_read_linear(FloppyDrive *d, uint8_t *dst, uint32_t bytes)
      * The mechanical model still also clears it on STEP.
      */
     d->disk_changed = 0;
+
+    kprintf("[FLOPPY] linear read offset=%u bytes=%u next=%u size=%u\n",
+            d->read_offset - to_copy,
+            to_copy,
+            d->read_offset,
+            d->adf_size);
 
     return to_copy;
 }

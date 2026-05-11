@@ -156,13 +156,6 @@ void cia_timers_step(CIA *cia, uint64_t ticks)
                                      cia->tb_latch,
                                      continuous,
                                      ticks);
-
-            kprintf("[CIA%c-TB-ADV] ret=%d ticks=%llu counter=%04x latch=%04x\n",
-                    cia->id == CIA_PORT_A ? 'A' : 'B',
-                    uf_b,
-                    (unsigned long long)ticks,
-                    (unsigned)cia->tb_counter,
-                    (unsigned)cia->tb_latch);
         }
         else if ((inmode == 2u || inmode == 3u) &&
                  uf_a > 0 &&

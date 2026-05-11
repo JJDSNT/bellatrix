@@ -1,17 +1,13 @@
 #include "bitplanes.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "agnus.h"
+#include "host/pal.h"
 #include "memory/memory.h"
 #include "support.h"
 
 #define CHIP_RAM_MASK BELLATRIX_CHIP_RAM_MASK
-
-#ifndef DMAF_BPLEN
-#define DMAF_BPLEN (1u << 8)
-#endif
 
 /* ---------------------------------------------------------------------------
  * Internal helpers
@@ -96,48 +92,40 @@ static inline int agnus_ddf_words(const AgnusState *agnus)
 
 static inline int agnus_bitplane_dma_enabled(const AgnusState *agnus)
 {
-    if ((agnus->dmacon & DMAF_DMAEN) == 0)
+    if (!agnus_dma_master_enabled(&agnus->dma))
         return 0;
-    if ((agnus->dmacon & DMAF_BPLEN) == 0)
-    {
-        /*
-         * Compatibility fallback:
-         *
-         * Some current Bellatrix boot paths reach a valid Copper display state
-         * (BPLCON0/BPLxPT/DIW/DDF) without ever observing the expected DMACON
-         * BPLEN write. Real hardware requires BPLEN, but allowing the fetch
-         * when display state is otherwise coherent lets us validate the rest of
-         * the display pipeline and unblocks the Happy Hand bring-up.
-         *
-         * Keep this narrowly scoped to cases that look like genuine bitplane
-         * display setup instead of enabling background fetch unconditionally.
-         */
-        int nplanes = agnus_bitplane_count(agnus);
-        if (nplanes <= 0)
-            return 0;
-
-        for (int p = 0; p < nplanes; ++p)
-        {
-            uint32_t ptr = make_bplpt(agnus->bplpth[p], agnus->bplptl[p]);
-            if (ptr != 0)
-            {
-                static uint32_t dbg_forced_bpl_dma = 0;
-                if ((dbg_forced_bpl_dma++ & 63u) == 0)
-                {
-                    kprintf("[BPL-DMA-FORCE] v=%u h=%u dmacon=%04x bplcon0=%04x plane=%d ptr=%05x\n",
-                            (unsigned)agnus->beam.vpos,
-                            (unsigned)agnus->beam.hpos,
-                            (unsigned)agnus->dmacon,
-                            (unsigned)agnus->bplcon0,
-                            p,
-                            (unsigned)ptr);
-                }
-                return 1;
-            }
-        }
+    if (!agnus_dma_bitplane_enabled(&agnus->dma))
         return 0;
-    }
     return 1;
+}
+
+int bitplanes_dma_allowed(const AgnusState *agnus)
+{
+    int raw_nplanes;
+
+    if (!agnus)
+        return 0;
+
+    raw_nplanes = agnus_bitplane_count(agnus);
+
+    if (agnus_bitplane_dma_enabled(agnus))
+        return 1;
+
+    /*
+     * Harness boot-path experiment:
+     * allow the line latch when display state is explicitly armed by the ROM
+     * even if BPLEN has already been cleared. This lets us test whether the
+     * missing boot screen is caused by overly strict DMA gating at line start.
+     */
+    if (agnus_dma_master_enabled(&agnus->dma) &&
+        raw_nplanes > 0 &&
+        (agnus->bplcon0 & 0x7000u) != 0 &&
+        (make_bplpt(agnus->bplpth[0], agnus->bplptl[0]) != 0u))
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
 static inline int bitplanes_word_fetch_hpos(const BitplaneState *bp, int word_index)
@@ -173,31 +161,28 @@ static int bitplanes_diag_target_line(int slot)
     static int initialized = 0;
     static int line0 = -1;
     static int line1 = -1;
-    const char *env0;
-    const char *env1;
-    char *end = NULL;
 
     if (!initialized) {
-        env0 = getenv("HARNESS_DIAG_LINE");
-        env1 = getenv("HARNESS_DIAG_LINE2");
-
-        if (env0 && env0[0] != '\0') {
-            long v = strtol(env0, &end, 10);
-            if (end && *end == '\0')
-                line0 = (int)v;
-        }
-
-        end = NULL;
-        if (env1 && env1[0] != '\0') {
-            long v = strtol(env1, &end, 10);
-            if (end && *end == '\0')
-                line1 = (int)v;
-        }
-
+        line0 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE", -1);
+        line1 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE2", -1);
         initialized = 1;
     }
 
     return slot == 0 ? line0 : line1;
+}
+
+static uint32_t bitplanes_plane_request_bit(int plane)
+{
+    switch (plane)
+    {
+    case 0: return AGNUS_DMA_REQ_BITPLANE1;
+    case 1: return AGNUS_DMA_REQ_BITPLANE2;
+    case 2: return AGNUS_DMA_REQ_BITPLANE3;
+    case 3: return AGNUS_DMA_REQ_BITPLANE4;
+    case 4: return AGNUS_DMA_REQ_BITPLANE5;
+    case 5: return AGNUS_DMA_REQ_BITPLANE6;
+    default: return AGNUS_DMA_REQ_NONE;
+    }
 }
 
 static int bitplanes_diag_line_selected(int vpos)
@@ -320,32 +305,91 @@ static void bitplanes_apply_modulos(BitplaneState *bp, const AgnusState *agnus)
 
 void bitplanes_begin_line(BitplaneState *bp, const AgnusState *agnus, int vpos_abs)
 {
+    int raw_nplanes;
+    int dma_enabled;
+    int dma_master_ok;
+    int dma_bpl_ok;
+    int dma_master_bit;
+    int dma_bpl_bit;
+
     bp->active = 1;
     bp->line_ready = 0;
     bp->line_vpos = vpos_abs;
     bp->line_words_fetched = 0;
     bp->fetch_index = 0;
+    bp->fetch_plane_index = 0;
 
     /*
      * Re-evaluate dynamic display state per line so Copper updates can affect
      * subsequent lines.
      */
     bp->hires = agnus_hires_mode(agnus);
-    bp->nplanes = agnus_bitplane_count(agnus);
+    raw_nplanes = agnus_bitplane_count(agnus);
+    dma_master_ok = agnus_dma_master_enabled(&agnus->dma) ? 1 : 0;
+    dma_bpl_ok = agnus_dma_bitplane_enabled(&agnus->dma) ? 1 : 0;
+    dma_master_bit = (agnus->dma.dmacon & AGNUS_DMACON_DMAEN) ? 1 : 0;
+    dma_bpl_bit = (agnus->dma.dmacon & AGNUS_DMACON_BPLEN) ? 1 : 0;
+    dma_enabled = bitplanes_dma_allowed(agnus);
+    bp->nplanes = raw_nplanes;
     bp->ddf_words = agnus_ddf_words(agnus);
 
-    if (!agnus_bitplane_dma_enabled(agnus))
+    if (!dma_enabled)
         bp->nplanes = 0;
     bp->fetch_hstart = (int)(agnus->ddfstrt & 0xFF);
     bp->fetch_hstop = (int)(agnus->ddfstop & 0xFF);
 
+    if (bitplanes_diag_line_selected(vpos_abs))
+    {
+        kprintf("[BPL-LATCH] v=%d h=%d raw_np=%d latched_np=%d dma_ok=%d "
+                "master_ok=%d bpl_ok=%d dmaen=%d bplen=%d dmacon=%04x "
+                "bplcon0=%04x bpl1=%05x bpl2=%05x ddf=%04x/%04x words=%d "
+                "copper_pc=%05x copper_state=%d\n",
+                vpos_abs,
+                agnus->beam.hpos,
+                raw_nplanes,
+                bp->nplanes,
+                dma_enabled,
+                dma_master_ok,
+                dma_bpl_ok,
+                dma_master_bit,
+                dma_bpl_bit,
+                (unsigned)agnus_dmacon_current(agnus),
+                agnus->bplcon0,
+                make_bplpt(agnus->bplpth[0], agnus->bplptl[0]),
+                make_bplpt(agnus->bplpth[1], agnus->bplptl[1]),
+                agnus->ddfstrt,
+                agnus->ddfstop,
+                bp->ddf_words,
+                (unsigned)(agnus->copper.pc & CHIP_RAM_MASK & ~1u),
+                agnus->copper.state);
+
+        if (!dma_bpl_ok && dma_enabled && raw_nplanes > 0)
+        {
+            kprintf("[BPL-LATCH-OVERRIDE] v=%d h=%d dmacon=%04x bplcon0=%04x "
+                    "bpl1=%05x raw_np=%d\n",
+                    vpos_abs,
+                    agnus->beam.hpos,
+                    (unsigned)agnus_dmacon_current(agnus),
+                    (unsigned)agnus->bplcon0,
+                    (unsigned)make_bplpt(agnus->bplpth[0], agnus->bplptl[0]),
+                    raw_nplanes);
+        }
+    }
+
     if (bitplanes_diagrom_window(bp, agnus) && ((vpos_abs - 40) % 16) == 0) {
-        kprintf("[BPL-DIAG-BEGIN] v=%d h=%d bplcon0=%04x nplanes=%d "
+        kprintf("[BPL-DIAG-BEGIN] v=%d h=%d bplcon0=%04x raw_np=%d dma_ok=%d "
+                "master_ok=%d bpl_ok=%d master_bit=%d bpl_bit=%d nplanes=%d "
                 "bpl1=%05x bpl2=%05x bpl3=%05x diw=%04x/%04x ddf=%04x/%04x "
                 "ddf_words=%d mod1=%04x mod2=%04x dmacon=%04x\n",
                 vpos_abs,
                 agnus->beam.hpos,
                 agnus->bplcon0,
+                raw_nplanes,
+                dma_enabled,
+                dma_master_ok,
+                dma_bpl_ok,
+                dma_master_bit,
+                dma_bpl_bit,
                 bp->nplanes,
                 make_bplpt(agnus->bplpth[0], agnus->bplptl[0]),
                 make_bplpt(agnus->bplpth[1], agnus->bplptl[1]),
@@ -357,7 +401,7 @@ void bitplanes_begin_line(BitplaneState *bp, const AgnusState *agnus, int vpos_a
                 bp->ddf_words,
                 (uint16_t)agnus->bpl1mod,
                 (uint16_t)agnus->bpl2mod,
-                agnus->dmacon);
+                agnus_dmacon_current(agnus));
     }
 
     if (bp->nplanes <= 0)
@@ -376,45 +420,8 @@ void bitplanes_begin_line(BitplaneState *bp, const AgnusState *agnus, int vpos_a
     bitplanes_diagrom_dump_raw_planes(bp, agnus);
 }
 
-static void bitplanes_fetch_word(BitplaneState *bp, AgnusState *agnus, int word_index)
+static void bitplanes_finish_word(BitplaneState *bp, AgnusState *agnus, int word_index)
 {
-    if (!agnus || !agnus->memory)
-        return;
-    if (bp->nplanes <= 0)
-        return;
-    if (word_index < 0 || word_index >= bp->ddf_words)
-        return;
-
-    for (int p = 0; p < bp->nplanes; ++p)
-    {
-        uint32_t addr = bp->cur_bplpt[p] & CHIP_RAM_MASK;
-        bp->line_words[p][word_index] = bellatrix_chip_read16(agnus->memory, addr);
-        bp->cur_bplpt[p] = (bp->cur_bplpt[p] + 2u) & CHIP_RAM_MASK;
-    }
-
-    if (bp->nplanes > 0 && bitplanes_diagrom_window(bp, agnus) &&
-        (word_index == 0 || word_index == bp->ddf_words - 1))
-    {
-        uint16_t w0 = bp->line_words[0][word_index];
-        uint16_t w1 = (bp->nplanes > 1) ? bp->line_words[1][word_index] : 0;
-        uint16_t w2 = (bp->nplanes > 2) ? bp->line_words[2][word_index] : 0;
-
-        kprintf("[BPL-DIAG-FETCH] v=%d h=%d target_h=%d wi=%d/%d np=%d "
-                "w0=%04x w1=%04x w2=%04x next1=%05x next2=%05x next3=%05x\n",
-                bp->line_vpos,
-                agnus->beam.hpos,
-                bitplanes_word_fetch_hpos(bp, word_index),
-                word_index,
-                bp->ddf_words,
-                bp->nplanes,
-                w0,
-                w1,
-                w2,
-                bp->cur_bplpt[0],
-                (bp->nplanes > 1) ? bp->cur_bplpt[1] : 0u,
-                (bp->nplanes > 2) ? bp->cur_bplpt[2] : 0u);
-    }
-
     bp->line_words_fetched = word_index + 1;
     bitplanes_publish_ptrs_to_agnus(bp, agnus);
 
@@ -457,20 +464,48 @@ static void bitplanes_fetch_word(BitplaneState *bp, AgnusState *agnus, int word_
     }
 }
 
-static void bitplanes_progress_fetch(BitplaneState *bp, AgnusState *agnus, int hpos)
+static void bitplanes_fetch_plane_word(BitplaneState *bp,
+                                       AgnusState *agnus,
+                                       int word_index,
+                                       int plane)
 {
-    if (bp->fetch_index >= bp->ddf_words)
+    if (!agnus || !agnus->memory)
+        return;
+    if (bp->nplanes <= 0)
+        return;
+    if (word_index < 0 || word_index >= bp->ddf_words)
+        return;
+    if (plane < 0 || plane >= bp->nplanes)
         return;
 
-    while (bp->fetch_index < bp->ddf_words)
     {
-        int target_hpos = bitplanes_word_fetch_hpos(bp, bp->fetch_index);
+        uint32_t addr = bp->cur_bplpt[plane] & CHIP_RAM_MASK;
+        bp->line_words[plane][word_index] = bellatrix_chip_read16(agnus->memory, addr);
+        bp->cur_bplpt[plane] = (bp->cur_bplpt[plane] + 2u) & CHIP_RAM_MASK;
+    }
 
-        if (hpos < target_hpos)
-            break;
+    if (bp->nplanes > 0 && bitplanes_diagrom_window(bp, agnus) &&
+        (word_index == 0 || word_index == bp->ddf_words - 1) &&
+        plane == bp->nplanes - 1)
+    {
+        uint16_t w0 = bp->line_words[0][word_index];
+        uint16_t w1 = (bp->nplanes > 1) ? bp->line_words[1][word_index] : 0;
+        uint16_t w2 = (bp->nplanes > 2) ? bp->line_words[2][word_index] : 0;
 
-        bitplanes_fetch_word(bp, agnus, bp->fetch_index);
-        bp->fetch_index++;
+        kprintf("[BPL-DIAG-FETCH] v=%d h=%d target_h=%d wi=%d/%d np=%d "
+                "w0=%04x w1=%04x w2=%04x next1=%05x next2=%05x next3=%05x\n",
+                bp->line_vpos,
+                agnus->beam.hpos,
+                bitplanes_word_fetch_hpos(bp, word_index),
+                word_index,
+                bp->ddf_words,
+                bp->nplanes,
+                w0,
+                w1,
+                w2,
+                bp->cur_bplpt[0],
+                (bp->nplanes > 1) ? bp->cur_bplpt[1] : 0u,
+                (bp->nplanes > 2) ? bp->cur_bplpt[2] : 0u);
     }
 }
 
@@ -509,6 +544,7 @@ void bitplanes_begin_frame(BitplaneState *bp, const AgnusState *agnus,
     bp->ddf_words = 0;
     bp->line_words_fetched = 0;
     bp->fetch_index = 0;
+    bp->fetch_plane_index = 0;
     bp->line_vpos = -1;
     bp->fetch_hstart = 0;
     bp->fetch_hstop = 0;
@@ -529,14 +565,20 @@ void bitplanes_fetch_line(BitplaneState *bp, AgnusState *agnus, int vpos_abs)
 
     while (bp->fetch_index < bp->ddf_words)
     {
-        bitplanes_fetch_word(bp, agnus, bp->fetch_index);
+        while (bp->fetch_plane_index < bp->nplanes)
+        {
+            bitplanes_fetch_plane_word(bp, agnus, bp->fetch_index, bp->fetch_plane_index);
+            bp->fetch_plane_index++;
+        }
+        bp->fetch_plane_index = 0;
+        bitplanes_finish_word(bp, agnus, bp->fetch_index);
         bp->fetch_index++;
     }
 }
 
 void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
 {
-    int vstart, vstop, vpos, hpos;
+    int vstart, vstop, vpos;
 
     if (!agnus)
         return;
@@ -544,7 +586,6 @@ void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
     vstart = agnus_display_vstart(agnus);
     vstop = agnus_display_vstop(agnus);
     vpos = (int)agnus->beam.vpos;
-    hpos = (int)agnus->beam.hpos;
 
     if (vpos < vstart || vpos >= vstop)
     {
@@ -563,15 +604,6 @@ void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
 
     if (bp->nplanes <= 0)
         return;
-
-    /*
-     * Incremental fetch model:
-     * words become available as beam advances across DDF.
-     */
-    if (hpos >= bp->fetch_hstart && agnus->memory)
-    {
-        bitplanes_progress_fetch(bp, agnus, hpos);
-    }
 
     /*
      * Keep the line latched until vpos changes. Clearing active here causes
@@ -620,4 +652,46 @@ const uint16_t *bitplanes_plane_words(const BitplaneState *bp, int plane)
 int bitplanes_line_vpos(const BitplaneState *bp)
 {
     return bp->line_vpos;
+}
+
+uint32_t bitplanes_dma_request_mask(const BitplaneState *bp, const AgnusState *agnus)
+{
+    int target_hpos;
+
+    if (!bp || !agnus)
+        return AGNUS_DMA_REQ_NONE;
+    if (!bp->active || bp->nplanes <= 0)
+        return AGNUS_DMA_REQ_NONE;
+    if (bp->line_ready)
+        return AGNUS_DMA_REQ_NONE;
+    if (bp->fetch_index >= bp->ddf_words)
+        return AGNUS_DMA_REQ_NONE;
+    if (bp->fetch_plane_index < 0 || bp->fetch_plane_index >= bp->nplanes)
+        return AGNUS_DMA_REQ_NONE;
+
+    target_hpos = bitplanes_word_fetch_hpos(bp, bp->fetch_index);
+    if ((int)agnus->beam.hpos < target_hpos)
+        return AGNUS_DMA_REQ_NONE;
+
+    return bitplanes_plane_request_bit(bp->fetch_plane_index);
+}
+
+void bitplanes_dma_service_next(BitplaneState *bp, AgnusState *agnus)
+{
+    if (!bp || !agnus)
+        return;
+    if (bp->fetch_index >= bp->ddf_words)
+        return;
+    if (bp->fetch_plane_index < 0 || bp->fetch_plane_index >= bp->nplanes)
+        return;
+
+    bitplanes_fetch_plane_word(bp, agnus, bp->fetch_index, bp->fetch_plane_index);
+    bp->fetch_plane_index++;
+
+    if (bp->fetch_plane_index >= bp->nplanes)
+    {
+        bp->fetch_plane_index = 0;
+        bitplanes_finish_word(bp, agnus, bp->fetch_index);
+        bp->fetch_index++;
+    }
 }

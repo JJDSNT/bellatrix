@@ -9,6 +9,7 @@
 #include "copper/copper_regs.h"
 #include "beam.h"
 #include "bitplanes.h"
+#include "dma.h"
 #include "memory/memory.h"
 
 struct Denise;
@@ -108,8 +109,16 @@ struct Paula;
  * ------------------------------------------------------------------------- */
 
 typedef struct AgnusState {
+    /*
+     * Transitional mirror:
+     * `dma.dmacon` is now the authoritative DMACON state.
+     * Keep this field synchronized for older debug paths and code that still
+     * reads `s->dmacon` directly while the rest of the DMA migration is in
+     * progress.
+     */
     uint16_t dmacon;
     uint16_t bplcon0;
+    AgnusDMA dma;
 
     BeamState      beam;
     BitplaneState  bitplanes;
@@ -140,6 +149,11 @@ typedef struct AgnusState {
 } AgnusState;
 
 typedef AgnusState Agnus;
+
+static inline uint16_t agnus_dmacon_current(const AgnusState *s)
+{
+    return s ? s->dma.dmacon : 0u;
+}
 
 /* ---------------------------------------------------------------------------
  * Chip RAM helpers — thin wrappers so blitter/copper can read/write chip RAM

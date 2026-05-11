@@ -29,8 +29,6 @@ extern "C" {
 enum
 {
     AGNUS_DMACON_SETCLR = 0x8000,
-    AGNUS_DMACON_BBUSY  = 0x4000,
-    AGNUS_DMACON_BZERO  = 0x2000,
     AGNUS_DMACON_BLTPRI = 0x0400,
     AGNUS_DMACON_DMAEN  = 0x0200,
     AGNUS_DMACON_BPLEN  = 0x0100,
@@ -42,6 +40,12 @@ enum
     AGNUS_DMACON_AUD2EN = 0x0004,
     AGNUS_DMACON_AUD1EN = 0x0002,
     AGNUS_DMACON_AUD0EN = 0x0001
+};
+
+enum
+{
+    AGNUS_DMA_DMACON_BBUSY = 0x4000,   /* bit 14 — blitter busy  */
+    AGNUS_DMA_DMACON_BZERO = 0x2000    /* bit 13 — blitter zero  */
 };
 
 /*
@@ -100,6 +104,12 @@ typedef struct AgnusDMAOps
      */
     bool (*blitter_busy)(void *ctx);
     bool (*blitter_zero)(void *ctx);
+
+    /*
+     * Permite ao host relaxar a elegibilidade de pedidos de bitplane em
+     * cenarios onde o display ja foi armado mas BPLEN nao permanece setado.
+     */
+    bool (*bitplane_allowed)(void *ctx);
 } AgnusDMAOps;
 
 typedef struct AgnusDMA

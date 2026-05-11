@@ -7,6 +7,7 @@
 #include "copper_regs.h"
 #include "copper.h"
 
+#include "memory/memory.h"
 #include "support.h"
 #include "debug/cpu_pc.h"
 
@@ -14,7 +15,7 @@
 /* helpers                                                                   */
 /* ------------------------------------------------------------------------- */
 
-#define CHIP_RAM_MASK 0x001FFFFFu
+#define CHIP_RAM_MASK BELLATRIX_CHIP_RAM_MASK
 
 /* ------------------------------------------------------------------------- */
 /* write                                                                     */

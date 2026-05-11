@@ -21,20 +21,155 @@ extern uint32_t fb_height;
  * Internal helpers
  * ------------------------------------------------------------------------- */
 
-#define CHIP_RAM_ADDR_MASK 0x001FFFFFu
-#define CHIP_RAM_WORD_MASK 0x001FFFFEu
+#define CHIP_RAM_ADDR_MASK BELLATRIX_CHIP_RAM_MASK
+#define CHIP_RAM_WORD_MASK (BELLATRIX_CHIP_RAM_MASK & ~1u)
 
-static inline void agnus_apply_setclr_15(uint16_t *dst,
-                                         uint16_t raw,
-                                         uint16_t writable_mask)
+static bool agnus_dma_blitter_busy_cb(void *ctx)
 {
-    uint16_t bits = (uint16_t)(raw & writable_mask);
-
-    if (raw & 0x8000u)
-        *dst |= bits;
-    else
-        *dst &= (uint16_t)~bits;
+    AgnusState *s = (AgnusState *)ctx;
+    return s ? blitter_is_busy(&s->blitter) : false;
 }
+
+static bool agnus_dma_blitter_zero_cb(void *ctx)
+{
+    AgnusState *s = (AgnusState *)ctx;
+    return s ? s->blitter.zero : true;
+}
+
+static bool agnus_dma_bitplane_allowed_cb(void *ctx)
+{
+    AgnusState *s = (AgnusState *)ctx;
+    return s ? bitplanes_dma_allowed(s) : false;
+}
+
+static void agnus_begin_denise_line(AgnusState *s, uint32_t prev_vpos)
+{
+    if (!s || !s->denise)
+        return;
+
+    if (s->beam.vpos == prev_vpos)
+        return;
+
+    denise_sprite_begin_line(&s->denise->sprites, (int)s->beam.vpos);
+}
+
+static uint32_t agnus_dma_query_requests_cb(void *ctx)
+{
+    AgnusState *s = (AgnusState *)ctx;
+    uint32_t req = 0;
+
+    if (!s)
+        return 0;
+
+    if (agnus_dma_copper_enabled(&s->dma) &&
+        s->copper_service.enabled &&
+        s->copper.state != COPPER_STATE_HALTED &&
+        s->copper.state != COPPER_STATE_WAITING_RASTER &&
+        s->copper.state != COPPER_STATE_WAITING_BLITTER)
+    {
+        req |= AGNUS_DMA_REQ_COPPER;
+    }
+
+    if (bitplanes_dma_allowed(s))
+        req |= bitplanes_dma_request_mask(&s->bitplanes, s);
+
+    if (agnus_dma_blitter_enabled(&s->dma))
+        req |= blitter_dma_request_mask(&s->blitter);
+
+    if (s->denise && agnus_dma_sprite_enabled(&s->dma))
+        req |= denise_sprites_dma_request_mask(&s->denise->sprites);
+
+    if (s->paula &&
+        agnus_dma_disk_enabled(&s->dma) &&
+        paula_disk_dma_wants_service(&s->paula->disk))
+    {
+        req |= AGNUS_DMA_REQ_DISK;
+    }
+
+    return req;
+}
+
+static void agnus_dma_service_request_cb(void *ctx, AgnusDMARequest request)
+{
+    AgnusState *s = (AgnusState *)ctx;
+
+    if (!s)
+        return;
+
+    switch (request)
+    {
+    case AGNUS_DMA_REQ_BITPLANE1:
+    case AGNUS_DMA_REQ_BITPLANE2:
+    case AGNUS_DMA_REQ_BITPLANE3:
+    case AGNUS_DMA_REQ_BITPLANE4:
+    case AGNUS_DMA_REQ_BITPLANE5:
+    case AGNUS_DMA_REQ_BITPLANE6:
+        bitplanes_dma_service_next(&s->bitplanes, s);
+        break;
+
+    case AGNUS_DMA_REQ_COPPER:
+        copper_service_step(&s->copper_service, &s->copper, s, 1);
+        break;
+
+    case AGNUS_DMA_REQ_BLITTER:
+        blitter_dma_service_grant(&s->blitter, s);
+        break;
+
+    case AGNUS_DMA_REQ_DISK:
+        if (s->paula)
+            paula_disk_dma_service_grant(&s->paula->disk);
+        break;
+
+    case AGNUS_DMA_REQ_SPRITE0:
+    case AGNUS_DMA_REQ_SPRITE1:
+    case AGNUS_DMA_REQ_SPRITE2:
+    case AGNUS_DMA_REQ_SPRITE3:
+    case AGNUS_DMA_REQ_SPRITE4:
+    case AGNUS_DMA_REQ_SPRITE5:
+    case AGNUS_DMA_REQ_SPRITE6:
+    case AGNUS_DMA_REQ_SPRITE7:
+        if (s->denise && s->memory)
+        {
+            int sprite_index = -1;
+            uint32_t ptr;
+
+            switch (request)
+            {
+            case AGNUS_DMA_REQ_SPRITE0: sprite_index = 0; break;
+            case AGNUS_DMA_REQ_SPRITE1: sprite_index = 1; break;
+            case AGNUS_DMA_REQ_SPRITE2: sprite_index = 2; break;
+            case AGNUS_DMA_REQ_SPRITE3: sprite_index = 3; break;
+            case AGNUS_DMA_REQ_SPRITE4: sprite_index = 4; break;
+            case AGNUS_DMA_REQ_SPRITE5: sprite_index = 5; break;
+            case AGNUS_DMA_REQ_SPRITE6: sprite_index = 6; break;
+            case AGNUS_DMA_REQ_SPRITE7: sprite_index = 7; break;
+            default: break;
+            }
+
+            if (sprite_index >= 0)
+            {
+                ptr = denise_sprite_get_ptr(&s->denise->sprites, sprite_index);
+                denise_sprite_dma_service(&s->denise->sprites,
+                                          sprite_index,
+                                          bellatrix_chip_read16(s->memory, ptr));
+            }
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+static const AgnusDMAOps s_agnus_dma_ops =
+{
+    .advance_slot = NULL,
+    .query_requests = agnus_dma_query_requests_cb,
+    .service_request = agnus_dma_service_request_cb,
+    .blitter_busy = agnus_dma_blitter_busy_cb,
+    .blitter_zero = agnus_dma_blitter_zero_cb,
+    .bitplane_allowed = agnus_dma_bitplane_allowed_cb,
+};
 
 /* ECS Fat Agnus 8372A PAL — bits [14:8] of VPOSR */
 #define AGNUS_CHIP_ID 0x20u
@@ -53,7 +188,8 @@ static inline void agnus_get_beam(const AgnusState *s,
 
 static inline int agnus_copper_enabled(const AgnusState *s)
 {
-    return (s->dmacon & DMAF_DMAEN) && (s->dmacon & DMAF_COPEN);
+    uint16_t dmacon = agnus_dmacon_current(s);
+    return (dmacon & DMAF_DMAEN) && (dmacon & DMAF_COPEN);
 }
 
 static inline uint32_t agnus_bpl_ptr(const AgnusState *s, unsigned plane)
@@ -69,6 +205,7 @@ static inline uint32_t agnus_bpl_ptr(const AgnusState *s, unsigned plane)
 void agnus_init(AgnusState *s)
 {
     s->dmacon = 0;
+    agnus_dma_init(&s->dma, s, &s_agnus_dma_ops);
 
     beam_init(&s->beam);
     bitplanes_init(&s->bitplanes);
@@ -138,18 +275,7 @@ void agnus_attach_memory(AgnusState *s, BellatrixMemory *m)
 void agnus_intreq_set(AgnusState *s, uint16_t bits)
 {
     if (s->paula)
-    {
         paula_irq_raise(s->paula, bits);
-
-        uint16_t pending =
-            (uint16_t)(s->paula->irq.intena & s->paula->irq.intreq & 0x3FFFu);
-
-        kprintf("[IRQSET] bits=%04x intena=%04x intreq=%04x pending=%04x\n",
-                (unsigned)bits,
-                (unsigned)s->paula->irq.intena,
-                (unsigned)s->paula->irq.intreq,
-                (unsigned)pending);
-    }
 }
 
 void agnus_intreq_clear(AgnusState *s, uint16_t bits)
@@ -164,13 +290,15 @@ void agnus_intreq_clear(AgnusState *s, uint16_t bits)
 
 int agnus_blitter_busy(const AgnusState *s)
 {
+    uint16_t dmacon = agnus_dmacon_current(s);
+
     if (!blitter_is_busy(&s->blitter))
         return 0;
 
-    if (!(s->dmacon & DMAF_DMAEN))
+    if (!(dmacon & DMAF_DMAEN))
         return 0;
 
-    if (!(s->dmacon & DMAF_BLTEN))
+    if (!(dmacon & DMAF_BLTEN))
         return 0;
 
     return 1;
@@ -238,7 +366,7 @@ static void agnus_log_vbl_enter(AgnusState *s)
             (unsigned)s->beam.frame,
             (unsigned)s->beam.hpos,
             (unsigned)s->beam.vpos,
-            (unsigned)s->dmacon,
+            (unsigned)agnus_dmacon_current(s),
             (unsigned)intena,
             (unsigned)intreq,
             (unsigned)pending,
@@ -268,14 +396,6 @@ void agnus_step(AgnusState *s, uint64_t ticks)
     if (!ticks)
         return;
 
-    /*
-     * Blitter consumes elapsed time directly.
-     *
-     * DMA ownership remains in Agnus, but the blitter's internal timing state
-     * advances here as part of the Agnus domain.
-     */
-    blitter_step(&s->blitter, s, ticks);
-
     while (ticks-- > 0)
     {
         int vbl_before = beam_is_in_vblank(&s->beam);
@@ -290,6 +410,8 @@ void agnus_step(AgnusState *s, uint64_t ticks)
         if (s->beam.vpos != prev_vpos)
             s->hsync_pulses++;
 
+        agnus_begin_denise_line(s, prev_vpos);
+
         /*
          * Critical Copper ordering:
          *
@@ -299,10 +421,9 @@ void agnus_step(AgnusState *s, uint64_t ticks)
          * MOVE immediately following a WAIT has executed.
          */
         if (agnus_copper_enabled(s))
-        {
             copper_service_poll(&s->copper_service, &s->copper, s);
-            copper_service_step(&s->copper_service, &s->copper, s, 1);
-        }
+
+        agnus_dma_step(&s->dma, 1);
 
         bitplanes_step(&s->bitplanes, s);
 
@@ -343,7 +464,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                         s->bitplanes.line_vpos,
                         (unsigned)s->diwstrt,
                         (unsigned)s->diwstop,
-                        (unsigned)s->dmacon);
+                        (unsigned)agnus_dmacon_current(s));
             }
         }
 
@@ -357,7 +478,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                     s->denise ? s->denise->bplcon0 : 0,
                     s->bplpth[0],
                     s->bplptl[0],
-                    (unsigned)s->dmacon);
+                    (unsigned)agnus_dmacon_current(s));
 
             if (agnus_copper_enabled(s))
             {
@@ -367,14 +488,14 @@ void agnus_step(AgnusState *s, uint64_t ticks)
             else
             {
                 kprintf("[COPPER] vbl_reload skipped - COPEN off (dmacon=%04x)\n",
-                        (unsigned)s->dmacon);
+                        (unsigned)agnus_dmacon_current(s));
             }
 
             kprintf("[DENISE] frame=%u bpt0=0x%05x dmacon=0x%04x\n",
                     (unsigned)s->beam.frame,
                     (unsigned)((((uint32_t)(s->bplpth[0] & 0x1Fu)) << 16) |
                                ((uint32_t)(s->bplptl[0] & 0xFFFEu))),
-                    (unsigned)s->dmacon);
+                    (unsigned)agnus_dmacon_current(s));
 
             if (framebuffer && pitch)
             {
@@ -442,8 +563,10 @@ int agnus_handles_write(const AgnusState *s, uint32_t addr)
 
 uint32_t agnus_read(AgnusState *s, uint32_t addr, unsigned int size)
 {
-    (void)size;
-    return agnus_read_reg(s, (uint16_t)(addr & 0x1FEu));
+    uint32_t value = agnus_read_reg(s, (uint16_t)(addr & 0x1FEu));
+    if (size == 1)
+        return (addr & 1u) ? (value & 0xFFu) : ((value >> 8) & 0xFFu);
+    return value;
 }
 
 void agnus_write(AgnusState *s, uint32_t addr, uint32_t value, unsigned int size)
@@ -460,14 +583,7 @@ uint32_t agnus_read_reg(AgnusState *s, uint16_t reg)
     switch (reg)
     {
     case AGNUS_DMACONR:
-        return (uint32_t)((uint16_t)(s->dmacon &
-                                     ~(AGNUS_DMACON_BBUSY | AGNUS_DMACON_BZERO)) |
-                          (uint16_t)(blitter_is_busy(&s->blitter)
-                                         ? AGNUS_DMACON_BBUSY
-                                         : 0u) |
-                          (uint16_t)(s->blitter.zero
-                                         ? AGNUS_DMACON_BZERO
-                                         : 0u));
+        return (uint32_t)agnus_dma_read_dmaconr(&s->dma);
 
     case AGNUS_VPOSR:
     {
@@ -512,11 +628,12 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
                 pc);
     }
 
-    if (pc >= 0x00FCCB80u && pc <= 0x00FCCD20u)
+    if (agnus_is_blitter_reg(reg))
     {
-        if ((reg >= AGNUS_BLTCON0 && reg <= AGNUS_BLTSIZE) ||
-            (reg >= AGNUS_BLTCMOD && reg <= AGNUS_BLTDMOD) ||
-            reg == AGNUS_BLTCDAT || reg == AGNUS_BLTBDAT || reg == AGNUS_BLTADAT)
+        if (reg == AGNUS_BLTSIZE || raw != 0u ||
+            (pc >= 0x00FCC980u && pc <= 0x00FCD620u) ||
+            (pc >= 0x00FCA480u && pc <= 0x00FCA568u) ||
+            (pc >= 0x00FE8800u && pc <= 0x00FE8848u))
         {
             kprintf("[AGNUS-BLT-W] pc=%08x reg=%04x value=%04x\n",
                     (unsigned)pc,
@@ -529,15 +646,18 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
     {
     case AGNUS_DMACON:
     {
-        uint16_t old = s->dmacon;
+        uint16_t old = agnus_dmacon_current(s);
 
-        agnus_apply_setclr_15(&s->dmacon, raw, 0x7FFFu);
+        agnus_dma_write_dmacon(&s->dma, raw);
+        s->dmacon = s->dma.dmacon;
+        if (s->paula)
+            paula_audio_set_dmacon(&s->paula->audio, s->dma.dmacon);
 
         kprintf("[DMACON-W] pc=%08x raw=%04x old=%04x new=%04x\n",
                 (unsigned)bellatrix_debug_cpu_pc(),
                 (unsigned)raw,
                 (unsigned)old,
-                (unsigned)s->dmacon);
+                (unsigned)agnus_dmacon_current(s));
         return;
     }
 
@@ -699,16 +819,6 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
 
         if (s->denise)
             denise_write_reg(s->denise, reg, raw);
-
-        if (reg == 0x0180u || reg == 0x0182u)
-        {
-            unsigned color_idx = (unsigned)((reg - 0x0180u) >> 1);
-            kprintf("[AGNUS] COLOR%02u=%03x vh=%04x copper_pc=%05x\n",
-                    color_idx,
-                    (unsigned)(raw & 0x0FFFu),
-                    (unsigned)(((s->beam.vpos & 0xFFu) << 8) | (s->beam.hpos & 0xFEu)),
-                    (unsigned)(s->copper.pc & CHIP_RAM_WORD_MASK));
-        }
 
         return;
     }

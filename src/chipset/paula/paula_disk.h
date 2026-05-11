@@ -10,7 +10,13 @@
 
 #define PAULA_INTREQ_DSKBLK  0x0002u
 #define PAULA_INTREQ_DSKSYNC 0x1000u
-#define PAULA_DISK_MFM_TRACK_BYTES_PAL 12668u
+/*
+ * Raw track capture size expected by Amiga trackdisk-style DMA readers.
+ * AROS m68k-amiga trackdisk uses DISK_BUFFERSIZE = 13630 bytes for one
+ * ADOS track revolution buffer; matching that size keeps the encoded gap
+ * and wrap point aligned with its sector decoder.
+ */
+#define PAULA_DISK_MFM_TRACK_BYTES_PAL 13630u
 
 typedef void (*PaulaDiskIntreqFn)(void *user, uint16_t bits);
 
