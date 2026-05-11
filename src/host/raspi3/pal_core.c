@@ -109,6 +109,20 @@ void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
 }
 
 __attribute__((weak))
+void bellatrix_runtime_audio_step(uint64_t host_now, uint64_t host_freq)
+{
+    (void)host_now;
+    (void)host_freq;
+}
+
+__attribute__((weak))
+void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
+{
+    (void)host_now;
+    (void)host_freq;
+}
+
+__attribute__((weak))
 void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 {
     (void)cycles;
@@ -278,11 +292,7 @@ void PAL_Runtime_ReportCpuProgress(uint32_t cycles)
 }
 
 // ---------------------------------------------------------------------------
-// Chipset core main loop
-//
-// This is the new heart of pal_core.c.
-// It is NOT a VBL loop.
-// It is a runtime loop that advances Bellatrix time using the host counter.
+// Core 1 — GFX/Agnus main loop
 // ---------------------------------------------------------------------------
 static void chipset_core_loop(void)
 {
@@ -312,18 +322,76 @@ static void chipset_core_loop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Core 1 bootstrap entry
+// Core 2 — Audio (Paula) main loop
+// ---------------------------------------------------------------------------
+static void chipset_audio_loop(void)
+{
+    while (!atomic_load_explicit(&s_rt.runtime_ready, memory_order_acquire))
+        pal_wfe();
+
+    while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
+        const uint64_t now = pal_read_cntpct();
+        bellatrix_runtime_audio_step(now, s_rt.host_counter_freq);
+        pal_wfe();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core 3 — IO (CIA / serial / disk) main loop
+// ---------------------------------------------------------------------------
+static void chipset_io_loop(void)
+{
+    while (!atomic_load_explicit(&s_rt.runtime_ready, memory_order_acquire))
+        pal_wfe();
+
+    while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
+        const uint64_t now = pal_read_cntpct();
+        bellatrix_runtime_io_step(now, s_rt.host_counter_freq);
+        pal_wfe();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Secondary core bootstrap entries
 //
-// Called by the secondary core bootstrap path.
+// Each is called by secondary_boot() in start.c for the matching cpu_id.
+// The entry spins on its function pointer until PAL_Core_Launch*() sets it.
 // ---------------------------------------------------------------------------
 static void (*volatile s_chipset_entry)(void) = NULL;
+static void (*volatile s_audio_entry)(void)   = NULL;
+static void (*volatile s_io_entry)(void)      = NULL;
 
 void bellatrix_core1_entry(void)
 {
+    /* Core 1 — Agnus/GFX. */
     while (!s_chipset_entry)
         pal_wfe();
 
     s_chipset_entry();
+
+    while (1)
+        pal_wfe();
+}
+
+void bellatrix_core2_entry(void)
+{
+    /* Core 2 — Audio (Paula). Parks until PAL_Core_LaunchAudio() is called. */
+    while (!s_audio_entry)
+        pal_wfe();
+
+    s_audio_entry();
+
+    while (1)
+        pal_wfe();
+}
+
+void bellatrix_core3_entry(void)
+{
+    /* Core 3 — IO (CIA / serial / disk). Parks until PAL_Core_LaunchIO(). */
+    while (!s_io_entry)
+        pal_wfe();
+
+    s_io_entry();
 
     while (1)
         pal_wfe();
@@ -374,6 +442,32 @@ void PAL_Core_LaunchChipset(void (*entry)(void))
     }
 
     s_chipset_entry = chipset_core_loop;
+
+    pal_dsb_sy();
+    pal_sev();
+}
+
+void PAL_Core_LaunchAudio(void)
+{
+    pal_runtime_init_once();
+
+    if (!atomic_load_explicit(&s_rt.multicore_enabled, memory_order_acquire))
+        return;
+
+    s_audio_entry = chipset_audio_loop;
+
+    pal_dsb_sy();
+    pal_sev();
+}
+
+void PAL_Core_LaunchIO(void)
+{
+    pal_runtime_init_once();
+
+    if (!atomic_load_explicit(&s_rt.multicore_enabled, memory_order_acquire))
+        return;
+
+    s_io_entry = chipset_io_loop;
 
     pal_dsb_sy();
     pal_sev();

@@ -117,7 +117,11 @@ static int should_emit(const BTraceState *t, uint32_t addr, uint8_t impl)
 void btrace_init(BTraceState *t)
 {
     memset(t, 0, sizeof(*t));
+#ifdef BELLATRIX_BTRACE_INIT_FILTER
+    t->filter = BELLATRIX_BTRACE_INIT_FILTER;
+#else
     t->filter = BTRACE_F_UNIMPL;
+#endif
 }
 
 void btrace_reset(BTraceState *t)

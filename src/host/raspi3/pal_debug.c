@@ -29,3 +29,15 @@ void PAL_Debug_PrintHex(uint32_t val)
 {
     kprintf("%08x", val);
 }
+
+int PAL_Diag_GetEnvInt(const char *name, int default_val)
+{
+    (void)name;
+    return default_val;
+}
+
+int PAL_Diag_GetEnvBool(const char *name)
+{
+    (void)name;
+    return 0;
+}

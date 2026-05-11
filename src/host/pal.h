@@ -102,6 +102,8 @@ uint64_t PAL_Time_GetFrequency(void);
 /* Launch chipset loop on a secondary ARM core via spin-table.
    Stub in Phase 0. */
 void PAL_Core_LaunchChipset(void (*entry)(void));
+void PAL_Core_LaunchAudio(void);
+void PAL_Core_LaunchIO(void);
 void PAL_Core_SetMulticoreEnabled(int enabled);
 int  PAL_Core_IsMulticoreEnabled(void);
 void PAL_Core_Sync(void);

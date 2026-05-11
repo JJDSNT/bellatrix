@@ -27,6 +27,7 @@ typedef struct NullModem {
     uint16_t loopback_wr;
     uint16_t loopback_count;
     uint16_t loopback_budget;
+    uint16_t diagrom_stream_index;
 } NullModem;
 
 void null_modem_init(NullModem *nm,

@@ -52,7 +52,7 @@ void emu_debug_dma(BellatrixMachine *m)
 
     kprintf("[DMA] ---- DMA state ----\n");
 
-    dmaconr = m->agnus.dmacon;
+    dmaconr = agnus_dmacon_current(&m->agnus);
 
     kprintf("[DMA] DMACONR=0x%04x enabled:", dmaconr);
     for (bit = 9; bit >= 0; bit--) {

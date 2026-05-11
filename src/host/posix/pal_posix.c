@@ -123,6 +123,15 @@ uint32_t PAL_Runtime_GetPendingIPL(void) { return 0; }
 void PAL_Runtime_WakeupChipset(void) {}
 void PAL_Runtime_MmioBarrier(void) {}
 
+/* Harness single-core stub: advance chipset synchronously on the caller's
+ * thread.  The strong override in bellatrix.c replaces this on bare metal. */
+__attribute__((weak))
+void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
+{
+    extern void bellatrix_machine_advance(uint32_t cycles);
+    bellatrix_machine_advance(cycles);
+}
+
 void PAL_HarnessSerial_ConfigureFromEnv(void)
 {
     const char *mode = getenv("HARNESS_SERIAL_MODE");
@@ -283,6 +292,8 @@ int PAL_HarnessSerial_ReadByte(uint8_t *byte)
 }
 
 void PAL_Core_LaunchChipset(void (*entry)(void)) { (void)entry; }
+void PAL_Core_LaunchAudio(void) {}
+void PAL_Core_LaunchIO(void) {}
 void PAL_Core_SetMulticoreEnabled(int enabled) { (void)enabled; }
 int PAL_Core_IsMulticoreEnabled(void) { return 0; }
 void PAL_Core_Sync(void) {}
