@@ -10,8 +10,9 @@
 /* ------------------------------------------------------------------------- */
 
 #define BELLATRIX_CHIP_RAM_BASE 0x00000000u
-#define BELLATRIX_CHIP_RAM_SIZE 0x00200000u
-#define BELLATRIX_CHIP_RAM_MASK 0x001FFFFFu
+#define BELLATRIX_CHIP_RAM_SIZE 0x00100000u
+#define BELLATRIX_CHIP_RAM_END  (BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_RAM_SIZE - 1u)
+#define BELLATRIX_CHIP_RAM_MASK 0x000FFFFFu
 
 /*
  * Phase 1 AROS boot target:
@@ -26,6 +27,9 @@
 #define BELLATRIX_ROM_SIZE      0x00080000u
 #define BELLATRIX_ROM_END       0x00FFFFFFu
 
+#define BELLATRIX_CHIP_BOOT_SIZE BELLATRIX_ROM_SIZE
+#define BELLATRIX_CHIP_BOOT_END  (BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_BOOT_SIZE - 1u)
+
 #define BELLATRIX_CUSTOM_BASE   0x00DFF000u
 #define BELLATRIX_CUSTOM_END    0x00DFFFFFu
 
@@ -39,6 +43,21 @@
 #define BELLATRIX_Z2_CONFIG_END  0x00EFFFFFu
 
 #define BELLATRIX_Z3_BASE        0x10000000u
+
+/* ------------------------------------------------------------------------- */
+/* address helpers                                                           */
+/* ------------------------------------------------------------------------- */
+
+static inline int bellatrix_chip_addr_contains(uint32_t addr)
+{
+    return addr < BELLATRIX_CHIP_RAM_SIZE;
+}
+
+static inline int bellatrix_chip_addr_contains_range(uint32_t addr, uint32_t size)
+{
+    return addr < BELLATRIX_CHIP_RAM_SIZE &&
+           size <= (BELLATRIX_CHIP_RAM_SIZE - addr);
+}
 
 /* ------------------------------------------------------------------------- */
 /* memory backing                                                            */

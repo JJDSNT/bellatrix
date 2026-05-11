@@ -12,11 +12,11 @@ static inline int in_low_memory(uint32_t addr)
     /*
      * Kickstart overlay only covers the low 512 KiB boot window.
      *
-     * Mirroring the whole 2 MiB chip RAM to ROM while OVL=1 makes internal
+     * Mirroring the whole configured Chip RAM to ROM while OVL=1 makes internal
      * memory reads disagree with the harness CPU bus, which already limits the
-     * overlay to 0x000000-0x07ffff.
+     * overlay to the boot window.
      */
-    return addr < BELLATRIX_ROM_SIZE;
+    return addr <= BELLATRIX_CHIP_BOOT_END;
 }
 
 static inline int in_rom_window(uint32_t addr)
@@ -26,7 +26,7 @@ static inline int in_rom_window(uint32_t addr)
 
 static inline int rom_offset_from_addr(uint32_t addr, uint32_t *off_out)
 {
-    if (addr < BELLATRIX_CHIP_RAM_SIZE)
+    if (bellatrix_chip_addr_contains(addr))
     {
         *off_out = addr;
         return 1;

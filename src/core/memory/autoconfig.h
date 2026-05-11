@@ -42,6 +42,7 @@ typedef struct AutoconfigBoard
 
 void autoconfig_init(BellatrixMemory *m);
 void autoconfig_reset(BellatrixMemory *m);
+void autoconfig_enable_z2_ram(uint32_t size_bytes);
 
 /* ------------------------------------------------------------------------- */
 /* config-space access                                                       */

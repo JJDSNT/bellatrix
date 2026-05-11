@@ -5,6 +5,8 @@
 
 #include "bellatrix.h"
 #include "bridge/bellatrix_bridge.h"
+#include "runtime/runtime.h"
+#include <stdatomic.h>
 #include "cpu_backend.h"
 #include "core/machine.h"
 #include "memory/autoconfig.h"
@@ -53,17 +55,123 @@ static CpuBackend g_emu68_backend = {
 };
 
 /* ---------------------------------------------------------------------------
- * Wall-clock driven machine step (strong override of pal_core.c weak stub).
- * Called by PAL_Runtime_Poll() on every bus access.
+ * Multicore runtime state.
+ *
+ * s_gfx_cycles_pending        : Core 0 → Core 1 (GFX/Agnus).
+ * s_io_cycles_pending         : Core 0 → Core 3 (IO/CIA).
+ * s_published_master_cycles   : Core 1 publishes GFX master time → Core 2
+ *                               (Audio) reads it via acquire load.
+ * s_chipset_lock              : Coarse spinlock protecting all chipset state.
+ *                               Held by Core 0 (MMIO) and Cores 1/2/3 while
+ *                               advancing their respective subsystems.
  * ------------------------------------------------------------------------- */
+static _Atomic uint32_t s_gfx_cycles_pending       = 0;
+static _Atomic uint32_t s_io_cycles_pending        = 0;
+static _Atomic uint64_t s_published_master_cycles  = 0;
+static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
 
+/* Per-core runtime objects — advanced by Core 1 via bellatrix_runtime_host_step(). */
+static BellatrixRuntime g_runtime;
+
+static inline void chipset_lock_acquire(void)
+{
+    while (atomic_flag_test_and_set_explicit(&s_chipset_lock, memory_order_acquire))
+        asm volatile("wfe" ::: "memory");
+}
+
+static inline void chipset_lock_release(void)
+{
+    atomic_flag_clear_explicit(&s_chipset_lock, memory_order_release);
+    asm volatile("dsb sy\n\t sev" ::: "memory");
+}
+
+/* ---------------------------------------------------------------------------
+ * Strong override: notify the chipset side of CPU progress.
+ *
+ * In multicore mode (Core 0): add cycles to the shared counter and wake
+ * Core 1 via SEV.  Core 1 will drain the counter in bellatrix_runtime_host_step.
+ *
+ * In single-core mode: advance the chipset directly (no locking needed).
+ * ------------------------------------------------------------------------- */
+void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
+{
+    if (PAL_Core_IsMulticoreEnabled()) {
+        atomic_fetch_add_explicit(&s_gfx_cycles_pending, cycles, memory_order_release);
+        atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
+        asm volatile("dsb sy\n\t sev" ::: "memory");
+    } else {
+        chipset_lock_acquire();
+        bellatrix_machine_advance(cycles);
+        chipset_lock_release();
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Strong overrides: per-core chipset advance steps.
+ *
+ * bellatrix_runtime_host_step  — Core 1, GFX/Agnus only.
+ * bellatrix_runtime_audio_step — Core 2, Paula audio.
+ * bellatrix_runtime_io_step    — Core 3, CIA / serial / disk.
+ *
+ * Core 1 publishes gfx.master_cycles to s_published_master_cycles after each
+ * GFX step so Core 2 can advance audio to the same time horizon without
+ * reading gfx.master_cycles across the chipset lock boundary.
+ * ------------------------------------------------------------------------- */
 void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
 {
-    /* The current Emu68 integration is validated with ExecutionLoop-driven
-     * machine time. Keep the host-clock runtime path inert until the
-     * refactored scheduler is intentionally wired in. */
     (void)host_now;
     (void)host_freq;
+
+    uint32_t cycles = atomic_exchange_explicit(&s_gfx_cycles_pending, 0u,
+                                               memory_order_acquire);
+    if (cycles == 0)
+        return;
+
+    chipset_lock_acquire();
+    core_gfx_step(&g_runtime.gfx, cycles);
+    atomic_store_explicit(&s_published_master_cycles,
+                          g_runtime.gfx.master_cycles,
+                          memory_order_release);
+    chipset_lock_release();
+}
+
+void bellatrix_runtime_audio_step(uint64_t host_now, uint64_t host_freq)
+{
+    (void)host_now;
+    (void)host_freq;
+
+    uint64_t master = atomic_load_explicit(&s_published_master_cycles,
+                                           memory_order_acquire);
+    if (master == 0)
+        return;
+
+    chipset_lock_acquire();
+    core_audio_step(&g_runtime.audio, master);
+    chipset_lock_release();
+}
+
+void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
+{
+    (void)host_now;
+    (void)host_freq;
+
+    uint32_t cycles = atomic_exchange_explicit(&s_io_cycles_pending, 0u,
+                                               memory_order_acquire);
+    if (cycles == 0)
+        return;
+
+    chipset_lock_acquire();
+    core_io_step(&g_runtime.io, cycles);
+    chipset_lock_release();
+}
+
+/* ---------------------------------------------------------------------------
+ * Strong override: MMIO barrier — called from PAL_Runtime_MmioBarrier().
+ * Not needed here since bus_access acquires the chipset lock directly.
+ * ------------------------------------------------------------------------- */
+void bellatrix_runtime_mmio_barrier(void)
+{
+    asm volatile("dmb ish" ::: "memory");
 }
 
 /* ---------------------------------------------------------------------------
@@ -73,6 +181,7 @@ void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
 static int s_overlay = 1;
 
 #define BTRACE_CONTROL_ADDR 0xDFFF00u
+#define ROM_OVERLAY_BASE    0x00E00000u
 
 static inline int cia_reg(uint32_t addr)
 {
@@ -91,6 +200,32 @@ static void __attribute__((unused)) update_ipl(void)
 /* ---------------------------------------------------------------------------
  * Overlay switch
  * ------------------------------------------------------------------------- */
+
+static void apply_overlay_map(int overlay_enabled)
+{
+    if (overlay_enabled)
+    {
+        mmu_map(ROM_OVERLAY_BASE, 0x000000, BELLATRIX_ROM_SIZE,
+                MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
+                    MMU_READ_ONLY | MMU_ATTR_CACHED,
+                0);
+        return;
+    }
+
+    mmu_map(0x000000, 0x000000, BELLATRIX_ROM_SIZE,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+
+    /* Keep page 0 and the Exec JMP table write-trapped for debug logs.
+     * Reads still succeed because AF=1 stays set. */
+    mmu_map(0x000000, 0x000000, 0x1000,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
+                MMU_READ_ONLY | MMU_ATTR_CACHED,
+            0);
+    mmu_map(0x1000, 0x1000, 0x1000,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
+                MMU_READ_ONLY | MMU_ATTR_CACHED,
+            0);
+}
 
 static void set_overlay(int new_overlay)
 {
@@ -129,25 +264,7 @@ static void set_overlay(int new_overlay)
 
     s_overlay = new_overlay;
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), s_overlay);
-
-    if (s_overlay)
-    {
-        mmu_map(0xf80000, 0x000000, 4096,
-                MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
-                    MMU_READ_ONLY | MMU_ATTR_CACHED,
-                0);
-    }
-    else
-    {
-        /* Keep page 0 write-protected so KS writes to the vector table
-         * (0x00–0xFF) still fault through bellatrix_bus_access and are
-         * captured by [VEC-W] logging.  Reads succeed (AF=1 is set).
-         * chip_ram_write() uses CHIP_RAM_VIRT and bypasses this mapping. */
-        mmu_map(0x000000, 0x000000, 4096,
-                MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
-                    MMU_READ_ONLY | MMU_ATTR_CACHED,
-                0);
-    }
+    apply_overlay_map(s_overlay);
 }
 
 /* ---------------------------------------------------------------------------
@@ -182,6 +299,7 @@ void bellatrix_init(void)
 
     autoconfig_enable_z2_ram(BELLATRIX_FAST_RAM_SIZE);
     bellatrix_machine_init(&g_emu68_backend);
+    bellatrix_runtime_init(&g_runtime, bellatrix_machine_get());
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
@@ -200,6 +318,8 @@ void bellatrix_init(void)
     m->memory.fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
     m->memory.fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
     memset(m->memory.fast_ram, 0, m->memory.fast_ram_size);
+    /* machine_init() attached Paula before we replaced the RAM backing. */
+    paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
     m->cia_a.ddra = 0x03;
 
     /* ROM diagnostic */
@@ -233,21 +353,12 @@ void bellatrix_init(void)
         }
     }
 
-    /* Chip RAM: 2 MB R/W */
-    mmu_map(0x000000, 0x000000, 0x200000,
+    /* Chip RAM: configured visible window */
+    mmu_map(0x000000, 0x000000, BELLATRIX_CHIP_RAM_SIZE,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 
-    /* Write-trap 0x1000-0x1FFF so MakeFunctions writes to the Exec JMP table
-     * are intercepted by bellatrix_bus_access and logged as [JMP-W].
-     * chip_ram_write() bypasses this mapping via CHIP_RAM_VIRT. */
-    mmu_map(0x1000, 0x1000, 0x1000,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
-
-    /* ROM overlay at address 0 (overlay=1): reset vectors visible at 0x000000 */
-    mmu_map(0xf80000, 0x000000, 4096,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 |
-                MMU_READ_ONLY | MMU_ATTR_CACHED,
-            0);
+    /* Install the low-memory window according to the initial OVL state. */
+    apply_overlay_map(1);
     s_overlay = 1;
 
     /* Fast RAM is plain Emu68-backed RAM on the real target.
@@ -288,6 +399,12 @@ void bellatrix_init(void)
     }
 
     PAL_Runtime_Init();
+
+    /* Enable secondary chipset cores. */
+    PAL_Core_SetMulticoreEnabled(1);
+    PAL_Core_LaunchChipset(NULL);   /* Core 1 — GFX/Agnus */
+    PAL_Core_LaunchAudio();         /* Core 2 — Paula audio */
+    PAL_Core_LaunchIO();            /* Core 3 — CIA / serial / disk */
 
 #if defined(BELLATRIX_UART_PL011)
 #ifndef BELLATRIX_UART_BAUD
@@ -366,7 +483,24 @@ void bellatrix_init(void)
                 (unsigned)fb_width, (unsigned)fb_height);
     }
 
-    kprintf("[BELA] Initialized (single-core mode)\n");
+    kprintf("[BELA] Initialized (multicore: Core 1=GFX, Core 2=Audio, Core 3=IO)\n");
+}
+
+void bellatrix_sync_overlay_from_ciaa(void)
+{
+    BellatrixMachine *m = bellatrix_machine_get();
+    int new_ovl = (int)(m->cia_a.pra & 1u);
+
+    if (new_ovl != s_overlay)
+    {
+        kprintf("[OVL-TRIG-LIVE] pra=%02x ddra=%02x new_ovl=%d fault_pc=%08x\n",
+                (unsigned)m->cia_a.pra,
+                (unsigned)m->cia_a.ddra,
+                new_ovl,
+                (unsigned)g_bellatrix_fault_pc);
+    }
+
+    set_overlay(new_ovl);
 }
 
 /* ---------------------------------------------------------------------------
@@ -402,7 +536,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     uint32_t real_pc = g_bellatrix_fault_pc;
 
     /* Warn if the CPU has strayed into chip RAM — usually means a bad vector. */
-    if (real_pc != 0u && real_pc < 0x200000u)
+    if (real_pc != 0u && bellatrix_chip_addr_contains(real_pc))
     {
         kprintf("[PC-CHIPMEM] fault_pc=%08x addr=%06x %s size=%d\n",
                 (unsigned)real_pc, (unsigned)addr,
@@ -449,14 +583,11 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         }
 
         /*
-         * The machine owns Amiga behavior:
-         * - custom registers
-         * - CIA
-         * - RTC
-         * - Chip RAM
-         * - Fast RAM
-         * - ROM/overlay reads
+         * Acquire chipset lock for MMIO: prevents concurrent
+         * bellatrix_machine_advance() on Core 1 while Core 0 writes.
          */
+        chipset_lock_acquire();
+
         bellatrix_bridge_cpu_write(addr, value, (unsigned)size);
 
         /*
@@ -482,10 +613,13 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
             set_overlay(new_ovl);
         }
 
+        chipset_lock_release();
         return 0;
     }
 
+    chipset_lock_acquire();
     result = bellatrix_bridge_cpu_read(addr, (unsigned)size);
+    chipset_lock_release();
     return result;
 }
 

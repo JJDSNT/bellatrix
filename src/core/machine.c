@@ -293,13 +293,17 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
         /* ID mode = motor OFF */
         idmode = !motor_on;
 
-        /* /DSKCHG: active LOW — reflects disk_changed in all motor states.
+        /* /DSKCHG: active LOW.
          *
-         * This is real hardware behavior: the change latch fires on insert/eject
-         * regardless of motor state, cleared by a STEP pulse.
-         * AROS reads /CHNG LOW = disk present/changed; HIGH = acknowledged.
+         * Motor ON:  expose the mechanical change latch.
+         * Motor OFF: DF0 uses the line for the drive-ID probe sequence.
+         *
+         * A standard 3.5" DD drive has no ID chip, so idbit stays '1' and the
+         * line remains released (HIGH) during the motor-off probe. Keeping the
+         * change latch visible in this phase makes Kickstart treat an empty
+         * drive as a boot candidate and follow the wrong failure path.
          */
-        if (!dskchg)
+        if ((!idmode && !dskchg) || (idmode && !idbit))
             ext &= (uint8_t)~0x04u;
 
         /* /WPRO: active LOW */
@@ -312,21 +316,22 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
 
         /* /RDY (/DKRDY): active LOW.
          *
-         * Motor ON:  LOW when drive is at speed (ready).
-         * Motor OFF: the drive ID shift register is clocked; each bit is
-         *            reflected on /DKRDY.  A '1' id_data bit = line released
-         *            (HIGH); a '0' id_data bit = line asserted (LOW).
-         *
-         * id_data=0xFFFFFFFF (standard 3.5" DD, no ID chip) → line always
-         * HIGH during motor-off probe → host accumulates 0xFFFFFFFF.
+         * For DF0 we model only the mechanical ready signal: LOW when the
+         * selected drive is spun up and actually has media. We intentionally
+         * do not multiplex drive-ID probing onto /RDY here, because that
+         * causes ROMs to treat an empty DF0 as a readable boot source and
+         * follow the wrong recovery path.
          */
         if (ready)
             ext &= (uint8_t)~0x20u;
-        else if (idmode && !idbit)
-            ext &= (uint8_t)~0x20u;
     }
 
-    kprintf("[FLOPPY-PRA-SYNC] prb=%02x selmask=%x drive=%d sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d wpro=%d dskchg=%d idmode=%d idbit=%d\n",
+    static uint8_t s_last_prb = 0xFF, s_last_ext = 0xFF;
+    if (prb != s_last_prb || ext != s_last_ext)
+    {
+        s_last_prb = prb;
+        s_last_ext = ext;
+        kprintf("[FLOPPY-PRA-SYNC] prb=%02x selmask=%x drive=%d sel0=%d sel1=%d sel2=%d sel3=%d motor=%d ext=%02x ready=%d track0=%d wpro=%d dskchg=%d idmode=%d idbit=%d\n",
             prb,
             sel_mask,
             selected_drive,
@@ -339,6 +344,7 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
             dskchg,
             idmode,
             idbit);
+    }
 
     cia_set_external_pra(&m->cia_a, ext);
     machine_sync_controller_ports(m);
@@ -527,9 +533,6 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
 
     denise_attach_agnus(&m->denise, &m->agnus);
 
-    paula_attach_agnus(&m->paula, &m->agnus);
-    paula_attach_cia_a(&m->paula, &m->cia_a);
-    paula_attach_cia_b(&m->paula, &m->cia_b);
     paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
 
     cia_attach_paula(&m->cia_a, &m->paula);

@@ -15,6 +15,10 @@
 // Called once at startup before M68K_StartEmu().
 void bellatrix_init(void);
 
+// Sync the host MMU overlay mapping with the logical CIA-A PRA OVL bit.
+// This is the live path used by Emu68's fault bridge after CIA writes.
+void bellatrix_sync_overlay_from_ciaa(void);
+
 // Reset vectors captured by bellatrix_init() directly from the ROM ARM
 // address — stable before any Emu68 JIT/cache init runs.
 // Both are M68K-side values (big-endian already decoded to host uint32_t).

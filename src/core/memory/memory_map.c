@@ -13,28 +13,28 @@
 
 MemoryRegion memory_map_decode(uint32_t addr)
 {
-    if (addr < 0x00200000u)
+    if (bellatrix_chip_addr_contains(addr))
         return MEM_REGION_CHIP_RAM;
 
-    if (addr >= 0x00200000u && addr <= 0x009FFFFFu)
+    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END)
         return MEM_REGION_FAST;
 
-    if (addr >= 0x00BFD000u && addr <= 0x00BFDFFFu)
+    if (addr >= BELLATRIX_CIAB_BASE && addr <= BELLATRIX_CIAB_END)
         return MEM_REGION_CIAB;
 
-    if (addr >= 0x00BFE000u && addr <= 0x00BFEFFFu)
+    if (addr >= BELLATRIX_CIAA_BASE && addr <= BELLATRIX_CIAA_END)
         return MEM_REGION_CIAA;
 
-    if (addr >= 0x00DFF000u && addr <= 0x00DFFFFFu)
+    if (addr >= BELLATRIX_CUSTOM_BASE && addr <= BELLATRIX_CUSTOM_END)
         return MEM_REGION_CUSTOM;
 
-    if (addr >= 0x00E80000u && addr <= 0x00EFFFFFu)
+    if (addr >= BELLATRIX_Z2_CONFIG_BASE && addr <= BELLATRIX_Z2_CONFIG_END)
         return MEM_REGION_Z2;
 
     if (addr >= 0x00F00000u && addr <= 0x00F7FFFFu)
         return MEM_REGION_EXP_ROM_CHECK;
 
-    if (addr >= 0x00F80000u && addr <= 0x00FFFFFFu)
+    if (addr >= BELLATRIX_ROM_BASE && addr <= BELLATRIX_ROM_END)
         return MEM_REGION_ROM;
 
     if (addr >= 0x10000000u)

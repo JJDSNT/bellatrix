@@ -29,11 +29,11 @@ void mem_write8(addr, value);
 void mem_write16(addr, value);
 void mem_write32(addr, value);
 
-0x000000-0x1FFFFF  Chip RAM / ROM overlay
+0x000000-BELLATRIX_CHIP_RAM_END  Chip RAM / ROM overlay
 0x00DFF000-0x00DFFFFF  Custom chips
 0x00BFD000-0x00BFEFFF  CIA
 0x00E80000-0x00EFFFFF  Zorro II config
 0x40000000+            Zorro III / Fast RAM futura
 
-reads em 0x000000 podem ver ROM ou RAM dependendo do OVL
+reads no boot window (`0x000000-BELLATRIX_CHIP_BOOT_END`) podem ver ROM ou RAM dependendo do OVL
 writes em 0x000000 sempre vão para Chip RAM

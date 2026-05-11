@@ -3,6 +3,11 @@
 #include "bridge/bellatrix_bridge.h"
 
 #include "core/machine.h"
+#include <stdint.h>
+
+/* Weak stub in pal_core.c; strong override provided by bellatrix.c for bare
+ * metal and by pal_posix.c (no-op) for the harness. */
+extern void bellatrix_runtime_notify_cpu_progress(uint32_t cycles);
 
 uint32_t bellatrix_bridge_normalize_addr(uint32_t addr)
 {
@@ -46,7 +51,7 @@ uint32_t bellatrix_bridge_cpu_access(uint32_t addr,
 
 void bellatrix_bridge_cpu_progress(uint32_t cycles)
 {
-    bellatrix_machine_advance(cycles);
+    bellatrix_runtime_notify_cpu_progress(cycles);
 }
 
 void bellatrix_bridge_cpu_sync_ipl(void)
