@@ -10,6 +10,7 @@
 #include "runtime/core_gfx.h"
 #include "runtime/core_audio.h"
 #include "runtime/core_io.h"
+#include "io/bluetooth/bt_host.h"
 
 typedef struct BellatrixRuntime {
     BellatrixMachine *machine;
@@ -18,6 +19,8 @@ typedef struct BellatrixRuntime {
     RuntimeCoreGFX gfx;
     RuntimeCoreAudio audio;
     RuntimeCoreIO io;
+
+    BTHost bluetooth;
 
     bool running;
 

@@ -71,7 +71,7 @@ static _Atomic uint64_t s_published_master_cycles  = 0;
 static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
 
 /* Per-core runtime objects — advanced by Core 1 via bellatrix_runtime_host_step(). */
-static BellatrixRuntime g_runtime;
+BellatrixRuntime g_runtime;
 
 static inline void chipset_lock_acquire(void)
 {
@@ -132,6 +132,13 @@ void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
     atomic_store_explicit(&s_published_master_cycles,
                           g_runtime.gfx.master_cycles,
                           memory_order_release);
+
+    /*
+     * Poll Bluetooth host in the chipset thread / single-core poll path.
+     * This provides the necessary host-side cycles for BTStack to run.
+     */
+    bt_host_step(&g_runtime.bluetooth);
+
     chipset_lock_release();
 }
 

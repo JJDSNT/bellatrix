@@ -7,6 +7,7 @@
 #include "core/machine.h"
 
 #include "io/serial/uart_host.h"
+#include "io/bluetooth/bt_host.h"
 
 typedef struct RuntimeCoreIO {
     BellatrixMachine *machine;

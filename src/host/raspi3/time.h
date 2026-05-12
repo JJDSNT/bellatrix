@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+uint64_t raspi3_read_legacy_system_timer(void);
 uint64_t raspi3_counter_get(void);
 uint64_t raspi3_counter_freq(void);
 void raspi3_delay_us(uint64_t delta_us);

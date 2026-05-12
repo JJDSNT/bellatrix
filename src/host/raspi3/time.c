@@ -22,7 +22,7 @@
 #define LE32(x) (x)
 #endif
 
-static inline uint64_t raspi3_read_legacy_system_timer(void)
+uint64_t raspi3_read_legacy_system_timer(void)
 {
     uint64_t hi = LE32(*RASPI3_LEGACY_SYS_TIMER_CHI);
     uint64_t lo = LE32(*RASPI3_LEGACY_SYS_TIMER_CLO);

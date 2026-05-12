@@ -39,6 +39,8 @@ bool bellatrix_runtime_init(
         return false;
     }
 
+    bt_host_init(&rt->bluetooth);
+
     rt->running = true;
 
     kprintf("[RUNTIME] init OK: Core0=CPU Core1=GFX Core2=PAULA Core3=IO\n");
@@ -57,6 +59,8 @@ void bellatrix_runtime_shutdown(
     core_gfx_shutdown(&rt->gfx);
     core_audio_shutdown(&rt->audio);
     core_io_shutdown(&rt->io);
+
+    bt_host_shutdown(&rt->bluetooth);
 
     rt->running = false;
 }

@@ -1,4 +1,5 @@
 #include "runtime/core_io.h"
+#include "runtime/runtime.h"
 
 #include <string.h>
 
@@ -64,6 +65,9 @@ void core_io_shutdown(RuntimeCoreIO *core)
         return;
     }
 
+    extern BellatrixRuntime g_runtime;
+    bt_host_shutdown(&g_runtime.bluetooth);
+
     CORE3_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->running = false;
 }
@@ -112,4 +116,8 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
 
     /* Physical serial host backend: TX drain → host, RX inject → Paula. */
     core_io_step_host_serial(core);
+
+    /* Bluetooth stack processing (host side). */
+    extern BellatrixRuntime g_runtime;
+    bt_host_step(&g_runtime.bluetooth);
 }
