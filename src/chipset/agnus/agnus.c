@@ -182,8 +182,9 @@ static inline void agnus_get_beam(const AgnusState *s,
     uint16_t vpos8 = (uint16_t)((s->beam.vpos >> 8) & 0x01u);
 
     *vposr_out = (uint16_t)(lof | (AGNUS_CHIP_ID << 8) | vpos8);
+    /* hpos is in master clocks (0-453); VHPOSR reports CCK position (0-226) */
     *vhposr_out = (uint16_t)(((s->beam.vpos & 0xFFu) << 8) |
-                             (s->beam.hpos & 0xFFu));
+                             ((s->beam.hpos >> 1) & 0xFFu));
 }
 
 static inline int agnus_copper_enabled(const AgnusState *s)
@@ -678,10 +679,24 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
         return;
 
     case AGNUS_DIWSTRT:
+        kprintf("[AGNUS-DIW] DIWSTRT=%04x (vstart=%d hstart=%d) pc=%08x copper_pc=%05x vh=%04x\n",
+                (unsigned)raw,
+                (int)((raw >> 8) & 0xFF),
+                (int)(raw & 0xFF),
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)(s->copper.pc & CHIP_RAM_WORD_MASK & ~1u),
+                (unsigned)(((s->beam.vpos & 0xFFu) << 8) | (s->beam.hpos & 0xFEu)));
         s->diwstrt = raw;
         return;
 
     case AGNUS_DIWSTOP:
+        kprintf("[AGNUS-DIW] DIWSTOP=%04x (vstop_raw=%d hstop=%d) pc=%08x copper_pc=%05x vh=%04x\n",
+                (unsigned)raw,
+                (int)((raw >> 8) & 0xFF),
+                (int)(raw & 0xFF),
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)(s->copper.pc & CHIP_RAM_WORD_MASK & ~1u),
+                (unsigned)(((s->beam.vpos & 0xFFu) << 8) | (s->beam.hpos & 0xFEu)));
         s->diwstop = raw;
         return;
 

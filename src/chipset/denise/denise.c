@@ -15,6 +15,7 @@
 
 #include "denise.h"
 #include "chipset/agnus/agnus.h"
+#include "chipset/agnus/display_window.h"
 #include "host/pal.h"
 #include "support.h"
 #include <stdint.h>
@@ -170,7 +171,8 @@ static int denise_diag_target_line(int slot)
     static int line0 = -1;
     static int line1 = -1;
 
-    if (!initialized) {
+    if (!initialized)
+    {
         line0 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE", -1);
         line1 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE2", -1);
         initialized = 1;
@@ -465,7 +467,8 @@ static void denise_dump_diag_decode(const Denise *d,
                                     int src_first_pixel)
 {
     kprintf("[DENISE-DECODE] bp_v=%d src0=%d idx64=", bp->line_vpos, src_first_pixel);
-    for (int i = 0; i < 64; ++i) {
+    for (int i = 0; i < 64; ++i)
+    {
         int src_pixel = src_first_pixel + i;
         int w = src_pixel / 16;
         int bit_in_word = 15 - (src_pixel % 16);
@@ -493,9 +496,11 @@ static void denise_dump_diag_progression(const Denise *d,
                                          int dpf,
                                          int src_first_pixel)
 {
-    for (int chunk = 0; chunk < 4; ++chunk) {
+    for (int chunk = 0; chunk < 4; ++chunk)
+    {
         kprintf("[DENISE-PROG] bp_v=%d src0=%d chunk=%d ", bp->line_vpos, src_first_pixel, chunk);
-        for (int i = 0; i < 16; ++i) {
+        for (int i = 0; i < 16; ++i)
+        {
             int rel_pixel = chunk * 16 + i;
             int src_pixel = src_first_pixel + rel_pixel;
             int w = src_pixel / 16;
@@ -532,13 +537,15 @@ static void denise_configure_diag_overrides(Denise *d)
 {
     int bias;
 
-    d->diag_bit_reverse   = PAL_Diag_GetEnvBool("HARNESS_DENISE_BIT_REVERSE");
-    d->diag_force_src0    = PAL_Diag_GetEnvBool("HARNESS_DENISE_FORCE_SRC0");
+    d->diag_bit_reverse = PAL_Diag_GetEnvBool("HARNESS_DENISE_BIT_REVERSE");
+    d->diag_force_src0 = PAL_Diag_GetEnvBool("HARNESS_DENISE_FORCE_SRC0");
     d->diag_show_fetch_all = PAL_Diag_GetEnvBool("HARNESS_DENISE_SHOW_FETCH_ALL");
 
     bias = PAL_Diag_GetEnvInt("HARNESS_DENISE_PHASE_BIAS", 0);
-    if (bias < -64) bias = -64;
-    if (bias >  64) bias =  64;
+    if (bias < -64)
+        bias = -64;
+    if (bias > 64)
+        bias = 64;
     d->diag_phase_bias = bias;
 }
 
@@ -556,11 +563,12 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
         return;
 
     {
-        int vstart = (agnus->diwstrt >> 8) & 0xFF;
-        int vstop  = (agnus->diwstop >> 8) & 0xFF;
-        if (vstop <= vstart)
-            vstop += 256;
-        int vheight = vstop - vstart;
+        AgnusDisplayWindow win = agnus_get_display_window(agnus);
+
+        int vstart = win.vstart;
+        int vstop = win.vstop;
+        int vheight = win.vheight;
+
         if (vheight <= 0)
             vheight = 1;
         if (vheight > 512)
@@ -659,212 +667,218 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
             return;
         }
 
-    {
-        int nplanes = bp->nplanes;
-        int ddf_words = bp->ddf_words;
-        int hires = denise_is_hires(d, bp);
-        int dpf = denise_is_dpf(d);
-        int hscale = hires ? 1 : 2;
-        int vscale = 2;
-        int pix_per_line = ddf_words * 16;
-        int visible_pixels = denise_visible_pixels(agnus, hires);
-        int fine_scroll = denise_fine_scroll_pixels(d, hires);
-        int phase_pixels = 0;
-        int x_phase = d->diag_phase_bias;
-        int src_first_pixel = d->diag_force_src0 ? 0 : x_phase;
-        int render_visible_pixels;
-        int out_w;
-        int out_h = vheight * vscale;
-
-        if (visible_pixels <= 0)
-            visible_pixels = pix_per_line;
-        if (visible_pixels > pix_per_line)
-            visible_pixels = pix_per_line;
-        /* Keep the normal path anchored at the left edge of the DIW window.
-         * Horizontal phase/debug bias remains opt-in via diag_force_src0/bias. */
-        src_first_pixel = 0;
-
-        if (d->diag_show_fetch_all) {
-            src_first_pixel = 0;
-            render_visible_pixels = pix_per_line;
-        } else {
-            render_visible_pixels = visible_pixels;
-        }
-
-        out_w = render_visible_pixels * hscale;
-
-        uint32_t fb_x0 = ((uint32_t)out_w < fb_width) ? (fb_width - (uint32_t)out_w) / 2u : 0u;
-        uint32_t fb_y0 = ((uint32_t)out_h < fb_height) ? (fb_height - (uint32_t)out_h) / 2u : 0u;
-
-        for (int sy = 0; sy < vscale; ++sy)
         {
+            int nplanes = bp->nplanes;
+            int ddf_words = bp->ddf_words;
+            int hires = denise_is_hires(d, bp);
+            int dpf = denise_is_dpf(d);
+            int hscale = hires ? 1 : 2;
+            int vscale = 2;
+            int pix_per_line = ddf_words * 16;
+            int visible_pixels = denise_visible_pixels(agnus, hires);
+            int fine_scroll = denise_fine_scroll_pixels(d, hires);
+            int phase_pixels = 0;
+            int x_phase = d->diag_phase_bias;
+            int src_first_pixel = d->diag_force_src0 ? 0 : x_phase;
+            int render_visible_pixels;
+            int out_w;
+            int out_h = vheight * vscale;
 
-            uint32_t fb_y = fb_y0 + (uint32_t)(line_idx * vscale + sy);
-            if (fb_y >= fb_height)
-                continue;
+            if (visible_pixels <= 0)
+                visible_pixels = pix_per_line;
+            if (visible_pixels > pix_per_line)
+                visible_pixels = pix_per_line;
+            /* Keep the normal path anchored at the left edge of the DIW window.
+             * Horizontal phase/debug bias remains opt-in via diag_force_src0/bias. */
+            src_first_pixel = 0;
 
+            if (d->diag_show_fetch_all)
             {
-                uint16_t *row = (uint16_t *)((uintptr_t)framebuffer + ((uintptr_t)fb_y * (uintptr_t)pitch));
-                uint16_t bg = d->palette[0];
-                uint32_t non_bg_pixels = 0;
-                uint8_t first_idx = 0;
-                uint8_t last_idx = 0;
-                int first_word = -1;
-                int first_bit = -1;
-                uint32_t first_non_bg_x = fb_width;
-                uint32_t last_non_bg_x = 0;
-                int saw_nonzero_idx = 0;
+                src_first_pixel = 0;
+                render_visible_pixels = pix_per_line;
+            }
+            else
+            {
+                render_visible_pixels = visible_pixels;
+            }
 
-                /*
-                 * Clear the whole line to background first so narrower display
-                 * windows don't leave stale pixels behind.
-                 */
-                for (uint32_t x = 0; x < fb_width; ++x)
-                    row[x] = bg;
+            out_w = render_visible_pixels * hscale;
 
-                for (int w = 0; w < ddf_words; ++w)
+            uint32_t fb_x0 = ((uint32_t)out_w < fb_width) ? (fb_width - (uint32_t)out_w) / 2u : 0u;
+            uint32_t fb_y0 = ((uint32_t)out_h < fb_height) ? (fb_height - (uint32_t)out_h) / 2u : 0u;
+
+            for (int sy = 0; sy < vscale; ++sy)
+            {
+
+                uint32_t fb_y = fb_y0 + (uint32_t)(line_idx * vscale + sy);
+                if (fb_y >= fb_height)
+                    continue;
+
                 {
+                    uint16_t *row = (uint16_t *)((uintptr_t)framebuffer + ((uintptr_t)fb_y * (uintptr_t)pitch));
+                    uint16_t bg = d->palette[0];
+                    uint32_t non_bg_pixels = 0;
+                    uint8_t first_idx = 0;
+                    uint8_t last_idx = 0;
+                    int first_word = -1;
+                    int first_bit = -1;
+                    uint32_t first_non_bg_x = fb_width;
+                    uint32_t last_non_bg_x = 0;
+                    int saw_nonzero_idx = 0;
 
-                    uint16_t pdata[DENISE_MAX_PLANES] = {0, 0, 0, 0, 0, 0};
+                    /*
+                     * Clear the whole line to background first so narrower display
+                     * windows don't leave stale pixels behind.
+                     */
+                    for (uint32_t x = 0; x < fb_width; ++x)
+                        row[x] = bg;
 
-                    for (int p = 0; p < nplanes; ++p)
-                        pdata[p] = bp->line_words[p][w];
-
-                    for (int b = 15; b >= 0; --b)
+                    for (int w = 0; w < ddf_words; ++w)
                     {
-                        int bit = d->diag_bit_reverse ? (15 - b) : b;
-                        int src_pixel = (w * 16) + (15 - b);
-                        int vis_pixel = src_pixel - src_first_pixel;
-                        uint8_t idx;
-                        uint16_t pixel;
-                        uint32_t fb_x;
 
-                        if (vis_pixel < 0 || vis_pixel >= render_visible_pixels)
-                            continue;
+                        uint16_t pdata[DENISE_MAX_PLANES] = {0, 0, 0, 0, 0, 0};
 
-                        fb_x = fb_x0 + (uint32_t)(vis_pixel * hscale);
+                        for (int p = 0; p < nplanes; ++p)
+                            pdata[p] = bp->line_words[p][w];
 
-                        if (dpf)
-                            idx = denise_translate_dpf_index(d, pdata, nplanes, bit);
-                        else
-                            idx = denise_decode_spf_index(pdata, nplanes, bit);
-
-                        if (idx != 0)
+                        for (int b = 15; b >= 0; --b)
                         {
-                            non_bg_pixels += (uint32_t)hscale;
-                            if (!saw_nonzero_idx)
+                            int bit = d->diag_bit_reverse ? (15 - b) : b;
+                            int src_pixel = (w * 16) + (15 - b);
+                            int vis_pixel = src_pixel - src_first_pixel;
+                            uint8_t idx;
+                            uint16_t pixel;
+                            uint32_t fb_x;
+
+                            if (vis_pixel < 0 || vis_pixel >= render_visible_pixels)
+                                continue;
+
+                            fb_x = fb_x0 + (uint32_t)(vis_pixel * hscale);
+
+                            if (dpf)
+                                idx = denise_translate_dpf_index(d, pdata, nplanes, bit);
+                            else
+                                idx = denise_decode_spf_index(pdata, nplanes, bit);
+
+                            if (idx != 0)
                             {
-                                first_idx = idx;
-                                first_word = w;
-                                first_bit = b;
-                                first_non_bg_x = fb_x;
-                                saw_nonzero_idx = 1;
+                                non_bg_pixels += (uint32_t)hscale;
+                                if (!saw_nonzero_idx)
+                                {
+                                    first_idx = idx;
+                                    first_word = w;
+                                    first_bit = b;
+                                    first_non_bg_x = fb_x;
+                                    saw_nonzero_idx = 1;
+                                }
+                                last_idx = idx;
+                                last_non_bg_x = fb_x + (uint32_t)(hscale - 1);
                             }
-                            last_idx = idx;
-                            last_non_bg_x = fb_x + (uint32_t)(hscale - 1);
-                        }
 
-                        pixel = denise_color_from_index(d, idx, nplanes, dpf);
+                            pixel = denise_color_from_index(d, idx, nplanes, dpf);
 
-                        for (int sx = 0; sx < hscale; ++sx)
-                        {
-                            uint32_t x = fb_x + (uint32_t)sx;
-                            if (x < fb_width)
-                                row[x] = pixel;
+                            for (int sx = 0; sx < hscale; ++sx)
+                            {
+                                uint32_t x = fb_x + (uint32_t)sx;
+                                if (x < fb_width)
+                                    row[x] = pixel;
+                            }
                         }
                     }
-                }
 
-                if (sy == 0 && denise_diagrom_window(bp, line_idx))
-                {
-                    kprintf("[DENISE-DIAG] line=%d bp_v=%d np=%d hires=%d "
-                            "dpf=%d words=%d pix=%d hscale=%d vscale=%d phase=%d x_phase=%d scroll=%d out=%dx%d fb0=%u,%u "
-                            "visible=%d src0=%d rev=%d force0=%d fetchall=%d bias=%d non_bg=%u first_idx=%02x last_idx=%02x first_wb=%d/%d xspan=%u-%u "
-                            "pal0=%04x pal1=%04x row0=%04x rowmid=%04x rowfirst=%04x rowlast=%04x\n",
-                            line_idx,
-                            bp->line_vpos,
-                            nplanes,
-                            hires,
-                            dpf,
-                            ddf_words,
-                            pix_per_line,
-                            hscale,
-                            vscale,
-                            phase_pixels,
-                            x_phase,
-                            fine_scroll,
-                            out_w,
-                            out_h,
-                            (unsigned)fb_x0,
-                            (unsigned)fb_y0,
-                            render_visible_pixels,
-                            src_first_pixel,
-                            d->diag_bit_reverse,
-                            d->diag_force_src0,
-                            d->diag_show_fetch_all,
-                            d->diag_phase_bias,
-                            (unsigned)non_bg_pixels,
-                            (unsigned)first_idx,
-                            (unsigned)last_idx,
-                            first_word,
-                            first_bit,
-                            saw_nonzero_idx ? (unsigned)first_non_bg_x : 0u,
-                            saw_nonzero_idx ? (unsigned)last_non_bg_x : 0u,
-                            (unsigned)d->palette[0],
-                            (unsigned)d->palette[1],
-                            (unsigned)row[fb_x0 < fb_width ? fb_x0 : 0],
-                            (unsigned)row[(fb_x0 + (uint32_t)(out_w / 2)) < fb_width ? (fb_x0 + (uint32_t)(out_w / 2)) : (fb_width / 2)],
-                            (unsigned)(saw_nonzero_idx && first_non_bg_x < fb_width ? row[first_non_bg_x] : bg),
-                            (unsigned)(saw_nonzero_idx && last_non_bg_x < fb_width ? row[last_non_bg_x] : bg));
+                    if (sy == 0 && denise_diagrom_window(bp, line_idx))
+                    {
+                        kprintf("[DENISE-DIAG] line=%d bp_v=%d np=%d hires=%d "
+                                "dpf=%d words=%d pix=%d hscale=%d vscale=%d phase=%d x_phase=%d scroll=%d out=%dx%d fb0=%u,%u "
+                                "visible=%d src0=%d rev=%d force0=%d fetchall=%d bias=%d non_bg=%u first_idx=%02x last_idx=%02x first_wb=%d/%d xspan=%u-%u "
+                                "pal0=%04x pal1=%04x row0=%04x rowmid=%04x rowfirst=%04x rowlast=%04x\n",
+                                line_idx,
+                                bp->line_vpos,
+                                nplanes,
+                                hires,
+                                dpf,
+                                ddf_words,
+                                pix_per_line,
+                                hscale,
+                                vscale,
+                                phase_pixels,
+                                x_phase,
+                                fine_scroll,
+                                out_w,
+                                out_h,
+                                (unsigned)fb_x0,
+                                (unsigned)fb_y0,
+                                render_visible_pixels,
+                                src_first_pixel,
+                                d->diag_bit_reverse,
+                                d->diag_force_src0,
+                                d->diag_show_fetch_all,
+                                d->diag_phase_bias,
+                                (unsigned)non_bg_pixels,
+                                (unsigned)first_idx,
+                                (unsigned)last_idx,
+                                first_word,
+                                first_bit,
+                                saw_nonzero_idx ? (unsigned)first_non_bg_x : 0u,
+                                saw_nonzero_idx ? (unsigned)last_non_bg_x : 0u,
+                                (unsigned)d->palette[0],
+                                (unsigned)d->palette[1],
+                                (unsigned)row[fb_x0 < fb_width ? fb_x0 : 0],
+                                (unsigned)row[(fb_x0 + (uint32_t)(out_w / 2)) < fb_width ? (fb_x0 + (uint32_t)(out_w / 2)) : (fb_width / 2)],
+                                (unsigned)(saw_nonzero_idx && first_non_bg_x < fb_width ? row[first_non_bg_x] : bg),
+                                (unsigned)(saw_nonzero_idx && last_non_bg_x < fb_width ? row[last_non_bg_x] : bg));
 
-                    if (denise_diag_line_selected(bp->line_vpos)) {
-                        for (int p = 0; p < nplanes; ++p) {
-                            kprintf("[DENISE-PLANES] bp_v=%d plane=%d "
-                                    "%04x %04x %04x %04x %04x %04x %04x %04x "
-                                    "%04x %04x %04x %04x %04x %04x %04x %04x "
-                                    "%04x %04x %04x %04x %04x\n",
-                                    bp->line_vpos,
-                                    p,
-                                    bp->line_words[p][0],
-                                    bp->line_words[p][1],
-                                    bp->line_words[p][2],
-                                    bp->line_words[p][3],
-                                    bp->line_words[p][4],
-                                    bp->line_words[p][5],
-                                    bp->line_words[p][6],
-                                    bp->line_words[p][7],
-                                    bp->line_words[p][8],
-                                    bp->line_words[p][9],
-                                    bp->line_words[p][10],
-                                    bp->line_words[p][11],
-                                    bp->line_words[p][12],
-                                    bp->line_words[p][13],
-                                    bp->line_words[p][14],
-                                    bp->line_words[p][15],
-                                    bp->line_words[p][16],
-                                    bp->line_words[p][17],
-                                    bp->line_words[p][18],
-                                    bp->line_words[p][19],
-                                    bp->line_words[p][20]);
-                        }
+                        if (denise_diag_line_selected(bp->line_vpos))
+                        {
+                            for (int p = 0; p < nplanes; ++p)
+                            {
+                                kprintf("[DENISE-PLANES] bp_v=%d plane=%d "
+                                        "%04x %04x %04x %04x %04x %04x %04x %04x "
+                                        "%04x %04x %04x %04x %04x %04x %04x %04x "
+                                        "%04x %04x %04x %04x %04x\n",
+                                        bp->line_vpos,
+                                        p,
+                                        bp->line_words[p][0],
+                                        bp->line_words[p][1],
+                                        bp->line_words[p][2],
+                                        bp->line_words[p][3],
+                                        bp->line_words[p][4],
+                                        bp->line_words[p][5],
+                                        bp->line_words[p][6],
+                                        bp->line_words[p][7],
+                                        bp->line_words[p][8],
+                                        bp->line_words[p][9],
+                                        bp->line_words[p][10],
+                                        bp->line_words[p][11],
+                                        bp->line_words[p][12],
+                                        bp->line_words[p][13],
+                                        bp->line_words[p][14],
+                                        bp->line_words[p][15],
+                                        bp->line_words[p][16],
+                                        bp->line_words[p][17],
+                                        bp->line_words[p][18],
+                                        bp->line_words[p][19],
+                                        bp->line_words[p][20]);
+                            }
 
-                        denise_dump_diag_decode(d,
-                                                bp,
-                                                nplanes,
-                                                dpf,
-                                                src_first_pixel);
+                            denise_dump_diag_decode(d,
+                                                    bp,
+                                                    nplanes,
+                                                    dpf,
+                                                    src_first_pixel);
 
-                        if (bp->line_vpos == denise_diag_target_line(0)) {
-                            denise_dump_diag_progression(d,
-                                                         bp,
-                                                         nplanes,
-                                                         dpf,
-                                                         src_first_pixel);
+                            if (bp->line_vpos == denise_diag_target_line(0))
+                            {
+                                denise_dump_diag_progression(d,
+                                                             bp,
+                                                             nplanes,
+                                                             dpf,
+                                                             src_first_pixel);
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    }   /* close vstart/vstop/line_idx block */
+    } /* close vstart/vstop/line_idx block */
 }
