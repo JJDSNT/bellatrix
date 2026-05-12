@@ -9,3 +9,6 @@
 	path = external/aros
 	url = https://github.com/aros-development-team/AROS
 	update = none
+[submodule "external/btstack"]
+	path = external/btstack
+	url = https://github.com/bluekitchen/btstack.git
