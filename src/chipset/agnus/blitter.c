@@ -222,11 +222,6 @@ static uint16_t blitter_fill_word(uint16_t d, uint8_t *carry,
     return result;
 }
 
-static inline uint32_t blitter_line_word_offset(int offset)
-{
-    return (uint32_t)(((unsigned int)offset >> 4) << 1);
-}
-
 static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
 {
     const uint16_t height_rows = blitter_height_rows(b);
@@ -264,50 +259,50 @@ static void blitter_execute_line_fallback(BlitterState *b, AgnusState *agnus)
         {
         case 0:
             offset = d + start_pixel;
-            addr = plane_addr + blitter_line_word_offset(offset) + (uint32_t)(i * plane_mod);
+            addr = plane_addr + (uint32_t)(offset >> 3) + (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 1:
             offset = d + start_pixel;
-            addr = plane_addr + blitter_line_word_offset(offset) - (uint32_t)(i * plane_mod);
+            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 2:
             offset = d + (15 - start_pixel);
-            addr = plane_addr - blitter_line_word_offset(offset) + (uint32_t)(i * plane_mod);
+            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) + (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x0001u << (offset & 15));
             break;
 
         case 3:
             offset = d + start_pixel;
-            addr = plane_addr + blitter_line_word_offset(offset) - (uint32_t)(i * plane_mod);
+            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(i * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 4:
             offset = (int)i + start_pixel;
-            addr = plane_addr + blitter_line_word_offset(offset) + (uint32_t)(d * plane_mod);
+            addr = plane_addr + (uint32_t)(offset >> 3) + (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 5:
             offset = (int)i + (15 - start_pixel);
-            addr = plane_addr - blitter_line_word_offset(offset) + (uint32_t)(d * plane_mod);
+            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) + (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x0001u << (offset & 15));
             break;
 
         case 6:
             offset = (int)i + start_pixel;
-            addr = plane_addr + blitter_line_word_offset(offset) - (uint32_t)(d * plane_mod);
+            addr = plane_addr + (uint32_t)(offset >> 3) - (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x8000u >> (offset & 15));
             break;
 
         case 7:
         default:
             offset = (int)i + (15 - start_pixel);
-            addr = plane_addr - blitter_line_word_offset(offset) - (uint32_t)(d * plane_mod);
+            addr = (plane_addr + 1u) - (uint32_t)(offset >> 3) - (uint32_t)(d * plane_mod);
             bitmask = (uint16_t)(0x0001u << (offset & 15));
             break;
         }
@@ -387,9 +382,9 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
 
             if (useA) {
                 uint16_t mask = 0xFFFFu;
-                uint16_t afetched;
+                uint16_t araw;
 
-                afetched = blitter_chip_read16(agnus, apt);
+                araw = blitter_chip_read16(agnus, apt);
                 apt = (uint32_t)(apt + xinc);
 
                 if (x == 0)
@@ -397,10 +392,11 @@ static void blitter_execute_copy(BlitterState *b, AgnusState *agnus)
                 if (x == (uint16_t)(width_words - 1))
                     mask &= b->bltalwm;
 
-                aval = blitter_barrel_shift(afetched, aold, ash, desc);
-                aval &= mask;
-                b->bltadat = afetched;
-                aold = afetched;
+                araw &= mask;
+                b->bltadat = araw;
+
+                aval = blitter_barrel_shift(araw, aold, ash, desc);
+                aold = araw;
             } else {
                 aval = b->bltadat;
             }
