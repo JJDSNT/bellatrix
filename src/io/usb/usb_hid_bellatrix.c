@@ -1,0 +1,328 @@
+#include "core/machine.h"
+#include "support.h"
+
+#if BELLATRIX_ENABLE_USBSTACK
+
+#include "usb_config.h"
+#include "usb_errno.h"
+#include "usbh_core.h"
+#include "usbh_hid.h"
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+
+#define BELLATRIX_USB_HID_MAX_CONTEXTS CONFIG_USBHOST_MAX_HID_CLASS
+#define BELLATRIX_USB_HID_REPORT_BYTES 64u
+
+typedef struct BellatrixUSBHIDKeyboard {
+    bool active;
+    uint8_t minor;
+    uint8_t modifiers;
+    uint8_t keys[6];
+} BellatrixUSBHIDKeyboard;
+
+static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t
+    g_bellatrix_usb_hid_report[BELLATRIX_USB_HID_MAX_CONTEXTS][USB_ALIGN_UP(BELLATRIX_USB_HID_REPORT_BYTES, CONFIG_USB_ALIGN_SIZE)];
+static BellatrixUSBHIDKeyboard g_bellatrix_usb_hid_keyboards[BELLATRIX_USB_HID_MAX_CONTEXTS];
+
+static BellatrixUSBHIDKeyboard *bellatrix_usb_hid_keyboard_for_minor(uint8_t minor)
+{
+    if (minor >= BELLATRIX_USB_HID_MAX_CONTEXTS) {
+        return NULL;
+    }
+    return &g_bellatrix_usb_hid_keyboards[minor];
+}
+
+static bool bellatrix_usb_hid_usage_to_amiga_raw(uint8_t usage, uint8_t *rawkey)
+{
+    if (!rawkey) {
+        return false;
+    }
+
+    if (usage >= 0x04u && usage <= 0x1du) {
+        static const uint8_t letter_rawkeys[] = {
+            0x20u, 0x35u, 0x33u, 0x22u, 0x12u, 0x23u, 0x24u, 0x25u, 0x17u,
+            0x26u, 0x27u, 0x28u, 0x37u, 0x36u, 0x18u, 0x19u, 0x10u, 0x13u,
+            0x21u, 0x14u, 0x16u, 0x34u, 0x11u, 0x32u, 0x15u, 0x31u
+        };
+
+        *rawkey = letter_rawkeys[usage - 0x04u];
+        return true;
+    }
+
+    if (usage >= 0x1eu && usage <= 0x27u) {
+        *rawkey = (uint8_t)(usage - 0x1du);
+        return true;
+    }
+
+    if (usage >= 0x59u && usage <= 0x61u) {
+        static const uint8_t keypad_rawkeys[] = {
+            0x1du, 0x1eu, 0x1fu, 0x2du, 0x2eu, 0x2fu, 0x3du, 0x3eu, 0x3fu
+        };
+
+        *rawkey = keypad_rawkeys[usage - 0x59u];
+        return true;
+    }
+
+    switch (usage) {
+    case HID_KBD_USAGE_SPACE: *rawkey = 0x40u; return true;
+    case HID_KBD_USAGE_ENTER: *rawkey = 0x44u; return true;
+    case HID_KBD_USAGE_KPDEMTER: *rawkey = 0x43u; return true;
+    case HID_KBD_USAGE_ESCAPE: *rawkey = 0x45u; return true;
+    case HID_KBD_USAGE_UP: *rawkey = 0x4Cu; return true;
+    case HID_KBD_USAGE_DOWN: *rawkey = 0x4Du; return true;
+    case HID_KBD_USAGE_RIGHT: *rawkey = 0x4Eu; return true;
+    case HID_KBD_USAGE_LEFT: *rawkey = 0x4Fu; return true;
+    case HID_KBD_USAGE_KPD0: *rawkey = 0x0Fu; return true;
+    default:
+        break;
+    }
+
+    switch (usage) {
+    case HID_KBD_USAGE_DELETE: *rawkey = 0x41u; return true;
+    case HID_KBD_USAGE_TAB: *rawkey = 0x42u; return true;
+    case HID_KBD_USAGE_HYPHEN: *rawkey = 0x0Bu; return true;
+    case HID_KBD_USAGE_EQUAL: *rawkey = 0x0Cu; return true;
+    case HID_KBD_USAGE_LBRACKET: *rawkey = 0x1Au; return true;
+    case HID_KBD_USAGE_RBRACKET: *rawkey = 0x1Bu; return true;
+    case HID_KBD_USAGE_BSLASH: *rawkey = 0x0Du; return true;
+    case HID_KBD_USAGE_SEMICOLON: *rawkey = 0x29u; return true;
+    case HID_KBD_USAGE_SQUOTE: *rawkey = 0x2Au; return true;
+    case HID_KBD_USAGE_GACCENT: *rawkey = 0x00u; return true;
+    case HID_KBD_USAGE_COMMON: *rawkey = 0x38u; return true;
+    case HID_KBD_USAGE_PERIOD: *rawkey = 0x39u; return true;
+    case HID_KBD_USAGE_DIV: *rawkey = 0x3Au; return true;
+    case HID_KBD_USAGE_CAPSLOCK: *rawkey = 0x62u; return true;
+    case HID_KBD_USAGE_F1: *rawkey = 0x50u; return true;
+    case HID_KBD_USAGE_F2: *rawkey = 0x51u; return true;
+    case HID_KBD_USAGE_F3: *rawkey = 0x52u; return true;
+    case HID_KBD_USAGE_F4: *rawkey = 0x53u; return true;
+    case HID_KBD_USAGE_F5: *rawkey = 0x54u; return true;
+    case HID_KBD_USAGE_F6: *rawkey = 0x55u; return true;
+    case HID_KBD_USAGE_F7: *rawkey = 0x56u; return true;
+    case HID_KBD_USAGE_F8: *rawkey = 0x57u; return true;
+    case HID_KBD_USAGE_F9: *rawkey = 0x58u; return true;
+    case HID_KBD_USAGE_F10: *rawkey = 0x59u; return true;
+    case HID_KBD_USAGE_DELFWD: *rawkey = 0x46u; return true;
+    case HID_KBD_USAGE_LCTRL: *rawkey = 0x63u; return true;
+    case HID_KBD_USAGE_LSHIFT: *rawkey = 0x60u; return true;
+    case HID_KBD_USAGE_LALT: *rawkey = 0x64u; return true;
+    case HID_KBD_USAGE_LGUI: *rawkey = 0x66u; return true;
+    case HID_KBD_USAGE_RCTRL: *rawkey = 0x63u; return true;
+    case HID_KBD_USAGE_RSHIFT: *rawkey = 0x61u; return true;
+    case HID_KBD_USAGE_RALT: *rawkey = 0x65u; return true;
+    case HID_KBD_USAGE_RGUI: *rawkey = 0x67u; return true;
+    default:
+        return false;
+    }
+}
+
+static bool bellatrix_usb_hid_report_contains(const uint8_t keys[6], uint8_t usage)
+{
+    unsigned int i;
+
+    for (i = 0; i < 6u; ++i) {
+        if (keys[i] == usage) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void bellatrix_usb_hid_emit_usage(uint8_t usage, bool pressed)
+{
+    uint8_t rawkey;
+
+    if (usage == HID_KBD_USAGE_NONE) {
+        return;
+    }
+
+    if (bellatrix_usb_hid_usage_to_amiga_raw(usage, &rawkey)) {
+        bellatrix_machine_keyboard_rawkey(rawkey, pressed ? 1 : 0);
+    }
+}
+
+static void bellatrix_usb_hid_emit_modifier_changes(uint8_t previous, uint8_t current)
+{
+    const struct {
+        uint8_t mask;
+        uint8_t usage;
+    } modifiers[] = {
+        { HID_MODIFIER_LCTRL, HID_KBD_USAGE_LCTRL },
+        { HID_MODIFIER_LSHIFT, HID_KBD_USAGE_LSHIFT },
+        { HID_MODIFIER_LALT, HID_KBD_USAGE_LALT },
+        { HID_MODIFIER_LGUI, HID_KBD_USAGE_LGUI },
+        { HID_MODIFIER_RCTRL, HID_KBD_USAGE_RCTRL },
+        { HID_MODIFIER_RSHIFT, HID_KBD_USAGE_RSHIFT },
+        { HID_MODIFIER_RALT, HID_KBD_USAGE_RALT },
+        { HID_MODIFIER_RGUI, HID_KBD_USAGE_RGUI },
+    };
+    unsigned int i;
+
+    for (i = 0; i < (sizeof(modifiers) / sizeof(modifiers[0])); ++i) {
+        bool was_pressed = (previous & modifiers[i].mask) != 0u;
+        bool is_pressed = (current & modifiers[i].mask) != 0u;
+
+        if (was_pressed != is_pressed) {
+            bellatrix_usb_hid_emit_usage(modifiers[i].usage, is_pressed);
+        }
+    }
+}
+
+static void bellatrix_usb_hid_release_all(BellatrixUSBHIDKeyboard *keyboard)
+{
+    unsigned int i;
+
+    if (!keyboard) {
+        return;
+    }
+
+    bellatrix_usb_hid_emit_modifier_changes(keyboard->modifiers, 0u);
+    for (i = 0; i < 6u; ++i) {
+        bellatrix_usb_hid_emit_usage(keyboard->keys[i], false);
+    }
+
+    keyboard->modifiers = 0u;
+    memset(keyboard->keys, 0, sizeof(keyboard->keys));
+}
+
+static void bellatrix_usb_hid_resubmit(struct usbh_hid *hid_class,
+                                       uint8_t *buffer,
+                                       uint32_t buffer_len,
+                                       void (*callback)(void *arg, int nbytes))
+{
+    usbh_int_urb_fill(&hid_class->intin_urb,
+                      hid_class->hport,
+                      hid_class->intin,
+                      buffer,
+                      buffer_len,
+                      0,
+                      callback,
+                      hid_class);
+    usbh_submit_urb(&hid_class->intin_urb);
+}
+
+static uint32_t bellatrix_usb_hid_transfer_len(const struct usbh_hid *hid_class)
+{
+    uint32_t transfer_len = BELLATRIX_USB_HID_REPORT_BYTES;
+
+    if (hid_class && hid_class->intin && hid_class->intin->wMaxPacketSize > 0u &&
+        hid_class->intin->wMaxPacketSize < transfer_len) {
+        transfer_len = hid_class->intin->wMaxPacketSize;
+    }
+
+    return transfer_len;
+}
+
+static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
+{
+    struct usbh_hid *hid_class = (struct usbh_hid *)arg;
+    BellatrixUSBHIDKeyboard *keyboard;
+    struct usb_hid_kbd_report *report;
+    unsigned int i;
+
+    if (!hid_class) {
+        return;
+    }
+
+    keyboard = (BellatrixUSBHIDKeyboard *)hid_class->user_data;
+    if (!keyboard) {
+        return;
+    }
+
+    if (nbytes > 0) {
+        report = (struct usb_hid_kbd_report *)g_bellatrix_usb_hid_report[hid_class->minor];
+
+        bellatrix_usb_hid_emit_modifier_changes(keyboard->modifiers, report->modifier);
+
+        for (i = 0; i < 6u; ++i) {
+            uint8_t usage = keyboard->keys[i];
+            if (usage != HID_KBD_USAGE_NONE && !bellatrix_usb_hid_report_contains(report->key, usage)) {
+                bellatrix_usb_hid_emit_usage(usage, false);
+            }
+        }
+
+        for (i = 0; i < 6u; ++i) {
+            uint8_t usage = report->key[i];
+            if (usage != HID_KBD_USAGE_NONE && !bellatrix_usb_hid_report_contains(keyboard->keys, usage)) {
+                bellatrix_usb_hid_emit_usage(usage, true);
+            }
+        }
+
+        keyboard->modifiers = report->modifier;
+        memcpy(keyboard->keys, report->key, sizeof(keyboard->keys));
+
+        bellatrix_usb_hid_resubmit(hid_class,
+                                   g_bellatrix_usb_hid_report[hid_class->minor],
+                                   bellatrix_usb_hid_transfer_len(hid_class),
+                                   bellatrix_usb_hid_keyboard_callback);
+    } else if (nbytes == -USB_ERR_NAK) {
+        bellatrix_usb_hid_resubmit(hid_class,
+                                   g_bellatrix_usb_hid_report[hid_class->minor],
+                                   bellatrix_usb_hid_transfer_len(hid_class),
+                                   bellatrix_usb_hid_keyboard_callback);
+    }
+}
+
+void usbh_hid_run(struct usbh_hid *hid_class)
+{
+    BellatrixUSBHIDKeyboard *keyboard;
+    uint8_t protocol;
+
+    if (!hid_class || !hid_class->intin) {
+        return;
+    }
+
+    protocol = hid_class->hport->config.intf[hid_class->intf].altsetting[0].intf_desc.bInterfaceProtocol;
+    if (protocol != HID_PROTOCOL_KEYBOARD) {
+        return;
+    }
+
+    keyboard = bellatrix_usb_hid_keyboard_for_minor(hid_class->minor);
+    if (!keyboard) {
+        kprintf("[USB-HID] no keyboard context for HID minor %u\n", (unsigned)hid_class->minor);
+        return;
+    }
+
+    memset(keyboard, 0, sizeof(*keyboard));
+    keyboard->active = true;
+    keyboard->minor = hid_class->minor;
+    hid_class->user_data = keyboard;
+
+    usbh_hid_set_protocol(hid_class, HID_PROTOCOL_BOOT);
+    kprintf("[USB-HID] keyboard attached: minor=%u intf=%u ep_in=0x%02x mps=%u\n",
+            (unsigned)hid_class->minor,
+            (unsigned)hid_class->intf,
+            (unsigned)hid_class->intin->bEndpointAddress,
+            (unsigned)hid_class->intin->wMaxPacketSize);
+
+    memset(g_bellatrix_usb_hid_report[hid_class->minor], 0, sizeof(g_bellatrix_usb_hid_report[hid_class->minor]));
+    bellatrix_usb_hid_resubmit(hid_class,
+                               g_bellatrix_usb_hid_report[hid_class->minor],
+                               bellatrix_usb_hid_transfer_len(hid_class),
+                               bellatrix_usb_hid_keyboard_callback);
+}
+
+void usbh_hid_stop(struct usbh_hid *hid_class)
+{
+    BellatrixUSBHIDKeyboard *keyboard;
+
+    if (!hid_class) {
+        return;
+    }
+
+    keyboard = (BellatrixUSBHIDKeyboard *)hid_class->user_data;
+    if (!keyboard) {
+        return;
+    }
+
+    bellatrix_usb_hid_release_all(keyboard);
+    keyboard->active = false;
+    hid_class->user_data = NULL;
+
+    kprintf("[USB-HID] keyboard detached: minor=%u\n", (unsigned)hid_class->minor);
+}
+
+#endif
