@@ -1,6 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..bellatrix 100644
-@@ -15,7 +15,7 @@
+index eb89404..a9a4628 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
  set(TARGET "raspi64" CACHE STRING "One of target machines: ${SUPPORTED_TARGETS}")
  set_property(CACHE TARGET PROPERTY STRINGS ${SUPPORTED_TARGETS})
  
@@ -9,7 +11,7 @@ index eb89404..bellatrix 100644
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
  
-@@ -167,8 +167,85 @@
+@@ -167,14 +167,166 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -60,8 +62,6 @@ index eb89404..bellatrix 100644
 +                ${CMAKE_SOURCE_DIR}/../src/core/memory/memory.c
 +                ${CMAKE_SOURCE_DIR}/../src/core/memory/memory_map.c
 +                ${CMAKE_SOURCE_DIR}/../src/core/memory/chip_ram.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/fast_ram.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/autoconfig.c
 +                ${CMAKE_SOURCE_DIR}/../src/core/memory/overlay.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/serial/null_modem.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/serial/uart_host.c
@@ -86,7 +86,81 @@ index eb89404..bellatrix 100644
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/mailbox.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/stats.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/sync.c
++                ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
++                ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 +            )
++            include_directories(${CMAKE_SOURCE_DIR}/../src/io/bluetooth)
++            include_directories(${CMAKE_SOURCE_DIR}/../src/io/usb)
++            option(BELLATRIX_ENABLE_BTSTACK "Enable BTStack support in Bellatrix" OFF)
++            option(BELLATRIX_ENABLE_USBSTACK "Enable CherryUSB host stack scaffold in Bellatrix" OFF)
++            add_compile_definitions(
++                BELLATRIX_ENABLE_BTSTACK=$<BOOL:${BELLATRIX_ENABLE_BTSTACK}>
++                BELLATRIX_ENABLE_USBSTACK=$<BOOL:${BELLATRIX_ENABLE_USBSTACK}>
++            )
++            if(BELLATRIX_ENABLE_BTSTACK)
++                set(BELLATRIX_BTSTACK_PATCHRAM_SOURCE "" CACHE STRING "Path to generated BCM PatchRAM C source for Bellatrix BTStack")
++                list(APPEND BELLATRIX_SOURCES
++                    ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_hal_raspi3.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/ad_parser.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_linked_list.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_memory.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_memory_pool.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_run_loop.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_slip.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_util.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_uart_slip_wrapper.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_ltv_builder.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_cmd.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_dump.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_transport_h4.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_transport_h5.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded/btstack_run_loop_embedded.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded/btstack_uart_block_embedded.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm/btstack_chipset_bcm.c
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm/btstack_chipset_bcm_download_firmware.c
++                )
++                if(BELLATRIX_BTSTACK_PATCHRAM_SOURCE)
++                    message(STATUS "Bellatrix BTStack PatchRAM source: ${BELLATRIX_BTSTACK_PATCHRAM_SOURCE}")
++                    list(APPEND BELLATRIX_SOURCES ${BELLATRIX_BTSTACK_PATCHRAM_SOURCE})
++                else()
++                    message(WARNING "Bellatrix BTStack PatchRAM source not provided; building without embedded BCM firmware")
++                    list(APPEND BELLATRIX_SOURCES
++                        ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_firmware_stub.c
++                    )
++                endif()
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/src)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/bluedroid/encoder/include)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/bluedroid/decoder/include)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/micro-ecc)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/rijndael)
++                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/yxml)
++                add_compile_definitions(BTSTACK_CONFIG_H="btstack_config.h")
++            endif()
++            if(BELLATRIX_ENABLE_USBSTACK)
++                if(EXISTS "${CMAKE_SOURCE_DIR}/../external/cherryusb/CMakeLists.txt")
++                    list(APPEND BELLATRIX_SOURCES
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_libc_bellatrix.c
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_osal_bellatrix.c
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usbh_class_info.c
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_hid_bellatrix.c
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_glue_dwc2_bellatrix.c
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_hc_bellatrix.c
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/core/usbh_core.c
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hub/usbh_hub.c
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hid/usbh_hid.c
++                    )
++                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/common)
++                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/core)
++                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hub)
++                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hid)
++                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/port/dwc2)
++                else()
++                    message(FATAL_ERROR "Bellatrix USB stack requested but external/cherryusb is missing")
++                endif()
++            endif()
 +        else()
 +            message(FATAL_ERROR "Bellatrix variant is supported on raspi64 target only.")
 +        endif()
@@ -96,3 +170,21 @@ index eb89404..bellatrix 100644
  else()
      message(FATAL_ERROR "Wrong variant selected: ${VARIANT}")
  endif()
+ 
++list(APPEND EMU68_FILES ${BELLATRIX_SOURCES})
++
+ add_link_options(-Wl,--build-id -nostdlib -nostartfiles -static)
+ add_compile_options(-mbig-endian -fno-exceptions -ffreestanding -Wall -Wextra -Werror)
++add_compile_options(-fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0)
+ 
+ list(APPEND ARCH_FILES
+     src/aarch64/start.c
+@@ -209,7 +361,7 @@ add_subdirectory(external)
+ target_link_libraries(Emu68.elf capstone-static libdeflate_static)
+ target_include_directories(Emu68.elf PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/external/capstone/include)
+ target_include_directories(Emu68.elf PRIVATE ${CMAKE_BINARY_DIR}/include)
+-target_compile_definitions(Emu68.elf PRIVATE)
++target_compile_definitions(Emu68.elf PRIVATE BELLATRIX_EMU68=1)
+ 
+ configure_file(include/version.h.in include/version.h @ONLY)
+ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/.git/index)
