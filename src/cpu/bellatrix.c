@@ -100,9 +100,12 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
         atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
         asm volatile("dsb sy\n\t sev" ::: "memory");
     } else {
-        chipset_lock_acquire();
+        /* Single-core: no lock and no sev.  The chipset_lock_release() sev would
+         * wake cores 1/2/3 (parked in wfe waiting for their entry pointers), causing
+         * spurious vCPU context switches in QEMU on every CPU progress tick — which
+         * starves Core 0 of scheduling time and breaks DiagROM CIA timer tests. */
         bellatrix_machine_advance(cycles);
-        chipset_lock_release();
+        bt_host_step(&g_runtime.bluetooth);
     }
 }
 
@@ -132,12 +135,6 @@ void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
     atomic_store_explicit(&s_published_master_cycles,
                           g_runtime.gfx.master_cycles,
                           memory_order_release);
-
-    /*
-     * Poll Bluetooth host in the chipset thread / single-core poll path.
-     * This provides the necessary host-side cycles for BTStack to run.
-     */
-    bt_host_step(&g_runtime.bluetooth);
 
     chipset_lock_release();
 }
@@ -287,6 +284,39 @@ static inline uint32_t read_be32(const uint8_t *p)
            ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
+#if BELLATRIX_ENABLE_BTSTACK
+static void bellatrix_init_bluetooth(BellatrixRuntime *rt, BellatrixMachine *m)
+{
+    if (!rt || !m) {
+        return;
+    }
+
+#if defined(BELLATRIX_UART_PL011)
+    kprintf("[BT] skipped: PL011 host bridge build conflicts with Pi 3B on-board Bluetooth pins\n");
+    return;
+#else
+    /*
+     * Bring BT up only after:
+     *   1. PAL runtime/timer state exists
+     *   2. serial ownership has been decided
+     *
+     * On Raspberry Pi 3B the controller uses the primary UART path, so the
+     * host serial bridge must not claim a competing backend first.
+     */
+    if (m->uart_host.backend_type != UART_HOST_BACKEND_NONE) {
+        kprintf("[BT] skipped: serial backend already owns the UART path (backend=%d)\n",
+                (int)m->uart_host.backend_type);
+        return;
+    }
+
+    if (!bt_host_init(&rt->bluetooth)) {
+        kprintf("[BT] init failed\n");
+        return;
+    }
+#endif
+}
+#endif
+
 /* ---------------------------------------------------------------------------
  * Initialisation
  * ------------------------------------------------------------------------- */
@@ -296,8 +326,20 @@ void bellatrix_init(void)
     extern struct M68KState *__m68k_state;
 
     PAL_Debug_Init(115200);
+    bellatrix_emu68_boards_reset();
 
-    autoconfig_enable_z2_ram(BELLATRIX_FAST_RAM_SIZE);
+#if !BELLATRIX_ENABLE_EMU68_BOARDS
+    /* Legacy path: Bellatrix owns the autoconfig protocol instead of Emu68
+     * boards.  Configure Z2 RAM size before machine_init() calls autoconfig_init(),
+     * so the board comes up enabled with the correct size advertisement. */
+#ifndef BELLATRIX_LEGACY_Z2_RAM_MB
+#define BELLATRIX_LEGACY_Z2_RAM_MB 8u
+#endif
+    autoconfig_enable_z2_ram((uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u);
+    kprintf("[BELA] legacy mode: Z2 RAM %uMB via Bellatrix autoconfig\n",
+            (unsigned)(BELLATRIX_LEGACY_Z2_RAM_MB));
+#endif
+
     bellatrix_machine_init(&g_emu68_backend);
     bellatrix_runtime_init(&g_runtime, bellatrix_machine_get());
 
@@ -306,11 +348,6 @@ void bellatrix_init(void)
 
     /* Bellatrix-specific CIA-A defaults: OVL and LED are outputs */
     BellatrixMachine *m = bellatrix_machine_get();
-    /*
-     * Reuse Emu68's tested RAM backing instead of maintaining a parallel
-     * Bellatrix-only Fast RAM buffer. This keeps CPU fetch/store and machine
-     * reads/writes coherent on the real target.
-     */
     m->memory.chip_ram = (uint8_t *)CHIP_RAM_KVIRT;
     m->memory.chip_ram_size = BELLATRIX_CHIP_RAM_SIZE;
     m->memory.chip_ram_mask = BELLATRIX_CHIP_RAM_MASK;
@@ -321,14 +358,6 @@ void bellatrix_init(void)
     /* machine_init() attached Paula before we replaced the RAM backing. */
     paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
     m->cia_a.ddra = 0x03;
-
-    /* Inject a space keypress so DiagROM enters serial mode during its
-     * boot-time "hold ANY key" window (diagrom.s waitloop ~line 2291,
-     * after RealLoopbacktest).  The byte sits in the keyboard FIFO and
-     * is delivered via CIA-A SDR on the first GetKey call in the waitloop.
-     * Amiga rawkey 0x40 = space bar. */
-    bellatrix_machine_keyboard_rawkey(0x40, 1); /* space down */
-    bellatrix_machine_keyboard_rawkey(0x40, 0); /* space up   */
 
     /* ROM diagnostic */
     {
@@ -361,28 +390,28 @@ void bellatrix_init(void)
         }
     }
 
-    /* Chip RAM: configured visible window */
+    /* Chip RAM: configured visible window.
+     * Legacy path extends the mapped region to 2MB so that 0x100000-0x1FFFFF
+     * is accessible to the CPU as "Slow RAM" (not DMA-accessible).  This
+     * matches the original Bellatrix approach and gives the OS more room,
+     * which is why the boot progressed further.  Z2 fast RAM at 0x200000+
+     * does not overlap with this range. */
+#if BELLATRIX_ENABLE_EMU68_BOARDS
     mmu_map(0x000000, 0x000000, BELLATRIX_CHIP_RAM_SIZE,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+#else
+    mmu_map(0x000000, 0x000000, 0x00200000u,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+    kprintf("[BELA] legacy MMU: chip+slow RAM 0x000000-0x1FFFFF (2MB)\n");
+#endif
 
     /* Install the low-memory window according to the initial OVL state. */
     apply_overlay_map(1);
     s_overlay = 1;
 
-    /* Fast RAM is plain Emu68-backed RAM on the real target.
-     * Keep it directly accessible instead of trapping it through Bellatrix.
-     * Bellatrix observes the same backing through FAST_RAM_KVIRT.
-     *
-     * NOTE: 0x200000-0xBFFFFF includes the CIA addresses (0xBFD000-0xBFEFFF).
-     * We override those 4K pages below so CIA accesses fault through
-     * bellatrix_bus_access instead of hitting physical DRAM directly.
-     */
-    mmu_map(0x200000, 0x200000, 0xA00000,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-
-    /* CIA-B ($BFD000) and CIA-A ($BFE000): override the direct Fast RAM
-     * mapping with AF=0 pages so every read and write faults into
-     * bellatrix_bus_access.  Same pattern as Autoconfig at 0xE80000. */
+    /* CIA-B ($BFD000) and CIA-A ($BFE000) belong to the Bellatrix chipset.
+     * Leave them fault-driven so the Emu68 CPU path hands those accesses to
+     * Bellatrix instead of satisfying them from the generic 1:1 map. */
     mmu_map(0xBFD000, 0xBFD000, 0x1000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
     mmu_map(0xBFE000, 0xBFE000, 0x1000,
@@ -393,15 +422,33 @@ void bellatrix_init(void)
     mmu_map(0xF00000, 0xF00000, 0x80000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
 
-    /*
-     * Autoconfig window must fault through the Emu68 vectors path. The global
-     * 1:1 RAM map established by Emu68 startup would otherwise satisfy
-     * 0x00e80000 accesses directly and Bellatrix would never see the config
-     * ROM traffic. Re-map the 64 KiB Z2 config page range without AF set so
-     * both reads and writes trap cleanly.
-     */
+#if BELLATRIX_ENABLE_EMU68_BOARDS
+    /* AutoConfig belongs to Emu68 boards on the real target. Force the
+     * 0x00e80000 window through the vectors path so the native board handler
+     * can expose board ROMs and complete assignment without Bellatrix owning
+     * the config aperture. */
     mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+#else
+    /* Legacy path: Bellatrix handles autoconfig via its own memory map.
+     * Fault-drive the Z2 config window so every read/write reaches
+     * bellatrix_bus_access → memory_map → autoconfig.c. */
+    mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+
+    /* Pre-map the full Z2 Fast RAM range with full R/W access.
+     * The JIT can access it directly after the OS assigns the base via
+     * autoconfig.  We always map at BELLATRIX_FAST_RAM_BASE (0x200000)
+     * because Kickstart/AROS assigns the first Z2 board there. */
+    mmu_map(BELLATRIX_FAST_RAM_BASE,
+            BELLATRIX_FAST_RAM_BASE,
+            (uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u,
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+    kprintf("[BELA] legacy MMU: Z2 Fast RAM %08x-%08x mapped\n",
+            (unsigned)BELLATRIX_FAST_RAM_BASE,
+            (unsigned)(BELLATRIX_FAST_RAM_BASE +
+                       (uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u - 1u));
+#endif
 
     /* Overlay sanity-check */
     if (rom_mapped)
@@ -420,12 +467,6 @@ void bellatrix_init(void)
     }
 
     PAL_Runtime_Init();
-
-    /* Enable secondary chipset cores. */
-    PAL_Core_SetMulticoreEnabled(1);
-    PAL_Core_LaunchChipset(NULL);   /* Core 1 — GFX/Agnus */
-    PAL_Core_LaunchAudio();         /* Core 2 — Paula audio */
-    PAL_Core_LaunchIO();            /* Core 3 — CIA / serial / disk */
 
 #if defined(BELLATRIX_UART_PL011)
 #ifndef BELLATRIX_UART_BAUD
@@ -459,6 +500,12 @@ void bellatrix_init(void)
             kprintf("[SERIAL] PTY ready: %s\n", pty_name);
         }
     }
+#if BELLATRIX_ENABLE_BTSTACK
+    else
+    {
+        kprintf("[SERIAL] BTStack owns on-board UART path; Paula host serial bridge disabled\n");
+    }
+#else
     else if (uart_host_open_miniuart(&m->uart_host, 9600))
     {
 #if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
@@ -475,6 +522,25 @@ void bellatrix_init(void)
         kprintf("[SERIAL] internal serial probe loopback enabled\n");
 #endif
     }
+#endif
+#endif
+
+#if BELLATRIX_ENABLE_BTSTACK
+    bellatrix_init_bluetooth(&g_runtime, m);
+#endif
+
+#ifdef BELLATRIX_ENABLE_MULTICORE
+    /* Enable secondary chipset cores only after host-side services are ready. */
+    PAL_Core_SetMulticoreEnabled(1);
+    PAL_Core_LaunchChipset(NULL);   /* Core 1 — GFX/Agnus */
+    PAL_Core_LaunchAudio();         /* Core 2 — Paula audio */
+    PAL_Core_LaunchIO();            /* Core 3 — CIA / serial / disk */
+#else
+    /*
+     * Keep Bellatrix in single-core mode so Emu68's normal bootstrap/JIT flow
+     * remains the only scheduler path active.
+     */
+    PAL_Core_SetMulticoreEnabled(0);
 #endif
 
     /* "Pau de Cego": paint framebuffer solid red to confirm VC4 pipeline is alive.
@@ -504,7 +570,21 @@ void bellatrix_init(void)
                 (unsigned)fb_width, (unsigned)fb_height);
     }
 
-    kprintf("[BELA] Initialized (multicore: Core 1=GFX, Core 2=Audio, Core 3=IO)\n");
+#if BELLATRIX_ENABLE_BTSTACK
+    if (g_runtime.bluetooth.initialized) {
+        if (!bt_host_wait_for_bootstrap(&g_runtime.bluetooth, 6000u)) {
+            kprintf("[BT] bootstrap window ended without WORKING; continuing boot\n");
+        } else {
+            kprintf("[BT] bootstrap completed before releasing boot\n");
+        }
+    }
+#endif
+
+    if (PAL_Core_IsMulticoreEnabled()) {
+        kprintf("[BELA] Initialized (multicore enabled: Core1=GFX Core2=Audio Core3=IO)\n");
+    } else {
+        kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+GFX+Audio+IO)\n");
+    }
 }
 
 void bellatrix_sync_overlay_from_ciaa(void)

@@ -3,9 +3,13 @@
 #include "memory/memory.h"
 #include "memory/memory_map.h"
 #include "memory/chip_ram.h"
-#include "memory/fast_ram.h"
 #include "memory/overlay.h"
+#include "support.h"
+
+#if defined(BELLATRIX_HARNESS)
+#include "memory/fast_ram.h"
 #include "memory/autoconfig.h"
+#endif
 
 #include <string.h>
 
@@ -15,10 +19,21 @@
 
 #define BELLATRIX_CHIP_RAM_VIRT ((uint8_t *)0xffffff9000000000ULL)
 
+#if defined(BELLATRIX_HARNESS)
 #define BELLATRIX_FAST_RAM_SIZE 0x00800000u
 #define BELLATRIX_FAST_RAM_MASK 0x007FFFFFu
 
 static uint8_t g_fast_ram[BELLATRIX_FAST_RAM_SIZE];
+#endif
+
+static void bellatrix_memory_log_expansion_backend(void)
+{
+#if defined(BELLATRIX_HARNESS)
+    kprintf("[MEMMAP] expansion backend: harness autoconfig\n");
+#elif defined(BELLATRIX_EMU68)
+    kprintf("[MEMMAP] expansion backend: emu68 boards\n");
+#endif
+}
 
 /* ------------------------------------------------------------------------- */
 /* lifecycle                                                                 */
@@ -32,24 +47,36 @@ void bellatrix_memory_init(BellatrixMemory *m)
     m->chip_ram_size = BELLATRIX_CHIP_RAM_SIZE;
     m->chip_ram_mask = BELLATRIX_CHIP_RAM_MASK;
 
+#if defined(BELLATRIX_HARNESS)
     m->fast_ram = g_fast_ram;
     m->fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
     m->fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
+#else
+    m->fast_ram = 0;
+    m->fast_ram_size = 0;
+    m->fast_ram_mask = 0;
+#endif
 
     m->rom = 0;
     m->rom_size = 0;
 
     m->overlay_enabled = 1;
 
+#if defined(BELLATRIX_HARNESS)
     memset(m->fast_ram, 0, m->fast_ram_size);
-
     autoconfig_init(m);
+#endif
+
+    bellatrix_memory_log_expansion_backend();
 }
 
 void bellatrix_memory_reset(BellatrixMemory *m)
 {
     bellatrix_memory_init(m);
+
+#if defined(BELLATRIX_HARNESS)
     autoconfig_reset(m);
+#endif
 }
 
 void bellatrix_memory_attach_rom(BellatrixMemory *m,
@@ -148,32 +175,68 @@ void bellatrix_chip_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
 
 uint8_t bellatrix_fast_read8(const BellatrixMemory *m, uint32_t addr)
 {
+#if defined(BELLATRIX_HARNESS)
     return fast_ram_read8(m, addr);
+#else
+    (void)m;
+    (void)addr;
+    return 0xFFu;
+#endif
 }
 
 uint16_t bellatrix_fast_read16(const BellatrixMemory *m, uint32_t addr)
 {
+#if defined(BELLATRIX_HARNESS)
     return fast_ram_read16(m, addr);
+#else
+    (void)m;
+    (void)addr;
+    return 0xFFFFu;
+#endif
 }
 
 uint32_t bellatrix_fast_read32(const BellatrixMemory *m, uint32_t addr)
 {
+#if defined(BELLATRIX_HARNESS)
     return fast_ram_read32(m, addr);
+#else
+    (void)m;
+    (void)addr;
+    return 0xFFFFFFFFu;
+#endif
 }
 
 void bellatrix_fast_write8(BellatrixMemory *m, uint32_t addr, uint8_t value)
 {
+#if defined(BELLATRIX_HARNESS)
     fast_ram_write8(m, addr, value);
+#else
+    (void)m;
+    (void)addr;
+    (void)value;
+#endif
 }
 
 void bellatrix_fast_write16(BellatrixMemory *m, uint32_t addr, uint16_t value)
 {
+#if defined(BELLATRIX_HARNESS)
     fast_ram_write16(m, addr, value);
+#else
+    (void)m;
+    (void)addr;
+    (void)value;
+#endif
 }
 
 void bellatrix_fast_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
 {
+#if defined(BELLATRIX_HARNESS)
     fast_ram_write32(m, addr, value);
+#else
+    (void)m;
+    (void)addr;
+    (void)value;
+#endif
 }
 
 /* ------------------------------------------------------------------------- */
