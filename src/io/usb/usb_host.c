@@ -7,6 +7,8 @@
 #include "usbh_hub.h"
 #include "usb_dwc2_reg.h"
 
+void usb_osal_timer_poll(void);
+
 #define BELLATRIX_USB_BUS_ID 0u
 #define BELLATRIX_USB_DWC2_REG_BASE 0xF2980000UL
 #define BELLATRIX_USB_HPRT_ADDR (BELLATRIX_USB_DWC2_REG_BASE + USB_OTG_HOST_PORT_BASE)
@@ -14,6 +16,17 @@
 static void usbh_bellatrix_poll(uint8_t busid)
 {
     USBH_IRQHandler(busid);
+}
+
+static void bellatrix_usb_pump_events(unsigned int passes)
+{
+    while (passes-- > 0u) {
+        usb_osal_timer_poll();
+        usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
+        usbh_bellatrix_poll(BELLATRIX_USB_BUS_ID);
+    }
+    usb_osal_timer_poll();
+    usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
 }
 
 static const char *bellatrix_usb_event_name(uint8_t event)
@@ -97,8 +110,7 @@ bool usb_host_init(USBHost *host)
 
     if (usbh_initialize(BELLATRIX_USB_BUS_ID, BELLATRIX_USB_DWC2_REG_BASE, bellatrix_usb_event) == 0) {
         host->controller_ready = true;
-        usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
-        usbh_bellatrix_poll(BELLATRIX_USB_BUS_ID);
+        bellatrix_usb_pump_events(4u);
         kprintf("[USB] CherryUSB DWC2 host initialized at %p\n",
                 (void *)BELLATRIX_USB_DWC2_REG_BASE);
         bellatrix_usb_log_hprt(host, "post-init");
@@ -118,10 +130,7 @@ void usb_host_step(USBHost *host)
     host->poll_count++;
 
     if (host->controller_ready) {
-        usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
-        usbh_bellatrix_poll(BELLATRIX_USB_BUS_ID);
-        USBH_IRQHandler(BELLATRIX_USB_BUS_ID);
-        usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
+        bellatrix_usb_pump_events(2u);
         if (host->poll_count <= 16u || (host->poll_count % 4096u) == 0u) {
             bellatrix_usb_log_hprt(host, "poll");
         }
@@ -135,10 +144,9 @@ void usb_host_shutdown(USBHost *host)
     }
 
     if (host->controller_ready) {
-        usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
+        bellatrix_usb_pump_events(1u);
         usbh_deinitialize(BELLATRIX_USB_BUS_ID);
-        usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
-        usbh_bellatrix_poll(BELLATRIX_USB_BUS_ID);
+        bellatrix_usb_pump_events(1u);
     }
 
     kprintf("[USB] shutdown\n");

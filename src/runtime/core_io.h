@@ -8,11 +8,13 @@
 
 #include "io/serial/uart_host.h"
 #include "io/bluetooth/bt_host.h"
+#include "io/usb/usb_host.h"
 
 typedef struct RuntimeCoreIO {
     BellatrixMachine *machine;
 
     UARTHost uart_host;
+    USBHost usb_host;
 
     bool running;
 

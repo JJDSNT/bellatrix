@@ -21,7 +21,7 @@ long bellatrix_usb_strtol(const char *nptr, char **endptr, int base);
 #define CONFIG_USBHOST_MAX_BUS               1
 #define CONFIG_USBHOST_MAX_RHPORTS           1
 #define CONFIG_USBHOST_MAX_EXTHUBS           1
-#define CONFIG_USBHOST_MAX_EHPORTS           4
+#define CONFIG_USBHOST_MAX_EHPORTS           8
 #define CONFIG_USBHOST_MAX_HID_CLASS         2
 #define CONFIG_USBHOST_MAX_INTERFACES        8
 #define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS  2

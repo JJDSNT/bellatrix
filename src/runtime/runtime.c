@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "debug/core_log.h"
+#include "host/pal.h"
 #include "support.h"
 
 bool bellatrix_runtime_init(
@@ -39,11 +40,19 @@ bool bellatrix_runtime_init(
         return false;
     }
 
-    bt_host_init(&rt->bluetooth);
+    rt->bluetooth.enabled = false;
+    rt->bluetooth.initialized = false;
+    rt->bluetooth.pairing_window_open = false;
+    rt->bluetooth.baudrate = 0;
+    rt->bluetooth.pairing_window_ms = 0;
 
     rt->running = true;
 
-    kprintf("[RUNTIME] init OK: Core0=CPU Core1=GFX Core2=PAULA Core3=IO\n");
+    if (PAL_Core_IsMulticoreEnabled()) {
+        kprintf("[RUNTIME] init OK: multicore enabled (Core0=CPU Core1=GFX Core2=PAULA Core3=IO)\n");
+    } else {
+        kprintf("[RUNTIME] init OK: single-core mode (Core0 drives CPU+GFX+PAULA+IO)\n");
+    }
     return true;
 }
 

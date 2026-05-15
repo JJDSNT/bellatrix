@@ -1,6 +1,7 @@
 #include "usb_osal.h"
 
 #include "usbh_core.h"
+#include "host/raspi3/time.h"
 #if BELLATRIX_ENABLE_USBSTACK
 #include "usb_dwc2_reg.h"
 
@@ -33,6 +34,38 @@ typedef struct {
     uint32_t count;
     uintptr_t *items;
 } BellatrixUSBMq;
+
+typedef struct BellatrixUSBTimerState {
+    struct BellatrixUSBTimerState *next;
+    struct usb_osal_timer *owner;
+    uint64_t deadline_us;
+    bool active;
+} BellatrixUSBTimerState;
+
+static BellatrixUSBTimerState *g_usb_timer_head;
+
+void usb_osal_timer_poll(void);
+
+static uint64_t bellatrix_usb_now_us(void)
+{
+    return raspi3_read_legacy_system_timer();
+}
+
+static uint64_t bellatrix_usb_timer_delay_us(const struct usb_osal_timer *timer)
+{
+    uint32_t timeout_ms;
+
+    timeout_ms = timer ? timer->timeout_ms : 0u;
+    if (timeout_ms == 0u) {
+        timeout_ms = 1u;
+    }
+    return (uint64_t)timeout_ms * 1000u;
+}
+
+static BellatrixUSBTimerState *bellatrix_usb_timer_state(struct usb_osal_timer *timer)
+{
+    return timer ? (BellatrixUSBTimerState *)timer->timer : NULL;
+}
 
 usb_osal_thread_t usb_osal_thread_create(const char *name, uint32_t stack_size, uint32_t prio, usb_thread_entry_t entry, void *args)
 {
@@ -107,6 +140,7 @@ int usb_osal_sem_take(usb_osal_sem_t sem, uint32_t timeout)
     max_spins = (timeout == USB_OSAL_WAITING_FOREVER) ? 1000000u : (timeout + 1u) * 256u;
 
     while (state->count == 0 && spins < max_spins) {
+        usb_osal_timer_poll();
         USBH_IRQHandler(BELLATRIX_USB_OSAL_BUS_ID);
         usb_osal_thread_schedule_other();
         spins++;
@@ -267,6 +301,7 @@ int usb_osal_mq_recv(usb_osal_mq_t mq, uintptr_t *addr, uint32_t timeout)
 struct usb_osal_timer *usb_osal_timer_create(const char *name, uint32_t timeout_ms, usb_timer_handler_t handler, void *argument, bool is_period)
 {
     struct usb_osal_timer *timer;
+    BellatrixUSBTimerState *state;
 
     (void)name;
     timer = usb_osal_malloc(sizeof(*timer));
@@ -274,29 +309,82 @@ struct usb_osal_timer *usb_osal_timer_create(const char *name, uint32_t timeout_
         return NULL;
     }
 
+    state = usb_osal_malloc(sizeof(*state));
+    if (!state) {
+        usb_osal_free(timer);
+        return NULL;
+    }
+
+    memset(state, 0, sizeof(*state));
+    state->owner = timer;
+
     timer->handler = handler;
     timer->argument = argument;
     timer->is_period = is_period;
     timer->timeout_ms = timeout_ms;
-    timer->timer = NULL;
+    timer->timer = state;
     return timer;
 }
 
 void usb_osal_timer_delete(struct usb_osal_timer *timer)
 {
+    BellatrixUSBTimerState *state;
+    BellatrixUSBTimerState **link;
+
     if (timer) {
+        state = bellatrix_usb_timer_state(timer);
+        if (state) {
+            link = &g_usb_timer_head;
+            while (*link) {
+                if (*link == state) {
+                    *link = state->next;
+                    break;
+                }
+                link = &(*link)->next;
+            }
+            usb_osal_free(state);
+        }
         usb_osal_free(timer);
     }
 }
 
 void usb_osal_timer_start(struct usb_osal_timer *timer)
 {
-    (void)timer;
+    BellatrixUSBTimerState *state;
+
+    state = bellatrix_usb_timer_state(timer);
+    if (!state) {
+        return;
+    }
+
+    state->deadline_us = bellatrix_usb_now_us() + bellatrix_usb_timer_delay_us(timer);
+    if (!state->active) {
+        state->next = g_usb_timer_head;
+        g_usb_timer_head = state;
+        state->active = true;
+    }
 }
 
 void usb_osal_timer_stop(struct usb_osal_timer *timer)
 {
-    (void)timer;
+    BellatrixUSBTimerState *state;
+    BellatrixUSBTimerState **link;
+
+    state = bellatrix_usb_timer_state(timer);
+    if (!state || !state->active) {
+        return;
+    }
+
+    link = &g_usb_timer_head;
+    while (*link) {
+        if (*link == state) {
+            *link = state->next;
+            break;
+        }
+        link = &(*link)->next;
+    }
+    state->next = NULL;
+    state->active = false;
 }
 
 size_t usb_osal_enter_critical_section(void)
@@ -311,5 +399,36 @@ void usb_osal_leave_critical_section(size_t flag)
 
 void usb_osal_msleep(uint32_t delay)
 {
-    (void)delay;
+    raspi3_delay_us((uint64_t)delay * 1000u);
+}
+
+void usb_osal_timer_poll(void)
+{
+    BellatrixUSBTimerState **link;
+    BellatrixUSBTimerState *state;
+    struct usb_osal_timer *timer;
+    uint64_t now_us;
+
+    now_us = bellatrix_usb_now_us();
+    link = &g_usb_timer_head;
+    while (*link) {
+        state = *link;
+        if (!state->active || now_us < state->deadline_us) {
+            link = &state->next;
+            continue;
+        }
+
+        *link = state->next;
+        state->next = NULL;
+        state->active = false;
+
+        timer = state->owner;
+        if (timer && timer->handler) {
+            timer->handler(timer->argument);
+        }
+
+        if (timer && timer->is_period && !state->active) {
+            usb_osal_timer_start(timer);
+        }
+    }
 }

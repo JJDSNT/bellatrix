@@ -6,6 +6,7 @@
 #include "chipset/cia/cia.h"
 #include "input/keyboard.h"
 #include "io/serial/uart_host.h"
+#include "io/usb/usb_host.h"
 #include "debug/core_log.h"
 
 /*
@@ -54,6 +55,7 @@ bool core_io_init(RuntimeCoreIO *core, BellatrixMachine *machine)
     core->machine = machine;
     core->running = true;
     core->local_cycles = 0;
+    usb_host_init(&core->usb_host);
 
     CORE3_LOG("init");
     return true;
@@ -67,6 +69,7 @@ void core_io_shutdown(RuntimeCoreIO *core)
 
     extern BellatrixRuntime g_runtime;
     bt_host_shutdown(&g_runtime.bluetooth);
+    usb_host_shutdown(&core->usb_host);
 
     CORE3_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->running = false;
@@ -120,4 +123,7 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
     /* Bluetooth stack processing (host side). */
     extern BellatrixRuntime g_runtime;
     bt_host_step(&g_runtime.bluetooth);
+
+    /* USB host stack processing (host side). */
+    usb_host_step(&core->usb_host);
 }

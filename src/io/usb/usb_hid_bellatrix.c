@@ -22,9 +22,16 @@ typedef struct BellatrixUSBHIDKeyboard {
     uint8_t keys[6];
 } BellatrixUSBHIDKeyboard;
 
+typedef struct BellatrixUSBHIDMouse {
+    bool active;
+    uint8_t minor;
+    uint8_t buttons;
+} BellatrixUSBHIDMouse;
+
 static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t
     g_bellatrix_usb_hid_report[BELLATRIX_USB_HID_MAX_CONTEXTS][USB_ALIGN_UP(BELLATRIX_USB_HID_REPORT_BYTES, CONFIG_USB_ALIGN_SIZE)];
 static BellatrixUSBHIDKeyboard g_bellatrix_usb_hid_keyboards[BELLATRIX_USB_HID_MAX_CONTEXTS];
+static BellatrixUSBHIDMouse    g_bellatrix_usb_hid_mice[BELLATRIX_USB_HID_MAX_CONTEXTS];
 
 static BellatrixUSBHIDKeyboard *bellatrix_usb_hid_keyboard_for_minor(uint8_t minor)
 {
@@ -32,6 +39,14 @@ static BellatrixUSBHIDKeyboard *bellatrix_usb_hid_keyboard_for_minor(uint8_t min
         return NULL;
     }
     return &g_bellatrix_usb_hid_keyboards[minor];
+}
+
+static BellatrixUSBHIDMouse *bellatrix_usb_hid_mouse_for_minor(uint8_t minor)
+{
+    if (minor >= BELLATRIX_USB_HID_MAX_CONTEXTS) {
+        return NULL;
+    }
+    return &g_bellatrix_usb_hid_mice[minor];
 }
 
 static bool bellatrix_usb_hid_usage_to_amiga_raw(uint8_t usage, uint8_t *rawkey)
@@ -266,9 +281,61 @@ static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
     }
 }
 
+static void bellatrix_usb_hid_mouse_callback(void *arg, int nbytes)
+{
+    struct usbh_hid *hid_class = (struct usbh_hid *)arg;
+    BellatrixUSBHIDMouse *mouse;
+    struct usb_hid_mouse_report *report;
+    BellatrixMachine *m;
+    unsigned int btn;
+
+    if (!hid_class) {
+        return;
+    }
+
+    mouse = (BellatrixUSBHIDMouse *)hid_class->user_data;
+    if (!mouse) {
+        return;
+    }
+
+    if (nbytes > 0) {
+        report = (struct usb_hid_mouse_report *)g_bellatrix_usb_hid_report[hid_class->minor];
+        m = bellatrix_machine_get();
+
+        if (report->xdisp || report->ydisp) {
+            bellatrix_controller_port_add_mouse_motion(&m->controller_ports,
+                                                       BELLATRIX_CONTROLLER_PORT_MOUSE,
+                                                       (int)report->xdisp,
+                                                       (int)report->ydisp);
+        }
+
+        for (btn = 0; btn < 3u; ++btn) {
+            int was = (mouse->buttons >> btn) & 1;
+            int is  = (report->buttons >> btn) & 1;
+            if (was != is) {
+                bellatrix_controller_port_set_mouse_button(&m->controller_ports,
+                                                           BELLATRIX_CONTROLLER_PORT_MOUSE,
+                                                           btn,
+                                                           is);
+            }
+        }
+
+        mouse->buttons = report->buttons & 0x07u;
+
+        bellatrix_usb_hid_resubmit(hid_class,
+                                   g_bellatrix_usb_hid_report[hid_class->minor],
+                                   bellatrix_usb_hid_transfer_len(hid_class),
+                                   bellatrix_usb_hid_mouse_callback);
+    } else if (nbytes == -USB_ERR_NAK) {
+        bellatrix_usb_hid_resubmit(hid_class,
+                                   g_bellatrix_usb_hid_report[hid_class->minor],
+                                   bellatrix_usb_hid_transfer_len(hid_class),
+                                   bellatrix_usb_hid_mouse_callback);
+    }
+}
+
 void usbh_hid_run(struct usbh_hid *hid_class)
 {
-    BellatrixUSBHIDKeyboard *keyboard;
     uint8_t protocol;
 
     if (!hid_class || !hid_class->intin) {
@@ -276,53 +343,94 @@ void usbh_hid_run(struct usbh_hid *hid_class)
     }
 
     protocol = hid_class->hport->config.intf[hid_class->intf].altsetting[0].intf_desc.bInterfaceProtocol;
-    if (protocol != HID_PROTOCOL_KEYBOARD) {
-        return;
+
+    if (protocol == HID_PROTOCOL_KEYBOARD) {
+        BellatrixUSBHIDKeyboard *keyboard = bellatrix_usb_hid_keyboard_for_minor(hid_class->minor);
+        if (!keyboard) {
+            kprintf("[USB-HID] no keyboard context for HID minor %u\n", (unsigned)hid_class->minor);
+            return;
+        }
+
+        memset(keyboard, 0, sizeof(*keyboard));
+        keyboard->active = true;
+        keyboard->minor = hid_class->minor;
+        hid_class->user_data = keyboard;
+
+        usbh_hid_set_protocol(hid_class, HID_PROTOCOL_BOOT);
+        kprintf("[USB-HID] keyboard attached: minor=%u intf=%u ep_in=0x%02x mps=%u\n",
+                (unsigned)hid_class->minor,
+                (unsigned)hid_class->intf,
+                (unsigned)hid_class->intin->bEndpointAddress,
+                (unsigned)hid_class->intin->wMaxPacketSize);
+
+        memset(g_bellatrix_usb_hid_report[hid_class->minor], 0, sizeof(g_bellatrix_usb_hid_report[hid_class->minor]));
+        bellatrix_usb_hid_resubmit(hid_class,
+                                   g_bellatrix_usb_hid_report[hid_class->minor],
+                                   bellatrix_usb_hid_transfer_len(hid_class),
+                                   bellatrix_usb_hid_keyboard_callback);
+
+    } else if (protocol == HID_PROTOCOL_MOUSE) {
+        BellatrixUSBHIDMouse *mouse = bellatrix_usb_hid_mouse_for_minor(hid_class->minor);
+        if (!mouse) {
+            kprintf("[USB-HID] no mouse context for HID minor %u\n", (unsigned)hid_class->minor);
+            return;
+        }
+
+        memset(mouse, 0, sizeof(*mouse));
+        mouse->active = true;
+        mouse->minor = hid_class->minor;
+        hid_class->user_data = mouse;
+
+        usbh_hid_set_protocol(hid_class, HID_PROTOCOL_BOOT);
+        kprintf("[USB-HID] mouse attached: minor=%u intf=%u ep_in=0x%02x mps=%u\n",
+                (unsigned)hid_class->minor,
+                (unsigned)hid_class->intf,
+                (unsigned)hid_class->intin->bEndpointAddress,
+                (unsigned)hid_class->intin->wMaxPacketSize);
+
+        memset(g_bellatrix_usb_hid_report[hid_class->minor], 0, sizeof(g_bellatrix_usb_hid_report[hid_class->minor]));
+        bellatrix_usb_hid_resubmit(hid_class,
+                                   g_bellatrix_usb_hid_report[hid_class->minor],
+                                   bellatrix_usb_hid_transfer_len(hid_class),
+                                   bellatrix_usb_hid_mouse_callback);
     }
-
-    keyboard = bellatrix_usb_hid_keyboard_for_minor(hid_class->minor);
-    if (!keyboard) {
-        kprintf("[USB-HID] no keyboard context for HID minor %u\n", (unsigned)hid_class->minor);
-        return;
-    }
-
-    memset(keyboard, 0, sizeof(*keyboard));
-    keyboard->active = true;
-    keyboard->minor = hid_class->minor;
-    hid_class->user_data = keyboard;
-
-    usbh_hid_set_protocol(hid_class, HID_PROTOCOL_BOOT);
-    kprintf("[USB-HID] keyboard attached: minor=%u intf=%u ep_in=0x%02x mps=%u\n",
-            (unsigned)hid_class->minor,
-            (unsigned)hid_class->intf,
-            (unsigned)hid_class->intin->bEndpointAddress,
-            (unsigned)hid_class->intin->wMaxPacketSize);
-
-    memset(g_bellatrix_usb_hid_report[hid_class->minor], 0, sizeof(g_bellatrix_usb_hid_report[hid_class->minor]));
-    bellatrix_usb_hid_resubmit(hid_class,
-                               g_bellatrix_usb_hid_report[hid_class->minor],
-                               bellatrix_usb_hid_transfer_len(hid_class),
-                               bellatrix_usb_hid_keyboard_callback);
 }
 
 void usbh_hid_stop(struct usbh_hid *hid_class)
 {
-    BellatrixUSBHIDKeyboard *keyboard;
+    uint8_t protocol;
 
     if (!hid_class) {
         return;
     }
 
-    keyboard = (BellatrixUSBHIDKeyboard *)hid_class->user_data;
-    if (!keyboard) {
-        return;
+    protocol = hid_class->hport->config.intf[hid_class->intf].altsetting[0].intf_desc.bInterfaceProtocol;
+
+    if (protocol == HID_PROTOCOL_KEYBOARD) {
+        BellatrixUSBHIDKeyboard *keyboard = (BellatrixUSBHIDKeyboard *)hid_class->user_data;
+        if (keyboard) {
+            bellatrix_usb_hid_release_all(keyboard);
+            keyboard->active = false;
+            hid_class->user_data = NULL;
+            kprintf("[USB-HID] keyboard detached: minor=%u\n", (unsigned)hid_class->minor);
+        }
+    } else if (protocol == HID_PROTOCOL_MOUSE) {
+        BellatrixUSBHIDMouse *mouse = (BellatrixUSBHIDMouse *)hid_class->user_data;
+        if (mouse) {
+            BellatrixMachine *m = bellatrix_machine_get();
+            unsigned int btn;
+            for (btn = 0; btn < 3u; ++btn) {
+                if ((mouse->buttons >> btn) & 1) {
+                    bellatrix_controller_port_set_mouse_button(&m->controller_ports,
+                                                               BELLATRIX_CONTROLLER_PORT_MOUSE,
+                                                               btn, 0);
+                }
+            }
+            mouse->active = false;
+            hid_class->user_data = NULL;
+            kprintf("[USB-HID] mouse detached: minor=%u\n", (unsigned)hid_class->minor);
+        }
     }
-
-    bellatrix_usb_hid_release_all(keyboard);
-    keyboard->active = false;
-    hid_class->user_data = NULL;
-
-    kprintf("[USB-HID] keyboard detached: minor=%u\n", (unsigned)hid_class->minor);
 }
 
 #endif

@@ -77,6 +77,8 @@ struct dwc2_chan {
     uint16_t ssplit_frame;
     uint16_t last_start_frame;
     uint8_t sof_kicks;
+    uint32_t saved_hcdma;
+    uint32_t saved_hctsiz;
     usb_osal_sem_t waitsem;
     struct usbh_urb *urb;
     uint32_t iso_frame_idx;
@@ -106,6 +108,7 @@ static uint8_t setup_bounce_bufs[CONFIG_USBHOST_MAX_BUS][16][32]
 #define DWC2_EP0_STATE_OUTSTATUS 4
 
 static inline uint16_t dwc2_get_full_frame_num(struct usbh_bus *bus);
+static void dwc2_apply_port_speed_config(struct usbh_bus *bus, uint32_t hprt0);
 static void dwc2_inchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num);
 static void dwc2_outchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num);
 
@@ -440,6 +443,11 @@ static inline void dwc2_chan_transfer(struct usbh_bus *bus, uint8_t ch_num, uint
     tmpreg |= USB_OTG_HCCHAR_CHENA;
     dwc2_hc_wr32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCCHAR), tmpreg);
 
+    chan->saved_hcdma  = dma_addr;
+    chan->saved_hctsiz = (size & USB_OTG_HCTSIZ_XFRSIZ) |
+                         (((uint32_t)num_packets << 19) & USB_OTG_HCTSIZ_PKTCNT) |
+                         (((uint32_t)pid << 29) & USB_OTG_HCTSIZ_DPID);
+
     if (chan->urb && USB_GET_ENDPOINT_TYPE(chan->urb->ep->bmAttributes) == USB_ENDPOINT_TYPE_CONTROL) {
         USB_LOG_INFO("Bellatrix DWC2: arm ch=%u ep=0x%02x state=%u hcintmsk=0x%08x hctsiz=0x%08x hcchar=0x%08x hcdma=0x%08x pid=%u size=%u pkts=%u\r\n",
                      (unsigned int)ch_num, (unsigned int)ep_addr,
@@ -497,6 +505,12 @@ static void dwc2_sof_kick_pending_channels(struct usbh_bus *bus)
             continue;
         }
 
+        /* Restore HCTSIZ and HCDMA to the original arm values so that DMA
+         * re-reads from the start of the bounce buffer rather than from
+         * wherever it stopped after the first fetch. */
+        dwc2_hc_wr32(bus, i, offsetof(DWC2_HostChannelTypeDef, HCTSIZ), chan->saved_hctsiz);
+        dwc2_hc_wr32(bus, i, offsetof(DWC2_HostChannelTypeDef, HCDMA),  chan->saved_hcdma);
+
         hcchar &= ~(USB_OTG_HCCHAR_CHDIS | USB_OTG_HCCHAR_ODDFRM);
         hcchar |= (((uint32_t)dwc2_rd32(bus, DWC2_HOST_OFF(HFNUM)) & 0x01U) != 0U) ? USB_OTG_HCCHAR_ODDFRM : 0U;
         hcchar |= USB_OTG_HCCHAR_CHENA;
@@ -536,6 +550,9 @@ static void dwc2_halt(struct usbh_bus *bus, uint8_t ch_num)
     }
 
     dwc2_hc_wr32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCINTMSK), 0U);
+    /* BCM2837: halt stalls when TX FIFO holds unacknowledged data.
+     * Flush all TX FIFOs first so CHENA clears within the timeout. */
+    dwc2_flush_txfifo(bus, 0x10U);
 
     value = dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCCHAR));
     value |= USB_OTG_HCCHAR_CHDIS;
@@ -578,6 +595,13 @@ static int usbh_reset_port(struct usbh_bus *bus, const uint8_t port)
         }
         usb_osal_msleep(10U);
     }
+
+    /* On BCM2837 the hub thread can observe PENA and start EP0 enumeration
+     * before the pending PENCHNG interrupt is serviced. Program the FS/LS
+     * timing immediately so the first SETUP does not use the stale HS/UTMI
+     * host template. */
+    hprt0 = dwc2_rd32(bus, DWC2_HOST_OFF(HPRT));
+    dwc2_apply_port_speed_config(bus, hprt0);
     return 0;
 }
 
@@ -633,6 +657,41 @@ uint32_t dwc2_calc_frame_interval(struct usbh_bus *bus)
         return 125 * clock - 1;
 
     return 1000 * clock - 1;
+}
+
+static void dwc2_apply_port_speed_config(struct usbh_bus *bus, uint32_t hprt0)
+{
+    uint32_t regval;
+
+    if ((hprt0 & USB_OTG_HPRT_PENA) != USB_OTG_HPRT_PENA) {
+        return;
+    }
+
+    regval  = dwc2_rd32(bus, DWC2_HOST_OFF(HFIR));
+    regval &= ~USB_OTG_HFIR_FRIVL;
+    regval |= dwc2_calc_frame_interval(bus) & USB_OTG_HFIR_FRIVL;
+    dwc2_wr32(bus, DWC2_HOST_OFF(HFIR), regval);
+
+    regval  = dwc2_rd32(bus, DWC2_HOST_OFF(HCFG));
+    regval &= ~(USB_OTG_HCFG_FSLSPCS | USB_OTG_HCFG_FSLSS);
+    if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_LOW_SPEED << 17)) {
+        regval |= USB_OTG_HCFG_FSLSPCLKSEL_6_MHZ | USB_OTG_HCFG_FSLSS;
+    } else if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_FULL_SPEED << 17)) {
+        regval |= USB_OTG_HCFG_FSLSPCLKSEL_48_MHZ | USB_OTG_HCFG_FSLSS;
+    } else {
+        regval |= USB_OTG_HCFG_FSLSPCLKSEL_30_60_MHZ;
+    }
+    dwc2_wr32(bus, DWC2_HOST_OFF(HCFG), regval);
+
+    USB_LOG_INFO("Bellatrix DWC2: port speed config speed=%u hcfg=0x%08x hfir=0x%08x\r\n",
+                 (unsigned int)((hprt0 & USB_OTG_HPRT_PSPD) >> USB_OTG_HPRT_PSPD_Pos),
+                 (unsigned int)dwc2_rd32(bus, DWC2_HOST_OFF(HCFG)),
+                 (unsigned int)dwc2_rd32(bus, DWC2_HOST_OFF(HFIR)));
+
+    /* BCM2837: if EP0 was armed before the host-side speed template was
+     * updated, the TX FIFO may still hold data prepared under the previous
+     * HCFG. Flush it so the next arm uses the correct speed. */
+    dwc2_flush_txfifo(bus, 0x10U);
 }
 
 static int dwc2_chan_alloc(struct usbh_bus *bus)
@@ -1512,11 +1571,18 @@ static void dwc2_outchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
         if (chan_intstatus & USB_OTG_HCINT_XFRC) {
             uint32_t hctsiz = dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCTSIZ));
             uint32_t count  = hctsiz & USB_OTG_HCTSIZ_XFRSIZ;
-            uint32_t has_used_packets = chan->num_packets - ((hctsiz & USB_OTG_HCTSIZ_PKTCNT) >> 19);
-            uint32_t olen   = (has_used_packets - 1) * USB_GET_MAXPACKETSIZE(urb->ep->wMaxPacketSize) + count;
+            uint32_t olen   = 0;
             uint8_t data_toggle = ((hctsiz & USB_OTG_HCTSIZ_DPID) >> USB_OTG_HCTSIZ_DPID_Pos);
 
-            urb->actual_length += olen;
+            /* Zero-length control OUT status stages do not carry payload bytes.
+             * The generic OUT packet accounting underflows there because the
+             * hardware reports PKTCNT still equal to the original 1 packet. */
+            if (!(USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes) == USB_ENDPOINT_TYPE_CONTROL &&
+                  chan->ep0_state == DWC2_EP0_STATE_OUTSTATUS)) {
+                uint32_t has_used_packets = chan->num_packets - ((hctsiz & USB_OTG_HCTSIZ_PKTCNT) >> 19);
+                olen = (has_used_packets - 1) * USB_GET_MAXPACKETSIZE(urb->ep->wMaxPacketSize) + count;
+                urb->actual_length += olen;
+            }
 
             if (chan->ep0_state == DWC2_EP0_STATE_OUTDATA || urb->setup == NULL) {
                 if (urb->transfer_buffer_length > olen) {
@@ -1557,8 +1623,13 @@ static void dwc2_outchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
                                               urb->transfer_buffer, urb->transfer_buffer_length);
                     }
                 } else if (chan->ep0_state == DWC2_EP0_STATE_OUTSTATUS) {
+                    /* For control-IN transfers urb->actual_length already tracks
+                     * only the DATA stage bytes. The setup packet lives in the
+                     * dedicated LE bounce buffer, not in transfer_buffer, so
+                     * subtracting 8 here leaves the first descriptor bytes
+                     * stale in cache and can corrupt enumeration/parsing. */
                     usb_dcache_invalidate((uintptr_t)urb->transfer_buffer,
-                                         USB_ALIGN_UP(urb->actual_length - 8, CONFIG_USB_ALIGN_SIZE));
+                                         USB_ALIGN_UP(urb->actual_length, CONFIG_USB_ALIGN_SIZE));
                     chan->ep0_state = DWC2_EP0_STATE_SETUP;
                     urb->errorcode  = 0;
                     dwc2_urb_waitup(urb);
@@ -1668,7 +1739,7 @@ static void dwc2_outchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
 
 static void dwc2_port_irq_handler(struct usbh_bus *bus)
 {
-    __IO uint32_t hprt0, hprt0_dup, regval;
+    __IO uint32_t hprt0, hprt0_dup;
 
     hprt0 = dwc2_rd32(bus, DWC2_HOST_OFF(HPRT));
     hprt0_dup = hprt0;
@@ -1696,25 +1767,7 @@ static void dwc2_port_irq_handler(struct usbh_bus *bus)
         g_dwc2_hcd[bus->hcd.hcd_id].port_pec = 1;
 
         if ((hprt0 & USB_OTG_HPRT_PENA) == USB_OTG_HPRT_PENA) {
-            regval  = dwc2_rd32(bus, DWC2_HOST_OFF(HFIR));
-            regval &= ~USB_OTG_HFIR_FRIVL;
-            regval |= dwc2_calc_frame_interval(bus) & USB_OTG_HFIR_FRIVL;
-            dwc2_wr32(bus, DWC2_HOST_OFF(HFIR), regval);
-
-            regval  = dwc2_rd32(bus, DWC2_HOST_OFF(HCFG));
-            regval &= ~(USB_OTG_HCFG_FSLSPCS | USB_OTG_HCFG_FSLSS);
-            if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_LOW_SPEED << 17)) {
-                regval |= USB_OTG_HCFG_FSLSPCLKSEL_6_MHZ | USB_OTG_HCFG_FSLSS;
-            } else if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_FULL_SPEED << 17)) {
-                regval |= USB_OTG_HCFG_FSLSPCLKSEL_48_MHZ | USB_OTG_HCFG_FSLSS;
-            } else {
-                regval |= USB_OTG_HCFG_FSLSPCLKSEL_30_60_MHZ;
-            }
-            dwc2_wr32(bus, DWC2_HOST_OFF(HCFG), regval);
-            USB_LOG_INFO("Bellatrix DWC2: port enable speed=%u hcfg=0x%08x hfir=0x%08x\r\n",
-                         (unsigned int)((hprt0 & USB_OTG_HPRT_PSPD) >> USB_OTG_HPRT_PSPD_Pos),
-                         (unsigned int)dwc2_rd32(bus, DWC2_HOST_OFF(HCFG)),
-                         (unsigned int)dwc2_rd32(bus, DWC2_HOST_OFF(HFIR)));
+            dwc2_apply_port_speed_config(bus, hprt0);
         }
     }
 
