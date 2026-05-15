@@ -49,13 +49,6 @@ void bellatrix_keyboard_step(BellatrixKeyboard *kbd, struct CIA_State *cia)
 {
     if (kbd->waiting_handshake)
     {
-        if (!cia->sdr_full)
-        {
-            kbd->waiting_handshake = 0u;
-            kbd->handshake_low_seen = 0u;
-            kbd->handshake_timeout = 0u;
-        }
-
         uint8_t sp = cia_serial_sp_output_level(cia);
 
         if (!sp)

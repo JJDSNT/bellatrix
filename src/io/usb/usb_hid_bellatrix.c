@@ -268,17 +268,15 @@ static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
 
         keyboard->modifiers = report->modifier;
         memcpy(keyboard->keys, report->key, sizeof(keyboard->keys));
-
-        bellatrix_usb_hid_resubmit(hid_class,
-                                   g_bellatrix_usb_hid_report[hid_class->minor],
-                                   bellatrix_usb_hid_transfer_len(hid_class),
-                                   bellatrix_usb_hid_keyboard_callback);
-    } else if (nbytes == -USB_ERR_NAK) {
-        bellatrix_usb_hid_resubmit(hid_class,
-                                   g_bellatrix_usb_hid_report[hid_class->minor],
-                                   bellatrix_usb_hid_transfer_len(hid_class),
-                                   bellatrix_usb_hid_keyboard_callback);
     }
+
+    /* Interrupt endpoints must always be re-armed regardless of error code.
+     * Any error other than NAK (e.g. timeout, pipe stall) would otherwise
+     * silently kill the callback chain on real hardware. */
+    bellatrix_usb_hid_resubmit(hid_class,
+                               g_bellatrix_usb_hid_report[hid_class->minor],
+                               bellatrix_usb_hid_transfer_len(hid_class),
+                               bellatrix_usb_hid_keyboard_callback);
 }
 
 static void bellatrix_usb_hid_mouse_callback(void *arg, int nbytes)
@@ -321,17 +319,12 @@ static void bellatrix_usb_hid_mouse_callback(void *arg, int nbytes)
         }
 
         mouse->buttons = report->buttons & 0x07u;
-
-        bellatrix_usb_hid_resubmit(hid_class,
-                                   g_bellatrix_usb_hid_report[hid_class->minor],
-                                   bellatrix_usb_hid_transfer_len(hid_class),
-                                   bellatrix_usb_hid_mouse_callback);
-    } else if (nbytes == -USB_ERR_NAK) {
-        bellatrix_usb_hid_resubmit(hid_class,
-                                   g_bellatrix_usb_hid_report[hid_class->minor],
-                                   bellatrix_usb_hid_transfer_len(hid_class),
-                                   bellatrix_usb_hid_mouse_callback);
     }
+
+    bellatrix_usb_hid_resubmit(hid_class,
+                               g_bellatrix_usb_hid_report[hid_class->minor],
+                               bellatrix_usb_hid_transfer_len(hid_class),
+                               bellatrix_usb_hid_mouse_callback);
 }
 
 void usbh_hid_run(struct usbh_hid *hid_class)
