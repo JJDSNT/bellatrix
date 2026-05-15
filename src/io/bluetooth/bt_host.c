@@ -2,41 +2,479 @@
 #include "debug/core_log.h"
 #include "support.h"
 
+#if BELLATRIX_ENABLE_BTSTACK
+#include "hal_time_ms.h"
 #include "btstack.h"
+#include "btstack_event.h"
+#include "btstack_run_loop.h"
+#include "btstack_uart_slip_wrapper.h"
 #include "btstack_run_loop.h"
 #include "btstack_memory.h"
 #include "btstack_run_loop_embedded.h"
-#include "hci_transport_h4.h"
+#include "btstack_chipset_bcm.h"
+#include "btstack_chipset_bcm_download_firmware.h"
+#include "hci_transport_h5.h"
 #include "btstack_uart_block.h"
+#include "gap.h"
 #include "hci.h"
-#include "hci_dump.h"
+#include "hci_cmd.h"
+#include "hci_transport.h"
+#include "mmu.h"
 
 // HAL declarations
 void bt_hal_raspi3_poll_uart(void);
+void bt_hal_raspi3_trace_dump(void);
+void bt_hal_raspi3_trace_reset(void);
 const btstack_uart_block_t * btstack_uart_block_embedded_instance(void);
-
-// BCM Firmware stubs (empty for now to allow linking)
-const uint8_t  brcm_patchram_buf[] = {};
-const int      brcm_patch_ram_length = 0;
-const char *   brcm_patch_version = "0.0";
+bool pl011_backend_route_header_console(void);
+bool pl011_backend_route_bluetooth_pi3(void);
+void pl011_backend_wait_idle(void);
 
 void btstack_chipset_bcm_set_device_name(const char * device_name) {
     (void)device_name;
 }
 
+extern const int brcm_patch_ram_length;
+extern const char brcm_patch_version[];
+
+static const hci_transport_config_uart_t bt_transport_config = {
+    HCI_TRANSPORT_CONFIG_UART,
+    115200,
+    921600,
+    BTSTACK_UART_FLOWCONTROL_OFF,
+    NULL,
+    BTSTACK_UART_PARITY_OFF,
+};
+
+static const btstack_uart_config_t bt_phase1_uart_config = {
+    115200,
+    BTSTACK_UART_FLOWCONTROL_OFF,
+    NULL,
+    BTSTACK_UART_PARITY_OFF,
+};
+
 static btstack_packet_callback_registration_t hci_event_callback_registration;
+static btstack_timer_source_t bt_pairing_window_timer;
+static BTHost *s_bt_host = NULL;
+static bool s_bt_console_handed_off = false;
+
+static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+static void bt_pairing_window_close(BTHost *bt);
+static void bt_phase2_start(int status);
+static void bt_setup_hci_main(BTHost *bt);
+
+static void bt_console_release(void)
+{
+    if (!s_bt_console_handed_off) {
+        return;
+    }
+
+    pl011_backend_route_header_console();
+    kprintf_set_enabled(1);
+    s_bt_console_handed_off = false;
+    bt_hal_raspi3_trace_dump();
+}
+
+static void bt_console_handoff(void)
+{
+    if (s_bt_console_handed_off) {
+        return;
+    }
+
+    bt_hal_raspi3_trace_reset();
+    kprintf("[BT] handing PL011 from debug console to Bluetooth controller\n");
+    pl011_backend_wait_idle();
+    kprintf_set_enabled(0);
+    pl011_backend_route_bluetooth_pi3();
+    s_bt_console_handed_off = true;
+}
+
+#define BELLATRIX_BT_PAIRING_WINDOW_MS 120000u
+#define BELLATRIX_BT_BOOTSTRAP_WAIT_MS 6000u
+#define BELLATRIX_BT_REG_EN_GPIO 128u
+#define BELLATRIX_BT_REG_EN_ASSERT_MS 100u
+#define BELLATRIX_BT_BOOT_ROM_SETTLE_MS 250u
+#define BELLATRIX_BT_INIT_TIMEOUT_MS 5000u
+#define BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS 2u
+#define VC_MBOX_CH_PROP 8u
+#define VC_MBOX_TX_FULL 0x80000000u
+#define VC_MBOX_RX_EMPTY 0x40000000u
+#define VC_MBOX_CHANMASK 0xFu
+#define VC_FIRMWARE_STATUS_REQUEST 0u
+#define VC_FIRMWARE_STATUS_SUCCESS 0x80000000u
+#define VC_FIRMWARE_PROPERTY_END 0u
+#define VC_FIRMWARE_SET_GPIO_STATE 0x00038041u
+#define ARM_PERI_VIRT_BASE 0xF2000000u
+#define VC_MBOX_READ_ADDR   (ARM_PERI_VIRT_BASE + 0xB880u)
+#define VC_MBOX_STATUS_ADDR (ARM_PERI_VIRT_BASE + 0xB898u)
+#define VC_MBOX_WRITE_ADDR  (ARM_PERI_VIRT_BASE + 0xB8A0u)
+
+typedef enum BTBootstrapState {
+    BT_BOOTSTRAP_IDLE = 0,
+    BT_BOOTSTRAP_RESET_ASSERTED,
+    BT_BOOTSTRAP_WAIT_FOR_BOOT_ROM,
+    BT_BOOTSTRAP_WAIT_FOR_PHASE1,
+    BT_BOOTSTRAP_WAIT_FOR_WORKING,
+    BT_BOOTSTRAP_WORKING,
+    BT_BOOTSTRAP_FAILED
+} BTBootstrapState;
+
+static uint32_t vc_property_buffer[8] __attribute__((aligned(16)));
+
+static uint32_t bt_now_ms(void)
+{
+    return hal_time_ms();
+}
+
+static uint32_t vc_mbox_recv(uint32_t channel)
+{
+    uint32_t response;
+
+    do {
+        while (rd32le(VC_MBOX_STATUS_ADDR) & VC_MBOX_RX_EMPTY) {
+            dsb();
+        }
+
+        dmb();
+        response = rd32le(VC_MBOX_READ_ADDR);
+        dmb();
+    } while ((response & VC_MBOX_CHANMASK) != channel);
+
+    return response & ~VC_MBOX_CHANMASK;
+}
+
+static void vc_mbox_send(uint32_t channel, uint32_t data)
+{
+    uint32_t value = (data & ~VC_MBOX_CHANMASK) | (channel & VC_MBOX_CHANMASK);
+
+    while (rd32le(VC_MBOX_STATUS_ADDR) & VC_MBOX_TX_FULL) {
+        dsb();
+    }
+
+    dmb();
+    wr32le(VC_MBOX_WRITE_ADDR, value);
+}
+
+static bool vc_set_gpio_state(uint32_t gpio, uint32_t state)
+{
+    vc_property_buffer[0] = LE32(sizeof(vc_property_buffer));
+    vc_property_buffer[1] = LE32(VC_FIRMWARE_STATUS_REQUEST);
+    vc_property_buffer[2] = LE32(VC_FIRMWARE_SET_GPIO_STATE);
+    vc_property_buffer[3] = LE32(8);
+    vc_property_buffer[4] = 0;
+    vc_property_buffer[5] = LE32(gpio);
+    vc_property_buffer[6] = LE32(state ? 1u : 0u);
+    vc_property_buffer[7] = LE32(VC_FIRMWARE_PROPERTY_END);
+
+    arm_flush_cache((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
+    vc_mbox_send(VC_MBOX_CH_PROP, (uint32_t)mmu_virt2phys((uintptr_t)vc_property_buffer));
+    vc_mbox_recv(VC_MBOX_CH_PROP);
+    arm_dcache_invalidate((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
+
+    return LE32(vc_property_buffer[1]) == VC_FIRMWARE_STATUS_SUCCESS;
+}
+
+static void bt_begin_power_cycle(BTHost *bt, const char *reason)
+{
+    uint32_t now;
+    bool gpio_ok;
+
+    if (!bt) {
+        return;
+    }
+
+    now = bt_now_ms();
+    bt->power_cycle_attempts++;
+    gpio_ok = vc_set_gpio_state(BELLATRIX_BT_REG_EN_GPIO, 0);
+
+    if (gpio_ok) {
+        bt->bootstrap_state = BT_BOOTSTRAP_RESET_ASSERTED;
+        bt->bootstrap_deadline_ms = now + BELLATRIX_BT_REG_EN_ASSERT_MS;
+        bt->init_deadline_ms = 0;
+        kprintf("[BT] controller reset asserted via BT_REG_EN (attempt %u, %s)\n",
+                (unsigned)bt->power_cycle_attempts, reason);
+        return;
+    }
+
+    bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_BOOT_ROM;
+    bt->bootstrap_deadline_ms = now + BELLATRIX_BT_BOOT_ROM_SETTLE_MS;
+    bt->init_deadline_ms = 0;
+    kprintf("[BT] BT_REG_EN mailbox failed, falling back to warm boot (attempt %u, %s)\n",
+            (unsigned)bt->power_cycle_attempts, reason);
+}
+
+static void bt_schedule_power_on(BTHost *bt)
+{
+    if (!bt) {
+        return;
+    }
+
+    if (!bt->hci_ready) {
+        bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
+        bt->init_deadline_ms = 0;
+        kprintf("[BT] power on requested before HCI main setup completed\n");
+        return;
+    }
+
+    if (hci_power_control(HCI_POWER_ON) != 0) {
+        bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
+        bt->init_deadline_ms = 0;
+        kprintf("[BT] power on request failed\n");
+        return;
+    }
+
+    bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_WORKING;
+    bt->init_deadline_ms = bt_now_ms() + BELLATRIX_BT_INIT_TIMEOUT_MS;
+    kprintf("[BT] init OK, power on requested\n");
+}
+
+static void bt_bootstrap_step(BTHost *bt)
+{
+    uint32_t now;
+
+    if (!bt) {
+        return;
+    }
+
+    now = bt_now_ms();
+
+    switch ((BTBootstrapState)bt->bootstrap_state) {
+        case BT_BOOTSTRAP_RESET_ASSERTED:
+            if ((int32_t)(now - bt->bootstrap_deadline_ms) < 0) {
+                return;
+            }
+
+            if (!vc_set_gpio_state(BELLATRIX_BT_REG_EN_GPIO, 1)) {
+                kprintf("[BT] failed to release BT_REG_EN, proceeding with warm boot\n");
+            } else {
+                kprintf("[BT] controller reset released\n");
+            }
+
+            bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_BOOT_ROM;
+            bt->bootstrap_deadline_ms = now + BELLATRIX_BT_BOOT_ROM_SETTLE_MS;
+            return;
+
+        case BT_BOOTSTRAP_WAIT_FOR_BOOT_ROM:
+            if ((int32_t)(now - bt->bootstrap_deadline_ms) < 0) {
+                return;
+            }
+
+            if (!bt->phase1_complete) {
+                const btstack_uart_t *uart_phase1;
+
+                kprintf("[BT] controller boot ROM settle complete, starting BCM phase 1 over H4\n");
+                bt_console_handoff();
+                bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_PHASE1;
+                bt->init_deadline_ms = now + BELLATRIX_BT_INIT_TIMEOUT_MS;
+                uart_phase1 = (const btstack_uart_t *)btstack_uart_block_embedded_instance();
+                uart_phase1->init(&bt_phase1_uart_config);
+                btstack_chipset_bcm_download_firmware(
+                    btstack_uart_block_embedded_instance(),
+                    (int)bt_transport_config.baudrate_main,
+                    bt_phase2_start);
+                return;
+            }
+
+            kprintf("[BT] controller boot ROM settle complete, starting HCI bring-up\n");
+            bt_schedule_power_on(bt);
+            return;
+
+        case BT_BOOTSTRAP_WAIT_FOR_PHASE1:
+            if ((bt->init_deadline_ms != 0u) &&
+                ((int32_t)(now - bt->init_deadline_ms) >= 0)) {
+                bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
+                bt->init_deadline_ms = 0;
+                bt_console_release();
+                kprintf("[BT] BCM phase 1 timed out before H5 startup\n");
+            }
+            return;
+
+        case BT_BOOTSTRAP_WAIT_FOR_WORKING:
+            if ((bt->init_deadline_ms != 0u) &&
+                ((int32_t)(now - bt->init_deadline_ms) >= 0)) {
+                if ((!bt->phase1_complete) &&
+                    (bt->power_cycle_attempts < BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS)) {
+                    kprintf("[BT] still stuck in initializing after %u ms, retrying bring-up\n",
+                            (unsigned)BELLATRIX_BT_INIT_TIMEOUT_MS);
+                    hci_power_control(HCI_POWER_OFF);
+                    bt_pairing_window_close(bt);
+                    bt_begin_power_cycle(bt, "retry after initializing timeout");
+                } else {
+                    bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
+                    bt->init_deadline_ms = 0;
+                    kprintf("[BT] initializing timeout after %u attempts; controller did not reach WORKING\n",
+                            (unsigned)bt->power_cycle_attempts);
+                }
+            }
+            return;
+
+        default:
+            return;
+    }
+}
+
+static void bt_setup_hci_main(BTHost *bt)
+{
+    const btstack_chipset_t *chipset;
+    const btstack_uart_t *uart_driver;
+    const hci_transport_t *transport;
+    const btstack_uart_block_t *uart_block;
+
+    if (!bt || bt->hci_ready) {
+        return;
+    }
+
+    uart_block = btstack_uart_block_embedded_instance();
+    if (uart_block->close) {
+        uart_block->close();
+    }
+
+    chipset = btstack_chipset_bcm_instance();
+    chipset->init(&bt_transport_config);
+
+    uart_driver = btstack_uart_slip_wrapper_instance(
+        (const btstack_uart_t *) btstack_uart_block_embedded_instance());
+    transport = hci_transport_h5_instance(uart_driver);
+
+    hci_init(transport, &bt_transport_config);
+    hci_set_chipset(chipset);
+
+    hci_event_callback_registration.callback = &packet_handler;
+    hci_add_event_handler(&hci_event_callback_registration);
+
+    bt->hci_ready = true;
+}
+
+static void bt_phase2_start(int status)
+{
+    if (!s_bt_host) {
+        return;
+    }
+
+    if (status != 0) {
+        s_bt_host->bootstrap_state = BT_BOOTSTRAP_FAILED;
+        s_bt_host->init_deadline_ms = 0;
+        bt_console_release();
+        kprintf("[BT] BCM phase 1 failed with status=%d\n", status);
+        return;
+    }
+
+    s_bt_host->phase1_complete = true;
+    s_bt_host->init_deadline_ms = 0;
+    kprintf("[BT] BCM phase 1 complete, switching to H5 main transport\n");
+    bt_setup_hci_main(s_bt_host);
+    bt_schedule_power_on(s_bt_host);
+}
+
+static bool bt_bootstrap_is_terminal(const BTHost *bt)
+{
+    if (!bt) {
+        return true;
+    }
+
+    switch ((BTBootstrapState)bt->bootstrap_state) {
+        case BT_BOOTSTRAP_WORKING:
+        case BT_BOOTSTRAP_FAILED:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void bt_pairing_window_close(BTHost *bt)
+{
+    if (!bt || !bt->pairing_window_open) {
+        return;
+    }
+
+    gap_discoverable_control(0);
+    bt->pairing_window_open = false;
+    kprintf("[BT] pairing window closed\n");
+}
+
+static void bt_pairing_window_timeout(btstack_timer_source_t *ts)
+{
+    BTHost *bt = (BTHost *)btstack_run_loop_get_timer_context(ts);
+    bt_pairing_window_close(bt);
+}
+
+static void bt_pairing_window_open(BTHost *bt)
+{
+    if (!bt || bt->pairing_window_open) {
+        return;
+    }
+
+    gap_discoverable_control(1);
+    bt->pairing_window_open = true;
+    btstack_run_loop_set_timer(&bt_pairing_window_timer, bt->pairing_window_ms);
+    btstack_run_loop_add_timer(&bt_pairing_window_timer);
+    kprintf("[BT] pairing window open for %u ms\n", (unsigned)bt->pairing_window_ms);
+}
 
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+    bd_addr_t event_addr;
+
     (void)channel;
     (void)size;
     if (packet_type != HCI_EVENT_PACKET) return;
 
     switch (hci_event_packet_get_type(packet)) {
+        case BTSTACK_EVENT_POWERON_FAILED:
+            kprintf("[BT] power on failed\n");
+            break;
         case BTSTACK_EVENT_STATE:
-            if (btstack_event_state_get_state(packet) == HCI_STATE_WORKING) {
-                bd_addr_t local_addr;
-                gap_local_bd_addr(local_addr);
-                kprintf("[BT] Stack up and running! BD_ADDR: %s\n", bd_addr_to_str(local_addr));
+            switch (btstack_event_state_get_state(packet)) {
+                case HCI_STATE_WORKING: {
+                    bd_addr_t local_addr;
+                    gap_local_bd_addr(local_addr);
+                    if (s_bt_host) {
+                        s_bt_host->bootstrap_state = BT_BOOTSTRAP_WORKING;
+                        s_bt_host->init_deadline_ms = 0;
+                    }
+                    kprintf("[BT] stack up and running, BD_ADDR=%s\n", bd_addr_to_str(local_addr));
+                    bt_pairing_window_open(s_bt_host);
+                    break;
+                }
+                case HCI_STATE_INITIALIZING:
+                    if (s_bt_host && s_bt_host->init_deadline_ms == 0u) {
+                        s_bt_host->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_WORKING;
+                        s_bt_host->init_deadline_ms = bt_now_ms() + BELLATRIX_BT_INIT_TIMEOUT_MS;
+                    }
+                    kprintf("[BT] state=initializing\n");
+                    break;
+                case HCI_STATE_OFF:
+                    if (s_bt_host && s_bt_host->bootstrap_state == BT_BOOTSTRAP_WORKING) {
+                        s_bt_host->bootstrap_state = BT_BOOTSTRAP_IDLE;
+                    }
+                    bt_pairing_window_close(s_bt_host);
+                    kprintf("[BT] state=off\n");
+                    break;
+                case HCI_STATE_HALTING:
+                    bt_pairing_window_close(s_bt_host);
+                    kprintf("[BT] state=halting\n");
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case HCI_EVENT_PIN_CODE_REQUEST:
+            hci_event_pin_code_request_get_bd_addr(packet, event_addr);
+            if (s_bt_host && s_bt_host->pairing_window_open) {
+                kprintf("[BT] pin code request from %s -> using 0000\n", bd_addr_to_str(event_addr));
+                hci_send_cmd(&hci_pin_code_request_reply, &event_addr, 4, "0000");
+            } else {
+                kprintf("[BT] pin code request from %s denied (pairing window closed)\n", bd_addr_to_str(event_addr));
+                hci_send_cmd(&hci_pin_code_request_negative_reply, &event_addr);
+            }
+            break;
+        case HCI_EVENT_USER_CONFIRMATION_REQUEST:
+            hci_event_user_confirmation_request_get_bd_addr(packet, event_addr);
+            if (s_bt_host && s_bt_host->pairing_window_open) {
+                kprintf("[BT] user confirmation request from %s -> accepted\n", bd_addr_to_str(event_addr));
+                hci_send_cmd(&hci_user_confirmation_request_reply, &event_addr);
+            } else {
+                kprintf("[BT] user confirmation request from %s denied (pairing window closed)\n", bd_addr_to_str(event_addr));
+                hci_send_cmd(&hci_user_confirmation_request_negative_reply, &event_addr);
             }
             break;
         default:
@@ -45,36 +483,75 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 }
 
 bool bt_host_init(BTHost *bt) {
+    const btstack_chipset_t *chipset;
+
     if (!bt) return false;
 
-    kprintf("[BT] Initializing BTStack (Raspberry Pi 3B)...\n");
+    kprintf("[BT] Initializing BTStack (Raspberry Pi 3B, H5 over PL011)...\n");
+    kprintf("[BT] PatchRAM: version=%s size=%u bytes\n",
+            brcm_patch_version, (unsigned)brcm_patch_ram_length);
 
     btstack_memory_init();
-    
-    // Initialize embedded run loop
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
+    gap_set_local_name("Bellatrix");
+    gap_ssp_set_io_capability(SSP_IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
 
-    // Use H4 transport with the embedded UART instance
-    hci_init(hci_transport_h4_instance(btstack_uart_block_embedded_instance()), NULL);
-    
-    // Inform about BTstack state
-    hci_event_callback_registration.callback = &packet_handler;
-    hci_add_event_handler(&hci_event_callback_registration);
+    chipset = btstack_chipset_bcm_instance();
+    chipset->init(&bt_transport_config);
 
+    s_bt_host = bt;
+    bt->baudrate = bt_transport_config.baudrate_main;
     bt->initialized = true;
     bt->enabled = true;
+    bt->pairing_window_open = false;
+    bt->phase1_complete = false;
+    bt->hci_ready = false;
+    bt->pairing_window_ms = BELLATRIX_BT_PAIRING_WINDOW_MS;
+    bt->bootstrap_state = BT_BOOTSTRAP_IDLE;
+    bt->power_cycle_attempts = 0;
+    bt->bootstrap_deadline_ms = 0;
+    bt->init_deadline_ms = 0;
 
-    kprintf("[BT] init OK\n");
+    btstack_run_loop_set_timer_handler(&bt_pairing_window_timer, bt_pairing_window_timeout);
+    btstack_run_loop_set_timer_context(&bt_pairing_window_timer, bt);
 
-    // Start stack
-    hci_power_control(HCI_POWER_ON);
+    bt_begin_power_cycle(bt, "initial bring-up");
 
     return true;
 }
 
+bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
+{
+    uint32_t start_ms;
+    uint32_t deadline_ms;
+
+    if (!bt || !bt->enabled) {
+        return false;
+    }
+
+    start_ms = bt_now_ms();
+    deadline_ms = start_ms + (timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS);
+
+    kprintf("[BT] waiting for bootstrap window (%u ms)\n",
+            (unsigned)(timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS));
+
+    while (!bt_bootstrap_is_terminal(bt)) {
+        bt_host_step(bt);
+        if ((int32_t)(bt_now_ms() - deadline_ms) >= 0) {
+            kprintf("[BT] bootstrap wait timed out after %u ms\n",
+                    (unsigned)(timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS));
+            return false;
+        }
+    }
+
+    return bt->bootstrap_state == BT_BOOTSTRAP_WORKING;
+}
+
 void bt_host_step(BTHost *bt) {
     if (!bt || !bt->enabled) return;
-    
+
+    bt_bootstrap_step(bt);
+
     // Poll UART HAL (simulates interrupts)
     bt_hal_raspi3_poll_uart();
 
@@ -86,6 +563,48 @@ void bt_host_shutdown(BTHost *bt) {
     if (!bt || !bt->initialized) return;
     
     kprintf("[BT] shutdown\n");
+    btstack_run_loop_remove_timer(&bt_pairing_window_timer);
+    bt_pairing_window_close(bt);
     hci_power_control(HCI_POWER_OFF);
+    bt_console_release();
     bt->enabled = false;
+    bt->bootstrap_state = BT_BOOTSTRAP_IDLE;
+    bt->bootstrap_deadline_ms = 0;
+    bt->init_deadline_ms = 0;
+    bt->hci_ready = false;
+    s_bt_host = NULL;
 }
+#else
+bool bt_host_init(BTHost *bt) {
+    if (!bt) {
+        return false;
+    }
+
+    bt->enabled = false;
+    bt->initialized = false;
+    bt->pairing_window_open = false;
+    bt->phase1_complete = false;
+    bt->hci_ready = false;
+    bt->baudrate = 0;
+    bt->pairing_window_ms = 0;
+    bt->bootstrap_state = 0;
+    bt->power_cycle_attempts = 0;
+    bt->bootstrap_deadline_ms = 0;
+    bt->init_deadline_ms = 0;
+    return true;
+}
+
+bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms) {
+    (void)bt;
+    (void)timeout_ms;
+    return false;
+}
+
+void bt_host_step(BTHost *bt) {
+    (void)bt;
+}
+
+void bt_host_shutdown(BTHost *bt) {
+    (void)bt;
+}
+#endif

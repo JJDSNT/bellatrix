@@ -2,6 +2,7 @@
 #define BELLATRIX_BTSTACK_CONFIG_H
 
 // BTstack features that can be enabled
+#define ENABLE_H5
 #define ENABLE_CLASSIC
 #define ENABLE_BLE
 #define ENABLE_LE_PERIPHERAL
@@ -38,5 +39,6 @@
 // Chipset and Transport
 #define HAVE_CHIPSET_BCM
 #define HAVE_TRANSPORT_H4
+#define HAVE_TRANSPORT_H5
 
 #endif // BELLATRIX_BTSTACK_CONFIG_H
