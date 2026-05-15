@@ -45,6 +45,8 @@ Common options (env vars):
                       Build Bellatrix either with Emu68 expansion boards
                       enabled or with the legacy Bellatrix Fast RAM path
                       (default: boards)
+  EMU_PROFILE=<name>  Runtime profile: bellatrix, bellatrix-musashi or emu68
+                      (default: bellatrix)
   BELLATRIX_Z2_RAM_SIZE=<off|1|2|4|8>
                       Append Emu68 Zorro II RAM board size to BOOTARGS for
                       Bellatrix/QEMU testing (default: off)
@@ -168,16 +170,25 @@ set_profile_paths() {
             IMAGE="$INSTALL/Emu68.img"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"
+            BELLATRIX_CPU_BACKEND_PROFILE="emu68"
+            ;;
+        bellatrix-musashi)
+            INSTALL="$ROOT/emu68/install-bellatrix-musashi"
+            IMAGE="$INSTALL/Emu68.img"
+            DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
+            BUILD_KIND="bellatrix"
+            BELLATRIX_CPU_BACKEND_PROFILE="musashi"
             ;;
         emu68)
             INSTALL="$ROOT/emu68/build"
             IMAGE="$INSTALL/Emu68.img"
             DTB="$INSTALL/firmware/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="emu68"
+            BELLATRIX_CPU_BACKEND_PROFILE=""
             ;;
         *)
             echo "ERROR: invalid EMU_PROFILE: $1"
-            echo "Valid values: bellatrix, emu68"
+            echo "Valid values: bellatrix, bellatrix-musashi, emu68"
             exit 1
             ;;
     esac
@@ -237,6 +248,9 @@ load_launcher_selection() {
                 ;;
             BELLATRIX_SERIAL)
                 BELLATRIX_SERIAL="$value"
+                ;;
+            BELLATRIX_OSD)
+                BELLATRIX_OSD="$value"
                 ;;
         esac
     done < "$tmpfile"
@@ -389,6 +403,8 @@ case "$BUILD_KIND" in
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+        export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"
+        export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         _SERIAL_RAW="${BELLATRIX_SERIAL:-miniuart}"
         export BELLATRIX_SERIAL="$( [ "$_SERIAL_RAW" = "pl011" ] && echo "pl011" || echo "" )"
         export CORE_LOG="$BELLATRIX_MULTICORE_LOGS"
@@ -499,6 +515,9 @@ case "$MODE" in
         echo "[RUN] Image: $IMAGE"
         echo "[RUN] DTB:   $DTB"
         echo "[RUN] Display mode: $DISPLAY_MODE"
+        if [ "$BUILD_KIND" = "bellatrix" ]; then
+            echo "[RUN] CPU backend profile: ${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
+        fi
         echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
         echo "[RUN] Boot args: $FINAL_BOOTARGS"
 
@@ -562,19 +581,21 @@ case "$MODE" in
         [ -n "$MOUNT" ] || { echo "Usage: ./run.sh raspi /media/user/BOOT"; exit 1; }
 
         if [ "$BUILD_KIND" != "bellatrix" ]; then
-            echo "ERROR: raspi mode currently supports only EMU_PROFILE=bellatrix"
+            echo "ERROR: raspi mode currently supports only Bellatrix profiles"
             exit 1
         fi
 
+        export BELLATRIX_INSTALL_DIR="$INSTALL"
         "$SCRIPTS/flash.sh" "$MOUNT"
         echo "[DONE] SD ready."
         ;;
     tftp)
         if [ "$BUILD_KIND" != "bellatrix" ]; then
-            echo "ERROR: tftp mode currently supports only EMU_PROFILE=bellatrix"
+            echo "ERROR: tftp mode currently supports only Bellatrix profiles"
             exit 1
         fi
 
+        export BELLATRIX_INSTALL_DIR="$INSTALL"
         "$SCRIPTS/flash.sh" tftp
         ;;
 esac

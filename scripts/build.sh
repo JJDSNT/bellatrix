@@ -91,6 +91,25 @@ hide_modified_files() {
     fi
 }
 
+CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
+case "$CPU_BACKEND" in
+    emu68|"")
+        BUILD="$EMU68/build-bellatrix"
+        INSTALL="$EMU68/install-bellatrix"
+        MUSASHI_CPU_FLAG="OFF"
+        ;;
+    musashi)
+        BUILD="$EMU68/build-bellatrix-musashi"
+        INSTALL="$EMU68/install-bellatrix-musashi"
+        MUSASHI_CPU_FLAG="ON"
+        ;;
+    *)
+        echo "ERROR: invalid BELLATRIX_CPU_BACKEND: $CPU_BACKEND"
+        echo "Valid values: emu68, musashi"
+        exit 1
+        ;;
+esac
+
 if [ "${1:-}" = "clean" ]; then
     echo "Cleaning build directory..."
     rm -rf "$BUILD" "$INSTALL"
@@ -110,6 +129,9 @@ MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
 BTSTACK_ENABLED="${BELLATRIX_BTSTACK:-0}"
 USBSTACK_ENABLED="${BELLATRIX_USBSTACK:-0}"
 EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+OSD_ENABLED="${BELLATRIX_OSD:-1}"
+
+echo "[BUILD] cpu backend: $CPU_BACKEND"
 
 if [ "$MULTICORE_BUILD" = "1" ]; then
     EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_ENABLE_MULTICORE"
@@ -135,6 +157,14 @@ if [ "$USBSTACK_ENABLED" = "1" ]; then
     echo "[BUILD] usb stack: enabled (CherryUSB scaffold)"
 else
     echo "[BUILD] usb stack: disabled"
+fi
+
+OSD_FLAG="OFF"
+if [ "$OSD_ENABLED" = "1" ]; then
+    OSD_FLAG="ON"
+    echo "[BUILD] OSD overlay: enabled"
+else
+    echo "[BUILD] OSD overlay: disabled"
 fi
 
 case "$EMU68_BOARDS_MODE" in
@@ -195,9 +225,11 @@ cmake "$EMU68" \
     -DCMAKE_CXX_FLAGS="$EXTRA_DEFINES" \
     -DBELLATRIX_UART_PL011="$PL011_FLAG" \
     -DBELLATRIX_ENABLE_EMU68_BOARDS="$EMU68_BOARDS_ENABLED" \
+    -DBELLATRIX_USE_MUSASHI_CPU="$MUSASHI_CPU_FLAG" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \
     -DBELLATRIX_ENABLE_USBSTACK="$USBSTACK_ENABLED" \
-    -DBELLATRIX_BTSTACK_PATCHRAM_SOURCE="$BT_PATCHRAM_SOURCE"
+    -DBELLATRIX_BTSTACK_PATCHRAM_SOURCE="$BT_PATCHRAM_SOURCE" \
+    -DBELLATRIX_OSD="$OSD_FLAG"
 
 make -j"$(nproc)"
 make install

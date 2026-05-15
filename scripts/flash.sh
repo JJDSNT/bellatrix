@@ -10,7 +10,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
-INSTALL="$ROOT/emu68/install-bellatrix"
+INSTALL="${BELLATRIX_INSTALL_DIR:-$ROOT/emu68/install-bellatrix}"
 
 if [ $# -eq 0 ]; then
     echo "Usage: $0 <mount-point>  or  $0 tftp"
