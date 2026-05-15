@@ -1174,10 +1174,24 @@ static void musashi_set_ipl(void *ctx, int level)
     m68k_set_irq((unsigned int)level);
 }
 
+static void musashi_reset(void *ctx)
+{
+    (void)ctx;
+    m68k_pulse_reset();
+}
+
+static int musashi_run(void *ctx, uint32_t cycles)
+{
+    (void)ctx;
+    return m68k_execute((int)cycles);
+}
+
 static CpuBackend g_musashi_backend = {
     .ctx     = NULL,
     .get_pc  = musashi_get_pc,
     .set_ipl = musashi_set_ipl,
+    .reset   = musashi_reset,
+    .run     = musashi_run,
 };
 
 CpuBackend *musashi_backend_get(void)
@@ -1194,14 +1208,4 @@ void musashi_backend_init(void)
     m68k_init();
     m68k_set_cpu_type(M68K_CPU_TYPE_68000);
     m68k_set_instr_hook_callback(harness_instr_hook);
-}
-
-void musashi_backend_reset(void)
-{
-    m68k_pulse_reset();
-}
-
-int musashi_backend_run(int cycles)
-{
-    return m68k_execute(cycles);
 }

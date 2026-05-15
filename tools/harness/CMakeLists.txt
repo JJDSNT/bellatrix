@@ -105,6 +105,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/io/serial/serial_backend.c
     ${SRC}/io/serial/pty_backend.c
     ${SRC}/io/serial/uart_host.c
+    ${SRC}/cpu/cpu_backend.c
 
     # RTC
     ${SRC}/chipset/rtc/rtc.c

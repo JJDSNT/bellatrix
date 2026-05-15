@@ -15,9 +15,3 @@ CpuBackend *musashi_backend_get(void);
 
 /* Init Musashi (call before bellatrix_machine_init). */
 void musashi_backend_init(void);
-
-/* Pulse the CPU reset line (reads reset vectors from bus). */
-void musashi_backend_reset(void);
-
-/* Execute up to `cycles` M68K cycles; returns cycles actually consumed. */
-int musashi_backend_run(int cycles);

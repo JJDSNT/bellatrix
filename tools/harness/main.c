@@ -865,7 +865,7 @@ int main(int argc, char **argv)
     m->cia_a.ddra = 0x03u;
 
     /* Pulse CPU reset — reads ISP+PC from bus through overlay */
-    musashi_backend_reset();
+    cpu_backend_reset(musashi_backend_get());
 
     if (headless) {
         printf("[HARNESS] Headless mode  max_cycles=%ld  max_frames=%ld\n",
@@ -946,8 +946,7 @@ int main(int argc, char **argv)
                                             &mouse_serial_trigger);
         harness_pump_serial_rx(m);
 
-        int used = musashi_backend_run(QUANTUM);
-        bellatrix_bridge_cpu_progress((uint32_t)used);
+        int used = cpu_backend_run(musashi_backend_get(), (uint32_t)QUANTUM);
         total_cycles += used;
 
         long cur_frame = (long)bellatrix_machine_agnus()->beam.frame;
