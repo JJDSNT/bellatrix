@@ -20,9 +20,11 @@ type launchResult struct {
 	usbstack       bool
 	usbPointer     string
 	emu68Boards    string
+	cpuBackend     string
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
+	osd            bool
 	cancelled      bool
 }
 
@@ -49,9 +51,11 @@ type model struct {
 	usbstack       bool
 	usbPointer     string
 	emu68Boards    string
+	cpuBackend     string
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
+	osd            bool
 
 	width     int
 	height    int
@@ -73,9 +77,11 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 		usbstack:       true,
 		usbPointer:     "mouse",
 		emu68Boards:    "legacy",
+		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
 		serialBackend:  "miniuart",
+		osd:            true,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -102,7 +108,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 	}
 
 	return launchResult{
-		emuProfile:     "bellatrix",
+		emuProfile:     launcherProfileForCPUBackend(fm.cpuBackend),
 		kickstart:      kickstart,
 		adf:            adf,
 		displayMode:    fm.displayMode,
@@ -113,9 +119,11 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 		usbstack:       fm.usbstack,
 		usbPointer:     fm.usbPointer,
 		emu68Boards:    fm.emu68Boards,
+		cpuBackend:     fm.cpuBackend,
 		fpuEnabled:     fm.fpuEnabled,
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
+		osd:            fm.osd,
 	}, nil
 }
 
@@ -152,6 +160,13 @@ func nextEmu68BoardsMode(current string) string {
 		return "boards"
 	}
 	return "legacy"
+}
+
+func launcherProfileForCPUBackend(cpuBackend string) string {
+	if cpuBackend == "musashi" {
+		return "bellatrix-musashi"
+	}
+	return "bellatrix"
 }
 
 func buildBootArgs(debugMode string, fpuEnabled bool) string {
@@ -264,6 +279,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.emu68Boards = nextEmu68BoardsMode(m.emu68Boards)
 			return m, nil
 
+		case "c":
+			if m.cpuBackend == "musashi" {
+				m.cpuBackend = "emu68"
+			} else {
+				m.cpuBackend = "musashi"
+			}
+			return m, nil
+
 		case "f":
 			m.fpuEnabled = !m.fpuEnabled
 			return m, nil
@@ -278,6 +301,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.serialBackend = "pl011"
 			}
+			return m, nil
+
+		case "o":
+			m.osd = !m.osd
 			return m, nil
 
 		case "enter":
@@ -419,6 +446,13 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emu68 boards:"), boardsBadge))
 	b.WriteString("\n")
 
+	cpuBackendBadge := offBadgeStyle.Render("EMU68")
+	if m.cpuBackend == "musashi" {
+		cpuBackendBadge = onBadgeStyle.Render("MUSASHI")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("CPU backend:"), cpuBackendBadge))
+	b.WriteString("\n")
+
 	fpuBadge := offBadgeStyle.Render("OFF")
 	if m.fpuEnabled {
 		fpuBadge = onBadgeStyle.Render("ON")
@@ -438,6 +472,13 @@ func (m model) renderPanel() string {
 		serialBadge = onBadgeStyle.Render("PL011")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Serial:"), serialBadge))
+	b.WriteString("\n")
+
+	osdBadge := offBadgeStyle.Render("OFF")
+	if m.osd {
+		osdBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("OSD overlay:"), osdBadge))
 	b.WriteString("\n\n")
 
 	b.WriteString(sectionTitleStyle.Render("QEMU command"))
@@ -445,7 +486,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • F FPU • Z Z2 RAM • S Serial • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -458,6 +499,10 @@ func (m model) qemuCommand() string {
 
 	image := "emu68/install-bellatrix/Emu68.img"
 	dtb := "emu68/install-bellatrix/bcm2710-rpi-3-b.dtb"
+	if m.cpuBackend == "musashi" {
+		image = "emu68/install-bellatrix-musashi/Emu68.img"
+		dtb = "emu68/install-bellatrix-musashi/bcm2710-rpi-3-b.dtb"
+	}
 
 	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled)
 
@@ -467,12 +512,13 @@ func (m model) qemuCommand() string {
 	}
 
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_OSD=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
 		m.emu68Boards,
+		boolEnv(m.osd),
 		serialEnv,
 		image,
 		dtb,
