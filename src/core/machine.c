@@ -458,6 +458,7 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     }
 
     agnus_step(&m->agnus, ticks);
+    blitter_step(&m->agnus.blitter, &m->agnus, (uint64_t)ticks);
 
     /*
      * CIA runs at E-clock = CPU / 10.  Accumulate fractional ticks to
