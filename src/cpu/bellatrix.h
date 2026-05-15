@@ -14,6 +14,8 @@
 
 // Called once at startup before M68K_StartEmu().
 void bellatrix_init(void);
+int  bellatrix_cpu_backend_owns_execution_loop(void);
+void bellatrix_run_selected_cpu_backend(void);
 void bellatrix_emu68_boards_reset(void);
 
 // Sync the host MMU overlay mapping with the logical CIA-A PRA OVL bit.

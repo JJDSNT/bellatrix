@@ -8,6 +8,7 @@
 #include "runtime/runtime.h"
 #include <stdatomic.h>
 #include "cpu_backend.h"
+#include "musashi_backend.h"
 #include "core/machine.h"
 #include "memory/autoconfig.h"
 #include "chipset/agnus/agnus.h"
@@ -48,11 +49,46 @@ static void emu68_set_ipl(void *ctx, int level)
     PAL_IPL_Set((uint8_t)level);
 }
 
-static CpuBackend g_emu68_backend = {
+static CpuBackend g_emu68_backend __attribute__((unused)) = {
     .ctx = NULL,
     .get_pc = emu68_get_pc,
     .set_ipl = emu68_set_ipl,
+    .reset = NULL,
+    .run = NULL,
 };
+
+#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
+static CpuBackend *bellatrix_selected_cpu_backend(void)
+{
+    return bellatrix_musashi_backend_get();
+}
+#else
+static CpuBackend *bellatrix_selected_cpu_backend(void)
+{
+    return &g_emu68_backend;
+}
+#endif
+
+int bellatrix_cpu_backend_owns_execution_loop(void)
+{
+    CpuBackend *backend = bellatrix_selected_cpu_backend();
+    return backend && backend->run && backend->reset;
+}
+
+void bellatrix_run_selected_cpu_backend(void)
+{
+    CpuBackend *backend = bellatrix_selected_cpu_backend();
+
+    if (!backend || !backend->run || !backend->reset) {
+        return;
+    }
+
+    cpu_backend_reset(backend);
+
+    for (;;) {
+        (void)cpu_backend_run(backend, 454u);
+    }
+}
 
 /* ---------------------------------------------------------------------------
  * Multicore runtime state.
@@ -106,6 +142,7 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
          * starves Core 0 of scheduling time and breaks DiagROM CIA timer tests. */
         bellatrix_machine_advance(cycles);
         bt_host_step(&g_runtime.bluetooth);
+        usb_host_step(&g_runtime.io.usb_host);
     }
 }
 
@@ -324,9 +361,15 @@ static void bellatrix_init_bluetooth(BellatrixRuntime *rt, BellatrixMachine *m)
 void bellatrix_init(void)
 {
     extern struct M68KState *__m68k_state;
+    CpuBackend *cpu_backend;
 
     PAL_Debug_Init(115200);
     bellatrix_emu68_boards_reset();
+    cpu_backend = bellatrix_selected_cpu_backend();
+
+#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
+    bellatrix_musashi_backend_init();
+#endif
 
 #if !BELLATRIX_ENABLE_EMU68_BOARDS
     /* Legacy path: Bellatrix owns the autoconfig protocol instead of Emu68
@@ -340,7 +383,7 @@ void bellatrix_init(void)
             (unsigned)(BELLATRIX_LEGACY_Z2_RAM_MB));
 #endif
 
-    bellatrix_machine_init(&g_emu68_backend);
+    bellatrix_machine_init(cpu_backend);
     bellatrix_runtime_init(&g_runtime, bellatrix_machine_get());
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
@@ -585,6 +628,12 @@ void bellatrix_init(void)
     } else {
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+GFX+Audio+IO)\n");
     }
+
+#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
+    kprintf("[BELA] CPU backend: musashi\n");
+#else
+    kprintf("[BELA] CPU backend: emu68\n");
+#endif
 }
 
 void bellatrix_sync_overlay_from_ciaa(void)

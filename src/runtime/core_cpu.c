@@ -12,9 +12,9 @@ static void core_cpu_publish_interrupts(RuntimeCoreCPU *core)
     }
 
     CpuBackend *be = core->machine->cpu_backend;
-    if (be && be->set_ipl) {
+    if (be) {
         uint8_t ipl = (uint8_t)core->machine->current_ipl;
-        be->set_ipl(be->ctx, (int)ipl);
+        cpu_backend_set_ipl(be, (int)ipl);
         if (ipl != core->last_ipl) {
             XCORE_LOG("PAULA->CPU", "IPL %u -> %u", (unsigned)core->last_ipl, (unsigned)ipl);
             core->last_ipl = ipl;
@@ -88,10 +88,12 @@ void core_cpu_step(RuntimeCoreCPU *core,
 
     core_cpu_publish_interrupts(core);
 
-    /*
-     * On the real target (Emu68), the JIT drives the CPU on Core 0.
-     * core_cpu_step() is only meaningful for the Musashi harness backend
-     * once it grows a step callback. Until then, treat as no-op.
-     */
+    if (core->machine->cpu_backend && core->machine->cpu_backend->run) {
+        core->local_cycles += (uint64_t)cpu_backend_run(core->machine->cpu_backend,
+                                                        cycles);
+        return;
+    }
+
+    /* Emu68 still owns the real baremetal loop. */
     core->local_cycles += cycles;
 }

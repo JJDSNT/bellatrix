@@ -3,11 +3,11 @@
 #include "memory/memory.h"
 #include "memory/memory_map.h"
 #include "memory/chip_ram.h"
+#include "memory/fast_ram.h"
 #include "memory/overlay.h"
 #include "support.h"
 
 #if defined(BELLATRIX_HARNESS)
-#include "memory/fast_ram.h"
 #include "memory/autoconfig.h"
 #endif
 
@@ -175,68 +175,50 @@ void bellatrix_chip_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
 
 uint8_t bellatrix_fast_read8(const BellatrixMemory *m, uint32_t addr)
 {
-#if defined(BELLATRIX_HARNESS)
+    if (!m || !m->fast_ram || !m->fast_ram_size) {
+        return 0xFFu;
+    }
     return fast_ram_read8(m, addr);
-#else
-    (void)m;
-    (void)addr;
-    return 0xFFu;
-#endif
 }
 
 uint16_t bellatrix_fast_read16(const BellatrixMemory *m, uint32_t addr)
 {
-#if defined(BELLATRIX_HARNESS)
+    if (!m || !m->fast_ram || !m->fast_ram_size) {
+        return 0xFFFFu;
+    }
     return fast_ram_read16(m, addr);
-#else
-    (void)m;
-    (void)addr;
-    return 0xFFFFu;
-#endif
 }
 
 uint32_t bellatrix_fast_read32(const BellatrixMemory *m, uint32_t addr)
 {
-#if defined(BELLATRIX_HARNESS)
+    if (!m || !m->fast_ram || !m->fast_ram_size) {
+        return 0xFFFFFFFFu;
+    }
     return fast_ram_read32(m, addr);
-#else
-    (void)m;
-    (void)addr;
-    return 0xFFFFFFFFu;
-#endif
 }
 
 void bellatrix_fast_write8(BellatrixMemory *m, uint32_t addr, uint8_t value)
 {
-#if defined(BELLATRIX_HARNESS)
+    if (!m || !m->fast_ram || !m->fast_ram_size) {
+        return;
+    }
     fast_ram_write8(m, addr, value);
-#else
-    (void)m;
-    (void)addr;
-    (void)value;
-#endif
 }
 
 void bellatrix_fast_write16(BellatrixMemory *m, uint32_t addr, uint16_t value)
 {
-#if defined(BELLATRIX_HARNESS)
+    if (!m || !m->fast_ram || !m->fast_ram_size) {
+        return;
+    }
     fast_ram_write16(m, addr, value);
-#else
-    (void)m;
-    (void)addr;
-    (void)value;
-#endif
 }
 
 void bellatrix_fast_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
 {
-#if defined(BELLATRIX_HARNESS)
+    if (!m || !m->fast_ram || !m->fast_ram_size) {
+        return;
+    }
     fast_ram_write32(m, addr, value);
-#else
-    (void)m;
-    (void)addr;
-    (void)value;
-#endif
 }
 
 /* ------------------------------------------------------------------------- */
