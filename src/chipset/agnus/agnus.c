@@ -10,6 +10,7 @@
 #include "chipset/paula/paula.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
+#include "host/osd.h"
 #include "support.h"
 
 extern uint16_t *framebuffer;
@@ -511,6 +512,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                         (unsigned)pitch);
             }
 
+            osd_render(s->beam.frame);
             PAL_Video_Flip();
         }
     }
