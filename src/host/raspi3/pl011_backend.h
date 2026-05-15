@@ -32,5 +32,8 @@ bool pl011_backend_is_open(const PL011Backend *b);
 
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out);
 bool pl011_backend_write_byte(PL011Backend *b, uint8_t byte);
+bool pl011_backend_route_header_console(void);
+bool pl011_backend_route_bluetooth_pi3(void);
+void pl011_backend_wait_idle(void);
 
 #endif

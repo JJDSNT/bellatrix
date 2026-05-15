@@ -16,10 +16,9 @@
  * Clock: 48 MHz (BCM2837 PL011 UART clock, set by firmware via mailbox).
  * 115200 baud: IBRD = 26, FBRD = 3  (error < 0.04 %).
  *
- * GPIO 14/15 mux: kprintf uses PL011 via the firmware's UART initialisation.
- * We re-init the PL011 here; kprintf continues to write the same registers so
- * boot messages still arrive.  Once Kickstart/DiagROM takes over serial,
- * kprintf goes quiet and the terminal becomes a clean Amiga serial console.
+ * The same PL011 can be routed either to the 40-pin header (GPIO 14/15) or to
+ * the Pi 3B's on-board Bluetooth path (GPIO 32/33 plus GPCLK2 on GPIO 43).
+ * Bellatrix switches between those routes explicitly depending on ownership.
  */
 
 #include <stdint.h>
@@ -35,7 +34,15 @@ static inline uint32_t pl_rd32(uintptr_t a)             { return *(volatile uint
 #endif
 
 #define ARM_PERI_VIRT_BASE 0xF2000000UL
+#define GPIO_BASE          (ARM_PERI_VIRT_BASE + 0x200000UL)
 #define PL011_BASE         (ARM_PERI_VIRT_BASE + 0x201000UL)
+
+#define GPFSEL1    (GPIO_BASE + 0x004UL)
+#define GPFSEL3    (GPIO_BASE + 0x00CUL)
+#define GPFSEL4    (GPIO_BASE + 0x010UL)
+#define GPPUD      (GPIO_BASE + 0x094UL)
+#define GPPUDCLK0  (GPIO_BASE + 0x098UL)
+#define GPPUDCLK1  (GPIO_BASE + 0x09CUL)
 
 #define PL011_DR      (PL011_BASE + 0x000UL)  /* data register            */
 #define PL011_FR      (PL011_BASE + 0x018UL)  /* flag register            */
@@ -62,6 +69,92 @@ static inline uint32_t pl_rd32(uintptr_t a)             { return *(volatile uint
 
 /* 48 MHz PL011 clock */
 #define PL011_CLK_HZ 48000000UL
+
+#define GPIO_FSEL_INPUT 0u
+#define GPIO_FSEL_ALT0  4u
+#define GPIO_FSEL_ALT3  7u
+
+static void gpio_wait_cycles(void)
+{
+    int i;
+    for (i = 0; i < 150; ++i) {
+        asm volatile ("nop");
+    }
+}
+
+static void gpio_set_pull_none(uint32_t mask0, uint32_t mask1)
+{
+    pl_wr32(GPPUD, 0);
+    gpio_wait_cycles();
+    if (mask0) {
+        pl_wr32(GPPUDCLK0, mask0);
+    }
+    if (mask1) {
+        pl_wr32(GPPUDCLK1, mask1);
+    }
+    gpio_wait_cycles();
+    if (mask0) {
+        pl_wr32(GPPUDCLK0, 0);
+    }
+    if (mask1) {
+        pl_wr32(GPPUDCLK1, 0);
+    }
+}
+
+static uint32_t gpio_fsel_update(uint32_t reg, unsigned gpio, uint32_t func)
+{
+    uint32_t shift = (gpio % 10u) * 3u;
+    reg &= ~(7u << shift);
+    reg |= (func & 7u) << shift;
+    return reg;
+}
+
+bool pl011_backend_route_header_console(void)
+{
+    uint32_t sel1 = pl_rd32(GPFSEL1);
+    uint32_t sel3 = pl_rd32(GPFSEL3);
+    uint32_t sel4 = pl_rd32(GPFSEL4);
+
+    sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_ALT0);
+    sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_ALT0);
+    sel3 = gpio_fsel_update(sel3, 32u, GPIO_FSEL_INPUT);
+    sel3 = gpio_fsel_update(sel3, 33u, GPIO_FSEL_INPUT);
+    sel4 = gpio_fsel_update(sel4, 43u, GPIO_FSEL_INPUT);
+
+    pl_wr32(GPFSEL1, sel1);
+    pl_wr32(GPFSEL3, sel3);
+    pl_wr32(GPFSEL4, sel4);
+    gpio_set_pull_none((1u << 14) | (1u << 15), (1u << 0) | (1u << 1) | (1u << 11));
+    return true;
+}
+
+bool pl011_backend_route_bluetooth_pi3(void)
+{
+    uint32_t sel1 = pl_rd32(GPFSEL1);
+    uint32_t sel3 = pl_rd32(GPFSEL3);
+    uint32_t sel4 = pl_rd32(GPFSEL4);
+
+    sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_INPUT);
+    sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_INPUT);
+    sel3 = gpio_fsel_update(sel3, 32u, GPIO_FSEL_ALT3);
+    sel3 = gpio_fsel_update(sel3, 33u, GPIO_FSEL_ALT3);
+    sel4 = gpio_fsel_update(sel4, 43u, GPIO_FSEL_ALT0);
+
+    pl_wr32(GPFSEL1, sel1);
+    pl_wr32(GPFSEL3, sel3);
+    pl_wr32(GPFSEL4, sel4);
+    gpio_set_pull_none((1u << 14) | (1u << 15), (1u << 0) | (1u << 1) | (1u << 11));
+    return true;
+}
+
+void pl011_backend_wait_idle(void)
+{
+    int timeout = 1000000;
+
+    while ((pl_rd32(PL011_FR) & FR_BUSY) && --timeout > 0) {
+        ;
+    }
+}
 
 bool pl011_backend_open(PL011Backend *b, uint32_t baud)
 {

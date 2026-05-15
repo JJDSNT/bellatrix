@@ -9,12 +9,21 @@ import (
 )
 
 type launchResult struct {
-	emuProfile  string
-	kickstart   string
-	adf         string
-	displayMode string
-	bootArgs    string
-	cancelled   bool
+	emuProfile     string
+	kickstart      string
+	adf            string
+	displayMode    string
+	bootArgs       string
+	multicoreBuild bool
+	multicoreLogs  bool
+	btstack        bool
+	usbstack       bool
+	usbPointer     string
+	emu68Boards    string
+	fpuEnabled     bool
+	z2RamSize      string
+	serialBackend  string
+	cancelled      bool
 }
 
 type activePane int
@@ -32,9 +41,17 @@ type model struct {
 	adfCursor int
 	active    activePane
 
-	displayMode string
-	emuProfile  string
-	debugMode   string // "", "debug", "disassemble"
+	displayMode    string
+	debugMode      string // "", "debug", "disassemble"
+	multicoreBuild bool
+	multicoreLogs  bool
+	btstack        bool
+	usbstack       bool
+	usbPointer     string
+	emu68Boards    string
+	fpuEnabled     bool
+	z2RamSize      string
+	serialBackend  string
 
 	width     int
 	height    int
@@ -44,13 +61,21 @@ type model struct {
 
 func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 	m := model{
-		roms:        roms,
-		adfs:        adfs,
-		romCursor:   defaultROMIndex(roms),
-		adfCursor:   0,
-		active:      paneKickstart,
-		displayMode: "gtk",
-		emuProfile:  "bellatrix",
+		roms:           roms,
+		adfs:           adfs,
+		romCursor:      defaultROMIndex(roms),
+		adfCursor:      0,
+		active:         paneKickstart,
+		displayMode:    "gtk",
+		multicoreBuild: false,
+		multicoreLogs:  false,
+		btstack:        false,
+		usbstack:       true,
+		usbPointer:     "mouse",
+		emu68Boards:    "legacy",
+		fpuEnabled:     true,
+		z2RamSize:      "off",
+		serialBackend:  "miniuart",
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -76,18 +101,37 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 		adf = selectedADF.Path
 	}
 
-	bootArgs := "enable_cache"
-	if fm.debugMode != "" {
-		bootArgs = "enable_cache " + fm.debugMode
-	}
-
 	return launchResult{
-		emuProfile:  fm.emuProfile,
-		kickstart:   kickstart,
-		adf:         adf,
-		displayMode: fm.displayMode,
-		bootArgs:    bootArgs,
+		emuProfile:     "bellatrix",
+		kickstart:      kickstart,
+		adf:            adf,
+		displayMode:    fm.displayMode,
+		bootArgs:       buildBootArgs(fm.debugMode, fm.fpuEnabled),
+		multicoreBuild: fm.multicoreBuild,
+		multicoreLogs:  fm.multicoreLogs,
+		btstack:        fm.btstack,
+		usbstack:       fm.usbstack,
+		usbPointer:     fm.usbPointer,
+		emu68Boards:    fm.emu68Boards,
+		fpuEnabled:     fm.fpuEnabled,
+		z2RamSize:      fm.z2RamSize,
+		serialBackend:  fm.serialBackend,
 	}, nil
+}
+
+func nextZ2RamSize(current string) string {
+	switch current {
+	case "off":
+		return "1"
+	case "1":
+		return "2"
+	case "2":
+		return "4"
+	case "4":
+		return "8"
+	default:
+		return "off"
+	}
 }
 
 func defaultROMIndex(roms []FileEntry) int {
@@ -101,6 +145,24 @@ func defaultROMIndex(roms []FileEntry) int {
 		}
 	}
 	return 0
+}
+
+func nextEmu68BoardsMode(current string) string {
+	if current == "legacy" {
+		return "boards"
+	}
+	return "legacy"
+}
+
+func buildBootArgs(debugMode string, fpuEnabled bool) string {
+	bootArgs := "enable_cache"
+	if !fpuEnabled {
+		bootArgs += " nofpu"
+	}
+	if debugMode != "" {
+		bootArgs += " " + debugMode
+	}
+	return bootArgs
 }
 
 func (m model) Init() tea.Cmd {
@@ -163,14 +225,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case "e":
-			if m.emuProfile == "bellatrix" {
-				m.emuProfile = "emu68"
-			} else {
-				m.emuProfile = "bellatrix"
-			}
-			return m, nil
-
 		case "b":
 			switch m.debugMode {
 			case "":
@@ -179,6 +233,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.debugMode = "disassemble"
 			default:
 				m.debugMode = ""
+			}
+			return m, nil
+
+		case "m":
+			m.multicoreBuild = !m.multicoreBuild
+			return m, nil
+
+		case "l":
+			m.multicoreLogs = !m.multicoreLogs
+			return m, nil
+
+		case "t":
+			m.btstack = !m.btstack
+			return m, nil
+
+		case "u":
+			m.usbstack = !m.usbstack
+			return m, nil
+
+		case "p":
+			if m.usbPointer == "mouse" {
+				m.usbPointer = "tablet"
+			} else {
+				m.usbPointer = "mouse"
+			}
+			return m, nil
+
+		case "e":
+			m.emu68Boards = nextEmu68BoardsMode(m.emu68Boards)
+			return m, nil
+
+		case "f":
+			m.fpuEnabled = !m.fpuEnabled
+			return m, nil
+
+		case "z":
+			m.z2RamSize = nextZ2RamSize(m.z2RamSize)
+			return m, nil
+
+		case "s":
+			if m.serialBackend == "pl011" {
+				m.serialBackend = "miniuart"
+			} else {
+				m.serialBackend = "pl011"
 			}
 			return m, nil
 
@@ -213,7 +311,7 @@ func (m model) renderPanel() string {
 	header := lipgloss.JoinVertical(
 		lipgloss.Center,
 		headerTitleStyle.Render("BELLATRIX"),
-		headerSubtitleStyle.Render("Raspberry Pi 3B • Emu68 launcher"),
+		headerSubtitleStyle.Render("Raspberry Pi 3B • Bellatrix launcher"),
 	)
 
 	b.WriteString(headerBlockStyle.Render(header))
@@ -260,13 +358,6 @@ func (m model) renderPanel() string {
 	b.WriteString(sectionTitleStyle.Render("Options"))
 	b.WriteString("\n")
 
-	profileBadge := offBadgeStyle.Render("EMU68")
-	if m.emuProfile == "bellatrix" {
-		profileBadge = onBadgeStyle.Render("BELLATRIX")
-	}
-	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emulator:"), profileBadge))
-	b.WriteString("\n")
-
 	displayBadge := onBadgeStyle.Render("GTK")
 	if m.displayMode == "none" {
 		displayBadge = offBadgeStyle.Render("HEADLESS")
@@ -284,6 +375,69 @@ func (m model) renderPanel() string {
 		debugBadge = offBadgeStyle.Render("OFF")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Debug:"), debugBadge))
+	b.WriteString("\n")
+
+	multicoreBadge := offBadgeStyle.Render("OFF")
+	if m.multicoreBuild {
+		multicoreBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Multicore build:"), multicoreBadge))
+	b.WriteString("\n")
+
+	logsBadge := offBadgeStyle.Render("OFF")
+	if m.multicoreLogs {
+		logsBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Multicore logs:"), logsBadge))
+	b.WriteString("\n")
+
+	btstackBadge := offBadgeStyle.Render("OFF")
+	if m.btstack {
+		btstackBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("BTStack:"), btstackBadge))
+	b.WriteString("\n")
+
+	usbstackBadge := offBadgeStyle.Render("OFF")
+	if m.usbstack {
+		usbstackBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("USB stack:"), usbstackBadge))
+	b.WriteString("\n")
+
+	usbPointerBadge := offBadgeStyle.Render(strings.ToUpper(m.usbPointer))
+	if m.usbstack {
+		usbPointerBadge = onBadgeStyle.Render(strings.ToUpper(m.usbPointer))
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("USB pointer:"), usbPointerBadge))
+	b.WriteString("\n")
+
+	boardsBadge := offBadgeStyle.Render("LEGACY")
+	if m.emu68Boards == "boards" {
+		boardsBadge = onBadgeStyle.Render("BOARDS")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emu68 boards:"), boardsBadge))
+	b.WriteString("\n")
+
+	fpuBadge := offBadgeStyle.Render("OFF")
+	if m.fpuEnabled {
+		fpuBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("FPU:"), fpuBadge))
+	b.WriteString("\n")
+
+	z2RamBadge := offBadgeStyle.Render("OFF")
+	if m.z2RamSize != "off" {
+		z2RamBadge = onBadgeStyle.Render(m.z2RamSize + "MB")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Z2 RAM:"), z2RamBadge))
+	b.WriteString("\n")
+
+	serialBadge := offBadgeStyle.Render("MINIUART")
+	if m.serialBackend == "pl011" {
+		serialBadge = onBadgeStyle.Render("PL011")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Serial:"), serialBadge))
 	b.WriteString("\n\n")
 
 	b.WriteString(sectionTitleStyle.Render("QEMU command"))
@@ -291,7 +445,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • E Toggle Emulator • D Toggle Display • B Toggle Debug • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • F FPU • Z Z2 RAM • S Serial • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -304,22 +458,27 @@ func (m model) qemuCommand() string {
 
 	image := "emu68/install-bellatrix/Emu68.img"
 	dtb := "emu68/install-bellatrix/bcm2710-rpi-3-b.dtb"
-	if m.emuProfile == "emu68" {
-		image = "emu68/build/Emu68.img"
-		dtb = "emu68/build/firmware/bcm2710-rpi-3-b.dtb"
-	}
 
-	bootArgs := "enable_cache"
-	if m.debugMode != "" {
-		bootArgs = "enable_cache " + m.debugMode
+	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled)
+
+	serialEnv := ""
+	if m.serialBackend == "pl011" {
+		serialEnv = " BELLATRIX_SERIAL=pl011"
 	}
 
 	base := fmt.Sprintf(
-		`qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		boolEnv(m.multicoreBuild),
+		boolEnv(m.multicoreLogs),
+		boolEnv(m.btstack),
+		boolEnv(m.usbstack),
+		m.emu68Boards,
+		serialEnv,
 		image,
 		dtb,
 		displayArg,
 		bootArgs,
+		qemuUSBDeviceArgs(m.usbstack, m.usbPointer),
 	)
 
 	selected := m.roms[m.romCursor]
@@ -328,4 +487,21 @@ func (m model) qemuCommand() string {
 	}
 
 	return fmt.Sprintf("%s -initrd %s", base, selected.Path)
+}
+
+func boolEnv(enabled bool) string {
+	if enabled {
+		return "1"
+	}
+	return "0"
+}
+
+func qemuUSBDeviceArgs(usbstack bool, usbPointer string) string {
+	if usbstack {
+		if usbPointer == "mouse" {
+			return " -device usb-kbd -device usb-mouse"
+		}
+		return " -device usb-kbd -device usb-tablet"
+	}
+	return ""
 }

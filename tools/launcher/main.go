@@ -67,12 +67,20 @@ func main() {
 	/* --------------------------------------------------------------------- */
 
 	output := fmt.Sprintf(
-		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\n",
+		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_MULTICORE_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\n",
 		result.emuProfile,
 		result.kickstart,
 		result.displayMode,
 		result.bootArgs,
 		result.adf,
+		boolEnv(result.multicoreBuild),
+		boolEnv(result.multicoreLogs),
+		boolEnv(result.btstack),
+		boolEnv(result.usbstack),
+		result.usbPointer,
+		result.emu68Boards,
+		result.z2RamSize,
+		result.serialBackend,
 	)
 
 	if outputFile != "" {

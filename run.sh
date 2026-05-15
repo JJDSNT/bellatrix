@@ -25,8 +25,37 @@ Modes:
   tftp                Upload via TFTP
 
 Common options (env vars):
-  CORE_LOG=1          Enable per-core runtime logs: [CORE0-CPU] [CORE1-GFX]
+  BELLATRIX_MULTICORE_BUILD=1
+                      Enable Bellatrix multicore build/runtime (default: off)
+  BELLATRIX_MULTICORE_LOGS=1
+                      Enable per-core runtime logs: [CORE0-CPU] [CORE1-GFX]
                       [CORE2-PAULA] [CORE3-IO] [XCORE-*] (default: off)
+  BELLATRIX_BTSTACK=1 Enable BTStack in Bellatrix build (default: off)
+  BELLATRIX_USBSTACK=1
+                      Enable CherryUSB host stack scaffold in Bellatrix build
+                      (default: off)
+  BELLATRIX_QEMU_USB_KBD=1
+                      In qemu mode, attach a virtual USB keyboard device
+                      (default: on when BELLATRIX_USBSTACK=1)
+  BELLATRIX_USB_POINTER=<mouse|tablet>
+                      In qemu mode with USB enabled, choose the companion USB
+                      pointer device to attach alongside the keyboard
+                      (default: tablet)
+  BELLATRIX_EMU68_BOARDS_MODE=<boards|legacy>
+                      Build Bellatrix either with Emu68 expansion boards
+                      enabled or with the legacy Bellatrix Fast RAM path
+                      (default: boards)
+  BELLATRIX_Z2_RAM_SIZE=<off|1|2|4|8>
+                      Append Emu68 Zorro II RAM board size to BOOTARGS for
+                      Bellatrix/QEMU testing (default: off)
+  BELLATRIX_BT_FIRMWARE_FILE=<path>
+                      Use a local BCM PatchRAM .hcd file during build
+  BELLATRIX_BT_FIRMWARE_FETCH=1
+                      If firmware is missing locally, try downloading it during
+                      build and embed it in the image (default: 1)
+  BELLATRIX_BT_FIRMWARE_URL=<url>
+                      Override the build-time firmware download URL
+  CORE_LOG=1          Legacy alias for BELLATRIX_MULTICORE_LOGS=1
 
 QEMU options (env vars):
   EMU_PROFILE=<name>  Runtime profile: bellatrix or emu68 (default: bellatrix)
@@ -115,7 +144,8 @@ build_harness() {
     mkdir -p "$HARNESS_BUILD_DIR"
 
     local HARNESS_CFLAGS=""
-    if [ "${CORE_LOG:-0}" = "1" ]; then
+    local core_log="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
+    if [ "$core_log" = "1" ]; then
         HARNESS_CFLAGS="-DBELLATRIX_CORE_LOG"
         echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
     fi
@@ -183,6 +213,30 @@ load_launcher_selection() {
                 ;;
             BOOTARGS)
                 BOOTARGS="$value"
+                ;;
+            BELLATRIX_MULTICORE_BUILD)
+                BELLATRIX_MULTICORE_BUILD="$value"
+                ;;
+            BELLATRIX_MULTICORE_LOGS)
+                BELLATRIX_MULTICORE_LOGS="$value"
+                ;;
+            BELLATRIX_BTSTACK)
+                BELLATRIX_BTSTACK="$value"
+                ;;
+            BELLATRIX_USBSTACK)
+                BELLATRIX_USBSTACK="$value"
+                ;;
+            BELLATRIX_USB_POINTER)
+                BELLATRIX_USB_POINTER="$value"
+                ;;
+            BELLATRIX_EMU68_BOARDS_MODE)
+                BELLATRIX_EMU68_BOARDS_MODE="$value"
+                ;;
+            BELLATRIX_Z2_RAM_SIZE)
+                BELLATRIX_Z2_RAM_SIZE="$value"
+                ;;
+            BELLATRIX_SERIAL)
+                BELLATRIX_SERIAL="$value"
                 ;;
         esac
     done < "$tmpfile"
@@ -330,6 +384,14 @@ esac
 case "$BUILD_KIND" in
     bellatrix)
         echo "[BUILD] Profile: bellatrix"
+        export BELLATRIX_MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
+        export BELLATRIX_MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
+        export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
+        export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
+        export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+        _SERIAL_RAW="${BELLATRIX_SERIAL:-miniuart}"
+        export BELLATRIX_SERIAL="$( [ "$_SERIAL_RAW" = "pl011" ] && echo "pl011" || echo "" )"
+        export CORE_LOG="$BELLATRIX_MULTICORE_LOGS"
         "$SCRIPTS/setup.sh"
         "$SCRIPTS/build.sh"
         ;;
@@ -366,6 +428,22 @@ case "$MODE" in
         #   debug         — print JIT block stats for every compiled M68k block
         #   disassemble   — print M68k + AArch64 side-by-side for each compiled block
         # Default: enable_cache only (minimal noise, JIT works correctly)
+        Z2_RAM_SIZE="${BELLATRIX_Z2_RAM_SIZE:-off}"
+        FINAL_BOOTARGS="${BOOTARGS:-enable_cache}"
+        case "$Z2_RAM_SIZE" in
+            off|"")
+                ;;
+            1|2|4|8)
+                if [[ " $FINAL_BOOTARGS " != *" z2_ram_size="* ]]; then
+                    FINAL_BOOTARGS="$FINAL_BOOTARGS z2_ram_size=$Z2_RAM_SIZE"
+                fi
+                ;;
+            *)
+                echo "ERROR: invalid BELLATRIX_Z2_RAM_SIZE: $Z2_RAM_SIZE"
+                echo "Valid values: off, 1, 2, 4, 8"
+                exit 1
+                ;;
+        esac
         #
         # AMIGA_SERIAL (env var):
         #   unset / log   — Amiga serial → mini-UART → second QEMU serial → /dev/stderr
@@ -380,8 +458,33 @@ case "$MODE" in
             -dtb "$DTB"
             -serial stdio
             -display "$DISPLAY_ARG"
-            -append "${BOOTARGS:-enable_cache}"
+            -append "$FINAL_BOOTARGS"
         )
+
+        QEMU_USB_KBD="${BELLATRIX_QEMU_USB_KBD:-}"
+        QEMU_USB_POINTER="${BELLATRIX_USB_POINTER:-tablet}"
+        if [ -z "$QEMU_USB_KBD" ] && [ "${BELLATRIX_USBSTACK:-0}" = "1" ]; then
+            QEMU_USB_KBD="1"
+        fi
+        if [ "$QEMU_USB_KBD" = "1" ]; then
+            case "$QEMU_USB_POINTER" in
+                mouse)
+                    QEMU_ARGS+=(-device usb-kbd -device usb-mouse)
+                    echo "[RUN] QEMU USB input: enabled (-device usb-kbd -device usb-mouse)"
+                    ;;
+                tablet)
+                    QEMU_ARGS+=(-device usb-kbd -device usb-tablet)
+                    echo "[RUN] QEMU USB input: enabled (-device usb-kbd -device usb-tablet)"
+                    ;;
+                *)
+                    echo "ERROR: invalid BELLATRIX_USB_POINTER: $QEMU_USB_POINTER"
+                    echo "Valid values: mouse, tablet"
+                    exit 1
+                    ;;
+            esac
+        else
+            echo "[RUN] QEMU USB input: disabled"
+        fi
 
         if [ -n "${KICKSTART:-}" ]; then
             [ -f "$KICKSTART" ] || { echo "ERROR: Kickstart not found: $KICKSTART"; exit 1; }
@@ -396,6 +499,8 @@ case "$MODE" in
         echo "[RUN] Image: $IMAGE"
         echo "[RUN] DTB:   $DTB"
         echo "[RUN] Display mode: $DISPLAY_MODE"
+        echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+        echo "[RUN] Boot args: $FINAL_BOOTARGS"
 
         if [ "${AMIGA_SERIAL:-log}" = "pty" ]; then
             # Detect the PTY by watching /dev/pts/ for new entries — reliable regardless
