@@ -25,6 +25,7 @@ type launchResult struct {
 	z2RamSize      string
 	serialBackend  string
 	osd            bool
+	launcher       bool
 	cancelled      bool
 }
 
@@ -56,6 +57,7 @@ type model struct {
 	z2RamSize      string
 	serialBackend  string
 	osd            bool
+	launcher       bool
 
 	width     int
 	height    int
@@ -80,8 +82,9 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
-		serialBackend:  "miniuart",
+		serialBackend:  "log",
 		osd:            true,
+		launcher:       true,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -124,6 +127,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
 		osd:            fm.osd,
+		launcher:       fm.launcher,
 	}, nil
 }
 
@@ -160,6 +164,17 @@ func nextEmu68BoardsMode(current string) string {
 		return "boards"
 	}
 	return "legacy"
+}
+
+func nextSerialBackend(current string) string {
+	switch current {
+	case "miniuart":
+		return "pl011"
+	case "pl011":
+		return "log"
+	default:
+		return "miniuart"
+	}
 }
 
 func launcherProfileForCPUBackend(cpuBackend string) string {
@@ -296,15 +311,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "s":
-			if m.serialBackend == "pl011" {
-				m.serialBackend = "miniuart"
-			} else {
-				m.serialBackend = "pl011"
-			}
+			m.serialBackend = nextSerialBackend(m.serialBackend)
 			return m, nil
 
 		case "o":
 			m.osd = !m.osd
+			return m, nil
+
+		case "n":
+			m.launcher = !m.launcher
 			return m, nil
 
 		case "enter":
@@ -467,9 +482,14 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Z2 RAM:"), z2RamBadge))
 	b.WriteString("\n")
 
-	serialBadge := offBadgeStyle.Render("MINIUART")
-	if m.serialBackend == "pl011" {
+	var serialBadge string
+	switch m.serialBackend {
+	case "pl011":
 		serialBadge = onBadgeStyle.Render("PL011")
+	case "log":
+		serialBadge = onBadgeStyle.Render("LOG")
+	default:
+		serialBadge = offBadgeStyle.Render("MINIUART")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Serial:"), serialBadge))
 	b.WriteString("\n")
@@ -479,6 +499,13 @@ func (m model) renderPanel() string {
 		osdBadge = onBadgeStyle.Render("ON")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("OSD overlay:"), osdBadge))
+	b.WriteString("\n")
+
+	launcherBadge := offBadgeStyle.Render("OFF")
+	if m.launcher {
+		launcherBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("ADF launcher:"), launcherBadge))
 	b.WriteString("\n\n")
 
 	b.WriteString(sectionTitleStyle.Render("QEMU command"))
@@ -486,7 +513,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -507,18 +534,22 @@ func (m model) qemuCommand() string {
 	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled)
 
 	serialEnv := ""
-	if m.serialBackend == "pl011" {
+	switch m.serialBackend {
+	case "pl011":
 		serialEnv = " BELLATRIX_SERIAL=pl011"
+	case "log":
+		serialEnv = " BELLATRIX_SERIAL=log"
 	}
 
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_OSD=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
 		m.emu68Boards,
 		boolEnv(m.osd),
+		boolEnv(m.launcher),
 		serialEnv,
 		image,
 		dtb,
@@ -532,7 +563,18 @@ func (m model) qemuCommand() string {
 		return base
 	}
 
-	return fmt.Sprintf("%s -initrd %s", base, selected.Path)
+	cmd := fmt.Sprintf("%s -initrd %s", base, selected.Path)
+
+	// Inject the ADF at physical 0x18000000 via the QEMU generic loader.
+	// Bellatrix checks that address for the 'DOS' boot-block magic when the
+	// EMMC init fails (no physical SD card in the QEMU environment).
+	selectedADF := m.adfs[m.adfCursor]
+	if !selectedADF.None {
+		cmd = fmt.Sprintf("%s -device loader,file=%s,addr=0x18000000,force-raw=on",
+			cmd, selectedADF.Path)
+	}
+
+	return cmd
 }
 
 func boolEnv(enabled bool) string {
