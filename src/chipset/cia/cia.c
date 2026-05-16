@@ -101,34 +101,6 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
         uint8_t v = 0xFFu;
         if (!cia_ports_read_reg(cia, reg, &v))
             return 0xFFu;
-
-        if ((reg & 0x0Fu) == CIA_REG_PRA)
-        {
-            static uint8_t last_pra_a, last_pra_b;
-            uint8_t *last = (cia->id == CIA_PORT_A) ? &last_pra_a : &last_pra_b;
-            if (v != *last)
-            {
-                kprintf("[CIA%c-PRA-R] -> %02x  (pra=%02x ddra=%02x ext=%02x)\n",
-                        cia->id == CIA_PORT_A ? 'A' : 'B',
-                        (unsigned)v, (unsigned)cia->pra,
-                        (unsigned)cia->ddra, (unsigned)cia->ext_pra);
-                *last = v;
-            }
-        }
-        else if ((reg & 0x0Fu) == CIA_REG_PRB)
-        {
-            static uint8_t last_prb_a, last_prb_b;
-            uint8_t *last = (cia->id == CIA_PORT_A) ? &last_prb_a : &last_prb_b;
-            if (v != *last)
-            {
-                kprintf("[CIA%c-PRB-R] -> %02x  (prb=%02x ddrb=%02x ext=%02x)\n",
-                        cia->id == CIA_PORT_A ? 'A' : 'B',
-                        (unsigned)v, (unsigned)cia->prb,
-                        (unsigned)cia->ddrb, (unsigned)cia->ext_prb);
-                *last = v;
-            }
-        }
-
         return v;
     }
 
@@ -161,14 +133,7 @@ uint8_t cia_read_reg(CIA *cia, uint8_t reg)
     }
 
     case CIA_REG_ICR:
-    {
-        uint8_t icr = cia_interrupt_read_icr(cia);
-        kprintf("[CIA%c-ICR-R] icr=%02x mask=%02x\n",
-                (cia->id == CIA_PORT_A ? 'A' : 'B'),
-                (unsigned)icr,
-                (unsigned)cia->icr_mask);
-        return icr;
-    }
+        return cia_interrupt_read_icr(cia);
 
     default:
         return 0xFFu;
@@ -215,10 +180,6 @@ void cia_write_reg(CIA *cia, uint8_t reg, uint8_t val)
 
     case CIA_REG_ICR:
         cia_interrupt_write_icr(cia, val);
-        kprintf("[CIA%c-ICR-W] raw=%02x -> mask=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)val,
-                (unsigned)cia->icr_mask);
         return;
 
     default:

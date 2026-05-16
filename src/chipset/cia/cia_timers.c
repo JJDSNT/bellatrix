@@ -169,16 +169,6 @@ void cia_timers_step(CIA *cia, uint64_t ticks)
 
         if (uf_b > 0)
         {
-            kprintf("[CIA%c-TB-FIRE] uf_b=%d ticks=%llu counter=%04x latch=%04x crb=%02x icr_data=%02x mask=%02x\n",
-                    cia->id == CIA_PORT_A ? 'A' : 'B',
-                    uf_b,
-                    (unsigned long long)ticks,
-                    (unsigned)cia->tb_counter,
-                    (unsigned)cia->tb_latch,
-                    (unsigned)cia->crb,
-                    (unsigned)cia->icr_data,
-                    (unsigned)cia->icr_mask);
-
             cia_interrupt_raise(cia, CIA_ICR_TB);
             cia_timer_apply_underflow_output(cia, cia->crb, uf_b);
 
@@ -286,9 +276,6 @@ int cia_timers_write_reg(CIA *cia, uint8_t reg, uint8_t val)
     {
     case CIA_REG_TALO:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0xFF00u) | (uint16_t)val);
-        kprintf("[CIA%c-TALO-W] val=%02x latch=%04x cra=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                val, cia->ta_latch, cia->cra);
         return 1;
 
     case CIA_REG_TAHI:
@@ -298,16 +285,10 @@ int cia_timers_write_reg(CIA *cia, uint8_t reg, uint8_t val)
             if (cia->cra & CIA_CRA_RUNMODE)
                 cia->cra |= CIA_CRA_START;
         }
-        kprintf("[CIA%c-TAHI-W] val=%02x latch=%04x counter=%04x cra=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                val, cia->ta_latch, cia->ta_counter, cia->cra);
         return 1;
 
     case CIA_REG_TBLO:
         cia->tb_latch = (uint16_t)((cia->tb_latch & 0xFF00u) | (uint16_t)val);
-        kprintf("[CIA%c-TBLO-W] val=%02x latch=%04x counter=%04x crb=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                val, cia->tb_latch, cia->tb_counter, cia->crb);
         return 1;
 
     case CIA_REG_TBHI:
@@ -317,56 +298,29 @@ int cia_timers_write_reg(CIA *cia, uint8_t reg, uint8_t val)
             if (cia->crb & CIA_CRB_RUNMODE)
                 cia->crb |= CIA_CRB_START;
         }
-        kprintf("[CIA%c-TBHI-W] val=%02x latch=%04x counter=%04x crb=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                val, cia->tb_latch, cia->tb_counter, cia->crb);
         return 1;
 
     case CIA_REG_CRA:
     {
-        uint8_t old = cia->cra;
-
         cia->cra = (uint8_t)(val & (uint8_t)~CIA_CRA_LOAD);
         if (cia->cra & CIA_CRA_PBON)
             cia->pb_timer_out |= 0x40u;
-
         if (val & CIA_CRA_LOAD)
             cia->ta_counter = cia->ta_latch;
-
         if (!(cia->cra & CIA_CRA_START) && (cia->cra & CIA_CRA_RUNMODE))
             cia->ta_counter = cia->ta_latch;
-
-        kprintf("[CIA%c-CRA-W] old=%02x new=%02x stored=%02x ta=%04x latch=%04x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)old,
-                (unsigned)val,
-                (unsigned)cia->cra,
-                (unsigned)cia->ta_counter,
-                (unsigned)cia->ta_latch);
         return 1;
     }
 
     case CIA_REG_CRB:
     {
-        uint8_t old = cia->crb;
-
         cia->crb = (uint8_t)(val & (uint8_t)~CIA_CRB_LOAD);
         if (cia->crb & CIA_CRB_PBON)
             cia->pb_timer_out |= 0x80u;
-
         if (val & CIA_CRB_LOAD)
             cia->tb_counter = cia->tb_latch;
-
         if (!(cia->crb & CIA_CRB_START) && (cia->crb & CIA_CRB_RUNMODE))
             cia->tb_counter = cia->tb_latch;
-
-        kprintf("[CIA%c-CRB-W] old=%02x new=%02x stored=%02x tb=%04x latch=%04x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)old,
-                (unsigned)val,
-                (unsigned)cia->crb,
-                (unsigned)cia->tb_counter,
-                (unsigned)cia->tb_latch);
         return 1;
     }
 

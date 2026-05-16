@@ -107,48 +107,18 @@ int cia_ports_write_reg(CIA *cia, uint8_t reg, uint8_t value)
     switch (reg & 0x0Fu)
     {
     case CIA_REG_PRA:
-    {
-        uint8_t old = cia->pra;
         cia->pra = value;
-
-        kprintf("[CIA%c-PRA-W] old=%02x new=%02x ddra=%02x ext=%02x result=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)old,
-                (unsigned)value,
-                (unsigned)cia->ddra,
-                (unsigned)cia->ext_pra,
-                (unsigned)cia_port_a_value(cia));
         return 1;
-    }
 
     case CIA_REG_PRB:
-    {
-        uint8_t old = cia->prb;
         cia->prb = value;
-
-        kprintf("[CIA%c-PRB-W] old=%02x new=%02x ddrb=%02x ext=%02x result=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)old,
-                (unsigned)value,
-                (unsigned)cia->ddrb,
-                (unsigned)cia->ext_prb,
-                (unsigned)cia_port_b_value(cia));
         return 1;
-    }
 
     case CIA_REG_DDRA:
-        kprintf("[CIA%c-DDRA-W] old=%02x new=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)cia->ddra,
-                (unsigned)value);
         cia->ddra = value;
         return 1;
 
     case CIA_REG_DDRB:
-        kprintf("[CIA%c-DDRB-W] old=%02x new=%02x\n",
-                cia->id == CIA_PORT_A ? 'A' : 'B',
-                (unsigned)cia->ddrb,
-                (unsigned)value);
         cia->ddrb = value;
         return 1;
 
