@@ -148,7 +148,6 @@ static void paula_disk_maybe_emit_sync(PaulaDisk *pd)
         return;
 
     pd->sync_irq_fired = 1;
-    kprintf("[DSKIRQ] DSKSYNC fired sync=%04x\n", pd->dsksync);
     emit_intreq(pd, PAULA_INTREQ_DSKSYNC);
 }
 
@@ -265,7 +264,6 @@ void paula_disk_write_dsksync(PaulaDisk *pd, uint16_t value)
 {
     pd->dsksync = value;
     pd->sync_irq_fired = 0;
-    kprintf("[DSKSYNC] set=%04x sync_seen=%d\n", value, pd->sync_seen);
     paula_disk_maybe_emit_sync(pd);
 }
 

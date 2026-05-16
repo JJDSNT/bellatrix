@@ -242,12 +242,6 @@ uint32_t floppy_read_linear(FloppyDrive *d, uint8_t *dst, uint32_t bytes)
      */
     d->disk_changed = 0;
 
-    kprintf("[FLOPPY] linear read offset=%u bytes=%u next=%u size=%u\n",
-            d->read_offset - to_copy,
-            to_copy,
-            d->read_offset,
-            d->adf_size);
-
     return to_copy;
 }
 
