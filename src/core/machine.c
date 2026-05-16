@@ -290,19 +290,30 @@ static void machine_sync_floppy_pra(BellatrixMachine *m)
         wpro = floppy_get_wpro(&m->df0);
         idbit = floppy_get_idbit(&m->df0);
 
-        /* ID mode = motor OFF */
-        idmode = !motor_on;
-
-        /* /DSKCHG: active LOW.
+        /*
+         * ID mode: motor is OFF and the 32-bit ID shift register has not yet
+         * been fully clocked out (first 32 SEL/DESEL cycles).
          *
-         * Motor ON:  expose the mechanical change latch.
-         * Motor OFF: DF0 uses the line for the drive-ID probe sequence.
+         * During the ID scan the drive outputs its type word on /DSKCHG.
+         * A standard 3.5" DD drive (id_data=0xFFFFFFFF) holds the line HIGH
+         * for every bit → /DSKCHG stays HIGH while id_count < 32.
          *
-         * A standard 3.5" DD drive has no ID chip, so idbit stays '1' and the
-         * line remains released (HIGH) during the motor-off probe. Keeping the
-         * change latch visible in this phase makes Kickstart treat an empty
-         * drive as a boot candidate and follow the wrong failure path.
+         * After 32 ID pulses the shift register is exhausted and real hardware
+         * reverts /DSKCHG to the mechanical change latch.  We must follow suit:
+         *
+         * - No disk (disk_changed=1 from power-on): /DSKCHG goes LOW.
+         *   trackdisk.device turns on motor, DSKRDY times out, boot code
+         *   shows the "Insert disk in DF0:" screen.  Correct path.
+         *
+         * - Disk inserted (disk_changed=1 from floppy_insert): same initial
+         *   LOW, motor on, DSKRDY asserts immediately, DMA read proceeds.
+         *
+         * The former "guard with has_media" was wrong: it kept idmode=1 for an
+         * empty drive, so /DSKCHG never went LOW, trackdisk never turned on
+         * the motor, and the boot screen never appeared.
          */
+        idmode = !motor_on && (m->df0.id_count < 32);
+
         if ((!idmode && !dskchg) || (idmode && !idbit))
             ext &= (uint8_t)~0x04u;
 
