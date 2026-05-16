@@ -130,6 +130,7 @@ typedef struct AgnusState {
     uint16_t ddfstrt;
     uint16_t ddfstop;
     uint32_t hsync_pulses;
+    uint32_t vsync_pulses;
 
     /* Bitplane pointers (6 planes, high/low word) */
     uint16_t bplpth[6];

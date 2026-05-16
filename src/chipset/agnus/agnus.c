@@ -473,6 +473,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
         if (!vbl_before && beam_is_in_vblank(&s->beam))
         {
             agnus_log_vbl_enter(s);
+            s->vsync_pulses++;
 
             agnus_intreq_set(s, PAULA_INT_VERTB);
 

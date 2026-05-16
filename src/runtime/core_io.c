@@ -107,11 +107,16 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
 
     /*
      * CIA-B TOD is clocked from Agnus hsync pulses.
-     * Agnus accumulates them in agnus.hsync_pulses; we drain here.
+     * CIA-A TOD is clocked from vsync (VBL, 50 Hz PAL).
+     * Agnus accumulates both; we drain here.
      */
     if (m->agnus.hsync_pulses > 0) {
         cia_tod_pulse(&m->cia_b, m->agnus.hsync_pulses);
         m->agnus.hsync_pulses = 0;
+    }
+    if (m->agnus.vsync_pulses > 0) {
+        cia_tod_pulse(&m->cia_a, m->agnus.vsync_pulses);
+        m->agnus.vsync_pulses = 0;
     }
 
     /* Keyboard shift register / handshake (CIA-A SP + CNT lines). */
