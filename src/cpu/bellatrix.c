@@ -6,6 +6,12 @@
 #include "bellatrix.h"
 #include "bridge/bellatrix_bridge.h"
 #include "runtime/runtime.h"
+#include "runtime/core_gfx.h"
+#include "runtime/core_audio.h"
+#include "runtime/core_io.h"
+#ifdef BELLATRIX_LAUNCHER
+#include "launcher/launcher.h"
+#endif
 #include <stdatomic.h>
 #include "cpu_backend.h"
 #include "musashi_backend.h"
@@ -69,6 +75,8 @@ static CpuBackend *bellatrix_selected_cpu_backend(void)
 }
 #endif
 
+static void bellatrix_runtime_notify_cpu_progress(uint32_t cycles);
+
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
     CpuBackend *backend = bellatrix_selected_cpu_backend();
@@ -86,7 +94,8 @@ void bellatrix_run_selected_cpu_backend(void)
     cpu_backend_reset(backend);
 
     for (;;) {
-        (void)cpu_backend_run(backend, 454u);
+        uint32_t ran = cpu_backend_run(backend, 454u);
+        bellatrix_runtime_notify_cpu_progress(ran > 0u ? ran : 454u);
     }
 }
 
@@ -136,11 +145,12 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
         atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
         asm volatile("dsb sy\n\t sev" ::: "memory");
     } else {
-        /* Single-core: no lock and no sev.  The chipset_lock_release() sev would
-         * wake cores 1/2/3 (parked in wfe waiting for their entry pointers), causing
-         * spurious vCPU context switches in QEMU on every CPU progress tick — which
-         * starves Core 0 of scheduling time and breaks DiagROM CIA timer tests. */
-        bellatrix_machine_advance(cycles);
+        /* Single-core: chipset is already advanced by machine_step_components(m,1)
+         * on every bus access (same path as the harness).  Calling core_*_step
+         * here would double-advance Agnus, CIA, Paula and Denise — CIA would run
+         * ~1.5x too fast, breaking floppy / trackdisk timing.
+         *
+         * Only pump host-side services that machine_step_components does not cover. */
         bt_host_step(&g_runtime.bluetooth);
         usb_host_step(&g_runtime.io.usb_host);
     }
@@ -312,8 +322,10 @@ static void set_overlay(int new_overlay)
  * here can observe stale/divergent data due to aliasing, while ICache fetches
  * are performed from the low 32-bit mapping.
  */
-#define FAST_RAM_KVIRT 0x0000000000200000ULL
-#define ROM_KVIRT      0xffffff9000f80000ULL
+#define FAST_RAM_KVIRT  0x0000000000200000ULL
+#define ROM_KVIRT       0xffffff9000f80000ULL
+/* Extended ROM: first 512 KB of 1 MB ROMs (AROS modules) at physical 0xe00000 */
+#define ROM_EXT_KVIRT   0xffffff9000e00000ULL
 
 static inline uint32_t read_be32(const uint8_t *p)
 {
@@ -384,6 +396,11 @@ void bellatrix_init(void)
 #endif
 
     bellatrix_machine_init(cpu_backend);
+#ifdef BELLATRIX_CORE_LOG
+    kprintf("[BUILD] BELLATRIX_CORE_LOG: ON\n");
+#else
+    kprintf("[BUILD] BELLATRIX_CORE_LOG: OFF\n");
+#endif
     bellatrix_runtime_init(&g_runtime, bellatrix_machine_get());
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
@@ -430,6 +447,28 @@ void bellatrix_init(void)
         else
         {
             kprintf("[BELA] WARNING: rom_mapped=0 -- M68K will start at PC=0.\n");
+        }
+
+        /* Detect 1 MB ROM: start.c copies first 512 KB to physical 0xe00000
+         * and second 512 KB to 0xf80000.  For a plain 512 KB Kickstart it
+         * mirrors the same data to both addresses, so they're identical.  If
+         * the two halves differ, we have a 1 MB ROM (e.g. AROS) and must
+         * expose the extended window to the Musashi CPU backend. */
+        if (rom_mapped)
+        {
+            const uint8_t *ext = (const uint8_t *)ROM_EXT_KVIRT;
+            const uint8_t *std = (const uint8_t *)ROM_KVIRT;
+            int is_1mb = 0;
+            for (int i = 0; i < 8; i++) {
+                if (ext[i] != std[i]) { is_1mb = 1; break; }
+            }
+            if (is_1mb) {
+                bellatrix_memory_attach_ext_rom(&m->memory, ext,
+                                               BELLATRIX_EXT_ROM_SIZE);
+                kprintf("[BELA] 1MB ROM: extended module ROM attached"
+                        " @ 0xe00000 (%u KB)\n",
+                        (unsigned)(BELLATRIX_EXT_ROM_SIZE / 1024u));
+            }
         }
     }
 
@@ -511,7 +550,9 @@ void bellatrix_init(void)
 
     PAL_Runtime_Init();
 
-#if defined(BELLATRIX_UART_PL011)
+#if defined(BELLATRIX_UART_LOG)
+    kprintf("[SERIAL] log mode — Paula TX forwarded to kprintf [SERIAL] prefix; no UART bridge\n");
+#elif defined(BELLATRIX_UART_PL011)
 #ifndef BELLATRIX_UART_BAUD
 #define BELLATRIX_UART_BAUD 115200
 #endif
@@ -623,6 +664,11 @@ void bellatrix_init(void)
     }
 #endif
 
+#ifdef BELLATRIX_LAUNCHER
+    launcher_run();
+#endif
+
+
     if (PAL_Core_IsMulticoreEnabled()) {
         kprintf("[BELA] Initialized (multicore enabled: Core1=GFX Core2=Audio Core3=IO)\n");
     } else {
@@ -635,6 +681,13 @@ void bellatrix_init(void)
     kprintf("[BELA] CPU backend: emu68\n");
 #endif
 }
+
+#ifdef BELLATRIX_LAUNCHER
+void bellatrix_launcher_pump_usb(void)
+{
+    usb_host_step(&g_runtime.io.usb_host);
+}
+#endif
 
 void bellatrix_sync_overlay_from_ciaa(void)
 {
