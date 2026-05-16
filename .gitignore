@@ -1,5 +1,8 @@
 referencias
-src/roms
+src/roms/*
+!src/roms/aros.rom
+!src/roms/diagrom.rom
+!src/roms/diagrom2.rom
 src/disks
 
 # launcher build
