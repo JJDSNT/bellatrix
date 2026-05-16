@@ -130,18 +130,21 @@ BTSTACK_ENABLED="${BELLATRIX_BTSTACK:-0}"
 USBSTACK_ENABLED="${BELLATRIX_USBSTACK:-0}"
 EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
 OSD_ENABLED="${BELLATRIX_OSD:-1}"
+LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
 
 echo "[BUILD] cpu backend: $CPU_BACKEND"
 
+MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
-    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_ENABLE_MULTICORE"
-    echo "[BUILD] multicore build: enabled"
+    MULTICORE_FLAG="ON"
+    echo "[BUILD] multicore build: enabled (Core1=GFX Core2=Paula Core3=IO)"
 else
-    echo "[BUILD] multicore build: disabled"
+    echo "[BUILD] multicore build: disabled (single-core)"
 fi
 
+CORELOG_FLAG="OFF"
 if [ "$MULTICORE_LOGS" = "1" ]; then
-    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_CORE_LOG"
+    CORELOG_FLAG="ON"
     echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
 else
     echo "[BUILD] core log: disabled"
@@ -165,6 +168,14 @@ if [ "$OSD_ENABLED" = "1" ]; then
     echo "[BUILD] OSD overlay: enabled"
 else
     echo "[BUILD] OSD overlay: disabled"
+fi
+
+LAUNCHER_FLAG="OFF"
+if [ "$LAUNCHER_ENABLED" = "1" ]; then
+    LAUNCHER_FLAG="ON"
+    echo "[BUILD] launcher: enabled (SD FAT32 ADF selector)"
+else
+    echo "[BUILD] launcher: disabled"
 fi
 
 case "$EMU68_BOARDS_MODE" in
@@ -192,12 +203,23 @@ esac
 # timing. Keeping the host link at 115200 avoids a silent baud switch between
 # Emu68 boot logs and the bridged Amiga serial console.
 PL011_FLAG="OFF"
-if [ "${BELLATRIX_SERIAL:-}" = "pl011" ]; then
-    PL011_FLAG="ON"
-    BAUD="${BELLATRIX_SERIAL_BAUD:-115200}"
-    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_UART_BAUD=${BAUD}"
-    echo "[BUILD] Serial backend: PL011 (GPIO 14/15, ${BAUD} baud)"
-fi
+UART_LOG_FLAG=""
+case "${BELLATRIX_SERIAL:-}" in
+    pl011)
+        PL011_FLAG="ON"
+        BAUD="${BELLATRIX_SERIAL_BAUD:-115200}"
+        EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_UART_BAUD=${BAUD}"
+        echo "[BUILD] Serial backend: PL011 (GPIO 14/15, ${BAUD} baud)"
+        ;;
+    log)
+        UART_LOG_FLAG="-DBELLATRIX_UART_LOG=1"
+        EXTRA_DEFINES="$EXTRA_DEFINES ${UART_LOG_FLAG}"
+        echo "[BUILD] Serial backend: log (Paula TX → kprintf [SERIAL], no UART bridge)"
+        ;;
+    *)
+        echo "[BUILD] Serial backend: miniUART (default)"
+        ;;
+esac
 
 if [ "${BELLATRIX_SERIAL_LOOPBACK:-0}" = "1" ]; then
     EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_UART_LOOPBACK_MODE=1"
@@ -229,7 +251,10 @@ cmake "$EMU68" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \
     -DBELLATRIX_ENABLE_USBSTACK="$USBSTACK_ENABLED" \
     -DBELLATRIX_BTSTACK_PATCHRAM_SOURCE="$BT_PATCHRAM_SOURCE" \
-    -DBELLATRIX_OSD="$OSD_FLAG"
+    -DBELLATRIX_OSD="$OSD_FLAG" \
+    -DBELLATRIX_ENABLE_MULTICORE="$MULTICORE_FLAG" \
+    -DBELLATRIX_CORE_LOG="$CORELOG_FLAG" \
+    -DBELLATRIX_LAUNCHER="$LAUNCHER_FLAG"
 
 make -j"$(nproc)"
 make install

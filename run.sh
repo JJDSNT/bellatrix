@@ -252,6 +252,9 @@ load_launcher_selection() {
             BELLATRIX_OSD)
                 BELLATRIX_OSD="$value"
                 ;;
+            BELLATRIX_LAUNCHER)
+                BELLATRIX_LAUNCHER="$value"
+                ;;
         esac
     done < "$tmpfile"
 
@@ -404,9 +407,14 @@ case "$BUILD_KIND" in
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
         export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"
+        export BELLATRIX_LAUNCHER="${BELLATRIX_LAUNCHER:-1}"
         export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         _SERIAL_RAW="${BELLATRIX_SERIAL:-miniuart}"
-        export BELLATRIX_SERIAL="$( [ "$_SERIAL_RAW" = "pl011" ] && echo "pl011" || echo "" )"
+        case "$_SERIAL_RAW" in
+            pl011) export BELLATRIX_SERIAL="pl011" ;;
+            log)   export BELLATRIX_SERIAL="log"   ;;
+            *)     export BELLATRIX_SERIAL=""       ;;
+        esac
         export CORE_LOG="$BELLATRIX_MULTICORE_LOGS"
         "$SCRIPTS/setup.sh"
         "$SCRIPTS/build.sh"
@@ -510,6 +518,15 @@ case "$MODE" in
         else
             echo "[RUN] QEMU profile: $EMU_PROFILE"
             echo "[RUN] QEMU (no Kickstart — btrace-only mode)"
+        fi
+
+        # Inject ADF via QEMU generic loader at physical 0x18000000.
+        # Bellatrix's launcher detects the 'DOS' boot-block magic there when
+        # the EMMC init fails (no physical SD card in QEMU).
+        if [ -n "${ADF:-}" ] && [ "${BELLATRIX_LAUNCHER:-1}" = "1" ]; then
+            [ -f "$ADF" ] || { echo "ERROR: ADF not found: $ADF"; exit 1; }
+            QEMU_ARGS+=(-device "loader,file=$ADF,addr=0x18000000,force-raw=on")
+            echo "[RUN] QEMU DF0 loader: $ADF → phys 0x18000000"
         fi
 
         echo "[RUN] Image: $IMAGE"
