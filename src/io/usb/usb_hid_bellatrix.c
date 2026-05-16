@@ -1,6 +1,10 @@
 #include "core/machine.h"
 #include "support.h"
 
+#ifdef BELLATRIX_LAUNCHER
+#include "launcher/launcher_input.h"
+#endif
+
 #if BELLATRIX_ENABLE_USBSTACK
 
 #include "usb_config.h"
@@ -153,6 +157,13 @@ static void bellatrix_usb_hid_emit_usage(uint8_t usage, bool pressed)
     if (usage == HID_KBD_USAGE_NONE) {
         return;
     }
+
+#ifdef BELLATRIX_LAUNCHER
+    if (pressed && launcher_input_is_active()) {
+        launcher_input_push(usage);
+        return;
+    }
+#endif
 
     if (bellatrix_usb_hid_usage_to_amiga_raw(usage, &rawkey)) {
         bellatrix_machine_keyboard_rawkey(rawkey, pressed ? 1 : 0);
