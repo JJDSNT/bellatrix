@@ -111,6 +111,16 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
         return musashi_rom_read_at(mem, addr - BELLATRIX_ROM_BASE, size);
     }
 
+    if (mem->rom_ext &&
+        addr >= BELLATRIX_EXT_ROM_BASE &&
+        addr <= BELLATRIX_EXT_ROM_END) {
+        const uint8_t *p = mem->rom_ext + (addr - BELLATRIX_EXT_ROM_BASE);
+        if (size == 1u) return p[0];
+        if (size == 2u) return ((uint32_t)p[0] << 8) | (uint32_t)p[1];
+        return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+               ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
+    }
+
     if (bellatrix_chip_addr_contains(addr)) {
         return musashi_chip_read(mem, addr, size);
     }
@@ -135,6 +145,9 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
     if ((mem->rom &&
          addr >= BELLATRIX_ROM_BASE &&
          addr <= BELLATRIX_ROM_END) ||
+        (mem->rom_ext &&
+         addr >= BELLATRIX_EXT_ROM_BASE &&
+         addr <= BELLATRIX_EXT_ROM_END) ||
         (musashi_overlay_enabled() &&
          addr < BELLATRIX_CHIP_BOOT_SIZE)) {
         return;

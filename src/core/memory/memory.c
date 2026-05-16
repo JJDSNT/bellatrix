@@ -59,6 +59,8 @@ void bellatrix_memory_init(BellatrixMemory *m)
 
     m->rom = 0;
     m->rom_size = 0;
+    m->rom_ext = 0;
+    m->rom_ext_size = 0;
 
     m->overlay_enabled = 1;
 
@@ -85,6 +87,14 @@ void bellatrix_memory_attach_rom(BellatrixMemory *m,
 {
     m->rom = rom;
     m->rom_size = rom_size;
+}
+
+void bellatrix_memory_attach_ext_rom(BellatrixMemory *m,
+                                     const uint8_t *rom_ext,
+                                     size_t rom_ext_size)
+{
+    m->rom_ext = rom_ext;
+    m->rom_ext_size = rom_ext_size;
 }
 
 /* ------------------------------------------------------------------------- */

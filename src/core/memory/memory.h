@@ -27,6 +27,11 @@
 #define BELLATRIX_ROM_SIZE      0x00080000u
 #define BELLATRIX_ROM_END       0x00FFFFFFu
 
+/* Extended ROM window — first 512 KB of a 1 MB ROM (e.g., AROS modules). */
+#define BELLATRIX_EXT_ROM_BASE  0x00E00000u
+#define BELLATRIX_EXT_ROM_SIZE  0x00080000u
+#define BELLATRIX_EXT_ROM_END   0x00E7FFFFu
+
 #define BELLATRIX_CHIP_BOOT_SIZE BELLATRIX_ROM_SIZE
 #define BELLATRIX_CHIP_BOOT_END  (BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_BOOT_SIZE - 1u)
 
@@ -76,6 +81,10 @@ typedef struct BellatrixMemory
     const uint8_t *rom;
     size_t         rom_size;
 
+    /* Extended ROM window (0xe00000-0xe7ffff) — first half of 1 MB ROMs only. */
+    const uint8_t *rom_ext;
+    size_t         rom_ext_size;
+
     uint8_t overlay_enabled;
 
 } BellatrixMemory;
@@ -91,6 +100,10 @@ void bellatrix_memory_reset(BellatrixMemory *mem);
 void bellatrix_memory_attach_rom(BellatrixMemory *mem,
                                  const uint8_t *rom,
                                  size_t rom_size);
+
+void bellatrix_memory_attach_ext_rom(BellatrixMemory *mem,
+                                     const uint8_t *rom_ext,
+                                     size_t rom_ext_size);
 
 /* ------------------------------------------------------------------------- */
 /* overlay                                                                   */
