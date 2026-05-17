@@ -67,6 +67,12 @@ void cia_interrupt_write_icr(CIA *cia, uint8_t value)
     else
         cia->icr_mask &= (uint8_t)~(value & 0x1Fu);
 
+    if (cia->id == CIA_PORT_A)
+        kprintf("[CIAA-ICR-MASK] write=%02x -> icr_mask=%02x (TA=%d TB=%d)\n",
+                (unsigned)value, (unsigned)cia->icr_mask,
+                (cia->icr_mask & CIA_ICR_TA) ? 1 : 0,
+                (cia->icr_mask & CIA_ICR_TB) ? 1 : 0);
+
     cia_interrupt_sync_irq_line(cia);
 }
 

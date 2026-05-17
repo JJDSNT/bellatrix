@@ -135,7 +135,15 @@ void cia_timers_step(CIA *cia, uint64_t ticks)
                                  ticks);
         if (uf_a > 0)
         {
+            if (cia->id == CIA_PORT_A)
+                kprintf("[CIAA-TA-UNDERFLOW] uf=%d icr_mask=%02x cra=%02x counter=%04x\n",
+                        uf_a, (unsigned)cia->icr_mask, (unsigned)cia->cra,
+                        (unsigned)cia->ta_counter);
             cia_interrupt_raise(cia, CIA_ICR_TA);
+            if (cia->id == CIA_PORT_A)
+                kprintf("[CIAA-ICR-SET] icr_data=%02x icr_mask=%02x pending=%d\n",
+                        (unsigned)cia->icr_data, (unsigned)cia->icr_mask,
+                        cia_irq_pending(cia));
             cia_timer_apply_underflow_output(cia, cia->cra, uf_a);
             for (int i = 0; i < uf_a; i++)
                 cia_serial_on_timer_a_underflow(cia);
@@ -276,14 +284,26 @@ int cia_timers_write_reg(CIA *cia, uint8_t reg, uint8_t val)
     {
     case CIA_REG_TALO:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0xFF00u) | (uint16_t)val);
+        if (cia->id == CIA_PORT_A)
+            kprintf("[CIAA-TA-TALO] latch=%04x cra=%02x\n",
+                    (unsigned)cia->ta_latch, (unsigned)cia->cra);
         return 1;
 
     case CIA_REG_TAHI:
         cia->ta_latch = (uint16_t)((cia->ta_latch & 0x00FFu) | ((uint16_t)val << 8));
+        if (cia->id == CIA_PORT_A)
+            kprintf("[CIAA-TA-TAHI] latch=%04x cra=%02x start=%d oneshot=%d\n",
+                    (unsigned)cia->ta_latch, (unsigned)cia->cra,
+                    (cia->cra & CIA_CRA_START) ? 1 : 0,
+                    (cia->cra & CIA_CRA_RUNMODE) ? 1 : 0);
         if (!(cia->cra & CIA_CRA_START)) {
             cia->ta_counter = cia->ta_latch;
-            if (cia->cra & CIA_CRA_RUNMODE)
+            if (cia->cra & CIA_CRA_RUNMODE) {
                 cia->cra |= CIA_CRA_START;
+                if (cia->id == CIA_PORT_A)
+                    kprintf("[CIAA-TA-AUTOSTART] counter=%04x cra=%02x\n",
+                            (unsigned)cia->ta_counter, (unsigned)cia->cra);
+            }
         }
         return 1;
 
@@ -309,6 +329,12 @@ int cia_timers_write_reg(CIA *cia, uint8_t reg, uint8_t val)
             cia->ta_counter = cia->ta_latch;
         if (!(cia->cra & CIA_CRA_START) && (cia->cra & CIA_CRA_RUNMODE))
             cia->ta_counter = cia->ta_latch;
+        if (cia->id == CIA_PORT_A)
+            kprintf("[CIAA-TA-CRA] val=%02x -> cra=%02x start=%d oneshot=%d counter=%04x latch=%04x\n",
+                    (unsigned)val, (unsigned)cia->cra,
+                    (cia->cra & CIA_CRA_START) ? 1 : 0,
+                    (cia->cra & CIA_CRA_RUNMODE) ? 1 : 0,
+                    (unsigned)cia->ta_counter, (unsigned)cia->ta_latch);
         return 1;
     }
 
