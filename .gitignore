@@ -3,7 +3,12 @@ src/roms/*
 !src/roms/aros.rom
 !src/roms/diagrom.rom
 !src/roms/diagrom2.rom
-src/disks
+src/disks/*
+!src/disks/AmigaTestKit.adf
+!src/disks/aros.adf
+!src/disks/dopus411.adf
+!src/disks/sysinfo44.adf
+!src/disks/sysInfo45.adf
 
 # launcher build
 tools/launcher/bin/
