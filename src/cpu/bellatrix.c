@@ -24,6 +24,7 @@
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "io/serial/uart_host.h"
+#include "chipset/paula/paula_serial.h"
 #include "mmu.h"
 #include "A64.h"
 #include "support.h"
@@ -145,12 +146,15 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
         atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
         asm volatile("dsb sy\n\t sev" ::: "memory");
     } else {
-        /* Single-core: chipset is already advanced by machine_step_components(m,1)
-         * on every bus access (same path as the harness).  Calling core_*_step
-         * here would double-advance Agnus, CIA, Paula and Denise — CIA would run
-         * ~1.5x too fast, breaking floppy / trackdisk timing.
-         *
-         * Only pump host-side services that machine_step_components does not cover. */
+        /*
+         * Single-core: advance all chipset components proportionally to the
+         * CPU quantum.  Bus accesses already contribute ~1 tick each via
+         * machine_step_components(m,1), but chipset-sparse code (ROM, chip RAM)
+         * generates zero bus faults → Agnus, copper, and bitplane DMA starve
+         * and VBL never fires.  Adding the full quantum here closes that gap;
+         * the ~1% over-count from bus-fault ticks is harmless.
+         */
+        bellatrix_machine_advance(cycles);
         bt_host_step(&g_runtime.bluetooth);
         usb_host_step(&g_runtime.io.usb_host);
     }
@@ -552,6 +556,8 @@ void bellatrix_init(void)
 
 #if defined(BELLATRIX_UART_LOG)
     kprintf("[SERIAL] log mode — Paula TX forwarded to kprintf [SERIAL] prefix; no UART bridge\n");
+    /* In log mode the kprintf fallback is instant; expose TBE=1 immediately. */
+    paula_serial_set_tx_instant(&m->paula.serial, true);
 #elif defined(BELLATRIX_UART_PL011)
 #ifndef BELLATRIX_UART_BAUD
 #define BELLATRIX_UART_BAUD 115200
@@ -563,6 +569,7 @@ void bellatrix_init(void)
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
 #endif
+        paula_serial_set_tx_instant(&m->paula.serial, true);
         kprintf("[SERIAL] PL011 host bridge open at %u baud — GPIO 14/15 (USB-TTL adapter)\n",
                 (unsigned)BELLATRIX_UART_BAUD);
 #if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
@@ -597,6 +604,7 @@ void bellatrix_init(void)
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
 #endif
+        paula_serial_set_tx_instant(&m->paula.serial, true);
         uint32_t lsr = miniuart_backend_read_lsr();
         kprintf("[SERIAL] mini-UART open at 9600 baud  LSR=0x%08x TX_ready=%s\n",
                 lsr, (lsr & 0x20u) ? "yes" : "no (QEMU AUX UART may be unresponsive)");
