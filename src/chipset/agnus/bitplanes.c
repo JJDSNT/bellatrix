@@ -636,19 +636,29 @@ void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
          * row with COLOR00 (copper-controlled border colour). This is what
          * makes the full PAL frame visible instead of showing only the DIW
          * area centred in the framebuffer.
+         *
+         * Important: once this line has been queued (active=1, line_vpos==vpos),
+         * subsequent ticks for the same vpos must NOT clear active — otherwise
+         * !bp->active becomes true on the next tick and the same line gets
+         * re-queued and rendered multiple times (causes ~3× renders/scanline
+         * and FPS collapse).
          */
-        if (vpos >= (int)BEAM_PAL_VBL_END && (!bp->active || bp->line_vpos != vpos))
+        if (vpos >= (int)BEAM_PAL_VBL_END)
         {
-            bp->active    = 1;
-            bp->line_vpos = vpos;
-            bp->nplanes   = 0;
-            bp->ddf_words = 0;
-            bp->line_words_fetched = 0;
-            bp->line_ready = 1;
+            if (!bp->active || bp->line_vpos != vpos)
+            {
+                bp->active    = 1;
+                bp->line_vpos = vpos;
+                bp->nplanes   = 0;
+                bp->ddf_words = 0;
+                bp->line_words_fetched = 0;
+                bp->line_ready = 1;
+            }
+            /* else: same line already queued — keep active, do nothing */
         }
         else
         {
-            bp->active = 0;
+            bp->active = 0;  /* VBL: no rendering */
         }
         return;
     }
