@@ -566,7 +566,6 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
         AgnusDisplayWindow win = agnus_get_display_window(agnus);
 
         int vstart = win.vstart;
-        int vstop = win.vstop;
         int vheight = win.vheight;
 
         if (vheight <= 0)
@@ -574,27 +573,19 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
         if (vheight > 512)
             vheight = 512;
 
-        int line_idx = bp->line_vpos - vstart;
-        if (line_idx < 0 || line_idx >= vheight)
-        {
-            static uint32_t dbg_line_skip = 0;
-            if ((dbg_line_skip++ & 63u) == 0)
-            {
-                kprintf("[DENISE-SKIP] bp_v=%d agnus_v=%d vstart=%d vstop=%d vheight=%d line_idx=%d ready=%d nplanes=%d ddf=%d diw=%04x-%04x\n",
-                        bp->line_vpos,
-                        (int)agnus->beam.vpos,
-                        vstart,
-                        vstop,
-                        vheight,
-                        line_idx,
-                        bitplanes_line_ready(bp),
-                        bp->nplanes,
-                        bp->ddf_words,
-                        (unsigned)agnus->diwstrt,
-                        (unsigned)agnus->diwstop);
-            }
+        int line_idx = bp->line_vpos - vstart;  /* kept for diag/diagrom checks */
+
+        /*
+         * Map beam position directly to framebuffer row.
+         * VBL lines (vpos < BEAM_PAL_VBL_END) are never rendered.
+         * Non-DIW post-VBL lines are rendered with COLOR00 only (nplanes=0),
+         * fed from bitplanes_step() background path.
+         * This replaces the old DIW-centred approach which left stale pixels
+         * at top/bottom and compressed the visible area.
+         */
+        int fb_line = bp->line_vpos - (int)BEAM_PAL_VBL_END;
+        if (fb_line < 0)
             return;
-        }
 
         static uint32_t dbg_render_calls = 0;
         if ((dbg_render_calls++ & 63u) == 0)
@@ -631,15 +622,10 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
             uint16_t bg = d->palette[0];
 
             int vscale = 2;
-            int out_h = vheight * vscale;
-
-            uint32_t fb_y0 = ((uint32_t)out_h < fb_height)
-                                 ? (fb_height - (uint32_t)out_h) / 2u
-                                 : 0u;
 
             for (int sy = 0; sy < vscale; ++sy)
             {
-                uint32_t fb_y = fb_y0 + (uint32_t)(line_idx * vscale + sy);
+                uint32_t fb_y = (uint32_t)(fb_line * vscale + sy);
                 if (fb_y >= fb_height)
                     continue;
 
@@ -649,13 +635,13 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
                 for (uint32_t x = 0; x < fb_width; ++x)
                     row[x] = bg;
 
-                if (line_idx == 0)
+                if (fb_line == 0)
                 {
                     static uint32_t dbg_bg_fill = 0;
                     if ((dbg_bg_fill++ & 63u) == 0)
                     {
-                        kprintf("[DENISE-BG] line=%d fb_y=%u bg=%04x first=%04x width=%u\n",
-                                line_idx,
+                        kprintf("[DENISE-BG] fb_line=%d fb_y=%u bg=%04x first=%04x width=%u\n",
+                                fb_line,
                                 (unsigned)fb_y,
                                 (unsigned)bg,
                                 (unsigned)row[0],
@@ -682,7 +668,7 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
             int src_first_pixel = d->diag_force_src0 ? 0 : x_phase;
             int render_visible_pixels;
             int out_w;
-            int out_h = vheight * vscale;
+            int out_h = vheight * vscale;  /* kept for diag log only */
 
             if (visible_pixels <= 0)
                 visible_pixels = pix_per_line;
@@ -705,12 +691,10 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
             out_w = render_visible_pixels * hscale;
 
             uint32_t fb_x0 = ((uint32_t)out_w < fb_width) ? (fb_width - (uint32_t)out_w) / 2u : 0u;
-            uint32_t fb_y0 = ((uint32_t)out_h < fb_height) ? (fb_height - (uint32_t)out_h) / 2u : 0u;
 
             for (int sy = 0; sy < vscale; ++sy)
             {
-
-                uint32_t fb_y = fb_y0 + (uint32_t)(line_idx * vscale + sy);
+                uint32_t fb_y = (uint32_t)(fb_line * vscale + sy);
                 if (fb_y >= fb_height)
                     continue;
 
@@ -807,7 +791,7 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
                                 out_w,
                                 out_h,
                                 (unsigned)fb_x0,
-                                (unsigned)fb_y0,
+                                (unsigned)(fb_line * vscale),
                                 render_visible_pixels,
                                 src_first_pixel,
                                 d->diag_bit_reverse,

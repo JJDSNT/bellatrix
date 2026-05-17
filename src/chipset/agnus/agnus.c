@@ -2,6 +2,8 @@
 
 #include "agnus.h"
 
+#include <string.h>
+
 #include "copper/copper.h"
 #include "copper/copper_regs.h"
 #include "copper/copper_service.h"
@@ -515,6 +517,17 @@ void agnus_step(AgnusState *s, uint64_t ticks)
 
             osd_render(s->beam.frame);
             PAL_Video_Flip();
+
+            /*
+             * Clear the framebuffer to black for the next frame.
+             * Areas outside the DIW window (top/bottom overscan) are never
+             * written by denise_render_line(); without this clear they would
+             * retain stale pixels (the initial red fill or previous-frame
+             * content if the DIW moved).
+             */
+            if (framebuffer && fb_width > 0 && fb_height > 0)
+                memset(framebuffer, 0,
+                       (size_t)fb_width * fb_height * sizeof(uint16_t));
         }
     }
 }

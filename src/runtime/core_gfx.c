@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "debug/core_log.h"
+
 #include "chipset/agnus/agnus.h"
 #include "chipset/agnus/beam.h"
 #include "chipset/agnus/copper/copper.h"

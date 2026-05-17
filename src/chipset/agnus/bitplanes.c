@@ -630,7 +630,26 @@ void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
 
     if (vpos < vstart || vpos >= vstop)
     {
-        bp->active = 0;
+        /*
+         * Outside the DIW window. For post-VBL visible lines, set up a
+         * zero-plane background-only line so denise_render_line() fills the
+         * row with COLOR00 (copper-controlled border colour). This is what
+         * makes the full PAL frame visible instead of showing only the DIW
+         * area centred in the framebuffer.
+         */
+        if (vpos >= (int)BEAM_PAL_VBL_END && (!bp->active || bp->line_vpos != vpos))
+        {
+            bp->active    = 1;
+            bp->line_vpos = vpos;
+            bp->nplanes   = 0;
+            bp->ddf_words = 0;
+            bp->line_words_fetched = 0;
+            bp->line_ready = 1;
+        }
+        else
+        {
+            bp->active = 0;
+        }
         return;
     }
 
