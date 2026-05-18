@@ -3,7 +3,6 @@
 #include <string.h>
 
 #include "agnus.h"
-#include "display_window.h"
 #include "host/pal.h"
 #include "memory/memory.h"
 #include "support.h"
@@ -29,16 +28,6 @@ static inline uint16_t bplpt_hi(uint32_t ptr)
 static inline uint16_t bplpt_lo(uint32_t ptr)
 {
     return (uint16_t)(ptr & 0xFFFEu);
-}
-
-static inline int agnus_display_vstart(const AgnusState *agnus)
-{
-    return agnus_get_display_window(agnus).vstart;
-}
-
-static inline int agnus_display_vstop(const AgnusState *agnus)
-{
-    return agnus_get_display_window(agnus).vstop;
 }
 
 static inline int agnus_bitplane_count(const AgnusState *agnus)
@@ -619,53 +608,34 @@ void bitplanes_fetch_line(BitplaneState *bp, AgnusState *agnus, int vpos_abs)
 
 void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
 {
-    int vstart, vstop, vpos;
+    int vpos;
 
     if (!agnus)
         return;
 
-    vstart = agnus_display_vstart(agnus);
-    vstop = agnus_display_vstop(agnus);
     vpos = (int)agnus->beam.vpos;
 
-    if (vpos < vstart || vpos >= vstop)
+    /*
+     * VBL guard: no rendering during vertical blank.
+     */
+    if (vpos < (int)BEAM_PAL_VBL_END)
     {
-        /*
-         * Outside the DIW window. For post-VBL visible lines, set up a
-         * zero-plane background-only line so denise_render_line() fills the
-         * row with COLOR00 (copper-controlled border colour). This is what
-         * makes the full PAL frame visible instead of showing only the DIW
-         * area centred in the framebuffer.
-         *
-         * Important: once this line has been queued (active=1, line_vpos==vpos),
-         * subsequent ticks for the same vpos must NOT clear active — otherwise
-         * !bp->active becomes true on the next tick and the same line gets
-         * re-queued and rendered multiple times (causes ~3× renders/scanline
-         * and FPS collapse).
-         */
-        if (vpos >= (int)BEAM_PAL_VBL_END)
-        {
-            if (!bp->active || bp->line_vpos != vpos)
-            {
-                bp->active    = 1;
-                bp->line_vpos = vpos;
-                bp->nplanes   = 0;
-                bp->ddf_words = 0;
-                bp->line_words_fetched = 0;
-                bp->line_ready = 1;
-            }
-            /* else: same line already queued — keep active, do nothing */
-        }
-        else
-        {
-            bp->active = 0;  /* VBL: no rendering */
-        }
+        bp->active = 0;
         return;
     }
 
     /*
-     * New visible line: latch current Agnus bitplane configuration now,
-     * not at frame start.
+     * Post-VBL: begin a new line whenever vpos advances.
+     *
+     * Bitplane DMA vertical extent is governed by BPLCON0 (nplanes) as
+     * programmed by the copper — NOT by DIWSTRT/DIWSTOP.  The DIW window
+     * is a Denise register that gates pixel output, not an Agnus register
+     * that gates DMA.  Gating DMA by vstop would suppress fetches for every
+     * line outside the (possibly wrong) DIW vertical range.
+     *
+     * bitplanes_begin_line() already handles nplanes=0 (background-only
+     * lines) when BPLCON0 says no planes are active, so those lines still
+     * reach denise_render_line() and get filled with COLOR00.
      */
     if (!bp->active || bp->line_vpos != vpos)
     {
@@ -674,12 +644,6 @@ void bitplanes_step(BitplaneState *bp, AgnusState *agnus)
 
     if (bp->nplanes <= 0)
         return;
-
-    /*
-     * Keep the line latched until vpos changes. Clearing active here causes
-     * the same scanline to restart repeatedly once fetch completes, advancing
-     * BPL pointers many times inside a single raster line.
-     */
 }
 
 void bitplanes_end_line(BitplaneState *bp, AgnusState *agnus)
