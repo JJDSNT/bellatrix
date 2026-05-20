@@ -11,7 +11,7 @@
 
 #include "../agnus.h"
 #include "../beam.h"
-#include "../blitter.h"
+#include "../blitter/blitter.h"
 #include "host/pal.h"
 #include "support.h"
 

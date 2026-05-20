@@ -57,6 +57,7 @@ set(BELLATRIX_SOURCES
 
     # Core
     ${SRC}/core/machine.c
+    ${SRC}/core/bus.c
     ${SRC}/bridge/bellatrix_bridge.c
 
     # Memory (nova base)
@@ -71,7 +72,12 @@ set(BELLATRIX_SOURCES
     ${SRC}/chipset/agnus/agnus.c
     ${SRC}/chipset/agnus/beam.c
     ${SRC}/chipset/agnus/bitplanes.c
-    ${SRC}/chipset/agnus/blitter.c
+    ${SRC}/chipset/agnus/blitter/blitter_command.c
+    ${SRC}/chipset/agnus/blitter/blitter_debug.c
+    ${SRC}/chipset/agnus/blitter/blitter_dma.c
+    ${SRC}/chipset/agnus/blitter/blitter_ref.c
+    ${SRC}/chipset/agnus/blitter/blitter_regs.c
+    ${SRC}/chipset/agnus/blitter/blitter_timing.c
     ${SRC}/chipset/agnus/dma.c
 
     # Copper (NOVO LAYOUT)
@@ -110,6 +116,17 @@ set(BELLATRIX_SOURCES
     # RTC
     ${SRC}/chipset/rtc/rtc.c
 
+    # GAYLE IDE + ATAPI CD-ROM
+    ${SRC}/bus/gayle/gayle.c
+    ${SRC}/bus/gayle/gayle_ide.c
+    ${SRC}/bus/gayle/atapi_cd.c
+
+    # Expansion ROM boards
+    ${SRC}/boards/cd_autoboot.c
+
+    # ISO image (in-memory + callback)
+    ${SRC}/storage/iso/iso_image.c
+
     # Input
     ${SRC}/input/controller_port.c
     ${SRC}/input/keyboard.c
@@ -145,6 +162,7 @@ target_include_directories(harness PRIVATE
     ${SRC}/core
     ${SRC}/cpu
     ${SRC}/host
+    ${SRC}/boards
     ${MUSASHI}
     ${CMAKE_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}

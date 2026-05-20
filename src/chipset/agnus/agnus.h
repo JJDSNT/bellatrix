@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#include "blitter.h"
+#include "blitter/blitter.h"
 #include "copper/copper.h"
 #include "copper/copper_service.h"
 #include "copper/copper_regs.h"

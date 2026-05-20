@@ -4,6 +4,7 @@
 
 #include <string.h>
 
+#include "blitter/blitter.h"
 #include "copper/copper.h"
 #include "copper/copper_regs.h"
 #include "copper/copper_service.h"
@@ -36,7 +37,48 @@ static bool agnus_dma_blitter_busy_cb(void *ctx)
 static bool agnus_dma_blitter_zero_cb(void *ctx)
 {
     AgnusState *s = (AgnusState *)ctx;
-    return s ? s->blitter.zero : true;
+    return s ? s->blitter.result.zero : true;
+}
+
+static uint32_t agnus_blitter_custom_offset(uint16_t reg)
+{
+    switch (reg)
+    {
+    case AGNUS_BLTCDAT:
+        return 0x072u;
+    case AGNUS_BLTBDAT:
+        return 0x074u;
+    case AGNUS_BLTADAT:
+        return 0x076u;
+    default:
+        return (uint32_t)reg;
+    }
+}
+
+static BlitterMemory agnus_blitter_memory(AgnusState *s)
+{
+    BlitterMemory mem = {0};
+
+    if (!s || !s->memory)
+        return mem;
+
+    mem.chipram = s->memory->chip_ram;
+    mem.chipram_size = s->memory->chip_ram_size;
+    return mem;
+}
+
+static void agnus_blitter_intreq(void *opaque, uint16_t value)
+{
+    agnus_intreq_set((AgnusState *)opaque, value);
+}
+
+static BlitterHost agnus_blitter_host(AgnusState *s)
+{
+    BlitterHost host;
+
+    host.opaque = s;
+    host.intreq = agnus_blitter_intreq;
+    return host;
 }
 
 static bool agnus_dma_bitplane_allowed_cb(void *ctx)
@@ -76,8 +118,20 @@ static uint32_t agnus_dma_query_requests_cb(void *ctx)
     if (bitplanes_dma_allowed(s))
         req |= bitplanes_dma_request_mask(&s->bitplanes, s);
 
-    if (agnus_dma_blitter_enabled(&s->dma))
-        req |= blitter_dma_request_mask(&s->blitter);
+    /*
+     * Keep the legacy intuition, but at the Agnus boundary:
+     * the blitter only requests DMA service while an operation
+     * is still observably pending.
+     *
+     * If this logic grows beyond a simple busy/time check,
+     * it may deserve a dedicated blitter-side query helper again.
+     */
+    if (agnus_dma_blitter_enabled(&s->dma) &&
+        blitter_is_busy(&s->blitter) &&
+        s->blitter.cycles_remaining != 0)
+    {
+        req |= AGNUS_DMA_REQ_BLITTER;
+    }
 
     if (s->denise && agnus_dma_sprite_enabled(&s->dma))
         req |= denise_sprites_dma_request_mask(&s->denise->sprites);
@@ -115,7 +169,10 @@ static void agnus_dma_service_request_cb(void *ctx, AgnusDMARequest request)
         break;
 
     case AGNUS_DMA_REQ_BLITTER:
-        blitter_dma_service_grant(&s->blitter, s);
+        blitter_step_dma(&s->blitter,
+                         agnus_blitter_memory(s),
+                         agnus_blitter_host(s),
+                         1);
         break;
 
     case AGNUS_DMA_REQ_DISK:
@@ -624,7 +681,8 @@ uint32_t agnus_read_reg(AgnusState *s, uint16_t reg)
 
     default:
         if (agnus_is_blitter_reg(reg))
-            return blitter_read_reg(&s->blitter, reg);
+            return blitter_read_reg16(&s->blitter,
+                                      agnus_blitter_custom_offset(reg));
 
         return 0;
     }
@@ -834,7 +892,12 @@ void agnus_write_reg(AgnusState *s, uint16_t reg, uint32_t value, int size)
      */
     if (agnus_is_blitter_reg(reg))
     {
-        blitter_write_reg(&s->blitter, s, reg, raw);
+        if (reg == AGNUS_BLTSIZE)
+            agnus_intreq_clear(s, BLITTER_INTREQ_BLIT);
+
+        blitter_write_reg16(&s->blitter,
+                            agnus_blitter_custom_offset(reg),
+                            raw);
         return;
     }
 

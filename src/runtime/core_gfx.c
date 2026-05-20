@@ -7,7 +7,6 @@
 #include "chipset/agnus/agnus.h"
 #include "chipset/agnus/beam.h"
 #include "chipset/agnus/copper/copper.h"
-#include "chipset/agnus/blitter.h"
 #include "chipset/agnus/bitplanes.h"
 
 #include "chipset/denise/denise.h"
@@ -38,14 +37,6 @@ static void core_gfx_step_copper(RuntimeCoreGFX *core,
     copper_step_exec(&core->machine->agnus.copper,
                      &core->machine->agnus,
                      (int)cycles);
-}
-
-static void core_gfx_step_blitter(RuntimeCoreGFX *core,
-                                  uint32_t cycles)
-{
-    blitter_step(&core->machine->agnus.blitter,
-                 &core->machine->agnus,
-                 (uint64_t)cycles);
 }
 
 static void core_gfx_step_bitplanes(RuntimeCoreGFX *core,
@@ -155,11 +146,6 @@ void core_gfx_step(RuntimeCoreGFX *core,
      * Copper execution.
      */
     core_gfx_step_copper(core, cycles);
-
-    /*
-     * Blitter execution.
-     */
-    core_gfx_step_blitter(core, cycles);
 
     /*
      * Bitplane DMA/fetch.

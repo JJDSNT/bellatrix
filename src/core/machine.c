@@ -3,6 +3,9 @@
 #include "core/machine.h"
 
 #include "chipset/floppy/floppy_drive.h"
+#include "bus/gayle/gayle.h"
+#include "storage/iso/iso_image.h"
+#include "chipset/paula/paula.h"
 
 #include "debug/btrace.h"
 #include "debug/cpu_pc.h"
@@ -63,6 +66,17 @@ static inline bool is_cia_b_addr(uint32_t addr)
 static inline bool is_rtc_addr(uint32_t addr)
 {
     return (addr >= 0x00dc0000u && addr <= 0x00dcffffu);
+}
+
+static inline bool is_gayle_addr(uint32_t addr)
+{
+    /* IDE + control: $DA0000-$DAFFFF */
+    if (addr >= GAYLE_BASE_1200 && addr < GAYLE_BASE_1200 + GAYLE_SIZE)
+        return true;
+    /* GAYLE ID shift register: $DE0000-$DEFFFF (ReadGayle LVO -136 reads $DE1000) */
+    if (addr >= GAYLE_ID_REGION_BASE && addr < GAYLE_ID_REGION_BASE + GAYLE_ID_REGION_SIZE)
+        return true;
+    return false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -469,7 +483,6 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t ticks)
     }
 
     agnus_step(&m->agnus, ticks);
-    blitter_step(&m->agnus.blitter, &m->agnus, (uint64_t)ticks);
 
     /*
      * CIA runs at E-clock = CPU / 10.  Accumulate fractional ticks to
@@ -553,6 +566,9 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     floppy_init(&m->df0);
     paula_attach_drive(&m->paula, &m->df0);
     machine_sync_floppy_pra(m); /* set initial /CHNG, /TK0, /RDY on CIA-A ext_pra */
+
+    iso_image_init(&m->iso);
+    gayle_init(&m->gayle, &m->iso, m->gayle_atapi_buf, sizeof(m->gayle_atapi_buf));
 
     uart_host_init(&m->uart_host);
     uart_host_attach_paula(&m->uart_host, &m->paula.serial);
@@ -672,6 +688,13 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
     {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
         value = rtc_read_reg(&m->rtc, reg);
+    }
+
+    else if (is_gayle_addr(addr))
+    {
+        value = gayle_read(&m->gayle, addr, size);
+        if (gayle_ide_irq_pending(&m->gayle.ide))
+            paula_irq_raise(&m->paula, PAULA_INT_PORTS);
     }
 
     else
@@ -800,6 +823,13 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
     {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
         rtc_write_reg(&m->rtc, reg, (uint8_t)(value & 0x0Fu));
+    }
+
+    else if (is_gayle_addr(addr))
+    {
+        gayle_write(&m->gayle, addr, value, size);
+        if (gayle_ide_irq_pending(&m->gayle.ide))
+            paula_irq_raise(&m->paula, PAULA_INT_PORTS);
     }
 
     else
@@ -1035,6 +1065,49 @@ void bellatrix_machine_eject_df0(void)
     machine_sync_floppy_pra(m);
 
     kprintf("[FLOPPY] DF0 ejected\n");
+}
+
+/* ---------------------------------------------------------------------------
+ * GAYLE / CD-ROM media
+ * ------------------------------------------------------------------------- */
+
+int bellatrix_machine_insert_iso(const void *data, size_t size)
+{
+    BellatrixMachine *m = &g_machine;
+
+    if (!iso_image_attach(&m->iso, data, size))
+        return -1;
+
+    m->gayle.ide.cd.media_changed = true;
+
+    kprintf("[ISO] in-memory image attached: %u sectors\n",
+            (unsigned)m->iso.sector_count);
+    return 0;
+}
+
+int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
+                                    uint32_t sector_count)
+{
+    BellatrixMachine *m = &g_machine;
+
+    if (!iso_image_attach_fn(&m->iso, fn, ctx, sector_count))
+        return -1;
+
+    m->gayle.ide.cd.media_changed = true;
+
+    kprintf("[ISO] callback-based image attached: %u sectors\n",
+            (unsigned)sector_count);
+    return 0;
+}
+
+void bellatrix_machine_eject_iso(void)
+{
+    BellatrixMachine *m = &g_machine;
+
+    iso_image_detach(&m->iso);
+    m->gayle.ide.cd.media_changed = true;
+
+    kprintf("[ISO] ejected\n");
 }
 
 /* ---------------------------------------------------------------------------
