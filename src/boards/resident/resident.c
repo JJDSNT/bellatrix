@@ -81,14 +81,16 @@ __asm__(
 );
 
 /* 0x0020: entry point trampoline — exactly where da_DiagPoint=16 points.
- * GCC may emit string-literal pools between the global asm and the first C
- * function, so diag_point() might not land at 0x0020.  This tiny stub is
- * guaranteed to be here (it's pure asm, no pools) and calls diag_point via
- * a PC-relative JSR (valid on m68000, ±32 KB range, well within our ROM). */
+ * AROS DiagArea calling convention passes SysBase in A6; we push it onto
+ * the stack so diag_point() receives it as a normal C argument (avoids
+ * relying on *(ExecBase **)4 which is not yet written at diag-init time).
+ */
 __asm__(
     ".globl _rom_entry\n"
     "_rom_entry:\n"
-    "    jsr (_diag_point,pc)\n"  /* PC-relative call to C diag_point */
+    "    move.l  %a6,-(%sp)\n"    /* push SysBase (A6 = AROS DiagArea convention) */
+    "    jsr     (_diag_point,pc)\n" /* PC-relative call to C diag_point */
+    "    addq.l  #4,%sp\n"        /* pop SysBase argument */
     "    rts\n"                   /* return d0 (1=keep copy) to AROS */
 );
 
@@ -117,6 +119,50 @@ __asm__(
 #define DAEMON_WAIT_TICKS   150    /* 3 s at 50 Hz — daemon fires at ~2 s */
 
 /* =========================================================================
+ * Debug helpers — direct SERDAT write (0xDFF030), no exec LVO dependency.
+ * AROS's own debug output goes through the same hardware register.
+ * ====================================================================== */
+
+static void dbg_putc(unsigned char c)
+{
+    /* AROS krnPutC pattern: poll SERDATR (0xDFF018) bit 13 (TBE), then
+     * write SERDAT_STP8|byte to SERDAT (0xDFF030).
+     * Use inline asm throughout — C volatile pointers generate PC-relative
+     * load sequences under -mpcrel that crash on m68000. */
+    unsigned short sr;
+    __asm__ volatile (
+        "0: move.w 0x00DFF018,%0 \n\t"  /* read SERDATR */
+        "   btst   #13,%0        \n\t"  /* test TBE (bit 13) */
+        "   beq.s  0b            \n\t"  /* loop while TBE=0 */
+        "   move.w %1,0x00DFF030"       /* write SERDAT_STP8 | char */
+        : "=d"(sr)
+        : "d"((unsigned short)(0x0100u | (unsigned short)c))
+        : "cc"
+    );
+}
+
+static void dbg_str(const char *s)
+{
+    while (*s)
+        dbg_putc((unsigned char)*s++);
+}
+
+static void dbg_hex(ULONG val)
+{
+    int i;
+    dbg_putc('0'); dbg_putc('x');
+    for (i = 28; i >= 0; i -= 4) {
+        int n = (val >> i) & 0xF;
+        dbg_putc(n < 10 ? ('0' + n) : ('a' + n - 10));
+    }
+}
+
+#define DBG(s)         dbg_str("[CDMOUNT] " s "\n")
+#define DBG_HEX(s, v)  do { dbg_str("[CDMOUNT] " s); \
+                             dbg_hex((ULONG)(v));      \
+                             dbg_putc('\n'); } while(0)
+
+/* =========================================================================
  * Forward declarations
  * ====================================================================== */
 
@@ -131,14 +177,20 @@ static void mount_task(void);
  * clib/alib_protos.h CreateTask to avoid needing a global SysBase.
  * ====================================================================== */
 
-int __attribute__((used)) diag_point(void)
+int __attribute__((used)) diag_point(struct ExecBase *SysBase)
 {
-    struct ExecBase *SysBase = *(struct ExecBase **)4;
     const ULONG stack_size = 8192;
+
+    DBG("diag_point entered");
+    DBG_HEX("SysBase=", (ULONG)SysBase);
+
     UBYTE *mem = (UBYTE *)AllocMem(sizeof(struct Task) + stack_size,
                                    MEMF_CLEAR | MEMF_PUBLIC);
-    if (!mem)
+    if (!mem) {
+        DBG("AllocMem FAILED");
         return 0;
+    }
+    DBG_HEX("task mem=", (ULONG)mem);
 
     struct Task *task  = (struct Task *)mem;
     UBYTE       *stack = mem + sizeof(struct Task);
@@ -150,7 +202,9 @@ int __attribute__((used)) diag_point(void)
     task->tc_SPUpper      = stack + stack_size;
     task->tc_SPReg        = task->tc_SPUpper;
 
+    DBG_HEX("AddTask pc=", (ULONG)mount_task);
     AddTask(task, (APTR)mount_task, NULL);
+    DBG("diag_point done, returning 1");
     return 1;
 }
 
@@ -164,12 +218,17 @@ static void mount_task(void)
     struct DosLibrary  *DOSBase;
     ULONG               unit = 0;
 
+    DBG("mount_task started");
+
     /* Spin until dos.library is available (we run at -50, everything more
      * important finishes first; this loop is rarely hit more than once).  */
     while (!(DOSBase = (struct DosLibrary *)OpenLibrary("dos.library", 0)))
         ;
 
+    DBG("dos.library opened");
+    DBG("waiting DAEMON_WAIT_TICKS...");
     Delay(DAEMON_WAIT_TICKS);
+    DBG("delay done, calling MountDrive");
 
     struct MountStruct ms;
     ms.deviceName  = "ata.device";
@@ -185,6 +244,7 @@ static void mount_task(void)
 
     MountDrive(&ms);
 
+    DBG("MountDrive returned");
     CloseLibrary((struct Library *)DOSBase);
     RemTask(NULL);
 }

@@ -16,3 +16,6 @@
 	path = external/cherryusb
 	url = https://github.com/cherry-embedded/CherryUSB.git
 	ignore = dirty
+[submodule "external/mounter"]
+	path = external/mounter
+	url = https://github.com/A4091/mounter

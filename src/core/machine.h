@@ -16,6 +16,9 @@
 #include "input/controller_port.h"
 #include "input/keyboard.h"
 
+#include "bus/gayle/gayle.h"
+#include "storage/iso/iso_image.h"
+
 #include "debug/probe.h"
 #include "debug/btrace.h"
 
@@ -85,6 +88,22 @@ typedef struct BellatrixMachine
     FloppyDrive df0;
 
     /*
+     * GAYLE IDE bridge — exposes an ATAPI CD-ROM device at $DA0000.
+     * gayle.ide.cd.iso points to &iso below.
+     */
+    GayleState gayle;
+
+    /*
+     * ISO image attached to GAYLE — populated by bellatrix_machine_insert_iso
+     * or bellatrix_machine_attach_iso_fn.  The gayle ATAPI uses a pointer to
+     * this struct so updates here are immediately visible to GAYLE.
+     */
+    IsoImage iso;
+
+    /* Scratch buffer for ATAPI data transfers (max ~2 sectors). */
+    uint8_t gayle_atapi_buf[4096];
+
+    /*
      * Host serial bridge used by the current machine-driven path.
      * This lets Emu68/Harness clock Paula serial without depending on the
      * separate runtime loop.
@@ -145,6 +164,29 @@ void bellatrix_machine_joystick_direction(unsigned port, unsigned direction, int
 
 int  bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size);
 void bellatrix_machine_eject_df0(void);
+
+/* ------------------------------------------------------------------------- */
+/* GAYLE / CD-ROM media                                                      */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * Attach an in-memory ISO image to the GAYLE CD-ROM device.
+ * data must remain valid for the lifetime of the emulation session.
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+int bellatrix_machine_insert_iso(const void *data, size_t size);
+
+/*
+ * Attach a callback-based ISO image (bare-metal SD card, USB mass storage).
+ * fn is called on every ATAPI READ(10) request; ctx and sector_count must
+ * remain valid for the lifetime of the emulation session.
+ * Returns 0 on success, -1 on invalid arguments.
+ */
+int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
+                                    uint32_t sector_count);
+
+/* Remove the current ISO image from GAYLE. */
+void bellatrix_machine_eject_iso(void);
 
 /* ------------------------------------------------------------------------- */
 /* debug access                                                              */

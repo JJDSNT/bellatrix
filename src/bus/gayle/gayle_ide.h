@@ -27,6 +27,7 @@
 #define ATA_STATUS_BSY   0x80u
 
 #define ATA_CMD_DEVICE_RESET            0x08u
+#define ATA_CMD_EXECUTE_DEVICE_DIAG     0x90u
 #define ATA_CMD_PACKET                  0xA0u
 #define ATA_CMD_IDENTIFY_PACKET_DEVICE  0xA1u
 #define ATA_CMD_IDENTIFY_DEVICE         0xECu
@@ -46,6 +47,11 @@ typedef struct GayleIde {
     uint8_t identify[512];
     size_t identify_pos;
     bool identify_active;
+
+    bool irq_pending; /* set when command/data phase is ready for host */
+
+    uint16_t byte_count_limit; /* BCL from cyl registers before PACKET cmd */
+    size_t drq_block_end;      /* cd.data_pos limit for current DRQ block */
 } GayleIde;
 
 void gayle_ide_init(

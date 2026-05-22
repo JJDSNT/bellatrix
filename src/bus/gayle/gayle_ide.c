@@ -1,6 +1,7 @@
 // src/bus/gayle/gayle_ide.c
 
 #include "bus/gayle/gayle_ide.h"
+#include "support.h"
 
 #include <string.h>
 
@@ -20,8 +21,13 @@ static void set_error(GayleIde *ide, uint8_t error)
 
 static void write_identify_word(uint8_t *buf, unsigned word, uint16_t value)
 {
-    buf[word * 2 + 0] = (uint8_t)(value & 0xff);
-    buf[word * 2 + 1] = (uint8_t)((value >> 8) & 0xff);
+    /*
+     * m68k reads IDENTIFY words with move.w (big-endian) then AROS does
+     * SWAP_LE_WORD.  We store big-endian here so that after read16 and
+     * the AROS swap the host sees the intended little-endian value.
+     */
+    buf[word * 2 + 0] = (uint8_t)((value >> 8) & 0xff);
+    buf[word * 2 + 1] = (uint8_t)(value & 0xff);
 }
 
 static void write_identify_string(uint8_t *buf, unsigned word, unsigned words, const char *text)
@@ -94,23 +100,29 @@ static void begin_identify(GayleIde *ide)
 
 static void begin_packet(GayleIde *ide)
 {
+    /* Host writes BCL into cyl_hi:cyl_lo before issuing PACKET command. */
+    uint16_t bcl = ((uint16_t)ide->cyl_high << 8) | ide->cyl_low;
+    bcl &= ~1u; /* ATAPI: BCL must be even */
+    if (bcl == 0)
+        bcl = 0xfffe;
+    ide->byte_count_limit = bcl;
+
     ide->identify_active = false;
 
-    /*
-     * ATAPI PACKET phase:
-     * AROS will write 12 packet bytes via data port.
-     */
     atapi_cd_begin_packet(&ide->cd);
 
     set_error(ide, 0);
     set_status(ide, ATA_STATUS_DRDY | ATA_STATUS_DRQ);
 
     /*
-     * Signature / byte count registers often used by ATAPI probing.
-     * Keep 2048 as requested transfer size hint.
+     * ATAPI Interrupt Reason: C/D=1, I/O=0 → device expects CDB.
+     * cyl_low/cyl_high will be updated to the actual DRQ block size
+     * after the CDB is received and the command dispatched.
      */
-    ide->cyl_low = 0x00;
-    ide->cyl_high = 0x08;
+    ide->sector_count = 0x01;
+    ide->cyl_low  = 0x00;
+    ide->cyl_high = 0x00;
+    ide->drq_block_end = 0;
 }
 
 static void device_reset(GayleIde *ide)
@@ -158,6 +170,9 @@ void gayle_ide_reset(GayleIde *ide)
     ide->identify_pos = 0;
     ide->identify_active = false;
 
+    ide->byte_count_limit = 0xfffe;
+    ide->drq_block_end = 0;
+
     atapi_cd_reset(&ide->cd);
 }
 
@@ -166,31 +181,58 @@ uint8_t gayle_ide_read8(GayleIde *ide, uint32_t reg)
     if (!ide)
         return 0xff;
 
+    /* Only device 0 is present. Return "no device" values when device 1
+     * is selected so AROS does not create a spurious slave unit. */
+    if (ide->dev_head & 0x10u) {
+        if (reg == GAYLE_IDE_REG_STATUS) return 0x00u;
+        if (reg == GAYLE_IDE_REG_ERROR)  return 0x01u;
+        return 0x00u;
+    }
+
+    uint8_t val;
     switch (reg) {
         case GAYLE_IDE_REG_ERROR:
-            return ide->error;
+            val = ide->error;
+            kprintf("[GAYLE-IDE-R] ERROR=%02x\n", (unsigned)val);
+            return val;
 
         case GAYLE_IDE_REG_SECCNT:
-            return ide->sector_count;
+            val = ide->sector_count;
+            kprintf("[GAYLE-IDE-R] SECCNT=%02x\n", (unsigned)val);
+            return val;
 
         case GAYLE_IDE_REG_SECNUM:
-            return ide->sector_number;
+            val = ide->sector_number;
+            kprintf("[GAYLE-IDE-R] SECNUM=%02x\n", (unsigned)val);
+            return val;
 
         case GAYLE_IDE_REG_CYLLO:
-            return ide->cyl_low;
+            val = ide->cyl_low;
+            kprintf("[GAYLE-IDE-R] CYLLO=%02x\n", (unsigned)val);
+            return val;
 
         case GAYLE_IDE_REG_CYLHI:
-            return ide->cyl_high;
+            val = ide->cyl_high;
+            kprintf("[GAYLE-IDE-R] CYLHI=%02x\n", (unsigned)val);
+            return val;
 
         case GAYLE_IDE_REG_DEVHEAD:
-            return ide->dev_head;
+            val = ide->dev_head;
+            kprintf("[GAYLE-IDE-R] DEVHEAD=%02x\n", (unsigned)val);
+            return val;
 
-        case GAYLE_IDE_REG_STATUS:
+        case GAYLE_IDE_REG_STATUS: {
+            uint8_t st;
             if (ide->cd.phase == ATAPI_PHASE_DATA_IN)
-                return ATA_STATUS_DRDY | ATA_STATUS_DRQ;
-            if (ide->cd.phase == ATAPI_PHASE_PACKET_IN)
-                return ATA_STATUS_DRDY | ATA_STATUS_DRQ;
-            return ide->status;
+                st = ATA_STATUS_DRDY | ATA_STATUS_DRQ;
+            else if (ide->cd.phase == ATAPI_PHASE_PACKET_IN)
+                st = ATA_STATUS_DRDY | ATA_STATUS_DRQ;
+            else
+                st = ide->status;
+            kprintf("[GAYLE-IDE-R] STATUS=%02x phase=%d\n",
+                    (unsigned)st, (int)ide->cd.phase);
+            return st;
+        }
 
         default:
             return 0xff;
@@ -204,33 +246,52 @@ void gayle_ide_write8(GayleIde *ide, uint32_t reg, uint8_t value)
 
     switch (reg) {
         case GAYLE_IDE_REG_FEATURES:
+            kprintf("[GAYLE-IDE-W] FEATURES=%02x\n", (unsigned)value);
             ide->features = value;
             break;
 
         case GAYLE_IDE_REG_SECCNT:
+            kprintf("[GAYLE-IDE-W] SECCNT=%02x\n", (unsigned)value);
             ide->sector_count = value;
             break;
 
         case GAYLE_IDE_REG_SECNUM:
+            kprintf("[GAYLE-IDE-W] SECNUM=%02x\n", (unsigned)value);
             ide->sector_number = value;
             break;
 
         case GAYLE_IDE_REG_CYLLO:
+            kprintf("[GAYLE-IDE-W] CYLLO=%02x\n", (unsigned)value);
             ide->cyl_low = value;
             break;
 
         case GAYLE_IDE_REG_CYLHI:
+            kprintf("[GAYLE-IDE-W] CYLHI=%02x\n", (unsigned)value);
             ide->cyl_high = value;
             break;
 
         case GAYLE_IDE_REG_DEVHEAD:
+            kprintf("[GAYLE-IDE-W] DEVHEAD=%02x\n", (unsigned)value);
             ide->dev_head = value;
             break;
 
         case GAYLE_IDE_REG_COMMAND:
+            kprintf("[GAYLE-IDE-W] CMD=%02x\n", (unsigned)value);
             switch (value) {
                 case ATA_CMD_DEVICE_RESET:
                     device_reset(ide);
+                    break;
+
+                case ATA_CMD_EXECUTE_DEVICE_DIAG:
+                    /* ATA spec §9.10: restore ATAPI signature regardless of
+                     * what the host wrote to the cylinder registers before
+                     * issuing this command. */
+                    ide->cyl_low  = 0x14;
+                    ide->cyl_high = 0xEB;
+                    ide->sector_count  = 0x01;
+                    ide->sector_number = 0x01;
+                    set_error(ide, 0x01);
+                    set_status(ide, ATA_STATUS_DRDY);
                     break;
 
                 case ATA_CMD_IDENTIFY_PACKET_DEVICE:
@@ -291,8 +352,25 @@ uint16_t gayle_ide_read16(GayleIde *ide)
     if (ide->cd.phase == ATAPI_PHASE_DATA_IN) {
         uint16_t v = atapi_cd_read_data_word(&ide->cd);
 
-        if (!atapi_cd_has_data(&ide->cd))
+        if (!atapi_cd_has_data(&ide->cd)) {
+            /* All data consumed — command complete. */
+            ide->sector_count = 0x03; /* I/O=1, C/D=1 */
             set_status(ide, ATA_STATUS_DRDY);
+            ide->irq_pending = true;
+        } else if (ide->cd.data_pos >= ide->drq_block_end) {
+            /* DRQ block exhausted; more data remains — set up next block. */
+            size_t remaining = ide->cd.data_len - ide->cd.data_pos;
+            size_t next = remaining < (size_t)ide->byte_count_limit
+                          ? remaining
+                          : (size_t)ide->byte_count_limit;
+            ide->drq_block_end = ide->cd.data_pos + next;
+            uint16_t bc = (uint16_t)next;
+            ide->sector_count = 0x02;
+            ide->cyl_low  = (uint8_t)(bc & 0xff);
+            ide->cyl_high = (uint8_t)((bc >> 8) & 0xff);
+            set_status(ide, ATA_STATUS_DRDY | ATA_STATUS_DRQ);
+            ide->irq_pending = true;
+        }
 
         return v;
     }
@@ -305,18 +383,43 @@ void gayle_ide_write16(GayleIde *ide, uint16_t value)
     if (!ide)
         return;
 
-    if (ide->cd.phase == ATAPI_PHASE_PACKET_IN) {
-        if (atapi_cd_write_packet_word(&ide->cd, value)) {
-            if (ide->cd.phase == ATAPI_PHASE_DATA_IN) {
-                set_error(ide, atapi_cd_error(&ide->cd));
-                set_status(ide, ATA_STATUS_DRDY | ATA_STATUS_DRQ);
-            } else {
-                set_error(ide, atapi_cd_error(&ide->cd));
-                set_status(ide, ATA_STATUS_DRDY |
-                                (atapi_cd_error(&ide->cd) ? ATA_STATUS_ERR : 0));
-            }
-        }
+    if (ide->cd.phase != ATAPI_PHASE_PACKET_IN)
+        return;
+
+    atapi_cd_write_packet_word(&ide->cd, value);
+
+    /* Only update status registers once the full 12-byte CDB has been
+     * received and handle_packet() has run (phase is no longer PACKET_IN). */
+    if (ide->cd.phase == ATAPI_PHASE_DATA_IN) {
+        /*
+         * Device has data for the host.
+         * Interrupt Reason: I/O=1 C/D=0 → 0x02.
+         * First DRQ block size = min(data_len, BCL).
+         */
+        size_t first = ide->cd.data_len < (size_t)ide->byte_count_limit
+                       ? ide->cd.data_len
+                       : (size_t)ide->byte_count_limit;
+        ide->drq_block_end = first; /* data_pos starts at 0 */
+        uint16_t bc = (uint16_t)first;
+        ide->sector_count = 0x02;
+        ide->cyl_low  = (uint8_t)(bc & 0xff);
+        ide->cyl_high = (uint8_t)((bc >> 8) & 0xff);
+        set_error(ide, atapi_cd_error(&ide->cd));
+        set_status(ide, ATA_STATUS_DRDY | ATA_STATUS_DRQ);
+        ide->irq_pending = true;
+
+    } else if (ide->cd.phase == ATAPI_PHASE_STATUS) {
+        /*
+         * No data transfer — command complete.
+         * Interrupt Reason: I/O=1 C/D=1 → 0x03.
+         */
+        ide->sector_count = 0x03;
+        set_error(ide, atapi_cd_error(&ide->cd));
+        set_status(ide, ATA_STATUS_DRDY |
+                        (atapi_cd_error(&ide->cd) ? ATA_STATUS_ERR : 0));
+        ide->irq_pending = true;
     }
+    /* ATAPI_PHASE_PACKET_IN: CDB not complete yet — don't change status */
 }
 
 uint32_t gayle_ide_read32(GayleIde *ide)
@@ -335,11 +438,11 @@ void gayle_ide_write32(GayleIde *ide, uint32_t value)
 
 bool gayle_ide_irq_pending(const GayleIde *ide)
 {
-    (void)ide;
-    return false;
+    return ide ? ide->irq_pending : false;
 }
 
 void gayle_ide_clear_irq(GayleIde *ide)
 {
-    (void)ide;
+    if (ide)
+        ide->irq_pending = false;
 }
