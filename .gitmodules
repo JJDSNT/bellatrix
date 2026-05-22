@@ -19,3 +19,6 @@
 [submodule "external/mounter"]
 	path = external/mounter
 	url = https://github.com/A4091/mounter
+[submodule "external/rigel"]
+	path = external/rigel
+	url = https://github.com/JJDSNT/rigel
