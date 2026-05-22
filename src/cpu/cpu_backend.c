@@ -1,6 +1,6 @@
-#include "cpu_backend.h"
+#include "cpu/cpu_backend.h"
 
-#include "bridge/bellatrix_bridge.h"
+#include "cpu/cpu_bridge.h"
 
 uint32_t cpu_backend_get_pc(CpuBackend *backend)
 {

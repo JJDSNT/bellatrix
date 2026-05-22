@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-#include "core/machine.h"
+#include "machine/machine.h"
 #include "support.h"
 
 /* ------------------------------------------------------------------------- */

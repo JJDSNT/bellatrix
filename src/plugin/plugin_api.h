@@ -1,7 +1,7 @@
 #ifndef BELLATRIX_PLUGIN_API_H
 #define BELLATRIX_PLUGIN_API_H
 
-#include "core/expansion.h"
+#include "machine/expansion.h"
 
 #ifdef __cplusplus
 extern "C" {

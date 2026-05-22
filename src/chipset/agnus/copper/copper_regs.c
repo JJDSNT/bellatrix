@@ -7,7 +7,7 @@
 #include "copper_regs.h"
 #include "copper.h"
 
-#include "memory/memory.h"
+#include "machine/memory/memory.h"
 #include "support.h"
 #include "debug/cpu_pc.h"
 

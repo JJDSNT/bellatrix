@@ -4,7 +4,7 @@
 
 #include "agnus.h"
 #include "host/pal.h"
-#include "memory/memory.h"
+#include "machine/memory/memory.h"
 #include "support.h"
 
 #define CHIP_RAM_MASK BELLATRIX_CHIP_RAM_MASK

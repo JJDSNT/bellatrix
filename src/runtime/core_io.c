@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "chipset/cia/cia.h"
-#include "input/keyboard.h"
+#include "machine/input/keyboard.h"
 #include "io/serial/uart_host.h"
 #include "io/usb/usb_host.h"
 #include "debug/core_log.h"

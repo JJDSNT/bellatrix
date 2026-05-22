@@ -4,7 +4,7 @@
 #include "plugin/plugin_manifest.h"
 #include "plugin/plugin_registry.h"
 
-#include "core/expansion.h"
+#include "machine/expansion.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -10,7 +10,7 @@
 #include "../agnus.h"
 #include "../beam.h"
 #include "../blitter/blitter.h"
-#include "memory/memory.h"
+#include "machine/memory/memory.h"
 #include "support.h"
 
 /* ------------------------------------------------------------------------- */

@@ -48,7 +48,7 @@ int bellatrix_plugin_load_all(
  *
  * Example:
  *
- *     expansions/cdrom
+ *     machine/expansions/cdrom
  */
 
 int bellatrix_plugin_load_directory(

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "core/machine.h"
+#include "machine/machine.h"
 
 #include "io/serial/uart_host.h"
 #include "io/bluetooth/bt_host.h"

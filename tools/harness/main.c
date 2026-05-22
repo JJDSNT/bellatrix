@@ -14,15 +14,15 @@
 //                     [--cycles N] [--frames N]
 
 #include "musashi_backend.h"
-#include "boards/cd_autoboot.h"
+#include "machine/boards/cd_autoboot.h"
 
-#include "core/machine.h"
-#include "bridge/bellatrix_bridge.h"
+#include "machine/machine.h"
+#include "cpu/cpu_bridge.h"
 #include "chipset/paula/paula.h"
 #include "chipset/paula/paula_audio.h"
 #include "debug/debug.h"
 #include "host/pal.h"
-#include "memory/memory.h"
+#include "machine/memory/memory.h"
 #include "plugin/plugin_loader.h"
 #include "m68k.h"
 

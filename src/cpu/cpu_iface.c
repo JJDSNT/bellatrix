@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "cpu_iface.h"
+#include "cpu/cpu_iface.h"
 #include "M68k.h"
 
 /*

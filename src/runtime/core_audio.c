@@ -6,7 +6,7 @@
 #include "chipset/paula/paula_disk.h"
 #include "chipset/paula/paula_serial.h"
 #include "chipset/paula/paula_interrupt.h"
-#include "core/machine.h"
+#include "machine/machine.h"
 #include "debug/core_log.h"
 
 /*

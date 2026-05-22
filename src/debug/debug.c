@@ -1,6 +1,6 @@
 #include "debug/debug.h"
 
-#include "core/machine.h"
+#include "machine/machine.h"
 #include "debug/probe.h"
 #include "debug/os_debug.h"
 #include "debug/emu_debug.h"

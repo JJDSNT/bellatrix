@@ -1,4 +1,4 @@
-#include "core/machine.h"
+#include "machine/machine.h"
 #include "chipset/denise/sprites.h"
 
 #include <stdint.h>

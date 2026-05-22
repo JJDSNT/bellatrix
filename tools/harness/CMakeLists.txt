@@ -57,20 +57,20 @@ target_compile_options(musashi PRIVATE
 set(BELLATRIX_SOURCES
 
     # Core
-    ${SRC}/core/machine.c
-    ${SRC}/core/expansion.c
-    ${SRC}/core/bus.c
-    ${SRC}/bridge/bellatrix_bridge.c
+    ${SRC}/machine/machine.c
+    ${SRC}/machine/expansion.c
+    ${SRC}/machine/bus.c
+    ${SRC}/cpu/cpu_bridge.c
     ${SRC}/plugin/plugin_loader.c
     ${SRC}/plugin/plugin_manifest.c
 
     # Memory (nova base)
-    ${SRC}/core/memory/memory.c
-    ${SRC}/core/memory/chip_ram.c
-    ${SRC}/core/memory/fast_ram.c
-    ${SRC}/core/memory/overlay.c
-    ${SRC}/core/memory/memory_map.c
-    ${SRC}/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/memory/memory.c
+    ${SRC}/machine/memory/chip_ram.c
+    ${SRC}/machine/memory/fast_ram.c
+    ${SRC}/machine/memory/overlay.c
+    ${SRC}/machine/memory/memory_map.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
 
     # Agnus
     ${SRC}/chipset/agnus/agnus.c
@@ -121,19 +121,19 @@ set(BELLATRIX_SOURCES
     ${SRC}/chipset/rtc/rtc.c
 
     # GAYLE IDE + ATAPI CD-ROM
-    ${SRC}/bus/gayle/gayle.c
-    ${SRC}/bus/gayle/gayle_ide.c
-    ${SRC}/bus/gayle/atapi_cd.c
+    ${SRC}/machine/bus/gayle/gayle.c
+    ${SRC}/machine/bus/gayle/gayle_ide.c
+    ${SRC}/machine/bus/gayle/atapi_cd.c
 
     # Expansion ROM boards
-    ${SRC}/boards/cd_autoboot.c
+    ${SRC}/machine/boards/cd_autoboot.c
 
     # ISO image (in-memory + callback)
     ${SRC}/storage/iso/iso_image.c
 
     # Input
-    ${SRC}/input/controller_port.c
-    ${SRC}/input/keyboard.c
+    ${SRC}/machine/input/controller_port.c
+    ${SRC}/machine/input/keyboard.c
 
     # Debug
     ${SRC}/debug/btrace.c
@@ -163,7 +163,6 @@ add_executable(harness
 target_include_directories(harness PRIVATE
     ${SRC}/host/posix
     ${SRC}
-    ${SRC}/core
     ${SRC}/cpu
     ${SRC}/host
     ${SRC}/boards
@@ -207,18 +206,17 @@ target_compile_options(harness PRIVATE
 # ---------------------------------------------------------------------------
 add_executable(bellatrix_unit_memory
     ${ROOT}/tests/unit/test_memory_map.c
-    ${SRC}/core/memory/memory.c
-    ${SRC}/core/memory/chip_ram.c
-    ${SRC}/core/memory/fast_ram.c
-    ${SRC}/core/memory/overlay.c
-    ${SRC}/core/memory/memory_map.c
-    ${SRC}/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/memory/memory.c
+    ${SRC}/machine/memory/chip_ram.c
+    ${SRC}/machine/memory/fast_ram.c
+    ${SRC}/machine/memory/overlay.c
+    ${SRC}/machine/memory/memory_map.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
 )
 
 target_include_directories(bellatrix_unit_memory PRIVATE
     ${SRC}/host/posix
     ${SRC}
-    ${SRC}/core
 )
 
 target_compile_definitions(bellatrix_unit_memory PRIVATE
@@ -240,7 +238,6 @@ add_executable(bellatrix_unit_uart
 target_include_directories(bellatrix_unit_uart PRIVATE
     ${SRC}/host/posix
     ${SRC}
-    ${SRC}/core
 )
 
 target_compile_definitions(bellatrix_unit_uart PRIVATE
@@ -267,7 +264,6 @@ add_executable(bellatrix_unit_cia
 target_include_directories(bellatrix_unit_cia PRIVATE
     ${SRC}/host/posix
     ${SRC}
-    ${SRC}/core
 )
 
 target_compile_definitions(bellatrix_unit_cia PRIVATE
@@ -289,7 +285,6 @@ add_executable(bellatrix_integration_overlay
 target_include_directories(bellatrix_integration_overlay PRIVATE
     ${SRC}/host/posix
     ${SRC}
-    ${SRC}/core
     ${SRC}/cpu
     ${SRC}/host
 )
@@ -352,12 +347,12 @@ set_tests_properties(bellatrix_harness_no_autoconfig PROPERTIES
 )
 
 add_library(cdrom MODULE
-    ${SRC}/expansions/cdrom/cdrom_plugin.c
-    ${SRC}/expansions/cdrom/board/cdrom_board.c
-    ${SRC}/expansions/cdrom/ide/cdrom_ide.c
-    ${SRC}/expansions/cdrom/media/cdrom_device.c
-    ${SRC}/expansions/cdrom/media/cdrom_iso_backend.c
-    ${SRC}/expansions/cdrom/media/cdrom_atapi.c
+    ${SRC}/machine/expansions/cdrom/cdrom_plugin.c
+    ${SRC}/machine/expansions/cdrom/board/cdrom_board.c
+    ${SRC}/machine/expansions/cdrom/ide/cdrom_ide.c
+    ${SRC}/machine/expansions/cdrom/media/cdrom_device.c
+    ${SRC}/machine/expansions/cdrom/media/cdrom_iso_backend.c
+    ${SRC}/machine/expansions/cdrom/media/cdrom_atapi.c
 )
 
 set_target_properties(cdrom PROPERTIES
@@ -367,16 +362,15 @@ set_target_properties(cdrom PROPERTIES
 
 target_include_directories(cdrom PRIVATE
     ${SRC}
-    ${SRC}/core
 )
 
 add_custom_command(
     TARGET cdrom POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGINS_OUT}/cdrom/resident
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${SRC}/expansions/cdrom/plugin.json
+            ${SRC}/machine/expansions/cdrom/plugin.json
             ${PLUGINS_OUT}/cdrom/plugin.json
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${SRC}/boards/resident/cdmount.rom
+            ${SRC}/machine/boards/resident/cdmount.rom
             ${PLUGINS_OUT}/cdrom/resident/cdmount.rom
 )

@@ -10,7 +10,7 @@
 #include "beam.h"
 #include "bitplanes.h"
 #include "dma.h"
-#include "memory/memory.h"
+#include "machine/memory/memory.h"
 
 struct Denise;
 struct Paula;

@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "core/machine.h"
+#include "machine/machine.h"
 
 typedef struct RuntimeCoreGFX {
     BellatrixMachine *machine;

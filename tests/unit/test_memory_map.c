@@ -1,5 +1,5 @@
-#include "memory/memory.h"
-#include "memory/memory_map.h"
+#include "machine/memory/memory.h"
+#include "machine/memory/memory_map.h"
 
 #include <stdint.h>
 #include <stdio.h>

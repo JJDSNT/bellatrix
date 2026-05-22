@@ -1,4 +1,4 @@
-#include "core/machine.h"
+#include "machine/machine.h"
 #include "support.h"
 
 #ifdef BELLATRIX_LAUNCHER

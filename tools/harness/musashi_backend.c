@@ -15,9 +15,9 @@
 //   1 MB   → first 512 KB at 0xE00000, second 512 KB at 0xF80000
 
 #include "musashi_backend.h"
-#include "bridge/bellatrix_bridge.h"
-#include "core/machine.h"
-#include "memory/memory.h"
+#include "cpu/cpu_bridge.h"
+#include "machine/machine.h"
+#include "machine/memory/memory.h"
 #include "chipset/cia/cia.h"
 
 #include "m68k.h"
