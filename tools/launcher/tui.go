@@ -12,6 +12,7 @@ type launchResult struct {
 	emuProfile     string
 	kickstart      string
 	adf            string
+	iso            string
 	displayMode    string
 	bootArgs       string
 	multicoreBuild bool
@@ -34,14 +35,17 @@ type activePane int
 const (
 	paneKickstart activePane = iota
 	paneADF
+	paneISO
 )
 
 type model struct {
 	roms []FileEntry
 	adfs []FileEntry
+	isos []FileEntry
 
 	romCursor int
 	adfCursor int
+	isoCursor int
 	active    activePane
 
 	displayMode    string
@@ -65,12 +69,14 @@ type model struct {
 	cancelled bool
 }
 
-func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
+func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchResult, error) {
 	m := model{
 		roms:           roms,
 		adfs:           adfs,
+		isos:           isos,
 		romCursor:      defaultROMIndex(roms),
 		adfCursor:      0,
+		isoCursor:      0,
 		active:         paneKickstart,
 		displayMode:    "gtk",
 		multicoreBuild: false,
@@ -110,10 +116,17 @@ func runLauncher(roms []FileEntry, adfs []FileEntry) (launchResult, error) {
 		adf = selectedADF.Path
 	}
 
+	selectedISO := fm.isos[fm.isoCursor]
+	iso := ""
+	if !selectedISO.None {
+		iso = selectedISO.Path
+	}
+
 	return launchResult{
 		emuProfile:     launcherProfileForCPUBackend(fm.cpuBackend),
 		kickstart:      kickstart,
 		adf:            adf,
+		iso:            iso,
 		displayMode:    fm.displayMode,
 		bootArgs:       buildBootArgs(fm.debugMode, fm.fpuEnabled),
 		multicoreBuild: fm.multicoreBuild,
@@ -214,9 +227,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "tab":
-			if m.active == paneKickstart {
+			switch m.active {
+			case paneKickstart:
 				m.active = paneADF
-			} else {
+			case paneADF:
+				m.active = paneISO
+			default:
 				m.active = paneKickstart
 			}
 			return m, nil
@@ -231,6 +247,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.adfCursor > 0 {
 					m.adfCursor--
 				}
+			case paneISO:
+				if m.isoCursor > 0 {
+					m.isoCursor--
+				}
 			}
 			return m, nil
 
@@ -243,6 +263,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case paneADF:
 				if m.adfCursor < len(m.adfs)-1 {
 					m.adfCursor++
+				}
+			case paneISO:
+				if m.isoCursor < len(m.isos)-1 {
+					m.isoCursor++
 				}
 			}
 			return m, nil
@@ -397,6 +421,25 @@ func (m model) renderPanel() string {
 	}
 
 	b.WriteString("\n")
+	b.WriteString(sectionTitleStyle.Render("CD-ROM (ISO)"))
+	if m.active == paneISO {
+		b.WriteString(" ")
+		b.WriteString(onBadgeStyle.Render("ACTIVE"))
+	}
+	b.WriteString("\n")
+
+	for i, iso := range m.isos {
+		line := "  " + iso.Name
+		if i == m.isoCursor {
+			line = "> " + iso.Name
+			b.WriteString(selectedItemStyle.Render(line))
+		} else {
+			b.WriteString(itemStyle.Render(line))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
 	b.WriteString(sectionTitleStyle.Render("Options"))
 	b.WriteString("\n")
 
@@ -513,7 +556,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -572,6 +615,16 @@ func (m model) qemuCommand() string {
 	if !selectedADF.None {
 		cmd = fmt.Sprintf("%s -device loader,file=%s,addr=0x18000000,force-raw=on",
 			cmd, selectedADF.Path)
+	}
+
+	// Inject the ISO at physical 0x20000000 via the QEMU generic loader.
+	// Bellatrix detects the ISO 9660 PVD signature there when the EMMC init
+	// fails and attaches the image to the GAYLE ATAPI CD-ROM device.
+	// Note: ADF and ISO are mutually exclusive; only one can be selected.
+	selectedISO := m.isos[m.isoCursor]
+	if !selectedISO.None && selectedADF.None {
+		cmd = fmt.Sprintf("%s -device loader,file=%s,addr=0x20000000,force-raw=on",
+			cmd, selectedISO.Path)
 	}
 
 	return cmd

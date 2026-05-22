@@ -49,10 +49,20 @@ func main() {
 	}
 
 	/* --------------------------------------------------------------------- */
+	/* Scan ISOs                                                             */
+	/* --------------------------------------------------------------------- */
+
+	isos, err := scanISOs(disksDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to scan ISOs: %v\n", err)
+		os.Exit(1)
+	}
+
+	/* --------------------------------------------------------------------- */
 	/* Run TUI                                                               */
 	/* --------------------------------------------------------------------- */
 
-	result, err := runLauncher(roms, adfs)
+	result, err := runLauncher(roms, adfs, isos)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "launcher failed: %v\n", err)
 		os.Exit(1)
@@ -67,12 +77,13 @@ func main() {
 	/* --------------------------------------------------------------------- */
 
 	output := fmt.Sprintf(
-		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_MULTICORE_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\n",
+		"EMU_PROFILE=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_MULTICORE_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\n",
 		result.emuProfile,
 		result.kickstart,
 		result.displayMode,
 		result.bootArgs,
 		result.adf,
+		result.iso,
 		boolEnv(result.multicoreBuild),
 		boolEnv(result.multicoreLogs),
 		boolEnv(result.btstack),
