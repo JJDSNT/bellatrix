@@ -4,6 +4,7 @@
 
 #include "chipset/floppy/floppy_drive.h"
 #include "bus/gayle/gayle.h"
+#include "core/expansion.h"
 #include "storage/iso/iso_image.h"
 #include "chipset/paula/paula.h"
 
@@ -594,6 +595,7 @@ void bellatrix_machine_reset(void)
 
     machine_debug_reset(m);
     machine_sync_floppy_pra(m);
+    bellatrix_expansion_reset_all(m);
 
     m->tick_count = 0;
     machine_publish_ipl(m, 0);

@@ -8,7 +8,7 @@
 #include "support.h"
 
 #if defined(BELLATRIX_HARNESS)
-#include "memory/autoconfig.h"
+#include "bus/zorro2/zorro2_bus.h"
 #endif
 
 #include <string.h>
@@ -29,7 +29,7 @@ static uint8_t g_fast_ram[BELLATRIX_FAST_RAM_SIZE];
 static void bellatrix_memory_log_expansion_backend(void)
 {
 #if defined(BELLATRIX_HARNESS)
-    kprintf("[MEMMAP] expansion backend: harness autoconfig\n");
+    kprintf("[MEMMAP] expansion backend: harness zorro2 bus\n");
 #elif defined(BELLATRIX_EMU68)
     kprintf("[MEMMAP] expansion backend: emu68 boards\n");
 #endif
@@ -66,7 +66,7 @@ void bellatrix_memory_init(BellatrixMemory *m)
 
 #if defined(BELLATRIX_HARNESS)
     memset(m->fast_ram, 0, m->fast_ram_size);
-    autoconfig_init(m);
+    bellatrix_zorro2_init(m);
 #endif
 
     bellatrix_memory_log_expansion_backend();
@@ -77,7 +77,7 @@ void bellatrix_memory_reset(BellatrixMemory *m)
     bellatrix_memory_init(m);
 
 #if defined(BELLATRIX_HARNESS)
-    autoconfig_reset(m);
+    bellatrix_zorro2_reset(m);
 #endif
 }
 

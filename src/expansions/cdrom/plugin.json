@@ -1,0 +1,1 @@
+{"id":"cdrom","name":"CD-ROM Expansion","version":"0.1.0","author":"OpenAI","module":"cdrom.so","abi_version":1,"priority":100,"kind":"board"}

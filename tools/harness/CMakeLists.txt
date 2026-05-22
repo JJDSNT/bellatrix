@@ -12,6 +12,7 @@ enable_testing()
 set(ROOT    ${CMAKE_SOURCE_DIR}/../..)   # bellatrix/
 set(SRC     ${ROOT}/src)
 set(MUSASHI ${ROOT}/external/musashi)
+set(PLUGINS_OUT ${CMAKE_BINARY_DIR}/plugins)
 
 # ---------------------------------------------------------------------------
 # Generate m68kops.c + m68kops.h from Musashi's code generator
@@ -57,8 +58,11 @@ set(BELLATRIX_SOURCES
 
     # Core
     ${SRC}/core/machine.c
+    ${SRC}/core/expansion.c
     ${SRC}/core/bus.c
     ${SRC}/bridge/bellatrix_bridge.c
+    ${SRC}/plugin/plugin_loader.c
+    ${SRC}/plugin/plugin_manifest.c
 
     # Memory (nova base)
     ${SRC}/core/memory/memory.c
@@ -66,7 +70,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/core/memory/fast_ram.c
     ${SRC}/core/memory/overlay.c
     ${SRC}/core/memory/memory_map.c
-    ${SRC}/core/memory/autoconfig.c
+    ${SRC}/bus/zorro2/zorro2_bus.c
 
     # Agnus
     ${SRC}/chipset/agnus/agnus.c
@@ -168,6 +172,8 @@ target_include_directories(harness PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+target_link_options(harness PRIVATE -rdynamic)
+
 target_compile_definitions(harness PRIVATE
     BELLATRIX_HARNESS=1
     BELLATRIX_ENABLE_PTY_BACKEND=1
@@ -190,7 +196,7 @@ endif()
 # Link
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
-target_link_libraries(harness PRIVATE musashi m Threads::Threads)
+target_link_libraries(harness PRIVATE musashi m dl Threads::Threads)
 
 target_compile_options(harness PRIVATE
     -Wall -Wextra -Wno-unused-parameter
@@ -206,7 +212,7 @@ add_executable(bellatrix_unit_memory
     ${SRC}/core/memory/fast_ram.c
     ${SRC}/core/memory/overlay.c
     ${SRC}/core/memory/memory_map.c
-    ${SRC}/core/memory/autoconfig.c
+    ${SRC}/bus/zorro2/zorro2_bus.c
 )
 
 target_include_directories(bellatrix_unit_memory PRIVATE
@@ -343,4 +349,34 @@ set_tests_properties(bellatrix_harness_boot_adf PROPERTIES
 set_tests_properties(bellatrix_harness_no_autoconfig PROPERTIES
     ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
     TIMEOUT 5
+)
+
+add_library(cdrom MODULE
+    ${SRC}/expansions/cdrom/cdrom_plugin.c
+    ${SRC}/expansions/cdrom/board/cdrom_board.c
+    ${SRC}/expansions/cdrom/ide/cdrom_ide.c
+    ${SRC}/expansions/cdrom/media/cdrom_device.c
+    ${SRC}/expansions/cdrom/media/cdrom_iso_backend.c
+    ${SRC}/expansions/cdrom/media/cdrom_atapi.c
+)
+
+set_target_properties(cdrom PROPERTIES
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${PLUGINS_OUT}/cdrom
+)
+
+target_include_directories(cdrom PRIVATE
+    ${SRC}
+    ${SRC}/core
+)
+
+add_custom_command(
+    TARGET cdrom POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGINS_OUT}/cdrom/resident
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${SRC}/expansions/cdrom/plugin.json
+            ${PLUGINS_OUT}/cdrom/plugin.json
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${SRC}/boards/resident/cdmount.rom
+            ${PLUGINS_OUT}/cdrom/resident/cdmount.rom
 )

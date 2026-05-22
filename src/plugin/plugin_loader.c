@@ -97,6 +97,8 @@ static int load_plugin_module(
         manifest->module
     );
 
+    loader->api.plugin_root = directory_path;
+
 #if defined(_WIN32)
 
     handle = LoadLibraryA(module_path);

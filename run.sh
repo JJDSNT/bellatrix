@@ -163,6 +163,16 @@ build_harness() {
     )
 }
 
+build_cd_board() {
+    local DOCKER_WRAPPER="${ROOT}/emu68/build-scripts/build-m68k-amigaos"
+    if [ ! -x "$DOCKER_WRAPPER" ]; then
+        echo "[CD-BOARD] Docker wrapper not found — skipping ROM build"
+        return 0
+    fi
+    echo "[BUILD] CD automount ROM (m68k DiagArea)"
+    TTY_ENABLED="" "$DOCKER_WRAPPER" make -C "${ROOT}/src/boards/resident"
+}
+
 set_profile_paths() {
     case "$1" in
         bellatrix)
@@ -215,6 +225,9 @@ load_launcher_selection() {
                 ;;
             ADF)
                 ADF="$value"
+                ;;
+            ISO)
+                ISO="$value"
                 ;;
             DISPLAY_MODE)
                 DISPLAY_MODE="$value"
@@ -287,6 +300,11 @@ if [ "$MODE" = "harness" ]; then
     echo "[BUILD] Harness (Musashi, native)"
     build_harness
 
+    # Auto-build cdmount.rom when running with an ISO
+    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+        build_cd_board
+    fi
+
     # Pick ROM via TUI if not set
     if [ -z "${KICKSTART:-}" ]; then
         load_launcher_selection
@@ -302,6 +320,16 @@ if [ "$MODE" = "harness" ]; then
         HARNESS_ARGS+=(--adf "$ADF")
     fi
 
+    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+        [ -f "$ISO" ] || { echo "ERROR: ISO not found: $ISO"; exit 1; }
+        HARNESS_ARGS+=(--iso "$ISO")
+    fi
+
+    PLUGINS_DIR="${PLUGINS_DIR:-$HARNESS_BUILD_DIR/plugins}"
+    if [ -d "$PLUGINS_DIR" ]; then
+        HARNESS_ARGS+=(--plugins "$PLUGINS_DIR")
+    fi
+
     if [ -n "${CYCLES:-}" ]; then
         HARNESS_ARGS+=(--cycles "$CYCLES")
     elif [ -n "${FRAMES:-}" ]; then
@@ -312,8 +340,13 @@ if [ "$MODE" = "harness" ]; then
     echo "[RUN] Harness ROM: $KICKSTART"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
+    elif [ -n "${ISO:-}" ]; then
+        echo "[RUN] Harness CD-ROM: $ISO"
     else
         echo "[RUN] Harness DF0: no disk"
+    fi
+    if [ -d "$PLUGINS_DIR" ]; then
+        echo "[RUN] Harness plugins: $PLUGINS_DIR"
     fi
 
     exec "$HARNESS_BIN" "${HARNESS_ARGS[@]}"
@@ -322,6 +355,10 @@ fi
 if [ "$MODE" = "harness-serial" ]; then
     echo "[BUILD] Harness (Musashi, native)"
     build_harness
+
+    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+        build_cd_board
+    fi
 
     if [ -z "${KICKSTART:-}" ]; then
         load_launcher_selection
@@ -336,6 +373,16 @@ if [ "$MODE" = "harness-serial" ]; then
         HARNESS_ARGS+=(--adf "$ADF")
     fi
 
+    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+        [ -f "$ISO" ] || { echo "ERROR: ISO not found: $ISO"; exit 1; }
+        HARNESS_ARGS+=(--iso "$ISO")
+    fi
+
+    PLUGINS_DIR="${PLUGINS_DIR:-$HARNESS_BUILD_DIR/plugins}"
+    if [ -d "$PLUGINS_DIR" ]; then
+        HARNESS_ARGS+=(--plugins "$PLUGINS_DIR")
+    fi
+
     if [ -n "${CYCLES:-}" ]; then
         HARNESS_ARGS+=(--cycles "$CYCLES")
     elif [ -n "${FRAMES:-}" ]; then
@@ -345,8 +392,13 @@ if [ "$MODE" = "harness-serial" ]; then
     echo "[RUN] Harness ROM: $KICKSTART"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
+    elif [ -n "${ISO:-}" ]; then
+        echo "[RUN] Harness CD-ROM: $ISO"
     else
         echo "[RUN] Harness DF0: no disk"
+    fi
+    if [ -d "$PLUGINS_DIR" ]; then
+        echo "[RUN] Harness plugins: $PLUGINS_DIR"
     fi
 
     tmpfile="$(mktemp)"
@@ -527,6 +579,16 @@ case "$MODE" in
             [ -f "$ADF" ] || { echo "ERROR: ADF not found: $ADF"; exit 1; }
             QEMU_ARGS+=(-device "loader,file=$ADF,addr=0x18000000,force-raw=on")
             echo "[RUN] QEMU DF0 loader: $ADF → phys 0x18000000"
+        fi
+
+        # Inject ISO via QEMU generic loader at physical 0x20000000.
+        # Bellatrix's launcher detects the ISO 9660 PVD signature there and
+        # attaches the image to the GAYLE ATAPI CD-ROM device.
+        # ADF and ISO are mutually exclusive — skip ISO if ADF is already set.
+        if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ] && [ "${BELLATRIX_LAUNCHER:-1}" = "1" ]; then
+            [ -f "$ISO" ] || { echo "ERROR: ISO not found: $ISO"; exit 1; }
+            QEMU_ARGS+=(-device "loader,file=$ISO,addr=0x20000000,force-raw=on")
+            echo "[RUN] QEMU CD-ROM loader: $ISO → phys 0x20000000"
         fi
 
         echo "[RUN] Image: $IMAGE"

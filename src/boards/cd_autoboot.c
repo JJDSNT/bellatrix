@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "memory/autoconfig.h"
+#include "bus/zorro2/zorro2_bus.h"
 
 static uint8_t *s_buf;
 
@@ -41,7 +41,7 @@ int cd_autoboot_init(BellatrixMachine *m, const char *rom_path)
     size_t n = fread(s_buf, 1, (size_t)file_sz, f);
     fclose(f);
 
-    autoconfig_enable_cd_board(s_buf, n);
+    bellatrix_zorro2_enable_cd_board(s_buf, n);
     fprintf(stderr, "[CD-BOARD] ROM %zu B → Autoconfig Z2 DiagArea @ er_InitDiagVec=0x0010\n", n);
     return 0;
 }

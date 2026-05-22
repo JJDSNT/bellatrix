@@ -9,16 +9,21 @@
 // is reached then exits.  Useful for CI and chipset validation.
 //
 // Usage:
-//   harness <rom.bin> [--adf disk.adf] [--headless] [--cycles N] [--frames N]
+//   harness <rom.bin> [--adf disk.adf] [--iso image.iso] [--plugins dir]
+//                     [--cd-board path.rom] [--headless]
+//                     [--cycles N] [--frames N]
 
 #include "musashi_backend.h"
+#include "boards/cd_autoboot.h"
 
 #include "core/machine.h"
 #include "bridge/bellatrix_bridge.h"
 #include "chipset/paula/paula.h"
+#include "chipset/paula/paula_audio.h"
 #include "debug/debug.h"
 #include "host/pal.h"
 #include "memory/memory.h"
+#include "plugin/plugin_loader.h"
 #include "m68k.h"
 
 #include <stdio.h>
@@ -745,14 +750,19 @@ int main(int argc, char **argv)
     harness_install_signal_handlers();
     PAL_HarnessSerial_ConfigureFromEnv();
 
-    const char *rom_path    = NULL;
-    const char *adf_path    = NULL;
-    int         headless    = 0;
-    long        max_cycles  = 0;
-    long        max_frames  = 0;
+    const char *rom_path      = NULL;
+    const char *adf_path      = NULL;
+    const char *iso_path      = NULL;
+    const char *plugins_path  = NULL;
+    const char *cd_board_path = NULL;
+    int         headless      = 0;
+    long        max_cycles    = 0;
+    long        max_frames    = 0;
 
     uint8_t    *adf_data    = NULL;
     uint32_t    adf_size    = 0;
+    uint8_t    *iso_data    = NULL;
+    uint32_t    iso_size    = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--headless") == 0) {
@@ -765,19 +775,29 @@ int main(int argc, char **argv)
             headless   = 1;
         } else if (strcmp(argv[i], "--adf") == 0 && i + 1 < argc) {
             adf_path = argv[++i];
+        } else if (strcmp(argv[i], "--iso") == 0 && i + 1 < argc) {
+            iso_path = argv[++i];
+        } else if (strcmp(argv[i], "--plugins") == 0 && i + 1 < argc) {
+            plugins_path = argv[++i];
+        } else if (strcmp(argv[i], "--cd-board") == 0 && i + 1 < argc) {
+            cd_board_path = argv[++i];
         } else if (argv[i][0] != '-') {
             rom_path = argv[i];
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             fprintf(stderr,
-                "Usage: harness <rom.bin> [--adf disk.adf] [--headless] [--cycles N] [--frames N]\n");
+                "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
+                "               [--plugins dir] [--cd-board path.rom]\n"
+                "               [--headless] [--cycles N] [--frames N]\n");
             return 1;
         }
     }
 
     if (!rom_path) {
         fprintf(stderr,
-            "Usage: harness <rom.bin> [--adf disk.adf] [--headless] [--cycles N] [--frames N]\n");
+            "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
+            "               [--plugins dir] [--cd-board path.rom]\n"
+            "               [--headless] [--cycles N] [--frames N]\n");
         return 1;
     }
 
@@ -824,6 +844,21 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Load ISO, if provided (preloaded into host RAM; GAYLE serves sectors on demand). */
+    if (iso_path) {
+        if (adf_path) {
+            fprintf(stderr, "[HARNESS] WARNING: both --adf and --iso specified; ISO ignored\n");
+        } else {
+            iso_data = load_file_limited(iso_path, &iso_size, 800u * 1024u * 1024u, "ISO");
+            if (!iso_data) {
+                free(rom_data);
+                return 1;
+            }
+            printf("[HARNESS] ISO: %s  size=%u bytes  (%u sectors)\n",
+                   iso_path, iso_size, iso_size / 2048u);
+        }
+    }
+
     /* Init display before machine so framebuffer globals are set */
     if (!headless) {
         if (PAL_Video_Init(640, 512, 16) != 0) {
@@ -835,6 +870,11 @@ int main(int argc, char **argv)
 
     harness_wait_for_serial_attach();
 
+    /* CD automount board: load ROM before machine init so the initial Zorro II
+     * board inventory already contains the DiagArea plugin/board sample. */
+    if (cd_board_path)
+        cd_autoboot_init(NULL, cd_board_path);
+
     /* Init Musashi + load ROM */
     musashi_backend_init();
     musashi_backend_load_rom(rom_data, rom_size, rom_base);
@@ -845,6 +885,28 @@ int main(int argc, char **argv)
     bellatrix_machine_init(musashi_backend_get());
     BellatrixMachine *m = bellatrix_machine_get();
     harness_memory_init(&m->memory);
+
+    if (plugins_path) {
+        BellatrixPluginLoader loader;
+        if (bellatrix_plugin_loader_init(&loader, plugins_path) == 0) {
+            int plugin_rc = bellatrix_plugin_load_all(&loader, m);
+            if (plugin_rc != 0) {
+                fprintf(stderr,
+                        "[HARNESS] Plugin load failed from %s (%d)\n",
+                        plugins_path,
+                        plugin_rc);
+            } else {
+                fprintf(stderr,
+                        "[HARNESS] Plugins loaded from %s\n",
+                        plugins_path);
+            }
+            bellatrix_plugin_loader_shutdown(&loader);
+        } else {
+            fprintf(stderr,
+                    "[HARNESS] Plugin loader init failed for %s\n",
+                    plugins_path);
+        }
+    }
 
     /* Re-wire Paula disk DMA to the harness chip RAM buffer.
      * machine_init wires Paula before harness_memory_init replaces the pointer. */
@@ -859,6 +921,17 @@ int main(int argc, char **argv)
         }
     } else {
         bellatrix_machine_eject_df0();
+    }
+
+    /* Attach ISO image to GAYLE CD-ROM device, if loaded. */
+    if (iso_data) {
+        if (bellatrix_machine_insert_iso(iso_data, iso_size) != 0) {
+            fprintf(stderr, "[HARNESS] Failed to attach ISO image\n");
+            free(iso_data);
+            free(adf_data);
+            return 1;
+        }
+        printf("[HARNESS] CD-ROM: %u sectors attached\n", iso_size / 2048u);
     }
 
     /* CIA-A defaults: OVL and LED are outputs */
@@ -879,6 +952,12 @@ int main(int argc, char **argv)
      * ------------------------------------------------------------------------- */
 
     const int QUANTUM = 454;
+
+    /* Audio sample rate conversion: one S16 stereo sample every
+     * M68K_HZ / AUDIO_RATE cycles (≈ 161 cycles at PAL 7.09 MHz). */
+    static const uint64_t AUDIO_RATE = 44100;
+    static const uint64_t M68K_HZ   = 7093790;
+    uint64_t audio_acc = 0;
 
     long  total_cycles = 0;
     long  frame_count  = 0;
@@ -948,6 +1027,17 @@ int main(int argc, char **argv)
 
         int used = cpu_backend_run(musashi_backend_get(), (uint32_t)QUANTUM);
         total_cycles += used;
+
+        /* Audio output: push samples at 44100 Hz using fractional accumulator */
+        if (!headless) {
+            audio_acc += (uint64_t)(unsigned)used * AUDIO_RATE;
+            while (audio_acc >= M68K_HZ) {
+                audio_acc -= M68K_HZ;
+                pal_audio_push_sample(
+                    paula_audio_left(&m->paula.audio),
+                    paula_audio_right(&m->paula.audio));
+            }
+        }
 
         long cur_frame = (long)bellatrix_machine_agnus()->beam.frame;
         if (cur_frame != prev_frame) {
@@ -1035,6 +1125,7 @@ int main(int argc, char **argv)
            (unsigned)m68k_get_reg(NULL, M68K_REG_PC));
 
     free(adf_data);
+    free(iso_data);
 
     return 0;
 }
