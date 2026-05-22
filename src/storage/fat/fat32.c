@@ -357,3 +357,67 @@ bool fat32_read_all(Fat32File *f, void *buf, uint32_t buf_size)
     uint32_t got = fat32_read(f, buf, f->file_size);
     return (got == f->file_size);
 }
+
+bool fat32_seek(Fat32File *f, uint32_t byte_offset)
+{
+    if (!f || !f->fs) return false;
+    if (byte_offset >= f->file_size) return false;
+
+    const Fat32State *fs          = f->fs;
+    uint32_t          cluster_bytes = fs->cluster_size * 512u;
+    uint32_t          target_idx    = byte_offset / cluster_bytes;
+    uint32_t          cur_idx       = f->cur_offset / cluster_bytes;
+
+    uint32_t cluster;
+    uint32_t idx;
+
+    if (target_idx >= cur_idx) {
+        // Seek forward from current cluster
+        cluster = f->cur_cluster;
+        idx     = cur_idx;
+    } else {
+        // Seek backward: rewind to start
+        cluster = f->start_cluster;
+        idx     = 0u;
+    }
+
+    while (idx < target_idx) {
+        uint32_t next = fat_next_cluster(fs, cluster);
+        if (next >= 0x0FFFFFF8u || next == 0u) return false;
+        cluster = next;
+        idx++;
+    }
+
+    f->cur_cluster = cluster;
+    f->cur_offset  = byte_offset;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// List ISO files
+// ---------------------------------------------------------------------------
+
+static bool list_iso_entry_fn(const uint8_t *entry, void *user)
+{
+    ListCtx *ctx = (ListCtx *)user;
+
+    if (ctx->count >= ctx->max) return false;
+
+    if (entry[8] != 'I' || entry[9] != 'S' || entry[10] != 'O')
+        return true;
+
+    from_83((const char *)entry, ctx->names[ctx->count]);
+    ctx->count++;
+    return true;
+}
+
+uint32_t fat32_list_iso(Fat32State *fs,
+                        char        names[][FAT32_NAME_MAX],
+                        uint32_t    max_count)
+{
+    if (!fs || !fs->initialized || !names || max_count == 0u) return 0u;
+
+    ListCtx ctx = { names, max_count, 0u };
+    scan_dir_cluster(fs, fs->root_cluster, list_iso_entry_fn, &ctx);
+    return ctx.count;
+}

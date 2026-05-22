@@ -49,3 +49,12 @@ uint32_t fat32_read(Fat32File *f, void *buf, uint32_t len);
 
 // Convenience: read entire file into buf (must be >= f->file_size bytes).
 bool fat32_read_all(Fat32File *f, void *buf, uint32_t buf_size);
+
+// Seek to byte_offset within the file; updates cur_cluster accordingly.
+// Returns false if byte_offset >= file_size or FAT chain is broken.
+bool fat32_seek(Fat32File *f, uint32_t byte_offset);
+
+// List .ISO files in the root directory (same semantics as fat32_list_adf).
+uint32_t fat32_list_iso(Fat32State *fs,
+                        char       names[][FAT32_NAME_MAX],
+                        uint32_t   max_count);

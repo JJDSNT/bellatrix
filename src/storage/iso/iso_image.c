@@ -9,10 +9,11 @@ void iso_image_init(IsoImage *iso)
     if (!iso)
         return;
 
-    iso->data = NULL;
-    iso->size = 0;
+    iso->data         = NULL;
+    iso->read_fn      = NULL;
+    iso->read_ctx     = NULL;
     iso->sector_count = 0;
-    iso->present = false;
+    iso->present      = false;
 }
 
 bool iso_image_attach(IsoImage *iso, const void *data, size_t size)
@@ -20,12 +21,30 @@ bool iso_image_attach(IsoImage *iso, const void *data, size_t size)
     if (!iso || !data || size < ISO_SECTOR_SIZE)
         return false;
 
-    iso->data = (const uint8_t *)data;
-    iso->size = size;
+    iso->data         = (const uint8_t *)data;
+    iso->read_fn      = NULL;
+    iso->read_ctx     = NULL;
     iso->sector_count = (uint32_t)(size / ISO_SECTOR_SIZE);
-    iso->present = iso->sector_count > 0;
+    iso->present      = iso->sector_count > 0;
 
     return iso->present;
+}
+
+bool iso_image_attach_fn(IsoImage   *iso,
+                         iso_read_fn fn,
+                         void       *ctx,
+                         uint32_t    sector_count)
+{
+    if (!iso || !fn || sector_count == 0)
+        return false;
+
+    iso->data         = NULL;
+    iso->read_fn      = fn;
+    iso->read_ctx     = ctx;
+    iso->sector_count = sector_count;
+    iso->present      = true;
+
+    return true;
 }
 
 void iso_image_detach(IsoImage *iso)
@@ -35,7 +54,8 @@ void iso_image_detach(IsoImage *iso)
 
 bool iso_image_present(const IsoImage *iso)
 {
-    return iso && iso->present && iso->data && iso->sector_count > 0;
+    return iso && iso->present && iso->sector_count > 0 &&
+           (iso->data != NULL || iso->read_fn != NULL);
 }
 
 uint32_t iso_image_sector_count(const IsoImage *iso)
@@ -58,6 +78,9 @@ bool iso_image_read_sector(
     if (lba >= iso->sector_count)
         return false;
 
+    if (iso->read_fn)
+        return iso->read_fn(iso->read_ctx, lba, 1, dst);
+
     memcpy(dst, iso->data + ((size_t)lba * ISO_SECTOR_SIZE), ISO_SECTOR_SIZE);
     return true;
 }
@@ -69,8 +92,6 @@ bool iso_image_read_sectors(
     void *dst
 )
 {
-    uint8_t *out = (uint8_t *)dst;
-
     if (!iso_image_present(iso) || !dst)
         return false;
 
@@ -83,7 +104,10 @@ bool iso_image_read_sectors(
     if (count > iso->sector_count - lba)
         return false;
 
-    memcpy(out, iso->data + ((size_t)lba * ISO_SECTOR_SIZE),
+    if (iso->read_fn)
+        return iso->read_fn(iso->read_ctx, lba, count, dst);
+
+    memcpy(dst, iso->data + ((size_t)lba * ISO_SECTOR_SIZE),
            (size_t)count * ISO_SECTOR_SIZE);
 
     return true;
