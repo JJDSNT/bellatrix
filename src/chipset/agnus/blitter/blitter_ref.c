@@ -410,6 +410,12 @@ static bool execute_copy_mode(
     BlitterCopyState state;
     int increment = cmd->descending ? -2 : 2;
 
+    /*
+     * TODO: Revisit copy-path semantics as a first-class model:
+     * define the canonical boundary between raw fetch, hold/continuity,
+     * shift alignment, A masks, latched channel values, fill, and final
+     * observable register publication.
+     */
     blitter_copy_state_init(&state, cmd);
 
     for (uint32_t y = 0; y < cmd->height_lines; ++y) {

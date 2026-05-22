@@ -23,6 +23,12 @@ typedef struct PaulaAudioChannel {
 
     bool dma_enabled;
     bool data_pending;
+
+    uint8_t  pending_lo;      /* low byte of last DMA-fetched word */
+    bool     has_pending_lo;  /* pending_lo is valid */
+
+    uint16_t dma_word;        /* word deposited by the DMA arbiter */
+    bool     dma_word_ready;  /* dma_word contains an unread word */
 } PaulaAudioChannel;
 
 typedef struct PaulaAudio {
@@ -89,6 +95,23 @@ void paula_audio_write_dat(PaulaAudio *audio,
 
 void paula_audio_set_dmacon(PaulaAudio *audio,
                             uint16_t dmacon);
+
+/*
+ * DMA arbiter interface — called by Agnus, not by Paula internals.
+ *
+ * paula_audio_dma_fetch_addr: returns the chip RAM address the arbiter must
+ * read for this channel, or UINT32_MAX if the channel needs no fetch now.
+ *
+ * paula_audio_dma_service_word: called by the arbiter after it has read the
+ * word at that address; Paula advances current_ptr / current_length here.
+ */
+
+uint32_t paula_audio_dma_fetch_addr(const PaulaAudio *audio,
+                                    int channel);
+
+void paula_audio_dma_service_word(PaulaAudio *audio,
+                                  int channel,
+                                  uint16_t word);
 
 /*
  * Audio output.

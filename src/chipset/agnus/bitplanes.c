@@ -221,6 +221,28 @@ static int bitplanes_diag_line_selected(int vpos)
     return (line0 >= 0 && vpos == line0) || (line1 >= 0 && vpos == line1);
 }
 
+static uint32_t bitplanes_raw_line_hash(const AgnusState *agnus,
+                                        uint32_t ptr,
+                                        int words)
+{
+    uint32_t hash = 2166136261u;
+
+    if (!agnus || !agnus->memory)
+        return 0;
+    if (words < 0)
+        words = 0;
+    if (words > 80)
+        words = 80;
+
+    for (int i = 0; i < words; ++i)
+    {
+        hash ^= (uint32_t)bellatrix_chip_read16(agnus->memory, ptr + (uint32_t)(i * 2));
+        hash *= 16777619u;
+    }
+
+    return hash;
+}
+
 static void bitplanes_snapshot_line_ptrs(BitplaneState *bp, const AgnusState *agnus)
 {
     for (int p = 0; p < 6; ++p)
@@ -273,14 +295,21 @@ static void bitplanes_diagrom_dump_raw_planes(const BitplaneState *bp,
     for (int p = 0; p < bp->nplanes; ++p)
     {
         uint32_t ptr = bp->cur_bplpt[p] & CHIP_RAM_MASK;
+        int last = bp->ddf_words > 0 ? bp->ddf_words - 1 : 0;
 
-        kprintf("[BPL-RAW] bp_v=%d plane=%d ptr=%05x "
+        kprintf("[BPL-RAW] bp_v=%d plane=%d ptr=%05x words=%d hash=%08x "
+                "first=%04x mid=%04x last=%04x "
                 "%04x %04x %04x %04x %04x %04x %04x %04x "
                 "%04x %04x %04x %04x %04x %04x %04x %04x "
                 "%04x %04x %04x %04x %04x\n",
                 bp->line_vpos,
                 p,
                 (unsigned)ptr,
+                bp->ddf_words,
+                (unsigned)bitplanes_raw_line_hash(agnus, ptr, bp->ddf_words),
+                bp->ddf_words > 0 ? bellatrix_chip_read16(agnus->memory, ptr + 0u) : 0,
+                bp->ddf_words > 0 ? bellatrix_chip_read16(agnus->memory, ptr + (uint32_t)((last / 2) * 2)) : 0,
+                bp->ddf_words > 0 ? bellatrix_chip_read16(agnus->memory, ptr + (uint32_t)(last * 2)) : 0,
                 bellatrix_chip_read16(agnus->memory, ptr + 0u),
                 bellatrix_chip_read16(agnus->memory, ptr + 2u),
                 bellatrix_chip_read16(agnus->memory, ptr + 4u),

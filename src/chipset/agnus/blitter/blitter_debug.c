@@ -1,6 +1,11 @@
 #include "blitter.h"
 
+#if defined(BELLATRIX_EMU68)
+#include "support.h"
+#define printf kprintf
+#else
 #include <stdio.h>
+#endif
 
 void blitter_debug_set_trace(
     BlitterState *b,

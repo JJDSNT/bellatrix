@@ -6,6 +6,7 @@
 #define _XOPEN_SOURCE 600
 
 #include "host/pal.h"
+#include "host/osd.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -331,6 +332,51 @@ static uint8_t s_key_head = 0;
 static uint8_t s_key_tail = 0;
 static uint8_t s_key_count = 0;
 
+/* ---- SDL audio ---- */
+
+#define PAL_AUDIO_SAMPLE_RATE 44100
+#define PAL_AUDIO_BUF_FRAMES  1024
+
+static SDL_AudioDeviceID s_audio_dev = 0;
+static int16_t s_audio_buf[PAL_AUDIO_BUF_FRAMES * 2];
+static int s_audio_buf_pos = 0;
+
+static void pal_audio_sdl_init(void)
+{
+    SDL_AudioSpec desired;
+    SDL_zero(desired);
+    desired.freq     = PAL_AUDIO_SAMPLE_RATE;
+    desired.format   = AUDIO_S16SYS;
+    desired.channels = 2;
+    desired.samples  = PAL_AUDIO_BUF_FRAMES;
+    desired.callback = NULL;
+
+    s_audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired, NULL, 0);
+    if (s_audio_dev == 0) {
+        fprintf(stderr, "[PAL] SDL audio unavailable: %s\n", SDL_GetError());
+        return;
+    }
+
+    SDL_PauseAudioDevice(s_audio_dev, 0);
+    fprintf(stderr, "[PAL] audio: %d Hz stereo S16\n", PAL_AUDIO_SAMPLE_RATE);
+}
+
+void pal_audio_push_sample(int16_t left, int16_t right)
+{
+    if (!s_audio_dev)
+        return;
+
+    s_audio_buf[s_audio_buf_pos++] = left;
+    s_audio_buf[s_audio_buf_pos++] = right;
+
+    if (s_audio_buf_pos >= PAL_AUDIO_BUF_FRAMES * 2) {
+        SDL_QueueAudio(s_audio_dev,
+                       s_audio_buf,
+                       (uint32_t)sizeof(s_audio_buf));
+        s_audio_buf_pos = 0;
+    }
+}
+
 static uint32_t pal_map_sdl_host_key(SDL_Scancode scancode)
 {
     switch (scancode) {
@@ -394,11 +440,13 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
     if (h > HARNESS_FB_H)
         h = HARNESS_FB_H;
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0)
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0)
     {
         fprintf(stderr, "[PAL] SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
+
+    pal_audio_sdl_init();
 
     s_window = SDL_CreateWindow("Bellatrix",
                                 SDL_WINDOWPOS_CENTERED,
@@ -470,6 +518,7 @@ void PAL_Video_Flip(void)
 
     flip_count++;
 
+    osd_render((uint64_t)flip_count);
     SDL_UpdateTexture(s_texture, NULL, framebuffer, (int)pitch);
     SDL_RenderClear(s_renderer);
     SDL_RenderCopy(s_renderer, s_texture, NULL, NULL);
@@ -661,6 +710,12 @@ int pal_sdl_pop_key_event(PAL_KeyEvent *event)
 void pal_sdl_set_title(const char *title)
 {
     (void)title;
+}
+
+void pal_audio_push_sample(int16_t left, int16_t right)
+{
+    (void)left;
+    (void)right;
 }
 
 #endif

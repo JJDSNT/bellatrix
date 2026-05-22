@@ -81,13 +81,39 @@ static void paula_write_audio_reg(Paula *p, uint32_t addr, uint16_t raw)
 
     switch (reg)
     {
-    case 0x0u: paula_audio_write_lch(&p->audio, channel, raw); break;
-    case 0x2u: paula_audio_write_lcl(&p->audio, channel, raw); break;
-    case 0x4u: paula_audio_write_len(&p->audio, channel, raw); break;
-    case 0x6u: paula_audio_write_per(&p->audio, channel, raw); break;
-    case 0x8u: paula_audio_write_vol(&p->audio, channel, raw); break;
-    case 0xAu: paula_audio_write_dat(&p->audio, channel, raw); break;
-    default: break;
+    case 0x0u:
+        paula_audio_write_lch(&p->audio, channel, raw);
+        kprintf("[AUD%d] LCH=%04x  lc=0x%06x\n",
+                channel, (unsigned)raw,
+                (unsigned)p->audio.ch[channel].audlc);
+        break;
+    case 0x2u:
+        paula_audio_write_lcl(&p->audio, channel, raw);
+        kprintf("[AUD%d] LCL=%04x  lc=0x%06x\n",
+                channel, (unsigned)raw,
+                (unsigned)p->audio.ch[channel].audlc);
+        break;
+    case 0x4u:
+        paula_audio_write_len(&p->audio, channel, raw);
+        kprintf("[AUD%d] LEN=%u words\n",
+                channel, (unsigned)p->audio.ch[channel].audlen);
+        break;
+    case 0x6u:
+        paula_audio_write_per(&p->audio, channel, raw);
+        kprintf("[AUD%d] PER=%u\n",
+                channel, (unsigned)p->audio.ch[channel].audper);
+        break;
+    case 0x8u:
+        paula_audio_write_vol(&p->audio, channel, raw);
+        kprintf("[AUD%d] VOL=%u\n",
+                channel, (unsigned)p->audio.ch[channel].audvol);
+        break;
+    case 0xAu:
+        paula_audio_write_dat(&p->audio, channel, raw);
+        kprintf("[AUD%d] DAT=%04x\n", channel, (unsigned)raw);
+        break;
+    default:
+        break;
     }
 }
 

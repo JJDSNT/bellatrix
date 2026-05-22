@@ -108,24 +108,18 @@ static inline int denise_diw_hstart(const AgnusState *agnus)
 
 static inline int denise_diw_hstop(const AgnusState *agnus)
 {
-    int hstart = denise_diw_hstart(agnus);
-    int hstop = (int)(agnus->diwstop & 0xFFu);
-
-    if (hstop <= hstart)
-        hstop += 256;
-
-    return hstop;
+    /* DIWSTOP always holds hstop in the second half of the scanline [256,511].
+     * Only bits [7:0] are stored, so always add 256 to recover the full value. */
+    return (int)(agnus->diwstop & 0xFFu) + 256;
 }
 
 static inline int denise_visible_pixels(const AgnusState *agnus, int hires)
 {
+    /* hwidth in raw lores hpos units (same units as DIWSTRT/DIWSTOP registers).
+     * With hstop always corrected to [256,511], standard display gives hwidth=320.
+     * Each lores unit = 1 LORES pixel or 2 HIRES pixels. */
     int hwidth = denise_diw_hstop(agnus) - denise_diw_hstart(agnus);
-    /*
-     * Calibrate the DIW span to the harness framebuffer targets:
-     * standard lores should occupy 320 source pixels, standard hires 640.
-     * With the common 0x81..0xC1 DIW range this maps to 64 units.
-     */
-    int pixels_per_unit = hires ? 10 : 5;
+    int pixels_per_unit = hires ? 2 : 1;
     int pixels = hwidth * pixels_per_unit;
 
     if (pixels <= 0)
@@ -163,6 +157,21 @@ static inline int denise_ddf_phase_pixels(const Denise *d,
         delta = 0;
 
     return delta;
+}
+
+static inline int denise_ddf_start_hpos(const AgnusState *agnus, int hires)
+{
+    return (int)(agnus->ddfstrt & (hires ? 0xFEu : 0xFCu));
+}
+
+static inline int denise_ddf_display_start_pixels(const Denise *d,
+                                                  const AgnusState *agnus,
+                                                  int hires)
+{
+    int diw_h = denise_diw_hstart(agnus);
+    int shift = denise_fine_scroll_pixels(d, hires);
+
+    return diw_h - (hires ? 4 : 8) - shift;
 }
 
 static int denise_diag_target_line(int slot)
@@ -663,6 +672,10 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
             int pix_per_line = ddf_words * 16;
             int visible_pixels = denise_visible_pixels(agnus, hires);
             int fine_scroll = denise_fine_scroll_pixels(d, hires);
+            int ddf_h = denise_ddf_start_hpos(agnus, hires);
+            int display_start_pixels =
+                denise_ddf_display_start_pixels(d, agnus, hires);
+            int pipeline_lead = hires ? 4 : 8;
             int phase_pixels = 0;
             int x_phase = d->diag_phase_bias;
             int src_first_pixel = d->diag_force_src0 ? 0 : x_phase;
@@ -674,9 +687,6 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
                 visible_pixels = pix_per_line;
             if (visible_pixels > pix_per_line)
                 visible_pixels = pix_per_line;
-            /* Keep the normal path anchored at the left edge of the DIW window.
-             * Horizontal phase/debug bias remains opt-in via diag_force_src0/bias. */
-            src_first_pixel = 0;
 
             if (d->diag_show_fetch_all)
             {
@@ -685,6 +695,10 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
             }
             else
             {
+                src_first_pixel = d->diag_force_src0
+                                  ? 0
+                                  : denise_ddf_phase_pixels(d, agnus, hires);
+                phase_pixels = src_first_pixel;
                 render_visible_pixels = visible_pixels;
             }
 
@@ -773,7 +787,7 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
                     if (sy == 0 && denise_diagrom_window(bp, line_idx))
                     {
                         kprintf("[DENISE-DIAG] line=%d bp_v=%d np=%d hires=%d "
-                                "dpf=%d words=%d pix=%d hscale=%d vscale=%d phase=%d x_phase=%d scroll=%d out=%dx%d fb0=%u,%u "
+                                "dpf=%d words=%d pix=%d hscale=%d vscale=%d phase=%d x_phase=%d scroll=%d bplcon1=%04x ddfh=%02x diw_h=%03d dsp=%03d lead=%d out=%dx%d fb0=%u,%u "
                                 "visible=%d src0=%d rev=%d force0=%d fetchall=%d bias=%d non_bg=%u first_idx=%02x last_idx=%02x first_wb=%d/%d xspan=%u-%u "
                                 "pal0=%04x pal1=%04x row0=%04x rowmid=%04x rowfirst=%04x rowlast=%04x\n",
                                 line_idx,
@@ -788,6 +802,11 @@ void denise_render_line(Denise *d, const AgnusState *agnus,
                                 phase_pixels,
                                 x_phase,
                                 fine_scroll,
+                                (unsigned)d->bplcon1,
+                                ddf_h,
+                                denise_diw_hstart(agnus),
+                                display_start_pixels,
+                                pipeline_lead,
                                 out_w,
                                 out_h,
                                 (unsigned)fb_x0,

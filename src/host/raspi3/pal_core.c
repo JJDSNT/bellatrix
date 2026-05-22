@@ -25,6 +25,7 @@
 #include <stdatomic.h>
 
 #include "pal.h"
+#include "host/osd.h"
 
 // ---------------------------------------------------------------------------
 // BCM2836 local interrupt controller (RPi3)
@@ -509,6 +510,9 @@ uint32_t *PAL_Video_GetBuffer(void)
 
 void PAL_Video_Flip(void)
 {
+    static uint32_t flip_count = 0;
+    flip_count++;
+    osd_render((uint64_t)flip_count);
 }
 
 void PAL_Video_SetPalette(uint8_t idx, uint32_t rgb)

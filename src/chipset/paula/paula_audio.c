@@ -1,5 +1,7 @@
 #include "chipset/paula/paula_audio.h"
+#include "support.h"
 
+#include <stdint.h>
 #include <string.h>
 
 #define AUDIO_IRQ_MASK(ch) (1u << ((ch) + 7))
@@ -34,18 +36,6 @@ static bool channel_dma_enabled(
             channel_dma_bit(ch)) != 0;
 }
 
-static int16_t paula_decode_sample(
-    uint16_t auddat)
-{
-    /*
-     * Simplified:
-     * high byte only.
-     */
-
-    int8_t s = (int8_t)((auddat >> 8) & 0xff);
-
-    return (int16_t)s << 8;
-}
 
 static void paula_audio_mix(PaulaAudio *audio)
 {
@@ -161,47 +151,105 @@ void paula_audio_step(PaulaAudio *audio,
             c->audper = 1;
         }
 
-        if (c->period_counter <= cycles) {
-
-            c->period_counter =
-                c->audper;
-
-            /*
-             * Simplified:
-             * replay current AUDDAT.
-             */
-
-            c->current_sample =
-                paula_decode_sample(
-                    c->auddat);
-
-            if (c->current_length > 0) {
-                c->current_length--;
-            }
-
-            if (c->current_length == 0) {
-
-                /*
-                 * Reload length.
-                 */
-
-                c->current_length =
-                    c->audlen;
-
-                c->current_ptr =
-                    c->audlc;
-
-                paula_audio_channel_irq(
-                    audio,
-                    ch);
-            }
-
-        } else {
-            c->period_counter -= cycles;
+        if (c->period_counter == 0) {
+            c->period_counter = c->audper;
         }
+
+        uint32_t rem = cycles;
+
+        while (rem >= c->period_counter) {
+            rem -= c->period_counter;
+            c->period_counter = c->audper;
+
+            if (c->has_pending_lo) {
+                /* consume the second byte of the last arbiter-fetched word */
+                c->current_sample =
+                    (int16_t)(int8_t)c->pending_lo << 8;
+                c->has_pending_lo = false;
+
+            } else if (c->dma_word_ready) {
+                /* consume the word deposited by the DMA arbiter */
+                c->current_sample =
+                    (int16_t)(int8_t)(c->dma_word >> 8) << 8;
+                c->pending_lo   = (uint8_t)(c->dma_word & 0xFFu);
+                c->has_pending_lo = true;
+                c->dma_word_ready = false;
+
+                /* length / reload managed at fetch time in dma_service_word */
+
+            }
+            /* else: DMA stall — arbiter hasn't delivered a word yet;
+             * hold last sample until one arrives */
+        }
+
+        c->period_counter -= rem;
     }
 
     paula_audio_mix(audio);
+}
+
+uint32_t paula_audio_dma_fetch_addr(const PaulaAudio *audio,
+                                    int channel)
+{
+    const PaulaAudioChannel *c;
+
+    if (!audio || !valid_channel(channel)) {
+        return UINT32_MAX;
+    }
+
+    c = &audio->ch[channel];
+
+    /* Request a fetch only when: DMA enabled, buffer has words left,
+     * and the prefetch slot is empty (no word waiting to be consumed). */
+    if (!channel_dma_enabled(audio, channel) ||
+        c->current_length == 0 ||
+        c->dma_word_ready) {
+        return UINT32_MAX;
+    }
+
+    return c->current_ptr;
+}
+
+void paula_audio_dma_service_word(PaulaAudio *audio,
+                                  int channel,
+                                  uint16_t word)
+{
+    static bool s_logged[PAULA_AUDIO_CHANNELS];
+
+    PaulaAudioChannel *c = audio_channel(audio, channel);
+
+    if (!c) {
+        return;
+    }
+
+    if (!s_logged[channel]) {
+        s_logged[channel] = true;
+        kprintf("[AUD%d] first DMA fetch ptr=0x%06x word=0x%04x"
+                " len=%u per=%u vol=%u\n",
+                channel,
+                (unsigned)c->current_ptr,
+                (unsigned)word,
+                (unsigned)c->current_length,
+                (unsigned)c->audper,
+                (unsigned)c->audvol);
+    }
+
+    c->dma_word       = word;
+    c->dma_word_ready = true;
+
+    /* Advance fetch pointer and manage the length counter here,
+     * as on the real hardware the DMA fetch is what drives these. */
+    c->current_ptr += 2u;
+
+    if (c->current_length > 0) {
+        c->current_length--;
+    }
+
+    if (c->current_length == 0) {
+        c->current_ptr    = c->audlc;
+        c->current_length = c->audlen;
+        paula_audio_channel_irq(audio, channel);
+    }
 }
 
 void paula_audio_write_lch(
@@ -311,8 +359,26 @@ void paula_audio_set_dmacon(
     PaulaAudio *audio,
     uint16_t dmacon)
 {
+    static uint16_t s_prev = 0xFFFFu;
+
     if (!audio) {
         return;
+    }
+
+    if (dmacon != s_prev) {
+        uint16_t changed = dmacon ^ s_prev;
+        if (s_prev == 0xFFFFu) changed = dmacon & 0x000Fu;
+
+        if (changed & 0x000Fu) {
+            kprintf("[AUDIO-DMA] dmacon audio bits = %04x"
+                    " (ch0=%u ch1=%u ch2=%u ch3=%u)\n",
+                    (unsigned)(dmacon & 0x000Fu),
+                    (unsigned)(dmacon & 1u),
+                    (unsigned)((dmacon >> 1) & 1u),
+                    (unsigned)((dmacon >> 2) & 1u),
+                    (unsigned)((dmacon >> 3) & 1u));
+        }
+        s_prev = dmacon;
     }
 
     audio->dmacon = dmacon;

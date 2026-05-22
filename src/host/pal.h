@@ -122,6 +122,10 @@ int  pal_sdl_pop_key_event(PAL_KeyEvent *event);
 /* Update window title (e.g. show FPS). No-op on bare-metal. */
 void pal_sdl_set_title(const char *title);
 
+/* Push one stereo sample to the host audio device (44100 Hz S16).
+ * No-op in headless mode or when audio device is unavailable. */
+void pal_audio_push_sample(int16_t left, int16_t right);
+
 /* ---- Diagnostic env-var helpers (stubs on bare-metal, env on harness) ---- */
 
 /* Return the integer value of env var `name`, or `default_val` if unset/invalid. */

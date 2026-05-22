@@ -11,9 +11,9 @@
 
 #include "chipset/denise/denise.h"
 #include "chipset/paula/paula.h"
+#include "chipset/paula/paula_audio.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
-#include "host/osd.h"
 #include "support.h"
 
 extern uint16_t *framebuffer;
@@ -143,6 +143,20 @@ static uint32_t agnus_dma_query_requests_cb(void *ctx)
         req |= AGNUS_DMA_REQ_DISK;
     }
 
+    if (s->paula) {
+        static const uint32_t audio_req[4] = {
+            AGNUS_DMA_REQ_AUDIO0, AGNUS_DMA_REQ_AUDIO1,
+            AGNUS_DMA_REQ_AUDIO2, AGNUS_DMA_REQ_AUDIO3,
+        };
+        for (int _ch = 0; _ch < 4; _ch++) {
+            if (agnus_dma_audio_enabled(&s->dma, (unsigned int)_ch) &&
+                paula_audio_dma_fetch_addr(&s->paula->audio, _ch) != UINT32_MAX)
+            {
+                req |= audio_req[_ch];
+            }
+        }
+    }
+
     return req;
 }
 
@@ -216,6 +230,28 @@ static void agnus_dma_service_request_cb(void *ctx, AgnusDMARequest request)
         }
         break;
 
+    case AGNUS_DMA_REQ_AUDIO0:
+    case AGNUS_DMA_REQ_AUDIO1:
+    case AGNUS_DMA_REQ_AUDIO2:
+    case AGNUS_DMA_REQ_AUDIO3:
+        if (s->paula && s->memory) {
+            int _ch;
+            switch (request) {
+            case AGNUS_DMA_REQ_AUDIO0: _ch = 0; break;
+            case AGNUS_DMA_REQ_AUDIO1: _ch = 1; break;
+            case AGNUS_DMA_REQ_AUDIO2: _ch = 2; break;
+            default:                   _ch = 3; break;
+            }
+            uint32_t ptr = paula_audio_dma_fetch_addr(
+                               &s->paula->audio, _ch);
+            if (ptr != UINT32_MAX) {
+                uint16_t word = bellatrix_chip_read16(s->memory, ptr);
+                paula_audio_dma_service_word(
+                    &s->paula->audio, _ch, word);
+            }
+        }
+        break;
+
     default:
         break;
     }
@@ -257,6 +293,53 @@ static inline uint32_t agnus_bpl_ptr(const AgnusState *s, unsigned plane)
 {
     return ((((uint32_t)(s->bplpth[plane] & 0x001Fu)) << 16) |
             ((uint32_t)s->bplptl[plane] & 0xFFFEu));
+}
+
+static int agnus_diag_target_line(int slot)
+{
+    static int initialized = 0;
+    static int line0 = -1;
+    static int line1 = -1;
+
+    if (!initialized)
+    {
+        line0 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE", -1);
+        line1 = PAL_Diag_GetEnvInt("HARNESS_DIAG_LINE2", -1);
+        initialized = 1;
+    }
+
+    return slot == 0 ? line0 : line1;
+}
+
+static int agnus_diag_line_selected(int vpos)
+{
+    int line0 = agnus_diag_target_line(0);
+    int line1 = agnus_diag_target_line(1);
+
+    return (line0 >= 0 && vpos == line0) || (line1 >= 0 && vpos == line1);
+}
+
+static uint32_t agnus_bitplane_line_hash(const BitplaneState *bp, int plane)
+{
+    uint32_t hash = 2166136261u;
+    int words;
+
+    if (!bp || plane < 0 || plane >= bp->nplanes)
+        return 0;
+
+    words = bp->ddf_words;
+    if (words < 0)
+        words = 0;
+    if (words > 80)
+        words = 80;
+
+    for (int i = 0; i < words; ++i)
+    {
+        hash ^= (uint32_t)bp->line_words[plane][i];
+        hash *= 16777619u;
+    }
+
+    return hash;
 }
 
 /* ---------------------------------------------------------------------------
@@ -491,7 +574,9 @@ void agnus_step(AgnusState *s, uint64_t ticks)
         if (bitplanes_line_ready(&s->bitplanes))
         {
             static uint32_t dbg_denise_call = 0;
-            if ((dbg_denise_call++ & 63u) == 0)
+            int diag_line = agnus_diag_line_selected(s->bitplanes.line_vpos);
+
+            if (diag_line || ((dbg_denise_call++ & 63u) == 0))
             {
                 kprintf("[AGNUS->DENISE] frame=%u v=%u h=%u bp_v=%d ready=%d nplanes=%d ddf=%d diw=%04x-%04x\n",
                         (unsigned)s->beam.frame,
@@ -503,6 +588,36 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                         s->bitplanes.ddf_words,
                         (unsigned)s->diwstrt,
                         (unsigned)s->diwstop);
+            }
+
+            if (diag_line)
+            {
+                for (int p = 0; p < s->bitplanes.nplanes; ++p)
+                {
+                    int last = s->bitplanes.ddf_words - 1;
+                    uint16_t first = 0;
+                    uint16_t mid = 0;
+                    uint16_t lastw = 0;
+
+                    if (last >= 0)
+                    {
+                        first = s->bitplanes.line_words[p][0];
+                        mid = s->bitplanes.line_words[p][last / 2];
+                        lastw = s->bitplanes.line_words[p][last];
+                    }
+
+                    kprintf("[AGNUS-BPL-PUB] bp_v=%d ag_v=%u ag_h=%u plane=%d words=%d hash=%08x first=%04x mid=%04x last=%04x ptr=%05x\n",
+                            s->bitplanes.line_vpos,
+                            (unsigned)s->beam.vpos,
+                            (unsigned)s->beam.hpos,
+                            p,
+                            s->bitplanes.ddf_words,
+                            (unsigned)agnus_bitplane_line_hash(&s->bitplanes, p),
+                            first,
+                            mid,
+                            lastw,
+                            (unsigned)(s->bitplanes.cur_bplpt[p] & CHIP_RAM_ADDR_MASK));
+                }
             }
 
             if (s->denise)
@@ -572,19 +687,7 @@ void agnus_step(AgnusState *s, uint64_t ticks)
                         (unsigned)pitch);
             }
 
-            osd_render(s->beam.frame);
             PAL_Video_Flip();
-
-            /*
-             * Clear the framebuffer to black for the next frame.
-             * Areas outside the DIW window (top/bottom overscan) are never
-             * written by denise_render_line(); without this clear they would
-             * retain stale pixels (the initial red fill or previous-frame
-             * content if the DIW moved).
-             */
-            if (framebuffer && fb_width > 0 && fb_height > 0)
-                memset(framebuffer, 0,
-                       (size_t)fb_width * fb_height * sizeof(uint16_t));
         }
     }
 }

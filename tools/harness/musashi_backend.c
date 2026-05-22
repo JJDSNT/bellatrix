@@ -22,6 +22,7 @@
 
 #include "m68k.h"
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
@@ -41,10 +42,17 @@ static uint32_t s_boot_display_ctx = 0;
 static uint32_t s_boot_display_aux = 0;
 static uint32_t s_boot_display_buf0 = 0;
 static uint32_t s_boot_display_buf1 = 0;
+static int s_watch_ranges_init = 0;
+static uint32_t s_watch_range_lo[2] = {0, 0};
+static uint32_t s_watch_range_hi[2] = {0, 0};
+static int s_watch_range_enabled[2] = {0, 0};
 
 #define BOOT_DISPLAY_BUF_SIZE 0x00001F40u
 
 static uint32_t harness_chip_read(uint32_t addr, int size);
+
+static void harness_init_watch_ranges(void);
+static int harness_watch_custom_range_addr(uint32_t addr);
 
 /* Standard ROM window (reset vectors, Kickstart entry) */
 static uint32_t s_rom_std_base  = 0xF80000u;  /* standard: 0xF80000 or 0xFC0000 */
@@ -106,6 +114,66 @@ static uint32_t rom_read_at(uint32_t byte_off, int size)
                           ((uint32_t)s_rom[byte_off + 1] << 16) |
                           ((uint32_t)s_rom[byte_off + 2] <<  8) |
                            (uint32_t)s_rom[byte_off + 3];
+    return 0;
+}
+
+static void harness_init_watch_ranges(void)
+{
+    static const char *const env_names[2] = {
+        "HARNESS_WATCH_RANGE1",
+        "HARNESS_WATCH_RANGE2"
+    };
+    int i;
+
+    if (s_watch_ranges_init)
+        return;
+    s_watch_ranges_init = 1;
+
+    for (i = 0; i < 2; ++i)
+    {
+        const char *spec = getenv(env_names[i]);
+        char *endptr = NULL;
+        unsigned long lo;
+        unsigned long hi;
+
+        if (!spec || !*spec)
+            continue;
+
+        lo = strtoul(spec, &endptr, 0);
+        if (!endptr || *endptr != ':')
+            continue;
+        hi = strtoul(endptr + 1, &endptr, 0);
+        if (!endptr || *endptr != '\0')
+            continue;
+        if (hi < lo)
+            continue;
+
+        s_watch_range_lo[i] = (uint32_t)lo & 0x00FFFFFFu;
+        s_watch_range_hi[i] = (uint32_t)hi & 0x00FFFFFFu;
+        s_watch_range_enabled[i] = 1;
+
+        printf("[HARNESS-WATCH-RANGE] slot=%d lo=%06x hi=%06x\n",
+               i + 1,
+               (unsigned)s_watch_range_lo[i],
+               (unsigned)s_watch_range_hi[i]);
+    }
+}
+
+static int harness_watch_custom_range_addr(uint32_t addr)
+{
+    int i;
+
+    harness_init_watch_ranges();
+    addr &= 0x00FFFFFFu;
+
+    for (i = 0; i < 2; ++i)
+    {
+        if (!s_watch_range_enabled[i])
+            continue;
+        if (addr >= s_watch_range_lo[i] && addr <= s_watch_range_hi[i])
+            return 1;
+    }
+
     return 0;
 }
 
@@ -1095,7 +1163,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
         harness_watch_boot_dynamic_buffer_write(pc, addr, size, value);
         if (harness_watch_boot_payload_addr(addr) && value != 0)
             harness_watch_rw("WATCH-BOOT-PAYLOAD-W", pc, addr, size, value);
-        if (addr >= 0x00000800u && addr < 0x00012000u && value != 0)
+        if (harness_watch_custom_range_addr(addr) && value != 0)
             harness_watch_rw("WATCH-BPL-RAM-W", pc, addr, size, value);
         if (size == 1) bellatrix_chip_write8 (mem, addr, (uint8_t)value);
         if (size == 2) bellatrix_chip_write16(mem, addr, (uint16_t)value);
