@@ -6,12 +6,15 @@ set(CMAKE_C_EXTENSIONS ON)
 
 enable_testing()
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 set(ROOT    ${CMAKE_SOURCE_DIR}/../..)   # bellatrix/
 set(SRC     ${ROOT}/src)
 set(MUSASHI ${ROOT}/external/musashi)
+set(LIDE    ${ROOT}/external/lide.device)
 set(PLUGINS_OUT ${CMAKE_BINARY_DIR}/plugins)
 
 # ---------------------------------------------------------------------------
@@ -52,6 +55,37 @@ target_compile_options(musashi PRIVATE
 )
 
 # ---------------------------------------------------------------------------
+# lide.rom — build from source via Docker, embed as C array
+# ---------------------------------------------------------------------------
+set(LIDE_ROM     ${LIDE}/lide.rom)
+set(LIDE_ROM_C   ${CMAKE_BINARY_DIR}/lide_rom_data.c)
+
+add_custom_command(
+    OUTPUT  ${LIDE_ROM}
+    COMMAND ${ROOT}/scripts/build-lide-rom.sh ${LIDE_ROM}
+    DEPENDS
+        ${LIDE}/device.c
+        ${LIDE}/ata.c
+        ${LIDE}/atapi.c
+        ${LIDE}/scsi.c
+        ${LIDE}/iotask.c
+        ${LIDE}/lide_alib.c
+        ${LIDE}/bootrom/bootldr.S
+        ${LIDE}/bootrom/reloc.S
+        ${LIDE}/bootrom/mungerom.py
+        ${ROOT}/scripts/build-lide-rom.sh
+        ${ROOT}/scripts/make_lide_rom.py
+    COMMENT "Building lide.rom via Docker m68k toolchain"
+)
+
+add_custom_command(
+    OUTPUT  ${LIDE_ROM_C}
+    COMMAND Python3::Interpreter ${ROOT}/scripts/rom_to_c.py ${LIDE_ROM} ${LIDE_ROM_C}
+    DEPENDS ${LIDE_ROM} ${ROOT}/scripts/rom_to_c.py
+    COMMENT "Embedding lide.rom as C array"
+)
+
+# ---------------------------------------------------------------------------
 # Bellatrix chipset sources
 # ---------------------------------------------------------------------------
 set(BELLATRIX_SOURCES
@@ -64,13 +98,24 @@ set(BELLATRIX_SOURCES
     ${SRC}/plugin/plugin_loader.c
     ${SRC}/plugin/plugin_manifest.c
 
+    # Autoconfig + bus fabric
+    ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/bus/zorro3/zorro3.c
+    ${SRC}/machine/bus/superbuster/superbuster.c
+
+    # lide.device CD-ROM expansion (lide_rom_data.c generated at build time)
+    ${SRC}/machine/expansions/lide_cdrom/ata_ide.c
+    ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
+    ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
+    ${LIDE_ROM_C}
+
     # Memory (nova base)
     ${SRC}/machine/memory/memory.c
     ${SRC}/machine/memory/chip_ram.c
     ${SRC}/machine/memory/fast_ram.c
     ${SRC}/machine/memory/overlay.c
     ${SRC}/machine/memory/memory_map.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
 
     # Agnus
     ${SRC}/chipset/agnus/agnus.c
@@ -120,15 +165,7 @@ set(BELLATRIX_SOURCES
     # RTC
     ${SRC}/chipset/rtc/rtc.c
 
-    # GAYLE IDE + ATAPI CD-ROM
-    ${SRC}/machine/bus/gayle/gayle.c
-    ${SRC}/machine/bus/gayle/gayle_ide.c
-    ${SRC}/machine/bus/gayle/atapi_cd.c
-
-    # Expansion ROM boards
-    ${SRC}/machine/boards/cd_autoboot.c
-
-    # ISO image (in-memory + callback)
+    # ISO image (legacy helper, still used by some tests)
     ${SRC}/storage/iso/iso_image.c
 
     # Input
@@ -346,31 +383,29 @@ set_tests_properties(bellatrix_harness_no_autoconfig PROPERTIES
     TIMEOUT 5
 )
 
-add_library(cdrom MODULE
-    ${SRC}/machine/expansions/cdrom/cdrom_plugin.c
-    ${SRC}/machine/expansions/cdrom/board/cdrom_board.c
-    ${SRC}/machine/expansions/cdrom/ide/cdrom_ide.c
-    ${SRC}/machine/expansions/cdrom/media/cdrom_device.c
-    ${SRC}/machine/expansions/cdrom/media/cdrom_iso_backend.c
-    ${SRC}/machine/expansions/cdrom/media/cdrom_atapi.c
+add_library(lide_cdrom MODULE
+    ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/bus/zorro3/zorro3.c
+    ${SRC}/machine/bus/superbuster/superbuster.c
+    ${SRC}/machine/expansions/lide_cdrom/ata_ide.c
+    ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
+    ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
+    ${SRC}/storage/iso/iso_image.c
+    ${LIDE_ROM_C}                           # needed since lide_cdrom.c references g_lide_rom_data
 )
 
-set_target_properties(cdrom PROPERTIES
+set_target_properties(lide_cdrom PROPERTIES
     PREFIX ""
-    LIBRARY_OUTPUT_DIRECTORY ${PLUGINS_OUT}/cdrom
+    OUTPUT_NAME "lide_cdrom"
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules/lide_cdrom
 )
 
-target_include_directories(cdrom PRIVATE
+target_include_directories(lide_cdrom PRIVATE
+    ${SRC}/host/posix
     ${SRC}
 )
 
-add_custom_command(
-    TARGET cdrom POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${PLUGINS_OUT}/cdrom/resident
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${SRC}/machine/expansions/cdrom/plugin.json
-            ${PLUGINS_OUT}/cdrom/plugin.json
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${SRC}/machine/boards/resident/cdmount.rom
-            ${PLUGINS_OUT}/cdrom/resident/cdmount.rom
+target_compile_definitions(lide_cdrom PRIVATE
+    BELLATRIX_HARNESS=1
 )

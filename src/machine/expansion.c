@@ -185,3 +185,69 @@ void bellatrix_expansion_shutdown_all(BellatrixMachine *machine)
 
     g_registry.count = 0;
 }
+
+int bellatrix_expansion_bus_read(
+    BellatrixMachine *machine,
+    uint32_t addr,
+    unsigned int size,
+    uint32_t *value
+)
+{
+    size_t i;
+
+    if (!machine || !value) {
+        return 0;
+    }
+
+    for (i = 0; i < g_registry.count; ++i) {
+        BellatrixExpansion *exp = g_registry.items[i];
+
+        if (!exp || exp->machine != machine || !exp->attached ||
+            !exp->desc.bus_ops || !exp->desc.bus_ops->owns_address ||
+            !exp->desc.bus_ops->read) {
+            continue;
+        }
+
+        if (!exp->desc.bus_ops->owns_address(exp, addr)) {
+            continue;
+        }
+
+        *value = exp->desc.bus_ops->read(exp, addr, size);
+        return 1;
+    }
+
+    return 0;
+}
+
+int bellatrix_expansion_bus_write(
+    BellatrixMachine *machine,
+    uint32_t addr,
+    uint32_t value,
+    unsigned int size
+)
+{
+    size_t i;
+
+    if (!machine) {
+        return 0;
+    }
+
+    for (i = 0; i < g_registry.count; ++i) {
+        BellatrixExpansion *exp = g_registry.items[i];
+
+        if (!exp || exp->machine != machine || !exp->attached ||
+            !exp->desc.bus_ops || !exp->desc.bus_ops->owns_address ||
+            !exp->desc.bus_ops->write) {
+            continue;
+        }
+
+        if (!exp->desc.bus_ops->owns_address(exp, addr)) {
+            continue;
+        }
+
+        exp->desc.bus_ops->write(exp, addr, value, size);
+        return 1;
+    }
+
+    return 0;
+}

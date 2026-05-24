@@ -3,9 +3,11 @@
 #include "machine/machine.h"
 
 #include "chipset/floppy/floppy_drive.h"
-#include "machine/bus/gayle/gayle.h"
 #include "machine/expansion.h"
-#include "storage/iso/iso_image.h"
+#include "machine/expansions/lide_cdrom/lide_cdrom.h"
+#include "machine/bus/zorro2/zorro2_bus.h"
+#include "machine/bus/zorro3/zorro3.h"
+#include "machine/bus/superbuster/superbuster.h"
 #include "chipset/paula/paula.h"
 
 #include "debug/btrace.h"
@@ -69,15 +71,28 @@ static inline bool is_rtc_addr(uint32_t addr)
     return (addr >= 0x00dc0000u && addr <= 0x00dcffffu);
 }
 
-static inline bool is_gayle_addr(uint32_t addr)
+static inline bool is_autoconfig_addr(uint32_t addr)
 {
-    /* IDE + control: $DA0000-$DAFFFF */
-    if (addr >= GAYLE_BASE_1200 && addr < GAYLE_BASE_1200 + GAYLE_SIZE)
-        return true;
-    /* GAYLE ID shift register: $DE0000-$DEFFFF (ReadGayle LVO -136 reads $DE1000) */
-    if (addr >= GAYLE_ID_REGION_BASE && addr < GAYLE_ID_REGION_BASE + GAYLE_ID_REGION_SIZE)
-        return true;
-    return false;
+    return (addr >= 0x00E80000u && addr <= 0x00E8FFFFu);
+}
+
+static inline bool is_z2_board_addr(uint32_t addr)
+{
+    /*
+     * Z2 board windows: small boards (≤512KB) go in $E90000–$EFFFFF;
+     * larger boards go in $200000–$9FFFFF.
+     */
+    return bellatrix_zorro2_in_board_window(addr);
+}
+
+static inline bool is_z3_board_addr(uint32_t addr)
+{
+    return bellatrix_zorro3_in_board_window(addr);
+}
+
+static inline bool is_superbuster_addr(uint32_t addr)
+{
+    return superbuster_owns(addr);
 }
 
 /* ---------------------------------------------------------------------------
@@ -568,11 +583,12 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     paula_attach_drive(&m->paula, &m->df0);
     machine_sync_floppy_pra(m); /* set initial /CHNG, /TK0, /RDY on CIA-A ext_pra */
 
-    iso_image_init(&m->iso);
-    gayle_init(&m->gayle, &m->iso, m->gayle_atapi_buf, sizeof(m->gayle_atapi_buf));
-
     uart_host_init(&m->uart_host);
     uart_host_attach_paula(&m->uart_host, &m->paula.serial);
+
+    superbuster_init(&m->superbuster);
+    bellatrix_zorro2_init();
+    bellatrix_zorro3_init();
 
     machine_debug_init(m);
 
@@ -592,6 +608,10 @@ void bellatrix_machine_reset(void)
     rtc_reset(&m->rtc);
     bellatrix_keyboard_reset(&m->keyboard);
     bellatrix_controller_ports_reset(&m->controller_ports);
+
+    superbuster_reset(&m->superbuster);
+    bellatrix_zorro2_reset();
+    bellatrix_zorro3_reset();
 
     machine_debug_reset(m);
     machine_sync_floppy_pra(m);
@@ -692,11 +712,47 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
         value = rtc_read_reg(&m->rtc, reg);
     }
 
-    else if (is_gayle_addr(addr))
+    else if (is_autoconfig_addr(addr))
     {
-        value = gayle_read(&m->gayle, addr, size);
-        if (gayle_ide_irq_pending(&m->gayle.ide))
-            paula_irq_raise(&m->paula, PAULA_INT_PORTS);
+        switch (size)
+        {
+        case 1: value = bellatrix_zorro2_config_read8(addr);  break;
+        case 2: value = bellatrix_zorro2_config_read16(addr); break;
+        case 4: value = bellatrix_zorro2_config_read32(addr); break;
+        default: value = 0xFFFFFFFFu; break;
+        }
+    }
+
+    else if (is_z2_board_addr(addr))
+    {
+        switch (size)
+        {
+        case 1: value = bellatrix_zorro2_board_read8(addr);  break;
+        case 2: value = bellatrix_zorro2_board_read16(addr); break;
+        case 4: value = bellatrix_zorro2_board_read32(addr); break;
+        default: value = 0xFFFFFFFFu; break;
+        }
+    }
+
+    else if (is_z3_board_addr(addr))
+    {
+        switch (size)
+        {
+        case 1: value = bellatrix_zorro3_board_read8(addr);  break;
+        case 2: value = bellatrix_zorro3_board_read16(addr); break;
+        case 4: value = bellatrix_zorro3_board_read32(addr); break;
+        default: value = 0xFFFFFFFFu; break;
+        }
+    }
+
+    else if (is_superbuster_addr(addr))
+    {
+        value = superbuster_read8(&m->superbuster, addr);
+    }
+
+    else if (bellatrix_expansion_bus_read(m, addr, size, &value))
+    {
+        return value;
     }
 
     else
@@ -827,11 +883,47 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
         rtc_write_reg(&m->rtc, reg, (uint8_t)(value & 0x0Fu));
     }
 
-    else if (is_gayle_addr(addr))
+    else if (is_autoconfig_addr(addr))
     {
-        gayle_write(&m->gayle, addr, value, size);
-        if (gayle_ide_irq_pending(&m->gayle.ide))
-            paula_irq_raise(&m->paula, PAULA_INT_PORTS);
+        switch (size)
+        {
+        case 1: bellatrix_zorro2_config_write8(addr,  (uint8_t)value);  break;
+        case 2: bellatrix_zorro2_config_write16(addr, (uint16_t)value); break;
+        case 4: bellatrix_zorro2_config_write32(addr, (uint32_t)value); break;
+        default: break;
+        }
+    }
+
+    else if (is_z2_board_addr(addr))
+    {
+        switch (size)
+        {
+        case 1: bellatrix_zorro2_board_write8(addr,  (uint8_t)value);  break;
+        case 2: bellatrix_zorro2_board_write16(addr, (uint16_t)value); break;
+        case 4: bellatrix_zorro2_board_write32(addr, (uint32_t)value); break;
+        default: break;
+        }
+    }
+
+    else if (is_z3_board_addr(addr))
+    {
+        switch (size)
+        {
+        case 1: bellatrix_zorro3_board_write8(addr,  (uint8_t)value);  break;
+        case 2: bellatrix_zorro3_board_write16(addr, (uint16_t)value); break;
+        case 4: bellatrix_zorro3_board_write32(addr, (uint32_t)value); break;
+        default: break;
+        }
+    }
+
+    else if (is_superbuster_addr(addr))
+    {
+        superbuster_write8(&m->superbuster, addr, (uint8_t)value);
+    }
+
+    else if (bellatrix_expansion_bus_write(m, addr, value, size))
+    {
+        return;
     }
 
     else
@@ -1070,46 +1162,27 @@ void bellatrix_machine_eject_df0(void)
 }
 
 /* ---------------------------------------------------------------------------
- * GAYLE / CD-ROM media
+ * legacy built-in CD-ROM API
  * ------------------------------------------------------------------------- */
 
 int bellatrix_machine_insert_iso(const void *data, size_t size)
 {
-    BellatrixMachine *m = &g_machine;
-
-    if (!iso_image_attach(&m->iso, data, size))
-        return -1;
-
-    m->gayle.ide.cd.media_changed = true;
-
-    kprintf("[ISO] in-memory image attached: %u sectors\n",
-            (unsigned)m->iso.sector_count);
-    return 0;
+    BellatrixMachine *m = bellatrix_machine_get();
+    lide_cdrom_register(m);   /* no-op if already registered */
+    return lide_cdrom_insert_iso(m, data, size);
 }
 
 int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
                                     uint32_t sector_count)
 {
-    BellatrixMachine *m = &g_machine;
-
-    if (!iso_image_attach_fn(&m->iso, fn, ctx, sector_count))
-        return -1;
-
-    m->gayle.ide.cd.media_changed = true;
-
-    kprintf("[ISO] callback-based image attached: %u sectors\n",
-            (unsigned)sector_count);
-    return 0;
+    BellatrixMachine *m = bellatrix_machine_get();
+    lide_cdrom_register(m);   /* no-op if already registered */
+    return lide_cdrom_attach_iso_fn(m, fn, ctx, sector_count);
 }
 
 void bellatrix_machine_eject_iso(void)
 {
-    BellatrixMachine *m = &g_machine;
-
-    iso_image_detach(&m->iso);
-    m->gayle.ide.cd.media_changed = true;
-
-    kprintf("[ISO] ejected\n");
+    lide_cdrom_eject(bellatrix_machine_get());
 }
 
 /* ---------------------------------------------------------------------------

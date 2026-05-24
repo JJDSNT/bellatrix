@@ -16,9 +16,12 @@
 	path = external/cherryusb
 	url = https://github.com/cherry-embedded/CherryUSB.git
 	ignore = dirty
-[submodule "external/mounter"]
-	path = external/mounter
-	url = https://github.com/A4091/mounter
 [submodule "external/rigel"]
 	path = external/rigel
 	url = https://github.com/JJDSNT/rigel
+[submodule "external/lide.device"]
+	path = external/lide.device
+	url = https://github.com/LIV2/lide.device
+[submodule "external/libamivideo"]
+	path = external/libamivideo
+	url = https://github.com/svanderburg/libamivideo.git

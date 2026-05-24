@@ -16,8 +16,9 @@
 #include "machine/input/controller_port.h"
 #include "machine/input/keyboard.h"
 
-#include "machine/bus/gayle/gayle.h"
 #include "storage/iso/iso_image.h"
+
+#include "machine/bus/superbuster/superbuster.h"
 
 #include "debug/probe.h"
 #include "debug/btrace.h"
@@ -72,6 +73,8 @@ typedef struct BellatrixMachine
     BellatrixKeyboard keyboard;
     BellatrixControllerPorts controller_ports;
 
+    SuperBusterState superbuster;
+
     BellatrixDebug debug;
 
     uint64_t tick_count;
@@ -86,22 +89,6 @@ typedef struct BellatrixMachine
      * DF0 drive state — signals CIA-A ext_pra.
      */
     FloppyDrive df0;
-
-    /*
-     * GAYLE IDE bridge — exposes an ATAPI CD-ROM device at $DA0000.
-     * gayle.ide.cd.iso points to &iso below.
-     */
-    GayleState gayle;
-
-    /*
-     * ISO image attached to GAYLE — populated by bellatrix_machine_insert_iso
-     * or bellatrix_machine_attach_iso_fn.  The gayle ATAPI uses a pointer to
-     * this struct so updates here are immediately visible to GAYLE.
-     */
-    IsoImage iso;
-
-    /* Scratch buffer for ATAPI data transfers (max ~2 sectors). */
-    uint8_t gayle_atapi_buf[4096];
 
     /*
      * Host serial bridge used by the current machine-driven path.
@@ -166,26 +153,23 @@ int  bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size);
 void bellatrix_machine_eject_df0(void);
 
 /* ------------------------------------------------------------------------- */
-/* GAYLE / CD-ROM media                                                      */
+/* legacy built-in CD-ROM API                                                */
 /* ------------------------------------------------------------------------- */
 
 /*
- * Attach an in-memory ISO image to the GAYLE CD-ROM device.
- * data must remain valid for the lifetime of the emulation session.
- * Returns 0 on success, -1 on invalid arguments.
+ * Legacy built-in GAYLE/CD-ROM path.
+ * The hardwired machine integration has been removed; callers should use
+ * machine expansions/plugins instead. Returns -1.
  */
 int bellatrix_machine_insert_iso(const void *data, size_t size);
 
 /*
- * Attach a callback-based ISO image (bare-metal SD card, USB mass storage).
- * fn is called on every ATAPI READ(10) request; ctx and sector_count must
- * remain valid for the lifetime of the emulation session.
- * Returns 0 on success, -1 on invalid arguments.
+ * Legacy built-in GAYLE/CD-ROM path. Returns -1.
  */
 int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
                                     uint32_t sector_count);
 
-/* Remove the current ISO image from GAYLE. */
+/* Legacy built-in GAYLE/CD-ROM path. No-op. */
 void bellatrix_machine_eject_iso(void);
 
 /* ------------------------------------------------------------------------- */

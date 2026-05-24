@@ -26,6 +26,13 @@ typedef struct BellatrixExpansionOps {
     void (*destroy)(BellatrixExpansion *exp);
 } BellatrixExpansionOps;
 
+typedef struct BellatrixExpansionBusOps {
+    int      (*owns_address)(BellatrixExpansion *exp, uint32_t addr);
+    uint32_t (*read)(BellatrixExpansion *exp, uint32_t addr, unsigned int size);
+    void     (*write)(BellatrixExpansion *exp, uint32_t addr, uint32_t value,
+                      unsigned int size);
+} BellatrixExpansionBusOps;
+
 typedef struct BellatrixExpansionDesc {
     const char *id;
     const char *name;
@@ -33,6 +40,7 @@ typedef struct BellatrixExpansionDesc {
     uint32_t priority;
     void *userdata;
     const BellatrixZorro2BoardDesc *zorro2_board;
+    const BellatrixExpansionBusOps *bus_ops;
     const BellatrixExpansionOps *ops;
 } BellatrixExpansionDesc;
 
@@ -54,6 +62,18 @@ BellatrixExpansion *bellatrix_expansion_find(
 
 void bellatrix_expansion_reset_all(BellatrixMachine *machine);
 void bellatrix_expansion_shutdown_all(BellatrixMachine *machine);
+int bellatrix_expansion_bus_read(
+    BellatrixMachine *machine,
+    uint32_t addr,
+    unsigned int size,
+    uint32_t *value
+);
+int bellatrix_expansion_bus_write(
+    BellatrixMachine *machine,
+    uint32_t addr,
+    uint32_t value,
+    unsigned int size
+);
 
 #ifdef __cplusplus
 }

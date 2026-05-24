@@ -10,11 +10,10 @@
 //
 // Usage:
 //   harness <rom.bin> [--adf disk.adf] [--iso image.iso] [--plugins dir]
-//                     [--cd-board path.rom] [--headless]
-//                     [--cycles N] [--frames N]
+//                     [--headless] [--cycles N] [--frames N]
 
 #include "musashi_backend.h"
-#include "machine/boards/cd_autoboot.h"
+#include "machine/expansions/lide_cdrom/lide_cdrom.h"
 
 #include "machine/machine.h"
 #include "cpu/cpu_bridge.h"
@@ -754,7 +753,6 @@ int main(int argc, char **argv)
     const char *adf_path      = NULL;
     const char *iso_path      = NULL;
     const char *plugins_path  = NULL;
-    const char *cd_board_path = NULL;
     int         headless      = 0;
     long        max_cycles    = 0;
     long        max_frames    = 0;
@@ -779,16 +777,15 @@ int main(int argc, char **argv)
             iso_path = argv[++i];
         } else if (strcmp(argv[i], "--plugins") == 0 && i + 1 < argc) {
             plugins_path = argv[++i];
-        } else if (strcmp(argv[i], "--cd-board") == 0 && i + 1 < argc) {
-            cd_board_path = argv[++i];
         } else if (argv[i][0] != '-') {
             rom_path = argv[i];
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             fprintf(stderr,
                 "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
-                "               [--plugins dir] [--cd-board path.rom]\n"
-                "               [--headless] [--cycles N] [--frames N]\n");
+                "               [--plugins dir]\n"
+                "               [--headless] [--cycles N] [--frames N]\n"
+                "Example ISO: harness kick.rom --iso game.iso\n");
             return 1;
         }
     }
@@ -796,8 +793,9 @@ int main(int argc, char **argv)
     if (!rom_path) {
         fprintf(stderr,
             "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
-            "               [--plugins dir] [--cd-board path.rom]\n"
-            "               [--headless] [--cycles N] [--frames N]\n");
+            "               [--plugins dir]\n"
+            "               [--headless] [--cycles N] [--frames N]\n"
+            "Example ISO: harness kick.rom --iso game.iso\n");
         return 1;
     }
 
@@ -844,7 +842,7 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Load ISO, if provided (preloaded into host RAM; GAYLE serves sectors on demand). */
+    /* Load ISO, if provided (preloaded into host RAM; lide_cdrom serves sectors on demand). */
     if (iso_path) {
         if (adf_path) {
             fprintf(stderr, "[HARNESS] WARNING: both --adf and --iso specified; ISO ignored\n");
@@ -869,11 +867,6 @@ int main(int argc, char **argv)
     }
 
     harness_wait_for_serial_attach();
-
-    /* CD automount board: load ROM before machine init so the initial Zorro II
-     * board inventory already contains the DiagArea plugin/board sample. */
-    if (cd_board_path)
-        cd_autoboot_init(NULL, cd_board_path);
 
     /* Init Musashi + load ROM */
     musashi_backend_init();
@@ -923,9 +916,15 @@ int main(int argc, char **argv)
         bellatrix_machine_eject_df0();
     }
 
-    /* Attach ISO image to GAYLE CD-ROM device, if loaded. */
+    /* Always register lide_cdrom (OAHR RIPPLE board) so the board appears
+     * in autoconfig even when no ISO is provided at startup (TUI can attach later). */
+    if (lide_cdrom_register(m) != 0) {
+        fprintf(stderr, "[HARNESS] lide_cdrom_register failed\n");
+    }
+
+    /* Attach ISO image to the lide_cdrom expansion, if loaded via --iso. */
     if (iso_data) {
-        if (bellatrix_machine_insert_iso(iso_data, iso_size) != 0) {
+        if (lide_cdrom_insert_iso(m, iso_data, iso_size) != 0) {
             fprintf(stderr, "[HARNESS] Failed to attach ISO image\n");
             free(iso_data);
             free(adf_data);

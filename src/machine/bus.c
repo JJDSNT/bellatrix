@@ -7,8 +7,6 @@
 #include "chipset/paula/paula.h"
 #include "chipset/paula/paula_interrupt.h"
 #include "chipset/cia/cia.h"
-#include "machine/bus/gayle/gayle.h"
-
 #include <string.h>
 
 #define CIAA_BASE          0x00bfe000u
@@ -234,14 +232,6 @@ uint32_t bellatrix_bus_read(BellatrixBus *bus,
         return read_cia_b(m, addr, size);
     }
 
-    if (gayle_owns_address(&m->gayle, addr)) {
-        uint32_t v = gayle_read(&m->gayle, addr, size);
-        /* Data exhausted during a read may set irq_pending (command complete). */
-        if (gayle_ide_irq_pending(&m->gayle.ide))
-            paula_irq_raise(&m->paula, PAULA_INT_PORTS);
-        return v;
-    }
-
     if (in_range(addr, BELLATRIX_ROM_BASE, BELLATRIX_ROM_END)) {
         return read_rom(m, addr, size);
     }
@@ -286,18 +276,6 @@ void bellatrix_bus_write(BellatrixBus *bus,
 
     if ((addr & 0x00fff000u) == CIAB_BASE) {
         write_cia_b(m, addr, value, size);
-        return;
-    }
-
-    if (gayle_owns_address(&m->gayle, addr)) {
-        gayle_write(&m->gayle, addr, value, size);
-        /*
-         * If the GAYLE IDE controller asserted its interrupt after this write
-         * (ATAPI command/data ready), propagate to Paula PORTS (Level 2).
-         * AROS's IDE interrupt handler reads $DA9000 to confirm it's IDE.
-         */
-        if (gayle_ide_irq_pending(&m->gayle.ide))
-            paula_irq_raise(&m->paula, PAULA_INT_PORTS);
         return;
     }
 

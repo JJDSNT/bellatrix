@@ -66,7 +66,6 @@ void bellatrix_memory_init(BellatrixMemory *m)
 
 #if defined(BELLATRIX_HARNESS)
     memset(m->fast_ram, 0, m->fast_ram_size);
-    bellatrix_zorro2_init(m);
 #endif
 
     bellatrix_memory_log_expansion_backend();
@@ -76,9 +75,6 @@ void bellatrix_memory_reset(BellatrixMemory *m)
 {
     bellatrix_memory_init(m);
 
-#if defined(BELLATRIX_HARNESS)
-    bellatrix_zorro2_reset(m);
-#endif
 }
 
 void bellatrix_memory_attach_rom(BellatrixMemory *m,
