@@ -38,8 +38,9 @@ extern "C" {
  *   reg 7: STATUS / COMMAND
  */
 
-/* Transfer buffer for IDENTIFY and sector/packet data */
-#define ATA_XFER_BUF_SIZE  (2048 + 16)
+/* Transfer buffer capacity — large enough for up to 256 CD-ROM sectors */
+#define ATA_XFER_BUF_SECTORS  256u
+#define ATA_XFER_BUF_SIZE     (ATA_XFER_BUF_SECTORS * 2048u)
 
 typedef enum AtaRegState {
     ATA_IDLE = 0,
@@ -63,7 +64,7 @@ typedef struct AtaIdeChannel {
 
     /* Transfer state */
     AtaRegState state;
-    uint8_t  xfer_buf[ATA_XFER_BUF_SIZE];
+    uint8_t *xfer_buf;   /* dynamically allocated (ATA_XFER_BUF_SIZE bytes) */
     size_t   xfer_len;   /* bytes valid in xfer_buf */
     size_t   xfer_pos;   /* next byte to emit (in 16-bit word steps) */
 
@@ -79,7 +80,12 @@ typedef struct AtaIdeChannel {
                          size_t *data_len_out);
 } AtaIdeChannel;
 
-void    ata_ide_channel_init(AtaIdeChannel *ch);
+/* alloc/free manage the xfer_buf heap allocation.
+ * Call ata_ide_channel_alloc() once after embedding in a struct,
+ * then ata_ide_channel_free() before destroying the struct. */
+int     ata_ide_channel_alloc(AtaIdeChannel *ch);   /* returns 0 on success */
+void    ata_ide_channel_free(AtaIdeChannel *ch);
+void    ata_ide_channel_init(AtaIdeChannel *ch);     /* zeros registers, resets state */
 void    ata_ide_channel_reset(AtaIdeChannel *ch);
 
 /* Byte-level register read/write.

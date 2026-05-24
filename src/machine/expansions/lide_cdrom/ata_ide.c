@@ -2,6 +2,7 @@
 
 #include "support.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* ATA status register bits */
@@ -105,9 +106,23 @@ static void build_identify(AtaIdeChannel *ch)
 
 /* ------------------------------------------------------------------ */
 
+int ata_ide_channel_alloc(AtaIdeChannel *ch)
+{
+    ch->xfer_buf = (uint8_t *)calloc(1, ATA_XFER_BUF_SIZE);
+    return ch->xfer_buf ? 0 : -1;
+}
+
+void ata_ide_channel_free(AtaIdeChannel *ch)
+{
+    free(ch->xfer_buf);
+    ch->xfer_buf = NULL;
+}
+
 void ata_ide_channel_init(AtaIdeChannel *ch)
 {
+    uint8_t *saved_buf = ch->xfer_buf;
     memset(ch, 0, sizeof(*ch));
+    ch->xfer_buf = saved_buf;
     ata_ide_channel_reset(ch);
 }
 

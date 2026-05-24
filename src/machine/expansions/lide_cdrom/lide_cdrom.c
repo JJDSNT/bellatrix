@@ -246,6 +246,15 @@ static uint32_t ripple_bus_read(BellatrixExpansion *exp,
         int      reg;
 
         /* ATA registers take priority over ROM */
+        if (size == 4) {
+            reg = ata_ide_offset_to_reg(off);
+            if (reg == 0) {
+                /* movem.l / move.l: two consecutive word reads from DATA port */
+                uint16_t hi = ata_ide_read16(&s->ide, 0);
+                uint16_t lo = ata_ide_read16(&s->ide, 0);
+                return ((uint32_t)hi << 16) | lo;
+            }
+        }
         if (size == 2) {
             reg = ata_ide_offset_to_reg(off);
             if (reg == 0)
@@ -290,6 +299,14 @@ static void ripple_bus_write(BellatrixExpansion *exp,
         uint32_t off      = addr - base;
         int      reg;
 
+        if (size == 4) {
+            reg = ata_ide_offset_to_reg(off);
+            if (reg == 0) {
+                ata_ide_write16(&s->ide, 0, (uint16_t)(value >> 16));
+                ata_ide_write16(&s->ide, 0, (uint16_t)(value & 0xFFFFu));
+                return;
+            }
+        }
         if (size == 2) {
             reg = ata_ide_offset_to_reg(off);
             if (reg == 0) {
@@ -337,6 +354,7 @@ static void ripple_exp_destroy(BellatrixExpansion *exp)
 {
     LideCdromState *s = (LideCdromState *)exp->desc.userdata;
     if (!s) return;
+    ata_ide_channel_free(&s->ide);
     /* rom is embedded static data — no free */
     free(s);
     exp->desc.userdata = NULL;
@@ -390,6 +408,10 @@ int lide_cdrom_register(BellatrixMachine *machine)
 
     /* Init ATAPI and IDE layers */
     atapi_cdrom_init(&s->atapi, &g_iso_media_ops, &s->media);
+    if (ata_ide_channel_alloc(&s->ide) != 0) {
+        free(s);
+        return -3;
+    }
     ata_ide_channel_init(&s->ide);
     s->ide.atapi_ctx  = &s->atapi;
     s->ide.atapi_exec = atapi_cdrom_exec;
