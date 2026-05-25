@@ -725,12 +725,15 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
 
     else if (is_z2_board_addr(addr))
     {
-        switch (size)
-        {
-        case 1: value = bellatrix_zorro2_board_read8(addr);  break;
-        case 2: value = bellatrix_zorro2_board_read16(addr); break;
-        case 4: value = bellatrix_zorro2_board_read32(addr); break;
-        default: value = 0xFFFFFFFFu; break;
+        /* Prefer size-aware expansion bus ops over the byte-decomposing zorro2 fallback. */
+        if (!bellatrix_expansion_bus_read(m, addr, size, &value)) {
+            switch (size)
+            {
+            case 1: value = bellatrix_zorro2_board_read8(addr);  break;
+            case 2: value = bellatrix_zorro2_board_read16(addr); break;
+            case 4: value = bellatrix_zorro2_board_read32(addr); break;
+            default: value = 0xFFFFFFFFu; break;
+            }
         }
     }
 
@@ -896,12 +899,15 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
 
     else if (is_z2_board_addr(addr))
     {
-        switch (size)
-        {
-        case 1: bellatrix_zorro2_board_write8(addr,  (uint8_t)value);  break;
-        case 2: bellatrix_zorro2_board_write16(addr, (uint16_t)value); break;
-        case 4: bellatrix_zorro2_board_write32(addr, (uint32_t)value); break;
-        default: break;
+        /* Prefer size-aware expansion bus ops over the byte-decomposing zorro2 fallback. */
+        if (!bellatrix_expansion_bus_write(m, addr, value, size)) {
+            switch (size)
+            {
+            case 1: bellatrix_zorro2_board_write8(addr,  (uint8_t)value);  break;
+            case 2: bellatrix_zorro2_board_write16(addr, (uint16_t)value); break;
+            case 4: bellatrix_zorro2_board_write32(addr, (uint32_t)value); break;
+            default: break;
+            }
         }
     }
 

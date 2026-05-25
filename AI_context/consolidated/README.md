@@ -19,6 +19,7 @@ tópico funcional. Substitui os arquivos `sprint_NN.md` individuais.
 | [issue_multicore_runtime.md](issue_multicore_runtime.md) | RPi3 multicore: Core 1=GFX, Core 2=Paula, Core 3=IO | 27, 28, 29 | ✅ Funciona (⚠️ cross-core sync) |
 | [issue_usb_host_dwc2.md](issue_usb_host_dwc2.md) | CherryUSB + DWC2 host, BCM2837 bring-up | 30-43 | ⚠️ QEMU OK, Pi 3B pendente |
 | [issue_bluetooth.md](issue_bluetooth.md) | BCM43430A1 bootstrap | 30 | 🔴 Bloqueado em phase 1 |
+| [issue_cdrom_boot.md](issue_cdrom_boot.md) | ATAPI CD-ROM boot: RIPPLE board, lide.device, FindCDFS, AROS CDFS gap | — | 🔴 Bloqueado: sem 'CD01' em FSR |
 
 ## Ações Imediatas (Próxima Sessão)
 
@@ -33,7 +34,15 @@ Detalhes: `issue_harness_ks13_boot_screen.md` + `issue_agnus_dma_copper.md`.
 **O quê**: Flash Sprint 42+43 no hardware e verificar se Pi 3B completa primeira transação EP0.
 Detalhes: `issue_usb_host_dwc2.md`.
 
-### 3. Cross-core CIA→INTREQ Sync
+### 3. CD Boot: Inject 'CD01' into FileSystem.resource
+**O quê**: `FindCDFS()` in lide.device searches FSR for DosType 'CD01'. AROS ROM doesn't
+provide this (AROS CDFS is a handler, not an FSR entry). Two paths:
+- **Option A**: expand board to 128KB, embed BootCDFileSystem in second ROM bank (real hardware path).
+- **Option B**: DiagArea ROM injects a minimal FileSysEntry with `fse_DosType='CD01'` into FSR at init time.
+**Prerequisite**: ADF/ISO harness mutual-exclusion bug fixed (main.c). media_present works.
+Detalhes: `issue_cdrom_boot.md`.
+
+### 4. Cross-core CIA→INTREQ Sync
 **O quê**: `RuntimeMailbox` ou evento atômico Core 3→Core 2 para propagação CIA ICR.
 **Risco atual**: Interrupções CIA podem ser perdidas ou atrasadas.
 Detalhes: `issue_multicore_runtime.md` + `issue_interrupt_pipeline.md`.

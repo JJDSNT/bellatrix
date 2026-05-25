@@ -23,9 +23,11 @@
 #define SK_NO_SENSE          0x00
 #define SK_NOT_READY         0x02
 #define SK_ILLEGAL_REQUEST   0x05
+#define SK_UNIT_ATTENTION    0x06
 
 /* ASC codes */
 #define ASC_MEDIUM_NOT_PRESENT   0x3A
+#define ASC_MEDIUM_CHANGED       0x28
 #define ASC_INVALID_COMMAND      0x20
 #define ASC_INVALID_FIELD_IN_CDB 0x24
 #define ASC_LBA_OUT_OF_RANGE     0x21
@@ -76,13 +78,24 @@ void atapi_cdrom_reset(AtapiCdromState *s)
 {
     bool had_media = s->media_present;
     memset(&s->sense_key, 0, sizeof(s->sense_key));
-    s->asc  = 0;
-    s->ascq = 0;
+    s->asc           = 0;
+    s->ascq          = 0;
     s->media_present = had_media;
+    /* Per ATAPI spec: power-on/reset raises UNIT_ATTENTION if media present */
+    s->unit_attention = had_media;
 }
 
-void atapi_cdrom_insert(AtapiCdromState *s) { s->media_present = true; }
-void atapi_cdrom_eject(AtapiCdromState *s)  { s->media_present = false; }
+void atapi_cdrom_insert(AtapiCdromState *s)
+{
+    s->media_present  = true;
+    s->unit_attention = true;  /* media change — host must re-scan */
+}
+
+void atapi_cdrom_eject(AtapiCdromState *s)
+{
+    s->media_present  = false;
+    s->unit_attention = false;
+}
 
 /* ------------------------------------------------------------------ */
 
@@ -93,6 +106,12 @@ static int cmd_test_unit_ready(AtapiCdromState *s,
     *len = 0;
     if (!s->media_present) {
         set_sense(s, SK_NOT_READY, ASC_MEDIUM_NOT_PRESENT, 0x00);
+        return -1;
+    }
+    if (s->unit_attention) {
+        s->unit_attention = false;
+        set_sense(s, SK_UNIT_ATTENTION, ASC_MEDIUM_CHANGED, 0x00);
+        kprintf("[ATAPI] UNIT_ATTENTION raised (medium changed)\n");
         return -1;
     }
     set_sense(s, SK_NO_SENSE, 0, 0);
@@ -235,6 +254,9 @@ static int cmd_read_10(AtapiCdromState *s, const uint8_t *pkt,
             ((uint32_t)pkt[4] <<  8) |  (uint32_t)pkt[5];
     count = (uint16_t)(((uint16_t)pkt[7] << 8) | pkt[8]);
 
+    kprintf("[ATAPI] READ_10 lba=%u count=%u max=%u\n",
+            (unsigned)lba, (unsigned)count, (unsigned)max);
+
     if (count == 0) {
         *len = 0;
         return 0;
@@ -242,11 +264,15 @@ static int cmd_read_10(AtapiCdromState *s, const uint8_t *pkt,
 
     needed = (size_t)count * ATAPI_SECTOR_SIZE;
     if (needed > max) {
+        kprintf("[ATAPI] READ_10 OVERFLOW needed=%u max=%u\n",
+                (unsigned)needed, (unsigned)max);
         set_sense(s, SK_ILLEGAL_REQUEST, ASC_INVALID_FIELD_IN_CDB, 0);
         return -1;
     }
 
     if (s->ops->read_sectors(s->ops_ctx, lba, count, out) != 0) {
+        kprintf("[ATAPI] READ_10 read_sectors FAILED lba=%u count=%u\n",
+                (unsigned)lba, (unsigned)count);
         set_sense(s, SK_ILLEGAL_REQUEST, ASC_LBA_OUT_OF_RANGE, 0);
         return -1;
     }

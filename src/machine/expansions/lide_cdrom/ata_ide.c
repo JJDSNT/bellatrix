@@ -228,10 +228,20 @@ static void execute_atapi_packet(AtaIdeChannel *ch)
         return;
     }
 
+    kprintf("[ATA-IDE] ATAPI pkt: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+            (unsigned)ch->atapi_pkt[0],  (unsigned)ch->atapi_pkt[1],
+            (unsigned)ch->atapi_pkt[2],  (unsigned)ch->atapi_pkt[3],
+            (unsigned)ch->atapi_pkt[4],  (unsigned)ch->atapi_pkt[5],
+            (unsigned)ch->atapi_pkt[6],  (unsigned)ch->atapi_pkt[7],
+            (unsigned)ch->atapi_pkt[8],  (unsigned)ch->atapi_pkt[9],
+            (unsigned)ch->atapi_pkt[10], (unsigned)ch->atapi_pkt[11]);
+
     rc = ch->atapi_exec(ch->atapi_ctx,
                         ch->atapi_pkt, 12,
                         ch->xfer_buf, ATA_XFER_BUF_SIZE,
                         &data_len);
+
+    kprintf("[ATA-IDE] atapi_exec rc=%d data_len=%u\n", rc, (unsigned)data_len);
 
     if (rc != 0 || data_len == 0) {
         /* Error or no-data command */
@@ -241,6 +251,25 @@ static void execute_atapi_packet(AtaIdeChannel *ch)
         /* Interrupt reason: IO=1, COD=1 = status phase */
         ch->sector_count = IR_IO | IR_COD;
     } else {
+        /*
+         * RIPPLE hardware byte-swaps D0-D7 <-> D8-D15 on every IDE word.
+         * lide.device re-swaps each word after reading command responses
+         * (READ_CAPACITY, INQUIRY, TOC, etc.) to recover the original bytes.
+         * Sector data (READ_10) is read via MOVEM.L: the bus's 32-bit path
+         * packs two byte-swapped words into one longword, so MOVEM gives
+         * correct byte order in memory without any software re-swap.
+         * Pre-swap byte pairs here for all non-sector commands so that
+         * (lo<<8)|hi in read16 + lide's re-swap = correct original data.
+         */
+        if (ch->atapi_pkt[0] != 0x28u && ch->atapi_pkt[0] != 0xA8u) {
+            size_t i;
+            for (i = 0; i + 1u < data_len; i += 2u) {
+                uint8_t t = ch->xfer_buf[i];
+                ch->xfer_buf[i]      = ch->xfer_buf[i + 1u];
+                ch->xfer_buf[i + 1u] = t;
+            }
+        }
+
         ch->xfer_len     = data_len;
         ch->xfer_pos     = 0;
         ch->state        = ATA_ATAPI_DATA_IN;
@@ -300,6 +329,12 @@ uint16_t ata_ide_read16(AtaIdeChannel *ch, uint8_t reg)
              */
             word = (uint16_t)(((uint16_t)lo << 8) | hi);
 
+            /* Log first and last 4 words of each transfer */
+            if (ch->xfer_pos <= 8u || ch->xfer_pos + 2u >= ch->xfer_len)
+                kprintf("[ATA-IDE] read16 pos=%u/%u word=%04x (lo=%02x hi=%02x)\n",
+                        (unsigned)(ch->xfer_pos - 2u), (unsigned)ch->xfer_len,
+                        (unsigned)word, (unsigned)lo, (unsigned)hi);
+
             if (ch->xfer_pos >= ch->xfer_len) {
                 /* Transfer complete */
                 if (ch->state == ATA_ATAPI_DATA_IN) {
@@ -356,6 +391,9 @@ void ata_ide_write16(AtaIdeChannel *ch, uint8_t reg, uint16_t value)
          * Undo the byte-swap before storing the packet byte:
          * the CPU writes a byte-swapped word, so we reverse it.
          */
+        kprintf("[ATA-IDE] pkt_write[%u] value=%04x -> bytes %02x %02x\n",
+                (unsigned)ch->atapi_pkt_pos, (unsigned)value,
+                (unsigned)hi, (unsigned)lo);
         ch->atapi_pkt[ch->atapi_pkt_pos++] = hi;
         if (ch->atapi_pkt_pos < 12u)
             ch->atapi_pkt[ch->atapi_pkt_pos++] = lo;

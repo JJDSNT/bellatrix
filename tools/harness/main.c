@@ -842,19 +842,17 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Load ISO, if provided (preloaded into host RAM; lide_cdrom serves sectors on demand). */
+    /* Load ISO, if provided (preloaded into host RAM; lide_cdrom serves sectors on demand).
+     * ADF and ISO are independent: ADF → DF0, ISO → lide_cdrom.  Both can coexist. */
     if (iso_path) {
-        if (adf_path) {
-            fprintf(stderr, "[HARNESS] WARNING: both --adf and --iso specified; ISO ignored\n");
-        } else {
-            iso_data = load_file_limited(iso_path, &iso_size, 800u * 1024u * 1024u, "ISO");
-            if (!iso_data) {
-                free(rom_data);
-                return 1;
-            }
-            printf("[HARNESS] ISO: %s  size=%u bytes  (%u sectors)\n",
-                   iso_path, iso_size, iso_size / 2048u);
+        iso_data = load_file_limited(iso_path, &iso_size, 800u * 1024u * 1024u, "ISO");
+        if (!iso_data) {
+            free(rom_data);
+            if (adf_data) free(adf_data);
+            return 1;
         }
+        printf("[HARNESS] ISO: %s  size=%u bytes  (%u sectors)\n",
+               iso_path, iso_size, iso_size / 2048u);
     }
 
     /* Init display before machine so framebuffer globals are set */

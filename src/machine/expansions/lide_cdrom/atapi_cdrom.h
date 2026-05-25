@@ -42,6 +42,7 @@ typedef struct AtapiCdromState {
     uint8_t ascq;
 
     bool media_present;
+    bool unit_attention;  /* raised on power-on/reset and media change */
 } AtapiCdromState;
 
 void atapi_cdrom_init(AtapiCdromState *s,
