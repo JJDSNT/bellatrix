@@ -175,6 +175,8 @@ static void execute_command(AtaIdeChannel *ch, uint8_t cmd)
     kprintf("[ATA-IDE] cmd %02x\n", (unsigned)cmd);
     switch (cmd) {
     case ATA_CMD_DEVICE_RESET:
+        if (ch->atapi_reset)
+            ch->atapi_reset(ch->atapi_ctx);
         ata_ide_channel_reset(ch);
         break;
 
@@ -252,23 +254,15 @@ static void execute_atapi_packet(AtaIdeChannel *ch)
         ch->sector_count = IR_IO | IR_COD;
     } else {
         /*
-         * RIPPLE hardware byte-swaps D0-D7 <-> D8-D15 on every IDE word.
-         * lide.device re-swaps each word after reading command responses
-         * (READ_CAPACITY, INQUIRY, TOC, etc.) to recover the original bytes.
-         * Sector data (READ_10) is read via MOVEM.L: the bus's 32-bit path
-         * packs two byte-swapped words into one longword, so MOVEM gives
-         * correct byte order in memory without any software re-swap.
-         * Pre-swap byte pairs here for all non-sector commands so that
-         * (lo<<8)|hi in read16 + lide's re-swap = correct original data.
+         * RIPPLE hardware byte-swaps D0-D7 <-> D8-D15.  read16() returns
+         * (buf[pos]<<8)|buf[pos+1], which replicates this: the m68k sees
+         * the original big-endian byte pair and stores it correctly.
+         * No pre-swap needed — lide.device stores words directly from the
+         * data register without re-swapping for ATAPI command responses.
+         * (Only IDENTIFY data is explicitly re-swapped by lide.device.)
+         * Sector data (READ_10) uses read_fast/MOVEM.L: two 16-bit words
+         * per longword give the correct big-endian layout in memory.
          */
-        if (ch->atapi_pkt[0] != 0x28u && ch->atapi_pkt[0] != 0xA8u) {
-            size_t i;
-            for (i = 0; i + 1u < data_len; i += 2u) {
-                uint8_t t = ch->xfer_buf[i];
-                ch->xfer_buf[i]      = ch->xfer_buf[i + 1u];
-                ch->xfer_buf[i + 1u] = t;
-            }
-        }
 
         ch->xfer_len     = data_len;
         ch->xfer_pos     = 0;
@@ -318,14 +312,15 @@ uint16_t ata_ide_read16(AtaIdeChannel *ch, uint8_t reg)
             ch->xfer_pos += 2u;
 
             /*
-             * Simulate the RIPPLE hardware byte-swap: the CPU sees the
-             * bytes in reversed order.  lide.device re-swaps them.
+             * Replicate the RIPPLE hardware byte-swap (D0-D7 ↔ D8-D15).
+             * Return (buf[pos]<<8)|buf[pos+1] — the m68k stores this as
+             * [buf[pos], buf[pos+1]] in big-endian memory, which is the
+             * original byte order from the ATAPI device.
              *
-             * For IDENTIFY: lo=ATA_low_byte, hi=ATA_high_byte
-             *   → return (lo<<8)|hi; lide re-swaps → (hi<<8)|lo = ATA_word ✓
-             *
-             * For sector data: natural byte pair [B0, B1]
-             *   → return (B0<<8)|B1; MOVEM stores B0, B1 in memory ✓
+             * For IDENTIFY: buf stores ATA-native LE words, so
+             *   lo=ATA_lo, hi=ATA_hi → (lo<<8)|hi; lide re-swaps → ATA_word
+             * For ATAPI responses and sector data: buf holds big-endian bytes
+             *   [B0,B1,...] → (B0<<8)|B1 → stored as [B0,B1] in memory
              */
             word = (uint16_t)(((uint16_t)lo << 8) | hi);
 

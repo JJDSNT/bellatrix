@@ -85,6 +85,12 @@ add_custom_command(
     COMMENT "Embedding lide.rom as C array"
 )
 
+add_library(lide_rom_data STATIC ${LIDE_ROM_C})
+
+set_target_properties(lide_rom_data PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
 # ---------------------------------------------------------------------------
 # Bellatrix chipset sources
 # ---------------------------------------------------------------------------
@@ -104,11 +110,10 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/bus/zorro3/zorro3.c
     ${SRC}/machine/bus/superbuster/superbuster.c
 
-    # lide.device CD-ROM expansion (lide_rom_data.c generated at build time)
+    # lide.device CD-ROM expansion
     ${SRC}/machine/expansions/lide_cdrom/ata_ide.c
     ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
     ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
-    ${LIDE_ROM_C}
 
     # Memory (nova base)
     ${SRC}/machine/memory/memory.c
@@ -233,6 +238,7 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 target_link_libraries(harness PRIVATE musashi m dl Threads::Threads)
+target_link_libraries(harness PRIVATE lide_rom_data)
 
 target_compile_options(harness PRIVATE
     -Wall -Wextra -Wno-unused-parameter
@@ -332,6 +338,7 @@ target_compile_definitions(bellatrix_integration_overlay PRIVATE
 )
 
 target_link_libraries(bellatrix_integration_overlay PRIVATE m)
+target_link_libraries(bellatrix_integration_overlay PRIVATE lide_rom_data)
 
 target_compile_options(bellatrix_integration_overlay PRIVATE
     -Wall -Wextra -Wno-unused-parameter
@@ -392,7 +399,6 @@ add_library(lide_cdrom MODULE
     ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
     ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
     ${SRC}/storage/iso/iso_image.c
-    ${LIDE_ROM_C}                           # needed since lide_cdrom.c references g_lide_rom_data
 )
 
 set_target_properties(lide_cdrom PROPERTIES
@@ -409,3 +415,5 @@ target_include_directories(lide_cdrom PRIVATE
 target_compile_definitions(lide_cdrom PRIVATE
     BELLATRIX_HARNESS=1
 )
+
+target_link_libraries(lide_cdrom PRIVATE lide_rom_data)

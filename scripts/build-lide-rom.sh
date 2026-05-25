@@ -23,20 +23,20 @@ echo "[lide-rom] Step 1/4 — building lide.device..."
 # transitively as liv2/amiga-gcc does.  We set CFLAGS inside a bash -c so the
 # environment variable reaches the container (the Docker wrapper doesn't pass
 # host env vars via --env).
-TTY_ENABLED="" "$DOCKER_WRAPPER" bash -c \
+(cd "$REPO_ROOT" && TTY_ENABLED="" "$DOCKER_WRAPPER" bash -c \
     "CFLAGS='-include stdint.h -include exec/execbase.h -include libraries/expansionbase.h' \
-     make -C '$LIDE_DIR' lide.device -s"
+     make -C '$LIDE_DIR' lide.device -s")
 
 echo "[lide-rom] Step 2/4 — assembling bootloader (vasmm68k_mot -Fhunk)..."
 mkdir -p "$LIDE_DIR/bootrom/obj"
 # -Fbin causes section-overlap errors with this codebase; use -Fhunk
 # then extract the raw bytes with hunk_to_bin.py.
-TTY_ENABLED="" "$DOCKER_WRAPPER" vasmm68k_mot \
+(cd "$REPO_ROOT" && TTY_ENABLED="" "$DOCKER_WRAPPER" vasmm68k_mot \
     -Fhunk -quiet -align \
     -DROM -DBYTEWIDE \
     -I"$NDK_INCLUDE" \
     -o "$LIDE_DIR/bootrom/obj/bootldr.hunk" \
-    "$LIDE_DIR/bootrom/bootldr.S"
+    "$LIDE_DIR/bootrom/bootldr.S")
 python3 "$SCRIPT_DIR/hunk_to_bin.py" \
     "$LIDE_DIR/bootrom/obj/bootldr.hunk" \
     "$LIDE_DIR/bootrom/obj/bootldr"

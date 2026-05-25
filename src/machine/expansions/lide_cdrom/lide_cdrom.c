@@ -413,8 +413,9 @@ int lide_cdrom_register(BellatrixMachine *machine)
         return -3;
     }
     ata_ide_channel_init(&s->ide);
-    s->ide.atapi_ctx  = &s->atapi;
-    s->ide.atapi_exec = atapi_cdrom_exec;
+    s->ide.atapi_ctx   = &s->atapi;
+    s->ide.atapi_exec  = atapi_cdrom_exec;
+    s->ide.atapi_reset = (void (*)(void *))atapi_cdrom_reset;
 
     /* Build Zorro 2 board descriptor */
     memset(&s->board_desc, 0, sizeof(s->board_desc));
@@ -470,19 +471,41 @@ int lide_cdrom_insert_iso(BellatrixMachine *machine,
 {
     LideCdromState *s;
     BellatrixExpansion *exp;
+    const uint8_t *bytes = (const uint8_t *)data;
 
     (void)machine;
     exp = bellatrix_expansion_find(machine, "lide.cdrom");
-    if (!exp) return -1;
+    if (!exp) {
+        kprintf("[LIDE-CDROM] insert_iso: expansion not found\n");
+        return -1;
+    }
     s = (LideCdromState *)exp->desc.userdata;
-    if (!s) return -1;
+    if (!s) {
+        kprintf("[LIDE-CDROM] insert_iso: no state\n");
+        return -1;
+    }
 
-    s->media.mem_data    = (const uint8_t *)data;
-    s->media.mem_size    = size;
-    s->media.fn          = NULL;
-    s->media.fn_ctx      = NULL;
+    if (!data || size == 0) {
+        kprintf("[LIDE-CDROM] insert_iso: NULL or empty data\n");
+        return -1;
+    }
+    if (size % ATAPI_SECTOR_SIZE != 0) {
+        kprintf("[LIDE-CDROM] insert_iso: size %u not a multiple of %u; truncating tail\n",
+                (unsigned)size, (unsigned)ATAPI_SECTOR_SIZE);
+        size -= size % ATAPI_SECTOR_SIZE;
+    }
+    if (size < 17u * ATAPI_SECTOR_SIZE) {
+        kprintf("[LIDE-CDROM] insert_iso: too small for ISO9660 PVD (%u sectors)\n",
+                (unsigned)(size / ATAPI_SECTOR_SIZE));
+        return -1;
+    }
+
+    s->media.mem_data     = bytes;
+    s->media.mem_size     = size;
+    s->media.fn           = NULL;
+    s->media.fn_ctx       = NULL;
     s->media.sector_count = (uint32_t)(size / ATAPI_SECTOR_SIZE);
-    s->media.present     = 1;
+    s->media.present      = 1;
 
     atapi_cdrom_insert(&s->atapi);
     ata_ide_channel_reset(&s->ide);

@@ -72,12 +72,14 @@ typedef struct AtaIdeChannel {
     uint8_t  atapi_pkt[12];
     size_t   atapi_pkt_pos;
 
-    /* Pointer to ATAPI layer (set by lide_cdrom_init) */
+    /* Pointer to ATAPI layer (set by lide_cdrom_register) */
     void    *atapi_ctx;
     int    (*atapi_exec)(void *ctx,
                          const uint8_t *pkt, size_t pkt_len,
                          uint8_t *buf_out, size_t buf_max,
                          size_t *data_len_out);
+    /* Called on ATA DEVICE RESET so the ATAPI layer can re-raise UNIT_ATTENTION */
+    void   (*atapi_reset)(void *ctx);
 } AtaIdeChannel;
 
 /* alloc/free manage the xfer_buf heap allocation.

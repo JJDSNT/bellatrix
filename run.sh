@@ -301,7 +301,7 @@ if [ "$MODE" = "harness" ]; then
     build_harness
 
     # Auto-build cdmount.rom when running with an ISO
-    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+    if [ -n "${ISO:-}" ]; then
         build_cd_board
     fi
 
@@ -320,7 +320,7 @@ if [ "$MODE" = "harness" ]; then
         HARNESS_ARGS+=(--adf "$ADF")
     fi
 
-    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+    if [ -n "${ISO:-}" ]; then
         [ -f "$ISO" ] || { echo "ERROR: ISO not found: $ISO"; exit 1; }
         HARNESS_ARGS+=(--iso "$ISO")
     fi
@@ -340,10 +340,11 @@ if [ "$MODE" = "harness" ]; then
     echo "[RUN] Harness ROM: $KICKSTART"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
-    elif [ -n "${ISO:-}" ]; then
-        echo "[RUN] Harness CD-ROM: $ISO"
     else
         echo "[RUN] Harness DF0: no disk"
+    fi
+    if [ -n "${ISO:-}" ]; then
+        echo "[RUN] Harness CD-ROM: $ISO"
     fi
     if [ -d "$PLUGINS_DIR" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
@@ -356,7 +357,7 @@ if [ "$MODE" = "harness-serial" ]; then
     echo "[BUILD] Harness (Musashi, native)"
     build_harness
 
-    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+    if [ -n "${ISO:-}" ]; then
         build_cd_board
     fi
 
@@ -373,7 +374,7 @@ if [ "$MODE" = "harness-serial" ]; then
         HARNESS_ARGS+=(--adf "$ADF")
     fi
 
-    if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ]; then
+    if [ -n "${ISO:-}" ]; then
         [ -f "$ISO" ] || { echo "ERROR: ISO not found: $ISO"; exit 1; }
         HARNESS_ARGS+=(--iso "$ISO")
     fi
@@ -392,10 +393,11 @@ if [ "$MODE" = "harness-serial" ]; then
     echo "[RUN] Harness ROM: $KICKSTART"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
-    elif [ -n "${ISO:-}" ]; then
-        echo "[RUN] Harness CD-ROM: $ISO"
     else
         echo "[RUN] Harness DF0: no disk"
+    fi
+    if [ -n "${ISO:-}" ]; then
+        echo "[RUN] Harness CD-ROM: $ISO"
     fi
     if [ -d "$PLUGINS_DIR" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
@@ -584,8 +586,7 @@ case "$MODE" in
         # Inject ISO via QEMU generic loader at physical 0x20000000.
         # Bellatrix's launcher detects the ISO 9660 PVD signature there and
         # attaches the image to the GAYLE ATAPI CD-ROM device.
-        # ADF and ISO are mutually exclusive — skip ISO if ADF is already set.
-        if [ -n "${ISO:-}" ] && [ -z "${ADF:-}" ] && [ "${BELLATRIX_LAUNCHER:-1}" = "1" ]; then
+        if [ -n "${ISO:-}" ] && [ "${BELLATRIX_LAUNCHER:-1}" = "1" ]; then
             [ -f "$ISO" ] || { echo "ERROR: ISO not found: $ISO"; exit 1; }
             QEMU_ARGS+=(-device "loader,file=$ISO,addr=0x20000000,force-raw=on")
             echo "[RUN] QEMU CD-ROM loader: $ISO → phys 0x20000000"

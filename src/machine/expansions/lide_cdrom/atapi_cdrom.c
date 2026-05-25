@@ -76,24 +76,21 @@ void atapi_cdrom_init(AtapiCdromState *s,
 
 void atapi_cdrom_reset(AtapiCdromState *s)
 {
-    bool had_media = s->media_present;
+    bool had_media = s->ops->present(s->ops_ctx);
     memset(&s->sense_key, 0, sizeof(s->sense_key));
-    s->asc           = 0;
-    s->ascq          = 0;
-    s->media_present = had_media;
+    s->asc  = 0;
+    s->ascq = 0;
     /* Per ATAPI spec: power-on/reset raises UNIT_ATTENTION if media present */
     s->unit_attention = had_media;
 }
 
 void atapi_cdrom_insert(AtapiCdromState *s)
 {
-    s->media_present  = true;
     s->unit_attention = true;  /* media change — host must re-scan */
 }
 
 void atapi_cdrom_eject(AtapiCdromState *s)
 {
-    s->media_present  = false;
     s->unit_attention = false;
 }
 
@@ -104,7 +101,7 @@ static int cmd_test_unit_ready(AtapiCdromState *s,
 {
     (void)out; (void)max;
     *len = 0;
-    if (!s->media_present) {
+    if (!s->ops->present(s->ops_ctx)) {
         set_sense(s, SK_NOT_READY, ASC_MEDIUM_NOT_PRESENT, 0x00);
         return -1;
     }
@@ -158,7 +155,7 @@ static int cmd_read_capacity(AtapiCdromState *s,
     uint32_t sectors;
 
     if (max < 8) return -1;
-    if (!s->media_present) {
+    if (!s->ops->present(s->ops_ctx)) {
         set_sense(s, SK_NOT_READY, ASC_MEDIUM_NOT_PRESENT, 0);
         return -1;
     }
@@ -188,7 +185,7 @@ static int cmd_read_toc(AtapiCdromState *s, const uint8_t *pkt,
     uint16_t toc_len;
 
     if (max < 20) return -1;
-    if (!s->media_present) {
+    if (!s->ops->present(s->ops_ctx)) {
         set_sense(s, SK_NOT_READY, ASC_MEDIUM_NOT_PRESENT, 0);
         return -1;
     }
@@ -245,7 +242,7 @@ static int cmd_read_10(AtapiCdromState *s, const uint8_t *pkt,
     uint16_t count;
     size_t   needed;
 
-    if (!s->media_present) {
+    if (!s->ops->present(s->ops_ctx)) {
         set_sense(s, SK_NOT_READY, ASC_MEDIUM_NOT_PRESENT, 0);
         return -1;
     }
@@ -300,7 +297,7 @@ int atapi_cdrom_exec(void *ctx,
     (void)pkt_len;
     *data_len = 0;
 
-    kprintf("[ATAPI] cmd %02x media=%d\n", (unsigned)pkt[0], s->media_present);
+    kprintf("[ATAPI] cmd %02x media=%d\n", (unsigned)pkt[0], s->ops->present(s->ops_ctx));
     switch (pkt[0]) {
     case CMD_TEST_UNIT_READY:
         return cmd_test_unit_ready(s, buf_out, buf_max, data_len);
