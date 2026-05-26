@@ -10,6 +10,7 @@ import (
 
 type launchResult struct {
 	emuProfile     string
+	chipsetBackend string
 	kickstart      string
 	adf            string
 	iso            string
@@ -21,7 +22,6 @@ type launchResult struct {
 	usbstack       bool
 	usbPointer     string
 	emu68Boards    string
-	cpuBackend     string
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
@@ -56,6 +56,7 @@ type model struct {
 	usbstack       bool
 	usbPointer     string
 	emu68Boards    string
+	chipsetBackend string
 	cpuBackend     string
 	fpuEnabled     bool
 	z2RamSize      string
@@ -85,6 +86,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		usbstack:       true,
 		usbPointer:     "mouse",
 		emu68Boards:    "legacy",
+		chipsetBackend: "legacy",
 		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
@@ -135,7 +137,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		usbstack:       fm.usbstack,
 		usbPointer:     fm.usbPointer,
 		emu68Boards:    fm.emu68Boards,
-		cpuBackend:     fm.cpuBackend,
+		chipsetBackend: fm.chipsetBackend,
 		fpuEnabled:     fm.fpuEnabled,
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
@@ -177,6 +179,26 @@ func nextEmu68BoardsMode(current string) string {
 		return "boards"
 	}
 	return "legacy"
+}
+
+func nextChipsetBackend(current string) string {
+	if current == "legacy" {
+		return "rigel"
+	}
+	return "legacy"
+}
+
+func installDirForSelection(cpuBackend string, chipsetBackend string) string {
+	switch {
+	case chipsetBackend == "rigel" && cpuBackend == "musashi":
+		return "emu68/install-bellatrix-rigel-musashi"
+	case chipsetBackend == "rigel":
+		return "emu68/install-bellatrix-rigel"
+	case cpuBackend == "musashi":
+		return "emu68/install-bellatrix-musashi"
+	default:
+		return "emu68/install-bellatrix"
+	}
 }
 
 func nextSerialBackend(current string) string {
@@ -291,6 +313,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "m":
+			if m.chipsetBackend == "rigel" {
+				m.multicoreBuild = false
+				return m, nil
+			}
 			m.multicoreBuild = !m.multicoreBuild
 			return m, nil
 
@@ -316,6 +342,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "e":
 			m.emu68Boards = nextEmu68BoardsMode(m.emu68Boards)
+			return m, nil
+
+		case "g":
+			m.chipsetBackend = nextChipsetBackend(m.chipsetBackend)
+			if m.chipsetBackend == "rigel" {
+				m.multicoreBuild = false
+			}
 			return m, nil
 
 		case "c":
@@ -504,6 +537,17 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emu68 boards:"), boardsBadge))
 	b.WriteString("\n")
 
+	chipsetBadge := offBadgeStyle.Render("LEGACY")
+	if m.chipsetBackend == "rigel" {
+		chipsetBadge = onBadgeStyle.Render("RIGEL")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Chipset backend:"), chipsetBadge))
+	b.WriteString("\n")
+	if m.chipsetBackend == "rigel" {
+		b.WriteString(mutedStyle.Render("  Rigel: single-core only in Bellatrix for now."))
+		b.WriteString("\n")
+	}
+
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
 	if m.cpuBackend == "musashi" {
 		cpuBackendBadge = onBadgeStyle.Render("MUSASHI")
@@ -556,7 +600,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • G Chipset • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -567,12 +611,9 @@ func (m model) qemuCommand() string {
 		displayArg = "none"
 	}
 
-	image := "emu68/install-bellatrix/Emu68.img"
-	dtb := "emu68/install-bellatrix/bcm2710-rpi-3-b.dtb"
-	if m.cpuBackend == "musashi" {
-		image = "emu68/install-bellatrix-musashi/Emu68.img"
-		dtb = "emu68/install-bellatrix-musashi/bcm2710-rpi-3-b.dtb"
-	}
+	installDir := installDirForSelection(m.cpuBackend, m.chipsetBackend)
+	image := installDir + "/Emu68.img"
+	dtb := installDir + "/bcm2710-rpi-3-b.dtb"
 
 	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled)
 
@@ -585,12 +626,13 @@ func (m model) qemuCommand() string {
 	}
 
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_CHIPSET_BACKEND=%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
 		m.emu68Boards,
+		m.chipsetBackend,
 		boolEnv(m.osd),
 		boolEnv(m.launcher),
 		serialEnv,
@@ -620,9 +662,8 @@ func (m model) qemuCommand() string {
 	// Inject the ISO at physical 0x20000000 via the QEMU generic loader.
 	// Bellatrix detects the ISO 9660 PVD signature there when the EMMC init
 	// fails and attaches the image to the GAYLE ATAPI CD-ROM device.
-	// Note: ADF and ISO are mutually exclusive; only one can be selected.
 	selectedISO := m.isos[m.isoCursor]
-	if !selectedISO.None && selectedADF.None {
+	if !selectedISO.None {
 		cmd = fmt.Sprintf("%s -device loader,file=%s,addr=0x20000000,force-raw=on",
 			cmd, selectedISO.Path)
 	}

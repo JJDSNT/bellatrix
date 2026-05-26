@@ -253,6 +253,9 @@ bool uart_host_receive_byte(UARTHost *host, uint8_t *byte_out)
 
 void uart_host_poll(UARTHost *host)
 {
+#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
+    (void)host;
+#else
     if (!host || !host->enabled || !host->paula_serial) {
         return;
     }
@@ -300,4 +303,5 @@ void uart_host_poll(UARTHost *host)
             kprintf_set_enabled(0);
         }
     }
+#endif
 }

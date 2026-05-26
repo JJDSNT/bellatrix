@@ -1,7 +1,9 @@
 #include "machine/input/keyboard.h"
 
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
 #include "chipset/cia/cia.h"
 #include "chipset/cia/cia_serial.h"
+#endif
 
 #include <string.h>
 
@@ -47,6 +49,10 @@ int bellatrix_keyboard_enqueue_raw(BellatrixKeyboard *kbd, uint8_t rawkey, int p
 
 void bellatrix_keyboard_step(BellatrixKeyboard *kbd, struct CIA_State *cia)
 {
+#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
+    (void)kbd;
+    (void)cia;
+#else
     if (kbd->waiting_handshake)
     {
         uint8_t sp = cia_serial_sp_output_level(cia);
@@ -91,4 +97,5 @@ void bellatrix_keyboard_step(BellatrixKeyboard *kbd, struct CIA_State *cia)
     kbd->waiting_handshake = 1u;
     kbd->handshake_low_seen = 0u;
     kbd->handshake_timeout = 0u;
+#endif
 }

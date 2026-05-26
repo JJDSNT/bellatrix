@@ -12,6 +12,23 @@ ROMS_DIR="$ROOT/src/roms"
 HARNESS_BUILD_DIR="$ROOT/out/harness"
 HARNESS_BIN="$HARNESS_BUILD_DIR/harness"
 
+set_harness_paths() {
+    case "${BELLATRIX_CHIPSET_BACKEND:-legacy}" in
+        rigel)
+            HARNESS_BUILD_DIR="$ROOT/out/harness-rigel"
+            ;;
+        legacy|"")
+            HARNESS_BUILD_DIR="$ROOT/out/harness"
+            ;;
+        *)
+            echo "ERROR: invalid BELLATRIX_CHIPSET_BACKEND: ${BELLATRIX_CHIPSET_BACKEND:-}"
+            echo "Valid values: legacy, rigel"
+            exit 1
+            ;;
+    esac
+    HARNESS_BIN="$HARNESS_BUILD_DIR/harness"
+}
+
 usage() {
     cat <<EOF
 Usage:
@@ -45,6 +62,9 @@ Common options (env vars):
                       Build Bellatrix either with Emu68 expansion boards
                       enabled or with the legacy Bellatrix Fast RAM path
                       (default: boards)
+  BELLATRIX_CHIPSET_BACKEND=<legacy|rigel>
+                      Select Bellatrix chipset backend
+                      (default: legacy)
   EMU_PROFILE=<name>  Runtime profile: bellatrix, bellatrix-musashi or emu68
                       (default: bellatrix)
   BELLATRIX_Z2_RAM_SIZE=<off|1|2|4|8>
@@ -143,10 +163,15 @@ build_launcher() {
 }
 
 build_harness() {
+    set_harness_paths
     mkdir -p "$HARNESS_BUILD_DIR"
 
     local HARNESS_CFLAGS=""
+    local HARNESS_RIGEL_FLAG="OFF"
     local core_log="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
+    if [ "${BELLATRIX_CHIPSET_BACKEND:-legacy}" = "rigel" ]; then
+        HARNESS_RIGEL_FLAG="ON"
+    fi
     if [ "$core_log" = "1" ]; then
         HARNESS_CFLAGS="-DBELLATRIX_CORE_LOG"
         echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
@@ -157,6 +182,7 @@ build_harness() {
         cmake "$ROOT/tools/harness" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
+            -DBELLATRIX_USE_RIGEL_CHIPSET="$HARNESS_RIGEL_FLAG" \
             ${HARNESS_CFLAGS:+-DCMAKE_C_FLAGS="$HARNESS_CFLAGS"} \
             > /dev/null
         make -j"$(nproc)"
@@ -176,14 +202,22 @@ build_cd_board() {
 set_profile_paths() {
     case "$1" in
         bellatrix)
-            INSTALL="$ROOT/emu68/install-bellatrix"
+            if [ "${BELLATRIX_CHIPSET_BACKEND:-legacy}" = "rigel" ]; then
+                INSTALL="$ROOT/emu68/install-bellatrix-rigel"
+            else
+                INSTALL="$ROOT/emu68/install-bellatrix"
+            fi
             IMAGE="$INSTALL/Emu68.img"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"
             BELLATRIX_CPU_BACKEND_PROFILE="emu68"
             ;;
         bellatrix-musashi)
-            INSTALL="$ROOT/emu68/install-bellatrix-musashi"
+            if [ "${BELLATRIX_CHIPSET_BACKEND:-legacy}" = "rigel" ]; then
+                INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi"
+            else
+                INSTALL="$ROOT/emu68/install-bellatrix-musashi"
+            fi
             IMAGE="$INSTALL/Emu68.img"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"
@@ -256,6 +290,9 @@ load_launcher_selection() {
             BELLATRIX_EMU68_BOARDS_MODE)
                 BELLATRIX_EMU68_BOARDS_MODE="$value"
                 ;;
+            BELLATRIX_CHIPSET_BACKEND)
+                BELLATRIX_CHIPSET_BACKEND="$value"
+                ;;
             BELLATRIX_Z2_RAM_SIZE)
                 BELLATRIX_Z2_RAM_SIZE="$value"
                 ;;
@@ -297,17 +334,18 @@ esac
 # Harness mode — handled entirely here, no Emu68 build needed
 # ---------------------------------------------------------------------------
 if [ "$MODE" = "harness" ]; then
+    # Pick ROM via TUI if not set
+    if [ -z "${KICKSTART:-}" ]; then
+        load_launcher_selection
+    fi
+
     echo "[BUILD] Harness (Musashi, native)"
+    echo "[BUILD] Harness chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-legacy}"
     build_harness
 
     # Auto-build cdmount.rom when running with an ISO
     if [ -n "${ISO:-}" ]; then
         build_cd_board
-    fi
-
-    # Pick ROM via TUI if not set
-    if [ -z "${KICKSTART:-}" ]; then
-        load_launcher_selection
     fi
 
     [ -n "${KICKSTART:-}" ] || { echo "ERROR: no ROM selected"; exit 1; }
@@ -354,15 +392,16 @@ if [ "$MODE" = "harness" ]; then
 fi
 
 if [ "$MODE" = "harness-serial" ]; then
+    if [ -z "${KICKSTART:-}" ]; then
+        load_launcher_selection
+    fi
+
     echo "[BUILD] Harness (Musashi, native)"
+    echo "[BUILD] Harness chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-legacy}"
     build_harness
 
     if [ -n "${ISO:-}" ]; then
         build_cd_board
-    fi
-
-    if [ -z "${KICKSTART:-}" ]; then
-        load_launcher_selection
     fi
 
     [ -n "${KICKSTART:-}" ] || { echo "ERROR: no ROM selected"; exit 1; }
@@ -460,6 +499,7 @@ case "$BUILD_KIND" in
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+        export BELLATRIX_CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-legacy}"
         export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"
         export BELLATRIX_LAUNCHER="${BELLATRIX_LAUNCHER:-1}"
         export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
@@ -598,6 +638,7 @@ case "$MODE" in
         if [ "$BUILD_KIND" = "bellatrix" ]; then
             echo "[RUN] CPU backend profile: ${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         fi
+        echo "[RUN] Chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-legacy}"
         echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
         echo "[RUN] Boot args: $FINAL_BOOTARGS"
 

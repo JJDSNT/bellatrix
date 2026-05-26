@@ -22,6 +22,7 @@ static const BellatrixControllerPortState *controller_port_state_const(const Bel
     return &ports->port[port];
 }
 
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
 static uint16_t controller_port_joydat(const BellatrixControllerPortState *port)
 {
     uint8_t x;
@@ -45,6 +46,7 @@ static uint16_t controller_port_joydat(const BellatrixControllerPortState *port)
     y = port->mouse_y;
     return (uint16_t)(((uint16_t)y << 8) | (uint16_t)x);
 }
+#endif
 
 void bellatrix_controller_ports_init(BellatrixControllerPorts *ports)
 {
@@ -196,6 +198,10 @@ uint8_t bellatrix_controller_ports_cia_pra_bits(const BellatrixControllerPorts *
 void bellatrix_controller_ports_sync_paula(const BellatrixControllerPorts *ports,
                                            struct Paula *paula)
 {
+#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
+    (void)ports;
+    (void)paula;
+#else
     unsigned port;
 
     if (!ports || !paula)
@@ -209,4 +215,5 @@ void bellatrix_controller_ports_sync_paula(const BellatrixControllerPorts *ports
         paula_set_pot_button_x(paula, port, state->button2 ? 1 : 0);
         paula_set_pot_button_y(paula, port, state->button3 ? 1 : 0);
     }
+#endif
 }

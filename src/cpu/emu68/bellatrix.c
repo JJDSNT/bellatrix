@@ -6,9 +6,6 @@
 #include "cpu/emu68/bellatrix.h"
 #include "cpu/cpu_bridge.h"
 #include "runtime/runtime.h"
-#include "runtime/core_gfx.h"
-#include "runtime/core_audio.h"
-#include "runtime/core_io.h"
 #ifdef BELLATRIX_LAUNCHER
 #include "launcher/launcher.h"
 #endif
@@ -78,6 +75,15 @@ static CpuBackend *bellatrix_selected_cpu_backend(void)
 
 static void bellatrix_runtime_notify_cpu_progress(uint32_t cycles);
 
+#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
+#define BELLATRIX_RIGEL_BUILD 1
+#else
+#define BELLATRIX_RIGEL_BUILD 0
+#include "runtime/core_gfx.h"
+#include "runtime/core_audio.h"
+#include "runtime/core_io.h"
+#endif
+
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
     CpuBackend *backend = bellatrix_selected_cpu_backend();
@@ -111,10 +117,12 @@ void bellatrix_run_selected_cpu_backend(void)
  *                               Held by Core 0 (MMIO) and Cores 1/2/3 while
  *                               advancing their respective subsystems.
  * ------------------------------------------------------------------------- */
+static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
+#if !BELLATRIX_RIGEL_BUILD
 static _Atomic uint32_t s_gfx_cycles_pending       = 0;
 static _Atomic uint32_t s_io_cycles_pending        = 0;
 static _Atomic uint64_t s_published_master_cycles  = 0;
-static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
+#endif
 
 /* Per-core runtime objects — advanced by Core 1 via bellatrix_runtime_host_step(). */
 BellatrixRuntime g_runtime;
@@ -141,6 +149,11 @@ static inline void chipset_lock_release(void)
  * ------------------------------------------------------------------------- */
 void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 {
+#if BELLATRIX_RIGEL_BUILD
+    bellatrix_machine_advance(cycles);
+    bt_host_step(&g_runtime.bluetooth);
+    usb_host_step(&g_runtime.io.usb_host);
+#else
     if (PAL_Core_IsMulticoreEnabled()) {
         atomic_fetch_add_explicit(&s_gfx_cycles_pending, cycles, memory_order_release);
         atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
@@ -158,6 +171,7 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
         bt_host_step(&g_runtime.bluetooth);
         usb_host_step(&g_runtime.io.usb_host);
     }
+#endif
 }
 
 /* ---------------------------------------------------------------------------
@@ -171,6 +185,7 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
  * GFX step so Core 2 can advance audio to the same time horizon without
  * reading gfx.master_cycles across the chipset lock boundary.
  * ------------------------------------------------------------------------- */
+#if !BELLATRIX_RIGEL_BUILD
 void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
 {
     (void)host_now;
@@ -219,6 +234,7 @@ void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
     core_io_step(&g_runtime.io, cycles);
     chipset_lock_release();
 }
+#endif
 
 /* ---------------------------------------------------------------------------
  * Strong override: MMIO barrier — called from PAL_Runtime_MmioBarrier().
@@ -405,7 +421,13 @@ void bellatrix_init(void)
 #else
     kprintf("[BUILD] BELLATRIX_CORE_LOG: OFF\n");
 #endif
+    memset(&g_runtime, 0, sizeof(g_runtime));
+    g_runtime.machine = bellatrix_machine_get();
+#if BELLATRIX_RIGEL_BUILD
+    usb_host_init(&g_runtime.io.usb_host);
+#else
     bellatrix_runtime_init(&g_runtime, bellatrix_machine_get());
+#endif
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
@@ -419,8 +441,10 @@ void bellatrix_init(void)
     m->memory.fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
     m->memory.fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
     memset(m->memory.fast_ram, 0, m->memory.fast_ram_size);
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
     /* machine_init() attached Paula before we replaced the RAM backing. */
     paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
+#endif
     m->cia_a.ddra = 0x03;
 
     /* ROM diagnostic */
@@ -556,8 +580,10 @@ void bellatrix_init(void)
 
 #if defined(BELLATRIX_UART_LOG)
     kprintf("[SERIAL] log mode — Paula TX forwarded to kprintf [SERIAL] prefix; no UART bridge\n");
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
     /* In log mode the kprintf fallback is instant; expose TBE=1 immediately. */
     paula_serial_set_tx_instant(&m->paula.serial, true);
+#endif
 #elif defined(BELLATRIX_UART_PL011)
 #ifndef BELLATRIX_UART_BAUD
 #define BELLATRIX_UART_BAUD 115200
@@ -569,7 +595,9 @@ void bellatrix_init(void)
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
 #endif
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
         paula_serial_set_tx_instant(&m->paula.serial, true);
+#endif
         kprintf("[SERIAL] PL011 host bridge open at %u baud — GPIO 14/15 (USB-TTL adapter)\n",
                 (unsigned)BELLATRIX_UART_BAUD);
 #if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
@@ -604,7 +632,9 @@ void bellatrix_init(void)
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
 #endif
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
         paula_serial_set_tx_instant(&m->paula.serial, true);
+#endif
         uint32_t lsr = miniuart_backend_read_lsr();
         kprintf("[SERIAL] mini-UART open at 9600 baud  LSR=0x%08x TX_ready=%s\n",
                 lsr, (lsr & 0x20u) ? "yes" : "no (QEMU AUX UART may be unresponsive)");

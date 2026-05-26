@@ -8,6 +8,8 @@ enable_testing()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+option(BELLATRIX_USE_RIGEL_CHIPSET "Use Rigel as the Bellatrix chipset backend in the harness" OFF)
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -94,10 +96,11 @@ set_target_properties(lide_rom_data PROPERTIES
 # ---------------------------------------------------------------------------
 # Bellatrix chipset sources
 # ---------------------------------------------------------------------------
+set(BELLATRIX_MACHINE_SOURCE ${SRC}/machine/machine.c)
 set(BELLATRIX_SOURCES
 
     # Core
-    ${SRC}/machine/machine.c
+    ${BELLATRIX_MACHINE_SOURCE}
     ${SRC}/machine/expansion.c
     ${SRC}/machine/bus.c
     ${SRC}/cpu/cpu_bridge.c
@@ -193,6 +196,44 @@ set(BELLATRIX_SOURCES
     ${SRC}/runtime/affinity.c
 )
 
+if(BELLATRIX_USE_RIGEL_CHIPSET)
+    add_subdirectory(${ROOT}/external/rigel ${CMAKE_BINARY_DIR}/rigel-build EXCLUDE_FROM_ALL)
+    set(BELLATRIX_MACHINE_SOURCE ${SRC}/machine/machine_rigel.c)
+    list(TRANSFORM BELLATRIX_SOURCES REPLACE "^${SRC}/machine/machine\\.c$" "${BELLATRIX_MACHINE_SOURCE}")
+    list(REMOVE_ITEM BELLATRIX_SOURCES
+        ${SRC}/machine/bus.c
+        ${SRC}/chipset/agnus/agnus.c
+        ${SRC}/chipset/agnus/beam.c
+        ${SRC}/chipset/agnus/bitplanes.c
+        ${SRC}/chipset/agnus/blitter/blitter_command.c
+        ${SRC}/chipset/agnus/blitter/blitter_debug.c
+        ${SRC}/chipset/agnus/blitter/blitter_dma.c
+        ${SRC}/chipset/agnus/blitter/blitter_ref.c
+        ${SRC}/chipset/agnus/blitter/blitter_regs.c
+        ${SRC}/chipset/agnus/blitter/blitter_timing.c
+        ${SRC}/chipset/agnus/dma.c
+        ${SRC}/chipset/agnus/copper/copper.c
+        ${SRC}/chipset/agnus/copper/copper_regs.c
+        ${SRC}/chipset/agnus/copper/copper_service.c
+        ${SRC}/chipset/cia/cia.c
+        ${SRC}/chipset/cia/cia_interrupt.c
+        ${SRC}/chipset/cia/cia_ports.c
+        ${SRC}/chipset/cia/cia_serial.c
+        ${SRC}/chipset/cia/cia_timers.c
+        ${SRC}/chipset/cia/cia_tod.c
+        ${SRC}/chipset/denise/denise.c
+        ${SRC}/chipset/denise/sprites.c
+        ${SRC}/chipset/floppy/floppy_drive.c
+        ${SRC}/chipset/paula/paula.c
+        ${SRC}/chipset/paula/paula_input.c
+        ${SRC}/chipset/paula/paula_interrupt.c
+        ${SRC}/chipset/paula/paula_disk.c
+        ${SRC}/chipset/paula/paula_audio.c
+        ${SRC}/chipset/paula/paula_serial.c
+        ${SRC}/chipset/rtc/rtc.c
+    )
+endif()
+
 # ---------------------------------------------------------------------------
 # Harness executable
 # ---------------------------------------------------------------------------
@@ -212,6 +253,12 @@ target_include_directories(harness PRIVATE
     ${CMAKE_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+if(BELLATRIX_USE_RIGEL_CHIPSET)
+    target_compile_definitions(harness PRIVATE BELLATRIX_USE_RIGEL_CHIPSET=1)
+else()
+    target_compile_definitions(harness PRIVATE BELLATRIX_USE_RIGEL_CHIPSET=0)
+endif()
 
 target_link_options(harness PRIVATE -rdynamic)
 
@@ -239,6 +286,9 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(harness PRIVATE musashi m dl Threads::Threads)
 target_link_libraries(harness PRIVATE lide_rom_data)
+if(BELLATRIX_USE_RIGEL_CHIPSET)
+    target_link_libraries(harness PRIVATE rigel)
+endif()
 
 target_compile_options(harness PRIVATE
     -Wall -Wextra -Wno-unused-parameter
@@ -320,32 +370,35 @@ target_compile_options(bellatrix_unit_cia PRIVATE
 add_test(NAME bellatrix_unit_cia
          COMMAND bellatrix_unit_cia)
 
-add_executable(bellatrix_integration_overlay
-    ${ROOT}/tests/integration/test_machine_overlay.c
-    ${BELLATRIX_SOURCES}
-)
+if(NOT BELLATRIX_USE_RIGEL_CHIPSET)
+    add_executable(bellatrix_integration_overlay
+        ${ROOT}/tests/integration/test_machine_overlay.c
+        ${BELLATRIX_SOURCES}
+    )
 
-target_include_directories(bellatrix_integration_overlay PRIVATE
-    ${SRC}/host/posix
-    ${SRC}
-    ${SRC}/cpu
-    ${SRC}/host
-)
+    target_include_directories(bellatrix_integration_overlay PRIVATE
+        ${SRC}/host/posix
+        ${SRC}
+        ${SRC}/cpu
+        ${SRC}/host
+    )
 
-target_compile_definitions(bellatrix_integration_overlay PRIVATE
-    BELLATRIX_HARNESS=1
-    BELLATRIX_ENABLE_PTY_BACKEND=1
-)
+    target_compile_definitions(bellatrix_integration_overlay PRIVATE
+        BELLATRIX_USE_RIGEL_CHIPSET=0
+        BELLATRIX_HARNESS=1
+        BELLATRIX_ENABLE_PTY_BACKEND=1
+    )
 
-target_link_libraries(bellatrix_integration_overlay PRIVATE m)
-target_link_libraries(bellatrix_integration_overlay PRIVATE lide_rom_data)
+    target_link_libraries(bellatrix_integration_overlay PRIVATE m)
+    target_link_libraries(bellatrix_integration_overlay PRIVATE lide_rom_data)
 
-target_compile_options(bellatrix_integration_overlay PRIVATE
-    -Wall -Wextra -Wno-unused-parameter
-)
+    target_compile_options(bellatrix_integration_overlay PRIVATE
+        -Wall -Wextra -Wno-unused-parameter
+    )
 
-add_test(NAME bellatrix_integration_overlay
-         COMMAND bellatrix_integration_overlay)
+    add_test(NAME bellatrix_integration_overlay
+             COMMAND bellatrix_integration_overlay)
+endif()
 
 add_test(NAME bellatrix_harness_smoke
          COMMAND /bin/bash
@@ -371,9 +424,11 @@ set_tests_properties(bellatrix_unit_memory PROPERTIES
     ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
 
-set_tests_properties(bellatrix_integration_overlay PROPERTIES
-    ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
-)
+if(NOT BELLATRIX_USE_RIGEL_CHIPSET)
+    set_tests_properties(bellatrix_integration_overlay PROPERTIES
+        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+    )
+endif()
 
 set_tests_properties(bellatrix_harness_smoke PROPERTIES
     ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"

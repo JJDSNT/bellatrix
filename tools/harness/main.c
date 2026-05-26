@@ -18,7 +18,6 @@
 #include "machine/machine.h"
 #include "cpu/cpu_bridge.h"
 #include "chipset/paula/paula.h"
-#include "chipset/paula/paula_audio.h"
 #include "debug/debug.h"
 #include "host/pal.h"
 #include "machine/memory/memory.h"
@@ -182,10 +181,12 @@ static void harness_maybe_inject_serial(BellatrixMachine *m,
                                         HarnessSerialInject *cfg,
                                         const char *label)
 {
+    (void)m;
+
     if (!cfg->enabled || cfg->injected || frame_count < cfg->frame)
         return;
 
-    paula_serial_receive_byte(&m->paula.serial, cfg->byte);
+    bellatrix_machine_serial_receive_byte(cfg->byte);
     cfg->injected = 1;
 
     if (cfg->byte >= 32 && cfg->byte <= 126) {
@@ -204,10 +205,12 @@ static void harness_maybe_log_serial_consumed(BellatrixMachine *m,
                                               HarnessSerialInject *cfg,
                                               const char *label)
 {
+    (void)m;
+
     if (!cfg->enabled || !cfg->injected || cfg->consumed)
         return;
 
-    if (m->paula.serial.rx_buffer_full)
+    if (bellatrix_machine_serial_rx_pending())
         return;
 
     cfg->consumed = 1;
@@ -650,8 +653,10 @@ static void harness_pump_serial_rx(BellatrixMachine *m)
 {
     uint8_t byte = 0;
 
+    (void)m;
+
     while (PAL_HarnessSerial_ReadByte(&byte)) {
-        paula_serial_receive_byte(&m->paula.serial, byte);
+        bellatrix_machine_serial_receive_byte(byte);
         fprintf(stderr,
                 "[HARNESS] PTY serial RX -> UART 0x%02x%s\n",
                 (unsigned)byte,
@@ -901,7 +906,9 @@ int main(int argc, char **argv)
 
     /* Re-wire Paula disk DMA to the harness chip RAM buffer.
      * machine_init wires Paula before harness_memory_init replaces the pointer. */
+#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
     paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
+#endif
 
     /* Mount or eject DF0 explicitly. */
     if (adf_data) {
@@ -943,6 +950,7 @@ int main(int argc, char **argv)
     } else {
         printf("[HARNESS] Interactive mode — close window or press Esc to quit\n");
     }
+    printf("[HARNESS] Chipset backend: %s\n", bellatrix_machine_backend_name());
 
     /* ---------------------------------------------------------------------------
      * Main loop
@@ -1031,8 +1039,8 @@ int main(int argc, char **argv)
             while (audio_acc >= M68K_HZ) {
                 audio_acc -= M68K_HZ;
                 pal_audio_push_sample(
-                    paula_audio_left(&m->paula.audio),
-                    paula_audio_right(&m->paula.audio));
+                    bellatrix_machine_audio_left(),
+                    bellatrix_machine_audio_right());
             }
         }
 

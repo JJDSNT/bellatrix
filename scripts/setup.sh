@@ -113,6 +113,10 @@ ensure_gitignore_entry() {
 ensure_emu68_gitignore() {
     ensure_gitignore_entry "/build-bellatrix/"
     ensure_gitignore_entry "/install-bellatrix/"
+    ensure_gitignore_entry "/build-bellatrix-rigel/"
+    ensure_gitignore_entry "/install-bellatrix-rigel/"
+    ensure_gitignore_entry "/build-bellatrix-rigel-musashi/"
+    ensure_gitignore_entry "/install-bellatrix-rigel-musashi/"
 }
 
 hide_local_gitignore_change() {
