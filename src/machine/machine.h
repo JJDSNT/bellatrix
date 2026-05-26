@@ -173,6 +173,19 @@ int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
 void bellatrix_machine_eject_iso(void);
 
 /* ------------------------------------------------------------------------- */
+/* host-facing helpers                                                       */
+/* ------------------------------------------------------------------------- */
+
+const char *bellatrix_machine_backend_name(void);
+void bellatrix_machine_serial_receive_byte(uint8_t byte);
+int16_t bellatrix_machine_audio_left(void);
+int16_t bellatrix_machine_audio_right(void);
+int bellatrix_machine_serial_rx_pending(void);
+
+/* Enable/disable the Rigel event trace log (no-op on the legacy backend). */
+void bellatrix_machine_rigel_trace_enable(bool enabled);
+
+/* ------------------------------------------------------------------------- */
 /* debug access                                                              */
 /* ------------------------------------------------------------------------- */
 

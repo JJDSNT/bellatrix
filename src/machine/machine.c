@@ -1191,6 +1191,36 @@ void bellatrix_machine_eject_iso(void)
     lide_cdrom_eject(bellatrix_machine_get());
 }
 
+const char *bellatrix_machine_backend_name(void)
+{
+    return "legacy";
+}
+
+void bellatrix_machine_serial_receive_byte(uint8_t byte)
+{
+    paula_serial_receive_byte(&g_machine.paula.serial, byte);
+}
+
+int16_t bellatrix_machine_audio_left(void)
+{
+    return paula_audio_left(&g_machine.paula.audio);
+}
+
+int16_t bellatrix_machine_audio_right(void)
+{
+    return paula_audio_right(&g_machine.paula.audio);
+}
+
+int bellatrix_machine_serial_rx_pending(void)
+{
+    return g_machine.paula.serial.rx_buffer_full ? 1 : 0;
+}
+
+void bellatrix_machine_rigel_trace_enable(bool enabled)
+{
+    (void)enabled;
+}
+
 /* ---------------------------------------------------------------------------
  * btrace wrappers for callers that don't own the BTraceState
  * ------------------------------------------------------------------------- */
