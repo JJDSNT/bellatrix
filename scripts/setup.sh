@@ -22,6 +22,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
 EMU68="$ROOT/emu68"
 CHERRYUSB="$ROOT/external/cherryusb"
+BTSTACK="$ROOT/external/btstack"
+MUSASHI="$ROOT/external/musashi"
 PATCHES="$ROOT/patches"
 EMU68_GITIGNORE="$EMU68/.gitignore"
 
@@ -145,6 +147,14 @@ CHERRYUSB_PATCHES=(
     "$PATCHES/0004-bellatrix-cherryusb-dwc2-host.patch"
 )
 
+BTSTACK_PATCHES=(
+    "$PATCHES/0005-btstack-baremetal-bcm-init.patch"
+)
+
+MUSASHI_PATCHES=(
+    "$PATCHES/0006-musashi-enable-instruction-hook.patch"
+)
+
 # ---------------------------------------------------------------------------
 # --verify: check all patches are correctly applied, exit 1 on failure
 #
@@ -189,7 +199,7 @@ check_emu68_patch_applied() {
 if [ "$SETUP_MODE" = "verify" ]; then
     check_cmd git
     cd "$ROOT"
-    git submodule update --init emu68 external/cherryusb >/dev/null 2>&1 || true
+    git submodule update --init emu68 external/cherryusb external/btstack external/musashi >/dev/null 2>&1 || true
 
     failed=0
     echo "=== Patch verification ==="
@@ -206,6 +216,30 @@ if [ "$SETUP_MODE" = "verify" ]; then
         [ -f "$patch" ] || continue
         name="$(basename "$patch")"
         if git -C "$CHERRYUSB" apply --reverse --check "$patch" >/dev/null 2>&1; then
+            echo "  OK  $name"
+        else
+            echo "  FAIL $name"
+            failed=1
+        fi
+    done
+
+    echo "--- external/btstack ---"
+    for patch in "${BTSTACK_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        name="$(basename "$patch")"
+        if git -C "$BTSTACK" apply --reverse --check "$patch" >/dev/null 2>&1; then
+            echo "  OK  $name"
+        else
+            echo "  FAIL $name"
+            failed=1
+        fi
+    done
+
+    echo "--- external/musashi ---"
+    for patch in "${MUSASHI_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        name="$(basename "$patch")"
+        if git -C "$MUSASHI" apply --reverse --check "$patch" >/dev/null 2>&1; then
             echo "  OK  $name"
         else
             echo "  FAIL $name"
@@ -233,7 +267,7 @@ if [ "$SETUP_MODE" = "reset" ]; then
     cd "$ROOT"
 
     # Clear any assume-unchanged flags set by build.sh in the parent repo
-    git ls-files -v -- emu68 external/cherryusb 2>/dev/null \
+    git ls-files -v -- emu68 external/cherryusb external/btstack external/musashi 2>/dev/null \
         | awk '/^h/{print $2}' \
         | xargs -r git update-index --no-assume-unchanged || true
 
@@ -247,6 +281,12 @@ if [ "$SETUP_MODE" = "reset" ]; then
 
     echo "Resetting external/cherryusb..."
     git submodule update --force -- external/cherryusb
+
+    echo "Resetting external/btstack..."
+    git submodule update --force -- external/btstack
+
+    echo "Resetting external/musashi..."
+    git submodule update --force -- external/musashi
 
     echo "Submodules reset. Applying patches..."
 
@@ -266,6 +306,16 @@ if [ "$SETUP_MODE" = "reset" ]; then
         apply_submodule_patch_if_needed "$CHERRYUSB" "$patch"
     done
 
+    for patch in "${BTSTACK_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        apply_submodule_patch_if_needed "$BTSTACK" "$patch"
+    done
+
+    for patch in "${MUSASHI_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        apply_submodule_patch_if_needed "$MUSASHI" "$patch"
+    done
+
     install_be_stub_if_needed
 
     echo ""
@@ -282,7 +332,7 @@ check_cmd aarch64-linux-gnu-gcc
 
 cd "$ROOT"
 git submodule sync -- external/cherryusb >/dev/null 2>&1 || true
-git submodule update --init emu68 external/musashi external/cherryusb
+git submodule update --init emu68 external/musashi external/cherryusb external/btstack
 
 ensure_emu68_gitignore
 
@@ -299,6 +349,16 @@ cd "$ROOT"
 for patch in "${CHERRYUSB_PATCHES[@]}"; do
     [ -f "$patch" ] || continue
     apply_submodule_patch_if_needed "$CHERRYUSB" "$patch"
+done
+
+for patch in "${BTSTACK_PATCHES[@]}"; do
+    [ -f "$patch" ] || continue
+    apply_submodule_patch_if_needed "$BTSTACK" "$patch"
+done
+
+for patch in "${MUSASHI_PATCHES[@]}"; do
+    [ -f "$patch" ] || continue
+    apply_submodule_patch_if_needed "$MUSASHI" "$patch"
 done
 
 install_be_stub_if_needed

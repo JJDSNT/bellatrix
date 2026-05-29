@@ -1,0 +1,60 @@
+diff --git a/chipset/bcm/btstack_chipset_bcm_download_firmware.c b/chipset/bcm/btstack_chipset_bcm_download_firmware.c
+index 011418048..68cbf8e22 100644
+--- a/chipset/bcm/btstack_chipset_bcm_download_firmware.c
++++ b/chipset/bcm/btstack_chipset_bcm_download_firmware.c
+@@ -217,6 +217,10 @@ static void bcm_send_next_init_script_command(void){
+             bcm_send_prepared_command();
+             break;
+         case BTSTACK_CHIPSET_DONE:
++        case BTSTACK_CHIPSET_NO_INIT_SCRIPT:
++            if (res == BTSTACK_CHIPSET_NO_INIT_SCRIPT){
++                log_info("bcm: no init script present, continuing without PatchRAM upload");
++            }
+             log_info("bcm: init script done");
+             // disable init script for main startup
+             btstack_chipset_bcm_enable_init_script(0);
+@@ -252,12 +256,16 @@ void btstack_chipset_bcm_download_firmware_with_uart(const btstack_uart_t * the_
+     }
+ 
+     // Reset with CTS asserted (low)
++#ifdef HAVE_POSIX_FILE_IO
+     printf("Please reset Bluetooth Controller, e.g. via RESET button. Firmware download starts in:\n");
+     uint8_t i;
+     for (i = 3; i > 0; i--){
+         printf("%u\n", i);
+         sleep(1);
+     }
++#else
++    printf("Controller assumed already reset by platform bring-up, starting BCM phase 1 now\n");
++#endif
+     printf("Firmware download started\n");
+ 
+     bcm_send_hci_reset();
+diff --git a/src/hci_transport_h5.c b/src/hci_transport_h5.c
+index 377a2f75e..e19d786b7 100644
+--- a/src/hci_transport_h5.c
++++ b/src/hci_transport_h5.c
+@@ -202,6 +202,7 @@ static uint16_t crc16_calc_for_slip_frame(const uint8_t * data, uint16_t len){
+ 
+ // -----------------------------
+ static void hci_transport_inactivity_timeout_handler(btstack_timer_source_t * ts){
++    UNUSED(ts);
+     log_info("inactivity timeout. link state %d, peer asleep %u, actions 0x%02x, outgoing packet %u",
+         link_state, link_peer_asleep, hci_transport_link_actions, hci_transport_link_have_outgoing_packet());
+     if (hci_transport_link_have_outgoing_packet()) return;
+@@ -412,6 +413,7 @@ static void hci_transport_link_set_timer(uint16_t timeout_ms){
+ }
+ 
+ static void hci_transport_link_timeout_handler(btstack_timer_source_t * timer){
++    UNUSED(timer);
+     switch (link_state){
+         case LINK_UNINITIALIZED:
+             hci_transport_link_actions |= HCI_TRANSPORT_LINK_SEND_SYNC;
+@@ -817,6 +819,7 @@ static void hci_transport_h5_register_packet_handler(void (*handler)(uint8_t pac
+ }
+ 
+ static int hci_transport_h5_can_send_packet_now(uint8_t packet_type){
++    UNUSED(packet_type);
+     int res = !hci_transport_link_have_outgoing_packet() && link_state == LINK_ACTIVE;
+     // log_info("can_send_packet_now: %u", res);
+     return res;
