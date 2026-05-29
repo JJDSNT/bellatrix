@@ -304,6 +304,7 @@ add_executable(bellatrix_unit_memory
     ${SRC}/machine/memory/fast_ram.c
     ${SRC}/machine/memory/overlay.c
     ${SRC}/machine/memory/memory_map.c
+    ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
 )
 

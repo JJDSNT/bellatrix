@@ -75,6 +75,10 @@ void bellatrix_zorro2_board_write32(uint32_t addr, uint32_t value);
 int      bellatrix_zorro2_board_configured(const char *id);
 uint32_t bellatrix_zorro2_board_base(const char *id);
 
+/* Register a Zorro2 Fast RAM board for the legacy (non-boards) path.
+ * size_bytes is clamped to the nearest supported AC size (max 8 MB). */
+void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes);
+
 #ifdef __cplusplus
 }
 #endif

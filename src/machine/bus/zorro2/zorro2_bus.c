@@ -312,3 +312,57 @@ uint32_t bellatrix_zorro2_board_base(const char *id)
     if (slot < 0) return 0;
     return s_boards[slot].base;
 }
+
+/* ----------------------------------------------------------------------- */
+
+static uint8_t s_fast_ram_config[AUTOCONFIG_DATA_SIZE];
+static BellatrixZorro2BoardDesc s_fast_ram_board_desc;
+
+static uint8_t bytes_to_ac_size(uint32_t size)
+{
+    if (size >= 8u * 1024u * 1024u) return AC_SIZE_8MB;
+    if (size >= 4u * 1024u * 1024u) return AC_SIZE_4MB;
+    if (size >= 2u * 1024u * 1024u) return AC_SIZE_2MB;
+    if (size >= 1u * 1024u * 1024u) return AC_SIZE_1MB;
+    if (size >= 512u * 1024u)       return AC_SIZE_512KB;
+    if (size >= 256u * 1024u)       return AC_SIZE_256KB;
+    if (size >= 128u * 1024u)       return AC_SIZE_128KB;
+    return AC_SIZE_64KB;
+}
+
+static uint32_t ac_size_to_bytes(uint8_t code)
+{
+    switch (code) {
+        case AC_SIZE_8MB:   return 8u * 1024u * 1024u;
+        case AC_SIZE_4MB:   return 4u * 1024u * 1024u;
+        case AC_SIZE_2MB:   return 2u * 1024u * 1024u;
+        case AC_SIZE_1MB:   return 1u * 1024u * 1024u;
+        case AC_SIZE_512KB: return 512u * 1024u;
+        case AC_SIZE_256KB: return 256u * 1024u;
+        case AC_SIZE_128KB: return 128u * 1024u;
+        default:            return 64u * 1024u;
+    }
+}
+
+void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes)
+{
+    uint8_t sz  = bytes_to_ac_size(size_bytes);
+    uint8_t raw[AUTOCONFIG_ROM_BYTES];
+
+    memset(raw, 0, sizeof(raw));
+    raw[0]  = (uint8_t)(AC_TYPE_Z2 | AC_TYPE_MEMLIST | sz);
+    raw[1]  = 0x01u;               /* product ID */
+    raw[4]  = 0x07u;               /* manufacturer 0x07DB high */
+    raw[5]  = 0xDBu;               /* manufacturer 0x07DB low  */
+    raw[9]  = 0x01u;               /* serial 1 */
+
+    autoconfig_build(s_fast_ram_config, raw);
+
+    memset(&s_fast_ram_board_desc, 0, sizeof(s_fast_ram_board_desc));
+    s_fast_ram_board_desc.id          = "bellatrix.fastram";
+    s_fast_ram_board_desc.config_data = s_fast_ram_config;
+    s_fast_ram_board_desc.config_size = sizeof(s_fast_ram_config);
+    s_fast_ram_board_desc.window_size = ac_size_to_bytes(sz);
+
+    bellatrix_zorro2_register_board(&s_fast_ram_board_desc);
+}
