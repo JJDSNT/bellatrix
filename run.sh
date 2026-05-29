@@ -293,6 +293,9 @@ load_launcher_selection() {
             BELLATRIX_CHIPSET_BACKEND)
                 BELLATRIX_CHIPSET_BACKEND="$value"
                 ;;
+            BELLATRIX_RIGEL_TRACE)
+                BELLATRIX_RIGEL_TRACE="$value"
+                ;;
             BELLATRIX_Z2_RAM_SIZE)
                 BELLATRIX_Z2_RAM_SIZE="$value"
                 ;;
@@ -388,6 +391,7 @@ if [ "$MODE" = "harness" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
     fi
 
+    export BELLATRIX_RIGEL_TRACE="${BELLATRIX_RIGEL_TRACE:-0}"
     exec "$HARNESS_BIN" "${HARNESS_ARGS[@]}"
 fi
 
@@ -441,6 +445,8 @@ if [ "$MODE" = "harness-serial" ]; then
     if [ -d "$PLUGINS_DIR" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
     fi
+
+    export BELLATRIX_RIGEL_TRACE="${BELLATRIX_RIGEL_TRACE:-0}"
 
     tmpfile="$(mktemp)"
     trap 'rm -f "$tmpfile"; [ -n "${HARNESS_PID:-}" ] && kill "$HARNESS_PID" 2>/dev/null || true' EXIT

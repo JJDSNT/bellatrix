@@ -25,6 +25,7 @@ type launchResult struct {
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
+	rigelTrace     bool
 	osd            bool
 	launcher       bool
 	cancelled      bool
@@ -61,6 +62,7 @@ type model struct {
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
+	rigelTrace     bool
 	osd            bool
 	launcher       bool
 
@@ -86,11 +88,12 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		usbstack:       true,
 		usbPointer:     "mouse",
 		emu68Boards:    "legacy",
-		chipsetBackend: "legacy",
+		chipsetBackend: "rigel",
 		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
 		serialBackend:  "log",
+		rigelTrace:     true,
 		osd:            true,
 		launcher:       true,
 	}
@@ -141,6 +144,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		fpuEnabled:     fm.fpuEnabled,
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
+		rigelTrace:     fm.rigelTrace,
 		osd:            fm.osd,
 		launcher:       fm.launcher,
 	}, nil
@@ -371,6 +375,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.serialBackend = nextSerialBackend(m.serialBackend)
 			return m, nil
 
+		case "r":
+			if m.chipsetBackend == "rigel" {
+				m.rigelTrace = !m.rigelTrace
+			}
+			return m, nil
+
 		case "o":
 			m.osd = !m.osd
 			return m, nil
@@ -546,6 +556,12 @@ func (m model) renderPanel() string {
 	if m.chipsetBackend == "rigel" {
 		b.WriteString(mutedStyle.Render("  Rigel: single-core only in Bellatrix for now."))
 		b.WriteString("\n")
+		rigelTraceBadge := offBadgeStyle.Render("OFF")
+		if m.rigelTrace {
+			rigelTraceBadge = onBadgeStyle.Render("ON")
+		}
+		b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("  Rigel trace log:"), rigelTraceBadge))
+		b.WriteString("\n")
 	}
 
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
@@ -600,7 +616,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • G Chipset • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • G Chipset • R Rigel trace • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -625,14 +641,20 @@ func (m model) qemuCommand() string {
 		serialEnv = " BELLATRIX_SERIAL=log"
 	}
 
+	rigelTraceEnv := ""
+	if m.chipsetBackend == "rigel" && m.rigelTrace {
+		rigelTraceEnv = " BELLATRIX_RIGEL_TRACE=1"
+	}
+
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_CHIPSET_BACKEND=%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_CHIPSET_BACKEND=%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
 		m.emu68Boards,
 		m.chipsetBackend,
+		rigelTraceEnv,
 		boolEnv(m.osd),
 		boolEnv(m.launcher),
 		serialEnv,

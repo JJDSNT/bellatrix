@@ -263,6 +263,11 @@ elif [ "${BELLATRIX_SERIAL_LOOPBACK:-0}" = "probe" ]; then
     echo "[BUILD] Serial loopback: probe echo enabled"
 fi
 
+if [ "${BELLATRIX_RIGEL_TRACE_BUILD:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_RIGEL_TRACE_BUILD=1"
+    echo "[BUILD] Rigel trace: enabled unconditionally (bare-metal)"
+fi
+
 BT_PATCHRAM_SOURCE=""
 if [ "$BTSTACK_ENABLED" = "1" ]; then
     if BT_PATCHRAM_SOURCE="$(prepare_bt_patchram "$BT_FW_DEVICE" "$BUILD")"; then
