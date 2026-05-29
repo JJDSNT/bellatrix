@@ -437,6 +437,11 @@ void bellatrix_init(void)
     m->memory.chip_ram = (uint8_t *)CHIP_RAM_KVIRT;
     m->memory.chip_ram_size = BELLATRIX_CHIP_RAM_SIZE;
     m->memory.chip_ram_mask = BELLATRIX_CHIP_RAM_MASK;
+    /* Clear chip RAM so M68K sees a clean slate (no ARM boot residue).
+     * Without this, (4).W (SysBase) contains ARM instruction bytes which
+     * confuses the Kickstart's early VBL handler into computing a wrong
+     * exec dispatch address and installing a bad vector at 0x6c. */
+    memset(m->memory.chip_ram, 0, m->memory.chip_ram_size);
     m->memory.fast_ram = (uint8_t *)FAST_RAM_KVIRT;
     m->memory.fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
     m->memory.fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
