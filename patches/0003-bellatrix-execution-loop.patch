@@ -1,5 +1,5 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
-index 732a176..bccb51d 100644
+index 732a176..eb753ca 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
 @@ -1,6 +1,9 @@
@@ -7,15 +7,15 @@ index 732a176..bccb51d 100644
  #include <support.h>
  #include <config.h>
 +#ifdef BELLATRIX
-+#include "bridge/bellatrix_bridge.h"
++#include "cpu/cpu_bridge.h"
 +#endif
  #ifdef PISTORM
  #ifndef PISTORM32
  #define PS_PROTOCOL_IMPL
-@@ -136,13 +139,36 @@ void MainLoop()
- 
+@@ -136,13 +139,36 @@
+
      asm volatile("mov v28.d[0], xzr");
- 
+
 +#ifdef BELLATRIX
 +    uint64_t bela_insn_prev = 0;
 +    asm volatile("mov %0, v30.d[0]" : "=r"(bela_insn_prev));
@@ -24,13 +24,13 @@ index 732a176..bccb51d 100644
 +
      /* The JIT loop is running forever */
      while(1)
--    {   
--        /* Load m68k context and last used PC counter into temporary register */ 
+-    {
+-        /* Load m68k context and last used PC counter into temporary register */
 +    {
 +        /* Load m68k context and last used PC counter into temporary register */
          LastPC = getLastPC();
          ctx = getCTX();
- 
+
 +#ifdef BELLATRIX
 +        {
 +            uint64_t bela_insn_curr, _x18_save, _v30_save;
@@ -51,9 +51,9 @@ index 732a176..bccb51d 100644
          /* If (unlikely) there was interrupt pending, check if it needs to be processed */
          if (unlikely(ctx->INT32 != 0))
          {
-@@ -152,6 +178,13 @@ void MainLoop()
+@@ -152,6 +178,13 @@
              uint32_t vbr;
- 
+
              /* Find out requested IPL level based on ARM state and real IPL line */
 +#ifdef BELLATRIX
 +            /* Bellatrix writes the actual IPL level into INT.IPL directly.
@@ -65,31 +65,31 @@ index 732a176..bccb51d 100644
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +202,7 @@ void MainLoop()
+@@ -169,7 +202,7 @@
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
--                }    
+-                }
 +                }
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +223,10 @@ void MainLoop()
+@@ -190,9 +223,10 @@
                      {
                          level = ipl_level;
                      }
--                }           
+-                }
 +                }
  #endif
              }
 +#endif /* BELLATRIX */
- 
+
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +270,49 @@ void MainLoop()
+@@ -236,6 +270,49 @@
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
- 
+
 +
 +#ifdef BELLATRIX
 +                {
@@ -136,13 +136,13 @@ index 732a176..bccb51d 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +325,8 @@ void MainLoop()
+@@ -248,7 +325,8 @@
                  vbr = ctx->VBR;
- 
+
                  /* Load PC */
--                asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector)); 
+-                asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector));
 +                asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector));
 +#endif /* BELLATRIX */
              }
- 
+
              /* All interrupts masked or new PC loaded and stack swapped, continue with code execution */
