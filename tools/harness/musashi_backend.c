@@ -46,6 +46,8 @@ static int s_watch_ranges_init = 0;
 static uint32_t s_watch_range_lo[2] = {0, 0};
 static uint32_t s_watch_range_hi[2] = {0, 0};
 static int s_watch_range_enabled[2] = {0, 0};
+static int s_run_sync_active = 0;
+static uint32_t s_run_sync_published = 0;
 
 #define BOOT_DISPLAY_BUF_SIZE 0x00001F40u
 
@@ -53,6 +55,23 @@ static uint32_t harness_chip_read(uint32_t addr, int size);
 
 static void harness_init_watch_ranges(void);
 static int harness_watch_custom_range_addr(uint32_t addr);
+
+static void harness_sync_cpu_progress(void)
+{
+    int ran;
+    uint32_t delta;
+
+    if (!s_run_sync_active)
+        return;
+
+    ran = m68k_cycles_run();
+    if (ran <= 0 || (uint32_t)ran <= s_run_sync_published)
+        return;
+
+    delta = (uint32_t)ran - s_run_sync_published;
+    s_run_sync_published = (uint32_t)ran;
+    bellatrix_bridge_cpu_progress(delta);
+}
 
 /* Standard ROM window (reset vectors, Kickstart entry) */
 static uint32_t s_rom_std_base  = 0xF80000u;  /* standard: 0xF80000 or 0xFC0000 */
@@ -1130,6 +1149,7 @@ static uint32_t harness_read(uint32_t addr, int size)
             uint32_t rom_off = s_rom_std_off + (addr & (s_rom_std_size - 1u));
             return rom_read_at(rom_off, size);
         }
+        harness_sync_cpu_progress();
         const BellatrixMemory *mem = &bellatrix_machine_get()->memory;
         if (size == 1) ret = bellatrix_chip_read8(mem, addr);
         else if (size == 2) ret = bellatrix_chip_read16(mem, addr);
@@ -1139,6 +1159,7 @@ static uint32_t harness_read(uint32_t addr, int size)
     }
 
     /* Chipset / CIA / RTC */
+    harness_sync_cpu_progress();
     ret = bellatrix_bridge_cpu_read(addr, (unsigned int)size);
     harness_watch_rw("WATCH-BUS-R", pc, addr, size, ret);
     aros_loop_check(addr, ret);
@@ -1158,6 +1179,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     /* Chip RAM */
     if (bellatrix_chip_addr_contains(addr)) {
         BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+        harness_sync_cpu_progress();
         harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
         harness_watch_boot_bitplane_write(pc, addr, size, value);
         harness_watch_boot_dynamic_buffer_write(pc, addr, size, value);
@@ -1179,6 +1201,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     }
 
     /* Chipset / CIA / RTC */
+    harness_sync_cpu_progress();
     harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
     bellatrix_bridge_cpu_write(addr, value, (unsigned int)size);
     harness_watch_dskblk_ack(pc, addr, size, value);
@@ -1250,8 +1273,17 @@ static void musashi_reset(void *ctx)
 
 static int musashi_run(void *ctx, uint32_t cycles)
 {
+    int used;
+
     (void)ctx;
-    return m68k_execute((int)cycles);
+
+    s_run_sync_active = 1;
+    s_run_sync_published = 0;
+    used = m68k_execute((int)cycles);
+    harness_sync_cpu_progress();
+    s_run_sync_active = 0;
+
+    return used;
 }
 
 static CpuBackend g_musashi_backend = {
@@ -1260,6 +1292,7 @@ static CpuBackend g_musashi_backend = {
     .set_ipl = musashi_set_ipl,
     .reset   = musashi_reset,
     .run     = musashi_run,
+    .progress_in_run = 1,
 };
 
 CpuBackend *musashi_backend_get(void)

@@ -637,6 +637,11 @@ void bellatrix_machine_sync_ipl(void)
     machine_publish_ipl(m, machine_compute_ipl(m));
 }
 
+uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles)
+{
+    return max_cycles != 0u ? max_cycles : 1u;
+}
+
 /* ---------------------------------------------------------------------------
  * Bus protocol
  * ------------------------------------------------------------------------- */

@@ -19,6 +19,7 @@ typedef struct CpuBackend {
     void     (*set_ipl)(void *ctx, int level);
     void     (*reset)(void *ctx);
     int      (*run)(void *ctx, uint32_t cycles);
+    int      progress_in_run;
 } CpuBackend;
 
 uint32_t cpu_backend_get_pc(CpuBackend *backend);

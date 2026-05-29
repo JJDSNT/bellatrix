@@ -862,7 +862,18 @@ int main(int argc, char **argv)
 
     /* Init display before machine so framebuffer globals are set */
     if (!headless) {
-        if (PAL_Video_Init(640, 512, 16) != 0) {
+        const char *zc = getenv("BELLATRIX_RIGEL_ZERO_COPY_VIDEO");
+        uint32_t video_w = 640u;
+        uint32_t video_h = 512u;
+
+        if (zc != NULL && zc[0] != '\0' && zc[0] != '0') {
+            video_w = 320u;
+            video_h = 256u;
+            printf("[HARNESS] Rigel zero-copy video test: %ux%u RGB565 target\n",
+                   video_w, video_h);
+        }
+
+        if (PAL_Video_Init(video_w, video_h, 16) != 0) {
             fprintf(stderr,
                 "[HARNESS] SDL2 unavailable — falling back to headless\n");
             headless = 1;
@@ -1030,7 +1041,8 @@ int main(int argc, char **argv)
                                             &mouse_serial_trigger);
         harness_pump_serial_rx(m);
 
-        int used = cpu_backend_run(musashi_backend_get(), (uint32_t)QUANTUM);
+        uint32_t quantum = bellatrix_machine_recommended_cpu_quantum((uint32_t)QUANTUM);
+        int used = cpu_backend_run(musashi_backend_get(), quantum);
         total_cycles += used;
 
         /* Audio output: push samples at 44100 Hz using fractional accumulator */

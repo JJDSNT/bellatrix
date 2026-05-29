@@ -116,6 +116,7 @@ void bellatrix_machine_attach_rom(const uint8_t *rom, uint32_t rom_size);
 
 void bellatrix_machine_advance(uint32_t ticks);
 void bellatrix_machine_sync_ipl(void);
+uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles);
 
 /* ------------------------------------------------------------------------- */
 /* bus protocol                                                              */
