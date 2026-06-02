@@ -17,6 +17,7 @@ set(ROOT    ${CMAKE_SOURCE_DIR}/../..)   # bellatrix/
 set(SRC     ${ROOT}/src)
 set(MUSASHI ${ROOT}/external/musashi)
 set(LIDE    ${ROOT}/external/lide.device)
+set(ODFS    ${ROOT}/external/ODFileSystem)
 set(PLUGINS_OUT ${CMAKE_BINARY_DIR}/plugins)
 
 # ---------------------------------------------------------------------------
@@ -235,11 +236,48 @@ if(BELLATRIX_USE_RIGEL_CHIPSET)
 endif()
 
 # ---------------------------------------------------------------------------
+# ODFileSystem host library (libodfs)
+# Provides ISO 9660 / Rock Ridge / Joliet / UDF reading on the host side.
+# ---------------------------------------------------------------------------
+add_library(odfs STATIC
+    ${ODFS}/core/error.c
+    ${ODFS}/core/log.c
+    ${ODFS}/core/node.c
+    ${ODFS}/core/namefix.c
+    ${ODFS}/core/cache_block.c
+    ${ODFS}/core/charset.c
+    ${ODFS}/core/ancestry.c
+    ${ODFS}/core/mount.c
+    ${ODFS}/core/session.c
+    ${ODFS}/backends/iso9660/iso9660.c
+    ${ODFS}/backends/rock_ridge/rock_ridge.c
+    ${ODFS}/backends/joliet/joliet.c
+    ${ODFS}/backends/udf/udf.c
+    ${ODFS}/backends/hfs/hfs.c
+    ${ODFS}/backends/hfsplus/hfsplus.c
+    ${ODFS}/backends/cdda/cdda.c
+    ${ODFS}/platform/host/file_media.c
+)
+
+target_include_directories(odfs PUBLIC
+    ${ODFS}/include
+    ${ODFS}/backends
+)
+
+target_compile_definitions(odfs PRIVATE
+    ODFS_PLATFORM_HOST=1
+)
+
+# Suppress warnings from the external library
+target_compile_options(odfs PRIVATE -w)
+
+# ---------------------------------------------------------------------------
 # Harness executable
 # ---------------------------------------------------------------------------
 add_executable(harness
     ${CMAKE_CURRENT_SOURCE_DIR}/main.c
     ${CMAKE_CURRENT_SOURCE_DIR}/musashi_backend.c
+    ${SRC}/storage/iso/odfs_iso.c
     ${BELLATRIX_SOURCES}
 )
 
@@ -252,6 +290,8 @@ target_include_directories(harness PRIVATE
     ${MUSASHI}
     ${CMAKE_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${ODFS}/include
+    ${ODFS}/backends
 )
 
 if(BELLATRIX_USE_RIGEL_CHIPSET)
@@ -265,6 +305,7 @@ target_link_options(harness PRIVATE -rdynamic)
 target_compile_definitions(harness PRIVATE
     BELLATRIX_HARNESS=1
     BELLATRIX_ENABLE_PTY_BACKEND=1
+    ODFS_PLATFORM_HOST=1
 )
 
 # ---------------------------------------------------------------------------
@@ -286,6 +327,7 @@ endif()
 find_package(Threads REQUIRED)
 target_link_libraries(harness PRIVATE musashi m dl Threads::Threads)
 target_link_libraries(harness PRIVATE lide_rom_data)
+target_link_libraries(harness PRIVATE odfs)
 if(BELLATRIX_USE_RIGEL_CHIPSET)
     target_link_libraries(harness PRIVATE rigel)
 endif()
