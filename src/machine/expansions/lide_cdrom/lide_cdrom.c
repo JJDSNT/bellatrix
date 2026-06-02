@@ -12,9 +12,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Embedded ROM — generated at build time by scripts/rom_to_c.py */
+/* Embedded ROMs — generated at build time by scripts/rom_to_c.py */
 extern const unsigned char g_lide_rom_data[];
 extern const size_t        g_lide_rom_size;
+
+/* ODFileSystem handler binary for the second ROM bank (128 KB board).
+ * Generated from external/ODFileSystem/build/amiga/ODFileSystem.
+ * Served BYTEWIDE at board offsets 0x10000..0x1FFFF (even addresses only).
+ * When present, the bootldr detects no 'LIDE' trailer in the second bank
+ * and loads+relocates this binary as a CDFileSystem (DosType CD01). */
+#if BELLATRIX_ENABLE_ODFS
+extern const unsigned char g_odfs_data[];
+extern const size_t        g_odfs_size;
+#endif
 
 /* -----------------------------------------------------------------------
  * lide.rom address-space mapping
@@ -264,6 +274,23 @@ static uint32_t ripple_bus_read(BellatrixExpansion *exp,
         if (reg >= 0)
             return ata_ide_read8(&s->ide, (uint8_t)reg);
 
+        /* Second bank (0x10000..0x1FFFF): ODFileSystem binary, BYTEWIDE encoded.
+         * board[0x10000 + N*2] = odfs_byte[N].  Odd addresses return 0xFF.
+         * The bootldr checks for 'LIDE' at 0x1FFF8-0x1FFFE; since our binary
+         * ends well before that, 0xFF is returned there → CDFileSystem detected. */
+#if BELLATRIX_ENABLE_ODFS
+        if (off >= 0x10000u && off < 0x20000u) {
+            uint32_t bank_off = off - 0x10000u;
+            if (bank_off & 1u) return 0xFFu;       /* odd address: not mapped */
+            uint32_t byte_idx = bank_off >> 1;
+            uint8_t  b = (byte_idx < g_odfs_size) ? g_odfs_data[byte_idx] : 0xFFu;
+            if (size == 1) return b;
+            /* 16-bit read: pair (byte_idx, byte_idx+1) */
+            uint8_t b1 = (byte_idx + 1u < g_odfs_size) ? g_odfs_data[byte_idx + 1u] : 0xFFu;
+            return (size == 2) ? (((uint32_t)b << 8) | b1) : 0xFFu;
+        }
+#endif
+
         /* ROM: header (0-3), nibble-bootldr (4-0xFFF), device binary (0x2000+) */
         if (s->rom) {
             uint8_t b0 = ripple_rom_byte(s->rom, s->rom_size, off);
@@ -375,7 +402,7 @@ static const BellatrixExpansionOps g_ripple_exp_ops = {
 int lide_cdrom_register(BellatrixMachine *machine)
 {
     static const uint8_t ac_bytes[AUTOCONFIG_ROM_BYTES] = {
-        AC_TYPE_Z2 | AC_TYPE_DIAGVALID | AC_SIZE_64KB,  /* er_Type    */
+        AC_TYPE_Z2 | AC_TYPE_DIAGVALID | AC_SIZE_128KB, /* er_Type    */
         RIPPLE_PROD,                                      /* er_Product */
         0x00u,                                            /* er_Flags   */
         0x00u,                                            /* reserved   */
@@ -422,7 +449,8 @@ int lide_cdrom_register(BellatrixMachine *machine)
     s->board_desc.id          = "lide.cdrom";
     s->board_desc.config_data = s->config_data;
     s->board_desc.config_size = sizeof(s->config_data);
-    s->board_desc.window_size = BELLATRIX_ZORRO2_WIN_64KB;
+    /* 128 KB window: first 64 KB = lide.device ROM, second 64 KB = ODFileSystem */
+    s->board_desc.window_size = BELLATRIX_ZORRO2_WIN_128KB;
     /* Do NOT set rom/rom_size — bellatrix_zorro2_board_read8 would bypass
      * ripple_read8. All reads must go through ripple_read8 so that
      * ripple_rom_byte can apply the A0-not-connected nibble remapping. */

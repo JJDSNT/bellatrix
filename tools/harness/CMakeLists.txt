@@ -88,6 +88,35 @@ add_custom_command(
     COMMENT "Embedding lide.rom as C array"
 )
 
+# ---------------------------------------------------------------------------
+# ODFileSystem handler — build via Docker, embed for second ROM bank
+# ---------------------------------------------------------------------------
+set(ODFS_BIN ${ODFS}/build/amiga/ODFileSystem)
+set(ODFS_C   ${CMAKE_BINARY_DIR}/odfs_data.c)
+
+add_custom_command(
+    OUTPUT  ${ODFS_BIN}
+    COMMAND ${ROOT}/scripts/build-odfs.sh ${ODFS_BIN}
+    DEPENDS
+        ${ODFS}/platform/amiga/handler_main.c
+        ${ODFS}/core/mount.c
+        ${ODFS}/backends/iso9660/iso9660.c
+        ${ROOT}/scripts/build-odfs.sh
+        ${ROOT}/scripts/odfs_crosstools_compat.h
+    COMMENT "Building ODFileSystem (m68k) via Docker"
+)
+
+add_custom_command(
+    OUTPUT  ${ODFS_C}
+    COMMAND Python3::Interpreter ${ROOT}/scripts/rom_to_c.py
+            ${ODFS_BIN} ${ODFS_C} --symbol odfs
+    DEPENDS ${ODFS_BIN} ${ROOT}/scripts/rom_to_c.py
+    COMMENT "Embedding ODFileSystem binary as C array"
+)
+
+add_library(odfs_data STATIC ${ODFS_C})
+set_target_properties(odfs_data PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(lide_rom_data STATIC ${LIDE_ROM_C})
 
 set_target_properties(lide_rom_data PROPERTIES
@@ -306,6 +335,7 @@ target_compile_definitions(harness PRIVATE
     BELLATRIX_HARNESS=1
     BELLATRIX_ENABLE_PTY_BACKEND=1
     ODFS_PLATFORM_HOST=1
+    BELLATRIX_ENABLE_ODFS=1
 )
 
 # ---------------------------------------------------------------------------
@@ -326,8 +356,7 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 target_link_libraries(harness PRIVATE musashi m dl Threads::Threads)
-target_link_libraries(harness PRIVATE lide_rom_data)
-target_link_libraries(harness PRIVATE odfs)
+target_link_libraries(harness PRIVATE lide_rom_data odfs_data odfs)
 if(BELLATRIX_USE_RIGEL_CHIPSET)
     target_link_libraries(harness PRIVATE rigel)
 endif()
@@ -512,6 +541,7 @@ target_include_directories(lide_cdrom PRIVATE
 
 target_compile_definitions(lide_cdrom PRIVATE
     BELLATRIX_HARNESS=1
+    BELLATRIX_ENABLE_ODFS=1
 )
 
-target_link_libraries(lide_cdrom PRIVATE lide_rom_data)
+target_link_libraries(lide_cdrom PRIVATE lide_rom_data odfs_data)
