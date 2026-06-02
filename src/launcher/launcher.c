@@ -15,6 +15,9 @@
 #include "storage/sdcard/bcm_emmc.h"
 #include "storage/fat/fat32.h"
 #include "storage/iso/iso_image.h"
+#if BELLATRIX_ENABLE_USBSTACK
+#include "io/usb/usb_msc_bellatrix.h"
+#endif
 
 #include <string.h>
 #include <stdint.h>
@@ -46,9 +49,15 @@ typedef enum {
     MEDIA_ISO,
 } MediaType;
 
+typedef enum {
+    MEDIA_SOURCE_SD = 0,
+    MEDIA_SOURCE_USB,
+} MediaSource;
+
 typedef struct {
-    char      name[FAT32_NAME_MAX];
-    MediaType type;
+    char        name[FAT32_NAME_MAX];
+    MediaType   type;
+    MediaSource source;
 } MediaEntry;
 
 // RGB565 colour palette
@@ -339,6 +348,10 @@ static uint8_t s_adf_buf[ADF_BUF_SIZE] __attribute__((aligned(512)));
 
 static Fat32State s_fat32;
 static Fat32File  s_iso_file;
+#if BELLATRIX_ENABLE_USBSTACK
+static Fat32State s_usb_fat32;
+static Fat32File  s_usb_iso_file;
+#endif
 
 static bool fat32_iso_read_cb(void *ctx, uint32_t lba, uint32_t count, void *dst)
 {
@@ -404,7 +417,7 @@ static bool try_qemu_loader_adf(void)
 
     // Copy into the static ADF buffer so the pointer stays valid after launch
     memcpy(s_adf_buf, p, ADF_SIZE_DD);
-    return bellatrix_machine_insert_df0_adf(s_adf_buf, ADF_SIZE_DD) == 0;
+    return bellatrix_machine_insert_df0_adf(s_adf_buf, ADF_SIZE_DD) != 0;
 }
 
 static bool try_qemu_loader_iso(void)
@@ -487,7 +500,7 @@ bool launcher_run(void)
     // Scan ADF and ISO files into a combined list
     static char        s_adf_names[MAX_ADF_FILES][FAT32_NAME_MAX];
     static char        s_iso_names[MAX_ISO_FILES][FAT32_NAME_MAX];
-    static MediaEntry  s_entries[MAX_ADF_FILES + MAX_ISO_FILES];
+    static MediaEntry  s_entries[(MAX_ADF_FILES + MAX_ISO_FILES) * 2u];
 
     uint32_t n_adf = fat32_list_adf(&s_fat32, s_adf_names, MAX_ADF_FILES);
     uint32_t n_iso = fat32_list_iso(&s_fat32, s_iso_names, MAX_ISO_FILES);
@@ -495,14 +508,49 @@ bool launcher_run(void)
 
     for (uint32_t i = 0u; i < n_adf; i++) {
         memcpy(s_entries[count].name, s_adf_names[i], FAT32_NAME_MAX);
-        s_entries[count].type = MEDIA_ADF;
+        s_entries[count].type   = MEDIA_ADF;
+        s_entries[count].source = MEDIA_SOURCE_SD;
         count++;
     }
     for (uint32_t i = 0u; i < n_iso; i++) {
         memcpy(s_entries[count].name, s_iso_names[i], FAT32_NAME_MAX);
-        s_entries[count].type = MEDIA_ISO;
+        s_entries[count].type   = MEDIA_ISO;
+        s_entries[count].source = MEDIA_SOURCE_SD;
         count++;
     }
+
+#if BELLATRIX_ENABLE_USBSTACK
+    // Give USB time to enumerate a mass-storage device (≈1 s extra)
+    draw_message("Scanning USB drive...", COL_TITLE_BG);
+    for (uint32_t i = 0u; i < 200u; i++) {
+        pump_usb();
+        for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
+        if (usb_msc_is_ready()) break;
+    }
+
+    if (usb_msc_is_ready() && fat32_init_usb(&s_usb_fat32)) {
+        static char s_usb_adf_names[MAX_ADF_FILES][FAT32_NAME_MAX];
+        static char s_usb_iso_names[MAX_ISO_FILES][FAT32_NAME_MAX];
+
+        uint32_t nu_adf = fat32_list_adf(&s_usb_fat32, s_usb_adf_names, MAX_ADF_FILES);
+        uint32_t nu_iso = fat32_list_iso(&s_usb_fat32, s_usb_iso_names, MAX_ISO_FILES);
+
+        kprintf("[LAUNCHER] USB: %u ADF, %u ISO\n", (unsigned)nu_adf, (unsigned)nu_iso);
+
+        for (uint32_t i = 0u; i < nu_adf; i++) {
+            memcpy(s_entries[count].name, s_usb_adf_names[i], FAT32_NAME_MAX);
+            s_entries[count].type   = MEDIA_ADF;
+            s_entries[count].source = MEDIA_SOURCE_USB;
+            count++;
+        }
+        for (uint32_t i = 0u; i < nu_iso; i++) {
+            memcpy(s_entries[count].name, s_usb_iso_names[i], FAT32_NAME_MAX);
+            s_entries[count].type   = MEDIA_ISO;
+            s_entries[count].source = MEDIA_SOURCE_USB;
+            count++;
+        }
+    }
+#endif
 
     if (count == 0u) {
         kprintf("[LAUNCHER] no ADF or ISO files found\n");
@@ -573,13 +621,23 @@ bool launcher_run(void)
 
     const MediaEntry *sel = &s_entries[cursor];
 
+#if BELLATRIX_ENABLE_USBSTACK
+    Fat32State *sel_fs       = (sel->source == MEDIA_SOURCE_USB) ? &s_usb_fat32 : &s_fat32;
+    Fat32File  *sel_iso_file = (sel->source == MEDIA_SOURCE_USB) ? &s_usb_iso_file : &s_iso_file;
+    const char *src_tag      = (sel->source == MEDIA_SOURCE_USB) ? "USB" : "SD";
+#else
+    Fat32State *sel_fs       = &s_fat32;
+    Fat32File  *sel_iso_file = &s_iso_file;
+    const char *src_tag      = "SD";
+#endif
+
     if (sel->type == MEDIA_ADF) {
         // ADF: preload entire image into RAM buffer
-        kprintf("[LAUNCHER] loading ADF \"%s\"...\n", sel->name);
+        kprintf("[LAUNCHER] loading ADF \"%s\" from %s...\n", sel->name, src_tag);
         draw_message("Loading ADF...", COL_TITLE_BG);
 
         Fat32File file;
-        if (!fat32_open(&s_fat32, sel->name, &file)) {
+        if (!fat32_open(sel_fs, sel->name, &file)) {
             kprintf("[LAUNCHER] open failed\n");
             return false;
         }
@@ -593,39 +651,39 @@ bool launcher_run(void)
         }
 
         int rc = bellatrix_machine_insert_df0_adf(s_adf_buf, file.file_size);
-        if (rc != 0) {
-            kprintf("[LAUNCHER] insert_df0_adf failed (%d)\n", rc);
+        if (!rc) {
+            kprintf("[LAUNCHER] insert_df0_adf failed\n");
             return false;
         }
 
-        kprintf("[LAUNCHER] DF0: \"%s\" (%u bytes)\n", sel->name, (unsigned)file.file_size);
+        kprintf("[LAUNCHER] DF0: \"%s\" (%u bytes) [%s]\n", sel->name, (unsigned)file.file_size, src_tag);
         draw_message("Disk inserted.  Starting emulation...", COL_STATUS_BG);
 
     } else {
         // ISO: open file and attach via read callback — no preload
-        kprintf("[LAUNCHER] attaching ISO \"%s\" via CD-ROM...\n", sel->name);
+        kprintf("[LAUNCHER] attaching ISO \"%s\" via CD-ROM [%s]...\n", sel->name, src_tag);
         draw_message("Attaching ISO...", COL_TITLE_BG);
 
-        if (!fat32_open(&s_fat32, sel->name, &s_iso_file)) {
+        if (!fat32_open(sel_fs, sel->name, sel_iso_file)) {
             kprintf("[LAUNCHER] open failed\n");
             return false;
         }
 
-        uint32_t sector_count = s_iso_file.file_size / ISO_SECTOR_SIZE;
+        uint32_t sector_count = sel_iso_file->file_size / ISO_SECTOR_SIZE;
         if (sector_count == 0u) {
-            kprintf("[LAUNCHER] ISO too small (%u bytes)\n", (unsigned)s_iso_file.file_size);
+            kprintf("[LAUNCHER] ISO too small (%u bytes)\n", (unsigned)sel_iso_file->file_size);
             return false;
         }
 
         int rc = bellatrix_machine_attach_iso_fn(fat32_iso_read_cb,
-                                                 &s_iso_file,
+                                                 sel_iso_file,
                                                  sector_count);
         if (rc != 0) {
             kprintf("[LAUNCHER] attach_iso_fn failed (%d)\n", rc);
             return false;
         }
 
-        kprintf("[LAUNCHER] CD-ROM: \"%s\" (%u sectors)\n", sel->name, (unsigned)sector_count);
+        kprintf("[LAUNCHER] CD-ROM: \"%s\" (%u sectors) [%s]\n", sel->name, (unsigned)sector_count, src_tag);
         draw_message("ISO attached.  Starting emulation...", COL_STATUS_BG);
     }
 

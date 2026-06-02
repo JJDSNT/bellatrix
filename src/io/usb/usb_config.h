@@ -23,6 +23,8 @@ long bellatrix_usb_strtol(const char *nptr, char **endptr, int base);
 #define CONFIG_USBHOST_MAX_EXTHUBS           1
 #define CONFIG_USBHOST_MAX_EHPORTS           8
 #define CONFIG_USBHOST_MAX_HID_CLASS         2
+#define CONFIG_USBHOST_MAX_MSC_CLASS         1
+#define CONFIG_USBHOST_MSC_TIMEOUT           5000
 #define CONFIG_USBHOST_MAX_INTERFACES        8
 #define CONFIG_USBHOST_MAX_INTF_ALTSETTINGS  2
 #define CONFIG_USBHOST_MAX_ENDPOINTS         4

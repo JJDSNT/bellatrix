@@ -10,6 +10,9 @@
 
 #define FAT32_NAME_MAX  12u   // "FILENAME.EXT" + NUL
 
+// Block reader callback: read one 512-byte sector at LBA into buf.
+typedef bool (*Fat32ReadBlockFn)(void *ctx, uint32_t lba, uint8_t *buf);
+
 typedef struct Fat32State {
     uint32_t part_lba;          // partition start LBA
     uint32_t cluster_size;      // sectors per cluster
@@ -19,6 +22,8 @@ typedef struct Fat32State {
     uint32_t fat_size;          // sectors per FAT
     uint16_t bytes_per_sector;  // usually 512
     bool     initialized;
+    Fat32ReadBlockFn read_block; // pluggable block reader
+    void            *read_ctx;  // opaque context for read_block
 } Fat32State;
 
 typedef struct Fat32File {
@@ -32,6 +37,9 @@ typedef struct Fat32File {
 
 // Initialise from the SD card; returns false if no FAT32 partition found
 bool fat32_init(Fat32State *fs);
+
+// Initialise with a custom block reader (e.g. USB MSC)
+bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx);
 
 // List .ADF files in the root directory.
 // names: array of FAT32_NAME_MAX-byte strings; max_count: capacity.

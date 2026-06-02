@@ -7,6 +7,13 @@
 
 int kprintf(const char *fmt, ...);
 
+// SD card block reader used by fat32_init()
+static bool sd_read_block(void *ctx, uint32_t lba, uint8_t *buf)
+{
+    (void)ctx;
+    return bcm_emmc_read_block(lba, buf);
+}
+
 // ---------------------------------------------------------------------------
 // Little-endian accessors (sector buffers are byte arrays)
 // ---------------------------------------------------------------------------
@@ -26,11 +33,12 @@ static inline uint32_t le32(const uint8_t *p)
 // Sector buffer (shared scratch)
 // ---------------------------------------------------------------------------
 
-static uint8_t s_sector[512] __attribute__((aligned(4)));
+// 32-byte alignment required for USB DMA
+static uint8_t s_sector[512] __attribute__((aligned(32)));
 
-static bool read_sector(uint32_t lba)
+static bool read_sector(const Fat32State *fs, uint32_t lba)
 {
-    return bcm_emmc_read_block(lba, s_sector);
+    return fs->read_block(fs->read_ctx, lba, s_sector);
 }
 
 // ---------------------------------------------------------------------------
@@ -44,7 +52,7 @@ static uint32_t fat_next_cluster(const Fat32State *fs, uint32_t cluster)
     uint32_t fat_sector  = fs->fat_lba + (cluster / 128u);
     uint32_t fat_offset  = (cluster % 128u) * 4u;
 
-    if (!read_sector(fat_sector)) {
+    if (!read_sector(fs, fat_sector)) {
         return 0u;
     }
 
@@ -60,13 +68,15 @@ static uint32_t cluster_to_lba(const Fat32State *fs, uint32_t cluster)
 // Init
 // ---------------------------------------------------------------------------
 
-bool fat32_init(Fat32State *fs)
+bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx)
 {
-    if (!fs) return false;
+    if (!fs || !read_fn) return false;
     memset(fs, 0, sizeof(*fs));
+    fs->read_block = read_fn;
+    fs->read_ctx   = ctx;
 
     // Read MBR (sector 0)
-    if (!read_sector(0u)) {
+    if (!read_sector(fs, 0u)) {
         kprintf("[FAT32] cannot read MBR\n");
         return false;
     }
@@ -96,7 +106,7 @@ bool fat32_init(Fat32State *fs)
     }
 
     // Read FAT32 boot sector (BPB)
-    if (!read_sector(part_lba)) {
+    if (!read_sector(fs, part_lba)) {
         kprintf("[FAT32] cannot read BPB at LBA %u\n", (unsigned)part_lba);
         return false;
     }
@@ -114,18 +124,23 @@ bool fat32_init(Fat32State *fs)
         return false;
     }
 
-    fs->part_lba        = part_lba;
+    fs->part_lba         = part_lba;
     fs->bytes_per_sector = bytes_per_sec;
-    fs->cluster_size    = sec_per_clust;
-    fs->fat_lba         = part_lba + reserved_sec;
-    fs->fat_size        = fat32_size;
-    fs->data_lba        = fs->fat_lba + (uint32_t)num_fats * fat32_size;
-    fs->root_cluster    = root_cluster;
-    fs->initialized     = true;
+    fs->cluster_size     = sec_per_clust;
+    fs->fat_lba          = part_lba + reserved_sec;
+    fs->fat_size         = fat32_size;
+    fs->data_lba         = fs->fat_lba + (uint32_t)num_fats * fat32_size;
+    fs->root_cluster     = root_cluster;
+    fs->initialized      = true;
 
     kprintf("[FAT32] init OK: part_lba=%u clust_sec=%u root_clust=%u\n",
             (unsigned)part_lba, (unsigned)sec_per_clust, (unsigned)root_cluster);
     return true;
+}
+
+bool fat32_init(Fat32State *fs)
+{
+    return fat32_init_with_reader(fs, sd_read_block, NULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +208,7 @@ static bool scan_dir_cluster(const Fat32State *fs, uint32_t cluster,
         uint32_t lba = cluster_to_lba(fs, cluster);
 
         for (uint32_t sec = 0u; sec < fs->cluster_size; sec++) {
-            if (!read_sector(lba + sec)) {
+            if (!read_sector(fs, lba + sec)) {
                 return false;
             }
 
@@ -323,7 +338,7 @@ uint32_t fat32_read(Fat32File *f, void *buf, uint32_t len)
         uint32_t byte_in_sec    = cluster_off % 512u;
 
         uint32_t lba = cluster_to_lba(fs, f->cur_cluster) + sec_in_cluster;
-        if (!read_sector(lba)) break;
+        if (!read_sector(f->fs, lba)) break;
 
         uint32_t can_copy = 512u - byte_in_sec;
         uint32_t to_copy  = len - done;
