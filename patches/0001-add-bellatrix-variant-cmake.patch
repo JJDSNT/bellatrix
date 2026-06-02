@@ -1,8 +1,7 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..669505a 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
+@@ -15,7 +15,7 @@
  set(TARGET "raspi64" CACHE STRING "One of target machines: ${SUPPORTED_TARGETS}")
  set_property(CACHE TARGET PROPERTY STRINGS ${SUPPORTED_TARGETS})
  
@@ -11,7 +10,15 @@ index eb89404..669505a 100644
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
  
-@@ -167,14 +167,239 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+@@ -89,6 +89,7 @@
+     src/math/96bit.c
+ )
+ 
++set(BELLATRIX_INCLUDE_DIRS "")
+ set_source_files_properties(src/math/96bit.c PROPERTIES COMPILE_FLAGS 
+     "-fcall-saved-x4 -fcall-saved-x5 -fcall-saved-x6 -fcall-saved-x7 -fcall-saved-x8 \
+     -fcall-saved-x9 -fcall-saved-x10 -fcall-saved-x11 -fcall-saved-x12 -fcall-saved-x13 \
+@@ -167,14 +168,381 @@
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -19,16 +26,52 @@ index eb89404..669505a 100644
 +        if(${TARGET} STREQUAL "raspi64")
 +            option(BELLATRIX_UART_PL011 "Use PL011 (GPIO 14/15) as Amiga serial backend" OFF)
 +            option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
++            option(BELLATRIX_USE_RIGEL_CHIPSET "Use Rigel as the Bellatrix chipset backend" OFF)
 +            option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 +            option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
++            option(BELLATRIX_ENABLE_MULTICORE "Enable multicore chipset runtime (Core1=GFX Core2=Paula Core3=IO)" OFF)
++            option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO]" OFF)
 +            add_compile_definitions(BELLATRIX BELLATRIX_ENABLE_MINIUART_BACKEND BELLATRIX_ENABLE_PL011_BACKEND)
++            if(BELLATRIX_ENABLE_MULTICORE)
++                add_compile_definitions(BELLATRIX_ENABLE_MULTICORE)
++                message(STATUS "[BUILD] Multicore: enabled (Core1=GFX Core2=Paula Core3=IO)")
++            else()
++                message(STATUS "[BUILD] Multicore: disabled (single-core mode)")
++            endif()
++            if(BELLATRIX_CORE_LOG)
++                add_compile_definitions(BELLATRIX_CORE_LOG)
++                message(STATUS "[BUILD] Core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO])")
++            else()
++                message(STATUS "[BUILD] Core log: disabled")
++            endif()
 +            if(BELLATRIX_UART_PL011)
 +                add_compile_definitions(BELLATRIX_UART_PL011)
 +            endif()
-+            include_directories(${CMAKE_SOURCE_DIR}/../src)
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/core)
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/cpu)
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/host)
++            list(APPEND BELLATRIX_INCLUDE_DIRS
++                ${CMAKE_SOURCE_DIR}/../src
++                ${CMAKE_SOURCE_DIR}/../src/cpu
++                ${CMAKE_SOURCE_DIR}/../src/host
++            )
++            if(BELLATRIX_USE_RIGEL_CHIPSET)
++                if(BELLATRIX_ENABLE_MULTICORE)
++                    message(FATAL_ERROR "Rigel Bellatrix backend currently supports single-core only")
++                endif()
++                list(APPEND BELLATRIX_INCLUDE_DIRS
++                    ${CMAKE_SOURCE_DIR}/../external/rigel/include
++                    ${CMAKE_SOURCE_DIR}/../external/rigel/src
++                    ${CMAKE_SOURCE_DIR}/../external/rigel/src/chipset
++                )
++                set(RIGEL_BUILD_TESTS OFF CACHE BOOL "Build Rigel unit tests" FORCE)
++                set(RIGEL_BUILD_HARNESS OFF CACHE BOOL "Build Rigel Musashi harness" FORCE)
++                set(RIGEL_ENABLE_STDIO_LOG OFF CACHE BOOL "Use stderr for Rigel logs" FORCE)
++                add_subdirectory(${CMAKE_SOURCE_DIR}/../external/rigel ${CMAKE_BINARY_DIR}/rigel-build EXCLUDE_FROM_ALL)
++                target_compile_options(rigel PRIVATE -mbig-endian -fno-stack-protector)
++                add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=1)
++                set(BELLATRIX_MACHINE_SOURCE ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel.c)
++            else()
++                add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=0)
++                set(BELLATRIX_MACHINE_SOURCE ${CMAKE_SOURCE_DIR}/../src/machine/machine.c)
++            endif()
 +            if(BELLATRIX_USE_MUSASHI_CPU)
 +                find_program(BELLATRIX_HOST_CC NAMES cc gcc clang)
 +                if(NOT BELLATRIX_HOST_CC)
@@ -50,18 +93,51 @@ index eb89404..669505a 100644
 +                if(NOT BELLATRIX_M68KMAKE_RUN_RESULT EQUAL 0)
 +                    message(FATAL_ERROR "Failed to generate Musashi opcode tables")
 +                endif()
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/musashi)
-+                include_directories(${BELLATRIX_MUSASHI_GEN_DIR})
++                list(APPEND BELLATRIX_INCLUDE_DIRS
++                    ${CMAKE_SOURCE_DIR}/../external/musashi
++                    ${BELLATRIX_MUSASHI_GEN_DIR}
++                )
 +                add_compile_definitions(BELLATRIX_USE_MUSASHI_CPU=1)
-+                add_compile_definitions(MUSASHI_CNF="musashi_baremetal_config.h")
++                add_compile_definitions(MUSASHI_CNF="cpu/musashi/musashi_baremetal_config.h")
 +            else()
 +                add_compile_definitions(BELLATRIX_USE_MUSASHI_CPU=0)
 +            endif()
++
++            # lide.rom → embedded C array (reuse the already-built ROM if present)
++            set(BELLATRIX_LIDE_ROM     ${CMAKE_SOURCE_DIR}/../external/lide.device/lide.rom)
++            set(BELLATRIX_LIDE_ROM_C   ${CMAKE_BINARY_DIR}/lide_rom_data.c)
++            find_program(BELLATRIX_PYTHON3 NAMES python3 python)
++            if(BELLATRIX_PYTHON3 AND EXISTS ${BELLATRIX_LIDE_ROM})
++                add_custom_command(
++                    OUTPUT  ${BELLATRIX_LIDE_ROM_C}
++                    COMMAND ${BELLATRIX_PYTHON3}
++                            ${CMAKE_SOURCE_DIR}/../scripts/rom_to_c.py
++                            ${BELLATRIX_LIDE_ROM}
++                            ${BELLATRIX_LIDE_ROM_C}
++                    DEPENDS ${BELLATRIX_LIDE_ROM}
++                    COMMENT "Embedding lide.rom for Bellatrix bare-metal"
++                )
++                list(APPEND BASE_FILES ${BELLATRIX_LIDE_ROM_C})
++            else()
++                message(WARNING "lide.rom or python3 not found — lide_cdrom will be stub-only in Bellatrix build")
++            endif()
++
 +            list(APPEND BASE_FILES
-+                ${CMAKE_SOURCE_DIR}/../src/cpu/bellatrix.c
++                ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix.c
 +                ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c
-+                ${CMAKE_SOURCE_DIR}/../src/bridge/bellatrix_bridge.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/machine.c
++                ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_bridge.c
++                ${BELLATRIX_MACHINE_SOURCE}
++                ${CMAKE_SOURCE_DIR}/../src/machine/expansion.c
++                # Bus fabric and CD-ROM expansion
++                ${CMAKE_SOURCE_DIR}/../src/machine/autoconfig/autoconfig.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro2/zorro2_bus.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro3/zorro3.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/bus/superbuster/superbuster.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/lide_cdrom.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/ata_ide.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/atapi_cdrom.c
++                # Bare-metal calloc/free backed by TLSF heap
++                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_alloc.c
 +                ${CMAKE_SOURCE_DIR}/../src/debug/btrace.c
 +                ${CMAKE_SOURCE_DIR}/../src/debug/probe.c
 +                ${CMAKE_SOURCE_DIR}/../src/debug/debug.c
@@ -75,7 +151,12 @@ index eb89404..669505a 100644
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_tod.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/rtc/rtc.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/agnus.c
-+                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_command.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_debug.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_dma.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_ref.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_regs.c
++                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_timing.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_regs.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_service.c
@@ -89,17 +170,18 @@ index eb89404..669505a 100644
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_serial.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/floppy/floppy_drive.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/dma.c
++                ${CMAKE_SOURCE_DIR}/../src/storage/iso/iso_image.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/beam.c
 +                ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/bitplanes.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/memory.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/memory_map.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/chip_ram.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/fast_ram.c
-+                ${CMAKE_SOURCE_DIR}/../src/core/memory/overlay.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/memory/memory.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/memory/memory_map.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/memory/chip_ram.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/memory/fast_ram.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/memory/overlay.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/serial/null_modem.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/serial/uart_host.c
-+                ${CMAKE_SOURCE_DIR}/../src/input/controller_port.c
-+                ${CMAKE_SOURCE_DIR}/../src/input/keyboard.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/input/controller_port.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/input/keyboard.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/miniuart_backend.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pl011_backend.c
 +                ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_debug.c
@@ -122,10 +204,55 @@ index eb89404..669505a 100644
 +                ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 +            )
++            if(BELLATRIX_USE_RIGEL_CHIPSET)
++                list(REMOVE_ITEM BASE_FILES
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_interrupt.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_ports.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_serial.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_timers.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_tod.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/rtc/rtc.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/agnus.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_command.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_debug.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_dma.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_ref.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_regs.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_timing.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_regs.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_service.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/dma.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/beam.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/bitplanes.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/denise/denise.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/denise/sprites.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_input.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_interrupt.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_disk.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_audio.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_serial.c
++                    ${CMAKE_SOURCE_DIR}/../src/chipset/floppy/floppy_drive.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime_core.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_cpu.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_gfx.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_audio.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/affinity.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/clock.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/event.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/mailbox.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/stats.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/sync.c
++                )
++            endif()
 +            if(BELLATRIX_USE_MUSASHI_CPU)
 +                list(APPEND BASE_FILES
-+                    ${CMAKE_SOURCE_DIR}/../src/cpu/musashi_backend.c
-+                    ${CMAKE_SOURCE_DIR}/../src/cpu/musashi_baremetal_stubs.c
++                    ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_backend.c
++                    ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_baremetal_stubs.c
 +                    ${CMAKE_SOURCE_DIR}/../external/musashi/m68kcpu.c
 +                    ${CMAKE_SOURCE_DIR}/../external/musashi/m68kdasm.c
 +                    ${CMAKE_SOURCE_DIR}/../external/musashi/softfloat/softfloat.c
@@ -153,11 +280,13 @@ index eb89404..669505a 100644
 +                    "Z2 Fast RAM size in MB for the Bellatrix-owned autoconfig path (legacy mode)")
 +                add_compile_definitions(BELLATRIX_LEGACY_Z2_RAM_MB=${BELLATRIX_LEGACY_Z2_RAM_MB})
 +                list(APPEND BASE_FILES
-+                    ${CMAKE_SOURCE_DIR}/../src/core/memory/autoconfig.c
++                    ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro2/zorro2_bus.c
 +                )
 +            endif()
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/io/bluetooth)
-+            include_directories(${CMAKE_SOURCE_DIR}/../src/io/usb)
++            list(APPEND BELLATRIX_INCLUDE_DIRS
++                ${CMAKE_SOURCE_DIR}/../src/io/bluetooth
++                ${CMAKE_SOURCE_DIR}/../src/io/usb
++            )
 +            option(BELLATRIX_ENABLE_BTSTACK "Enable BTStack support in Bellatrix" OFF)
 +            option(BELLATRIX_ENABLE_USBSTACK "Enable CherryUSB host stack scaffold in Bellatrix" OFF)
 +            add_compile_definitions(
@@ -196,14 +325,16 @@ index eb89404..669505a 100644
 +                        ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_firmware_stub.c
 +                    )
 +                endif()
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/src)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/bluedroid/encoder/include)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/bluedroid/decoder/include)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/micro-ecc)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/rijndael)
-+                include_directories(${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/yxml)
++                list(APPEND BELLATRIX_INCLUDE_DIRS
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/src
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/bluedroid/encoder/include
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/bluedroid/decoder/include
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/micro-ecc
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/rijndael
++                    ${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/yxml
++                )
 +                add_compile_definitions(BTSTACK_CONFIG_H="btstack_config.h")
 +            endif()
 +            if(BELLATRIX_ENABLE_USBSTACK)
@@ -213,17 +344,22 @@ index eb89404..669505a 100644
 +                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_osal_bellatrix.c
 +                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usbh_class_info.c
 +                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_hid_bellatrix.c
++                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_msc_bellatrix.c
 +                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_glue_dwc2_bellatrix.c
 +                        ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_hc_bellatrix.c
 +                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/core/usbh_core.c
 +                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hub/usbh_hub.c
 +                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hid/usbh_hid.c
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/msc/usbh_msc.c
 +                    )
-+                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/common)
-+                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/core)
-+                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hub)
-+                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hid)
-+                    include_directories(${CMAKE_SOURCE_DIR}/../external/cherryusb/port/dwc2)
++                    list(APPEND BELLATRIX_INCLUDE_DIRS
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/common
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/core
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hub
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/hid
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/msc
++                        ${CMAKE_SOURCE_DIR}/../external/cherryusb/port/dwc2
++                    )
 +                else()
 +                    message(FATAL_ERROR "Bellatrix USB stack requested but external/cherryusb is missing")
 +                endif()
@@ -233,6 +369,19 @@ index eb89404..669505a 100644
 +                list(APPEND BELLATRIX_SOURCES
 +                    ${CMAKE_SOURCE_DIR}/../src/host/osd.c
 +                )
++            endif()
++            option(BELLATRIX_LAUNCHER "ADF selector UI on framebuffer (SD card FAT32)" ON)
++            if(BELLATRIX_LAUNCHER)
++                add_compile_definitions(BELLATRIX_LAUNCHER=1)
++                list(APPEND BELLATRIX_SOURCES
++                    ${CMAKE_SOURCE_DIR}/../src/launcher/launcher.c
++                    ${CMAKE_SOURCE_DIR}/../src/launcher/launcher_input.c
++                    ${CMAKE_SOURCE_DIR}/../src/storage/sdcard/bcm_emmc.c
++                    ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32.c
++                )
++                message(STATUS "[BUILD] Launcher: enabled (SD FAT32 ADF+ISO selector)")
++            else()
++                message(STATUS "[BUILD] Launcher: disabled")
 +            endif()
 +        else()
 +            message(FATAL_ERROR "Bellatrix variant is supported on raspi64 target only.")
@@ -252,11 +401,19 @@ index eb89404..669505a 100644
  
  list(APPEND ARCH_FILES
      src/aarch64/start.c
-@@ -209,7 +434,7 @@ add_subdirectory(external)
+@@ -207,9 +575,15 @@
+ add_subdirectory(external)
+ 
  target_link_libraries(Emu68.elf capstone-static libdeflate_static)
++if(TARGET rigel)
++    target_link_libraries(Emu68.elf rigel)
++endif()
  target_include_directories(Emu68.elf PRIVATE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/external/capstone/include)
  target_include_directories(Emu68.elf PRIVATE ${CMAKE_BINARY_DIR}/include)
 -target_compile_definitions(Emu68.elf PRIVATE)
++if(BELLATRIX_INCLUDE_DIRS)
++    target_include_directories(Emu68.elf PRIVATE ${BELLATRIX_INCLUDE_DIRS})
++endif()
 +target_compile_definitions(Emu68.elf PRIVATE BELLATRIX_EMU68=1)
  
  configure_file(include/version.h.in include/version.h @ONLY)
