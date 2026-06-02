@@ -190,6 +190,11 @@ build_harness() {
 }
 
 build_cd_board() {
+    # CD automount is now handled by ODFileSystem in the RIPPLE second ROM bank.
+    # The legacy src/boards/resident/ DiagArea approach has been superseded.
+    if [ ! -d "${ROOT}/src/boards/resident" ]; then
+        return 0
+    fi
     local DOCKER_WRAPPER="${ROOT}/emu68/build-scripts/build-m68k-amigaos"
     if [ ! -x "$DOCKER_WRAPPER" ]; then
         echo "[CD-BOARD] Docker wrapper not found — skipping ROM build"
