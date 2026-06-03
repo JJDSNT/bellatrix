@@ -98,6 +98,7 @@ extern uint32_t fb_height;
 static BellatrixMachine g_machine;
 static RigelContext *g_rigel;
 static bool g_rigel_zero_copy_video;
+static int g_rigel_cia_trace = -1;
 
 /* --------------------------------------------------------------------------
  * Rigel trace — structured event log built from rigel_step results
@@ -128,6 +129,38 @@ static void machine_rigel_log(const char *msg, void *opaque)
     if (!g_rtrace.enabled)
         return;
     kprintf("[rigel] %s\n", msg);
+}
+
+static void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
+{
+    (void)event;
+    (void)opaque;
+}
+
+static int machine_rigel_cia_trace_enabled(void)
+{
+    const char *env;
+
+    if (g_rigel_cia_trace >= 0)
+        return g_rigel_cia_trace;
+
+    env = getenv("BELLATRIX_RIGEL_CIA_TRACE");
+    g_rigel_cia_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    return g_rigel_cia_trace;
+}
+
+static int machine_rigel_blitter_trace_enabled(void)
+{
+#ifdef BELLATRIX_HARNESS
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("BELLATRIX_RIGEL_BLITTER_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    return enabled;
+#else
+    return 0;
+#endif
 }
 
 static void machine_rigel_trace_init(void)
@@ -487,6 +520,25 @@ static inline void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
     if (ipl > 7u)
         ipl = 7u;
 
+    if (g_rtrace.enabled && ipl != m->current_ipl) {
+        uint32_t pc = machine_cpu_pc(m);
+        uint32_t vec_off;
+        uint32_t chip_val;
+
+        if (ipl > m->current_ipl && ipl > 0u)
+            vec_off = 0x60u + (uint32_t)ipl * 4u;
+        else
+            vec_off = 0x60u + (uint32_t)m->current_ipl * 4u;
+
+        chip_val = bellatrix_chip_read32(&m->memory, vec_off);
+        kprintf(ipl > m->current_ipl && ipl > 0u
+                    ? "[IPL-RISE] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n"
+                    : "[IPL-DROP] %u->%u  vec=%03x chip[%03x]=%08x m68k_pc=%08x\n",
+                (unsigned)m->current_ipl, (unsigned)ipl,
+                (unsigned)vec_off, (unsigned)vec_off, (unsigned)chip_val,
+                (unsigned)pc);
+    }
+
     m->current_ipl = ipl;
     if (m->cpu_backend && m->cpu_backend->set_ipl)
         m->cpu_backend->set_ipl(m->cpu_backend->ctx, (int)ipl);
@@ -502,11 +554,60 @@ static void rigel_trace_chip_write(uint32_t addr, uint16_t value)
 {
     static uint32_t write_count;
     static uint32_t nonzero_count;
+    static int watch_init;
+    static uint32_t watch_lo;
+    static uint32_t watch_hi;
+
+    addr &= 0x00ffffffu;
+
+    if (!watch_init) {
+        const char *spec = getenv("BELLATRIX_RIGEL_CHIP_WRITE_WATCH");
+        char *endptr = NULL;
+        watch_init = 1;
+        if (spec && *spec) {
+            unsigned long lo = strtoul(spec, &endptr, 0);
+            if (endptr && *endptr == ':') {
+                unsigned long hi = strtoul(endptr + 1, &endptr, 0);
+                watch_lo = (uint32_t)lo & 0x00ffffffu;
+                watch_hi = (uint32_t)hi & 0x00ffffffu;
+            }
+        }
+    }
+
+    if (watch_lo < watch_hi && addr >= watch_lo && addr < watch_hi) {
+        uint16_t dmacon = g_rigel ? rigel_custom_read16(g_rigel, 0x002u) : 0u;
+        uint16_t dskpth = g_rigel ? rigel_custom_read16(g_rigel, 0x020u) : 0u;
+        uint16_t dskptl = g_rigel ? rigel_custom_read16(g_rigel, 0x022u) : 0u;
+        uint16_t dsklen = g_rigel ? rigel_custom_read16(g_rigel, 0x024u) : 0u;
+        uint16_t bltcon0 = g_rigel ? rigel_custom_read16(g_rigel, 0x040u) : 0u;
+        uint16_t bltcon1 = g_rigel ? rigel_custom_read16(g_rigel, 0x042u) : 0u;
+        uint32_t bltbpt = g_rigel
+            ? (((uint32_t)rigel_custom_read16(g_rigel, 0x04cu) << 16) |
+               (uint32_t)rigel_custom_read16(g_rigel, 0x04eu))
+            : 0u;
+        uint32_t bltdpt = g_rigel
+            ? (((uint32_t)rigel_custom_read16(g_rigel, 0x054u) << 16) |
+               (uint32_t)rigel_custom_read16(g_rigel, 0x056u))
+            : 0u;
+
+        kprintf("[RIGEL-CHIP-WATCH-W] addr=%06x value=%04x pc=%08x "
+                "dmacon=%04x dskpt=%06x dsklen=%04x "
+                "bltcon=%04x/%04x bltbpt=%06x bltdpt=%06x\n",
+                (unsigned)addr, (unsigned)value,
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)dmacon,
+                (unsigned)((((uint32_t)dskpth & 0x001fu) << 16) |
+                           ((uint32_t)dskptl & 0xfffeu)),
+                (unsigned)dsklen,
+                (unsigned)bltcon0,
+                (unsigned)bltcon1,
+                (unsigned)(bltbpt & 0x001ffffeu),
+                (unsigned)(bltdpt & 0x001ffffeu));
+    }
 
     if (!g_rtrace.enabled)
         return;
 
-    addr &= 0x00ffffffu;
     if (addr < 0x012000u || addr >= 0x018000u)
         return;
 
@@ -725,11 +826,12 @@ static void machine_mirror_cia_write(CIA *cia, uint8_t reg, uint8_t value)
 /* ---------------------------------------------------------------------------
  * Quantum-based Rigel advancement.
  *
- * Rigel owns the clock.  The JIT is an inexact tenant: bela_delta*8 tells
- * us approximately how many M68K master-clock cycles have been consumed, but
- * that number is never passed to rigel_step.  Instead we use it only to
- * decide WHEN to step Rigel.  Rigel is always advanced by the exact number
- * of cycles to the next event deadline — never by the JIT's approximation.
+ * Rigel owns the CCK clock.  The JIT is an inexact tenant: bela_delta*8 tells
+ * us approximately how many M68K CPU cycles have been consumed.  Bellatrix
+ * CPU cycles run at roughly 2x the chipset CCK rate, so the integration
+ * converts CPU cycles to CCK before deciding WHEN to step Rigel.  Rigel is
+ * always advanced by the exact number of CCK cycles to the next event
+ * deadline, never by the raw JIT estimate.
  *
  * Result: chipset timing (VBL, copper, DMA, audio) is cycle-exact.  CPU
  * speed is approximate, as on any emulator that lacks per-instruction timing.
@@ -742,7 +844,8 @@ static void machine_mirror_cia_write(CIA *cia, uint8_t reg, uint8_t value)
 #define RIGEL_MAX_QUANTUM  71424u   /* 313 lines × 228 cycles — one PAL frame */
 #define RIGEL_MIN_QUANTUM      8u   /* never step by zero                      */
 
-static uint64_t      s_cpu_approx;  /* accumulated approximate CPU cycles      */
+static uint64_t      s_cpu_approx;  /* accumulated approximate Rigel CCKs      */
+static uint32_t      s_cpu_cck_rem; /* odd CPU-cycle remainder for /2 scaling  */
 static rigel_cycle_t s_quantum;     /* cycles to next Rigel event (the budget) */
 
 /* Compute cycles to the nearest upcoming Rigel event deadline. */
@@ -758,7 +861,10 @@ static rigel_cycle_t machine_next_quantum(void)
     next = rigel_get_next_bus_change(g_rigel);
     if (next > now && (next - now) < q) q = next - now;
 
-    return q >= RIGEL_MIN_QUANTUM ? q : RIGEL_MIN_QUANTUM;
+    if (q == 0u)
+        return RIGEL_MIN_QUANTUM;
+
+    return q;
 }
 
 /* Execute one quantum step and update machine state. */
@@ -795,7 +901,11 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t approx)
     if (s_quantum == 0u)
         s_quantum = machine_next_quantum();
 
-    s_cpu_approx += approx;
+    {
+        uint64_t scaled = (uint64_t)s_cpu_cck_rem + approx;
+        s_cpu_approx += scaled / 2u;
+        s_cpu_cck_rem = (uint32_t)(scaled & 1u);
+    }
 
     while (s_cpu_approx >= s_quantum) {
         s_cpu_approx -= s_quantum;
@@ -861,6 +971,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
 
     machine_rigel_trace_init();
     s_cpu_approx = 0u;
+    s_cpu_cck_rem = 0u;
     s_quantum    = 0u;
 
     memset(&config, 0, sizeof(config));
@@ -875,6 +986,8 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     config.chipset_model = RIGEL_CHIPSET_ECS;
     config.log_fn = machine_rigel_log;
     config.log_opaque = NULL;
+    config.log_event_fn = g_rtrace.enabled ? NULL : machine_rigel_log_event;
+    config.log_event_opaque = NULL;
     config.pixel_format = RIGEL_PIXEL_RGBA8888;
 
     g_rigel_zero_copy_video = false;
@@ -945,6 +1058,9 @@ void bellatrix_machine_reset(void)
     }
 
     m->tick_count = 0;
+    s_cpu_approx = 0u;
+    s_cpu_cck_rem = 0u;
+    s_quantum = machine_next_quantum();
     machine_publish_ipl(m, g_rigel ? rigel_get_ipl(g_rigel) : 0u);
 }
 
@@ -964,37 +1080,71 @@ uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles)
 {
     rigel_cycle_t now;
     rigel_cycle_t next;
-    uint32_t quantum = max_cycles != 0u ? max_cycles : 1u;
+    rigel_cycle_t cck_quantum = RIGEL_MAX_QUANTUM;
+    uint64_t cpu_quantum;
 
     if (!g_rigel)
-        return quantum;
+        return max_cycles != 0u ? max_cycles : 1u;
 
     now = rigel_get_time(g_rigel);
 
     next = rigel_get_next_deadline(g_rigel);
-    if (next > now && (next - now) < (rigel_cycle_t)quantum)
-        quantum = (uint32_t)(next - now);
+    if (next > now && (next - now) < cck_quantum)
+        cck_quantum = next - now;
 
     next = rigel_get_next_bus_change(g_rigel);
-    if (next > now && (next - now) < (rigel_cycle_t)quantum)
-        quantum = (uint32_t)(next - now);
+    if (next > now && (next - now) < cck_quantum)
+        cck_quantum = next - now;
 
-    return quantum != 0u ? quantum : 1u;
+    if (cck_quantum == 0u)
+        return 1u;
+
+    /*
+     * The harness consumes this value as approximate M68K CPU cycles, while
+     * Rigel deadlines are in CCK.  Account for the /2 conversion and any odd
+     * CPU-cycle remainder already carried by the integrator.
+     */
+    cpu_quantum = ((uint64_t)cck_quantum * 2u);
+    if (s_cpu_cck_rem != 0u && cpu_quantum > 1u)
+        cpu_quantum -= 1u;
+
+    if (max_cycles != 0u && cpu_quantum > max_cycles)
+        cpu_quantum = max_cycles;
+
+    return cpu_quantum != 0u ? (uint32_t)cpu_quantum : 1u;
 }
 
 static uint32_t machine_custom_read(uint32_t addr, unsigned int size)
 {
     uint16_t word;
     uint32_t reg = addr & 0x1FEu;
+    uint32_t value;
+    uint32_t pc;
 
     if (!g_rigel)
         return 0u;
 
     word = rigel_custom_read16(g_rigel, reg);
     if (size == 1u)
-        return (addr & 1u) ? (uint32_t)(word & 0x00FFu)
-                           : (uint32_t)(word >> 8);
-    return (uint32_t)word;
+        value = (addr & 1u) ? (uint32_t)(word & 0x00FFu)
+                            : (uint32_t)(word >> 8);
+    else
+        value = (uint32_t)word;
+
+    pc = bellatrix_debug_cpu_pc();
+    if (machine_rigel_blitter_trace_enabled() &&
+        reg == 0x002u &&
+        (pc == 0x00fc5a70u || pc == 0x00fc5a78u || pc == 0x00fc5a6cu)) {
+        kprintf("[RIGEL-BLT-R] pc=%08x addr=%06x size=%u word=%04x val=%08x cyc=%llu\n",
+                (unsigned)pc,
+                (unsigned)(addr & 0x00ffffffu),
+                (unsigned)size,
+                (unsigned)word,
+                (unsigned)value,
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+    }
+
+    return value;
 }
 
 static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int size)
@@ -1031,6 +1181,44 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
                 (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
     }
 
+    if (machine_rigel_blitter_trace_enabled() &&
+        (reg == 0x040u || reg == 0x042u || reg == 0x044u || reg == 0x046u ||
+         reg == 0x048u || reg == 0x04au || reg == 0x04cu || reg == 0x04eu ||
+         reg == 0x050u || reg == 0x052u || reg == 0x054u || reg == 0x056u ||
+         reg == 0x058u || reg == 0x060u || reg == 0x062u || reg == 0x064u ||
+         reg == 0x066u || reg == 0x070u || reg == 0x072u || reg == 0x074u)) {
+        uint16_t before = rigel_custom_read16(g_rigel, reg);
+        kprintf("[RIGEL-BLT-W] pc=%08x reg=%03x before=%04x write=%04x size=%u cyc=%llu\n",
+                (unsigned)bellatrix_debug_cpu_pc(),
+                (unsigned)reg,
+                (unsigned)before,
+                (unsigned)word,
+                (unsigned)size,
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+    }
+
+    if (reg == 0x09au || reg == 0x09cu) {
+        uint16_t before_intena = (uint16_t)rigel_custom_read16(g_rigel, 0x01cu);
+        uint16_t before_intreq = (uint16_t)rigel_custom_read16(g_rigel, 0x01eu);
+        uint8_t before_ipl = rigel_get_ipl(g_rigel);
+
+        rigel_custom_write16(g_rigel, reg, word);
+
+        if (g_rtrace.enabled) {
+            uint16_t after_intena = (uint16_t)rigel_custom_read16(g_rigel, 0x01cu);
+            uint16_t after_intreq = (uint16_t)rigel_custom_read16(g_rigel, 0x01eu);
+            uint8_t after_ipl = rigel_get_ipl(g_rigel);
+            kprintf("[RIGEL-INT-W] reg=%03x raw=%04x pc=%08x "
+                    "intena=%04x->%04x intreq=%04x->%04x ipl=%u->%u\n",
+                    (unsigned)reg, (unsigned)word,
+                    (unsigned)bellatrix_debug_cpu_pc(),
+                    (unsigned)before_intena, (unsigned)after_intena,
+                    (unsigned)before_intreq, (unsigned)after_intreq,
+                    (unsigned)before_ipl, (unsigned)after_ipl);
+        }
+        return;
+    }
+
     rigel_custom_write16(g_rigel, reg, word);
 }
 
@@ -1043,10 +1231,18 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
     } else if (is_cia_a_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         value = rigel_cia_read(g_rigel, 0u, reg);
+        if (machine_rigel_cia_trace_enabled())
+            kprintf("[RIGEL-CIAA-R] pc=%08x addr=%06x reg=%u val=%02x\n",
+                    (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
+                    (unsigned)reg, (unsigned)(value & 0xffu));
         machine_mirror_cia_write(&m->cia_a, reg, (uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         value = rigel_cia_read(g_rigel, 1u, reg);
+        if (machine_rigel_cia_trace_enabled())
+            kprintf("[RIGEL-CIAB-R] pc=%08x addr=%06x reg=%u val=%02x\n",
+                    (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
+                    (unsigned)reg, (unsigned)(value & 0xffu));
         machine_mirror_cia_write(&m->cia_b, reg, (uint8_t)value);
     } else if (is_rtc_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
@@ -1095,10 +1291,18 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
         machine_custom_write(addr, value, size);
     } else if (is_cia_a_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
+        if (machine_rigel_cia_trace_enabled())
+            kprintf("[RIGEL-CIAA-W] pc=%08x addr=%06x reg=%u val=%02x\n",
+                    (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
+                    (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 0u, reg, (uint8_t)value);
         machine_mirror_cia_write(&m->cia_a, reg, (uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
+        if (machine_rigel_cia_trace_enabled())
+            kprintf("[RIGEL-CIAB-W] pc=%08x addr=%06x reg=%u val=%02x\n",
+                    (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
+                    (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 1u, reg, (uint8_t)value);
         machine_mirror_cia_write(&m->cia_b, reg, (uint8_t)value);
     } else if (is_rtc_addr(addr)) {
@@ -1147,7 +1351,11 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
 
     /* One bus cycle elapsed; flush partial quantum so register reads
      * (VPOS, INTREQ, DMA owner) reflect the current Rigel state. */
-    s_cpu_approx += 1u;
+    {
+        uint64_t scaled = (uint64_t)s_cpu_cck_rem + 1u;
+        s_cpu_approx += scaled / 2u;
+        s_cpu_cck_rem = (uint32_t)(scaled & 1u);
+    }
     machine_flush_for_bus(m);
 
     if (size == 4u) {
@@ -1165,7 +1373,11 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
 
     /* One bus cycle elapsed; flush so Rigel sees the write at the right
      * time and the post-write IPL reflects the updated register. */
-    s_cpu_approx += 1u;
+    {
+        uint64_t scaled = (uint64_t)s_cpu_cck_rem + 1u;
+        s_cpu_approx += scaled / 2u;
+        s_cpu_cck_rem = (uint32_t)(scaled & 1u);
+    }
     machine_flush_for_bus(m);
 
     if (size == 4u) {
