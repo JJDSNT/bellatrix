@@ -11,6 +11,7 @@ import (
 type launchResult struct {
 	emuProfile     string
 	chipsetBackend string
+	harnessCPU     string
 	kickstart      string
 	adf            string
 	iso            string
@@ -129,6 +130,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 
 	return launchResult{
 		emuProfile:     launcherProfileForCPUBackend(fm.cpuBackend),
+		harnessCPU:     harnessCPUForBackend(fm.cpuBackend),
 		kickstart:      kickstart,
 		adf:            adf,
 		iso:            iso,
@@ -192,13 +194,35 @@ func nextChipsetBackend(current string) string {
 	return "legacy"
 }
 
+func nextCPUBackend(current string) string {
+	switch current {
+	case "musashi":
+		return "musashi-68020"
+	case "musashi-68020":
+		return "emu68"
+	default:
+		return "musashi"
+	}
+}
+
+func isMusashiCPUBackend(cpuBackend string) bool {
+	return strings.HasPrefix(cpuBackend, "musashi")
+}
+
+func harnessCPUForBackend(cpuBackend string) string {
+	if cpuBackend == "musashi-68020" {
+		return "68020"
+	}
+	return ""
+}
+
 func installDirForSelection(cpuBackend string, chipsetBackend string) string {
 	switch {
-	case chipsetBackend == "rigel" && cpuBackend == "musashi":
+	case chipsetBackend == "rigel" && isMusashiCPUBackend(cpuBackend):
 		return "emu68/install-bellatrix-rigel-musashi"
 	case chipsetBackend == "rigel":
 		return "emu68/install-bellatrix-rigel"
-	case cpuBackend == "musashi":
+	case isMusashiCPUBackend(cpuBackend):
 		return "emu68/install-bellatrix-musashi"
 	default:
 		return "emu68/install-bellatrix"
@@ -217,7 +241,7 @@ func nextSerialBackend(current string) string {
 }
 
 func launcherProfileForCPUBackend(cpuBackend string) string {
-	if cpuBackend == "musashi" {
+	if isMusashiCPUBackend(cpuBackend) {
 		return "bellatrix-musashi"
 	}
 	return "bellatrix"
@@ -356,11 +380,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "c":
-			if m.cpuBackend == "musashi" {
-				m.cpuBackend = "emu68"
-			} else {
-				m.cpuBackend = "musashi"
-			}
+			m.cpuBackend = nextCPUBackend(m.cpuBackend)
 			return m, nil
 
 		case "f":
@@ -565,7 +585,9 @@ func (m model) renderPanel() string {
 	}
 
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
-	if m.cpuBackend == "musashi" {
+	if m.cpuBackend == "musashi-68020" {
+		cpuBackendBadge = onBadgeStyle.Render("MUSASHI 68020")
+	} else if m.cpuBackend == "musashi" {
 		cpuBackendBadge = onBadgeStyle.Render("MUSASHI")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("CPU backend:"), cpuBackendBadge))
