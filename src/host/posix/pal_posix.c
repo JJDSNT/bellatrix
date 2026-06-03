@@ -326,45 +326,11 @@ static int s_mouse_right_down = 0;
 static uint8_t s_mouse_buttons[3];
 static int s_mouse_dx = 0;
 static int s_mouse_dy = 0;
-static int s_mouse_capture_requested = 1;
-static int s_mouse_capture_active = 0;
 static int s_any_key_down = 0;
 static PAL_KeyEvent s_key_events[64];
 static uint8_t s_key_head = 0;
 static uint8_t s_key_tail = 0;
 static uint8_t s_key_count = 0;
-
-static int pal_posix_get_env_bool_default_on(const char *name)
-{
-    const char *env = getenv(name);
-
-    if (!env || env[0] == '\0')
-        return 1;
-
-    if (strcmp(env, "0") == 0 ||
-        strcasecmp(env, "false") == 0 ||
-        strcasecmp(env, "no") == 0 ||
-        strcasecmp(env, "off") == 0)
-        return 0;
-
-    return 1;
-}
-
-static void pal_sdl_set_mouse_capture(int enabled)
-{
-    if (!s_window)
-        return;
-
-    s_mouse_capture_active = enabled ? 1 : 0;
-    SDL_SetWindowGrab(s_window, enabled ? SDL_TRUE : SDL_FALSE);
-    SDL_SetRelativeMouseMode(enabled ? SDL_TRUE : SDL_FALSE);
-    SDL_ShowCursor(enabled ? SDL_DISABLE : SDL_ENABLE);
-
-    if (!enabled) {
-        s_mouse_dx = 0;
-        s_mouse_dy = 0;
-    }
-}
 
 /* ---- SDL audio ---- */
 
@@ -517,10 +483,6 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
         return -1;
     }
 
-    s_mouse_capture_requested = pal_posix_get_env_bool_default_on(
-        "HARNESS_SDL_MOUSE_CAPTURE");
-    pal_sdl_set_mouse_capture(s_mouse_capture_requested);
-
     framebuffer = s_pixels;
     pitch = w * sizeof(uint16_t);
     fb_width = w;
@@ -580,15 +542,6 @@ int pal_sdl_poll_events(void)
 
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
             return 0;
-
-        if (e.type == SDL_WINDOWEVENT) {
-            if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-                pal_sdl_set_mouse_capture(0);
-            } else if (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
-                       s_mouse_capture_requested) {
-                pal_sdl_set_mouse_capture(1);
-            }
-        }
 
         if (e.type == SDL_KEYDOWN && e.key.repeat == 0)
         {
