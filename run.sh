@@ -93,6 +93,8 @@ Harness options (env vars):
   ADF=<file>          Mount ADF image as DF0 (optional)
   FRAMES=<n>          Stop after N frames and exit (headless mode)
   CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
+  HARNESS_CPU=<type>  Musashi CPU type: 68000, 68010, 68ec020, 68020
+                      (default: 68000)
   HARNESS_SERIAL_MODE=<mode>
                       Serial presentation: line, raw, ansi, pty (default: line)
   HARNESS_SERIAL_NOWAIT=1
@@ -274,6 +276,9 @@ load_launcher_selection() {
             EMU_PROFILE)
                 EMU_PROFILE="$value"
                 ;;
+            HARNESS_CPU)
+                HARNESS_CPU="$value"
+                ;;
             BOOTARGS)
                 BOOTARGS="$value"
                 ;;
@@ -361,6 +366,10 @@ if [ "$MODE" = "harness" ]; then
 
     HARNESS_ARGS=("$KICKSTART")
 
+    if [ -n "${HARNESS_CPU:-}" ]; then
+        HARNESS_ARGS+=(--cpu "$HARNESS_CPU")
+    fi
+
     if [ -n "${ADF:-}" ]; then
         [ -f "$ADF" ] || { echo "ERROR: ADF not found: $ADF"; exit 1; }
         HARNESS_ARGS+=(--adf "$ADF")
@@ -384,6 +393,7 @@ if [ "$MODE" = "harness" ]; then
     # Without FRAMES or CYCLES: interactive SDL2 window (default)
 
     echo "[RUN] Harness ROM: $KICKSTART"
+    echo "[RUN] Harness CPU: ${HARNESS_CPU:-68000}"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
     else
@@ -417,6 +427,10 @@ if [ "$MODE" = "harness-serial" ]; then
     [ -f "$KICKSTART" ]     || { echo "ERROR: ROM not found: $KICKSTART"; exit 1; }
     HARNESS_ARGS=("$KICKSTART")
 
+    if [ -n "${HARNESS_CPU:-}" ]; then
+        HARNESS_ARGS+=(--cpu "$HARNESS_CPU")
+    fi
+
     if [ -n "${ADF:-}" ]; then
         [ -f "$ADF" ] || { echo "ERROR: ADF not found: $ADF"; exit 1; }
         HARNESS_ARGS+=(--adf "$ADF")
@@ -439,6 +453,7 @@ if [ "$MODE" = "harness-serial" ]; then
     fi
 
     echo "[RUN] Harness ROM: $KICKSTART"
+    echo "[RUN] Harness CPU: ${HARNESS_CPU:-68000}"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
     else

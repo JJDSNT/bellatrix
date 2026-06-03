@@ -35,6 +35,7 @@
 
 static uint8_t  s_rom[HARNESS_ROM_MAX];
 static uint32_t s_rom_size  = 0;
+static unsigned int s_cpu_type = M68K_CPU_TYPE_68000;
 static uint32_t s_boot_trace_until_pc = 0;
 static uint32_t s_boot_trace_ack_count = 0;
 static uint32_t s_boot_display_a5 = 0;
@@ -42,10 +43,15 @@ static uint32_t s_boot_display_ctx = 0;
 static uint32_t s_boot_display_aux = 0;
 static uint32_t s_boot_display_buf0 = 0;
 static uint32_t s_boot_display_buf1 = 0;
+static int s_low_mem_trace = -1;
 static int s_watch_ranges_init = 0;
 static uint32_t s_watch_range_lo[2] = {0, 0};
 static uint32_t s_watch_range_hi[2] = {0, 0};
 static int s_watch_range_enabled[2] = {0, 0};
+static int s_trace_pc_ranges_init = 0;
+static uint32_t s_trace_pc_lo[2] = {0, 0};
+static uint32_t s_trace_pc_hi[2] = {0, 0};
+static int s_trace_pc_enabled[2] = {0, 0};
 static int s_run_sync_active = 0;
 static uint32_t s_run_sync_published = 0;
 
@@ -55,6 +61,19 @@ static uint32_t harness_chip_read(uint32_t addr, int size);
 
 static void harness_init_watch_ranges(void);
 static int harness_watch_custom_range_addr(uint32_t addr);
+static void harness_trace_pc_range(uint32_t pc);
+
+static int harness_boot_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_BOOT_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
 
 static void harness_sync_cpu_progress(void)
 {
@@ -71,6 +90,66 @@ static void harness_sync_cpu_progress(void)
     delta = (uint32_t)ran - s_run_sync_published;
     s_run_sync_published = (uint32_t)ran;
     bellatrix_bridge_cpu_progress(delta);
+}
+
+static void harness_init_trace_pc_ranges(void)
+{
+    static const char *const env_names[2] = {
+        "HARNESS_TRACE_PC_RANGE1",
+        "HARNESS_TRACE_PC_RANGE2"
+    };
+    int i;
+
+    if (s_trace_pc_ranges_init)
+        return;
+    s_trace_pc_ranges_init = 1;
+
+    for (i = 0; i < 2; ++i)
+    {
+        const char *spec = getenv(env_names[i]);
+        char *endptr = NULL;
+        unsigned long lo;
+        unsigned long hi;
+
+        if (!spec || !*spec)
+            continue;
+
+        lo = strtoul(spec, &endptr, 0);
+        if (!endptr || *endptr != ':')
+            continue;
+        hi = strtoul(endptr + 1, &endptr, 0);
+        if (!endptr || *endptr != '\0')
+            continue;
+        if (hi < lo)
+            continue;
+
+        s_trace_pc_lo[i] = (uint32_t)lo & 0x00FFFFFFu;
+        s_trace_pc_hi[i] = (uint32_t)hi & 0x00FFFFFFu;
+        s_trace_pc_enabled[i] = 1;
+
+        printf("[HARNESS-TRACE-PC-RANGE] slot=%d lo=%06x hi=%06x\n",
+               i + 1,
+               (unsigned)s_trace_pc_lo[i],
+               (unsigned)s_trace_pc_hi[i]);
+    }
+}
+
+static int harness_trace_pc_range_enabled(uint32_t pc)
+{
+    int i;
+
+    harness_init_trace_pc_ranges();
+    pc &= 0x00FFFFFFu;
+
+    for (i = 0; i < 2; ++i)
+    {
+        if (!s_trace_pc_enabled[i])
+            continue;
+        if (pc >= s_trace_pc_lo[i] && pc <= s_trace_pc_hi[i])
+            return 1;
+    }
+
+    return 0;
 }
 
 /* Standard ROM window (reset vectors, Kickstart entry) */
@@ -261,6 +340,8 @@ static int harness_watch_boot_pc(uint32_t pc)
         return 1;
     if (pc >= 0x00FE960Cu && pc <= 0x00FE96FCu)
         return 1;
+    if (pc >= 0x00FEA1D0u && pc <= 0x00FEA230u)
+        return 1;
     if (pc >= 0x00FEAA5Cu && pc <= 0x00FEAAC2u)
         return 1;
     return 0;
@@ -399,12 +480,12 @@ static void harness_dump_disasm(const char *tag, uint32_t pc)
     char buff[256];
     unsigned int ppc = (unsigned int)m68k_get_reg(NULL, M68K_REG_PPC);
 
-    m68k_disassemble(buff, pc, M68K_CPU_TYPE_68000);
+    m68k_disassemble(buff, pc, s_cpu_type);
     printf("[A4D0-%s] PC %08x: %s\n", tag, (unsigned)pc, buff);
 
     if (ppc && ppc != pc)
     {
-        m68k_disassemble(buff, ppc, M68K_CPU_TYPE_68000);
+        m68k_disassemble(buff, ppc, s_cpu_type);
         printf("[A4D0-%s] PPC %08x: %s\n", tag, ppc, buff);
     }
 }
@@ -456,6 +537,9 @@ static void harness_dump_a4d0_state(uint32_t pc)
 
 static void harness_watch_a4d0(const char *tag, uint32_t pc, uint32_t addr, int size, uint32_t value)
 {
+    if (!harness_boot_trace_enabled())
+        return;
+
     if ((addr & 0x00FFFFFFu) != 0x0000A4D0u)
         return;
 
@@ -475,9 +559,11 @@ static void harness_watch_a4d0(const char *tag, uint32_t pc, uint32_t addr, int 
 
 static void harness_watch_rw(const char *tag, uint32_t pc, uint32_t addr, int size, uint32_t value)
 {
+    int boot_trace = harness_boot_trace_enabled();
+
     harness_watch_a4d0(tag, pc, addr, size, value);
 
-    if (harness_watch_boot_pc(pc) && harness_watch_boot_addr(addr))
+    if (boot_trace && harness_watch_boot_pc(pc) && harness_watch_boot_addr(addr))
     {
         uint32_t a4 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A4) & 0x00FFFFFFu;
         uint32_t a5 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A5) & 0x00FFFFFFu;
@@ -531,6 +617,18 @@ static void harness_watch_rw(const char *tag, uint32_t pc, uint32_t addr, int si
                (unsigned)a6,
                (unsigned)vec_1c8,
                (unsigned)vec_1c4);
+    }
+
+    if (!boot_trace) {
+        if (strstr(tag, "WATCH-BPL-RAM") != NULL) {
+            printf("[%s] pc=%08x addr=%08x size=%d val=%08x\n",
+                   tag,
+                   (unsigned)pc,
+                   (unsigned)(addr & 0x00FFFFFFu),
+                   size,
+                   (unsigned)value);
+        }
+        return;
     }
 
     if (!harness_watch_gfx_pc(pc) && !harness_watch_gfx_addr(addr))
@@ -607,6 +705,108 @@ static void harness_watch_boot_dynamic_buffer_write(uint32_t pc, uint32_t addr, 
            (unsigned)value);
 }
 
+static uint32_t harness_mfm_long_at(uint32_t base, uint32_t word_index)
+{
+    return harness_chip_read(base + word_index * 2u, 4) & 0x55555555u;
+}
+
+static uint32_t harness_mfm_decode_long(uint32_t base, uint32_t word_index, uint32_t offset_words)
+{
+    uint32_t odd = harness_mfm_long_at(base, word_index);
+    uint32_t even = harness_mfm_long_at(base, word_index + offset_words);
+    return (odd << 1) | even;
+}
+
+static uint32_t harness_mfm_decode_long_chk(
+    uint32_t base,
+    uint32_t word_index,
+    uint32_t offset_words,
+    uint32_t *checksum)
+{
+    uint32_t odd = harness_mfm_long_at(base, word_index);
+    uint32_t even = harness_mfm_long_at(base, word_index + offset_words);
+    *checksum ^= odd ^ even;
+    return (odd << 1) | even;
+}
+
+static void harness_decode_boot_dma(uint32_t *err_out, uint32_t *sector_bits_out, uint32_t *last_id_out)
+{
+    const uint32_t base = 0x0001660Cu;
+    const uint32_t words = 0x397Cu / 2u;
+    uint32_t raw = 0;
+    uint32_t sector_bits = 0;
+    uint32_t err = 0;
+    uint32_t last_id = 0;
+
+    while (sector_bits != 0x7ffu) {
+        uint32_t rawnext;
+        uint32_t checksum;
+        uint32_t id;
+        uint32_t dlong;
+        uint32_t trackoffs;
+
+        if (raw != 0u) {
+            while (raw < words && (harness_chip_read(base + raw * 2u, 2) & 0xffffu) != 0x4489u)
+                raw++;
+        }
+        while (raw < words && (harness_chip_read(base + raw * 2u, 2) & 0xffffu) == 0x4489u)
+            raw++;
+        if (raw + 544u >= words) {
+            if (err == 0u)
+                err = 26u;
+            break;
+        }
+
+        rawnext = raw + 544u - 3u;
+        checksum = 0;
+        id = harness_mfm_decode_long_chk(base, raw, 2u, &checksum);
+        last_id = id;
+        raw += 4u;
+
+        trackoffs = (id >> 8) & 0xffu;
+        if (trackoffs >= 11u || (id & 0xff000000u) != 0xff000000u) {
+            err = 27u;
+            continue;
+        }
+        if ((sector_bits & (1u << trackoffs)) != 0u) {
+            raw = rawnext;
+            continue;
+        }
+
+        for (uint32_t i = 0; i < 4u; i++) {
+            (void)harness_mfm_decode_long_chk(base, raw, 8u, &checksum);
+            raw += 2u;
+        }
+        raw += 8u;
+        dlong = harness_mfm_decode_long(base, raw, 2u);
+        raw += 4u;
+        if (dlong != checksum) {
+            err = 24u;
+            continue;
+        }
+        if (((id >> 16) & 0xffu) != 0u) {
+            err = 27u;
+            continue;
+        }
+
+        checksum = harness_mfm_decode_long(base, raw, 2u);
+        raw += 4u;
+        for (uint32_t i = 0; i < 128u; i++) {
+            (void)harness_mfm_decode_long_chk(base, raw, 256u, &checksum);
+            raw += 2u;
+        }
+        if (checksum != 0u) {
+            err = 25u;
+            continue;
+        }
+        sector_bits |= 1u << trackoffs;
+    }
+
+    *err_out = err;
+    *sector_bits_out = sector_bits;
+    *last_id_out = last_id;
+}
+
 static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint32_t value)
 {
     BellatrixMachine *m = bellatrix_machine_get();
@@ -621,8 +821,26 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
                      ((uint32_t)m->agnus.bplptl[1] & 0xFFFEu));
     uint32_t cop1 = m->agnus.copper.cop1lc & 0x001FFFFEu;
     uint32_t cop2 = m->agnus.copper.cop2lc & 0x001FFFFEu;
+    /* In Rigel backend, copper state lives inside Rigel; read from chipset regs */
+    {
+        uint32_t h = bellatrix_machine_read(0x00DFF080u, 2) & 0x001Fu;
+        uint32_t l = bellatrix_machine_read(0x00DFF082u, 2) & 0xFFFEu;
+        if (h || l) { cop1 = (h << 16) | l; }
+        h = bellatrix_machine_read(0x00DFF084u, 2) & 0x001Fu;
+        l = bellatrix_machine_read(0x00DFF086u, 2) & 0xFFFEu;
+        if (h || l) { cop2 = (h << 16) | l; }
+    }
     uint32_t p0 = harness_chip_read(0x0000A572u, 4);
     uint32_t p1 = harness_chip_read(0x0000C4B2u, 4);
+    uint32_t boot0 = harness_chip_read(0x00015738u, 4);
+    uint32_t boot1 = harness_chip_read(0x0001573Cu, 4);
+    uint32_t boot2 = harness_chip_read(0x00015740u, 4);
+    uint32_t boot3 = harness_chip_read(0x00015744u, 4);
+    uint32_t raw0 = harness_chip_read(0x0001660Cu, 4);
+    uint32_t raw1 = harness_chip_read(0x00016610u, 4);
+    uint32_t decode_err = 0;
+    uint32_t decode_bits = 0;
+    uint32_t decode_id = 0;
 
     if ((addr & 0x00FFFFFFu) != 0x00DFF09Cu)
         return;
@@ -634,10 +852,12 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
 
     s_boot_trace_ack_count++;
     s_boot_trace_until_pc = pc + 0x00002000u;
+    harness_decode_boot_dma(&decode_err, &decode_bits, &decode_id);
 
     printf("[BOOT-DSKBLK-ACK] pc=%08x raw=%04x D0=%08x D1=%08x D2=%08x "
            "A5=%06x A6=%06x intena=%04x intreq=%04x dmacon=%04x bplcon0=%04x "
-           "bpl1=%05x bpl2=%05x cop1=%05x cop2=%05x p0=%08x p1=%08x\n",
+           "bpl1=%05x bpl2=%05x cop1=%05x cop2=%05x p0=%08x p1=%08x "
+           "boot=%08x:%08x:%08x:%08x raw=%08x:%08x dec_err=%u dec_bits=%03x dec_id=%08x\n",
            (unsigned)pc,
            (unsigned)(value & 0xFFFFu),
            (unsigned)d0,
@@ -645,21 +865,29 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
            (unsigned)d2,
            (unsigned)a5,
            (unsigned)a6,
-           (unsigned)m->paula.irq.intena,
-           (unsigned)m->paula.irq.intreq,
-           (unsigned)m->agnus.dmacon,
-           (unsigned)m->agnus.bplcon0,
+           (unsigned)(bellatrix_machine_read(0x00DFF01Cu, 2) & 0xFFFFu), /* INTENAR */
+           (unsigned)(bellatrix_machine_read(0x00DFF01Eu, 2) & 0xFFFFu), /* INTREQR */
+           (unsigned)(bellatrix_machine_read(0x00DFF002u, 2) & 0xFFFFu), /* DMACONR */
+           (unsigned)(bellatrix_machine_read(0x00DFF102u, 2) & 0xFFFFu), /* BPLCON0 */
            (unsigned)bpl1,
            (unsigned)bpl2,
            (unsigned)cop1,
            (unsigned)cop2,
            (unsigned)p0,
-           (unsigned)p1);
+           (unsigned)p1,
+           (unsigned)boot0,
+           (unsigned)boot1,
+           (unsigned)boot2,
+           (unsigned)boot3,
+           (unsigned)raw0,
+           (unsigned)raw1,
+           (unsigned)decode_err,
+           (unsigned)decode_bits,
+           (unsigned)decode_id);
 }
 
 static void harness_trace_post_dskblk_window(uint32_t pc)
 {
-    BellatrixMachine *m = bellatrix_machine_get();
     uint32_t p0 = harness_chip_read(0x0000A572u, 4);
     uint32_t p1 = harness_chip_read(0x0000C4B2u, 4);
 
@@ -691,14 +919,16 @@ static void harness_trace_post_dskblk_window(uint32_t pc)
            "bpl1=%05x bpl2=%05x cop1=%05x cop2=%05x p0=%08x p1=%08x\n",
            (unsigned)s_boot_trace_ack_count,
            (unsigned)pc,
-           (unsigned)m->agnus.dmacon,
-           (unsigned)m->agnus.bplcon0,
-           (unsigned)((((uint32_t)(m->agnus.bplpth[0] & 0x001Fu)) << 16) |
-                      ((uint32_t)m->agnus.bplptl[0] & 0xFFFEu)),
-           (unsigned)((((uint32_t)(m->agnus.bplpth[1] & 0x001Fu)) << 16) |
-                      ((uint32_t)m->agnus.bplptl[1] & 0xFFFEu)),
-           (unsigned)(m->agnus.copper.cop1lc & 0x001FFFFEu),
-           (unsigned)(m->agnus.copper.cop2lc & 0x001FFFFEu),
+           (unsigned)(bellatrix_machine_read(0x00DFF002u, 2) & 0xFFFFu),
+           (unsigned)(bellatrix_machine_read(0x00DFF102u, 2) & 0xFFFFu),
+           (unsigned)((((uint32_t)bellatrix_machine_read(0x00DFF0E0u, 2) & 0x001Fu) << 16) |
+                      ((uint32_t)bellatrix_machine_read(0x00DFF0E2u, 2) & 0xFFFEu)),
+           (unsigned)((((uint32_t)bellatrix_machine_read(0x00DFF0E4u, 2) & 0x001Fu) << 16) |
+                      ((uint32_t)bellatrix_machine_read(0x00DFF0E6u, 2) & 0xFFFEu)),
+           (unsigned)((((uint32_t)bellatrix_machine_read(0x00DFF080u, 2) & 0x001Fu) << 16) |
+                      ((uint32_t)bellatrix_machine_read(0x00DFF082u, 2) & 0xFFFEu)),
+           (unsigned)((((uint32_t)bellatrix_machine_read(0x00DFF084u, 2) & 0x001Fu) << 16) |
+                      ((uint32_t)bellatrix_machine_read(0x00DFF086u, 2) & 0xFFFEu)),
            (unsigned)p0,
            (unsigned)p1);
 }
@@ -1040,21 +1270,39 @@ static void harness_probe_exec_io(uint32_t pc)
         uint32_t req_ln_pred = 0;
         uint32_t req_dev = 0;
         uint32_t req_unit = 0;
+        uint32_t req_reply_port = 0;
         uint16_t req_cmd = 0;
         uint8_t req_flags = 0;
+        uint8_t req_err_raw = 0;
         int8_t req_err = 0;
+        uint32_t req_actual = 0;
+        uint32_t req_length = 0;
+        uint32_t req_data = 0;
+        uint32_t req_offset = 0;
         uint32_t unit_msgport = 0;
         uint8_t unit_num = 0;
+        uint8_t req_rp_sigbit = 0;
+        uint32_t req_rp_sigtask = 0;
+        uint32_t req_rp_head = 0;
+        uint8_t unit_mp_sigbit = 0;
+        uint32_t unit_mp_sigtask = 0;
+        uint32_t unit_mp_head = 0;
 
-        if (bellatrix_chip_addr_contains_range(a1, 0x2Du))
+        if (bellatrix_chip_addr_contains_range(a1, 0x30u))
         {
             req_ln_succ = harness_chip_read(a1 + 0x00u, 4);
             req_ln_pred = harness_chip_read(a1 + 0x04u, 4);
+            req_reply_port = harness_chip_read(a1 + 0x0Eu, 4);
             req_dev = harness_chip_read(a1 + 0x10u, 4);
             req_unit = harness_chip_read(a1 + 0x14u, 4);
             req_cmd = (uint16_t)harness_chip_read(a1 + 0x1Cu, 2);
             req_flags = (uint8_t)harness_chip_read(a1 + 0x1Eu, 1);
-            req_err = (int8_t)harness_chip_read(a1 + 0x1Fu, 1);
+            req_err_raw = (uint8_t)harness_chip_read(a1 + 0x1Fu, 1);
+            req_err = (int8_t)req_err_raw;
+            req_actual = harness_chip_read(a1 + 0x20u, 4);
+            req_length = harness_chip_read(a1 + 0x24u, 4);
+            req_data = harness_chip_read(a1 + 0x28u, 4);
+            req_offset = harness_chip_read(a1 + 0x2Cu, 4);
         }
 
         if (bellatrix_chip_addr_contains_range(req_unit, 0x10u))
@@ -1062,10 +1310,24 @@ static void harness_probe_exec_io(uint32_t pc)
             unit_msgport = harness_chip_read(req_unit + 0x00u, 4);
             unit_num = (uint8_t)harness_chip_read(req_unit + 0x09u, 1);
         }
+        if (bellatrix_chip_addr_contains_range(req_reply_port, 0x20u))
+        {
+            req_rp_sigbit = (uint8_t)harness_chip_read(req_reply_port + 0x0Fu, 1);
+            req_rp_sigtask = harness_chip_read(req_reply_port + 0x10u, 4);
+            req_rp_head = harness_chip_read(req_reply_port + 0x14u, 4);
+        }
+        if (bellatrix_chip_addr_contains_range(unit_msgport, 0x20u))
+        {
+            unit_mp_sigbit = (uint8_t)harness_chip_read(unit_msgport + 0x0Fu, 1);
+            unit_mp_sigtask = harness_chip_read(unit_msgport + 0x10u, 4);
+            unit_mp_head = harness_chip_read(unit_msgport + 0x14u, 4);
+        }
 
         printf("[EXEC-IO] pc=%08x D0=%08x D1=%08x A0=%06x A1=%06x A2=%06x A6=%06x "
-               "ln=%08x/%08x dev=%06x unit=%06x cmd=%04x flags=%02x err=%d "
-               "unit_mp=%06x unit_num=%u\n",
+               "ln=%08x/%08x dev=%06x unit=%06x cmd=%04x flags=%02x err=%d/%02x "
+               "actual=%08x length=%08x data=%06x offset=%08x "
+               "reply=%06x rp_sig=%u rp_task=%06x rp_head=%06x "
+               "unit_mp=%06x unit_num=%u ump_sig=%u ump_task=%06x ump_head=%06x%s\n",
                (unsigned)pc,
                (unsigned)d0,
                (unsigned)d1,
@@ -1080,9 +1342,86 @@ static void harness_probe_exec_io(uint32_t pc)
                (unsigned)req_cmd,
                (unsigned)req_flags,
                (int)req_err,
+               (unsigned)req_err_raw,
+               (unsigned)req_actual,
+               (unsigned)req_length,
+               (unsigned)req_data,
+               (unsigned)req_offset,
+               (unsigned)req_reply_port,
+               (unsigned)req_rp_sigbit,
+               (unsigned)req_rp_sigtask,
+               (unsigned)req_rp_head,
                (unsigned)unit_msgport,
-               (unsigned)unit_num);
+               (unsigned)unit_num,
+               (unsigned)unit_mp_sigbit,
+               (unsigned)unit_mp_sigtask,
+               (unsigned)unit_mp_head,
+               req_err_raw == 26u ? " err_name=TDERR_TooFewSecs" : "");
     }
+}
+
+static void harness_trace_pc_range(uint32_t pc)
+{
+    char disasm[256];
+    uint32_t a1;
+    uint32_t a5;
+    uint16_t req_cmd = 0;
+    uint8_t req_err_raw = 0;
+    int8_t req_err = 0;
+    uint32_t req_actual = 0;
+    uint32_t req_length = 0;
+    uint32_t req_data = 0;
+    uint32_t req_offset = 0;
+    uint32_t a5_4c = 0;
+
+    if (!harness_trace_pc_range_enabled(pc))
+        return;
+
+    a1 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A1) & 0x00FFFFFFu;
+    a5 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A5) & 0x00FFFFFFu;
+
+    if (bellatrix_chip_addr_contains_range(a1, 0x30u))
+    {
+        req_cmd = (uint16_t)harness_chip_read(a1 + 0x1Cu, 2);
+        req_err_raw = (uint8_t)harness_chip_read(a1 + 0x1Fu, 1);
+        req_err = (int8_t)req_err_raw;
+        req_actual = harness_chip_read(a1 + 0x20u, 4);
+        req_length = harness_chip_read(a1 + 0x24u, 4);
+        req_data = harness_chip_read(a1 + 0x28u, 4);
+        req_offset = harness_chip_read(a1 + 0x2Cu, 4);
+    }
+
+    if (bellatrix_chip_addr_contains_range(a5, 0x50u))
+        a5_4c = harness_chip_read(a5 + 0x4Cu, 4);
+
+    m68k_disassemble(disasm, pc, s_cpu_type);
+    printf("[TRACE-PC] pc=%08x sr=%04x %s "
+           "D0=%08x D1=%08x D2=%08x D3=%08x "
+           "A0=%06x A1=%06x A2=%06x A3=%06x A4=%06x A5=%06x A6=%06x A7=%06x "
+           "cmd=%04x err=%d/%02x actual=%08x length=%08x data=%06x offset=%08x A5+4c=%08x\n",
+           (unsigned)pc,
+           (unsigned)m68k_get_reg(NULL, M68K_REG_SR),
+           disasm,
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D0),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D1),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D2),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D3),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A0) & 0x00FFFFFFu),
+           (unsigned)a1,
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A2) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A3) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A4) & 0x00FFFFFFu),
+           (unsigned)a5,
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A6) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A7) & 0x00FFFFFFu),
+           (unsigned)req_cmd,
+           (int)req_err,
+           (unsigned)req_err_raw,
+           (unsigned)req_actual,
+           (unsigned)req_length,
+           (unsigned)req_data,
+           (unsigned)req_offset,
+           (unsigned)a5_4c);
 }
 
 static void harness_probe_vbl_dispatch_node(uint32_t pc)
@@ -1114,6 +1453,11 @@ static void harness_probe_vbl_dispatch_node(uint32_t pc)
 
 static void harness_instr_hook(unsigned int pc)
 {
+    harness_trace_pc_range((uint32_t)pc);
+
+    if (!harness_boot_trace_enabled())
+        return;
+
     harness_update_boot_display_block((uint32_t)pc);
     harness_probe_display_setup((uint32_t)pc);
     harness_probe_display_writer((uint32_t)pc);
@@ -1179,20 +1523,39 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     /* Chip RAM */
     if (bellatrix_chip_addr_contains(addr)) {
         BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+        uint32_t wend = addr + (uint32_t)size - 1u;
         harness_sync_cpu_progress();
         harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
-        harness_watch_boot_bitplane_write(pc, addr, size, value);
-        harness_watch_boot_dynamic_buffer_write(pc, addr, size, value);
-        if (harness_watch_boot_payload_addr(addr) && value != 0)
+        if (harness_boot_trace_enabled()) {
+            harness_watch_boot_bitplane_write(pc, addr, size, value);
+            harness_watch_boot_dynamic_buffer_write(pc, addr, size, value);
+        }
+        if (harness_boot_trace_enabled() &&
+            harness_watch_boot_payload_addr(addr) && value != 0)
             harness_watch_rw("WATCH-BOOT-PAYLOAD-W", pc, addr, size, value);
-        if (harness_watch_custom_range_addr(addr) && value != 0)
+        if (harness_watch_custom_range_addr(addr))
             harness_watch_rw("WATCH-BPL-RAM-W", pc, addr, size, value);
+        if (s_low_mem_trace < 0) {
+            const char *env = getenv("HARNESS_LOW_MEM_TRACE");
+            s_low_mem_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+        }
+        if (s_low_mem_trace && addr <= 0x000001ffu) {
+            printf("[LOW-MEM-W] pc=%08x addr=%06x size=%d val=%08x "
+                   "v0=%08x v4=%08x v6c=%08x v128=%08x\n",
+                   (unsigned)pc,
+                   (unsigned)addr,
+                   size,
+                   (unsigned)value,
+                   (unsigned)harness_chip_read(0x000000u, 4),
+                   (unsigned)harness_chip_read(0x000004u, 4),
+                   (unsigned)harness_chip_read(0x00006cu, 4),
+                   (unsigned)harness_chip_read(0x000128u, 4));
+        }
         if (size == 1) bellatrix_chip_write8 (mem, addr, (uint8_t)value);
         if (size == 2) bellatrix_chip_write16(mem, addr, (uint16_t)value);
         if (size == 4) bellatrix_chip_write32(mem, addr, value);
         /* Track writes that may touch bytes 0x1892..0x1895 */
-        uint32_t wend = addr + (uint32_t)size - 1u;
-        if (wend >= 0x1892u && addr <= 0x1895u) {
+        if (harness_boot_trace_enabled() && wend >= 0x1892u && addr <= 0x1895u) {
             uint32_t b92 = bellatrix_chip_read32(mem, 0x1892u);
             printf("[1892-WATCH] pc=%08x write addr=%06x size=%d val=%08x → [1892]=%08x\n",
                    (unsigned)pc, (unsigned)addr, size, (unsigned)value, (unsigned)b92);
@@ -1204,7 +1567,8 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     harness_sync_cpu_progress();
     harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
     bellatrix_bridge_cpu_write(addr, value, (unsigned int)size);
-    harness_watch_dskblk_ack(pc, addr, size, value);
+    if (harness_boot_trace_enabled())
+        harness_watch_dskblk_ack(pc, addr, size, value);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1259,7 +1623,7 @@ static uint32_t musashi_get_pc(void *ctx)
 static void musashi_set_ipl(void *ctx, int level)
 {
     (void)ctx;
-    if (level > 0)
+    if (harness_boot_trace_enabled() && level > 0)
         printf("[IPL] set_ipl level=%d  pc=0x%08x\n", level,
                (unsigned)m68k_get_reg(NULL, M68K_REG_PC));
     m68k_set_irq((unsigned int)level);
@@ -1306,7 +1670,21 @@ CpuBackend *musashi_backend_get(void)
 
 void musashi_backend_init(void)
 {
+    const char *cpu = getenv("HARNESS_CPU");
+
+    s_cpu_type = M68K_CPU_TYPE_68000;
+    if (cpu && strcmp(cpu, "68010") == 0)
+        s_cpu_type = M68K_CPU_TYPE_68010;
+    else if (cpu && strcmp(cpu, "68ec020") == 0)
+        s_cpu_type = M68K_CPU_TYPE_68EC020;
+    else if (cpu && strcmp(cpu, "68020") == 0)
+        s_cpu_type = M68K_CPU_TYPE_68020;
+
     m68k_init();
-    m68k_set_cpu_type(M68K_CPU_TYPE_68000);
+    m68k_set_cpu_type(s_cpu_type);
+    printf("[HARNESS] CPU: %s\n",
+           s_cpu_type == M68K_CPU_TYPE_68020 ? "68020" :
+           s_cpu_type == M68K_CPU_TYPE_68EC020 ? "68ec020" :
+           s_cpu_type == M68K_CPU_TYPE_68010 ? "68010" : "68000");
     m68k_set_instr_hook_callback(harness_instr_hook);
 }

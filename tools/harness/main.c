@@ -10,6 +10,7 @@
 //
 // Usage:
 //   harness <rom.bin> [--adf disk.adf] [--iso image.iso] [--plugins dir]
+//                     [--cpu 68000|68010|68ec020|68020]
 //                     [--headless] [--cycles N] [--frames N]
 
 #include "musashi_backend.h"
@@ -758,6 +759,7 @@ int main(int argc, char **argv)
     const char *adf_path      = NULL;
     const char *iso_path      = NULL;
     const char *plugins_path  = NULL;
+    const char *cpu_type      = NULL;
     int         headless      = 0;
     long        max_cycles    = 0;
     long        max_frames    = 0;
@@ -782,6 +784,8 @@ int main(int argc, char **argv)
             iso_path = argv[++i];
         } else if (strcmp(argv[i], "--plugins") == 0 && i + 1 < argc) {
             plugins_path = argv[++i];
+        } else if (strcmp(argv[i], "--cpu") == 0 && i + 1 < argc) {
+            cpu_type = argv[++i];
         } else if (argv[i][0] != '-') {
             rom_path = argv[i];
         } else {
@@ -789,6 +793,7 @@ int main(int argc, char **argv)
             fprintf(stderr,
                 "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
                 "               [--plugins dir]\n"
+                "               [--cpu 68000|68010|68ec020|68020]\n"
                 "               [--headless] [--cycles N] [--frames N]\n"
                 "Example ISO: harness kick.rom --iso game.iso\n");
             return 1;
@@ -799,9 +804,21 @@ int main(int argc, char **argv)
         fprintf(stderr,
             "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
             "               [--plugins dir]\n"
+            "               [--cpu 68000|68010|68ec020|68020]\n"
             "               [--headless] [--cycles N] [--frames N]\n"
             "Example ISO: harness kick.rom --iso game.iso\n");
         return 1;
+    }
+
+    if (cpu_type) {
+        if (strcmp(cpu_type, "68000") != 0 &&
+            strcmp(cpu_type, "68010") != 0 &&
+            strcmp(cpu_type, "68ec020") != 0 &&
+            strcmp(cpu_type, "68020") != 0) {
+            fprintf(stderr, "[HARNESS] Unknown CPU type: %s\n", cpu_type);
+            return 1;
+        }
+        setenv("HARNESS_CPU", cpu_type, 1);
     }
 
     /* Load ROM */

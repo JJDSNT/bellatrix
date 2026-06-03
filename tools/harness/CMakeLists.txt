@@ -13,7 +13,7 @@ option(BELLATRIX_USE_RIGEL_CHIPSET "Use Rigel as the Bellatrix chipset backend i
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-set(ROOT    ${CMAKE_SOURCE_DIR}/../..)   # bellatrix/
+get_filename_component(ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)  # bellatrix/
 set(SRC     ${ROOT}/src)
 set(MUSASHI ${ROOT}/external/musashi)
 set(LIDE    ${ROOT}/external/lide.device)
