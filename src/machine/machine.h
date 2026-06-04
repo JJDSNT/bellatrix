@@ -118,6 +118,13 @@ void bellatrix_machine_advance(uint32_t ticks);
 void bellatrix_machine_sync_ipl(void);
 uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles);
 
+/* Hooks called by the chipset core (Core 1) after each Rigel step. */
+void bellatrix_machine_on_frame_ready(void);
+void bellatrix_machine_on_ipl_changed(uint8_t ipl);
+void bellatrix_machine_post_chipset_step(void);
+
+struct RigelContext *bellatrix_machine_rigel_ctx(void);
+
 /* ------------------------------------------------------------------------- */
 /* bus protocol                                                              */
 /* ------------------------------------------------------------------------- */

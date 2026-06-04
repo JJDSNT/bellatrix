@@ -989,6 +989,9 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     config.log_event_fn = g_rtrace.enabled ? NULL : machine_rigel_log_event;
     config.log_event_opaque = NULL;
     config.pixel_format = RIGEL_PIXEL_RGBA8888;
+    /* Bypass baud-rate timing so SERDAT writes appear immediately in the TX
+     * FIFO. Without this the guest stalls in a TBE polling loop (krnPutC). */
+    config.serial.tx_instant = true;
 
     g_rigel_zero_copy_video = false;
     if (framebuffer && pitch && fb_width <= 1024u && fb_height <= 312u) {
@@ -1015,15 +1018,10 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
                 (unsigned)fb_width, (unsigned)fb_height, (unsigned)pitch);
 
     if (g_rigel) {
-        /* Bypass baud-rate timing so SERDAT writes appear immediately in the
-         * TX FIFO.  Without this the guest stalls in a TBE polling loop every
-         * time it uses the serial port (krnPutC, DiagROM, etc.). */
-        rigel_serial_set_tx_instant(g_rigel, true);
-        rigel_cia_write(g_rigel, 0u, 0x2u, 0x03u);
-        machine_mirror_cia_write(&m->cia_a, 0x2u, 0x03u);
         /* Sync PRA from Rigel so harness_overlay() sees OVL=1 at boot.
          * Without this the mirror stays 0 and the ROM overlay is skipped,
          * causing the CPU to fetch reset vectors from uninitialised chip RAM. */
+        machine_mirror_cia_write(&m->cia_a, 0x2u, 0x03u);
         machine_mirror_cia_write(&m->cia_a, 0x0u,
             (uint8_t)rigel_cia_read(g_rigel, 0u, 0x0u));
     }
@@ -1051,7 +1049,6 @@ void bellatrix_machine_reset(void)
     bellatrix_expansion_reset_all(m);
 
     if (g_rigel) {
-        rigel_cia_write(g_rigel, 0u, 0x2u, 0x03u);
         machine_mirror_cia_write(&m->cia_a, 0x2u, 0x03u);
         machine_mirror_cia_write(&m->cia_a, 0x0u,
             (uint8_t)rigel_cia_read(g_rigel, 0u, 0x0u));
@@ -1064,10 +1061,30 @@ void bellatrix_machine_reset(void)
     machine_publish_ipl(m, g_rigel ? rigel_get_ipl(g_rigel) : 0u);
 }
 
+struct RigelContext *bellatrix_machine_rigel_ctx(void)
+{
+    return g_rigel;
+}
+
 void bellatrix_machine_advance(uint32_t ticks)
 {
-    machine_step_components(&g_machine, ticks);
-    bellatrix_machine_sync_ipl();
+    bellatrix_runtime_notify_cpu_progress(ticks);
+}
+
+void bellatrix_machine_on_frame_ready(void)
+{
+    machine_present_frame_from_rigel();
+}
+
+void bellatrix_machine_on_ipl_changed(uint8_t ipl)
+{
+    machine_publish_ipl(&g_machine, ipl);
+}
+
+void bellatrix_machine_post_chipset_step(void)
+{
+    machine_step_host_serial_rigel();
+    machine_drain_serial_fallback_rigel();
 }
 
 void bellatrix_machine_sync_ipl(void)

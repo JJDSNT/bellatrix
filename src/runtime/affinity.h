@@ -4,10 +4,9 @@
 #include <stdbool.h>
 
 typedef enum RuntimeAffinityCore {
-    RUNTIME_AFFINITY_CPU   = 0,   /* Core 0 — Emu68 JIT (boot core, fixed) */
-    RUNTIME_AFFINITY_GFX   = 1,   /* Core 1 — Agnus / DMA / Denise         */
-    RUNTIME_AFFINITY_AUDIO = 2,   /* Core 2 — Paula audio                  */
-    RUNTIME_AFFINITY_IO    = 3    /* Core 3 — CIA / serial / disk           */
+    RUNTIME_AFFINITY_CPU     = 0,   /* Core 0 — Emu68 JIT (boot core, fixed) */
+    RUNTIME_AFFINITY_CHIPSET = 1,   /* Core 1 — Rigel chipset (full domain)  */
+    RUNTIME_AFFINITY_IO      = 3    /* Core 3 — USB / Bluetooth              */
 } RuntimeAffinityCore;
 
 bool runtime_affinity_set_current_thread(RuntimeAffinityCore core);

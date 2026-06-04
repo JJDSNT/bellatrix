@@ -12,11 +12,8 @@ const char *runtime_affinity_core_name(RuntimeAffinityCore core)
     case RUNTIME_AFFINITY_CPU:
         return "CPU";
 
-    case RUNTIME_AFFINITY_GFX:
-        return "GFX";
-
-    case RUNTIME_AFFINITY_AUDIO:
-        return "AUDIO";
+    case RUNTIME_AFFINITY_CHIPSET:
+        return "CHIPSET";
 
     case RUNTIME_AFFINITY_IO:
         return "IO";

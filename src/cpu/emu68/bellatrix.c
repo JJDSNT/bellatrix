@@ -147,32 +147,18 @@ static inline void chipset_lock_release(void)
  *
  * In single-core mode: advance the chipset directly (no locking needed).
  * ------------------------------------------------------------------------- */
+#if !BELLATRIX_RIGEL_BUILD
 void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 {
-#if BELLATRIX_RIGEL_BUILD
-    bellatrix_machine_advance(cycles);
-    bt_host_step(&g_runtime.bluetooth);
-    usb_host_step(&g_runtime.io.usb_host);
-#else
     if (PAL_Core_IsMulticoreEnabled()) {
         atomic_fetch_add_explicit(&s_gfx_cycles_pending, cycles, memory_order_release);
         atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
         asm volatile("dsb sy\n\t sev" ::: "memory");
     } else {
-        /*
-         * Single-core: advance all chipset components proportionally to the
-         * CPU quantum.  Bus accesses already contribute ~1 tick each via
-         * machine_step_components(m,1), but chipset-sparse code (ROM, chip RAM)
-         * generates zero bus faults → Agnus, copper, and bitplane DMA starve
-         * and VBL never fires.  Adding the full quantum here closes that gap;
-         * the ~1% over-count from bus-fault ticks is harmless.
-         */
         bellatrix_machine_advance(cycles);
-        bt_host_step(&g_runtime.bluetooth);
-        usb_host_step(&g_runtime.io.usb_host);
     }
-#endif
 }
+#endif
 
 /* ---------------------------------------------------------------------------
  * Strong overrides: per-core chipset advance steps.

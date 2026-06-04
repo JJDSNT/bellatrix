@@ -1,3 +1,5 @@
+// src/runtime/runtime.c
+
 #include "runtime/runtime.h"
 
 #include <string.h>
@@ -5,6 +7,8 @@
 #include "debug/core_log.h"
 #include "host/pal.h"
 #include "support.h"
+
+extern RigelContext *bellatrix_machine_rigel_ctx(void);
 
 bool bellatrix_runtime_init(
     BellatrixRuntime *rt,
@@ -17,22 +21,14 @@ bool bellatrix_runtime_init(
     memset(rt, 0, sizeof(*rt));
 
     rt->machine = machine;
-
-    /*
-     * Conservative default.
-     * Can later become dynamic or beam-based.
-     */
     rt->cycles_per_step = 4;
 
     if (!core_cpu_init(&rt->cpu, machine)) {
         return false;
     }
 
-    if (!core_gfx_init(&rt->gfx, machine)) {
-        return false;
-    }
-
-    if (!core_audio_init(&rt->audio, machine)) {
+    RigelContext *rigel = bellatrix_machine_rigel_ctx();
+    if (!core_chipset_init(&rt->chipset, rigel, machine)) {
         return false;
     }
 
@@ -40,19 +36,18 @@ bool bellatrix_runtime_init(
         return false;
     }
 
-    rt->bluetooth.enabled = false;
+    rt->bluetooth.enabled     = false;
     rt->bluetooth.initialized = false;
-    rt->bluetooth.pairing_window_open = false;
-    rt->bluetooth.baudrate = 0;
-    rt->bluetooth.pairing_window_ms = 0;
-
     rt->running = true;
 
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[RUNTIME] init OK: multicore enabled (Core0=CPU Core1=GFX Core2=PAULA Core3=IO)\n");
+        kprintf("[RUNTIME] init OK: Core0=CPU Core1=CHIPSET(Rigel) Core3=IO\n");
+        PAL_Core_LaunchChipset(NULL);
+        PAL_Core_LaunchIO();
     } else {
-        kprintf("[RUNTIME] init OK: single-core mode (Core0 drives CPU+GFX+PAULA+IO)\n");
+        kprintf("[RUNTIME] init OK: single-core mode\n");
     }
+
     return true;
 }
 
@@ -65,12 +60,9 @@ void bellatrix_runtime_shutdown(
 
     kprintf("[RUNTIME] shutdown\n");
     core_cpu_shutdown(&rt->cpu);
-    core_gfx_shutdown(&rt->gfx);
-    core_audio_shutdown(&rt->audio);
+    core_chipset_shutdown(&rt->chipset);
     core_io_shutdown(&rt->io);
-
     bt_host_shutdown(&rt->bluetooth);
-
     rt->running = false;
 }
 
@@ -83,61 +75,8 @@ void bellatrix_runtime_reset(
 
     kprintf("[RUNTIME] reset\n");
     bellatrix_machine_reset();
-
-    rt->cpu.local_cycles = 0;
-
-    rt->gfx.master_cycles = 0;
-    rt->gfx.frame_counter = 0;
-
-    rt->audio.local_cycles = 0;
-
-    rt->io.local_cycles = 0;
-}
-
-void bellatrix_runtime_step(
-    BellatrixRuntime *rt)
-{
-    if (!rt || !rt->running) {
-        return;
-    }
-
-    uint32_t cycles = rt->cycles_per_step;
-
-    /*
-     * -----------------------------------------------------------------
-     * GFX FIRST
-     * -----------------------------------------------------------------
-     *
-     * Agnus owns observable time.
-     *
-     * Everything else consumes that time.
-     */
-    core_gfx_step(&rt->gfx, cycles);
-
-    /*
-     * -----------------------------------------------------------------
-     * CPU
-     * -----------------------------------------------------------------
-     */
-    core_cpu_step(&rt->cpu, cycles);
-
-    /*
-     * -----------------------------------------------------------------
-     * AUDIO
-     * -----------------------------------------------------------------
-     *
-     * Audio follows Agnus master time.
-     */
-    core_audio_step(
-        &rt->audio,
-        core_gfx_master_cycles(&rt->gfx));
-
-    /*
-     * -----------------------------------------------------------------
-     * IO
-     * -----------------------------------------------------------------
-     */
-    core_io_step(&rt->io, cycles);
+    core_cpu_reset(&rt->cpu);
+    core_chipset_reset(&rt->chipset);
 }
 
 void bellatrix_runtime_run(
@@ -149,8 +88,17 @@ void bellatrix_runtime_run(
 
     rt->running = true;
 
+    /*
+     * In multicore mode the chipset and IO cores run independently.
+     * Core 0 only drives the CPU; PAL_Runtime_Poll() services the
+     * single-core fallback path.
+     */
     while (rt->running) {
-        bellatrix_runtime_step(rt);
+        core_cpu_step(&rt->cpu, rt->cycles_per_step);
+
+        if (!PAL_Core_IsMulticoreEnabled()) {
+            PAL_Runtime_Poll();
+        }
     }
 }
 
