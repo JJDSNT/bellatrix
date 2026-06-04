@@ -117,7 +117,9 @@ void bellatrix_run_selected_cpu_backend(void)
  *                               Held by Core 0 (MMIO) and Cores 1/2/3 while
  *                               advancing their respective subsystems.
  * ------------------------------------------------------------------------- */
+#if defined(BELLATRIX_ENABLE_MULTICORE)
 static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
+#endif
 #if !BELLATRIX_RIGEL_BUILD
 static _Atomic uint32_t s_gfx_cycles_pending       = 0;
 static _Atomic uint32_t s_io_cycles_pending        = 0;
@@ -129,14 +131,18 @@ BellatrixRuntime g_runtime;
 
 static inline void chipset_lock_acquire(void)
 {
+#if defined(BELLATRIX_ENABLE_MULTICORE)
     while (atomic_flag_test_and_set_explicit(&s_chipset_lock, memory_order_acquire))
         asm volatile("wfe" ::: "memory");
+#endif
 }
 
 static inline void chipset_lock_release(void)
 {
+#if defined(BELLATRIX_ENABLE_MULTICORE)
     atomic_flag_clear_explicit(&s_chipset_lock, memory_order_release);
     asm volatile("dsb sy\n\t sev" ::: "memory");
+#endif
 }
 
 /* ---------------------------------------------------------------------------
@@ -754,9 +760,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 
     addr = bellatrix_bridge_normalize_addr(addr);
 
-    /* First-N trace: log every bus access unconditionally for the first 120
-     * calls.  This captures the exact order of accesses at boot and shows
-     * where the CPU gets stuck relative to expected CIA/custom writes. */
+#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
     {
         static int s_bus_n = 0;
         if (s_bus_n < 120)
@@ -769,25 +773,24 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         }
     }
 
-    /* Use the fault-time PC captured by vectors.c (x18 at MMIO fault).
-     * Falls back to the stale ctx->PC when called outside a fault context. */
-    uint32_t real_pc = g_bellatrix_fault_pc;
-
-    /* Warn if the CPU has strayed into chip RAM — usually means a bad vector. */
-    if (real_pc != 0u && bellatrix_chip_addr_contains(real_pc))
     {
-        kprintf("[PC-CHIPMEM] fault_pc=%08x addr=%06x %s size=%d\n",
-                (unsigned)real_pc, (unsigned)addr,
-                dir == BUS_READ ? "R" : "W", size);
-    }
+        uint32_t real_pc = g_bellatrix_fault_pc;
 
-    /* PC trap for a specific ROM range of interest */
-    if (real_pc >= 0xfc5e00u && real_pc <= 0xfc5fffu)
-    {
-        kprintf("[PC-TRAP] pc=%08x addr=%06x %s size=%d val=%08x\n",
-                (unsigned)real_pc, (unsigned)addr,
-                dir == BUS_READ ? "R" : "W", size, (unsigned)value);
+        if (real_pc != 0u && bellatrix_chip_addr_contains(real_pc))
+        {
+            kprintf("[PC-CHIPMEM] fault_pc=%08x addr=%06x %s size=%d\n",
+                    (unsigned)real_pc, (unsigned)addr,
+                    dir == BUS_READ ? "R" : "W", size);
+        }
+
+        if (real_pc >= 0xfc5e00u && real_pc <= 0xfc5fffu)
+        {
+            kprintf("[PC-TRAP] pc=%08x addr=%06x %s size=%d val=%08x\n",
+                    (unsigned)real_pc, (unsigned)addr,
+                    dir == BUS_READ ? "R" : "W", size, (unsigned)value);
+        }
     }
+#endif
 
     /* Btrace verbosity control */
     if (addr == BTRACE_CONTROL_ADDR && dir == BUS_WRITE)
@@ -798,27 +801,23 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 
     if (dir == BUS_WRITE)
     {
+#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
         if (addr < 0x400u)
         {
             kprintf("[VEC-W] %05x[%d]=%08x\n",
-                    (unsigned)addr,
-                    size,
-                    (unsigned)value);
+                    (unsigned)addr, size, (unsigned)value);
         }
         else if (addr >= 0x1000u && addr < 0x2000u)
         {
             kprintf("[JMP-W] %05x[%d]=%08x\n",
-                    (unsigned)addr,
-                    size,
-                    (unsigned)value);
+                    (unsigned)addr, size, (unsigned)value);
         }
         else if (addr >= 0x02368u && addr < 0x02420u)
         {
             kprintf("[CHIPRAM-W] addr=%05x size=%d value=%08x\n",
-                    (unsigned)addr,
-                    size,
-                    (unsigned)value);
+                    (unsigned)addr, size, (unsigned)value);
         }
+#endif
 
         /*
          * Acquire chipset lock for MMIO: prevents concurrent
@@ -839,6 +838,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         {
             int new_ovl = (int)(m->cia_a.pra & 1u);
 
+#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
             if (new_ovl != s_overlay)
             {
                 kprintf("[OVL-TRIG] ciaa_pra_write addr=%08x val=%02x pra=%02x new_ovl=%d\n",
@@ -847,7 +847,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
                         (unsigned)m->cia_a.pra,
                         new_ovl);
             }
-
+#endif
             set_overlay(new_ovl);
         }
 
