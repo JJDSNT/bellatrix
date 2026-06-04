@@ -283,9 +283,12 @@ static uint32_t ripple_bus_read(BellatrixExpansion *exp,
             uint32_t bank_off = off - 0x10000u;
             if (bank_off & 1u) return 0xFFu;       /* odd address: not mapped */
             uint32_t byte_idx = bank_off >> 1;
+            /* Log first 4 and trailer reads so we can confirm _relocate is running */
+            if (byte_idx < 4u || off >= 0x1FFF0u)
+                kprintf("[LIDE-CDROM] bank2 off=0x%05x byte=%u/%u\n",
+                        (unsigned)off, (unsigned)byte_idx, (unsigned)g_odfs_size);
             uint8_t  b = (byte_idx < g_odfs_size) ? g_odfs_data[byte_idx] : 0xFFu;
             if (size == 1) return b;
-            /* 16-bit read: pair (byte_idx, byte_idx+1) */
             uint8_t b1 = (byte_idx + 1u < g_odfs_size) ? g_odfs_data[byte_idx + 1u] : 0xFFu;
             return (size == 2) ? (((uint32_t)b << 8) | b1) : 0xFFu;
         }
@@ -293,6 +296,9 @@ static uint32_t ripple_bus_read(BellatrixExpansion *exp,
 
         /* ROM: header (0-3), nibble-bootldr (4-0xFFF), device binary (0x2000+) */
         if (s->rom) {
+            /* Log first read of device binary so we know bootldr is loading lide.device */
+            if (off == RIPPLE_ROM_DEVICE_BOARD)
+                kprintf("[LIDE-CDROM] device binary first read (bootldr loading lide.device)\n");
             uint8_t b0 = ripple_rom_byte(s->rom, s->rom_size, off);
             if (size == 1) return b0;
             if (size == 2) {
