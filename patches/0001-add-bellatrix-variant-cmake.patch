@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..e470ea9 100644
+index eb89404..403d210 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
@@ -19,7 +19,7 @@ index eb89404..e470ea9 100644
  set_source_files_properties(src/math/96bit.c PROPERTIES COMPILE_FLAGS 
      "-fcall-saved-x4 -fcall-saved-x5 -fcall-saved-x6 -fcall-saved-x7 -fcall-saved-x8 \
      -fcall-saved-x9 -fcall-saved-x10 -fcall-saved-x11 -fcall-saved-x12 -fcall-saved-x13 \
-@@ -167,14 +168,385 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+@@ -167,14 +168,382 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -54,9 +54,6 @@ index eb89404..e470ea9 100644
 +                ${CMAKE_SOURCE_DIR}/../src/host
 +            )
 +            if(BELLATRIX_USE_RIGEL_CHIPSET)
-+                if(BELLATRIX_ENABLE_MULTICORE)
-+                    message(FATAL_ERROR "Rigel Bellatrix backend currently supports single-core only")
-+                endif()
 +                list(APPEND BELLATRIX_INCLUDE_DIRS
 +                    ${CMAKE_SOURCE_DIR}/../external/rigel/include
 +                    ${CMAKE_SOURCE_DIR}/../external/rigel/src
@@ -406,7 +403,7 @@ index eb89404..e470ea9 100644
  
  list(APPEND ARCH_FILES
      src/aarch64/start.c
-@@ -207,9 +579,15 @@ add_custom_command(
+@@ -207,9 +576,15 @@ add_custom_command(
  add_subdirectory(external)
  
  target_link_libraries(Emu68.elf capstone-static libdeflate_static)

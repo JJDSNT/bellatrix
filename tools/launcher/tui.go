@@ -341,10 +341,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "m":
-			if m.chipsetBackend == "rigel" {
-				m.multicoreBuild = false
-				return m, nil
-			}
 			m.multicoreBuild = !m.multicoreBuild
 			return m, nil
 
@@ -374,9 +370,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "g":
 			m.chipsetBackend = nextChipsetBackend(m.chipsetBackend)
-			if m.chipsetBackend == "rigel" {
-				m.multicoreBuild = false
-			}
 			return m, nil
 
 		case "c":
