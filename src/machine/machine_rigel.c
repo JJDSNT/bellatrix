@@ -683,6 +683,13 @@ static void machine_present_frame_from_rigel(void)
         frame.height = 256u;
     }
 
+    /* Guard: VBL copper writes (e.g. DIWSTRT=0xffff before BPLCON0 depth=0) can
+     * produce out-of-range visible_y_start, causing rigel_get_frame to return a
+     * nonsensical height via uint wrap.  Skip the frame to avoid reading past the
+     * frame buffer and corrupting the SDL surface. */
+    if (!frame.pixels || frame.width > 1024u || frame.height > 512u)
+        return;
+
     stride = pitch / 2u;
     src = frame.pixels;
 
