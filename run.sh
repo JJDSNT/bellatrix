@@ -529,6 +529,7 @@ case "$BUILD_KIND" in
         export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"
         export BELLATRIX_LAUNCHER="${BELLATRIX_LAUNCHER:-1}"
         export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
+        export BELLATRIX_RIGEL_TRACE_BUILD="${BELLATRIX_RIGEL_TRACE:-0}"
         _SERIAL_RAW="${BELLATRIX_SERIAL:-miniuart}"
         case "$_SERIAL_RAW" in
             pl011) export BELLATRIX_SERIAL="pl011" ;;
