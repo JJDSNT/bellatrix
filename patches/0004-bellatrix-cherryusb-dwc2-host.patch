@@ -1,5 +1,5 @@
 diff --git a/class/hub/usbh_hub.c b/class/hub/usbh_hub.c
-index 5538de86..9c13ca57 100644
+index 5538de86..70dcc695 100644
 --- a/class/hub/usbh_hub.c
 +++ b/class/hub/usbh_hub.c
 @@ -27,6 +27,14 @@ extern void usbh_hubport_release(struct usbh_hubport *hport);
@@ -172,7 +172,19 @@ index 5538de86..9c13ca57 100644
          hub->nports = hub->hub_desc.bNbrPorts;
          hub->powerdelay = hub->hub_desc.bPwrOn2PwrGood * 2;
          hub->tt_think = ((hub->hub_desc.wHubCharacteristics & HUB_CHAR_TTTT_MASK) >> 5);
-@@ -496,9 +551,15 @@ static void usbh_hub_events(struct usbh_hub *hub)
+@@ -440,7 +495,10 @@ static int usbh_hub_connect(struct usbh_hubport *hport, uint8_t intf)
+         USB_LOG_ERR("No memory to alloc int_timer\r\n");
+         return -USB_ERR_NOMEM;
+     }
+-    usb_osal_timer_start(hub->int_timer);
++    /* Start listening for downstream port changes immediately. Waiting for the
++     * first periodic interval delays QEMU's already-connected usb-kbd by up to
++     * 255 ms and can miss the initial bring-up window in short captures. */
++    hub_int_timeout(hub);
+     return 0;
+ }
+ 
+@@ -496,9 +554,15 @@ static void usbh_hub_events(struct usbh_hub *hub)
      }
  
      flags = usb_osal_enter_critical_section();
@@ -189,7 +201,7 @@ index 5538de86..9c13ca57 100644
      for (uint8_t port = 0; port < hub->nports; port++) {
          USB_LOG_DBG("Port change:0x%02x\r\n", portchange_index);
  
-@@ -518,6 +579,11 @@ static void usbh_hub_events(struct usbh_hub *hub)
+@@ -518,6 +582,11 @@ static void usbh_hub_events(struct usbh_hub *hub)
          portstatus = port_status.wPortStatus;
          portchange = port_status.wPortChange;
  
@@ -201,7 +213,7 @@ index 5538de86..9c13ca57 100644
          USB_LOG_DBG("port %u, status:0x%03x, change:0x%02x\r\n", port + 1, portstatus, portchange);
  
          /* First, clear all change bits */
-@@ -553,6 +619,13 @@ static void usbh_hub_events(struct usbh_hub *hub)
+@@ -553,6 +622,13 @@ static void usbh_hub_events(struct usbh_hub *hub)
                  portstatus = port_status.wPortStatus;
                  portchange = port_status.wPortChange;
  
@@ -215,7 +227,7 @@ index 5538de86..9c13ca57 100644
                  USB_LOG_DBG("Port %u, status:0x%03x, change:0x%02x\r\n", port + 1, portstatus, portchange);
  
                  if (!(portchange & HUB_PORT_STATUS_C_CONNECTION) &&
-@@ -600,6 +673,11 @@ static void usbh_hub_events(struct usbh_hub *hub)
+@@ -600,6 +676,11 @@ static void usbh_hub_events(struct usbh_hub *hub)
                  portstatus = port_status.wPortStatus;
                  portchange = port_status.wPortChange;
  
@@ -227,7 +239,7 @@ index 5538de86..9c13ca57 100644
                  USB_LOG_DBG("Port %u, status:0x%03x, change:0x%02x\r\n", port + 1, portstatus, portchange);
  
                  if (!(portstatus & HUB_PORT_STATUS_RESET) && (portstatus & HUB_PORT_STATUS_ENABLE)) {
-@@ -709,11 +787,72 @@ static void usbh_hub_thread(CONFIG_USB_OSAL_THREAD_SET_ARGV)
+@@ -709,11 +790,72 @@ static void usbh_hub_thread(CONFIG_USB_OSAL_THREAD_SET_ARGV)
      usb_osal_thread_delete(NULL);
  }
  
@@ -300,7 +312,7 @@ index 5538de86..9c13ca57 100644
  int usbh_hub_initialize(struct usbh_bus *bus)
  {
      char thread_name[32] = { 0 };
-@@ -728,6 +867,7 @@ int usbh_hub_initialize(struct usbh_bus *bus)
+@@ -728,6 +870,7 @@ int usbh_hub_initialize(struct usbh_bus *bus)
      hub->nports = CONFIG_USBHOST_MAX_RHPORTS;
      hub->int_buffer = bus->hcd.roothub_intbuf;
      hub->bus = bus;
@@ -308,7 +320,7 @@ index 5538de86..9c13ca57 100644
  
      bus->hub_mq = usb_osal_mq_create(7);
      if (bus->hub_mq == NULL) {
-@@ -756,11 +896,16 @@ int usbh_hub_deinitialize(struct usbh_bus *bus)
+@@ -756,11 +899,16 @@ int usbh_hub_deinitialize(struct usbh_bus *bus)
          return -USB_ERR_INVAL;
      }
  
@@ -337,6 +349,31 @@ index dcce6606..f8be7296 100644
  
  int usbh_hub_initialize(struct usbh_bus *bus);
  int usbh_hub_deinitialize(struct usbh_bus *bus);
+diff --git a/class/msc/usb_msc.h b/class/msc/usb_msc.h
+index 75187f5e..bcb11b06 100644
+--- a/class/msc/usb_msc.h
++++ b/class/msc/usb_msc.h
+@@ -6,6 +6,8 @@
+ #ifndef USB_MSC_H
+ #define USB_MSC_H
+ 
++#include "usb_util.h"
++
+ /* MSC Subclass Codes */
+ #define MSC_SUBCLASS_RBC           0x01 /* Reduced block commands (e.g., flash devices) */
+ #define MSC_SUBCLASS_SFF8020I_MMC2 0x02 /* SFF-8020i/MMC-2 (ATAPI) (e.g., C/DVD) */
+diff --git a/class/msc/usbh_msc.h b/class/msc/usbh_msc.h
+index c4aee8a8..b751bb58 100644
+--- a/class/msc/usbh_msc.h
++++ b/class/msc/usbh_msc.h
+@@ -6,6 +6,7 @@
+ #ifndef USBH_MSC_H
+ #define USBH_MSC_H
+ 
++#include "usb_hc.h"
+ #include "usb_msc.h"
+ #include "usb_scsi.h"
+ 
 diff --git a/core/usbh_core.c b/core/usbh_core.c
 index cce9a46e..eb4738d3 100644
 --- a/core/usbh_core.c

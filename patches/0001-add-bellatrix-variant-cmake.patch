@@ -1,7 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
+index eb89404..e470ea9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -15,7 +15,7 @@
+@@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
  set(TARGET "raspi64" CACHE STRING "One of target machines: ${SUPPORTED_TARGETS}")
  set_property(CACHE TARGET PROPERTY STRINGS ${SUPPORTED_TARGETS})
  
@@ -10,7 +11,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
  set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
  
-@@ -89,6 +89,7 @@
+@@ -89,6 +89,7 @@ set(EMU68_FILES
      src/math/96bit.c
  )
  
@@ -18,7 +19,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  set_source_files_properties(src/math/96bit.c PROPERTIES COMPILE_FLAGS 
      "-fcall-saved-x4 -fcall-saved-x5 -fcall-saved-x6 -fcall-saved-x7 -fcall-saved-x8 \
      -fcall-saved-x9 -fcall-saved-x10 -fcall-saved-x11 -fcall-saved-x12 -fcall-saved-x13 \
-@@ -167,14 +168,381 @@
+@@ -167,14 +168,385 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -64,6 +65,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +                set(RIGEL_BUILD_TESTS OFF CACHE BOOL "Build Rigel unit tests" FORCE)
 +                set(RIGEL_BUILD_HARNESS OFF CACHE BOOL "Build Rigel Musashi harness" FORCE)
 +                set(RIGEL_ENABLE_STDIO_LOG OFF CACHE BOOL "Use stderr for Rigel logs" FORCE)
++                set(RIGEL_ENABLE_STDLIB_ENV OFF CACHE BOOL "Use getenv() for Rigel trace knobs" FORCE)
 +                add_subdirectory(${CMAKE_SOURCE_DIR}/../external/rigel ${CMAKE_BINARY_DIR}/rigel-build EXCLUDE_FROM_ALL)
 +                target_compile_options(rigel PRIVATE -mbig-endian -fno-stack-protector)
 +                add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=1)
@@ -248,6 +250,9 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/stats.c
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/sync.c
 +                )
++                list(APPEND BASE_FILES
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_chipset.c
++                )
 +            endif()
 +            if(BELLATRIX_USE_MUSASHI_CPU)
 +                list(APPEND BASE_FILES
@@ -401,7 +406,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  
  list(APPEND ARCH_FILES
      src/aarch64/start.c
-@@ -207,9 +575,15 @@
+@@ -207,9 +579,15 @@ add_custom_command(
  add_subdirectory(external)
  
  target_link_libraries(Emu68.elf capstone-static libdeflate_static)

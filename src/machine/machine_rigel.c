@@ -139,13 +139,17 @@ static void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque
 
 static int machine_rigel_cia_trace_enabled(void)
 {
-    const char *env;
-
     if (g_rigel_cia_trace >= 0)
         return g_rigel_cia_trace;
 
-    env = getenv("BELLATRIX_RIGEL_CIA_TRACE");
-    g_rigel_cia_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+#ifdef BELLATRIX_HARNESS
+    {
+        const char *env = getenv("BELLATRIX_RIGEL_CIA_TRACE");
+        g_rigel_cia_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+#else
+    g_rigel_cia_trace = 0;
+#endif
     return g_rigel_cia_trace;
 }
 
@@ -561,9 +565,10 @@ static void rigel_trace_chip_write(uint32_t addr, uint16_t value)
     addr &= 0x00ffffffu;
 
     if (!watch_init) {
+        watch_init = 1;
+#ifdef BELLATRIX_HARNESS
         const char *spec = getenv("BELLATRIX_RIGEL_CHIP_WRITE_WATCH");
         char *endptr = NULL;
-        watch_init = 1;
         if (spec && *spec) {
             unsigned long lo = strtoul(spec, &endptr, 0);
             if (endptr && *endptr == ':') {
@@ -572,6 +577,7 @@ static void rigel_trace_chip_write(uint32_t addr, uint16_t value)
                 watch_hi = (uint32_t)hi & 0x00ffffffu;
             }
         }
+#endif
     }
 
     if (watch_lo < watch_hi && addr >= watch_lo && addr < watch_hi) {
@@ -1068,7 +1074,7 @@ struct RigelContext *bellatrix_machine_rigel_ctx(void)
 
 void bellatrix_machine_advance(uint32_t ticks)
 {
-    bellatrix_runtime_notify_cpu_progress(ticks);
+    machine_quantum_step(&g_machine, (rigel_cycle_t)ticks);
 }
 
 void bellatrix_machine_on_frame_ready(void)

@@ -147,7 +147,12 @@ static inline void chipset_lock_release(void)
  *
  * In single-core mode: advance the chipset directly (no locking needed).
  * ------------------------------------------------------------------------- */
-#if !BELLATRIX_RIGEL_BUILD
+#if BELLATRIX_RIGEL_BUILD
+void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
+{
+    bellatrix_machine_advance(cycles);
+}
+#else
 void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 {
     if (PAL_Core_IsMulticoreEnabled()) {
