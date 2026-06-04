@@ -873,12 +873,12 @@ static rigel_cycle_t machine_next_quantum(void)
     return q;
 }
 
-/* Execute one quantum step and update machine state. */
-static void machine_quantum_step(BellatrixMachine *m, rigel_cycle_t cycles)
+/* Execute one quantum step and update machine state. Returns event flags. */
+static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle_t cycles)
 {
     rigel_step_result_t r;
 
-    if (!m || !g_rigel || cycles == 0u) return;
+    if (!m || !g_rigel || cycles == 0u) return 0;
 
     r = rigel_step(g_rigel, cycles);
     m->tick_count = (uint64_t)r.time;
@@ -893,12 +893,15 @@ static void machine_quantum_step(BellatrixMachine *m, rigel_cycle_t cycles)
     }
     if (r.events & RIGEL_EVENT_IRQ_CHANGED)
         machine_publish_ipl(m, rigel_get_ipl(g_rigel));
+
+    return r.events;
 }
 
 /*
  * Called with the approximate number of M68K cycles the JIT just consumed.
  * When that estimate reaches the current quantum, Rigel advances by the
  * EXACT quantum (not the estimate) and the next quantum is fetched.
+ * Quantum is only recomputed when it is consumed or events fire.
  */
 static inline void machine_step_components(BellatrixMachine *m, uint32_t approx)
 {
@@ -915,8 +918,10 @@ static inline void machine_step_components(BellatrixMachine *m, uint32_t approx)
 
     while (s_cpu_approx >= s_quantum) {
         s_cpu_approx -= s_quantum;
-        machine_quantum_step(m, s_quantum);
-        s_quantum = machine_next_quantum();
+        rigel_event_flags_t ev = machine_quantum_step(m, s_quantum);
+        /* Recompute deadline only when quantum consumed or events fired. */
+        if (ev || s_cpu_approx >= s_quantum)
+            s_quantum = machine_next_quantum();
     }
 }
 
@@ -930,17 +935,15 @@ static inline void machine_flush_for_bus(BellatrixMachine *m)
     if (!m || !g_rigel || s_cpu_approx == 0u) return;
 
     rigel_cycle_t partial = (rigel_cycle_t)s_cpu_approx;
-    if (partial > s_quantum && s_quantum > 0u)
+    if (s_quantum > 0u && partial > s_quantum)
         partial = s_quantum;
 
-    machine_quantum_step(m, partial);
-    if (s_cpu_approx >= partial)
-        s_cpu_approx -= partial;
-    else
-        s_cpu_approx = 0u;
+    rigel_event_flags_t ev = machine_quantum_step(m, partial);
+    s_cpu_approx = (s_cpu_approx >= partial) ? s_cpu_approx - partial : 0u;
 
-    /* Recompute quantum from the new Rigel time. */
-    s_quantum = machine_next_quantum();
+    /* Recompute deadline only if we hit the quantum boundary or events fired. */
+    if (ev || partial >= s_quantum)
+        s_quantum = machine_next_quantum();
 }
 
 BellatrixMachine *bellatrix_machine_get(void)
@@ -1074,7 +1077,7 @@ struct RigelContext *bellatrix_machine_rigel_ctx(void)
 
 void bellatrix_machine_advance(uint32_t ticks)
 {
-    machine_quantum_step(&g_machine, (rigel_cycle_t)ticks);
+    machine_step_components(&g_machine, ticks);
 }
 
 void bellatrix_machine_on_frame_ready(void)
