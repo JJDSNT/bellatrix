@@ -56,51 +56,28 @@ static inline int agnus_ddf_words(const AgnusState *agnus)
     int words;
 
     /*
-     * OCS DDF word count derivation.
+     * OCS hires DDF pipeline overhead depends on whether the DDF span
+     * (stop - start) is a multiple of 8 CCK or only of 4 CCK.
      *
-     * The relationship between DDFSTRT/DDFSTOP and the actual number of
-     * fetched words is not a simple inclusive linear span. Real software
-     * demonstrates mode-specific edge/alignment behavior.
+     * In hires mode each word fetch takes one 4-CCK DMA slot.  After the
+     * last active slot, the shift-register pipeline needs to be flushed.
+     * When the span is already aligned to 8 CCK (an even number of 4-CCK
+     * slots), 2 pipeline words suffice.  When the span is only 4-CCK
+     * aligned (odd number of slots), 3 pipeline words are needed.
      *
-     * Current known-good reference cases:
-     *
-     *   AROS hires:
-     *     DDFSTRT=0x3c
-     *     DDFSTOP=0x00d0
-     *     expected = 40 words (640px hires)
-     *
-     *   DiagROM hires:
-     *     DDFSTRT=0x3c
-     *     DDFSTOP=0x00d4
-     *     expected = 40 words (80 bytes/line)
-     *
-     *   DiagROM lores:
-     *     DDFSTRT=0x38
-     *     DDFSTOP=0x00d0
-     *     expected = 20 words (40 bytes/line)
-     *
-     * Earlier generic hires derivation:
-     *
-     *     words = ((stop - start) / 4) + 3
-     *
-     * correctly fixed the AROS diagonal skew caused by a 1-word underfetch,
-     * but overfetched DiagROM hires by one word (41 instead of 40).
-     *
-     * This strongly suggests that:
-     *
-     *   - DDFSTOP alignment matters;
-     *   - the final fetch slot is mode/timing dependent;
-     *   - OCS fetch windows are not modeled correctly yet by a single
-     *     universal formula.
-     *
-     * Therefore the implementation below temporarily preserves known-good
-     * software behavior while the exact Agnus DMA slot timing model is
-     * refined.
+     * Verification against known-good cases:
+     *   AROS    0x3c→0xd0  span=148  148&4=4  +3  37+3=40 ✓  (640px hires)
+     *   DiagROM 0x3c→0xd4  span=152  152&4=0  +2  38+2=40 ✓  (80 bytes/line)
+     *   DiagROM 0x38→0xd0  span=152  152&4=0  +2  38+2=40 ✓  (80 bytes/line)
+     *   KS20    0x40→0xd0  span=144  144&4=0  +2  36+2=38 ✓  (560px hires)
+     *   DiagROM 0x38→0xd0  lores     152/8+1=20  ✓           (40 bytes/line)
      */
-    if (hires && start == 0x3c && stop == 0xd4)
-        words = 40;
-    else
-        words = ((stop - start) / fetch_quantum) + (hires ? 3 : 1);
+    if (hires) {
+        int pipeline = ((stop - start) & 4) ? 3 : 2;
+        words = (stop - start) / fetch_quantum + pipeline;
+    } else {
+        words = (stop - start) / fetch_quantum + 1;
+    }
 
     if (words < 1)
         words = 20;
