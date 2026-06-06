@@ -838,6 +838,10 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
     uint32_t boot3 = harness_chip_read(0x00015744u, 4);
     uint32_t raw0 = harness_chip_read(0x0001660Cu, 4);
     uint32_t raw1 = harness_chip_read(0x00016610u, 4);
+    uint32_t dma0 = harness_chip_read(0x00006B14u, 4);
+    uint32_t dma1 = harness_chip_read(0x00006B18u, 4);
+    uint32_t sync0 = harness_chip_read(0x00007190u, 4);
+    uint32_t sync1 = harness_chip_read(0x00007194u, 4);
     uint32_t decode_err = 0;
     uint32_t decode_bits = 0;
     uint32_t decode_id = 0;
@@ -857,7 +861,8 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
     printf("[BOOT-DSKBLK-ACK] pc=%08x raw=%04x D0=%08x D1=%08x D2=%08x "
            "A5=%06x A6=%06x intena=%04x intreq=%04x dmacon=%04x bplcon0=%04x "
            "bpl1=%05x bpl2=%05x cop1=%05x cop2=%05x p0=%08x p1=%08x "
-           "boot=%08x:%08x:%08x:%08x raw=%08x:%08x dec_err=%u dec_bits=%03x dec_id=%08x\n",
+           "boot=%08x:%08x:%08x:%08x raw=%08x:%08x dma=%08x:%08x sync=%08x:%08x "
+           "dec_err=%u dec_bits=%03x dec_id=%08x\n",
            (unsigned)pc,
            (unsigned)(value & 0xFFFFu),
            (unsigned)d0,
@@ -881,6 +886,10 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
            (unsigned)boot3,
            (unsigned)raw0,
            (unsigned)raw1,
+           (unsigned)dma0,
+           (unsigned)dma1,
+           (unsigned)sync0,
+           (unsigned)sync1,
            (unsigned)decode_err,
            (unsigned)decode_bits,
            (unsigned)decode_id);

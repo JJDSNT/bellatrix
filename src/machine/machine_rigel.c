@@ -26,6 +26,7 @@
 #include "rigel/rigel_irq.h"
 
 #ifdef BELLATRIX_HARNESS
+#include <stdio.h>
 #include <stdlib.h>
 #endif
 
@@ -99,6 +100,7 @@ static BellatrixMachine g_machine;
 static RigelContext *g_rigel;
 static bool g_rigel_zero_copy_video;
 static int g_rigel_cia_trace = -1;
+static int g_rigel_floppy_trace = -1;
 
 /* --------------------------------------------------------------------------
  * Rigel trace — structured event log built from rigel_step results
@@ -123,18 +125,31 @@ typedef struct {
 
 static RigelTrace g_rtrace;
 
+static int machine_rigel_floppy_trace_enabled(void);
+
 static void machine_rigel_log(const char *msg, void *opaque)
 {
+    static const char floppy_prefix[] = "[RIGEL-FLOPPY-DRIVE]";
+
     (void)opaque;
-    if (!g_rtrace.enabled)
+    if (!g_rtrace.enabled &&
+        !(msg && strncmp(msg, floppy_prefix, sizeof(floppy_prefix) - 1u) == 0 &&
+          machine_rigel_floppy_trace_enabled()))
         return;
     kprintf("[rigel] %s\n", msg);
 }
 
 static void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
 {
-    (void)event;
     (void)opaque;
+    if (!g_rtrace.enabled || event == NULL)
+        return;
+
+    kprintf("[RIGEL-EVENT] %s", event->name ? event->name : "unknown");
+    for (rigel_u8 i = 0u; i < event->field_count && i < 16u; i++) {
+        kprintf(" f%u=%08x", (unsigned)i, (unsigned)event->fields[i]);
+    }
+    kprintf("\n");
 }
 
 static int machine_rigel_cia_trace_enabled(void)
@@ -151,6 +166,80 @@ static int machine_rigel_cia_trace_enabled(void)
     g_rigel_cia_trace = 0;
 #endif
     return g_rigel_cia_trace;
+}
+
+static int machine_rigel_floppy_trace_enabled(void)
+{
+    if (g_rigel_floppy_trace >= 0)
+        return g_rigel_floppy_trace;
+
+#ifdef BELLATRIX_HARNESS
+    {
+        const char *env = getenv("BELLATRIX_RIGEL_FLOPPY_TRACE");
+        g_rigel_floppy_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+#else
+    g_rigel_floppy_trace = 0;
+#endif
+    return g_rigel_floppy_trace;
+}
+
+static void machine_rigel_trace_floppy(const char *reason, uint32_t pc,
+                                       uint8_t reg, uint8_t value)
+{
+    rigel_floppy_status_t df0;
+    uint8_t prb;
+    uint8_t pra;
+    int mtr;
+    int sel0;
+    int step;
+    int dir;
+    int side;
+
+    if (!g_rigel || !machine_rigel_floppy_trace_enabled())
+        return;
+
+    if (!rigel_floppy_get_status(g_rigel, RIGEL_FLOPPY_DRIVE_DF0, &df0))
+        return;
+
+    prb = rigel_cia_read(g_rigel, 1u, 0x1u);
+    pra = rigel_cia_read(g_rigel, 0u, 0x0u);
+
+    mtr  = (prb & 0x80u) == 0u;
+    sel0 = (prb & 0x08u) == 0u;
+    step = (prb & 0x01u) == 0u;
+    dir  = (prb & 0x02u) != 0u;
+    side = (prb & 0x04u) == 0u;
+
+    kprintf("[RIGEL-FLOPPY] %s pc=%08x reg=%x val=%02x prb=%02x pra=%02x "
+            "mtr=%d sel0=%d step=%d dir=%s side=%d "
+            "df0_sel=%d motor=%d cyl=%u side=%u media=%d rdy=%d trk0=%d "
+            "chg=%d wpro=%d dma=%d lines=/chg%d /wpro%d /trk0%d /rdy%d\n",
+            reason ? reason : "?",
+            (unsigned)pc,
+            (unsigned)(reg & 0x0fu),
+            (unsigned)value,
+            (unsigned)prb,
+            (unsigned)pra,
+            mtr,
+            sel0,
+            step,
+            dir ? "out" : "in",
+            side,
+            df0.selected ? 1 : 0,
+            df0.motor_on ? 1 : 0,
+            (unsigned)df0.cylinder,
+            (unsigned)df0.side,
+            df0.has_media ? 1 : 0,
+            df0.ready ? 1 : 0,
+            df0.track0 ? 1 : 0,
+            df0.disk_changed ? 1 : 0,
+            df0.write_protected ? 1 : 0,
+            df0.dma_active ? 1 : 0,
+            (pra & 0x04u) ? 1 : 0,
+            (pra & 0x08u) ? 1 : 0,
+            (pra & 0x10u) ? 1 : 0,
+            (pra & 0x20u) ? 1 : 0);
 }
 
 static int machine_rigel_blitter_trace_enabled(void)
@@ -201,6 +290,89 @@ void bellatrix_machine_rigel_trace_enable(bool enabled)
 {
     g_rtrace.enabled = enabled;
 }
+
+static uint32_t machine_rigel_count_nonzero_words(uint32_t addr, uint32_t words)
+{
+    uint32_t count = 0u;
+
+    if (!chip_ram_is_configured(&g_machine.memory))
+        return 0u;
+
+    for (uint32_t i = 0u; i < words; i++) {
+        if (chip_ram_read16(&g_machine.memory, addr + i * 2u) != 0u)
+            count++;
+    }
+
+    return count;
+}
+
+static uint32_t machine_rigel_estimate_plane_span(uint32_t width,
+                                                  uint32_t height,
+                                                  uint16_t modulo)
+{
+    uint32_t words_per_line = width / 16u;
+    uint32_t row_bytes = words_per_line * 2u;
+    int32_t stride = (int32_t)row_bytes + (int16_t)modulo;
+
+    if (words_per_line == 0u || height == 0u)
+        return 0u;
+
+    if (stride <= 0)
+        stride = (int32_t)row_bytes;
+
+    return (uint32_t)stride * height;
+}
+
+#ifdef BELLATRIX_HARNESS
+static void machine_rigel_maybe_dump_frame(const rigel_frame_t *frame)
+{
+    static int init;
+    static int done;
+    static uint64_t dump_frame;
+    static const char *dump_path;
+
+    if (!init) {
+        const char *frame_env = getenv("BELLATRIX_RIGEL_DUMP_FRAME");
+        dump_path = getenv("BELLATRIX_RIGEL_DUMP_PPM");
+        init = 1;
+        if (frame_env && *frame_env)
+            dump_frame = (uint64_t)strtoull(frame_env, NULL, 0);
+    }
+
+    if (done || !dump_frame || !dump_path || !*dump_path ||
+            !frame || !frame->pixels ||
+            frame->frame_count < dump_frame ||
+            frame->width == 0u || frame->height == 0u)
+        return;
+
+    FILE *fp = fopen(dump_path, "wb");
+    if (!fp) {
+        kprintf("[RIGEL-DUMP] failed to open %s\n", dump_path);
+        done = 1;
+        return;
+    }
+
+    fprintf(fp, "P6\n%u %u\n255\n", (unsigned)frame->width, (unsigned)frame->height);
+    for (uint32_t y = 0; y < frame->height; y++) {
+        const uint32_t *row = (const uint32_t *)((const uint8_t *)frame->pixels +
+                                                 (uintptr_t)y * frame->pitch);
+        for (uint32_t x = 0; x < frame->width; x++) {
+            uint32_t rgba = row[x];
+            fputc((int)((rgba >> 16) & 0xffu), fp);
+            fputc((int)((rgba >> 8) & 0xffu), fp);
+            fputc((int)(rgba & 0xffu), fp);
+        }
+    }
+
+    fclose(fp);
+    kprintf("[RIGEL-DUMP] frame=%llu wrote %s size=%ux%u\n",
+            (unsigned long long)frame->frame_count,
+            dump_path,
+            (unsigned)frame->width,
+            (unsigned)frame->height);
+    done = 1;
+}
+#endif
 
 static void machine_rigel_trace_step(const rigel_step_result_t *r)
 {
@@ -289,6 +461,9 @@ static void machine_rigel_trace_step(const rigel_step_result_t *r)
         rigel_frame_t frame;
         g_rtrace.frame_count++;
         if (rigel_get_frame(g_rigel, &frame)) {
+#ifdef BELLATRIX_HARNESS
+            machine_rigel_maybe_dump_frame(&frame);
+#endif
             kprintf("[RIGEL-FRAME] N=%llu %ux%u flags=%02x ipl=%u intreq=%04x cyc=%llu\n",
                     (unsigned long long)g_rtrace.frame_count,
                     (unsigned)frame.width, (unsigned)frame.height,
@@ -335,6 +510,26 @@ static void machine_rigel_trace_step(const rigel_step_result_t *r)
                                   (uint32_t)rigel_custom_read16(g_rigel, 0x0e2u);
                 uint32_t bpl2pt = ((uint32_t)rigel_custom_read16(g_rigel, 0x0e4u) << 16) |
                                   (uint32_t)rigel_custom_read16(g_rigel, 0x0e6u);
+                uint32_t bpl1span = machine_rigel_estimate_plane_span(frame.width,
+                                                                      frame.height,
+                                                                      bpl1mod);
+                uint32_t bpl2span = machine_rigel_estimate_plane_span(frame.width,
+                                                                      frame.height,
+                                                                      bpl2mod);
+                uint32_t bpl1start = (bpl1pt - bpl1span) & 0x00ffffffu;
+                uint32_t bpl2start = (bpl2pt - bpl2span) & 0x00ffffffu;
+                uint16_t bpl1w0 = chip_ram_read16(&g_machine.memory, bpl1pt);
+                uint16_t bpl1w1 = chip_ram_read16(&g_machine.memory, bpl1pt + 2u);
+                uint16_t bpl2w0 = chip_ram_read16(&g_machine.memory, bpl2pt);
+                uint16_t bpl2w1 = chip_ram_read16(&g_machine.memory, bpl2pt + 2u);
+                uint32_t bpl1nz = machine_rigel_count_nonzero_words(bpl1pt, 1024u);
+                uint32_t bpl2nz = machine_rigel_count_nonzero_words(bpl2pt, 1024u);
+                uint16_t bpl1startw0 = chip_ram_read16(&g_machine.memory, bpl1start);
+                uint16_t bpl1startw1 = chip_ram_read16(&g_machine.memory, bpl1start + 2u);
+                uint16_t bpl2startw0 = chip_ram_read16(&g_machine.memory, bpl2start);
+                uint16_t bpl2startw1 = chip_ram_read16(&g_machine.memory, bpl2start + 2u);
+                uint32_t bpl1startnz = machine_rigel_count_nonzero_words(bpl1start, bpl1span / 2u);
+                uint32_t bpl2startnz = machine_rigel_count_nonzero_words(bpl2start, bpl2span / 2u);
                 /* count dirty (composed) lines from delta bitmask */
                 uint32_t dirty = 0u;
                 unsigned bi;
@@ -344,7 +539,10 @@ static void machine_rigel_trace_step(const rigel_step_result_t *r)
                 }
                 kprintf("[RIGEL-CHIPSET] frame=%llu bplcon0=%04x depth=%u dmacon=%04x"
                         " diw=%04x/%04x ddf=%04x/%04x mod=%04x/%04x"
-                        " bplpt=%06x/%06x col=%04x/%04x dirty=%u\n",
+                        " bplpt=%06x/%06x bplw=%04x,%04x/%04x,%04x"
+                        " bplnz=%u/%u bplstart=%06x/%06x"
+                        " bplstartw=%04x,%04x/%04x,%04x"
+                        " bplstartnz=%u/%u col=%04x/%04x dirty=%u\n",
                         (unsigned long long)g_rtrace.frame_count,
                         (unsigned)bplcon0, (unsigned)((bplcon0 >> 12) & 7u),
                         (unsigned)dmacon,
@@ -353,6 +551,13 @@ static void machine_rigel_trace_step(const rigel_step_result_t *r)
                         (unsigned)bpl1mod, (unsigned)bpl2mod,
                         (unsigned)(bpl1pt & 0x00ffffffu),
                         (unsigned)(bpl2pt & 0x00ffffffu),
+                        (unsigned)bpl1w0, (unsigned)bpl1w1,
+                        (unsigned)bpl2w0, (unsigned)bpl2w1,
+                        (unsigned)bpl1nz, (unsigned)bpl2nz,
+                        (unsigned)bpl1start, (unsigned)bpl2start,
+                        (unsigned)bpl1startw0, (unsigned)bpl1startw1,
+                        (unsigned)bpl2startw0, (unsigned)bpl2startw1,
+                        (unsigned)bpl1startnz, (unsigned)bpl2startnz,
                         (unsigned)color00, (unsigned)color01,
                         (unsigned)dirty);
             }
@@ -365,15 +570,56 @@ static void machine_rigel_trace_step(const rigel_step_result_t *r)
                 uint16_t diwstop = rigel_custom_read16(g_rigel, 0x090u);
                 uint16_t ddfstrt = rigel_custom_read16(g_rigel, 0x092u);
                 uint16_t ddfstop = rigel_custom_read16(g_rigel, 0x094u);
+                uint16_t bpl1mod = rigel_custom_read16(g_rigel, 0x108u);
+                uint16_t bpl2mod = rigel_custom_read16(g_rigel, 0x10au);
                 uint16_t c0 = rigel_custom_read16(g_rigel, 0x180u);
+                uint16_t c1 = rigel_custom_read16(g_rigel, 0x182u);
+                uint32_t bpl1pt = ((uint32_t)rigel_custom_read16(g_rigel, 0x0e0u) << 16) |
+                                  (uint32_t)rigel_custom_read16(g_rigel, 0x0e2u);
+                uint32_t bpl2pt = ((uint32_t)rigel_custom_read16(g_rigel, 0x0e4u) << 16) |
+                                  (uint32_t)rigel_custom_read16(g_rigel, 0x0e6u);
+                uint32_t bpl1span = machine_rigel_estimate_plane_span(frame.width,
+                                                                      frame.height,
+                                                                      bpl1mod);
+                uint32_t bpl2span = machine_rigel_estimate_plane_span(frame.width,
+                                                                      frame.height,
+                                                                      bpl2mod);
+                uint32_t bpl1start = (bpl1pt - bpl1span) & 0x00ffffffu;
+                uint32_t bpl2start = (bpl2pt - bpl2span) & 0x00ffffffu;
+                uint16_t bpl1w0 = chip_ram_read16(&g_machine.memory, bpl1pt);
+                uint16_t bpl1w1 = chip_ram_read16(&g_machine.memory, bpl1pt + 2u);
+                uint16_t bpl2w0 = chip_ram_read16(&g_machine.memory, bpl2pt);
+                uint16_t bpl2w1 = chip_ram_read16(&g_machine.memory, bpl2pt + 2u);
+                uint32_t bpl1nz = machine_rigel_count_nonzero_words(bpl1pt, 1024u);
+                uint32_t bpl2nz = machine_rigel_count_nonzero_words(bpl2pt, 1024u);
+                uint16_t bpl1startw0 = chip_ram_read16(&g_machine.memory, bpl1start);
+                uint16_t bpl1startw1 = chip_ram_read16(&g_machine.memory, bpl1start + 2u);
+                uint16_t bpl2startw0 = chip_ram_read16(&g_machine.memory, bpl2start);
+                uint16_t bpl2startw1 = chip_ram_read16(&g_machine.memory, bpl2start + 2u);
+                uint32_t bpl1startnz = machine_rigel_count_nonzero_words(bpl1start, bpl1span / 2u);
+                uint32_t bpl2startnz = machine_rigel_count_nonzero_words(bpl2start, bpl2span / 2u);
                 kprintf("[RIGEL-CHIPSET] frame=%llu bplcon0=%04x depth=%u dmacon=%04x"
-                        " diw=%04x/%04x ddf=%04x/%04x col00=%04x\n",
+                        " diw=%04x/%04x ddf=%04x/%04x mod=%04x/%04x"
+                        " bplpt=%06x/%06x bplw=%04x,%04x/%04x,%04x"
+                        " bplnz=%u/%u bplstart=%06x/%06x"
+                        " bplstartw=%04x,%04x/%04x,%04x"
+                        " bplstartnz=%u/%u col=%04x/%04x\n",
                         (unsigned long long)g_rtrace.frame_count,
                         (unsigned)bp, (unsigned)((bp >> 12) & 7u),
                         (unsigned)dm,
                         (unsigned)diwstrt, (unsigned)diwstop,
                         (unsigned)ddfstrt, (unsigned)ddfstop,
-                        (unsigned)c0);
+                        (unsigned)bpl1mod, (unsigned)bpl2mod,
+                        (unsigned)(bpl1pt & 0x00ffffffu),
+                        (unsigned)(bpl2pt & 0x00ffffffu),
+                        (unsigned)bpl1w0, (unsigned)bpl1w1,
+                        (unsigned)bpl2w0, (unsigned)bpl2w1,
+                        (unsigned)bpl1nz, (unsigned)bpl2nz,
+                        (unsigned)bpl1start, (unsigned)bpl2start,
+                        (unsigned)bpl1startw0, (unsigned)bpl1startw1,
+                        (unsigned)bpl2startw0, (unsigned)bpl2startw1,
+                        (unsigned)bpl1startnz, (unsigned)bpl2startnz,
+                        (unsigned)c0, (unsigned)c1);
             }
             if (g_rtrace.frame_count <= 5u && frame.pixels &&
                     frame.width > 0u && frame.height > 0u) {
@@ -1002,7 +1248,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     config.chipset_model = RIGEL_CHIPSET_ECS;
     config.log_fn = machine_rigel_log;
     config.log_opaque = NULL;
-    config.log_event_fn = g_rtrace.enabled ? NULL : machine_rigel_log_event;
+    config.log_event_fn = machine_rigel_log_event;
     config.log_event_opaque = NULL;
     config.pixel_format = RIGEL_PIXEL_RGBA8888;
     /* Bypass baud-rate timing so SERDAT writes appear immediately in the TX
@@ -1201,8 +1447,11 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
     if (g_rtrace.enabled &&
             (reg == 0x08eu || reg == 0x090u ||
              reg == 0x092u || reg == 0x094u ||
+             (reg >= 0x0e0u && reg <= 0x0f6u) ||
              reg == 0x096u || reg == 0x100u ||
+             reg == 0x108u || reg == 0x10au ||
              reg == 0x102u || reg == 0x106u ||
+             (reg >= 0x180u && reg <= 0x19eu) ||
              reg == 0x1e4u)) {
         uint16_t before = rigel_custom_read16(g_rigel, reg);
         kprintf("[RIGEL-MMIO-W] reg=%03x before=%04x write=%04x size=%u pc=%08x cyc=%llu\n",
@@ -1268,6 +1517,8 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
             kprintf("[RIGEL-CIAA-R] pc=%08x addr=%06x reg=%u val=%02x\n",
                     (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
+        if (reg == 0x0u)
+            machine_rigel_trace_floppy("ciaa-pra-r", machine_cpu_pc(m), reg, (uint8_t)value);
         machine_mirror_cia_write(&m->cia_a, reg, (uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
@@ -1276,6 +1527,8 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
             kprintf("[RIGEL-CIAB-R] pc=%08x addr=%06x reg=%u val=%02x\n",
                     (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
+        if (reg == 0x1u)
+            machine_rigel_trace_floppy("ciab-prb-r", machine_cpu_pc(m), reg, (uint8_t)value);
         machine_mirror_cia_write(&m->cia_b, reg, (uint8_t)value);
     } else if (is_rtc_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
@@ -1338,6 +1591,8 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
                     (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 1u, reg, (uint8_t)value);
         machine_mirror_cia_write(&m->cia_b, reg, (uint8_t)value);
+        if (reg == 0x1u || reg == 0x3u)
+            machine_rigel_trace_floppy("ciab-w", machine_cpu_pc(m), reg, (uint8_t)value);
     } else if (is_rtc_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
         rigel_rtc_write_reg(g_rigel, reg, (uint8_t)(value & 0x0Fu));
