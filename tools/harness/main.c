@@ -949,9 +949,14 @@ int main(int argc, char **argv)
         bellatrix_machine_eject_df0();
     }
 
-    /* Always register lide_cdrom (OAHR RIPPLE board) so the board appears
-     * in autoconfig even when no ISO is provided at startup (TUI can attach later). */
-    if (lide_cdrom_register(m) != 0) {
+    /* Register the CD-ROM board only when it has media, unless explicitly
+     * requested.  AROS polls an empty ATAPI device during boot and can sit on
+     * the grey boot-wait screen indefinitely in ADF-only runs. */
+    const char *empty_cdrom = getenv("HARNESS_REGISTER_EMPTY_CDROM");
+    int register_cdrom = iso_data != NULL ||
+                         (empty_cdrom && empty_cdrom[0] != '\0' &&
+                          empty_cdrom[0] != '0');
+    if (register_cdrom && lide_cdrom_register(m) != 0) {
         fprintf(stderr, "[HARNESS] lide_cdrom_register failed\n");
     }
 
