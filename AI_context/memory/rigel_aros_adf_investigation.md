@@ -258,6 +258,45 @@ Traced where `LOFlist`/`SHFlist` are normally assigned, in the same file:
 - `resetmode()` (`amigavideo_chipset.c:197`): sets `GfxBase->LOFlist = GfxBase->SHFlist = csd->copper2_backup;` — but it is **only called from `amigavideo_compositorclass.c:428` and `amigavideo_bitmapclass.c:222`** (compositor/bitmap class method handlers — i.e., when Intuition actually creates/composites a screen bitmap).
 - `gfx_vblank_attachbm()` (lines ~1291-1297, ~1405-1420): sets `GfxBase->LOFlist = bm->bmcl->CopLStart` / `SHFlist = bm->bmcl->CopSStart` to the **real screen's** compiled Copper-list addresses — also only reachable through the bitmap-attach/compositing path triggered by Intuition opening a screen.
 
+## 2026-06-07 Correction After Slow RAM: ADF No Longer Has Zero COP2LC, But Still Renders a Blank Grey Screen
+
+After the shared slow RAM implementation, the old "COP2LC is zeroed every frame" conclusion is no longer the active failure mode. The slow RAM mapping changes AROS memory placement enough that `GfxBase` and the vblank list fields now live in slow RAM and must be probed through CPU memory, not only chip RAM.
+
+Current Rigel harness results with `aros.rom`:
+
+- No ADF:
+  - `GfxBase->LOFlist=0x0002babc`, `GfxBase->SHFlist=0x0002c294`.
+  - The selected `SHF` copper list at `0x02c294` programs a visible 4-plane display:
+    - `BPLCON0=c205`
+    - `BPL1=0x003b08`, `BPL2=0x00db08`, `BPL3=0x017b08`, `BPL4=0x021b08`
+    - `BPLxMOD=0x0050`, `DIW=2c81/2cc1`, `DDF=003c/00d0`
+  - The captured frame shows the expected AROS no-media visual.
+- `aros.adf` and `bootdisk-amiga-m68k.adf`:
+  - `GfxBase->LOFlist=0x0000dabc`, `GfxBase->SHFlist=0x0000dabc`.
+  - The selected copper list at `0x00dabc` is valid but intentionally much simpler:
+    - `BPLCON0=a201` (2 planes)
+    - `BPL1=0x003ab8`, `BPL2=0x008ab8`
+    - `BPLxMOD=0`, `DIW=2c81/2cc1`, `DDF=003c/00d0`
+    - Colors are mostly grey/black (`COLOR00=0x0aaa`, `COLOR01=0x0000`, later color registers are zero).
+  - Frame dumps around 1500-1600 show a flat grey screen with only tiny black artifacts.
+  - Active bitplane regions receive writes, but the later writes from AROS code around `PC=0x00ffddd2` clear the relevant window to zero. Rigel then correctly fetches zero bitplane words, so the visible result is grey.
+- Disk activity is not absent:
+  - With ADFs, repeated DSKBLK interrupt enable/ack traffic is present (`INTENA/INTREQ` bit `0x0002`), unlike the no-ADF path.
+  - This means the current "no visual return" is not explained by a total floppy/IRQ absence.
+
+Current interpretation:
+
+- The slow RAM implementation fixed the earlier failure where AROS could not keep the vblank display-list fields populated.
+- The remaining ADF visual issue has moved forward: AROS now selects a valid 2-plane grey screen and clears its bitplane buffers, while continuing disk/boot activity.
+- This is still not the desired AROS behavior: a standalone `aros.adf`/`bootdisk-amiga-m68k.adf` should eventually show Workbook or an Intuition requester. The next investigation should compare why the AROS bitmap/compositor path chooses or clears this minimal screen instead of attaching a populated WorkBook/requester bitmap.
+
+Useful probes used in this pass:
+
+- `AROS_GFXBASE_TRACE=1`: captures `GfxBase`, `LOFlist`, and `SHFlist` from the ROM vblank routine at `pc=0xfc95fc/0xfc9600`.
+- `AROS_COPLIST_DUMP=1`: decodes the selected AROS copper lists.
+- `BELLATRIX_CHIP_WRITE_WATCH=0x003ab8:0x003c00` / `0x008ab8:0x008c00`: confirms writes to the ADF bitplane buffers and later zeroing.
+- `BELLATRIX_RIGEL_TRACE=1 BELLATRIX_RIGEL_DUMP_FRAME=1599`: captures the grey ADF frame and visible no-ADF frame.
+
 **Conclusion of this thread**: `GfxBase->LOFlist`/`SHFlist` are never anything but their zeroed-at-allocation initial value (`AllocMem`/`MakeLibrary` clears `GfxBase`) because **neither `resetmode()` nor `gfx_vblank_attachbm()` is ever invoked** — i.e., the AmigaVideo compositor/bitmap class methods that run when Intuition creates/attaches a screen bitmap *never fire* during this entire run (1120+ frames). `gfx_vblank` faithfully runs every frame and "selects" between two NULL pointers, strobing `COPJMP2` toward chip address 0 and halting the Copper — a textbook-correct response to the actual problem, which is upstream.
 
 **This closes the Copper/Rigel-rendering angle**: there is no Copper bug, no missing-DMA bug, no list-decoding bug — Rigel is faithfully executing exactly what AROS told it to. **The real defect is that AROS never creates/opens/attaches any screen bitmap** — matching precisely what the user described ("no Workbook, no Intuition requester, only artifacts"). The investigation must now move from Rigel/graphics internals to **why Intuition (or whatever subsystem opens the boot-time screen / volume-insert requester) never reaches the point of creating a screen bitmap** — almost certainly a stalled task/missing-signal problem (an IRQ, a semaphore release, a DMA-completion flag, or similar Rigel-side condition AROS is blocked waiting on) somewhere in the boot chain *before* Intuition's first `OpenScreen()`/requester call. Likely next steps: trace Exec task switches / `Wait()`/`Signal()` activity around the point where the boot sequence should hand off to Intuition, or search `external/aros/rom/intuition/` for the screen-opening / system-requester code path and instrument its entry points to see whether it's ever reached at all.
