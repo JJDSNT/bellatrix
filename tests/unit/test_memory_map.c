@@ -36,6 +36,11 @@ static void test_decode_regions(void)
     CHECK_EQ("chip decode", MEM_REGION_CHIP_RAM, memory_map_decode(0x000100u));
     CHECK_EQ("fast decode lo", MEM_REGION_FAST, memory_map_decode(BELLATRIX_FAST_RAM_BASE));
     CHECK_EQ("fast decode hi", MEM_REGION_FAST, memory_map_decode(BELLATRIX_FAST_RAM_END));
+    CHECK_EQ("slow decode lo", MEM_REGION_SLOW, memory_map_decode(BELLATRIX_SLOW_RAM_BASE));
+    CHECK_EQ("slow decode hi", MEM_REGION_SLOW, memory_map_decode(BELLATRIX_SLOW_RAM_END));
+    CHECK_EQ("slow decode cxf mirror-looking address",
+             MEM_REGION_SLOW,
+             memory_map_decode(0x00C1FA68u));
     CHECK_EQ("z2 decode", MEM_REGION_Z2, memory_map_decode(0x00e80000u));
     CHECK_EQ("exp rom check decode", MEM_REGION_EXP_ROM_CHECK, memory_map_decode(0x00f00000u));
     CHECK_EQ("rom decode", MEM_REGION_ROM, memory_map_decode(0x00f80000u));
@@ -48,6 +53,7 @@ static void test_memory_init(BellatrixMemory *mem)
     mem->chip_ram = s_chip_ram;
     mem->chip_ram_size = sizeof(s_chip_ram);
     mem->chip_ram_mask = sizeof(s_chip_ram) - 1u;
+    mem->slow_ram_enabled = 1u;
 }
 
 static void test_overlay_reads_and_chip_writes(void)
@@ -93,6 +99,38 @@ static void test_fast_ram_big_endian(void)
     CHECK_EQ("fast read16 lo", 0x5678u, bellatrix_mem_read16(&mem, BELLATRIX_FAST_RAM_BASE + 2u));
     CHECK_EQ("fast read8 b0", 0x12u, bellatrix_mem_read8(&mem, BELLATRIX_FAST_RAM_BASE));
     CHECK_EQ("fast read8 b3", 0x78u, bellatrix_mem_read8(&mem, BELLATRIX_FAST_RAM_BASE + 3u));
+}
+
+static void test_slow_ram_big_endian_and_no_custom_alias(void)
+{
+    BellatrixMemory mem;
+
+    test_memory_init(&mem);
+
+    bellatrix_mem_write32(&mem, BELLATRIX_SLOW_RAM_BASE, 0x89abcdefu);
+    CHECK_EQ("slow read32",
+             0x89abcdefu,
+             bellatrix_mem_read32(&mem, BELLATRIX_SLOW_RAM_BASE));
+    CHECK_EQ("slow read16 hi",
+             0x89abu,
+             bellatrix_mem_read16(&mem, BELLATRIX_SLOW_RAM_BASE));
+    CHECK_EQ("slow read16 lo",
+             0xcdefu,
+             bellatrix_mem_read16(&mem, BELLATRIX_SLOW_RAM_BASE + 2u));
+    CHECK_EQ("slow read8 b0",
+             0x89u,
+             bellatrix_mem_read8(&mem, BELLATRIX_SLOW_RAM_BASE));
+    CHECK_EQ("slow read8 b3",
+             0xefu,
+             bellatrix_mem_read8(&mem, BELLATRIX_SLOW_RAM_BASE + 3u));
+
+    bellatrix_mem_write32(&mem, 0x00C1FA68u, 0x13572468u);
+    CHECK_EQ("slow mirror-looking readback",
+             0x13572468u,
+             bellatrix_mem_read32(&mem, 0x00C1FA68u));
+    CHECK_EQ("slow mirror-looking address is not custom/open bus",
+             0xffffffffu,
+             bellatrix_mem_read32(&mem, 0x00DFFA68u));
 }
 
 static void test_autoconfig_window_is_empty(void)
@@ -210,6 +248,7 @@ int main(void)
     test_decode_regions();
     test_overlay_reads_and_chip_writes();
     test_fast_ram_big_endian();
+    test_slow_ram_big_endian_and_no_custom_alias();
     test_autoconfig_window_is_empty();
     test_expansion_rom_probe_window_is_neutral();
     test_chip_ram_bank_independence();

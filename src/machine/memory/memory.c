@@ -4,6 +4,7 @@
 #include "machine/memory/memory_map.h"
 #include "machine/memory/chip_ram.h"
 #include "machine/memory/fast_ram.h"
+#include "machine/memory/slow_ram.h"
 #include "machine/memory/overlay.h"
 #include "support.h"
 
@@ -12,6 +13,9 @@
 #endif
 
 #include <string.h>
+#if defined(BELLATRIX_HARNESS)
+#include <stdlib.h>
+#endif
 
 /* ------------------------------------------------------------------------- */
 /* default backing                                                           */
@@ -24,6 +28,7 @@
 #define BELLATRIX_FAST_RAM_MASK 0x007FFFFFu
 
 static uint8_t g_fast_ram[BELLATRIX_FAST_RAM_SIZE];
+static uint8_t g_slow_ram[BELLATRIX_SLOW_RAM_SIZE];
 #endif
 
 static void bellatrix_memory_log_expansion_backend(void)
@@ -57,6 +62,19 @@ void bellatrix_memory_init(BellatrixMemory *m)
     m->fast_ram_mask = 0;
 #endif
 
+#if defined(BELLATRIX_HARNESS)
+    {
+        const char *slow = getenv("BELLATRIX_SLOW_RAM");
+        m->slow_ram = g_slow_ram;
+        m->slow_ram_size = BELLATRIX_SLOW_RAM_SIZE;
+        m->slow_ram_enabled = !(slow && slow[0] == '0');
+    }
+#else
+    m->slow_ram = 0;
+    m->slow_ram_size = 0;
+    m->slow_ram_enabled = 0;
+#endif
+
     m->rom = 0;
     m->rom_size = 0;
     m->rom_ext = 0;
@@ -66,6 +84,13 @@ void bellatrix_memory_init(BellatrixMemory *m)
 
 #if defined(BELLATRIX_HARNESS)
     memset(m->fast_ram, 0, m->fast_ram_size);
+    memset(m->slow_ram, 0, m->slow_ram_size);
+    if (m->slow_ram_enabled) {
+        kprintf("[MEMMAP] slow RAM: 0x%06x-0x%06x (%u KB)\n",
+                (unsigned)BELLATRIX_SLOW_RAM_BASE,
+                (unsigned)(BELLATRIX_SLOW_RAM_BASE + m->slow_ram_size - 1u),
+                (unsigned)(m->slow_ram_size / 1024u));
+    }
 #endif
 
     bellatrix_memory_log_expansion_backend();
@@ -225,6 +250,45 @@ void bellatrix_fast_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
         return;
     }
     fast_ram_write32(m, addr, value);
+}
+
+/* ------------------------------------------------------------------------- */
+/* direct slow RAM API                                                       */
+/* ------------------------------------------------------------------------- */
+
+uint8_t bellatrix_slow_read8(const BellatrixMemory *m, uint32_t addr)
+{
+    return slow_ram_read8(m, addr);
+}
+
+uint16_t bellatrix_slow_read16(const BellatrixMemory *m, uint32_t addr)
+{
+    return slow_ram_read16(m, addr);
+}
+
+uint32_t bellatrix_slow_read32(const BellatrixMemory *m, uint32_t addr)
+{
+    return slow_ram_read32(m, addr);
+}
+
+void bellatrix_slow_write8(BellatrixMemory *m, uint32_t addr, uint8_t value)
+{
+    slow_ram_write8(m, addr, value);
+}
+
+void bellatrix_slow_write16(BellatrixMemory *m, uint32_t addr, uint16_t value)
+{
+    slow_ram_write16(m, addr, value);
+}
+
+void bellatrix_slow_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
+{
+    slow_ram_write32(m, addr, value);
+}
+
+int bellatrix_slow_contains(const BellatrixMemory *m, uint32_t addr, unsigned int size)
+{
+    return slow_ram_contains(m, addr, size);
 }
 
 /* ------------------------------------------------------------------------- */

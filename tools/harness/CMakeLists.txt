@@ -152,6 +152,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/memory/memory.c
     ${SRC}/machine/memory/chip_ram.c
     ${SRC}/machine/memory/fast_ram.c
+    ${SRC}/machine/memory/slow_ram.c
     ${SRC}/machine/memory/overlay.c
     ${SRC}/machine/memory/memory_map.c
 
@@ -373,6 +374,7 @@ add_executable(bellatrix_unit_memory
     ${SRC}/machine/memory/memory.c
     ${SRC}/machine/memory/chip_ram.c
     ${SRC}/machine/memory/fast_ram.c
+    ${SRC}/machine/memory/slow_ram.c
     ${SRC}/machine/memory/overlay.c
     ${SRC}/machine/memory/memory_map.c
     ${SRC}/machine/autoconfig/autoconfig.c

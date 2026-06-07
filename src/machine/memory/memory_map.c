@@ -4,6 +4,7 @@
 
 #include "machine/memory/chip_ram.h"
 #include "machine/memory/overlay.h"
+#include "machine/memory/slow_ram.h"
 
 /* autoconfig and fast RAM are needed:
  *   - always on the Musashi harness (all accesses go through the bus handler)
@@ -39,6 +40,9 @@ MemoryRegion memory_map_decode(uint32_t addr)
     if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END)
         return MEM_REGION_FAST;
 #endif
+
+    if (addr >= BELLATRIX_SLOW_RAM_BASE && addr <= BELLATRIX_SLOW_RAM_END)
+        return MEM_REGION_SLOW;
 
     if (addr >= BELLATRIX_CIAB_BASE && addr <= BELLATRIX_CIAB_END)
         return MEM_REGION_CIAB;
@@ -94,6 +98,9 @@ uint8_t memory_map_read8(BellatrixMemory *m, uint32_t addr)
         return fast_ram_read8(m, addr);
 #endif
 
+    case MEM_REGION_SLOW:
+        return slow_ram_read8(m, addr);
+
 #if BELLATRIX_ROUTE_Z2_AUTOCONFIG
     case MEM_REGION_Z2:
         return bellatrix_zorro2_config_read8(addr);
@@ -125,6 +132,9 @@ uint16_t memory_map_read16(BellatrixMemory *m, uint32_t addr)
     case MEM_REGION_FAST:
         return fast_ram_read16(m, addr);
 #endif
+
+    case MEM_REGION_SLOW:
+        return slow_ram_read16(m, addr);
 
 #if BELLATRIX_ROUTE_Z2_AUTOCONFIG
     case MEM_REGION_Z2:
@@ -158,6 +168,9 @@ uint32_t memory_map_read32(BellatrixMemory *m, uint32_t addr)
         return fast_ram_read32(m, addr);
 #endif
 
+    case MEM_REGION_SLOW:
+        return slow_ram_read32(m, addr);
+
 #if BELLATRIX_ROUTE_Z2_AUTOCONFIG
     case MEM_REGION_Z2:
         return bellatrix_zorro2_config_read32(addr);
@@ -190,6 +203,10 @@ void memory_map_write8(BellatrixMemory *m, uint32_t addr, uint8_t value)
         return;
 #endif
 
+    case MEM_REGION_SLOW:
+        slow_ram_write8(m, addr, value);
+        return;
+
 #if BELLATRIX_ROUTE_Z2_AUTOCONFIG
     case MEM_REGION_Z2:
         bellatrix_zorro2_config_write8(addr, value);
@@ -216,6 +233,10 @@ void memory_map_write16(BellatrixMemory *m, uint32_t addr, uint16_t value)
         return;
 #endif
 
+    case MEM_REGION_SLOW:
+        slow_ram_write16(m, addr, value);
+        return;
+
 #if BELLATRIX_ROUTE_Z2_AUTOCONFIG
     case MEM_REGION_Z2:
         bellatrix_zorro2_config_write16(addr, value);
@@ -241,6 +262,10 @@ void memory_map_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
         fast_ram_write32(m, addr, value);
         return;
 #endif
+
+    case MEM_REGION_SLOW:
+        slow_ram_write32(m, addr, value);
+        return;
 
 #if BELLATRIX_ROUTE_Z2_AUTOCONFIG
     case MEM_REGION_Z2:

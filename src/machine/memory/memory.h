@@ -23,6 +23,15 @@
 #define BELLATRIX_FAST_RAM_END  0x009FFFFFu
 #define BELLATRIX_FAST_RAM_MASK 0x007FFFFFu
 
+/*
+ * AROS-visible motherboard slow RAM.  AROS __MemoryTest discovers this range
+ * and gives it higher priority than chip RAM, keeping chip RAM free for DMA
+ * buffers and display data.
+ */
+#define BELLATRIX_SLOW_RAM_BASE 0x00C00000u
+#define BELLATRIX_SLOW_RAM_SIZE 0x00180000u
+#define BELLATRIX_SLOW_RAM_END  (BELLATRIX_SLOW_RAM_BASE + BELLATRIX_SLOW_RAM_SIZE - 1u)
+
 #define BELLATRIX_ROM_BASE      0x00F80000u
 #define BELLATRIX_ROM_SIZE      0x00080000u
 #define BELLATRIX_ROM_END       0x00FFFFFFu
@@ -77,6 +86,10 @@ typedef struct BellatrixMemory
     uint8_t *fast_ram;
     size_t   fast_ram_size;
     uint32_t fast_ram_mask;
+
+    uint8_t *slow_ram;
+    size_t   slow_ram_size;
+    uint8_t  slow_ram_enabled;
 
     const uint8_t *rom;
     size_t         rom_size;
@@ -147,6 +160,20 @@ uint32_t bellatrix_fast_read32(const BellatrixMemory *mem, uint32_t addr);
 void bellatrix_fast_write8 (BellatrixMemory *mem, uint32_t addr, uint8_t value);
 void bellatrix_fast_write16(BellatrixMemory *mem, uint32_t addr, uint16_t value);
 void bellatrix_fast_write32(BellatrixMemory *mem, uint32_t addr, uint32_t value);
+
+/* ------------------------------------------------------------------------- */
+/* direct Slow RAM API                                                       */
+/* ------------------------------------------------------------------------- */
+
+uint8_t  bellatrix_slow_read8 (const BellatrixMemory *mem, uint32_t addr);
+uint16_t bellatrix_slow_read16(const BellatrixMemory *mem, uint32_t addr);
+uint32_t bellatrix_slow_read32(const BellatrixMemory *mem, uint32_t addr);
+
+void bellatrix_slow_write8 (BellatrixMemory *mem, uint32_t addr, uint8_t value);
+void bellatrix_slow_write16(BellatrixMemory *mem, uint32_t addr, uint16_t value);
+void bellatrix_slow_write32(BellatrixMemory *mem, uint32_t addr, uint32_t value);
+
+int bellatrix_slow_contains(const BellatrixMemory *mem, uint32_t addr, unsigned int size);
 
 /* ------------------------------------------------------------------------- */
 /* helpers                                                                   */

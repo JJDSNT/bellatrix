@@ -5,6 +5,7 @@
 //
 // Address map served by this dispatcher:
 //   0x000000–BELLATRIX_CHIP_RAM_END  chip RAM (or ROM overlay at boot)
+//   0xC00000–0xD7FFFF  slow RAM via shared Bellatrix memory map
 //   0xE00000–0xEFFFFF  extended ROM (1 MB ROMs only — first 512 KB)
 //   0xF80000–0xFFFFFF  standard ROM (Kickstart / AROS second 512 KB)
 //   everything else    delegated to bellatrix_machine_read/write (chipset/CIA/RTC)
@@ -1522,6 +1523,13 @@ static uint32_t harness_read(uint32_t addr, int size)
 
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
+    if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
+                                addr,
+                                (unsigned int)size)) {
+        bellatrix_bridge_cpu_write(addr, value, (unsigned int)size);
+        return;
+    }
+
     addr = bellatrix_bridge_normalize_addr(addr);
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
 

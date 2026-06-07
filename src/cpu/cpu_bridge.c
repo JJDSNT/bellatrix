@@ -3,6 +3,7 @@
 #include "cpu/cpu_bridge.h"
 
 #include "machine/machine.h"
+#include "machine/memory/memory.h"
 #include <stdint.h>
 
 /* Weak stub in pal_core.c; strong override provided by bellatrix.c for bare
@@ -28,11 +29,17 @@ uint32_t bellatrix_bridge_normalize_addr(uint32_t addr)
 
 uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
 {
+    if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
+        return bellatrix_machine_read(addr, size);
     return bellatrix_machine_read(bellatrix_bridge_normalize_addr(addr), size);
 }
 
 void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size)
 {
+    if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size)) {
+        bellatrix_machine_write(addr, value, size);
+        return;
+    }
     bellatrix_machine_write(bellatrix_bridge_normalize_addr(addr), value, size);
 }
 
