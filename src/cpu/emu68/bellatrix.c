@@ -79,8 +79,6 @@ static void bellatrix_runtime_notify_cpu_progress(uint32_t cycles);
 #define BELLATRIX_RIGEL_BUILD 1
 #else
 #define BELLATRIX_RIGEL_BUILD 0
-#include "runtime/core_gfx.h"
-#include "runtime/core_audio.h"
 #include "runtime/core_io.h"
 #endif
 
@@ -109,21 +107,18 @@ void bellatrix_run_selected_cpu_backend(void)
 /* ---------------------------------------------------------------------------
  * Multicore runtime state.
  *
- * s_gfx_cycles_pending        : Core 0 → Core 1 (GFX/Agnus).
- * s_io_cycles_pending         : Core 0 → Core 3 (IO/CIA).
- * s_published_master_cycles   : Core 1 publishes GFX master time → Core 2
- *                               (Audio) reads it via acquire load.
+ * s_chipset_cycles_pending    : Core 0 → Core 1 (chipset).
+ * s_io_cycles_pending         : Core 0 → Core 3 (physical IO).
  * s_chipset_lock              : Coarse spinlock protecting all chipset state.
- *                               Held by Core 0 (MMIO) and Cores 1/2/3 while
- *                               advancing their respective subsystems.
+ *                               Held by Core 0 (MMIO) and Core 1 while
+ *                               advancing the chipset.
  * ------------------------------------------------------------------------- */
 #if defined(BELLATRIX_ENABLE_MULTICORE)
 static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
 #endif
 #if !BELLATRIX_RIGEL_BUILD
-static _Atomic uint32_t s_gfx_cycles_pending       = 0;
+static _Atomic uint32_t s_chipset_cycles_pending   = 0;
 static _Atomic uint32_t s_io_cycles_pending        = 0;
-static _Atomic uint64_t s_published_master_cycles  = 0;
 #endif
 
 /* Per-core runtime objects — advanced by Core 1 via bellatrix_runtime_host_step(). */
@@ -162,7 +157,7 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 {
     if (PAL_Core_IsMulticoreEnabled()) {
-        atomic_fetch_add_explicit(&s_gfx_cycles_pending, cycles, memory_order_release);
+        atomic_fetch_add_explicit(&s_chipset_cycles_pending, cycles, memory_order_release);
         atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
         asm volatile("dsb sy\n\t sev" ::: "memory");
     } else {
@@ -174,13 +169,8 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 /* ---------------------------------------------------------------------------
  * Strong overrides: per-core chipset advance steps.
  *
- * bellatrix_runtime_host_step  — Core 1, GFX/Agnus only.
- * bellatrix_runtime_audio_step — Core 2, Paula audio.
- * bellatrix_runtime_io_step    — Core 3, CIA / serial / disk.
- *
- * Core 1 publishes gfx.master_cycles to s_published_master_cycles after each
- * GFX step so Core 2 can advance audio to the same time horizon without
- * reading gfx.master_cycles across the chipset lock boundary.
+ * bellatrix_runtime_host_step  — Core 1, full chipset.
+ * bellatrix_runtime_io_step    — Core 3, physical IO.
  * ------------------------------------------------------------------------- */
 #if !BELLATRIX_RIGEL_BUILD
 void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
@@ -188,17 +178,13 @@ void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
     (void)host_now;
     (void)host_freq;
 
-    uint32_t cycles = atomic_exchange_explicit(&s_gfx_cycles_pending, 0u,
+    uint32_t cycles = atomic_exchange_explicit(&s_chipset_cycles_pending, 0u,
                                                memory_order_acquire);
     if (cycles == 0)
         return;
 
     chipset_lock_acquire();
-    core_gfx_step(&g_runtime.gfx, cycles);
-    atomic_store_explicit(&s_published_master_cycles,
-                          g_runtime.gfx.master_cycles,
-                          memory_order_release);
-
+    bellatrix_machine_advance(cycles);
     chipset_lock_release();
 }
 
@@ -206,15 +192,6 @@ void bellatrix_runtime_audio_step(uint64_t host_now, uint64_t host_freq)
 {
     (void)host_now;
     (void)host_freq;
-
-    uint64_t master = atomic_load_explicit(&s_published_master_cycles,
-                                           memory_order_acquire);
-    if (master == 0)
-        return;
-
-    chipset_lock_acquire();
-    core_audio_step(&g_runtime.audio, master);
-    chipset_lock_release();
 }
 
 void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
@@ -423,7 +400,7 @@ void bellatrix_init(void)
 #if BELLATRIX_RIGEL_BUILD
     usb_host_init(&g_runtime.io.usb_host);
 #else
-    bellatrix_runtime_init(&g_runtime, bellatrix_machine_get());
+    core_io_init(&g_runtime.io, bellatrix_machine_get());
 #endif
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
@@ -656,9 +633,8 @@ void bellatrix_init(void)
 #ifdef BELLATRIX_ENABLE_MULTICORE
     /* Enable secondary chipset cores only after host-side services are ready. */
     PAL_Core_SetMulticoreEnabled(1);
-    PAL_Core_LaunchChipset(NULL);   /* Core 1 — GFX/Agnus */
-    PAL_Core_LaunchAudio();         /* Core 2 — Paula audio */
-    PAL_Core_LaunchIO();            /* Core 3 — CIA / serial / disk */
+    PAL_Core_LaunchChipset(NULL);   /* Core 1 — chipset */
+    PAL_Core_LaunchIO();            /* Core 3 — physical IO */
 #else
     /*
      * Keep Bellatrix in single-core mode so Emu68's normal bootstrap/JIT flow
@@ -710,9 +686,9 @@ void bellatrix_init(void)
 
 
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[BELA] Initialized (multicore enabled: Core1=GFX Core2=Audio Core3=IO)\n");
+        kprintf("[BELA] Initialized (multicore enabled: Core1=Chipset Core3=IO)\n");
     } else {
-        kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+GFX+Audio+IO)\n");
+        kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }
 
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
@@ -758,7 +734,8 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     uint32_t result = 0;
     BellatrixMachine *m = bellatrix_machine_get();
 
-    addr = bellatrix_bridge_normalize_addr(addr);
+    if (!bellatrix_slow_contains(bellatrix_machine_memory(), addr, (unsigned int)size))
+        addr = bellatrix_bridge_normalize_addr(addr);
 
 #if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
     {

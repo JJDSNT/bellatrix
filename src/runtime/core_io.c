@@ -66,7 +66,7 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
 }
 
 /* Weak override — called from Core 3's loop in pal_core.c. */
-void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
+__attribute__((weak)) void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
     (void)now;
     (void)freq;
