@@ -302,6 +302,7 @@ void paula_audio_write_len(
 
     if (c->current_length == 0) {
         c->current_length = value;
+        c->current_ptr = c->audlc;
     }
 }
 

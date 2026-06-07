@@ -9,16 +9,17 @@ trap 'rm -f "$LOG"' EXIT
 
 "$HARNESS" "$ROM" --adf "$ADF" --headless --cycles 5000 >"$LOG" 2>&1
 
-grep -F "[AUTOCONFIG] disabled; config window=00e80000 returns empty" "$LOG" >/dev/null
+grep -F "[MEMMAP] expansion backend: harness zorro2 bus" "$LOG" >/dev/null
+grep -F "[Z2] all boards configured" "$LOG" >/dev/null
 
-if grep -F "[AUTOCONFIG] board assigned" "$LOG" >/dev/null; then
-    echo "unexpected AutoConfig assignment"
+if grep -F "[AUTOCONFIG]" "$LOG" >/dev/null; then
+    echo "unexpected legacy AutoConfig activity"
     cat "$LOG"
     exit 1
 fi
 
-if grep -F "[AUTOCONFIG] shutup" "$LOG" >/dev/null; then
-    echo "unexpected AutoConfig shutup"
+if grep -F "[Z2] board '" "$LOG" >/dev/null; then
+    echo "unexpected Zorro2 board activity"
     cat "$LOG"
     exit 1
 fi

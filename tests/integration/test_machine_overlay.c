@@ -87,6 +87,12 @@ static void failf(const char *expr, int expected, int actual, int line)
 static uint8_t s_adf[FLOPPY_ADF_DD_SIZE];
 static uint8_t s_chip_ram[BELLATRIX_CHIP_RAM_SIZE];
 
+static uint16_t test_expected_vhposr(const BellatrixMachine *m)
+{
+    return (uint16_t)(((m->agnus.beam.vpos & 0xFFu) << 8) |
+                      ((m->agnus.beam.hpos >> 1) & 0xFFu));
+}
+
 static int harness_overlay_state(const BellatrixMachine *m)
 {
     if (!(m->cia_a.ddra & 0x01u))
@@ -496,19 +502,19 @@ static void test_paula_audio_channel0_irq_real_path(void)
 
     m = test_machine_init();
 
+    bellatrix_chip_write16(&m->memory, 0x0200u, 0x7F00u);
+    bellatrix_machine_write(REG_AUD0LCH, 0x0000u, 2);
+    bellatrix_machine_write(REG_AUD0LCL, 0x0200u, 2);
+    bellatrix_machine_write(REG_AUD0LEN, 0x0001u, 2);
+    bellatrix_machine_write(REG_AUD0PER, 0x0001u, 2);
+    bellatrix_machine_write(REG_AUD0VOL, 0x0040u, 2);
+
     bellatrix_machine_write(REG_INTENA,
                             0x8000u | PAULA_INT_MASTER | PAULA_INT_AUD0,
                             2);
     bellatrix_machine_write(REG_DMACON,
                             0x8000u | DMAF_DMAEN | DMAF_AUD0EN,
                             2);
-
-    bellatrix_machine_write(REG_AUD0LCH, 0x0000u, 2);
-    bellatrix_machine_write(REG_AUD0LCL, 0x0200u, 2);
-    bellatrix_machine_write(REG_AUD0LEN, 0x0001u, 2);
-    bellatrix_machine_write(REG_AUD0PER, 0x0001u, 2);
-    bellatrix_machine_write(REG_AUD0VOL, 0x0040u, 2);
-    bellatrix_machine_write(REG_AUD0DAT, 0x7F00u, 2);
 
     bellatrix_machine_advance(1u);
     bellatrix_machine_sync_ipl();
@@ -519,7 +525,7 @@ static void test_paula_audio_channel0_irq_real_path(void)
     CHECK_INT("aud0 publishes level 4",
               4,
               m->current_ipl);
-    CHECK_INT("aud0 current sample decoded from auddat",
+    CHECK_INT("aud0 current sample decoded from dma word",
               32512,
               m->paula.audio.ch[0].current_sample);
 
@@ -969,8 +975,7 @@ static void test_custom_readback_basics(void)
     vposr = (uint16_t)bellatrix_machine_read(REG_VPOSR, 2);
     vhposr = (uint16_t)agnus_read_reg(&m->agnus, AGNUS_VHPOSR);
     expected_vposr = (uint16_t)(0x2000u | (((m->agnus.beam.vpos >> 8) & 0x01u) << 8));
-    expected_vhposr = (uint16_t)(((m->agnus.beam.vpos & 0xFFu) << 8) |
-                                 (m->agnus.beam.hpos & 0xFFu));
+    expected_vhposr = test_expected_vhposr(m);
 
     CHECK_INT("dmaconr starts with blitter zero flag only", 0x2000, dmaconr);
     CHECK_INT("intenar starts clear", 0x0000, intenar);
@@ -1043,16 +1048,14 @@ static void test_raster_progression_readback(void)
               (int)(0x2000u | (((m->agnus.beam.vpos >> 8) & 0x01u) << 8)),
               vposr);
     CHECK_INT("vhposr matches beam state after one tick",
-              (int)(((m->agnus.beam.vpos & 0xFFu) << 8) |
-                    (m->agnus.beam.hpos & 0xFFu)),
+              test_expected_vhposr(m),
               vhposr);
 
     ticks_to_next_line = beam_line_hmax(&m->agnus.beam) - beam_hpos(&m->agnus.beam);
     bellatrix_machine_advance(ticks_to_next_line);
     vhposr = (uint16_t)agnus_read_reg(&m->agnus, AGNUS_VHPOSR);
     CHECK_INT("vhposr matches beam state at next line",
-              (int)(((m->agnus.beam.vpos & 0xFFu) << 8) |
-                    (m->agnus.beam.hpos & 0xFFu)),
+              test_expected_vhposr(m),
               vhposr);
 
     bellatrix_machine_advance(4096u);
@@ -1063,8 +1066,7 @@ static void test_raster_progression_readback(void)
               (int)(0x2000u | (((m->agnus.beam.vpos >> 8) & 0x01u) << 8)),
               vposr);
     CHECK_INT("vhposr keeps tracking current beam state",
-              (int)(((m->agnus.beam.vpos & 0xFFu) << 8) |
-                    (m->agnus.beam.hpos & 0xFFu)),
+              test_expected_vhposr(m),
               vhposr);
 
     ticks_to_next_frame =
@@ -1075,8 +1077,7 @@ static void test_raster_progression_readback(void)
     vhposr = (uint16_t)agnus_read_reg(&m->agnus, AGNUS_VHPOSR);
 
     CHECK_INT("frame wrap readback matches beam origin",
-              (int)(((m->agnus.beam.vpos & 0xFFu) << 8) |
-                    (m->agnus.beam.hpos & 0xFFu)),
+              test_expected_vhposr(m),
               vhposr);
     CHECK_INT("frame wrap vposr matches chip id and beam state",
               (int)(0x2000u | (((m->agnus.beam.vpos >> 8) & 0x01u) << 8)),
