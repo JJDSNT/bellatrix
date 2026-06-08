@@ -36,6 +36,9 @@ Changes are in `external/rigel`:
   - Hires DDF origin now uses the same horizontal scale as the visible window.
   - Sprite composition now honors each sprite's `VSTART/VSTOP`; previously an
     armed sprite could render on unrelated lines and create a vertical black bar.
+  - Sprite horizontal composition now scales lores sprite bits across 2 hires
+    pixels when `BPLCON0.HIRES` is set. This makes the floppy/sprite-width path
+    match the hires playfield coordinate space instead of rendering too narrow.
 
 - `src/chipset/agnus/timing/slot_scheduler.c`
   - `BPL1MOD/BPL2MOD` are now applied only after a scanline that actually fetched
@@ -60,6 +63,8 @@ Observed after the fixes:
 
 - The horizontal wrap is gone.
 - The black vertical bar is gone.
+- The floppy/sprite overlay is wider and closer to the Kickstart reference in
+  hires mode.
 - Frame dump is still `560x145`, matching Rigel's current ECS/hires DIW decode
   for this ROM sequence.
 
@@ -70,9 +75,18 @@ The KS20 screen is still not visually complete:
 - logo and floppy are mostly outline/partial bitplane data
 - ROM copyright text is missing or not rendered visibly
 - fills and some colors do not match the reference
+- the visible image appears static across the tested boot-screen frames:
+  `/tmp/ks20_850.ppm`, `/tmp/ks20_890.ppm`, and
+  `/tmp/ks20_900_sprite_hscale.ppm` compared with ImageMagick `AE=0`
 
 Most likely next areas:
 
+- animation source:
+  - Copper trace shows `SPR0PTH..SPR7PTL` are reloaded every frame to
+    `0x000490`, which looks like a shared/null sprite list rather than the
+    animated floppy artwork.
+  - This makes the remaining floppy animation more likely to be bitplane/Copper
+    or blitter-driven than hardware-sprite driven.
 - bitplane fetch/plane-word count for KS20 hires settings:
   - `BPLCON0=b302`
   - `BPLCON1=0044`
@@ -83,4 +97,3 @@ Most likely next areas:
 - Hires planar expansion: compositor currently emits one pixel per bitplane bit
   block position. Verify whether hires needs different source-to-output mapping
   rather than only scaled DIW/DDF coordinates.
-
