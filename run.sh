@@ -13,19 +13,7 @@ HARNESS_BUILD_DIR="$ROOT/out/harness"
 HARNESS_BIN="$HARNESS_BUILD_DIR/harness"
 
 set_harness_paths() {
-    case "${BELLATRIX_CHIPSET_BACKEND:-rigel}" in
-        rigel)
-            HARNESS_BUILD_DIR="$ROOT/out/harness-rigel"
-            ;;
-        legacy|"")
-            HARNESS_BUILD_DIR="$ROOT/out/harness"
-            ;;
-        *)
-            echo "ERROR: invalid BELLATRIX_CHIPSET_BACKEND: ${BELLATRIX_CHIPSET_BACKEND:-}"
-            echo "Valid values: legacy, rigel"
-            exit 1
-            ;;
-    esac
+    HARNESS_BUILD_DIR="$ROOT/out/harness-rigel"
     HARNESS_BIN="$HARNESS_BUILD_DIR/harness"
 }
 
@@ -169,11 +157,7 @@ build_harness() {
     mkdir -p "$HARNESS_BUILD_DIR"
 
     local HARNESS_CFLAGS=""
-    local HARNESS_RIGEL_FLAG="OFF"
     local core_log="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
-    if [ "${BELLATRIX_CHIPSET_BACKEND:-rigel}" = "rigel" ]; then
-        HARNESS_RIGEL_FLAG="ON"
-    fi
     if [ "$core_log" = "1" ]; then
         HARNESS_CFLAGS="-DBELLATRIX_CORE_LOG"
         echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
@@ -184,7 +168,6 @@ build_harness() {
         cmake "$ROOT/tools/harness" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
-            -DBELLATRIX_USE_RIGEL_CHIPSET="$HARNESS_RIGEL_FLAG" \
             ${HARNESS_CFLAGS:+-DCMAKE_C_FLAGS="$HARNESS_CFLAGS"} \
             > /dev/null
         make -j"$(nproc)"
@@ -209,22 +192,14 @@ build_cd_board() {
 set_profile_paths() {
     case "$1" in
         bellatrix)
-            if [ "${BELLATRIX_CHIPSET_BACKEND:-rigel}" = "rigel" ]; then
-                INSTALL="$ROOT/emu68/install-bellatrix-rigel"
-            else
-                INSTALL="$ROOT/emu68/install-bellatrix"
-            fi
+            INSTALL="$ROOT/emu68/install-bellatrix-rigel"
             IMAGE="$INSTALL/Emu68.img"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"
             BELLATRIX_CPU_BACKEND_PROFILE="emu68"
             ;;
         bellatrix-musashi)
-            if [ "${BELLATRIX_CHIPSET_BACKEND:-rigel}" = "rigel" ]; then
-                INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi"
-            else
-                INSTALL="$ROOT/emu68/install-bellatrix-musashi"
-            fi
+            INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi"
             IMAGE="$INSTALL/Emu68.img"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"

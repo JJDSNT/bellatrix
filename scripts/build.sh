@@ -92,40 +92,16 @@ hide_modified_files() {
 }
 
 CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
-CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-rigel}"
-case "$CHIPSET_BACKEND" in
-    legacy|"")
-        CHIPSET_RIGEL_FLAG="OFF"
-        ;;
-    rigel)
-        CHIPSET_RIGEL_FLAG="ON"
-        ;;
-    *)
-        echo "ERROR: invalid BELLATRIX_CHIPSET_BACKEND: $CHIPSET_BACKEND"
-        echo "Valid values: legacy, rigel"
-        exit 1
-        ;;
-esac
 
 case "$CPU_BACKEND" in
     emu68|"")
-        if [ "$CHIPSET_BACKEND" = "rigel" ]; then
-            BUILD="$EMU68/build-bellatrix-rigel"
-            INSTALL="$EMU68/install-bellatrix-rigel"
-        else
-            BUILD="$EMU68/build-bellatrix"
-            INSTALL="$EMU68/install-bellatrix"
-        fi
+        BUILD="$EMU68/build-bellatrix-rigel"
+        INSTALL="$EMU68/install-bellatrix-rigel"
         MUSASHI_CPU_FLAG="OFF"
         ;;
     musashi)
-        if [ "$CHIPSET_BACKEND" = "rigel" ]; then
-            BUILD="$EMU68/build-bellatrix-rigel-musashi"
-            INSTALL="$EMU68/install-bellatrix-rigel-musashi"
-        else
-            BUILD="$EMU68/build-bellatrix-musashi"
-            INSTALL="$EMU68/install-bellatrix-musashi"
-        fi
+        BUILD="$EMU68/build-bellatrix-rigel-musashi"
+        INSTALL="$EMU68/install-bellatrix-rigel-musashi"
         MUSASHI_CPU_FLAG="ON"
         ;;
     *)
@@ -158,7 +134,7 @@ OSD_ENABLED="${BELLATRIX_OSD:-1}"
 LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
 
 echo "[BUILD] cpu backend: $CPU_BACKEND"
-echo "[BUILD] chipset backend: $CHIPSET_BACKEND"
+echo "[BUILD] chipset backend: rigel"
 
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
@@ -281,7 +257,6 @@ cmake "$EMU68" \
     -DCMAKE_CXX_FLAGS="$EXTRA_DEFINES" \
     -DBELLATRIX_UART_PL011="$PL011_FLAG" \
     -DBELLATRIX_ENABLE_EMU68_BOARDS="$EMU68_BOARDS_ENABLED" \
-    -DBELLATRIX_USE_RIGEL_CHIPSET="$CHIPSET_RIGEL_FLAG" \
     -DBELLATRIX_USE_MUSASHI_CPU="$MUSASHI_CPU_FLAG" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \
     -DBELLATRIX_ENABLE_USBSTACK="$USBSTACK_ENABLED" \

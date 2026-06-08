@@ -3,8 +3,6 @@
 
 #include <stdint.h>
 
-struct Paula;
-
 typedef enum BellatrixControllerPortDevice {
     BELLATRIX_CONTROLLER_PORT_MOUSE = 0,
     BELLATRIX_CONTROLLER_PORT_JOYSTICK = 1,
@@ -70,7 +68,5 @@ void bellatrix_controller_port_set_joystick_direction(BellatrixControllerPorts *
                                                       int pressed);
 
 uint8_t bellatrix_controller_ports_cia_pra_bits(const BellatrixControllerPorts *ports);
-void bellatrix_controller_ports_sync_paula(const BellatrixControllerPorts *ports,
-                                           struct Paula *paula);
 
 #endif

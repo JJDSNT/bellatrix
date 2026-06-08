@@ -1,7 +1,5 @@
 #include "machine/input/controller_port.h"
 
-#include "chipset/paula/paula.h"
-
 #include <string.h>
 
 static BellatrixControllerPortState *controller_port_state(BellatrixControllerPorts *ports,
@@ -21,32 +19,6 @@ static const BellatrixControllerPortState *controller_port_state_const(const Bel
 
     return &ports->port[port];
 }
-
-#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
-static uint16_t controller_port_joydat(const BellatrixControllerPortState *port)
-{
-    uint8_t x;
-    uint8_t y;
-
-    if (!port)
-        return 0x0000u;
-
-    if (port->device == BELLATRIX_CONTROLLER_PORT_JOYSTICK)
-    {
-        uint8_t y1 = port->joy_left ? 1u : 0u;
-        uint8_t y0 = (uint8_t)(y1 ^ (port->joy_up ? 1u : 0u));
-        uint8_t x1 = port->joy_right ? 1u : 0u;
-        uint8_t x0 = (uint8_t)(x1 ^ (port->joy_down ? 1u : 0u));
-
-        return (uint16_t)(((uint16_t)((uint8_t)((y1 << 1) | y0)) << 8) |
-                          (uint16_t)((uint8_t)((x1 << 1) | x0)));
-    }
-
-    x = port->mouse_x;
-    y = port->mouse_y;
-    return (uint16_t)(((uint16_t)y << 8) | (uint16_t)x);
-}
-#endif
 
 void bellatrix_controller_ports_init(BellatrixControllerPorts *ports)
 {
@@ -195,25 +167,3 @@ uint8_t bellatrix_controller_ports_cia_pra_bits(const BellatrixControllerPorts *
     return value;
 }
 
-void bellatrix_controller_ports_sync_paula(const BellatrixControllerPorts *ports,
-                                           struct Paula *paula)
-{
-#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
-    (void)ports;
-    (void)paula;
-#else
-    unsigned port;
-
-    if (!ports || !paula)
-        return;
-
-    for (port = 0u; port < 2u; ++port)
-    {
-        const BellatrixControllerPortState *state = &ports->port[port];
-
-        paula_set_joydat(paula, port, controller_port_joydat(state));
-        paula_set_pot_button_x(paula, port, state->button2 ? 1 : 0);
-        paula_set_pot_button_y(paula, port, state->button3 ? 1 : 0);
-    }
-#endif
-}

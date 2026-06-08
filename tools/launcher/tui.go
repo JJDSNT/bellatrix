@@ -9,9 +9,8 @@ import (
 )
 
 type launchResult struct {
-	emuProfile     string
-	chipsetBackend string
-	harnessCPU     string
+	emuProfile string
+	harnessCPU string
 	kickstart      string
 	adf            string
 	iso            string
@@ -58,9 +57,8 @@ type model struct {
 	btstack        bool
 	usbstack       bool
 	usbPointer     string
-	emu68Boards    string
-	chipsetBackend string
-	cpuBackend     string
+	emu68Boards string
+	cpuBackend  string
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
@@ -90,9 +88,8 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		btstack:        false,
 		usbstack:       true,
 		usbPointer:     "mouse",
-		emu68Boards:    "legacy",
-		chipsetBackend: "rigel",
-		cpuBackend:     "musashi",
+		emu68Boards: "legacy",
+		cpuBackend:  "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
 		serialBackend:  "miniuart",
@@ -144,9 +141,8 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		btstack:        fm.btstack,
 		usbstack:       fm.usbstack,
 		usbPointer:     fm.usbPointer,
-		emu68Boards:    fm.emu68Boards,
-		chipsetBackend: fm.chipsetBackend,
-		fpuEnabled:     fm.fpuEnabled,
+		emu68Boards: fm.emu68Boards,
+		fpuEnabled:  fm.fpuEnabled,
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
 		rigelTrace:     fm.rigelTrace,
@@ -191,13 +187,6 @@ func nextEmu68BoardsMode(current string) string {
 	return "legacy"
 }
 
-func nextChipsetBackend(current string) string {
-	if current == "legacy" {
-		return "rigel"
-	}
-	return "legacy"
-}
-
 func nextCPUBackend(current string) string {
 	switch current {
 	case "musashi":
@@ -220,17 +209,11 @@ func harnessCPUForBackend(cpuBackend string) string {
 	return ""
 }
 
-func installDirForSelection(cpuBackend string, chipsetBackend string) string {
-	switch {
-	case chipsetBackend == "rigel" && isMusashiCPUBackend(cpuBackend):
+func installDirForSelection(cpuBackend string) string {
+	if isMusashiCPUBackend(cpuBackend) {
 		return "emu68/install-bellatrix-rigel-musashi"
-	case chipsetBackend == "rigel":
-		return "emu68/install-bellatrix-rigel"
-	case isMusashiCPUBackend(cpuBackend):
-		return "emu68/install-bellatrix-musashi"
-	default:
-		return "emu68/install-bellatrix"
 	}
+	return "emu68/install-bellatrix-rigel"
 }
 
 func nextSerialBackend(current string) string {
@@ -373,10 +356,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.emu68Boards = nextEmu68BoardsMode(m.emu68Boards)
 			return m, nil
 
-		case "g":
-			m.chipsetBackend = nextChipsetBackend(m.chipsetBackend)
-			return m, nil
-
 		case "c":
 			m.cpuBackend = nextCPUBackend(m.cpuBackend)
 			return m, nil
@@ -395,10 +374,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "r":
-			if m.chipsetBackend == "rigel" {
-				m.rigelTrace = !m.rigelTrace
-				m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
-			}
+			m.rigelTrace = !m.rigelTrace
+			m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
 			return m, nil
 
 		case "a":
@@ -583,22 +560,12 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emu68 boards:"), boardsBadge))
 	b.WriteString("\n")
 
-	chipsetBadge := offBadgeStyle.Render("LEGACY")
-	if m.chipsetBackend == "rigel" {
-		chipsetBadge = onBadgeStyle.Render("RIGEL")
+	rigelTraceBadge := offBadgeStyle.Render("OFF")
+	if m.rigelTrace {
+		rigelTraceBadge = onBadgeStyle.Render("ON")
 	}
-	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Chipset backend:"), chipsetBadge))
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Rigel trace log:"), rigelTraceBadge))
 	b.WriteString("\n")
-	if m.chipsetBackend == "rigel" {
-		b.WriteString(mutedStyle.Render("  Rigel: single-core only in Bellatrix for now."))
-		b.WriteString("\n")
-		rigelTraceBadge := offBadgeStyle.Render("OFF")
-		if m.rigelTrace {
-			rigelTraceBadge = onBadgeStyle.Render("ON")
-		}
-		b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("  Rigel trace log:"), rigelTraceBadge))
-		b.WriteString("\n")
-	}
 
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
 	if m.cpuBackend == "musashi-68020" {
@@ -665,7 +632,7 @@ func (m model) qemuCommand() string {
 		displayArg = "none"
 	}
 
-	installDir := installDirForSelection(m.cpuBackend, m.chipsetBackend)
+	installDir := installDirForSelection(m.cpuBackend)
 	image := installDir + "/Emu68.img"
 	dtb := installDir + "/bcm2710-rpi-3-b.dtb"
 
@@ -680,7 +647,7 @@ func (m model) qemuCommand() string {
 	}
 
 	rigelTraceEnv := ""
-	if m.chipsetBackend == "rigel" && m.rigelTrace {
+	if m.rigelTrace {
 		rigelTraceEnv = " BELLATRIX_RIGEL_TRACE=1"
 	}
 
@@ -690,13 +657,12 @@ func (m model) qemuCommand() string {
 	}
 
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_CHIPSET_BACKEND=%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
 		m.emu68Boards,
-		m.chipsetBackend,
 		rigelTraceEnv,
 		perfLogsEnv,
 		boolEnv(m.osd),
