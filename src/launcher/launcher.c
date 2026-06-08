@@ -8,7 +8,7 @@
 // ADF: loaded entirely into a static RAM buffer, inserted via
 //      bellatrix_machine_insert_df0_adf().
 // ISO: opened via FAT32 and read on-demand sector-by-sector through a
-//      callback registered with the lide_cdrom expansion.
+//      callback registered with the lide_cdrom Zorro II expansion.
 //
 // QEMU: when no USB drive is present the launcher checks for images
 //       injected via -device loader (physical 0x18000000/0x20000000).
