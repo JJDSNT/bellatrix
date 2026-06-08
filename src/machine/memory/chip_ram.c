@@ -76,6 +76,30 @@ uint8_t chip_ram_read8(const BellatrixMemory *m, uint32_t addr)
 uint16_t chip_ram_read16(const BellatrixMemory *m, uint32_t addr)
 {
     uint32_t a = chip_addr(m, addr);
+#ifdef BELLATRIX_HARNESS
+    {
+        static int cr_probe_enabled = -1;
+        static unsigned cr_count = 0u;
+        if (cr_probe_enabled < 0) {
+            const char *e = getenv("RIGEL_BPL_FETCH_PROBE");
+            cr_probe_enabled = (e && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+        }
+        if (cr_probe_enabled && cr_count < 8u &&
+            addr >= 0xC2B30u && addr < 0xC2B60u) {
+            uint16_t r = ((uint16_t)m->chip_ram[a] << 8) |
+                         ((uint16_t)m->chip_ram[(a + 1) & m->chip_ram_mask]);
+            kprintf("[CHIP-RAM-PROBE] addr=%06x a=%06x buf=%p b0=%02x b1=%02x result=%04x mask=%06x\n",
+                    (unsigned)addr, (unsigned)a,
+                    (const void *)m->chip_ram,
+                    (unsigned)m->chip_ram[a],
+                    (unsigned)m->chip_ram[(a + 1) & m->chip_ram_mask],
+                    (unsigned)r,
+                    (unsigned)m->chip_ram_mask);
+            cr_count++;
+            return r;
+        }
+    }
+#endif
     return ((uint16_t)m->chip_ram[a] << 8) |
            ((uint16_t)m->chip_ram[(a + 1) & m->chip_ram_mask]);
 }

@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "chipset/paula/paula_serial.h"
 #include "io/serial/null_modem.h"
 #include "io/serial/pty_backend.h"
 #include "io/serial/miniuart_backend.h"
@@ -19,8 +18,6 @@ typedef enum UARTHostBackendType {
 
 typedef struct UARTHost {
     UARTHostBackendType backend_type;
-
-    PaulaSerial *paula_serial;
 
     PtyBackend pty;
     MiniUartBackend mini_uart;
@@ -38,8 +35,6 @@ const char *uart_host_pty_name(const UARTHost *host);
 
 bool uart_host_open_miniuart(UARTHost *host, uint32_t baud);
 bool uart_host_open_pl011(UARTHost *host, uint32_t baud);
-
-void uart_host_attach_paula(UARTHost *host, PaulaSerial *paula_serial);
 
 void uart_host_set_null_modem_mode(UARTHost *host, NullModemMode mode);
 

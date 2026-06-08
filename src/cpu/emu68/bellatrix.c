@@ -13,15 +13,11 @@
 #include "cpu/cpu_backend.h"
 #include "cpu/musashi/musashi_backend.h"
 #include "machine/machine.h"
+#include "rigel/rigel_cia.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
-#include "chipset/agnus/agnus.h"
-#include "chipset/cia/cia.h"
-#include "chipset/denise/denise.h"
-#include "chipset/rtc/rtc.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "io/serial/uart_host.h"
-#include "chipset/paula/paula_serial.h"
 #include "mmu.h"
 #include "A64.h"
 #include "support.h"
@@ -75,13 +71,6 @@ static CpuBackend *bellatrix_selected_cpu_backend(void)
 
 static void bellatrix_runtime_notify_cpu_progress(uint32_t cycles);
 
-#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
-#define BELLATRIX_RIGEL_BUILD 1
-#else
-#define BELLATRIX_RIGEL_BUILD 0
-#include "runtime/core_io.h"
-#endif
-
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
     CpuBackend *backend = bellatrix_selected_cpu_backend();
@@ -116,10 +105,6 @@ void bellatrix_run_selected_cpu_backend(void)
 #if defined(BELLATRIX_ENABLE_MULTICORE)
 static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
 #endif
-#if !BELLATRIX_RIGEL_BUILD
-static _Atomic uint32_t s_chipset_cycles_pending   = 0;
-static _Atomic uint32_t s_io_cycles_pending        = 0;
-#endif
 
 /* Per-core runtime objects — advanced by Core 1 via bellatrix_runtime_host_step(). */
 BellatrixRuntime g_runtime;
@@ -148,23 +133,10 @@ static inline void chipset_lock_release(void)
  *
  * In single-core mode: advance the chipset directly (no locking needed).
  * ------------------------------------------------------------------------- */
-#if BELLATRIX_RIGEL_BUILD
 void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
 {
     bellatrix_machine_advance(cycles);
 }
-#else
-void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
-{
-    if (PAL_Core_IsMulticoreEnabled()) {
-        atomic_fetch_add_explicit(&s_chipset_cycles_pending, cycles, memory_order_release);
-        atomic_fetch_add_explicit(&s_io_cycles_pending,  cycles, memory_order_release);
-        asm volatile("dsb sy\n\t sev" ::: "memory");
-    } else {
-        bellatrix_machine_advance(cycles);
-    }
-}
-#endif
 
 /* ---------------------------------------------------------------------------
  * Strong overrides: per-core chipset advance steps.
@@ -172,43 +144,6 @@ void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
  * bellatrix_runtime_host_step  — Core 1, full chipset.
  * bellatrix_runtime_io_step    — Core 3, physical IO.
  * ------------------------------------------------------------------------- */
-#if !BELLATRIX_RIGEL_BUILD
-void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
-{
-    (void)host_now;
-    (void)host_freq;
-
-    uint32_t cycles = atomic_exchange_explicit(&s_chipset_cycles_pending, 0u,
-                                               memory_order_acquire);
-    if (cycles == 0)
-        return;
-
-    chipset_lock_acquire();
-    bellatrix_machine_advance(cycles);
-    chipset_lock_release();
-}
-
-void bellatrix_runtime_audio_step(uint64_t host_now, uint64_t host_freq)
-{
-    (void)host_now;
-    (void)host_freq;
-}
-
-void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
-{
-    (void)host_now;
-    (void)host_freq;
-
-    uint32_t cycles = atomic_exchange_explicit(&s_io_cycles_pending, 0u,
-                                               memory_order_acquire);
-    if (cycles == 0)
-        return;
-
-    chipset_lock_acquire();
-    core_io_step(&g_runtime.io, cycles);
-    chipset_lock_release();
-}
-#endif
 
 /* ---------------------------------------------------------------------------
  * Strong override: MMIO barrier — called from PAL_Runtime_MmioBarrier().
@@ -397,11 +332,7 @@ void bellatrix_init(void)
 #endif
     memset(&g_runtime, 0, sizeof(g_runtime));
     g_runtime.machine = bellatrix_machine_get();
-#if BELLATRIX_RIGEL_BUILD
     usb_host_init(&g_runtime.io.usb_host);
-#else
-    core_io_init(&g_runtime.io, bellatrix_machine_get());
-#endif
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
@@ -420,11 +351,6 @@ void bellatrix_init(void)
     m->memory.fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
     m->memory.fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
     memset(m->memory.fast_ram, 0, m->memory.fast_ram_size);
-#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
-    /* machine_init() attached Paula before we replaced the RAM backing. */
-    paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
-#endif
-    m->cia_a.ddra = 0x03;
 
     /* ROM diagnostic */
     {
@@ -559,10 +485,6 @@ void bellatrix_init(void)
 
 #if defined(BELLATRIX_UART_LOG)
     kprintf("[SERIAL] log mode — Paula TX forwarded to kprintf [SERIAL] prefix; no UART bridge\n");
-#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
-    /* In log mode the kprintf fallback is instant; expose TBE=1 immediately. */
-    paula_serial_set_tx_instant(&m->paula.serial, true);
-#endif
 #elif defined(BELLATRIX_UART_PL011)
 #ifndef BELLATRIX_UART_BAUD
 #define BELLATRIX_UART_BAUD 115200
@@ -573,9 +495,6 @@ void bellatrix_init(void)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK);
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
-#endif
-#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
-        paula_serial_set_tx_instant(&m->paula.serial, true);
 #endif
         kprintf("[SERIAL] PL011 host bridge open at %u baud — GPIO 14/15 (USB-TTL adapter)\n",
                 (unsigned)BELLATRIX_UART_BAUD);
@@ -610,9 +529,6 @@ void bellatrix_init(void)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK);
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
-#endif
-#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
-        paula_serial_set_tx_instant(&m->paula.serial, true);
 #endif
         uint32_t lsr = miniuart_backend_read_lsr();
         kprintf("[SERIAL] mini-UART open at 9600 baud  LSR=0x%08x TX_ready=%s\n",
@@ -707,14 +623,16 @@ void bellatrix_launcher_pump_usb(void)
 
 void bellatrix_sync_overlay_from_ciaa(void)
 {
-    BellatrixMachine *m = bellatrix_machine_get();
-    int new_ovl = (int)(m->cia_a.pra & 1u);
+    struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+    uint8_t pra  = ctx ? (uint8_t)rigel_cia_read(ctx, 0u, 0x0u) : 0u;
+    uint8_t ddra = ctx ? (uint8_t)rigel_cia_read(ctx, 0u, 0x2u) : 0u;
+    int new_ovl = (int)(pra & 1u);
 
     if (new_ovl != s_overlay)
     {
         kprintf("[OVL-TRIG-LIVE] pra=%02x ddra=%02x new_ovl=%d fault_pc=%08x\n",
-                (unsigned)m->cia_a.pra,
-                (unsigned)m->cia_a.ddra,
+                (unsigned)pra,
+                (unsigned)ddra,
                 new_ovl,
                 (unsigned)g_bellatrix_fault_pc);
     }
@@ -728,13 +646,9 @@ void bellatrix_sync_overlay_from_ciaa(void)
 
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 {
-#if !BELLATRIX_RIGEL_BUILD
-    bellatrix_runtime_notify_cpu_progress(4);
-#endif
     PAL_Runtime_Poll();
 
     uint32_t result = 0;
-    BellatrixMachine *m = bellatrix_machine_get();
 
     if (!bellatrix_slow_contains(bellatrix_machine_memory(), addr, (unsigned int)size))
         addr = bellatrix_bridge_normalize_addr(addr);
@@ -815,7 +729,9 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
             (addr & 0xFFu) == 0x01u &&
             cia_reg(addr) == 0)
         {
-            int new_ovl = (int)(m->cia_a.pra & 1u);
+            struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+            uint8_t pra = ctx ? (uint8_t)rigel_cia_read(ctx, 0u, 0x0u) : 0u;
+            int new_ovl = (int)(pra & 1u);
 
 #if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
             if (new_ovl != s_overlay)
@@ -823,7 +739,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
                 kprintf("[OVL-TRIG] ciaa_pra_write addr=%08x val=%02x pra=%02x new_ovl=%d\n",
                         (unsigned)addr,
                         (unsigned)(value & 0xFFu),
-                        (unsigned)m->cia_a.pra,
+                        (unsigned)pra,
                         new_ovl);
             }
 #endif

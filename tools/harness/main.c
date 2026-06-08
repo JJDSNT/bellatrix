@@ -18,7 +18,6 @@
 
 #include "machine/machine.h"
 #include "cpu/cpu_bridge.h"
-#include "chipset/paula/paula.h"
 #include "debug/debug.h"
 #include "host/pal.h"
 #include "machine/memory/memory.h"
@@ -932,12 +931,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Re-wire Paula disk DMA to the harness chip RAM buffer.
-     * machine_init wires Paula before harness_memory_init replaces the pointer. */
-#if !defined(BELLATRIX_USE_RIGEL_CHIPSET) || !BELLATRIX_USE_RIGEL_CHIPSET
-    paula_attach_memory(&m->paula, m->memory.chip_ram, m->memory.chip_ram_size);
-#endif
-
     /* Mount or eject DF0 explicitly. */
     if (adf_data) {
         if (!bellatrix_machine_insert_df0_adf(adf_data, adf_size)) {
@@ -970,9 +963,6 @@ int main(int argc, char **argv)
         }
         printf("[HARNESS] CD-ROM: %u sectors attached\n", iso_size / 2048u);
     }
-
-    /* CIA-A defaults: OVL and LED are outputs */
-    m->cia_a.ddra = 0x03u;
 
     /* Pulse CPU reset — reads ISP+PC from bus through overlay */
     cpu_backend_reset(musashi_backend_get());
@@ -1078,13 +1068,14 @@ int main(int argc, char **argv)
             }
         }
 
-        long cur_frame = (long)bellatrix_machine_agnus()->beam.frame;
+        long cur_frame = (long)bellatrix_machine_get()->frame_counter;
         if (cur_frame != prev_frame) {
             frame_count++;
             fps_frames++;
             prev_frame = cur_frame;
 
             harness_update_mouse_hold(m, frame_count, &mouse_rmb);
+
             harness_maybe_inject_serial(m, frame_count, &serial_bootkey, "bootkey");
             harness_maybe_inject_serial(m, frame_count, &serial_menu, "input");
             harness_maybe_inject_serial(m, frame_count, &mouse_serial_trigger.pending,
@@ -1123,7 +1114,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            if (frame_count == 4000) {
+            if (frame_count == 3000) {
                 const uint8_t *cr = m->memory.chip_ram;
                 uint32_t eb = ((uint32_t)cr[4] << 24) | ((uint32_t)cr[5] << 16) |
                               ((uint32_t)cr[6] << 8) | (uint32_t)cr[7];
@@ -1149,6 +1140,19 @@ int main(int argc, char **argv)
                     printf("[EXEC-DUMP] A4=0x%08x  D0=0x%08x\n",
                            (unsigned)m68k_get_reg(NULL, M68K_REG_A4),
                            (unsigned)m68k_get_reg(NULL, M68K_REG_D0));
+                }
+                /* Dump demo code area around known stuck PCs */
+                {
+                    uint32_t addrs[] = {0x29200u, 0x29500u, 0x24700u};
+                    unsigned int a;
+                    for (a = 0; a < 3u; ++a) {
+                        uint32_t base = addrs[a];
+                        if (base + 48 <= m->memory.chip_ram_size) {
+                            printf("[CHIP-DUMP] 0x%05x:", (unsigned)base);
+                            for (int i = 0; i < 48; i++) printf(" %02x", cr[base + i]);
+                            printf("\n");
+                        }
+                    }
                 }
             }
         }

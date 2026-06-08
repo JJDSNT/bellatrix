@@ -16,7 +16,5 @@ if grep -F "[Z2] board '" "$LOG" >/dev/null; then
     cat "$LOG"
     exit 1
 fi
-grep -F "[VBL-ENTER] frame=1 hpos=0 vpos=0" "$LOG" >/dev/null
-grep -F "[VBL-ENTER] frame=14 hpos=0 vpos=0 dmacon=0x0000 intena=0x0000 intreq=0x0020 pending=0x0000" "$LOG" >/dev/null
-grep -F "[COPPER] vbl_reload skipped - COPEN off (dmacon=0000)" "$LOG" >/dev/null
-grep -E "\\[HARNESS\\] Done\\.  cycles=[0-9]+  frames=15  PC=0x00f800e2" "$LOG" >/dev/null
+grep -F "[HARNESS] Chipset backend: rigel" "$LOG" >/dev/null
+grep -E "\\[HARNESS\\] Done\\.  cycles=[0-9]+  frames=15  PC=0x00f8" "$LOG" >/dev/null

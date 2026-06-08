@@ -3,6 +3,8 @@
 #include <stdint.h>
 
 #include "machine/machine.h"
+#include "rigel/rigel_custom.h"
+#include "rigel/rigel_mmio.h"
 #include "support.h"
 
 /* ------------------------------------------------------------------------- */
@@ -52,7 +54,7 @@ void emu_debug_dma(BellatrixMachine *m)
 
     kprintf("[DMA] ---- DMA state ----\n");
 
-    dmaconr = agnus_dmacon_current(&m->agnus);
+    dmaconr = 0; /* Rigel: read via rigel_custom_read if needed */
 
     kprintf("[DMA] DMACONR=0x%04x enabled:", dmaconr);
     for (bit = 9; bit >= 0; bit--) {
@@ -65,14 +67,26 @@ void emu_debug_dma(BellatrixMachine *m)
     }
     kprintf("\n");
 
-    kprintf("[DMA] Beam V=%04x H=%04x\n",
-            (unsigned)m->agnus.beam.vpos,
-            (unsigned)m->agnus.beam.hpos);
+    {
+        struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+        uint16_t vhposr = ctx ? rigel_custom_read16(ctx, RIGEL_REG_VHPOSR) : 0u;
+        kprintf("[DMA] Beam V=%04x H=%04x\n",
+                (unsigned)((vhposr >> 8) & 0xFFu),
+                (unsigned)(vhposr & 0xFFu));
+    }
 
     {
+        struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+        static const uint32_t bpl_regs[6] = {
+            RIGEL_REG_BPL1PTH, RIGEL_REG_BPL2PTH, RIGEL_REG_BPL3PTH,
+            RIGEL_REG_BPL4PTH, RIGEL_REG_BPL5PTH, RIGEL_REG_BPL6PTH
+        };
         int i;
         for (i = 0; i < 6; i++) {
-            uint32_t pt = ((uint32_t)m->agnus.bplpth[i] << 16) | m->agnus.bplptl[i];
+            uint32_t pt = ctx
+                ? (((uint32_t)rigel_custom_read16(ctx, bpl_regs[i]) << 16) |
+                   rigel_custom_read16(ctx, bpl_regs[i] + 2u))
+                : 0u;
             kprintf("[DMA] BPL%dPT=%08x\n", i + 1, pt);
         }
     }
@@ -137,13 +151,20 @@ void emu_debug_copper(BellatrixMachine *m, uint32_t max_insn)
 
     kprintf("[COP] ---- Copper state ----\n");
 
-    kprintf("[COP] state=%u PC=%08x cop1lc=%08x cop2lc=%08x\n",
-            (unsigned)m->agnus.copper.state,
-            (unsigned)m->agnus.copper.pc,
-            (unsigned)m->agnus.copper.cop1lc,
-            (unsigned)m->agnus.copper.cop2lc);
-
-    pc = m->agnus.copper.pc;
+    {
+        struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+        uint32_t cop1lc = ctx
+            ? (((uint32_t)rigel_custom_read16(ctx, RIGEL_REG_COP1LCH) << 16) |
+               rigel_custom_read16(ctx, RIGEL_REG_COP1LCL))
+            : 0u;
+        uint32_t cop2lc = ctx
+            ? (((uint32_t)rigel_custom_read16(ctx, RIGEL_REG_COP2LCH) << 16) |
+               rigel_custom_read16(ctx, RIGEL_REG_COP2LCL))
+            : 0u;
+        kprintf("[COP] cop1lc=%08x cop2lc=%08x\n",
+                (unsigned)cop1lc, (unsigned)cop2lc);
+        pc = cop1lc;
+    }
 
     for (i = 0; i < max_insn; i++, pc += 4) {
         uint16_t ir1;

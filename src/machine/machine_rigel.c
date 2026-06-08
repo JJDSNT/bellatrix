@@ -385,8 +385,8 @@ static void machine_rigel_trace_step(const rigel_step_result_t *r)
     if (!g_rtrace.enabled || !g_rigel)
         return;
 
-    /* Track DMACON and BPLCON0 changes — first 20 seconds (1000 frames) */
-    if (g_rtrace.frame_count < 1000u) {
+    /* Track DMACON and BPLCON0 changes — unlimited (full boot coverage) */
+    {
         dmacon  = rigel_custom_read16(g_rigel, 0x096u);
         bplcon0 = rigel_custom_read16(g_rigel, 0x100u);
         if (dmacon != g_rtrace.last_dmacon) {
@@ -1068,19 +1068,6 @@ static void machine_sync_controller_ports_rigel(BellatrixMachine *m)
     }
 }
 
-static void machine_mirror_cia_write(CIA *cia, uint8_t reg, uint8_t value)
-{
-    if (!cia)
-        return;
-
-    switch (reg & 0x0Fu) {
-    case 0x0u: cia->pra = value; break;
-    case 0x1u: cia->prb = value; break;
-    case 0x2u: cia->ddra = value; break;
-    case 0x3u: cia->ddrb = value; break;
-    default: break;
-    }
-}
 
 /* ---------------------------------------------------------------------------
  * Quantum-based Rigel advancement.
@@ -1141,7 +1128,7 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
     machine_drain_serial_fallback_rigel();
 
     if (r.events & RIGEL_EVENT_FRAME_READY) {
-        g_machine.agnus.beam.frame++;
+        g_machine.frame_counter++;
         machine_present_frame_from_rigel();
     }
     if (r.events & RIGEL_EVENT_IRQ_CHANGED)
@@ -1279,14 +1266,6 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
         kprintf("[RIGEL] zero-copy RGB565 video target %ux%u pitch=%u\n",
                 (unsigned)fb_width, (unsigned)fb_height, (unsigned)pitch);
 
-    if (g_rigel) {
-        /* Sync PRA from Rigel so harness_overlay() sees OVL=1 at boot.
-         * Without this the mirror stays 0 and the ROM overlay is skipped,
-         * causing the CPU to fetch reset vectors from uninitialised chip RAM. */
-        machine_mirror_cia_write(&m->cia_a, 0x2u, 0x03u);
-        machine_mirror_cia_write(&m->cia_a, 0x0u,
-            (uint8_t)rigel_cia_read(g_rigel, 0u, 0x0u));
-    }
     machine_sync_controller_ports_rigel(m);
 
     m->tick_count = 0;
@@ -1309,12 +1288,6 @@ void bellatrix_machine_reset(void)
     bellatrix_zorro3_reset();
     machine_debug_reset(m);
     bellatrix_expansion_reset_all(m);
-
-    if (g_rigel) {
-        machine_mirror_cia_write(&m->cia_a, 0x2u, 0x03u);
-        machine_mirror_cia_write(&m->cia_a, 0x0u,
-            (uint8_t)rigel_cia_read(g_rigel, 0u, 0x0u));
-    }
 
     m->tick_count = 0;
     s_cpu_approx = 0u;
@@ -1445,7 +1418,9 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
     }
 
     if (g_rtrace.enabled &&
-            (reg == 0x08eu || reg == 0x090u ||
+            (reg == 0x080u || reg == 0x082u || reg == 0x084u ||
+             reg == 0x086u || reg == 0x088u || reg == 0x08au ||
+             reg == 0x08eu || reg == 0x090u ||
              reg == 0x092u || reg == 0x094u ||
              (reg >= 0x0e0u && reg <= 0x0f6u) ||
              reg == 0x096u || reg == 0x100u ||
@@ -1519,7 +1494,6 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
                     (unsigned)reg, (unsigned)(value & 0xffu));
         if (reg == 0x0u)
             machine_rigel_trace_floppy("ciaa-pra-r", machine_cpu_pc(m), reg, (uint8_t)value);
-        machine_mirror_cia_write(&m->cia_a, reg, (uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         value = rigel_cia_read(g_rigel, 1u, reg);
@@ -1529,7 +1503,6 @@ static uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsign
                     (unsigned)reg, (unsigned)(value & 0xffu));
         if (reg == 0x1u)
             machine_rigel_trace_floppy("ciab-prb-r", machine_cpu_pc(m), reg, (uint8_t)value);
-        machine_mirror_cia_write(&m->cia_b, reg, (uint8_t)value);
     } else if (is_rtc_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
         value = rigel_rtc_read_reg(g_rigel, reg);
@@ -1582,7 +1555,6 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
                     (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 0u, reg, (uint8_t)value);
-        machine_mirror_cia_write(&m->cia_a, reg, (uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         if (machine_rigel_cia_trace_enabled())
@@ -1590,7 +1562,6 @@ static void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t 
                     (unsigned)machine_cpu_pc(m), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 1u, reg, (uint8_t)value);
-        machine_mirror_cia_write(&m->cia_b, reg, (uint8_t)value);
         if (reg == 0x1u || reg == 0x3u)
             machine_rigel_trace_floppy("ciab-w", machine_cpu_pc(m), reg, (uint8_t)value);
     } else if (is_rtc_addr(addr)) {
@@ -1681,36 +1652,6 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
 BellatrixMemory *bellatrix_machine_memory(void)
 {
     return &g_machine.memory;
-}
-
-AgnusState *bellatrix_machine_agnus(void)
-{
-    return &g_machine.agnus;
-}
-
-Denise *bellatrix_machine_denise(void)
-{
-    return &g_machine.denise;
-}
-
-Paula *bellatrix_machine_paula(void)
-{
-    return &g_machine.paula;
-}
-
-CIA *bellatrix_machine_cia_a(void)
-{
-    return &g_machine.cia_a;
-}
-
-CIA *bellatrix_machine_cia_b(void)
-{
-    return &g_machine.cia_b;
-}
-
-RTCState *bellatrix_machine_rtc(void)
-{
-    return &g_machine.rtc;
 }
 
 void bellatrix_machine_floppy_update(void)

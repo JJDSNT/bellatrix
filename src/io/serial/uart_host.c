@@ -83,7 +83,6 @@ void uart_host_init(UARTHost *host)
     memset(host, 0, sizeof(*host));
 
     host->backend_type = UART_HOST_BACKEND_NONE;
-    host->paula_serial = NULL;
     host->enabled = false;
 
     null_modem_init(&host->null_modem,
@@ -116,7 +115,6 @@ void uart_host_shutdown(UARTHost *host)
 
     host->backend_type = UART_HOST_BACKEND_NONE;
     host->enabled = false;
-    host->paula_serial = NULL;
 }
 
 bool uart_host_open_pty(UARTHost *host)
@@ -169,59 +167,40 @@ const char *uart_host_pty_name(const UARTHost *host)
 
 bool uart_host_open_miniuart(UARTHost *host, uint32_t baud)
 {
-    PaulaSerial *attached_paula = NULL;
-
     if (!host) {
         return false;
     }
 
-    attached_paula = host->paula_serial;
     uart_host_shutdown(host);
 
     if (!miniuart_backend_open(&host->mini_uart, baud)) {
         host->backend_type = UART_HOST_BACKEND_NONE;
         host->enabled = false;
-        host->paula_serial = attached_paula;
         return false;
     }
 
     host->backend_type = UART_HOST_BACKEND_MINIUART;
     host->enabled = true;
-    host->paula_serial = attached_paula;
     return true;
 }
 
 bool uart_host_open_pl011(UARTHost *host, uint32_t baud)
 {
-    PaulaSerial *attached_paula = NULL;
-
     if (!host) {
         return false;
     }
 
-    attached_paula = host->paula_serial;
     uart_host_shutdown(host);
 
     if (!pl011_backend_open(&host->pl011, baud)) {
         host->backend_type = UART_HOST_BACKEND_NONE;
         host->enabled = false;
-        host->paula_serial = attached_paula;
         return false;
     }
 
     host->backend_type = UART_HOST_BACKEND_PL011;
     host->enabled = true;
-    host->paula_serial = attached_paula;
     return true;
-}
-
-void uart_host_attach_paula(UARTHost *host, PaulaSerial *paula_serial)
-{
-    if (!host) {
-        return;
-    }
-
-    host->paula_serial = paula_serial;
 }
 
 void uart_host_set_null_modem_mode(UARTHost *host, NullModemMode mode)
@@ -253,55 +232,5 @@ bool uart_host_receive_byte(UARTHost *host, uint8_t *byte_out)
 
 void uart_host_poll(UARTHost *host)
 {
-#if defined(BELLATRIX_USE_RIGEL_CHIPSET) && BELLATRIX_USE_RIGEL_CHIPSET
     (void)host;
-#else
-    if (!host || !host->enabled || !host->paula_serial) {
-        return;
-    }
-
-    uint8_t byte;
-
-    while (uart_host_receive_byte(host, &byte)) {
-        paula_serial_receive_byte(host->paula_serial, byte);
-    }
-
-    while (paula_serial_tx_available(host->paula_serial)) {
-        if (!paula_serial_peek_tx_byte(host->paula_serial, &byte)) {
-            break;
-        }
-
-        if (host->backend_type == UART_HOST_BACKEND_PL011) {
-            static int s_first_pl011_tx_drain_logged = 0;
-            if (!s_first_pl011_tx_drain_logged) {
-                s_first_pl011_tx_drain_logged = 1;
-                kprintf("[SERIAL-BRIDGE] draining Paula TX byte=%02x\n",
-                        (unsigned)byte);
-            }
-        }
-
-        if (!uart_host_send_byte(host, byte)) {
-            break;
-        }
-
-        if (!paula_serial_pop_tx_byte(host->paula_serial, &byte)) {
-            break;
-        }
-
-        if (host->backend_type == UART_HOST_BACKEND_PL011) {
-            static int s_first_pl011_tx_logged = 0;
-            if (!s_first_pl011_tx_logged) {
-                s_first_pl011_tx_logged = 1;
-                kprintf("[SERIAL-BRIDGE] first PL011 TX byte=%02x\n",
-                        (unsigned)byte);
-            }
-        }
-
-        if (host->backend_type == UART_HOST_BACKEND_PL011 &&
-            kprintf_get_enabled())
-        {
-            kprintf_set_enabled(0);
-        }
-    }
-#endif
 }

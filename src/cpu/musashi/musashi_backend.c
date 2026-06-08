@@ -1,8 +1,8 @@
 #include "cpu/musashi/musashi_backend.h"
 
 #include "cpu/cpu_bridge.h"
-#include "chipset/cia/cia.h"
 #include "machine/machine.h"
+#include "rigel/rigel_cia.h"
 #include "machine/memory/memory.h"
 
 #include "m68k.h"
@@ -27,12 +27,10 @@ static uint32_t musashi_rom_read_at(const BellatrixMemory *mem,
 
 static int musashi_overlay_enabled(void)
 {
-    const BellatrixMachine *m = bellatrix_machine_get();
-
-    if (!(m->cia_a.ddra & 0x01u)) {
-        return 1;
-    }
-    return (m->cia_a.pra & 0x01u) ? 1 : 0;
+    struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+    if (!ctx) return 1;
+    if (!(rigel_cia_read(ctx, 0u, 0x2u) & 0x01u)) return 1;
+    return (rigel_cia_read(ctx, 0u, 0x0u) & 0x01u) ? 1 : 0;
 }
 
 static uint32_t musashi_chip_read(const BellatrixMemory *mem,

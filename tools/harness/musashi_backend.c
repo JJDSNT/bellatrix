@@ -19,7 +19,7 @@
 #include "cpu/cpu_bridge.h"
 #include "machine/machine.h"
 #include "machine/memory/memory.h"
-#include "chipset/cia/cia.h"
+#include "rigel/rigel_cia.h"
 
 #include "m68k.h"
 
@@ -59,6 +59,7 @@ static uint32_t s_run_sync_published = 0;
 #define BOOT_DISPLAY_BUF_SIZE 0x00001F40u
 
 static uint32_t harness_chip_read(uint32_t addr, int size);
+static uint32_t harness_cpu_ram_read(uint32_t addr, int size);
 
 static void harness_init_watch_ranges(void);
 static int harness_watch_custom_range_addr(uint32_t addr);
@@ -194,11 +195,10 @@ void musashi_backend_load_rom(const uint8_t *data, uint32_t size, uint32_t base)
 
 static int harness_overlay(void)
 {
-    const BellatrixMachine *m = bellatrix_machine_get();
-    /* OVL = output only when ddra bit 0 = 1 (output).  Kickstart sets this
-     * early; at reset ddra=0x03 is set by bellatrix_init. */
-    if (!(m->cia_a.ddra & 0x01u)) return 1; /* ddra=input → assume overlay on */
-    return (m->cia_a.pra & 0x01u) ? 1 : 0;
+    struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+    if (!ctx) return 1;
+    if (!(rigel_cia_read(ctx, 0u, 0x2u) & 0x01u)) return 1; /* ddra=input → overlay on */
+    return (rigel_cia_read(ctx, 0u, 0x0u) & 0x01u) ? 1 : 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -298,6 +298,193 @@ static void aros_wait2_check(uint32_t addr, uint32_t ret)
     if (count <= 40 || count % 100000 == 0)
         printf("[AROS-WAIT2] count=%-8d pc=%08x addr=%06x ret=%08x\n",
                count, pc, addr & 0x00FFFFFFu, ret);
+}
+
+static void aros_dump_copper_list_once(const char *name, uint32_t base)
+{
+    static int enabled = -1;
+    static uint32_t dumped[8];
+    static unsigned dumped_count;
+
+    if (enabled < 0) {
+        const char *env = getenv("AROS_COPLIST_DUMP");
+        enabled = (env != NULL && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    if (!enabled || base == 0)
+        return;
+
+    base &= 0x00FFFFFFu;
+    for (unsigned i = 0; i < dumped_count; i++) {
+        if (dumped[i] == base)
+            return;
+    }
+    if (dumped_count < (sizeof(dumped) / sizeof(dumped[0])))
+        dumped[dumped_count++] = base;
+
+    printf("[AROS-COPLIST] %s base=%06x\n", name, (unsigned)base);
+    for (unsigned off = 0; off < 0x100u; off += 4u) {
+        uint16_t op = (uint16_t)harness_cpu_ram_read(base + off, 2);
+        uint16_t val = (uint16_t)harness_cpu_ram_read(base + off + 2u, 2);
+
+        if (op == 0xFFFFu && val == 0xFFFEu) {
+            printf("[AROS-COPLIST]   +%03x END %04x %04x\n",
+                   off, (unsigned)op, (unsigned)val);
+            break;
+        }
+        if ((op & 1u) == 0u) {
+            printf("[AROS-COPLIST]   +%03x MOVE reg=%03x val=%04x\n",
+                   off, (unsigned)(op & 0x01FEu), (unsigned)val);
+        } else {
+            printf("[AROS-COPLIST]   +%03x WAIT/SKIP op=%04x mask=%04x\n",
+                   off, (unsigned)op, (unsigned)val);
+        }
+    }
+}
+
+/* AROS-GFXBASE: capture GfxBase from A2 at the gfx_vblank LOFlist/SHFlist
+ * comparison site (move.l ($32,A2),D0 / move.l ($36,A2),D1 at pc=0xfc95fc/0xfc9600,
+ * AmigaVideo's gfx_vblank() in amigavideo_chipset.c), then watch every write to
+ * GfxBase->LOFlist (+0x32) / GfxBase->SHFlist (+0x36) to find what (if anything)
+ * ever populates them with a non-zero Copper-list address. */
+static void aros_gfxbase_lof_check(uint32_t pc, uint32_t addr, uint32_t value, int is_write)
+{
+    static int enabled = -1;
+    static uint32_t gfxbase = 0;
+
+    if (enabled < 0) {
+        const char *env = getenv("AROS_GFXBASE_TRACE");
+        enabled = (env != NULL && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    if (!enabled) return;
+
+    if (!is_write && (pc == 0x00FC95FCu || pc == 0x00FC9600u)) {
+        uint32_t a2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A2) & 0x00FFFFFFu;
+        uint32_t lof = (a2 != 0) ? harness_cpu_ram_read(a2 + 0x32u, 4) : 0;
+        uint32_t shf = (a2 != 0) ? harness_cpu_ram_read(a2 + 0x36u, 4) : 0;
+        static uint32_t last_pc = 0;
+        static uint32_t last_a2 = 0;
+        static uint32_t last_lof = 0;
+        static uint32_t last_shf = 0;
+        if (a2 != 0 && a2 != gfxbase) {
+            gfxbase = a2;
+            printf("[AROS-GFXBASE] GfxBase=%06x captured at pc=%06x  LOFlist@%06x SHFlist@%06x\n",
+                   (unsigned)gfxbase, (unsigned)pc,
+                   (unsigned)(gfxbase + 0x32u), (unsigned)(gfxbase + 0x36u));
+        }
+        if (a2 != 0 &&
+            (pc != last_pc || a2 != last_a2 || lof != last_lof || shf != last_shf)) {
+            printf("[AROS-GFXBASE-R] pc=%06x GfxBase=%06x addr=%06x value=%08x LOF=%08x SHF=%08x\n",
+                   (unsigned)pc,
+                   (unsigned)a2,
+                   (unsigned)addr,
+                   (unsigned)value,
+                   (unsigned)lof,
+                   (unsigned)shf);
+            last_pc = pc;
+            last_a2 = a2;
+            last_lof = lof;
+            last_shf = shf;
+            aros_dump_copper_list_once("LOF", lof);
+            aros_dump_copper_list_once("SHF", shf);
+        }
+    }
+
+    if (!is_write || gfxbase == 0) return;
+
+    {
+        uint32_t lof_addr = gfxbase + 0x32u;
+        uint32_t shf_addr = gfxbase + 0x36u;
+        if (addr == lof_addr || addr == shf_addr) {
+            printf("[AROS-GFXBASE-W] %s addr=%06x val=%08x pc=%06x\n",
+                   (addr == lof_addr) ? "LOFlist" : "SHFlist",
+                   (unsigned)addr, (unsigned)value, (unsigned)pc);
+        }
+    }
+}
+
+/* AROS-BPL-DUMP: one-shot hexdump of the bitplane buffers referenced by the
+ * active screen Copper list (BPL1PT=0x000C2B38, BPL2PT=0x000C7B38, found by
+ * decoding the list at COP2LC=0x000D9EFC). Fires N gfx_vblank invocations
+ * after a screen first attaches (GfxBase captured), to check whether anything
+ * was ever actually rendered into the bitmap (vs. an all-zero buffer). */
+static void aros_bpl_dump_check(uint32_t pc)
+{
+    static int enabled = -1;
+    static int armed = 0;
+    static int fired = 0;
+    static int vbl_count = 0;
+    static int trigger_after = 60;
+
+    if (enabled < 0) {
+        const char *env = getenv("AROS_BPL_DUMP");
+        enabled = (env != NULL && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+        if (enabled) {
+            const char *after = getenv("AROS_BPL_DUMP_AFTER");
+            if (after != NULL && after[0] != '\0')
+                trigger_after = atoi(after);
+        }
+    }
+    if (!enabled || fired) return;
+    if (pc != 0x00FC95FCu && pc != 0x00FC9600u) return;
+
+    if (!armed) {
+        uint32_t a2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A2) & 0x00FFFFFFu;
+        if (a2 != 0) {
+            uint32_t lof = harness_cpu_ram_read(a2 + 0x32u, 4);
+            if (lof != 0) armed = 1;
+        }
+        return;
+    }
+
+    vbl_count++;
+    if (vbl_count < trigger_after) return;
+
+    fired = 1;
+    {
+        uint32_t addrs[4];
+        static const char *names[4] = { "BPL1", "BPL2", "BPL3", "BPL4" };
+        int p;
+        addrs[0] = ((bellatrix_machine_read(0x00DFF0E0u, 2) & 0x001Fu) << 16) |
+                   (bellatrix_machine_read(0x00DFF0E2u, 2) & 0xFFFEu);
+        addrs[1] = ((bellatrix_machine_read(0x00DFF0E4u, 2) & 0x001Fu) << 16) |
+                   (bellatrix_machine_read(0x00DFF0E6u, 2) & 0xFFFEu);
+        addrs[2] = ((bellatrix_machine_read(0x00DFF0E8u, 2) & 0x001Fu) << 16) |
+                   (bellatrix_machine_read(0x00DFF0EAu, 2) & 0xFFFEu);
+        addrs[3] = ((bellatrix_machine_read(0x00DFF0ECu, 2) & 0x001Fu) << 16) |
+                   (bellatrix_machine_read(0x00DFF0EEu, 2) & 0xFFFEu);
+
+        for (p = 0; p < 4; p++) {
+            uint32_t base = addrs[p];
+            uint32_t off;
+            uint32_t nonzero = 0;
+            if (base == 0)
+                continue;
+            printf("[AROS-BPL-DUMP] %s buffer @ %06x (after %d gfx_vblank fires):\n",
+                   names[p], (unsigned)base, vbl_count);
+            for (off = 0; off < 256u; off += 16u) {
+                uint8_t bytes[16];
+                uint32_t k;
+                for (k = 0; k < 16u; k++)
+                    bytes[k] = (uint8_t)harness_chip_read(base + off + k, 1);
+                printf("[AROS-BPL-DUMP]   +%04x:", (unsigned)off);
+                for (k = 0; k < 16u; k++) {
+                    printf(" %02x", bytes[k]);
+                    if (bytes[k] != 0) nonzero++;
+                }
+                printf("\n");
+            }
+            /* scan a wider window (one full hires scanline = 80 bytes * 256 lines) for any non-zero byte */
+            {
+                uint32_t scan, total_nonzero = 0;
+                uint32_t window = 80u * 256u;
+                for (scan = 0; scan < window; scan++) {
+                    if (harness_chip_read(base + scan, 1) != 0) total_nonzero++;
+                }
+                printf("[AROS-BPL-DUMP] %s non-zero bytes in first 256 bytes=%u, in full %u-byte window=%u\n",
+                       names[p], (unsigned)nonzero, (unsigned)window, (unsigned)total_nonzero);
+            }
+        }
+    }
 }
 
 static int harness_watch_gfx_pc(uint32_t pc)
@@ -450,6 +637,26 @@ static uint32_t harness_chip_read(uint32_t addr, int size)
     if (size == 1) return bellatrix_chip_read8(mem, addr);
     if (size == 2) return bellatrix_chip_read16(mem, addr);
     return bellatrix_chip_read32(mem, addr);
+}
+
+static uint32_t harness_cpu_ram_read(uint32_t addr, int size)
+{
+    BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+
+    addr &= 0x00FFFFFFu;
+
+    if (bellatrix_chip_addr_contains(addr))
+        return harness_chip_read(addr, size);
+
+    if (bellatrix_slow_contains(mem, addr, (unsigned int)size)) {
+        if (size == 1) return bellatrix_slow_read8(mem, addr);
+        if (size == 2) return bellatrix_slow_read16(mem, addr);
+        return bellatrix_slow_read32(mem, addr);
+    }
+
+    if (size == 1) return bellatrix_mem_read8(mem, addr);
+    if (size == 2) return bellatrix_mem_read16(mem, addr);
+    return bellatrix_mem_read32(mem, addr);
 }
 
 static void harness_dump_regs(void)
@@ -816,21 +1023,14 @@ static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint3
     uint32_t d0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D0);
     uint32_t d1 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D1);
     uint32_t d2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D2);
-    uint32_t bpl1 = ((((uint32_t)(m->agnus.bplpth[0] & 0x001Fu)) << 16) |
-                     ((uint32_t)m->agnus.bplptl[0] & 0xFFFEu));
-    uint32_t bpl2 = ((((uint32_t)(m->agnus.bplpth[1] & 0x001Fu)) << 16) |
-                     ((uint32_t)m->agnus.bplptl[1] & 0xFFFEu));
-    uint32_t cop1 = m->agnus.copper.cop1lc & 0x001FFFFEu;
-    uint32_t cop2 = m->agnus.copper.cop2lc & 0x001FFFFEu;
-    /* In Rigel backend, copper state lives inside Rigel; read from chipset regs */
-    {
-        uint32_t h = bellatrix_machine_read(0x00DFF080u, 2) & 0x001Fu;
-        uint32_t l = bellatrix_machine_read(0x00DFF082u, 2) & 0xFFFEu;
-        if (h || l) { cop1 = (h << 16) | l; }
-        h = bellatrix_machine_read(0x00DFF084u, 2) & 0x001Fu;
-        l = bellatrix_machine_read(0x00DFF086u, 2) & 0xFFFEu;
-        if (h || l) { cop2 = (h << 16) | l; }
-    }
+    uint32_t bpl1 = (((bellatrix_machine_read(0x00DFF0E0u, 2) & 0x001Fu) << 16) |
+                     (bellatrix_machine_read(0x00DFF0E2u, 2) & 0xFFFEu));
+    uint32_t bpl2 = (((bellatrix_machine_read(0x00DFF0E4u, 2) & 0x001Fu) << 16) |
+                     (bellatrix_machine_read(0x00DFF0E6u, 2) & 0xFFFEu));
+    uint32_t cop1 = (((bellatrix_machine_read(0x00DFF080u, 2) & 0x001Fu) << 16) |
+                     (bellatrix_machine_read(0x00DFF082u, 2) & 0xFFFEu));
+    uint32_t cop2 = (((bellatrix_machine_read(0x00DFF084u, 2) & 0x001Fu) << 16) |
+                     (bellatrix_machine_read(0x00DFF086u, 2) & 0xFFFEu));
     uint32_t p0 = harness_chip_read(0x0000A572u, 4);
     uint32_t p1 = harness_chip_read(0x0000C4B2u, 4);
     uint32_t boot0 = harness_chip_read(0x00015738u, 4);
@@ -1509,6 +1709,19 @@ static uint32_t harness_read(uint32_t addr, int size)
         else if (size == 2) ret = bellatrix_chip_read16(mem, addr);
         else if (size == 4) ret = bellatrix_chip_read32(mem, addr);
         harness_watch_rw("WATCH-BUS-R", pc, addr, size, ret);
+        aros_gfxbase_lof_check(pc, addr, ret, 0);
+        aros_bpl_dump_check(pc);
+        return ret;
+    }
+
+    if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
+                                addr,
+                                (unsigned int)size)) {
+        harness_sync_cpu_progress();
+        ret = bellatrix_bridge_cpu_read(addr, (unsigned int)size);
+        harness_watch_rw("WATCH-BUS-R", pc, addr, size, ret);
+        aros_gfxbase_lof_check(pc, addr, ret, 0);
+        aros_bpl_dump_check(pc);
         return ret;
     }
 
@@ -1523,15 +1736,19 @@ static uint32_t harness_read(uint32_t addr, int size)
 
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
+    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+
     if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
                                 addr,
                                 (unsigned int)size)) {
+        harness_sync_cpu_progress();
+        harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
+        aros_gfxbase_lof_check(pc, addr, value, 1);
         bellatrix_bridge_cpu_write(addr, value, (unsigned int)size);
         return;
     }
 
     addr = bellatrix_bridge_normalize_addr(addr);
-    uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
 
     /* ROM windows are read-only */
     if (s_rom_std_size && addr >= s_rom_std_base && addr < s_rom_std_base + s_rom_std_size) return;
@@ -1543,6 +1760,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
         uint32_t wend = addr + (uint32_t)size - 1u;
         harness_sync_cpu_progress();
         harness_watch_rw("WATCH-BUS-W", pc, addr, size, value);
+        aros_gfxbase_lof_check(pc, addr, value, 1);
         if (harness_boot_trace_enabled()) {
             harness_watch_boot_bitplane_write(pc, addr, size, value);
             harness_watch_boot_dynamic_buffer_write(pc, addr, size, value);

@@ -7,12 +7,6 @@
 
 #include "cpu/cpu_backend.h"
 
-#include "chipset/agnus/agnus.h"
-#include "chipset/cia/cia.h"
-#include "chipset/floppy/floppy_drive.h"
-#include "chipset/denise/denise.h"
-#include "chipset/paula/paula.h"
-#include "chipset/rtc/rtc.h"
 #include "machine/input/controller_port.h"
 #include "machine/input/keyboard.h"
 
@@ -61,15 +55,8 @@ typedef struct BellatrixMachine
      */
     BellatrixMemory memory;
 
-    /*
-     * Chipset components.
-     */
-    AgnusState agnus;
-    Denise     denise;
-    Paula      paula;
-    CIA        cia_a;
-    CIA        cia_b;
-    RTCState   rtc;
+    uint32_t frame_counter;
+
     BellatrixKeyboard keyboard;
     BellatrixControllerPorts controller_ports;
 
@@ -79,16 +66,6 @@ typedef struct BellatrixMachine
 
     uint64_t tick_count;
     uint8_t  current_ipl;
-
-    /*
-     * Fractional CPU → E-clock accumulator.
-     */
-    uint32_t cia_tick_acc;
-
-    /*
-     * DF0 drive state — signals CIA-A ext_pra.
-     */
-    FloppyDrive df0;
 
     /*
      * Host serial bridge used by the current machine-driven path.
@@ -135,13 +112,6 @@ void     bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int siz
 /* ------------------------------------------------------------------------- */
 /* raw access to owned components                                            */
 /* ------------------------------------------------------------------------- */
-
-AgnusState *bellatrix_machine_agnus(void);
-Denise     *bellatrix_machine_denise(void);
-Paula      *bellatrix_machine_paula(void);
-CIA        *bellatrix_machine_cia_a(void);
-CIA        *bellatrix_machine_cia_b(void);
-RTCState   *bellatrix_machine_rtc(void);
 
 BellatrixMemory *bellatrix_machine_memory(void);
 
