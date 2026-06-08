@@ -119,7 +119,6 @@ BellatrixMemory *bellatrix_machine_memory(void);
 /* floppy media                                                              */
 /* ------------------------------------------------------------------------- */
 
-void bellatrix_machine_floppy_update(void);
 int  bellatrix_machine_keyboard_rawkey(uint8_t rawkey, int pressed);
 void bellatrix_machine_controller_set_device(unsigned port, unsigned device);
 void bellatrix_machine_mouse_button(unsigned port, unsigned button, int pressed);
@@ -131,23 +130,12 @@ int  bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size);
 void bellatrix_machine_eject_df0(void);
 
 /* ------------------------------------------------------------------------- */
-/* legacy built-in CD-ROM API                                                */
+/* CD-ROM media (via lide.device expansion)                                  */
 /* ------------------------------------------------------------------------- */
 
-/*
- * Legacy built-in GAYLE/CD-ROM path.
- * The hardwired machine integration has been removed; callers should use
- * machine expansions/plugins instead. Returns -1.
- */
-int bellatrix_machine_insert_iso(const void *data, size_t size);
-
-/*
- * Legacy built-in GAYLE/CD-ROM path. Returns -1.
- */
-int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
-                                    uint32_t sector_count);
-
-/* Legacy built-in GAYLE/CD-ROM path. No-op. */
+int  bellatrix_machine_insert_iso(const void *data, size_t size);
+int  bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
+                                     uint32_t sector_count);
 void bellatrix_machine_eject_iso(void);
 
 /* ------------------------------------------------------------------------- */
@@ -160,7 +148,6 @@ int16_t bellatrix_machine_audio_left(void);
 int16_t bellatrix_machine_audio_right(void);
 int bellatrix_machine_serial_rx_pending(void);
 
-/* Enable/disable the Rigel event trace log (no-op on the legacy backend). */
 void bellatrix_machine_rigel_trace_enable(bool enabled);
 
 /* ------------------------------------------------------------------------- */

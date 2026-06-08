@@ -266,10 +266,6 @@ BellatrixMemory *bellatrix_machine_memory(void)
     return &g_machine.memory;
 }
 
-void bellatrix_machine_floppy_update(void)
-{
-}
-
 int bellatrix_machine_keyboard_rawkey(uint8_t rawkey, int pressed)
 {
     if (!g_rigel)
