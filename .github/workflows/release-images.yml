@@ -1,0 +1,111 @@
+name: Release images
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-images:
+    name: Build ${{ matrix.image }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: musashi
+            multicore: "0"
+            install_dir: emu68/install-bellatrix-rigel-musashi
+            image: bellatrix_musashi.img
+          - backend: emu68
+            multicore: "0"
+            install_dir: emu68/install-bellatrix-rigel
+            image: bellatrix_emu68.img
+          - backend: musashi
+            multicore: "1"
+            install_dir: emu68/install-bellatrix-rigel-musashi
+            image: bellatrix_musashi_multicore.img
+          - backend: emu68
+            multicore: "1"
+            install_dir: emu68/install-bellatrix-rigel
+            image: bellatrix_emu68_multicore.img
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            curl \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            git \
+            make \
+            python3
+
+      - name: Prepare submodules
+        run: ./scripts/setup.sh
+
+      - name: Build release image
+        env:
+          BELLATRIX_CHIPSET_BACKEND: rigel
+          BELLATRIX_CPU_BACKEND: ${{ matrix.backend }}
+          BELLATRIX_MULTICORE_BUILD: ${{ matrix.multicore }}
+        run: ./scripts/build.sh clean
+
+      - name: Prepare image artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          cp "${{ matrix.install_dir }}/Emu68.img" "dist/${{ matrix.image }}"
+          (
+            cd dist
+            sha256sum "${{ matrix.image }}" > "${{ matrix.image }}.sha256"
+          )
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image }}
+          path: |
+            dist/*.img
+            dist/*.sha256
+
+  publish-release:
+    name: Publish release assets
+    needs: build-images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" dist/* --clobber
+          else
+            gh release create "$TAG_NAME" dist/* \
+              --title "$TAG_NAME" \
+              --generate-notes
+          fi

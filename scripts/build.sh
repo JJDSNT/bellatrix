@@ -162,13 +162,8 @@ echo "[BUILD] chipset backend: $CHIPSET_BACKEND"
 
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
-    if [ "$CHIPSET_BACKEND" = "rigel" ]; then
-        echo "[BUILD] multicore build: forcing disabled for rigel backend"
-        MULTICORE_BUILD="0"
-    else
-        MULTICORE_FLAG="ON"
-        echo "[BUILD] multicore build: enabled (Core1=GFX Core2=Paula Core3=IO)"
-    fi
+    MULTICORE_FLAG="ON"
+    echo "[BUILD] multicore build: enabled (Core1=GFX Core2=Paula Core3=IO)"
 fi
 
 if [ "$MULTICORE_BUILD" != "1" ]; then
