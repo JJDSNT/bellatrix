@@ -728,7 +728,9 @@ void bellatrix_sync_overlay_from_ciaa(void)
 
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 {
+#if !BELLATRIX_RIGEL_BUILD
     bellatrix_runtime_notify_cpu_progress(4);
+#endif
     PAL_Runtime_Poll();
 
     uint32_t result = 0;

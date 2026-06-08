@@ -77,7 +77,7 @@ func main() {
 	/* --------------------------------------------------------------------- */
 
 	output := fmt.Sprintf(
-		"EMU_PROFILE=%s\nHARNESS_CPU=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_MULTICORE_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_CHIPSET_BACKEND=%s\nBELLATRIX_RIGEL_TRACE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\n",
+		"EMU_PROFILE=%s\nHARNESS_CPU=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_MULTICORE_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_CHIPSET_BACKEND=%s\nBELLATRIX_RIGEL_TRACE=%s\nBELLATRIX_PERF_LOGS_OFF=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\n",
 		result.emuProfile,
 		result.harnessCPU,
 		result.kickstart,
@@ -93,6 +93,7 @@ func main() {
 		result.emu68Boards,
 		result.chipsetBackend,
 		boolEnv(result.rigelTrace),
+		boolEnv(result.perfLogsOff),
 		result.z2RamSize,
 		result.serialBackend,
 		boolEnv(result.osd),

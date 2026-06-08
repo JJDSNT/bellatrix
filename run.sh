@@ -13,7 +13,7 @@ HARNESS_BUILD_DIR="$ROOT/out/harness"
 HARNESS_BIN="$HARNESS_BUILD_DIR/harness"
 
 set_harness_paths() {
-    case "${BELLATRIX_CHIPSET_BACKEND:-legacy}" in
+    case "${BELLATRIX_CHIPSET_BACKEND:-rigel}" in
         rigel)
             HARNESS_BUILD_DIR="$ROOT/out/harness-rigel"
             ;;
@@ -64,7 +64,7 @@ Common options (env vars):
                       (default: boards)
   BELLATRIX_CHIPSET_BACKEND=<legacy|rigel>
                       Select Bellatrix chipset backend
-                      (default: legacy)
+                      (default: rigel)
   EMU_PROFILE=<name>  Runtime profile: bellatrix, bellatrix-musashi or emu68
                       (default: bellatrix)
   BELLATRIX_Z2_RAM_SIZE=<off|1|2|4|8>
@@ -171,7 +171,7 @@ build_harness() {
     local HARNESS_CFLAGS=""
     local HARNESS_RIGEL_FLAG="OFF"
     local core_log="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
-    if [ "${BELLATRIX_CHIPSET_BACKEND:-legacy}" = "rigel" ]; then
+    if [ "${BELLATRIX_CHIPSET_BACKEND:-rigel}" = "rigel" ]; then
         HARNESS_RIGEL_FLAG="ON"
     fi
     if [ "$core_log" = "1" ]; then
@@ -209,7 +209,7 @@ build_cd_board() {
 set_profile_paths() {
     case "$1" in
         bellatrix)
-            if [ "${BELLATRIX_CHIPSET_BACKEND:-legacy}" = "rigel" ]; then
+            if [ "${BELLATRIX_CHIPSET_BACKEND:-rigel}" = "rigel" ]; then
                 INSTALL="$ROOT/emu68/install-bellatrix-rigel"
             else
                 INSTALL="$ROOT/emu68/install-bellatrix"
@@ -220,7 +220,7 @@ set_profile_paths() {
             BELLATRIX_CPU_BACKEND_PROFILE="emu68"
             ;;
         bellatrix-musashi)
-            if [ "${BELLATRIX_CHIPSET_BACKEND:-legacy}" = "rigel" ]; then
+            if [ "${BELLATRIX_CHIPSET_BACKEND:-rigel}" = "rigel" ]; then
                 INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi"
             else
                 INSTALL="$ROOT/emu68/install-bellatrix-musashi"
@@ -306,6 +306,9 @@ load_launcher_selection() {
             BELLATRIX_RIGEL_TRACE)
                 BELLATRIX_RIGEL_TRACE="$value"
                 ;;
+            BELLATRIX_PERF_LOGS_OFF)
+                BELLATRIX_PERF_LOGS_OFF="$value"
+                ;;
             BELLATRIX_Z2_RAM_SIZE)
                 BELLATRIX_Z2_RAM_SIZE="$value"
                 ;;
@@ -353,7 +356,7 @@ if [ "$MODE" = "harness" ]; then
     fi
 
     echo "[BUILD] Harness (Musashi, native)"
-    echo "[BUILD] Harness chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-legacy}"
+    echo "[BUILD] Harness chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-rigel}"
     build_harness
 
     # Auto-build cdmount.rom when running with an ISO
@@ -416,7 +419,7 @@ if [ "$MODE" = "harness-serial" ]; then
     fi
 
     echo "[BUILD] Harness (Musashi, native)"
-    echo "[BUILD] Harness chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-legacy}"
+    echo "[BUILD] Harness chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-rigel}"
     build_harness
 
     if [ -n "${ISO:-}" ]; then
@@ -525,10 +528,18 @@ case "$BUILD_KIND" in
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
-        export BELLATRIX_CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-legacy}"
+        export BELLATRIX_CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-rigel}"
         export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"
         export BELLATRIX_LAUNCHER="${BELLATRIX_LAUNCHER:-1}"
         export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
+        if [ "${BELLATRIX_PERF_LOGS_OFF:-0}" = "1" ]; then
+            export BELLATRIX_MULTICORE_LOGS=0
+            export BELLATRIX_RIGEL_TRACE=0
+            if [ "${BELLATRIX_SERIAL:-}" = "log" ]; then
+                export BELLATRIX_SERIAL=""
+            fi
+            echo "[BUILD] Performance logs: off"
+        fi
         export BELLATRIX_RIGEL_TRACE_BUILD="${BELLATRIX_RIGEL_TRACE:-0}"
         _SERIAL_RAW="${BELLATRIX_SERIAL:-miniuart}"
         case "$_SERIAL_RAW" in
@@ -665,7 +676,7 @@ case "$MODE" in
         if [ "$BUILD_KIND" = "bellatrix" ]; then
             echo "[RUN] CPU backend profile: ${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         fi
-        echo "[RUN] Chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-legacy}"
+        echo "[RUN] Chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-rigel}"
         echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
         echo "[RUN] Boot args: $FINAL_BOOTARGS"
 

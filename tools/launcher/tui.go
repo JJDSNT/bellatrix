@@ -27,6 +27,7 @@ type launchResult struct {
 	z2RamSize      string
 	serialBackend  string
 	rigelTrace     bool
+	perfLogsOff    bool
 	osd            bool
 	launcher       bool
 	cancelled      bool
@@ -64,6 +65,7 @@ type model struct {
 	z2RamSize      string
 	serialBackend  string
 	rigelTrace     bool
+	perfLogsOff    bool
 	osd            bool
 	launcher       bool
 
@@ -93,8 +95,9 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
-		serialBackend:  "log",
-		rigelTrace:     true,
+		serialBackend:  "miniuart",
+		rigelTrace:     false,
+		perfLogsOff:    true,
 		osd:            true,
 		launcher:       true,
 	}
@@ -147,6 +150,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
 		rigelTrace:     fm.rigelTrace,
+		perfLogsOff:    fm.perfLogsOff,
 		osd:            fm.osd,
 		launcher:       fm.launcher,
 	}, nil
@@ -346,6 +350,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "l":
 			m.multicoreLogs = !m.multicoreLogs
+			m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
 			return m, nil
 
 		case "t":
@@ -386,11 +391,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "s":
 			m.serialBackend = nextSerialBackend(m.serialBackend)
+			m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
 			return m, nil
 
 		case "r":
 			if m.chipsetBackend == "rigel" {
 				m.rigelTrace = !m.rigelTrace
+				m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
+			}
+			return m, nil
+
+		case "a":
+			m.perfLogsOff = !m.perfLogsOff
+			if m.perfLogsOff {
+				m.multicoreLogs = false
+				m.rigelTrace = false
+				m.serialBackend = "miniuart"
 			}
 			return m, nil
 
@@ -532,6 +548,13 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Multicore logs:"), logsBadge))
 	b.WriteString("\n")
 
+	perfLogsBadge := offBadgeStyle.Render("CUSTOM")
+	if m.perfLogsOff {
+		perfLogsBadge = onBadgeStyle.Render("OFF")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Build logs:"), perfLogsBadge))
+	b.WriteString("\n")
+
 	btstackBadge := offBadgeStyle.Render("OFF")
 	if m.btstack {
 		btstackBadge = onBadgeStyle.Render("ON")
@@ -631,7 +654,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • T BTStack • U USB • P Pointer • E Boards • G Chipset • R Rigel trace • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • A Logs off • T BTStack • U USB • P Pointer • E Boards • G Chipset • R Rigel trace • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -661,8 +684,13 @@ func (m model) qemuCommand() string {
 		rigelTraceEnv = " BELLATRIX_RIGEL_TRACE=1"
 	}
 
+	perfLogsEnv := " BELLATRIX_PERF_LOGS_OFF=0"
+	if m.perfLogsOff {
+		perfLogsEnv = " BELLATRIX_PERF_LOGS_OFF=1"
+	}
+
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_CHIPSET_BACKEND=%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s BELLATRIX_CHIPSET_BACKEND=%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
@@ -670,6 +698,7 @@ func (m model) qemuCommand() string {
 		m.emu68Boards,
 		m.chipsetBackend,
 		rigelTraceEnv,
+		perfLogsEnv,
 		boolEnv(m.osd),
 		boolEnv(m.launcher),
 		serialEnv,
