@@ -8,11 +8,12 @@
 #include <stdbool.h>
 
 // Run the launcher.
-// Scans the SD card FAT32 partition for .adf files, shows a selection UI,
-// and inserts the chosen file as DF0.
+// Scans a USB pen drive for .ADF/.ISO files, shows a selection UI, and
+// inserts the chosen file as DF0 or CD-ROM.  Falls back to QEMU loader
+// images when no USB drive is present (development use).
 //
-// Returns true if a disk was inserted; false if user skipped (ESC) or no
-// ADF files were found.
+// Returns true if a disk was inserted; false if the user skipped (ESC)
+// or no media was found.
 //
 // Call after framebuffer is ready and before the main emulation loop.
 bool launcher_run(void);

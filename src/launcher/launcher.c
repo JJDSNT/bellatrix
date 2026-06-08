@@ -1,18 +1,20 @@
 // src/launcher/launcher.c
 // Media selector UI for Bellatrix bare-metal.
 //
-// Shows a combined list of .ADF (floppy) and .ISO (CD-ROM) files found on
-// the SD card.  Navigation: UP/DOWN arrows, ENTER to select, ESC to boot
+// Shows a list of .ADF (floppy) and .ISO (CD-ROM) files found on a USB
+// pen drive.  Navigation: UP/DOWN arrows, ENTER to select, ESC to boot
 // without disk.
 //
 // ADF: loaded entirely into a static RAM buffer, inserted via
 //      bellatrix_machine_insert_df0_adf().
 // ISO: opened via FAT32 and read on-demand sector-by-sector through a
 //      callback attached to the GAYLE ATAPI CD-ROM device.
+//
+// QEMU: when no USB drive is present the launcher checks for images
+//       injected via -device loader (physical 0x18000000/0x20000000).
 
 #include "launcher/launcher.h"
 #include "launcher/launcher_input.h"
-#include "storage/sdcard/bcm_emmc.h"
 #include "storage/fat/fat32.h"
 #include "storage/iso/iso_image.h"
 #if BELLATRIX_ENABLE_USBSTACK
@@ -49,15 +51,9 @@ typedef enum {
     MEDIA_ISO,
 } MediaType;
 
-typedef enum {
-    MEDIA_SOURCE_SD = 0,
-    MEDIA_SOURCE_USB,
-} MediaSource;
-
 typedef struct {
-    char        name[FAT32_NAME_MAX];
-    MediaType   type;
-    MediaSource source;
+    char      name[FAT32_NAME_MAX];
+    MediaType type;
 } MediaEntry;
 
 // RGB565 colour palette
@@ -346,11 +342,9 @@ static uint8_t s_adf_buf[ADF_BUF_SIZE] __attribute__((aligned(512)));
 // the ATAPI read callback can seek and read sectors on demand.
 // ---------------------------------------------------------------------------
 
+#if BELLATRIX_ENABLE_USBSTACK
 static Fat32State s_fat32;
 static Fat32File  s_iso_file;
-#if BELLATRIX_ENABLE_USBSTACK
-static Fat32State s_usb_fat32;
-static Fat32File  s_usb_iso_file;
 #endif
 
 static bool fat32_iso_read_cb(void *ctx, uint32_t lba, uint32_t count, void *dst)
@@ -460,67 +454,38 @@ bool launcher_run(void)
 
     fb_init_stride();
 
-    // Enable keyboard input before SD init so error screens are interactive
     launcher_input_init();
     launcher_input_set_active(true);
 
-    draw_message("Initialising SD card...", COL_TITLE_BG);
-
-    // Pump USB while SD initialises — gives the keyboard time to enumerate
+    // Pump USB to give the keyboard and MSC device time to enumerate
+    draw_message("Initialising...", COL_TITLE_BG);
     for (uint32_t i = 0u; i < 50u; i++) {
         pump_usb();
         for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
     }
 
-    // Init SD and FAT32 — s_fat32 is kept alive so ISO reads can continue
-    // during emulation via the FAT32 callback.
-    if (!bcm_emmc_init() || !fat32_init(&s_fat32)) {
-        kprintf("[LAUNCHER] SD/FAT32 init failed — trying QEMU loaders\n");
-
-        // Try QEMU-injected ADF first, then ISO
-        if (try_qemu_loader_adf()) {
-            launcher_input_set_active(false);
-            draw_message("QEMU: ADF loaded from memory.  Starting emulation...", COL_STATUS_BG);
-            for (volatile uint32_t i = 0u; i < 3000000u; i++) asm volatile("nop");
-            return true;
-        }
-        if (try_qemu_loader_iso()) {
-            launcher_input_set_active(false);
-            draw_message("QEMU: ISO loaded from memory.  Starting emulation...", COL_STATUS_BG);
-            for (volatile uint32_t i = 0u; i < 3000000u; i++) asm volatile("nop");
-            return true;
-        }
-
-        draw_message("SD card not found.  Press any key (or wait) to boot without disk.", COL_STATUS_BG);
-        wait_ack();
+    // QEMU: images injected via -device loader land at fixed physical addresses.
+    // On real hardware these locations contain random RAM and the magic checks fail.
+    if (try_qemu_loader_adf()) {
         launcher_input_set_active(false);
-        return false;
+        draw_message("QEMU: ADF loaded from memory.  Starting emulation...", COL_STATUS_BG);
+        for (volatile uint32_t i = 0u; i < 3000000u; i++) asm volatile("nop");
+        return true;
+    }
+    if (try_qemu_loader_iso()) {
+        launcher_input_set_active(false);
+        draw_message("QEMU: ISO loaded from memory.  Starting emulation...", COL_STATUS_BG);
+        for (volatile uint32_t i = 0u; i < 3000000u; i++) asm volatile("nop");
+        return true;
     }
 
-    // Scan ADF and ISO files into a combined list
-    static char        s_adf_names[MAX_ADF_FILES][FAT32_NAME_MAX];
-    static char        s_iso_names[MAX_ISO_FILES][FAT32_NAME_MAX];
-    static MediaEntry  s_entries[(MAX_ADF_FILES + MAX_ISO_FILES) * 2u];
-
-    uint32_t n_adf = fat32_list_adf(&s_fat32, s_adf_names, MAX_ADF_FILES);
-    uint32_t n_iso = fat32_list_iso(&s_fat32, s_iso_names, MAX_ISO_FILES);
+    static char       s_adf_names[MAX_ADF_FILES][FAT32_NAME_MAX];
+    static char       s_iso_names[MAX_ISO_FILES][FAT32_NAME_MAX];
+    static MediaEntry s_entries[(MAX_ADF_FILES + MAX_ISO_FILES) * 2u];
     uint32_t count = 0u;
 
-    for (uint32_t i = 0u; i < n_adf; i++) {
-        memcpy(s_entries[count].name, s_adf_names[i], FAT32_NAME_MAX);
-        s_entries[count].type   = MEDIA_ADF;
-        s_entries[count].source = MEDIA_SOURCE_SD;
-        count++;
-    }
-    for (uint32_t i = 0u; i < n_iso; i++) {
-        memcpy(s_entries[count].name, s_iso_names[i], FAT32_NAME_MAX);
-        s_entries[count].type   = MEDIA_ISO;
-        s_entries[count].source = MEDIA_SOURCE_SD;
-        count++;
-    }
-
 #if BELLATRIX_ENABLE_USBSTACK
-    // Give USB time to enumerate a mass-storage device (≈1 s extra)
+    // Wait for USB MSC to enumerate (up to ~1 s additional)
     draw_message("Scanning USB drive...", COL_TITLE_BG);
     for (uint32_t i = 0u; i < 200u; i++) {
         pump_usb();
@@ -528,39 +493,33 @@ bool launcher_run(void)
         if (usb_msc_is_ready()) break;
     }
 
-    if (usb_msc_is_ready() && fat32_init_usb(&s_usb_fat32)) {
-        static char s_usb_adf_names[MAX_ADF_FILES][FAT32_NAME_MAX];
-        static char s_usb_iso_names[MAX_ISO_FILES][FAT32_NAME_MAX];
+    if (usb_msc_is_ready() && fat32_init_usb(&s_fat32)) {
+        uint32_t n_adf = fat32_list_adf(&s_fat32, s_adf_names, MAX_ADF_FILES);
+        uint32_t n_iso = fat32_list_iso(&s_fat32, s_iso_names, MAX_ISO_FILES);
+        kprintf("[LAUNCHER] USB: %u ADF, %u ISO\n", (unsigned)n_adf, (unsigned)n_iso);
 
-        uint32_t nu_adf = fat32_list_adf(&s_usb_fat32, s_usb_adf_names, MAX_ADF_FILES);
-        uint32_t nu_iso = fat32_list_iso(&s_usb_fat32, s_usb_iso_names, MAX_ISO_FILES);
-
-        kprintf("[LAUNCHER] USB: %u ADF, %u ISO\n", (unsigned)nu_adf, (unsigned)nu_iso);
-
-        for (uint32_t i = 0u; i < nu_adf; i++) {
-            memcpy(s_entries[count].name, s_usb_adf_names[i], FAT32_NAME_MAX);
-            s_entries[count].type   = MEDIA_ADF;
-            s_entries[count].source = MEDIA_SOURCE_USB;
+        for (uint32_t i = 0u; i < n_adf; i++) {
+            memcpy(s_entries[count].name, s_adf_names[i], FAT32_NAME_MAX);
+            s_entries[count].type = MEDIA_ADF;
             count++;
         }
-        for (uint32_t i = 0u; i < nu_iso; i++) {
-            memcpy(s_entries[count].name, s_usb_iso_names[i], FAT32_NAME_MAX);
-            s_entries[count].type   = MEDIA_ISO;
-            s_entries[count].source = MEDIA_SOURCE_USB;
+        for (uint32_t i = 0u; i < n_iso; i++) {
+            memcpy(s_entries[count].name, s_iso_names[i], FAT32_NAME_MAX);
+            s_entries[count].type = MEDIA_ISO;
             count++;
         }
     }
 #endif
 
     if (count == 0u) {
-        kprintf("[LAUNCHER] no ADF or ISO files found\n");
-        draw_message("No media files on SD card.  Press any key (or wait) to boot without disk.", COL_STATUS_BG);
+        kprintf("[LAUNCHER] no media found on USB drive\n");
+        draw_message("No media on USB drive.  Press any key (or wait) to boot without disk.", COL_STATUS_BG);
         wait_ack();
         launcher_input_set_active(false);
         return false;
     }
 
-    kprintf("[LAUNCHER] found %u ADF, %u ISO\n", (unsigned)n_adf, (unsigned)n_iso);
+    kprintf("[LAUNCHER] found %u entries\n", (unsigned)count);
 
     // Flush any keys queued during initialisation
     while (launcher_input_pop() != 0u) {}
@@ -622,13 +581,13 @@ bool launcher_run(void)
     const MediaEntry *sel = &s_entries[cursor];
 
 #if BELLATRIX_ENABLE_USBSTACK
-    Fat32State *sel_fs       = (sel->source == MEDIA_SOURCE_USB) ? &s_usb_fat32 : &s_fat32;
-    Fat32File  *sel_iso_file = (sel->source == MEDIA_SOURCE_USB) ? &s_usb_iso_file : &s_iso_file;
-    const char *src_tag      = (sel->source == MEDIA_SOURCE_USB) ? "USB" : "SD";
-#else
     Fat32State *sel_fs       = &s_fat32;
     Fat32File  *sel_iso_file = &s_iso_file;
-    const char *src_tag      = "SD";
+    const char *src_tag      = "USB";
+#else
+    /* count is always 0 without USB stack — unreachable */
+    launcher_input_set_active(false);
+    return false;
 #endif
 
     if (sel->type == MEDIA_ADF) {
