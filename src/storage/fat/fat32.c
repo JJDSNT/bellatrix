@@ -2,17 +2,9 @@
 // Minimal FAT32 reader.  Read-only, no LFN, single partition.
 
 #include "storage/fat/fat32.h"
-#include "storage/sdcard/bcm_emmc.h"
 #include <string.h>
 
 int kprintf(const char *fmt, ...);
-
-// SD card block reader used by fat32_init()
-static bool sd_read_block(void *ctx, uint32_t lba, uint8_t *buf)
-{
-    (void)ctx;
-    return bcm_emmc_read_block(lba, buf);
-}
 
 // ---------------------------------------------------------------------------
 // Little-endian accessors (sector buffers are byte arrays)
@@ -138,10 +130,6 @@ bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx)
     return true;
 }
 
-bool fat32_init(Fat32State *fs)
-{
-    return fat32_init_with_reader(fs, sd_read_block, NULL);
-}
 
 // ---------------------------------------------------------------------------
 // 8.3 name helpers

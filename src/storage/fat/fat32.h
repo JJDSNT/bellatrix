@@ -35,9 +35,6 @@ typedef struct Fat32File {
     uint32_t   cur_offset;      // byte offset from start
 } Fat32File;
 
-// Initialise from the SD card; returns false if no FAT32 partition found
-bool fat32_init(Fat32State *fs);
-
 // Initialise with a custom block reader (e.g. USB MSC)
 bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx);
 
