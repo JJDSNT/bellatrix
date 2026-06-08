@@ -130,6 +130,9 @@ set(BELLATRIX_SOURCES
 
     # Core
     ${SRC}/machine/machine_rigel.c
+    ${SRC}/machine/machine_rigel_trace.c
+    ${SRC}/machine/machine_rigel_bus.c
+    ${SRC}/machine/machine_rigel_step.c
     ${SRC}/machine/expansion.c
     ${SRC}/cpu/cpu_bridge.c
     ${SRC}/plugin/plugin_loader.c

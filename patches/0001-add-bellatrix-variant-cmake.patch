@@ -66,7 +66,12 @@ index eb89404..403d210 100644
 +                add_subdirectory(${CMAKE_SOURCE_DIR}/../external/rigel ${CMAKE_BINARY_DIR}/rigel-build EXCLUDE_FROM_ALL)
 +                target_compile_options(rigel PRIVATE -mbig-endian -fno-stack-protector)
 +                add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=1)
-+                set(BELLATRIX_MACHINE_SOURCE ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel.c)
++                set(BELLATRIX_MACHINE_SOURCE
++                    ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel.c
++                    ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel_trace.c
++                    ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel_bus.c
++                    ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel_step.c
++                )
 +            else()
 +                add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=0)
 +                set(BELLATRIX_MACHINE_SOURCE ${CMAKE_SOURCE_DIR}/../src/machine/machine.c)

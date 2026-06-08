@@ -1017,7 +1017,6 @@ static void harness_decode_boot_dma(uint32_t *err_out, uint32_t *sector_bits_out
 
 static void harness_watch_dskblk_ack(uint32_t pc, uint32_t addr, int size, uint32_t value)
 {
-    BellatrixMachine *m = bellatrix_machine_get();
     uint32_t a5 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A5) & 0x00FFFFFFu;
     uint32_t a6 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A6) & 0x00FFFFFFu;
     uint32_t d0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D0);
