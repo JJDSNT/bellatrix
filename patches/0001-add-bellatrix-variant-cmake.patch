@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index eb89404..403d210 100644
+index eb89404..cbc1d79 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -15,7 +15,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
@@ -19,7 +19,7 @@ index eb89404..403d210 100644
  set_source_files_properties(src/math/96bit.c PROPERTIES COMPILE_FLAGS 
      "-fcall-saved-x4 -fcall-saved-x5 -fcall-saved-x6 -fcall-saved-x7 -fcall-saved-x8 \
      -fcall-saved-x9 -fcall-saved-x10 -fcall-saved-x11 -fcall-saved-x12 -fcall-saved-x13 \
-@@ -167,14 +168,382 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+@@ -167,14 +168,389 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
          else()
              message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
          endif()
@@ -30,18 +30,18 @@ index eb89404..403d210 100644
 +            option(BELLATRIX_USE_RIGEL_CHIPSET "Use Rigel as the Bellatrix chipset backend" OFF)
 +            option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 +            option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
-+            option(BELLATRIX_ENABLE_MULTICORE "Enable multicore chipset runtime (Core1=GFX Core2=Paula Core3=IO)" OFF)
-+            option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO]" OFF)
++            option(BELLATRIX_ENABLE_MULTICORE "Enable multicore chipset runtime (Core1=Chipset Core3=IO)" OFF)
++            option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-CPU] [CORE1-CHIPSET] [CORE3-IO]" OFF)
 +            add_compile_definitions(BELLATRIX BELLATRIX_ENABLE_MINIUART_BACKEND BELLATRIX_ENABLE_PL011_BACKEND)
 +            if(BELLATRIX_ENABLE_MULTICORE)
 +                add_compile_definitions(BELLATRIX_ENABLE_MULTICORE)
-+                message(STATUS "[BUILD] Multicore: enabled (Core1=GFX Core2=Paula Core3=IO)")
++                message(STATUS "[BUILD] Multicore: enabled (Core1=Chipset Core3=IO)")
 +            else()
 +                message(STATUS "[BUILD] Multicore: disabled (single-core mode)")
 +            endif()
 +            if(BELLATRIX_CORE_LOG)
 +                add_compile_definitions(BELLATRIX_CORE_LOG)
-+                message(STATUS "[BUILD] Core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO])")
++                message(STATUS "[BUILD] Core log: enabled ([CORE0-CPU] [CORE1-CHIPSET] [CORE3-IO])")
 +            else()
 +                message(STATUS "[BUILD] Core log: disabled")
 +            endif()
@@ -181,6 +181,7 @@ index eb89404..403d210 100644
 +                ${CMAKE_SOURCE_DIR}/../src/machine/memory/memory_map.c
 +                ${CMAKE_SOURCE_DIR}/../src/machine/memory/chip_ram.c
 +                ${CMAKE_SOURCE_DIR}/../src/machine/memory/fast_ram.c
++                ${CMAKE_SOURCE_DIR}/../src/machine/memory/slow_ram.c
 +                ${CMAKE_SOURCE_DIR}/../src/machine/memory/overlay.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/serial/null_modem.c
 +                ${CMAKE_SOURCE_DIR}/../src/io/serial/uart_host.c
@@ -196,8 +197,6 @@ index eb89404..403d210 100644
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/runtime.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/runtime_core.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/core_cpu.c
-+                ${CMAKE_SOURCE_DIR}/../src/runtime/core_gfx.c
-+                ${CMAKE_SOURCE_DIR}/../src/runtime/core_audio.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/affinity.c
 +                ${CMAKE_SOURCE_DIR}/../src/runtime/clock.c
@@ -242,8 +241,6 @@ index eb89404..403d210 100644
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime.c
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime_core.c
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_cpu.c
-+                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_gfx.c
-+                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_audio.c
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/affinity.c
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/clock.c
@@ -254,6 +251,12 @@ index eb89404..403d210 100644
 +                )
 +                list(APPEND BASE_FILES
 +                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_chipset.c
++                )
++            else()
++                list(REMOVE_ITEM BASE_FILES
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime_core.c
++                    ${CMAKE_SOURCE_DIR}/../src/runtime/core_cpu.c
 +                )
 +            endif()
 +            if(BELLATRIX_USE_MUSASHI_CPU)
@@ -383,7 +386,6 @@ index eb89404..403d210 100644
 +                list(APPEND BELLATRIX_SOURCES
 +                    ${CMAKE_SOURCE_DIR}/../src/launcher/launcher.c
 +                    ${CMAKE_SOURCE_DIR}/../src/launcher/launcher_input.c
-+                    ${CMAKE_SOURCE_DIR}/../src/storage/sdcard/bcm_emmc.c
 +                    ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32.c
 +                )
 +                message(STATUS "[BUILD] Launcher: enabled (SD FAT32 ADF+ISO selector)")
@@ -408,7 +410,7 @@ index eb89404..403d210 100644
  
  list(APPEND ARCH_FILES
      src/aarch64/start.c
-@@ -207,9 +576,15 @@ add_custom_command(
+@@ -207,9 +583,15 @@ add_custom_command(
  add_subdirectory(external)
  
  target_link_libraries(Emu68.elf capstone-static libdeflate_static)
