@@ -362,6 +362,84 @@ index 75187f5e..bcb11b06 100644
  /* MSC Subclass Codes */
  #define MSC_SUBCLASS_RBC           0x01 /* Reduced block commands (e.g., flash devices) */
  #define MSC_SUBCLASS_SFF8020I_MMC2 0x02 /* SFF-8020i/MMC-2 (ATAPI) (e.g., C/DVD) */
+diff --git a/class/msc/usbh_msc.c b/class/msc/usbh_msc.c
+index 12a4f673..18dc288b 100644
+--- a/class/msc/usbh_msc.c
++++ b/class/msc/usbh_msc.c
+@@ -125,12 +125,38 @@ static inline int usbh_msc_bulk_out_transfer(struct usbh_msc *msc_class, uint8_t
+     return ret;
+ }
+ 
++/* Bellatrix: the host runs AArch64 big-endian. The CBW/CSW uint32 fields
++ * (dSignature/dTag/dDataLength, dDataResidue) must be little-endian on the
++ * wire — writing them through the struct sends them byte-swapped and the
++ * device rejects the CBW (STALLs both bulk endpoints per BOT 6.6.1).
++ * Serialize/deserialize explicitly; this is a no-op on LE hosts. */
++static void usbh_msc_put_le32(uint8_t *p, uint32_t v)
++{
++    p[0] = (uint8_t)(v);
++    p[1] = (uint8_t)(v >> 8);
++    p[2] = (uint8_t)(v >> 16);
++    p[3] = (uint8_t)(v >> 24);
++}
++
++static uint32_t usbh_msc_get_le32(const uint8_t *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
+ static int usbh_bulk_cbw_csw_xfer(struct usbh_msc *msc_class, struct CBW *cbw, struct CSW *csw, uint8_t *buffer, uint32_t timeout)
+ {
+     int nbytes;
++    uint32_t datalen;
+ 
+     usbh_msc_cbw_dump(cbw);
+ 
++    /* Capture host-order values, then serialize the u32 fields as LE */
++    datalen = cbw->dDataLength;
++    usbh_msc_put_le32((uint8_t *)&cbw->dSignature, MSC_CBW_Signature);
++    usbh_msc_put_le32((uint8_t *)&cbw->dTag, cbw->dTag);
++    usbh_msc_put_le32((uint8_t *)&cbw->dDataLength, datalen);
++
+     /* Send the CBW */
+     nbytes = usbh_msc_bulk_out_transfer(msc_class, (uint8_t *)cbw, USB_SIZEOF_MSC_CBW, timeout);
+     if (nbytes < 0) {
+@@ -138,18 +164,18 @@ static int usbh_bulk_cbw_csw_xfer(struct usbh_msc *msc_class, struct CBW *cbw, s
+         goto __err_exit;
+     }
+ 
+-    if (cbw->dDataLength != 0) {
++    if (datalen != 0) {
+         if (cbw->CB[0] == SCSI_CMD_WRITE10) {
+-            nbytes = usbh_msc_bulk_out_transfer(msc_class, buffer, cbw->dDataLength, timeout);
++            nbytes = usbh_msc_bulk_out_transfer(msc_class, buffer, datalen, timeout);
+         } else if (cbw->CB[0] == SCSI_CMD_READCAPACITY10) {
+-            nbytes = usbh_msc_bulk_in_transfer(msc_class, buffer, cbw->dDataLength, timeout);
++            nbytes = usbh_msc_bulk_in_transfer(msc_class, buffer, datalen, timeout);
+             if (nbytes >= 0) {
+                 /* Save the capacity information */
+                 msc_class->blocknum = GET_BE32(&buffer[0]) + 1;
+                 msc_class->blocksize = GET_BE32(&buffer[4]);
+             }
+         } else {
+-            nbytes = usbh_msc_bulk_in_transfer(msc_class, buffer, cbw->dDataLength, timeout);
++            nbytes = usbh_msc_bulk_in_transfer(msc_class, buffer, datalen, timeout);
+         }
+ 
+         if (nbytes < 0) {
+@@ -166,6 +192,11 @@ static int usbh_bulk_cbw_csw_xfer(struct usbh_msc *msc_class, struct CBW *cbw, s
+         goto __err_exit;
+     }
+ 
++    /* Deserialize the CSW u32 fields from LE wire order */
++    csw->dSignature   = usbh_msc_get_le32((const uint8_t *)&csw->dSignature);
++    csw->dTag         = usbh_msc_get_le32((const uint8_t *)&csw->dTag);
++    csw->dDataResidue = usbh_msc_get_le32((const uint8_t *)&csw->dDataResidue);
++
+     usbh_msc_csw_dump(csw);
+ 
+     /* check csw status */
 diff --git a/class/msc/usbh_msc.h b/class/msc/usbh_msc.h
 index c4aee8a8..b751bb58 100644
 --- a/class/msc/usbh_msc.h
@@ -387,20 +465,21 @@ index aa411eef..6a9a13af 100644
  #ifdef __cplusplus
  extern "C" {
 diff --git a/core/usbh_core.c b/core/usbh_core.c
-index cce9a46e..eb4738d3 100644
+index cce9a46e..7757aaea 100644
 --- a/core/usbh_core.c
 +++ b/core/usbh_core.c
-@@ -12,6 +12,9 @@
+@@ -12,6 +12,10 @@
  struct usbh_class_info *usbh_class_info_table_begin = NULL;
  struct usbh_class_info *usbh_class_info_table_end = NULL;
  
 +extern const struct usbh_class_info hub_class_info __attribute__((weak));
 +extern const struct usbh_class_info hid_custom_class_info __attribute__((weak));
++extern const struct usbh_class_info msc_class_info __attribute__((weak));
 +
  usb_slist_t g_bus_head = USB_SLIST_OBJECT_INIT(g_bus_head);
  
  struct setup_align_buffer {
-@@ -31,6 +34,11 @@ struct usbh_bus g_usbhost_bus[CONFIG_USBHOST_MAX_BUS];
+@@ -31,6 +35,11 @@ struct usbh_bus g_usbhost_bus[CONFIG_USBHOST_MAX_BUS];
  #define USB_DEV_ADDR_MARK_OFFSET 5
  #define USB_DEV_ADDR_MARK_MASK   0x1f
  
@@ -412,7 +491,7 @@ index cce9a46e..eb4738d3 100644
  static void dummy_event_handler(uint8_t busid, uint8_t hub_index, uint8_t hub_port, uint8_t intf, uint8_t event)
  {
      (void)busid;
-@@ -94,44 +102,88 @@ static int usbh_free_devaddr(struct usbh_hubport *hport)
+@@ -94,44 +103,88 @@ static int usbh_free_devaddr(struct usbh_hubport *hport)
      return 0;
  }
  
@@ -424,7 +503,7 @@ index cce9a46e..eb4738d3 100644
 +                                    uint16_t vid,
 +                                    uint16_t pid)
 +{
-+    if (!index) {
++    if (!index || !index->class_driver) {
 +        return false;
 +    }
 +
@@ -460,6 +539,13 @@ index cce9a46e..eb4738d3 100644
                                                                uint16_t vid, uint16_t pid)
  {
      struct usbh_class_info *index = NULL;
++    static bool warned_once = false;
++    const struct usbh_class_info *fallback_infos[] = {
++        (uintptr_t)&hub_class_info ? &hub_class_info : NULL,
++        (uintptr_t)&hid_custom_class_info ? &hid_custom_class_info : NULL,
++        (uintptr_t)&msc_class_info ? &msc_class_info : NULL,
++        NULL
++    };
  
      for (index = usbh_class_info_table_begin; index < usbh_class_info_table_end; index++) {
 -        if ((index->match_flags & USB_CLASS_MATCH_INTF_CLASS) && !(index->bInterfaceClass == class)) {
@@ -482,13 +568,6 @@ index cce9a46e..eb4738d3 100644
 +     * runtime even though the compiled class infos are present in the image.
 +     * Fall back to the explicitly linked class infos we build today. */
 +    if ((uintptr_t)usbh_class_info_table_begin >= (uintptr_t)usbh_class_info_table_end) {
-+        static bool warned_once = false;
-+        const struct usbh_class_info *fallback_infos[] = {
-+            (uintptr_t)&hub_class_info ? &hub_class_info : NULL,
-+            (uintptr_t)&hid_custom_class_info ? &hid_custom_class_info : NULL,
-+            NULL
-+        };
-+
 +        if (!warned_once) {
 +            USB_LOG_WRN("Bellatrix USBH: class-info table invalid; using fallback registry\r\n");
 +            warned_once = true;
@@ -504,11 +583,12 @@ index cce9a46e..eb4738d3 100644
 -            /* do not match, continue next */
 -            if (!index->id_table[i][0]) {
 -                continue;
+-            }
++    }
 +
-+        for (uint32_t i = 0; fallback_infos[i] != NULL; i++) {
-+            if (usbh_class_info_matches(fallback_infos[i], class, subclass, protocol, intf, vid, pid)) {
-+                return fallback_infos[i]->class_driver;
-             }
++    for (uint32_t i = 0; fallback_infos[i] != NULL; i++) {
++        if (usbh_class_info_matches(fallback_infos[i], class, subclass, protocol, intf, vid, pid)) {
++            return fallback_infos[i]->class_driver;
          }
 -        return index->class_driver;
      }
@@ -523,7 +603,7 @@ index cce9a46e..eb4738d3 100644
      if (desc->bLength != USB_SIZEOF_DEVICE_DESC) {
          USB_LOG_ERR("invalid device bLength 0x%02x\r\n", desc->bLength);
          return -USB_ERR_INVAL;
-@@ -161,14 +213,14 @@ static int parse_device_descriptor(struct usbh_hubport *hport, struct usb_device
+@@ -161,14 +214,14 @@ static int parse_device_descriptor(struct usbh_hubport *hport, struct usb_device
  #endif
          hport->device_desc.bLength = desc->bLength;
          hport->device_desc.bDescriptorType = desc->bDescriptorType;
@@ -542,7 +622,7 @@ index cce9a46e..eb4738d3 100644
          hport->device_desc.iManufacturer = desc->iManufacturer;
          hport->device_desc.iProduct = desc->iProduct;
          hport->device_desc.iSerialNumber = desc->iSerialNumber;
-@@ -179,8 +231,6 @@ static int parse_device_descriptor(struct usbh_hubport *hport, struct usb_device
+@@ -179,8 +232,6 @@ static int parse_device_descriptor(struct usbh_hubport *hport, struct usb_device
  
  static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_configuration_descriptor *desc, uint16_t length)
  {
@@ -551,7 +631,7 @@ index cce9a46e..eb4738d3 100644
      uint8_t cur_alt_setting = 0xff;
      uint8_t cur_iface = 0xff;
      uint8_t cur_ep = 0xff;
-@@ -211,7 +261,7 @@ static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_config
+@@ -211,7 +262,7 @@ static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_config
  #endif
          hport->config.config_desc.bLength = desc->bLength;
          hport->config.config_desc.bDescriptorType = desc->bDescriptorType;
@@ -560,7 +640,7 @@ index cce9a46e..eb4738d3 100644
          hport->config.config_desc.bNumInterfaces = desc->bNumInterfaces;
          hport->config.config_desc.bConfigurationValue = desc->bConfigurationValue;
          hport->config.config_desc.iConfiguration = desc->iConfiguration;
-@@ -228,10 +278,9 @@ static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_config
+@@ -228,10 +279,9 @@ static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_config
          while (p[DESC_bLength] && (desc_len <= length)) {
              switch (p[DESC_bDescriptorType]) {
                  case USB_DESCRIPTOR_TYPE_INTERFACE:
@@ -574,7 +654,7 @@ index cce9a46e..eb4738d3 100644
                      cur_ep = 0;
  
                      if (cur_iface >= CONFIG_USBHOST_MAX_INTERFACES) {
-@@ -251,22 +300,35 @@ static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_config
+@@ -251,22 +301,35 @@ static int parse_config_descriptor(struct usbh_hubport *hport, struct usb_config
  
  #if 0
                      USB_LOG_DBG("Interface Descriptor:\r\n");
@@ -622,7 +702,7 @@ index cce9a46e..eb4738d3 100644
                      cur_ep++;
                      break;
  
-@@ -299,14 +361,16 @@ static int usbh_get_default_mps(int speed)
+@@ -299,14 +362,16 @@ static int usbh_get_default_mps(int speed)
      switch (speed) {
          case USB_SPEED_LOW: /* For low speed, we use 8 bytes */
              return 8;
@@ -641,7 +721,7 @@ index cce9a46e..eb4738d3 100644
      }
  }
  
-@@ -358,14 +422,14 @@ int usbh_enumerate(struct usbh_hubport *hport)
+@@ -358,14 +423,14 @@ int usbh_enumerate(struct usbh_hubport *hport)
  
      /* Extract the correct max packetsize from the device descriptor */
      dev_desc = (struct usb_device_descriptor *)ep0_request_buffer[hport->bus->busid];
@@ -658,7 +738,7 @@ index cce9a46e..eb4738d3 100644
                  dev_desc->bDeviceProtocol, ep_mps);
  
      /* Reconfigure EP0 with the correct maximum packet size */
-@@ -412,11 +476,11 @@ int usbh_enumerate(struct usbh_hubport *hport)
+@@ -412,11 +477,11 @@ int usbh_enumerate(struct usbh_hubport *hport)
  
      parse_device_descriptor(hport, (struct usb_device_descriptor *)ep0_request_buffer[hport->bus->busid], USB_SIZEOF_DEVICE_DESC);
      USB_LOG_INFO("New device found,idVendor:%04x,idProduct:%04x,bcdDevice:%04x\r\n",
@@ -674,7 +754,7 @@ index cce9a46e..eb4738d3 100644
  
      config_index = usbh_get_hport_active_config_index(hport);
      USB_LOG_DBG("The device selects config %d\r\n", config_index);
-@@ -441,7 +505,7 @@ int usbh_enumerate(struct usbh_hubport *hport)
+@@ -441,7 +506,7 @@ int usbh_enumerate(struct usbh_hubport *hport)
      }
  
      /* Read the full size of the configuration data */
@@ -683,7 +763,7 @@ index cce9a46e..eb4738d3 100644
  
      if (wTotalLength > CONFIG_USBHOST_REQUEST_BUFFER_LEN) {
          ret = -USB_ERR_NOMEM;
-@@ -467,7 +531,7 @@ int usbh_enumerate(struct usbh_hubport *hport)
+@@ -467,7 +532,7 @@ int usbh_enumerate(struct usbh_hubport *hport)
          goto errout;
      }
  
@@ -692,7 +772,7 @@ index cce9a46e..eb4738d3 100644
      hport->raw_config_desc = usb_osal_malloc(wTotalLength + 1);
      if (hport->raw_config_desc == NULL) {
          ret = -USB_ERR_NOMEM;
-@@ -475,7 +539,7 @@ int usbh_enumerate(struct usbh_hubport *hport)
+@@ -475,7 +540,7 @@ int usbh_enumerate(struct usbh_hubport *hport)
          goto errout;
      }
  
@@ -701,7 +781,7 @@ index cce9a46e..eb4738d3 100644
      memcpy(hport->raw_config_desc, ep0_request_buffer[hport->bus->busid], wTotalLength);
      hport->raw_config_desc[wTotalLength] = '\0';
  
-@@ -566,6 +630,46 @@ int usbh_enumerate(struct usbh_hubport *hport)
+@@ -566,6 +631,46 @@ int usbh_enumerate(struct usbh_hubport *hport)
                                                                                                      hport->device_desc.idProduct);
  
          if (class_driver == NULL) {
@@ -748,7 +828,7 @@ index cce9a46e..eb4738d3 100644
              USB_LOG_ERR("Do not support Class:0x%02x, Subclass:0x%02x, Protocl:0x%02x on interface %u\r\n",
                          intf_desc->bInterfaceClass,
                          intf_desc->bInterfaceSubClass,
-@@ -693,6 +797,16 @@ int usbh_control_transfer(struct usbh_hubport *hport, struct usb_setup_packet *s
+@@ -693,6 +798,16 @@ int usbh_control_transfer(struct usbh_hubport *hport, struct usb_setup_packet *s
      usbh_print_setup(setup);
  
  resubmit:
@@ -765,7 +845,7 @@ index cce9a46e..eb4738d3 100644
      usbh_control_urb_fill(urb, hport, setup, buffer, setup->wLength, CONFIG_USBHOST_CONTROL_TRANSFER_TIMEOUT, NULL, NULL);
      ret = usbh_submit_urb(urb);
      if (ret == 0) {
-@@ -707,6 +821,21 @@ resubmit:
+@@ -707,6 +822,21 @@ resubmit:
          }
      }
  
