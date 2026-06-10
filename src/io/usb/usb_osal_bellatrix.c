@@ -2,13 +2,16 @@
 
 #include "usbh_core.h"
 #include "host/raspi3/time.h"
+#include "support.h"
 #if BELLATRIX_ENABLE_USBSTACK
 #include "usb_dwc2_reg.h"
 
 #define BELLATRIX_USB_OSAL_DWC2_REG_BASE 0xF2980000UL
-#define BELLATRIX_USB_OSAL_GLB   ((DWC2_GlobalTypeDef *)(uintptr_t)(BELLATRIX_USB_OSAL_DWC2_REG_BASE))
-#define BELLATRIX_USB_OSAL_HOST  ((DWC2_HostTypeDef *)(uintptr_t)(BELLATRIX_USB_OSAL_DWC2_REG_BASE + USB_OTG_HOST_BASE))
-#define BELLATRIX_USB_OSAL_HC(i) ((DWC2_HostChannelTypeDef *)(uintptr_t)(BELLATRIX_USB_OSAL_DWC2_REG_BASE + USB_OTG_HOST_CHANNEL_BASE + ((i) * USB_OTG_HOST_CHANNEL_SIZE)))
+
+static inline uint32_t bellatrix_usb_osal_rd32(uint32_t off)
+{
+    return rd32le((uintptr_t)(BELLATRIX_USB_OSAL_DWC2_REG_BASE + off));
+}
 #endif
 
 #define BELLATRIX_USB_OSAL_BUS_ID 0u
@@ -148,18 +151,30 @@ int usb_osal_sem_take(usb_osal_sem_t sem, uint32_t timeout)
 
     if (state->count == 0) {
 #if BELLATRIX_ENABLE_USBSTACK
-        kprintf("[USB] sem timeout: spins=%u GINTSTS=0x%08x GINTMSK=0x%08x HFNUM=0x%08x HNPTXSTS=0x%08x HPTXSTS=0x%08x HAINT=0x%08x HAINTMSK=0x%08x HCINT0=0x%08x HCINTMSK0=0x%08x HCCHAR0=0x%08x\n",
+        kprintf("[USB] sem timeout: spins=%u GAHBCFG=0x%08x GUSBCFG=0x%08x GRSTCTL=0x%08x GINTSTS=0x%08x GINTMSK=0x%08x HFNUM=0x%08x HNPTXSTS=0x%08x HPTXSTS=0x%08x HAINT=0x%08x HAINTMSK=0x%08x HCINT0=0x%08x HCINTMSK0=0x%08x HCCHAR0=0x%08x HCSPLT0=0x%08x HCTSIZ0=0x%08x HCDMA0=0x%08x\n",
                 (unsigned)spins,
-                (unsigned)BELLATRIX_USB_OSAL_GLB->GINTSTS,
-                (unsigned)BELLATRIX_USB_OSAL_GLB->GINTMSK,
-                (unsigned)BELLATRIX_USB_OSAL_HOST->HFNUM,
-                (unsigned)BELLATRIX_USB_OSAL_GLB->HNPTXSTS,
-                (unsigned)BELLATRIX_USB_OSAL_HOST->HPTXSTS,
-                (unsigned)BELLATRIX_USB_OSAL_HOST->HAINT,
-                (unsigned)BELLATRIX_USB_OSAL_HOST->HAINTMSK,
-                (unsigned)BELLATRIX_USB_OSAL_HC(0)->HCINT,
-                (unsigned)BELLATRIX_USB_OSAL_HC(0)->HCINTMSK,
-                (unsigned)BELLATRIX_USB_OSAL_HC(0)->HCCHAR);
+                (unsigned)bellatrix_usb_osal_rd32(0x008U),
+                (unsigned)bellatrix_usb_osal_rd32(0x00cU),
+                (unsigned)bellatrix_usb_osal_rd32(0x010U),
+                (unsigned)bellatrix_usb_osal_rd32(0x014U),
+                (unsigned)bellatrix_usb_osal_rd32(0x018U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x008U),
+                (unsigned)bellatrix_usb_osal_rd32(0x02cU),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x010U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x014U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x018U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_CHANNEL_BASE + 0x008U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_CHANNEL_BASE + 0x00cU),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_CHANNEL_BASE + 0x000U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_CHANNEL_BASE + 0x004U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_CHANNEL_BASE + 0x010U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_CHANNEL_BASE + 0x014U));
+        kprintf("[USB] sem timeout(2): GOTGCTL=0x%08x HCFG=0x%08x HFIR=0x%08x HPRT=0x%08x PCGCCTL=0x%08x\n",
+                (unsigned)bellatrix_usb_osal_rd32(0x000U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x000U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x004U),
+                (unsigned)bellatrix_usb_osal_rd32(USB_OTG_HOST_BASE + 0x040U),
+                (unsigned)bellatrix_usb_osal_rd32(0xE00U));
 #endif
         return -1;
     }

@@ -215,6 +215,26 @@ static inline int dwc2_core_init(struct usbh_bus *bus)
         dwc2_wr32(bus, DWC2_GLB_OFF(GUSBCFG), regval);
     }
 
+    /* Pure host: disable the OTG session protocols. The firmware leaves
+     * SRPCAP/HNPCAP/TSDPS set on BCM2837; with them active, the first
+     * low-speed transaction triggers the OTG session state machine
+     * (GINTSTS.OTGINT) and the root port gets disabled mid-enumeration.
+     * USPI/Circle clear these in init for the same reason. */
+    regval  = dwc2_rd32(bus, DWC2_GLB_OFF(GUSBCFG));
+    regval &= ~(USB_OTG_GUSBCFG_SRPCAP | USB_OTG_GUSBCFG_HNPCAP | USB_OTG_GUSBCFG_TSDPS);
+    dwc2_wr32(bus, DWC2_GLB_OFF(GUSBCFG), regval);
+
+    /* BCM2837: do NOT soft-reset the core. The VideoCore firmware initialises
+     * the USB PHY at boot and a core soft reset leaves the PHY transmitter
+     * dead: line-state sensing still works (connect/reset/enable all succeed)
+     * but no packet is ever driven onto the bus and the HS chirp never
+     * happens (the on-board LAN9514 hub falls back to FS). The AROS usb2otg
+     * driver — same author as Emu68, same SoC — has the core reset
+     * deliberately compiled out for this reason. */
+    if (g_dwc2_hcd[bus->hcd.hcd_id].hw_params.snpsid == 0x4f54280aU) {
+        return 0;
+    }
+
     ret = dwc2_reset(bus);
     return ret;
 }
@@ -602,6 +622,18 @@ static int usbh_reset_port(struct usbh_bus *bus, const uint8_t port)
      * host template. */
     hprt0 = dwc2_rd32(bus, DWC2_HOST_OFF(HPRT));
     dwc2_apply_port_speed_config(bus, hprt0);
+
+    /* The reset itself raises PCDET/PENCHNG: the HPRT irq handler (pumped
+     * from sem_take during the waits above) records them as port_csc/port_pec
+     * and queues a root-hub wakeup. The hub thread is the caller of this
+     * reset — these self-inflicted change events must not surface as a new
+     * C_CONNECTION after enumeration, or the stack tears down the device it
+     * just enumerated (observed: LAN9514 hub unregistered right after
+     * interface_start). Clear them here; a genuine unplug raises CSC again
+     * outside any reset window. */
+    g_dwc2_hcd[bus->hcd.hcd_id].port_csc = 0;
+    g_dwc2_hcd[bus->hcd.hcd_id].port_pec = 0;
+    bus->hcd.roothub.int_buffer[0] = 0;
     return 0;
 }
 
@@ -674,12 +706,31 @@ static void dwc2_apply_port_speed_config(struct usbh_bus *bus, uint32_t hprt0)
 
     regval  = dwc2_rd32(bus, DWC2_HOST_OFF(HCFG));
     regval &= ~(USB_OTG_HCFG_FSLSPCS | USB_OTG_HCFG_FSLSS);
-    if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_LOW_SPEED << 17)) {
-        regval |= USB_OTG_HCFG_FSLSPCLKSEL_6_MHZ | USB_OTG_HCFG_FSLSS;
-    } else if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_FULL_SPEED << 17)) {
-        regval |= USB_OTG_HCFG_FSLSPCLKSEL_48_MHZ | USB_OTG_HCFG_FSLSS;
+    if (g_dwc2_hcd[bus->hcd.hcd_id].user_params.phy_type == DWC2_PHY_TYPE_PARAM_FS) {
+        /* PHYSEL=1: dedicated FS serial transceiver — PHY clock follows the
+         * attached device speed and the core runs in FS/LS-only mode. */
+        if ((hprt0 & USB_OTG_HPRT_PSPD) == (HPRT0_PRTSPD_LOW_SPEED << 17)) {
+            regval |= USB_OTG_HCFG_FSLSPCLKSEL_6_MHZ | USB_OTG_HCFG_FSLSS;
+        } else {
+            regval |= USB_OTG_HCFG_FSLSPCLKSEL_48_MHZ | USB_OTG_HCFG_FSLSS;
+        }
     } else {
+        /* UTMI/ULPI PHY (BCM2837): the PHY clock is always 30/60 MHz, even
+         * for FS/LS devices on the root port. Selecting 48 MHz here (the
+         * STM32 FS-serial template) desyncs the host frame scheduler from
+         * HFIR (computed for a 60 MHz clock) and the core never starts any
+         * transaction — channel stays armed, HCINT=0 forever. */
         regval |= USB_OTG_HCFG_FSLSPCLKSEL_30_60_MHZ;
+        if ((hprt0 & USB_OTG_HPRT_PSPD) != (HPRT0_PRTSPD_HIGH_SPEED << 17)) {
+            /* FS/LS root port: FSLSSupp enables PRE-prefixed low-speed
+             * packets for LS devices behind a FS hub. Without it, the first
+             * LS transaction (LSDEV=1, no split) puts invalid signalling on
+             * the bus and the core disables the root port (PENCHNG, ena=0,
+             * XACTERR — observed with the keyboard on the LAN9514 port 3).
+             * Keep the 30/60 MHz clock select — only the 48 MHz pairing was
+             * wrong for UTMI. */
+            regval |= USB_OTG_HCFG_FSLSS;
+        }
     }
     dwc2_wr32(bus, DWC2_HOST_OFF(HCFG), regval);
 
@@ -949,8 +1000,16 @@ int usb_hc_init(struct usbh_bus *bus)
     dwc2_wr32(bus, DWC2_GLB_OFF(GOTGCTL),
               dwc2_rd32(bus, DWC2_GLB_OFF(GOTGCTL)) & ~USB_OTG_GOTGCTL_BVALOVAL);
 
-    dwc2_wr32(bus, DWC2_GLB_OFF(GUSBCFG),
-              dwc2_rd32(bus, DWC2_GLB_OFF(GUSBCFG)) | USB_OTG_GUSBCFG_TOCAL);
+    /* USB turnaround time: Linux dwc2_gusbcfg_init uses 9 for 8-bit UTMI,
+     * 5 for 16-bit. The core reset default of 5 is too short for the
+     * BCM2837 8-bit UTMI PHY. TOCAL stays at its reset default. */
+    if (g_dwc2_hcd[bus->hcd.hcd_id].user_params.phy_type == DWC2_PHY_TYPE_PARAM_UTMI &&
+        g_dwc2_hcd[bus->hcd.hcd_id].user_params.phy_utmi_width == 8) {
+        uint32_t gusbcfg = dwc2_rd32(bus, DWC2_GLB_OFF(GUSBCFG));
+        gusbcfg &= ~USB_OTG_GUSBCFG_TRDT;
+        gusbcfg |= (9U << USB_OTG_GUSBCFG_TRDT_Pos) & USB_OTG_GUSBCFG_TRDT;
+        dwc2_wr32(bus, DWC2_GLB_OFF(GUSBCFG), gusbcfg);
+    }
 
     dwc2_wr32(bus, USB_OTG_PCGCCTL_BASE, 0U);
 
@@ -967,6 +1026,18 @@ int usb_hc_init(struct usbh_bus *bus)
         bus->hcd.roothub.speed = USB_SPEED_HIGH;
         dwc2_wr32(bus, DWC2_HOST_OFF(HCFG),
                   dwc2_rd32(bus, DWC2_HOST_OFF(HCFG)) | USB_OTG_HCFG_FSLSPCLKSEL_30_60_MHZ);
+        if (g_dwc2_hcd[bus->hcd.hcd_id].hw_params.snpsid == 0x4f54280aU) {
+            /* BCM2837: FSLSSupp is sampled when the port becomes enabled —
+             * setting it from the PENCHNG handler is too late, the core has
+             * already latched HS-host mode and its babble detector (FS
+             * timing) kills the port on the first PRE+LS packet (8x slower).
+             * Set it here, before port power, so the port enables directly
+             * in FS/LS-only mode. The root port never achieved HS on this
+             * setup anyway, so nothing is lost. */
+            bus->hcd.roothub.speed = USB_SPEED_FULL;
+            dwc2_wr32(bus, DWC2_HOST_OFF(HCFG),
+                      dwc2_rd32(bus, DWC2_HOST_OFF(HCFG)) | USB_OTG_HCFG_FSLSS);
+        }
     }
 
     if (g_dwc2_hcd[bus->hcd.hcd_id].hw_params.snpsid > 0x4F54292AU) {
@@ -996,8 +1067,19 @@ int usb_hc_init(struct usbh_bus *bus)
 
     dwc2_wr32(bus, DWC2_GLB_OFF(GAHBCFG),
               dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) & ~USB_OTG_GAHBCFG_HBSTLEN);
-    dwc2_wr32(bus, DWC2_GLB_OFF(GAHBCFG),
-              dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) | USB_OTG_GAHBCFG_HBSTLEN_4);
+    if (g_dwc2_hcd[bus->hcd.hcd_id].hw_params.snpsid == 0x4f54280aU) {
+        /* BCM283x: this DWC2 was synthesised with an AXI master, and the
+         * GAHBCFG bits [4:1] do NOT follow the Synopsys HBSTLEN encoding:
+         * bits[2:1] = max AXI burst, bit4 = wait for AXI writes.
+         * Linux dwc2_set_bcm_params() programs ahbcfg=0x10 (wait-axi-writes,
+         * burst 0); Circle/USPI do the same. Synopsys-style INCRx values put
+         * garbage in these fields and the DMA fetch never completes. */
+        dwc2_wr32(bus, DWC2_GLB_OFF(GAHBCFG),
+                  dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) | (1U << 4));
+    } else {
+        dwc2_wr32(bus, DWC2_GLB_OFF(GAHBCFG),
+                  dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) | USB_OTG_GAHBCFG_HBSTLEN_4);
+    }
     dwc2_wr32(bus, DWC2_GLB_OFF(GAHBCFG),
               dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) | USB_OTG_GAHBCFG_DMAEN);
 
@@ -1749,17 +1831,29 @@ static void dwc2_port_irq_handler(struct usbh_bus *bus)
                    USB_OTG_HPRT_PENCHNG | USB_OTG_HPRT_POCCHNG);
 
     if ((hprt0 & USB_OTG_HPRT_PCDET) == USB_OTG_HPRT_PCDET) {
-        if ((hprt0 & USB_OTG_HPRT_PCSTS) == USB_OTG_HPRT_PCSTS) {
+        if ((hprt0 & USB_OTG_HPRT_PCSTS) == USB_OTG_HPRT_PCSTS &&
+            (hprt0 & USB_OTG_HPRT_PENA) == USB_OTG_HPRT_PENA) {
+            /* PCDET with the port already ENABLED is the tail of a port reset
+             * we issued ourselves (the irq is serviced later, from sem_take
+             * pumping during the first control transfer). A genuine new
+             * connect always arrives with PENA=0 — the port only becomes
+             * enabled after the reset that follows it. Surfacing this as
+             * C_CONNECTION makes the hub thread tear down the device it just
+             * enumerated (LAN9514 unregistered right after interface_start). */
+            USB_LOG_INFO("Bellatrix DWC2: self-reset PCDET suppressed hprt=0x%08x\r\n",
+                         (unsigned int)hprt0);
+        } else if ((hprt0 & USB_OTG_HPRT_PCSTS) == USB_OTG_HPRT_PCSTS) {
             bus->hcd.roothub.int_buffer[0] = (1 << 1);
             bus->hcd.roothub.int_buffer[1] = 0;
             usbh_hub_thread_wakeup(&bus->hcd.roothub);
+            g_dwc2_hcd[bus->hcd.hcd_id].port_csc = 1;
             USB_LOG_INFO("Bellatrix DWC2: connect detected hprt=0x%08x intbuf=0x%02x\r\n",
                          (unsigned int)hprt0, (unsigned int)bus->hcd.roothub.int_buffer[0]);
         } else {
+            g_dwc2_hcd[bus->hcd.hcd_id].port_csc = 1;
             USB_LOG_INFO("Bellatrix DWC2: disconnect detected hprt=0x%08x\r\n", (unsigned int)hprt0);
         }
         hprt0_dup |= USB_OTG_HPRT_PCDET;
-        g_dwc2_hcd[bus->hcd.hcd_id].port_csc = 1;
     }
 
     if ((hprt0 & USB_OTG_HPRT_PENCHNG) == USB_OTG_HPRT_PENCHNG) {

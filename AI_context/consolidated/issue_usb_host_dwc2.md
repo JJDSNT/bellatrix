@@ -199,30 +199,122 @@ QEMU com USB hub agora enumera hub completo.
 **Workaround documentado**: `.usbh_class_info` fallback registry necessária por
 link order reverso em Bellatrix. Known issue, não crash.
 
+### Sprint 44: Sessão de eliminação sistemática no Pi 3B (HCINT=0)
+
+Sintoma persistente em hardware: porta detecta/reseta/habilita FS, HFNUM avança,
+canal arma, mas **nenhuma transação sai no fio** — `HCINT=0`, fila NP TX intocada
+(`HNPTXSTS=0x01080080`), sem nenhum bit de erro.
+
+Sequência de hipóteses testadas em hardware (cada uma confirmada via registrador
+no log, **nenhuma resolveu sozinha**, todas mantidas por estarem corretas):
+
+1. **Restore da HEAD (`da66367`)** — descoberto que o working tree estava cheio
+   de experimentos não commitados (phy_type=FS/PHYSEL=1/slave mode, salvos em
+   `/tmp/usb_fs_experiments.patch`). Teste lado-a-lado provou: **o launcher com
+   HID só funcionou no QEMU; o driver nunca enumerou em hardware real.**
+2. **HCFG clock select (Linux-style)** — `dwc2_apply_port_speed_config` aplicava
+   o template STM32 (48MHz+FSLSS) no caminho UTMI. Errado: UTMI roda a 30/60MHz
+   e Linux só toca FSLSPclkSel/FSLSS com PHYSEL=1. Fix mantido → `HCFG=0x0`.
+3. **GAHBCFG semântica Broadcom/AXI** — bits[4:1] NÃO são HBSTLEN Synopsys neste
+   SoC: bits[2:1]=max AXI burst, bit4=wait-for-AXI-writes (confirmado no header
+   AROS `usb2otg.h`). Linux usa `ahbcfg=0x10`. Fix mantido → `GAHBCFG=0x31`.
+4. **TRDT=9** — turnaround p/ UTMI 8-bit (Linux `dwc2_gusbcfg_init`; default 5 é
+   p/ 16-bit). Fix mantido → `GUSBCFG=0x20002400`.
+5. **No-core-reset (estilo AROS)** — AROS usb2otg tem o soft reset `#if (0)`'d;
+   pulamos o reset no BCM2837 para preservar estado do firmware. Mantido.
+6. **Dump ampliado no sem-timeout** — `GOTGCTL/HCFG/HFIR/HPRT/PCGCCTL`. Mostrou
+   sessão A-valid OK, sem clock gating, porta enabled — tudo "de manual".
+
+**Observação chave**: na 1ª tentativa o `HCDMA` readback avançava +8 → o fetch
+DMA funcionava; o MAC entregava o pacote a um PHY morto. E porta habilitar em
+**FS** num Pi 3B (cujo primeiro device é o hub LAN9514, HS) = chirp nunca
+aconteceu = transmissor morto. Port enable NÃO prova TX: o MAC dirige reset às
+cegas e amostra linestate (sensing passivo funciona sem energia).
+
+### Sprint 44 (cont.): ROOT CAUSE — USB power domain OFF + tag mailbox errada
+
+Reescrito o power-on usando o buffer mailbox **uncached** do Emu68
+(`extern uint32_t *FBReq` @ `0xffffff9000001000`) — o buffer estático cacheado
+anterior relia o próprio request (por isso o falso "state=0x3"). Com GET→SET→GET
+e response codes:
+
+```
+get=0x00000000(rc=0x80000000)   ← firmware confirma: USB power OFF
+set=0x00000003(rc=0x80000001)   ← SET rejeitado: "error parsing request buffer"
+chk=0x00000000(rc=0x80000000)   ← continua OFF
+```
+
+**A tag SET_POWER_STATE usada era `0x00028002` (errada) desde o primeiro
+experimento. A correta é `0x00028001`.** GET (`0x00020001`) sempre funcionou.
+Com o domínio USB sem energia, todo o quadro fecha: sensing passivo OK, FS em
+vez de HS, fetch DMA OK, zero pacotes, zero erros.
+
+### Sprint 44 (cont. 2): CONFIRMADO EM HARDWARE — primeira enumeração real
+
+Com a tag correta (`0x00028001`) o power-on funcionou
+(`get=0x0 → set=0x1 → chk=0x1`, todos rc=0x80000000) e **pela primeira vez
+transações USB reais completaram no Pi 3B**:
+
+- **LAN9514 hub enumerado** (`0424:9514`), hub class em `/dev/hub2`
+- Ethernet interna (`0424:ec00`, class 0xff) detectada → `interface_unsupported` (ok)
+- **Device low-speed (teclado/mouse) detectado na porta 3 do hub**
+
+Nota: o root port enumerou o LAN9514 em **full-speed** (chirp HS não aconteceu)
+— funcional, mas significa LS-over-FS-hub (PRE packets) em vez de splits.
+
+**Nova falha (camada seguinte)**: na 1ª transação para o device LS,
+`hcint=0x82` (XACTERR+CHH) e em seguida a **porta raiz foi desabilitada**
+(`HPRT ena=0`, `HFNUM=0x3fff` congelado) — todas as transferências seguintes
+morrem em timeout e não há recuperação.
+
+**Causa suspeita (fix compilado, aguardando teste)**: sem o core reset, o
+GUSBCFG herdou do firmware **SRPCAP+HNPCAP (bits 8,9) e TSDPS (bit 22)** —
+`GUSBCFG=0x20402700` — e `GINTSTS.OTGINT` aparece pendente nos dumps de
+timeout. Protocolo de sessão OTG ativo em modo host: a sinalização LS dispara
+a state machine de sessão e derruba a porta. USPI/Circle limpam esses bits no
+init. Fix: clear de SRPCAP|HNPCAP|TSDPS em `dwc2_core_init()`.
+
+### Sprint 44 (final): ✅ USB HID FUNCIONANDO EM HARDWARE
+
+Mais dois fixes nesta sequência:
+
+1. **Supressão de PCDET-com-PENA no HPRT irq handler** — o PCDET gerado pelo
+   nosso próprio port reset era servido tarde (pump do sem_take) e re-marcava
+   port_csc, fazendo o hub thread derrubar o hub recém-enumerado. Critério
+   estrutural: PCDET com PENA=1 só pode ser rastro de self-reset (connect
+   genuíno chega com porta desabilitada).
+2. **FSLSS=1 no host-init** (não no PENCHNG — FSLSSupp é amostrado quando a
+   porta habilita; setar depois chega tarde).
+
+**Resultado em Pi 3B real** (teclado FS `25a7:fa70` combo + pendrive SanDisk
+`0781:5567`):
+```
+[USB-HID] keyboard attached: minor=0 intf=0 ep_in=0x81 mps=8  → /dev/input0
+[USB-HID] mouse attached:    minor=1 intf=1 ep_in=0x82 mps=8  → /dev/input1
+New device found,idVendor:0781,idProduct:5567 (MSC, class 08/06/50)
+```
+Cadeia completa: power-on → LAN9514 hub → ethernet ignorada → HID nas duas
+interfaces → pendrive enumerado (MSC desabilitado neste build de teste).
+
+**Limitação conhecida**: devices **low-speed** atrás do hub ainda derrubam a
+porta raiz (XACTERR + port disable) mesmo com FSLSS=1 desde o init — teclados
+LS antigos não funcionam. PRE+LS no DWC2/BCM2837 em porta FS segue sem
+solução; alternativas: investigar chirp HS (splits) ou aceitar FS-only.
+
 ## Estado Atual
 
-### QEMU — Funcionando
-- Enumera dispositivos USB (teclado, hub)
-- Setup packets corretos (LE bounce buffer)
-- Descriptor parsing sem endianness bugs
-- `device_connected + device_configured` confirmados
+### Funcionando (QEMU e Pi 3B hardware)
+- Hub LAN9514 + HID keyboard/mouse FS (`/dev/input0`, `/dev/input1`)
+- Pendrive MSC enumera; build com `BELLATRIX_USB_MSC=1` compilado p/ teste
 
-### Pi 3B Hardware — Status Incerto
-**Sprint 43** regenerou patch com msleep fix + TX FIFO flush mas não confirmou
-em hardware real. Esperado que:
-- msleep fix resolve reset USB inválido
-- TX FIFO flush resolve timing PENCHNG vs canal arm
-
-**Próximo experimento**:
-1. Flash com Sprint 42+43 changes
-2. Verificar no log: `port enable speed=1 hcfg=0x00000005` (FSLSS set)
-3. Verificar: TX FIFO flush log após PENCHNG
-4. Verificar: SOF kicks restauram HCDMA ao alias base
-5. Alvo: `out irq ch=0 hcint=0x00000021` (XFRC+CHH) → primeira transação completa
+Build: `BELLATRIX_CPU_BACKEND=musashi BELLATRIX_USBSTACK=1 BELLATRIX_USB_MSC=1
+./scripts/build.sh`
 
 ### Pendente
-- Confirmação em hardware do msleep fix
-- HID class driver para input (após enumeração funcionar)
+- Testar launcher completo (HID + MSC/FAT32 lendo ADF/ISO do pendrive)
+- Hub interrupt poll com bitmap espúrio 0x8101 em loop (ruído, baixa prioridade)
+- LS devices atrás do hub (teclados antigos) — sem suporte por ora
+- Commitar os fixes (working tree com tudo não commitado!)
 - `usb_class_info` sentinels em ordem correta (link order issue)
 
 ## Registros Observados em Hardware
@@ -238,7 +330,8 @@ HCDMA: 0xf82b....        (BCM bus alias 0xC0000000 | phys)
 
 ## Arquivos Relevantes
 - `src/io/usb/usb_hc_bellatrix.c` — DWC2 host controller (implementação principal)
-- `src/io/usb/usb_osal_bellatrix.c` — OSAL shim (msleep, sem)
+- `src/io/usb/usb_glue_dwc2_bellatrix.c` — params PHY + VC mailbox USB power-on
+- `src/io/usb/usb_osal_bellatrix.c` — OSAL shim (msleep, sem + register dump no timeout)
 - `src/io/usb/usb_hid_bellatrix.h` — HID class integration (stub)
 - `external/cherryusb/` — submodule
 - `patches/0004-bellatrix-cherryusb-dwc2-host.patch` — patches CherryUSB

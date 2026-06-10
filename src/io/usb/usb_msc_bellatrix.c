@@ -1,7 +1,7 @@
 #include "io/usb/usb_msc_bellatrix.h"
 #include "support.h"
 
-#if BELLATRIX_ENABLE_USBSTACK
+#if BELLATRIX_ENABLE_USBSTACK && BELLATRIX_ENABLE_USB_MSC
 
 #include "usb_config.h"
 #include "usbh_msc.h"
