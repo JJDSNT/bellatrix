@@ -1,14 +1,18 @@
 // src/storage/fat/fat32.h
 // Minimal FAT32 reader for bare-metal use.
-// Supports: MBR, FAT32 BPB, root directory scan, sequential file read.
-// Read-only.  No LFN support (8.3 names only).
+// Supports: MBR, FAT32 BPB, root directory scan, sequential file read,
+// VFAT long file names (UTF-16 → UTF-8).
+// Read-only.
 
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 
-#define FAT32_NAME_MAX  12u   // "FILENAME.EXT" + NUL
+// UTF-8 display name capacity (LFN; longer names are truncated on a
+// character boundary).  Listing and open use the same truncated form,
+// so a name returned by fat32_list always opens.
+#define FAT32_NAME_MAX  128u
 
 // Block reader callback: read one 512-byte sector at LBA into buf.
 typedef bool (*Fat32ReadBlockFn)(void *ctx, uint32_t lba, uint8_t *buf);
@@ -38,16 +42,18 @@ typedef struct Fat32File {
 // Initialise with a custom block reader (e.g. USB MSC)
 bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx);
 
-// List .ADF files in the root directory.
+// List every regular file in the root directory (no extension filter —
+// callers decide what is interesting).  Names are UTF-8, LFN when present,
+// 8.3 fallback otherwise.
 // names: array of FAT32_NAME_MAX-byte strings; max_count: capacity.
 // Returns number of entries filled.
-uint32_t fat32_list_adf(Fat32State *fs,
-                        char       names[][FAT32_NAME_MAX],
-                        uint32_t   max_count);
+uint32_t fat32_list(Fat32State *fs,
+                    char       names[][FAT32_NAME_MAX],
+                    uint32_t   max_count);
 
-// Open a file by 8.3 uppercase name (e.g. "GAME    ADF").
-// name_dot: regular dotted filename string, e.g. "GAME.ADF"
-bool fat32_open(Fat32State *fs, const char *name_dot, Fat32File *out);
+// Open a root-directory file by name as returned by fat32_list (long or
+// 8.3 form; ASCII characters compare case-insensitively).
+bool fat32_open(Fat32State *fs, const char *name, Fat32File *out);
 
 // Read up to len bytes from the file into buf; returns bytes read.
 uint32_t fat32_read(Fat32File *f, void *buf, uint32_t len);
@@ -58,8 +64,3 @@ bool fat32_read_all(Fat32File *f, void *buf, uint32_t buf_size);
 // Seek to byte_offset within the file; updates cur_cluster accordingly.
 // Returns false if byte_offset >= file_size or FAT chain is broken.
 bool fat32_seek(Fat32File *f, uint32_t byte_offset);
-
-// List .ISO files in the root directory (same semantics as fat32_list_adf).
-uint32_t fat32_list_iso(Fat32State *fs,
-                        char       names[][FAT32_NAME_MAX],
-                        uint32_t   max_count);

@@ -1,7 +1,8 @@
 // src/storage/fat/fat32.c
-// Minimal FAT32 reader.  Read-only, no LFN, single partition.
+// Minimal FAT32 reader.  Read-only, single partition, VFAT LFN aware.
 
 #include "storage/fat/fat32.h"
+#include "storage/fat/fat32_lfn.h"
 #include <string.h>
 
 int kprintf(const char *fmt, ...);
@@ -130,68 +131,65 @@ bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx)
     return true;
 }
 
-
 // ---------------------------------------------------------------------------
-// 8.3 name helpers
+// Name helpers
 // ---------------------------------------------------------------------------
 
-// Convert dotted name ("GAME.ADF") to FAT 8.3 padded uppercase (11 bytes, no dot)
-static void to_83(const char *name_dot, char out[11])
+// Copy a UTF-8 string truncated to cap bytes (incl. NUL) without splitting
+// a multi-byte sequence.
+static void utf8_copy_truncated(char *dst, const char *src, size_t cap)
 {
-    memset(out, ' ', 11);
-    unsigned i = 0u, o = 0u;
+    size_t n = 0u;
 
-    while (name_dot[i] && name_dot[i] != '.' && o < 8u) {
-        char c = name_dot[i++];
-        if (c >= 'a' && c <= 'z') c = (char)(c - ('a' - 'A'));
-        out[o++] = c;
-    }
+    while (src[n]) {
+        unsigned char lead = (unsigned char)src[n];
+        size_t seq = 1u;
+        if      ((lead & 0xE0u) == 0xC0u) seq = 2u;
+        else if ((lead & 0xF0u) == 0xE0u) seq = 3u;
+        else if ((lead & 0xF8u) == 0xF0u) seq = 4u;
 
-    if (name_dot[i] == '.') {
-        i++;
-        unsigned e = 0u;
-        while (name_dot[i] && e < 3u) {
-            char c = name_dot[i++];
-            if (c >= 'a' && c <= 'z') c = (char)(c - ('a' - 'A'));
-            out[8u + e++] = c;
-        }
-    }
-}
-
-// Convert FAT 8.3 (11 bytes, no dot) to dotted string; returns length
-static unsigned from_83(const char raw[11], char out[FAT32_NAME_MAX])
-{
-    unsigned n = 0u;
-
-    // Base name (8 bytes)
-    for (unsigned i = 0u; i < 8u; i++) {
-        if (raw[i] == ' ') break;
-        out[n++] = raw[i];
-    }
-
-    // Extension (3 bytes)
-    if (raw[8] != ' ') {
-        out[n++] = '.';
-        for (unsigned i = 8u; i < 11u; i++) {
-            if (raw[i] == ' ') break;
-            out[n++] = raw[i];
+        if (n + seq + 1u > cap) break;
+        for (size_t i = 0u; i < seq && src[n]; i++) {
+            dst[n] = src[n];
+            n++;
         }
     }
 
-    out[n] = '\0';
-    return n;
+    dst[n] = '\0';
+}
+
+// Case-insensitive compare for the ASCII range; non-ASCII bytes must match
+// exactly (FAT LFN matching is case-insensitive; full Unicode folding is
+// not worth carrying on bare metal).
+static bool name_equal_icase(const char *a, const char *b)
+{
+    while (*a && *b) {
+        char ca = *a++, cb = *b++;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + ('a' - 'A'));
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
+        if (ca != cb) return false;
+    }
+    return *a == *b;
 }
 
 // ---------------------------------------------------------------------------
-// Directory scan
+// Directory scan (LFN-aware)
 // ---------------------------------------------------------------------------
 
-// Process one cluster's directory entries; returns false to stop
-typedef bool (*dir_entry_fn)(const uint8_t *entry, void *user);
+// Process one directory entry; name is UTF-8 (LFN if present, 8.3 fallback).
+// Return false to stop the scan.
+typedef bool (*dir_entry_fn)(const uint8_t *entry, const char *name, void *user);
 
 static bool scan_dir_cluster(const Fat32State *fs, uint32_t cluster,
                               dir_entry_fn fn, void *user)
 {
+    // Static: the LFN accumulator + UTF-8 scratch are ~1.5 KB — keep them
+    // off the bare-metal stack.  Scanning is single-threaded (Core 0).
+    static fat32_lfn_state_t s_lfn;
+    static char              s_lfn_utf8[FAT32_LFN_MAX_UTF8];
+
+    fat32_lfn_reset(&s_lfn);
+
     for (;;) {
         uint32_t lba = cluster_to_lba(fs, cluster);
 
@@ -204,12 +202,34 @@ static bool scan_dir_cluster(const Fat32State *fs, uint32_t cluster,
                 const uint8_t *entry = s_sector + i * 32u;
 
                 if (entry[0] == 0x00u) return true;   // end of directory
-                if (entry[0] == 0xE5u) continue;      // deleted
-                if (entry[11] & 0x08u) continue;      // volume label
-                if (entry[11] & 0x10u) continue;      // subdirectory
-                if (entry[11] == 0x0Fu) continue;      // LFN entry
+                if (entry[0] == 0xE5u) {              // deleted
+                    fat32_lfn_reset(&s_lfn);
+                    continue;
+                }
+                if ((entry[11] & 0x3Fu) == FAT32_ATTR_LFN) {
+                    fat32_lfn_push_entry(&s_lfn, entry);
+                    continue;
+                }
+                if (entry[11] & 0x08u) {              // volume label
+                    fat32_lfn_reset(&s_lfn);
+                    continue;
+                }
+                if (entry[11] & 0x10u) {              // subdirectory
+                    fat32_lfn_reset(&s_lfn);
+                    continue;
+                }
 
-                if (!fn(entry, user)) return false;
+                char name[FAT32_NAME_MAX];
+                if (fat32_lfn_finish(&s_lfn, entry, s_lfn_utf8, sizeof(s_lfn_utf8)) == 0) {
+                    utf8_copy_truncated(name, s_lfn_utf8, sizeof(name));
+                } else {
+                    fat32_short_name_to_string(entry, name, sizeof(name));
+                }
+                // finish() only resets on success — clear leftovers from
+                // orphaned/corrupt LFN chains so they can't leak forward
+                fat32_lfn_reset(&s_lfn);
+
+                if (!fn(entry, name, user)) return false;
             }
         }
 
@@ -221,7 +241,7 @@ static bool scan_dir_cluster(const Fat32State *fs, uint32_t cluster,
 }
 
 // ---------------------------------------------------------------------------
-// List ADF files
+// List files
 // ---------------------------------------------------------------------------
 
 typedef struct {
@@ -230,25 +250,21 @@ typedef struct {
     uint32_t  count;
 } ListCtx;
 
-static bool list_entry_fn(const uint8_t *entry, void *user)
+static bool list_entry_fn(const uint8_t *entry, const char *name, void *user)
 {
     ListCtx *ctx = (ListCtx *)user;
+    (void)entry;
 
     if (ctx->count >= ctx->max) return false;
 
-    // Check extension == "ADF"
-    if (entry[8] != 'A' || entry[9] != 'D' || entry[10] != 'F') {
-        return true;
-    }
-
-    from_83((const char *)entry, ctx->names[ctx->count]);
+    utf8_copy_truncated(ctx->names[ctx->count], name, FAT32_NAME_MAX);
     ctx->count++;
     return true;
 }
 
-uint32_t fat32_list_adf(Fat32State *fs,
-                        char        names[][FAT32_NAME_MAX],
-                        uint32_t    max_count)
+uint32_t fat32_list(Fat32State *fs,
+                    char        names[][FAT32_NAME_MAX],
+                    uint32_t    max_count)
 {
     if (!fs || !fs->initialized || !names || max_count == 0u) return 0u;
 
@@ -262,17 +278,25 @@ uint32_t fat32_list_adf(Fat32State *fs,
 // ---------------------------------------------------------------------------
 
 typedef struct {
-    char     target[11];
-    bool     found;
-    uint32_t start_cluster;
-    uint32_t file_size;
+    const char *target;
+    bool        found;
+    uint32_t    start_cluster;
+    uint32_t    file_size;
 } OpenCtx;
 
-static bool open_entry_fn(const uint8_t *entry, void *user)
+static bool open_entry_fn(const uint8_t *entry, const char *name, void *user)
 {
     OpenCtx *ctx = (OpenCtx *)user;
+    bool match = name_equal_icase(name, ctx->target);
 
-    if (memcmp(entry, ctx->target, 11) != 0) return true;
+    if (!match) {
+        // Also accept the 8.3 form when the listing produced an LFN
+        char short83[13];
+        fat32_short_name_to_string(entry, short83, sizeof(short83));
+        match = name_equal_icase(short83, ctx->target);
+    }
+
+    if (!match) return true;
 
     ctx->start_cluster = ((uint32_t)le16(entry + 20) << 16) | le16(entry + 26);
     ctx->file_size     = le32(entry + 28);
@@ -280,18 +304,18 @@ static bool open_entry_fn(const uint8_t *entry, void *user)
     return false;   // stop scanning
 }
 
-bool fat32_open(Fat32State *fs, const char *name_dot, Fat32File *out)
+bool fat32_open(Fat32State *fs, const char *name, Fat32File *out)
 {
-    if (!fs || !fs->initialized || !name_dot || !out) return false;
+    if (!fs || !fs->initialized || !name || !out) return false;
 
     OpenCtx ctx;
     memset(&ctx, 0, sizeof(ctx));
-    to_83(name_dot, ctx.target);
+    ctx.target = name;
 
     scan_dir_cluster(fs, fs->root_cluster, open_entry_fn, &ctx);
 
     if (!ctx.found) {
-        kprintf("[FAT32] file not found: %s\n", name_dot);
+        kprintf("[FAT32] file not found: %s\n", name);
         return false;
     }
 
@@ -394,33 +418,4 @@ bool fat32_seek(Fat32File *f, uint32_t byte_offset)
     f->cur_cluster = cluster;
     f->cur_offset  = byte_offset;
     return true;
-}
-
-// ---------------------------------------------------------------------------
-// List ISO files
-// ---------------------------------------------------------------------------
-
-static bool list_iso_entry_fn(const uint8_t *entry, void *user)
-{
-    ListCtx *ctx = (ListCtx *)user;
-
-    if (ctx->count >= ctx->max) return false;
-
-    if (entry[8] != 'I' || entry[9] != 'S' || entry[10] != 'O')
-        return true;
-
-    from_83((const char *)entry, ctx->names[ctx->count]);
-    ctx->count++;
-    return true;
-}
-
-uint32_t fat32_list_iso(Fat32State *fs,
-                        char        names[][FAT32_NAME_MAX],
-                        uint32_t    max_count)
-{
-    if (!fs || !fs->initialized || !names || max_count == 0u) return 0u;
-
-    ListCtx ctx = { names, max_count, 0u };
-    scan_dir_cluster(fs, fs->root_cluster, list_iso_entry_fn, &ctx);
-    return ctx.count;
 }
