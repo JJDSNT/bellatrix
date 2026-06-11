@@ -59,6 +59,10 @@ bool machine_rigel_rtrace_enabled(void);   /* returns g_rtrace.enabled */
 /* --- machine_rigel_trace.c (IPL publish lives here, uses g_rtrace) --- */
 void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl);
 
+/* --- machine_rigel.c (keyboard queue → CIA-A SDR drain) --- */
+void machine_keyboard_drain_rigel(void);
+void machine_keyboard_on_cia_cra_write(uint8_t value);
+
 /* --- machine_rigel_trace.c (log callbacks passed to rigel_create) --- */
 void machine_rigel_log(const char *msg, void *opaque);
 void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque);

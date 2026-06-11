@@ -166,7 +166,12 @@ static void bellatrix_usb_hid_emit_usage(uint8_t usage, bool pressed)
 #endif
 
     if (bellatrix_usb_hid_usage_to_amiga_raw(usage, &rawkey)) {
+        kprintf("[HID->AMIGA] usage=0x%02x %s rawkey=0x%02x\n",
+                (unsigned)usage, pressed ? "down" : "up", (unsigned)rawkey);
         bellatrix_machine_keyboard_rawkey(rawkey, pressed ? 1 : 0);
+    } else {
+        kprintf("[HID->AMIGA] usage=0x%02x %s (no amiga mapping)\n",
+                (unsigned)usage, pressed ? "down" : "up");
     }
 }
 

@@ -17,6 +17,7 @@
 
 #include "rigel/rigel.h"
 #include "rigel/rigel_custom.h"
+#include "core/rigel_context.h"   /* CIA-A sdr_full probe (keyboard log) */
 #include "rigel/rigel_irq.h"
 
 #ifdef BELLATRIX_HARNESS
@@ -297,6 +298,8 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
         value = machine_custom_read(addr, size);
     } else if (is_cia_a_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
+        uint8_t sdr_pending = (reg == 0x0Cu)
+            ? g_rigel->chipset.cia[0].sdr_full : 0u;
         value = rigel_cia_read(g_rigel, 0u, reg);
         if (machine_rigel_cia_trace_enabled())
             kprintf("[RIGEL-CIAA-R] pc=%08x addr=%06x reg=%u val=%02x\n",
@@ -304,6 +307,12 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
                     (unsigned)reg, (unsigned)(value & 0xffu));
         if (reg == 0x0u)
             machine_rigel_trace_floppy("ciaa-pra-r", bellatrix_debug_cpu_pc(), reg, (uint8_t)value);
+        /* Keyboard-path diagnostics: log SDR reads only when a keyboard
+         * byte was actually pending — DiagROM polls SDR continuously and
+         * unconditional logging drowns the signal. */
+        if (sdr_pending)
+            kprintf("[KBD] CPU read CIA-A SDR=0x%02x pc=%08x\n",
+                    (unsigned)(value & 0xffu), (unsigned)bellatrix_debug_cpu_pc());
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         value = rigel_cia_read(g_rigel, 1u, reg);
@@ -365,6 +374,8 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 0u, reg, (uint8_t)value);
+        if (reg == 0x0Eu)
+            machine_keyboard_on_cia_cra_write((uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         if (machine_rigel_cia_trace_enabled())

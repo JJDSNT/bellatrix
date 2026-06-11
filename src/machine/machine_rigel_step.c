@@ -269,6 +269,11 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
     machine_rigel_trace_step(&r);
     machine_step_host_serial_rigel();
     machine_drain_serial_fallback_rigel();
+    /* Refill CIA-A SDR from the keyboard queue every chipset advance.
+     * post_chipset_step only runs from the multicore Core-1 loop; in
+     * single-core the queue would otherwise drain one byte per *new*
+     * keypress, delivering keystrokes several events late. */
+    machine_keyboard_drain_rigel();
 
     if (r.events & RIGEL_EVENT_FRAME_READY) {
         g_machine.frame_counter++;
@@ -352,6 +357,7 @@ void bellatrix_machine_post_chipset_step(void)
 {
     machine_step_host_serial_rigel();
     machine_drain_serial_fallback_rigel();
+    machine_keyboard_drain_rigel();
 }
 
 void bellatrix_machine_sync_ipl(void)

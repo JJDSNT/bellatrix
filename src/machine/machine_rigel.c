@@ -28,6 +28,10 @@
 #include "rigel/rigel_denise_video.h"
 #include "rigel/rigel_irq.h"
 
+/* Rigel internals — only for keyboard-path diagnostics (CIA-A SDR/ICR
+ * snapshot in bellatrix_machine_keyboard_rawkey). */
+#include "core/rigel_context.h"
+
 #ifdef BELLATRIX_HARNESS
 #include <stdio.h>
 #include <stdlib.h>
@@ -266,12 +270,87 @@ BellatrixMemory *bellatrix_machine_memory(void)
     return &g_machine.memory;
 }
 
+/* Keyboard → CIA-A handshake tracking.
+ *
+ * A real Amiga keyboard waits for the KDAT handshake pulse (ROM sets CRA
+ * SPMODE=out, then back to input) before clocking out the next byte.  If we
+ * refill SDR as soon as the ROM reads it, the ROM's own SDR write during the
+ * handshake (cia_serial_write_sdr stores unconditionally) clobbers the
+ * pending byte — observed on hardware as a lost Enter key-up (SDR=0x00).
+ * Like the real 6500/1 controller, fall back to resending after ~143ms if no
+ * handshake arrives, so a ROM that never handshakes cannot stall the queue. */
+#define KBD_HANDSHAKE_TIMEOUT_CCK 507000u   /* ~143ms at 3.546895 MHz CCK */
+
+static uint8_t  s_kbd_await_handshake;
+static uint8_t  s_kbd_cra_spmode_out;
+static uint64_t s_kbd_sent_tick;
+
+void machine_keyboard_on_cia_cra_write(uint8_t value)
+{
+    uint8_t spmode_out = (value & 0x40u) ? 1u : 0u;
+
+    /* Handshake completes on the SPMODE out→input transition. */
+    if (s_kbd_cra_spmode_out && !spmode_out)
+        s_kbd_await_handshake = 0u;
+    s_kbd_cra_spmode_out = spmode_out;
+}
+
+/* Push the next queued keyboard wire byte into CIA-A once the previous one
+ * was consumed (ROM read of SDR clears sdr_full) AND the ROM finished the
+ * KDAT handshake (or the resend timeout expired).  A real Amiga keyboard
+ * buffers keystrokes in its 6500/1 controller and respects both gates;
+ * injecting straight into SDR while it is still full silently drops keys. */
+void machine_keyboard_drain_rigel(void)
+{
+    BellatrixKeyboard *kbd = &g_machine.keyboard;
+    CIA *cia_a;
+    uint8_t byte;
+
+    if (!g_rigel || kbd->count == 0u)
+        return;
+
+    cia_a = &g_rigel->chipset.cia[0];
+    if (cia_a->sdr_full)
+        return;
+
+    if (s_kbd_await_handshake &&
+        (g_machine.tick_count - s_kbd_sent_tick) < KBD_HANDSHAKE_TIMEOUT_CCK)
+        return;
+
+    byte = kbd->queue[kbd->head];
+    kbd->head = (uint8_t)((kbd->head + 1u) % BELLATRIX_KEYBOARD_QUEUE_CAP);
+    kbd->count--;
+
+    cia_receive_sdr(cia_a, byte);
+    s_kbd_await_handshake = 1u;
+    s_kbd_sent_tick = g_machine.tick_count;
+}
+
 int bellatrix_machine_keyboard_rawkey(uint8_t rawkey, int pressed)
 {
+    const CIA *cia_a;
+    int queued;
+
     if (!g_rigel)
         return 0;
-    rigel_keyboard_inject(g_rigel, rawkey & 0x7Fu, pressed != 0);
-    return 1;
+
+    /* enqueue_raw stores the Amiga wire encoding (~(code<<1 | up), i.e. the
+     * same transform rigel_keyboard_inject applies), so the drain feeds the
+     * byte to cia_receive_sdr directly. */
+    queued = bellatrix_keyboard_enqueue_raw(&g_machine.keyboard, rawkey, !!pressed);
+    machine_keyboard_drain_rigel();
+
+    cia_a = &g_rigel->chipset.cia[0];
+    kprintf("[KBD] rawkey=0x%02x %s%s queue=%u sdr=0x%02x full=%u icr_data=0x%02x icr_mask=0x%02x intena=0x%04x\n",
+            (unsigned)rawkey, pressed ? "down" : "up",
+            queued ? "" : " DROPPED(queue-full)",
+            (unsigned)g_machine.keyboard.count,
+            (unsigned)cia_a->sdr,
+            (unsigned)cia_a->sdr_full,
+            (unsigned)cia_a->icr_data,
+            (unsigned)cia_a->icr_mask,
+            (unsigned)rigel_custom_read16(g_rigel, 0x01Cu));
+    return queued;
 }
 
 void bellatrix_machine_controller_set_device(unsigned port, unsigned device)

@@ -236,6 +236,10 @@ list(REMOVE_ITEM BASE_FILES
 )
 list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/runtime/core_chipset.c
+    # core_io.c provides the STRONG bellatrix_runtime_io_step (and
+    # core_io_init/step).  Without it the weak no-op stub in pal_core.c
+    # links instead and USB/BT silently stop after the launcher.
+    ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
 )
 if(BELLATRIX_USE_MUSASHI_CPU)
     list(APPEND BASE_FILES

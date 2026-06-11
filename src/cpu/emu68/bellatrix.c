@@ -90,6 +90,10 @@ void bellatrix_run_selected_cpu_backend(void)
     for (;;) {
         uint32_t ran = cpu_backend_run(backend, 454u);
         bellatrix_runtime_notify_cpu_progress(ran > 0u ? ran : 454u);
+        /* The Musashi loop never goes through bellatrix_bus_access (that is
+         * the Emu68 JIT fault hook), so the single-core IO service point
+         * (USB/BT via PAL_Runtime_Poll's ~1ms throttle) must live here. */
+        PAL_Runtime_Poll();
     }
 }
 
@@ -332,7 +336,10 @@ void bellatrix_init(void)
 #endif
     memset(&g_runtime, 0, sizeof(g_runtime));
     g_runtime.machine = bellatrix_machine_get();
-    usb_host_init(&g_runtime.io.usb_host);
+    /* core_io_init (not a bare usb_host_init) — it sets io.running, without
+     * which core_io_step() is a silent no-op and USB dies after the launcher
+     * (PAL_Runtime_Poll → bellatrix_runtime_io_step → early return). */
+    core_io_init(&g_runtime.io, g_runtime.machine);
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
