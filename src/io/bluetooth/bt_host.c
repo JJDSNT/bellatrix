@@ -130,13 +130,23 @@ static uint32_t bt_now_ms(void)
     return hal_time_ms();
 }
 
-static uint32_t vc_mbox_recv(uint32_t channel)
+/* Bounded mailbox receive — a missing firmware response must degrade to the
+ * warm-boot fallback, not hang the whole boot with the console dark. */
+#define VC_MBOX_RECV_SPINS 4000000u
+
+static bool vc_mbox_recv(uint32_t channel, uint32_t *out)
 {
     uint32_t response;
+    uint32_t spins = VC_MBOX_RECV_SPINS;
 
     do {
         while (rd32le(VC_MBOX_STATUS_ADDR) & VC_MBOX_RX_EMPTY) {
             dsb();
+            if (--spins == 0u) {
+                bt_diag_log("[BT] vc mailbox recv timeout (ch=%u)\n",
+                            (unsigned)channel);
+                return false;
+            }
         }
 
         dmb();
@@ -144,7 +154,10 @@ static uint32_t vc_mbox_recv(uint32_t channel)
         dmb();
     } while ((response & VC_MBOX_CHANMASK) != channel);
 
-    return response & ~VC_MBOX_CHANMASK;
+    if (out) {
+        *out = response & ~VC_MBOX_CHANMASK;
+    }
+    return true;
 }
 
 static void vc_mbox_send(uint32_t channel, uint32_t data)
@@ -172,7 +185,9 @@ static bool vc_set_gpio_state(uint32_t gpio, uint32_t state)
 
     arm_flush_cache((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
     vc_mbox_send(VC_MBOX_CH_PROP, (uint32_t)mmu_virt2phys((uintptr_t)vc_property_buffer));
-    vc_mbox_recv(VC_MBOX_CH_PROP);
+    if (!vc_mbox_recv(VC_MBOX_CH_PROP, NULL)) {
+        return false;
+    }
     arm_dcache_invalidate((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
 
     return LE32(vc_property_buffer[1]) == VC_FIRMWARE_STATUS_SUCCESS;
@@ -248,6 +263,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 return;
             }
 
+            bt_diag_log("[BT] releasing BT_REG_EN (now=%u)\n", (unsigned)now);
             if (!vc_set_gpio_state(BELLATRIX_BT_REG_EN_GPIO, 1)) {
                 bt_diag_log("[BT] failed to release BT_REG_EN, proceeding with warm boot\n");
             } else {
@@ -494,6 +510,19 @@ bool bt_host_init(BTHost *bt) {
     kprintf("[BT] Initializing BTStack (Raspberry Pi 3B, H5 over PL011)...\n");
     kprintf("[BT] PatchRAM: version=%s size=%u bytes\n",
             brcm_patch_version, (unsigned)brcm_patch_ram_length);
+
+    /* Clock sanity probe: three consecutive reads must be monotonic and
+     * ~µs apart.  Catches the legacy-timer byte-swap class of bug at a
+     * glance (see time.c). */
+    {
+        extern uint64_t raspi3_read_legacy_system_timer(void);
+        uint64_t t0 = raspi3_read_legacy_system_timer();
+        uint64_t t1 = raspi3_read_legacy_system_timer();
+        uint64_t t2 = raspi3_read_legacy_system_timer();
+        bt_diag_log("[BT] clock probe: t0=%u t1=%u t2=%u (us, mono=%s)\n",
+                    (unsigned)t0, (unsigned)t1, (unsigned)t2,
+                    (t1 >= t0 && t2 >= t1) ? "yes" : "NO");
+    }
 
     btstack_memory_init();
     btstack_run_loop_init(btstack_run_loop_embedded_get_instance());
