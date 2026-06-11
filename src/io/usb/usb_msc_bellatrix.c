@@ -16,7 +16,12 @@ bool usb_msc_is_ready(void)
 static bool usb_msc_read_block(void *ctx, uint32_t lba, uint8_t *buf)
 {
     struct usbh_msc *msc = (struct usbh_msc *)ctx;
-    return usbh_msc_scsi_read10(msc, lba, (const uint8_t *)buf, 1u) == 0;
+    int ret = usbh_msc_scsi_read10(msc, lba, (const uint8_t *)buf, 1u);
+    if (ret != 0) {
+        kprintf("[USB-MSC] read10 lba=%u failed: %d\n", (unsigned)lba, ret);
+        return false;
+    }
+    return true;
 }
 
 bool fat32_init_usb(Fat32State *fs)
@@ -24,6 +29,8 @@ bool fat32_init_usb(Fat32State *fs)
     if (!g_usb_msc || !fs) return false;
     return fat32_init_with_reader(fs, usb_msc_read_block, g_usb_msc);
 }
+
+uint32_t usb_glue_vc_get_throttled(void);
 
 void usbh_msc_run(struct usbh_msc *msc_class)
 {
@@ -35,8 +42,9 @@ void usbh_msc_run(struct usbh_msc *msc_class)
         return;
     }
 
-    kprintf("[USB-MSC] drive ready: %u blocks x %u B/block\n",
-            (unsigned)msc_class->blocknum, (unsigned)msc_class->blocksize);
+    kprintf("[USB-MSC] drive ready: %u blocks x %u B/block (throttled=0x%08x)\n",
+            (unsigned)msc_class->blocknum, (unsigned)msc_class->blocksize,
+            (unsigned)usb_glue_vc_get_throttled());
 
     g_usb_msc = msc_class;
 }
@@ -46,7 +54,8 @@ void usbh_msc_stop(struct usbh_msc *msc_class)
     if (g_usb_msc == msc_class) {
         g_usb_msc = NULL;
     }
-    kprintf("[USB-MSC] drive removed\n");
+    kprintf("[USB-MSC] drive removed (throttled=0x%08x)\n",
+            (unsigned)usb_glue_vc_get_throttled());
 }
 
 #else

@@ -136,6 +136,27 @@ static uint32_t usb_glue_vc_power_call(uint32_t tag, uint32_t state, uint32_t *r
     return LE32(FBReq[6]);
 }
 
+/* GET_THROTTLED (0x30046): bit0=undervoltage now, bit1=arm freq capped,
+ * bit2=currently throttled, bits16-18 = same conditions since last read
+ * (reading clears the sticky bits in firmware). */
+uint32_t usb_glue_vc_get_throttled(void)
+{
+    FBReq[0] = LE32(8u * 4u);
+    FBReq[1] = LE32(USB_GLUE_VC_REQ);
+    FBReq[2] = LE32(0x00030046u);
+    FBReq[3] = LE32(8u);
+    FBReq[4] = LE32(0u);
+    FBReq[5] = LE32(0u);
+    FBReq[6] = LE32(0u);
+    FBReq[7] = LE32(USB_GLUE_VC_END);
+
+    arm_flush_cache((uintptr_t)FBReq, 8u * 4u);
+    usb_glue_mbox_send((uint32_t)mmu_virt2phys((uintptr_t)FBReq));
+    usb_glue_mbox_recv();
+
+    return LE32(FBReq[5]);
+}
+
 static void usb_glue_vc_power_on_usb(void)
 {
     uint32_t code_get, code_set, code_chk;
