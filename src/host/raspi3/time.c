@@ -18,7 +18,16 @@
 #define RASPI3_LEGACY_SYS_TIMER_CLO   ((volatile uint32_t *)0xF2003004u)
 #define RASPI3_LEGACY_SYS_TIMER_CHI   ((volatile uint32_t *)0xF2003008u)
 
-#ifndef LE32
+/* The BCM2837 system timer registers are little-endian; Emu68 runs the ARM
+ * core big-endian, so MMIO reads MUST byte-swap.  This used to be a no-op
+ * `#define LE32(x) (x)` fallback, which returned the counter byte-reversed:
+ * the µs-rate low byte landed in the TOP byte of the result, making
+ * hal_time_ms() wildly non-monotonic.  That garbage clock broke every BT
+ * bootstrap deadline (and made CherryUSB delays random-length). */
+#undef LE32
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define LE32(x) __builtin_bswap32(x)
+#else
 #define LE32(x) (x)
 #endif
 

@@ -595,7 +595,7 @@ void bellatrix_init(void)
 
 #if BELLATRIX_ENABLE_BTSTACK
     if (g_runtime.bluetooth.initialized) {
-        if (!bt_host_wait_for_bootstrap(&g_runtime.bluetooth, 6000u)) {
+        if (!bt_host_wait_for_bootstrap(&g_runtime.bluetooth, 20000u)) {
             kprintf("[BT] bootstrap window ended without WORKING; continuing boot\n");
         } else {
             kprintf("[BT] bootstrap completed before releasing boot\n");

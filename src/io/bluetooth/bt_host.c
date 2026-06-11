@@ -91,11 +91,14 @@ static void bt_console_handoff(void)
 }
 
 #define BELLATRIX_BT_PAIRING_WINDOW_MS 120000u
-#define BELLATRIX_BT_BOOTSTRAP_WAIT_MS 6000u
+/* Phase 1 alone pushes ~36KB of PatchRAM at 115200 baud (≈3.2s on the wire),
+ * then H5 + HCI bring-up follow.  These are real seconds now that
+ * hal_time_ms() is monotonic (the legacy-timer byte-swap fix in time.c). */
+#define BELLATRIX_BT_BOOTSTRAP_WAIT_MS 20000u
 #define BELLATRIX_BT_REG_EN_GPIO 128u
 #define BELLATRIX_BT_REG_EN_ASSERT_MS 100u
 #define BELLATRIX_BT_BOOT_ROM_SETTLE_MS 250u
-#define BELLATRIX_BT_INIT_TIMEOUT_MS 5000u
+#define BELLATRIX_BT_INIT_TIMEOUT_MS 15000u
 #define BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS 2u
 #define VC_MBOX_CH_PROP 8u
 #define VC_MBOX_TX_FULL 0x80000000u
