@@ -1,6 +1,6 @@
 // src/storage/sdcard/bcm_emmc.h
 // Bare-metal BCM2837 (RPi 3) EMMC block driver.
-// Polling mode, read-only, single-block reads.
+// Polling mode, single-block reads and writes (CMD17/CMD24).
 
 #pragma once
 #include <stdint.h>
@@ -14,3 +14,6 @@ bool bcm_emmc_read_block(uint32_t lba, void *buf);
 
 // Read nsectors consecutive 512-byte sectors
 bool bcm_emmc_read_blocks(uint32_t lba, void *buf, uint32_t nsectors);
+
+// Write one 512-byte sector (CMD24).  lba is the logical block address.
+bool bcm_emmc_write_block(uint32_t lba, const void *buf);

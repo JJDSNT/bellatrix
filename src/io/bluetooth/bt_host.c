@@ -1,4 +1,5 @@
 #include "io/bluetooth/bt_host.h"
+#include "io/bluetooth/bt_diag.h"
 #include "debug/core_log.h"
 #include "support.h"
 
@@ -191,7 +192,7 @@ static void bt_begin_power_cycle(BTHost *bt, const char *reason)
         bt->bootstrap_state = BT_BOOTSTRAP_RESET_ASSERTED;
         bt->bootstrap_deadline_ms = now + BELLATRIX_BT_REG_EN_ASSERT_MS;
         bt->init_deadline_ms = 0;
-        kprintf("[BT] controller reset asserted via BT_REG_EN (attempt %u, %s)\n",
+        bt_diag_log("[BT] controller reset asserted via BT_REG_EN (attempt %u, %s)\n",
                 (unsigned)bt->power_cycle_attempts, reason);
         return;
     }
@@ -199,7 +200,7 @@ static void bt_begin_power_cycle(BTHost *bt, const char *reason)
     bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_BOOT_ROM;
     bt->bootstrap_deadline_ms = now + BELLATRIX_BT_BOOT_ROM_SETTLE_MS;
     bt->init_deadline_ms = 0;
-    kprintf("[BT] BT_REG_EN mailbox failed, falling back to warm boot (attempt %u, %s)\n",
+    bt_diag_log("[BT] BT_REG_EN mailbox failed, falling back to warm boot (attempt %u, %s)\n",
             (unsigned)bt->power_cycle_attempts, reason);
 }
 
@@ -212,20 +213,20 @@ static void bt_schedule_power_on(BTHost *bt)
     if (!bt->hci_ready) {
         bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
         bt->init_deadline_ms = 0;
-        kprintf("[BT] power on requested before HCI main setup completed\n");
+        bt_diag_log("[BT] power on requested before HCI main setup completed\n");
         return;
     }
 
     if (hci_power_control(HCI_POWER_ON) != 0) {
         bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
         bt->init_deadline_ms = 0;
-        kprintf("[BT] power on request failed\n");
+        bt_diag_log("[BT] power on request failed\n");
         return;
     }
 
     bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_WORKING;
     bt->init_deadline_ms = bt_now_ms() + BELLATRIX_BT_INIT_TIMEOUT_MS;
-    kprintf("[BT] init OK, power on requested\n");
+    bt_diag_log("[BT] init OK, power on requested\n");
 }
 
 static void bt_bootstrap_step(BTHost *bt)
@@ -245,9 +246,9 @@ static void bt_bootstrap_step(BTHost *bt)
             }
 
             if (!vc_set_gpio_state(BELLATRIX_BT_REG_EN_GPIO, 1)) {
-                kprintf("[BT] failed to release BT_REG_EN, proceeding with warm boot\n");
+                bt_diag_log("[BT] failed to release BT_REG_EN, proceeding with warm boot\n");
             } else {
-                kprintf("[BT] controller reset released\n");
+                bt_diag_log("[BT] controller reset released\n");
             }
 
             bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_BOOT_ROM;
@@ -262,7 +263,7 @@ static void bt_bootstrap_step(BTHost *bt)
             if (!bt->phase1_complete) {
                 const btstack_uart_t *uart_phase1;
 
-                kprintf("[BT] controller boot ROM settle complete, starting BCM phase 1 over H4\n");
+                bt_diag_log("[BT] controller boot ROM settle complete, starting BCM phase 1 over H4\n");
                 bt_console_handoff();
                 bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_PHASE1;
                 bt->init_deadline_ms = now + BELLATRIX_BT_INIT_TIMEOUT_MS;
@@ -275,7 +276,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 return;
             }
 
-            kprintf("[BT] controller boot ROM settle complete, starting HCI bring-up\n");
+            bt_diag_log("[BT] controller boot ROM settle complete, starting HCI bring-up\n");
             bt_schedule_power_on(bt);
             return;
 
@@ -285,7 +286,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
                 bt->init_deadline_ms = 0;
                 bt_console_release();
-                kprintf("[BT] BCM phase 1 timed out before H5 startup\n");
+                bt_diag_log("[BT] BCM phase 1 timed out before H5 startup\n");
             }
             return;
 
@@ -294,7 +295,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 ((int32_t)(now - bt->init_deadline_ms) >= 0)) {
                 if ((!bt->phase1_complete) &&
                     (bt->power_cycle_attempts < BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS)) {
-                    kprintf("[BT] still stuck in initializing after %u ms, retrying bring-up\n",
+                    bt_diag_log("[BT] still stuck in initializing after %u ms, retrying bring-up\n",
                             (unsigned)BELLATRIX_BT_INIT_TIMEOUT_MS);
                     hci_power_control(HCI_POWER_OFF);
                     bt_pairing_window_close(bt);
@@ -302,7 +303,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 } else {
                     bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
                     bt->init_deadline_ms = 0;
-                    kprintf("[BT] initializing timeout after %u attempts; controller did not reach WORKING\n",
+                    bt_diag_log("[BT] initializing timeout after %u attempts; controller did not reach WORKING\n",
                             (unsigned)bt->power_cycle_attempts);
                 }
             }
@@ -355,13 +356,13 @@ static void bt_phase2_start(int status)
         s_bt_host->bootstrap_state = BT_BOOTSTRAP_FAILED;
         s_bt_host->init_deadline_ms = 0;
         bt_console_release();
-        kprintf("[BT] BCM phase 1 failed with status=%d\n", status);
+        bt_diag_log("[BT] BCM phase 1 failed with status=%d\n", status);
         return;
     }
 
     s_bt_host->phase1_complete = true;
     s_bt_host->init_deadline_ms = 0;
-    kprintf("[BT] BCM phase 1 complete, switching to H5 main transport\n");
+    bt_diag_log("[BT] BCM phase 1 complete, switching to H5 main transport\n");
     bt_setup_hci_main(s_bt_host);
     bt_schedule_power_on(s_bt_host);
 }
@@ -420,7 +421,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
     switch (hci_event_packet_get_type(packet)) {
         case BTSTACK_EVENT_POWERON_FAILED:
-            kprintf("[BT] power on failed\n");
+            bt_diag_log("[BT] power on failed\n");
             break;
         case BTSTACK_EVENT_STATE:
             switch (btstack_event_state_get_state(packet)) {
@@ -431,7 +432,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                         s_bt_host->bootstrap_state = BT_BOOTSTRAP_WORKING;
                         s_bt_host->init_deadline_ms = 0;
                     }
-                    kprintf("[BT] stack up and running, BD_ADDR=%s\n", bd_addr_to_str(local_addr));
+                    bt_diag_log("[BT] stack up and running, BD_ADDR=%s\n", bd_addr_to_str(local_addr));
                     bt_pairing_window_open(s_bt_host);
                     break;
                 }
@@ -440,18 +441,18 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                         s_bt_host->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_WORKING;
                         s_bt_host->init_deadline_ms = bt_now_ms() + BELLATRIX_BT_INIT_TIMEOUT_MS;
                     }
-                    kprintf("[BT] state=initializing\n");
+                    bt_diag_log("[BT] state=initializing\n");
                     break;
                 case HCI_STATE_OFF:
                     if (s_bt_host && s_bt_host->bootstrap_state == BT_BOOTSTRAP_WORKING) {
                         s_bt_host->bootstrap_state = BT_BOOTSTRAP_IDLE;
                     }
                     bt_pairing_window_close(s_bt_host);
-                    kprintf("[BT] state=off\n");
+                    bt_diag_log("[BT] state=off\n");
                     break;
                 case HCI_STATE_HALTING:
                     bt_pairing_window_close(s_bt_host);
-                    kprintf("[BT] state=halting\n");
+                    bt_diag_log("[BT] state=halting\n");
                     break;
                 default:
                     break;
@@ -532,13 +533,28 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
     start_ms = bt_now_ms();
     deadline_ms = start_ms + (timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS);
 
-    kprintf("[BT] waiting for bootstrap window (%u ms)\n",
+    bt_diag_log("[BT] waiting for bootstrap window (%u ms)\n",
             (unsigned)(timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS));
+
+    /* 1s heartbeat with raw state-machine values — survives in the bt_diag
+     * RAM ring even when the console is handed to the controller, and is
+     * the primary clue when the bootstrap silently stalls. */
+    uint32_t last_beat_ms = start_ms;
 
     while (!bt_bootstrap_is_terminal(bt)) {
         bt_host_step(bt);
-        if ((int32_t)(bt_now_ms() - deadline_ms) >= 0) {
-            kprintf("[BT] bootstrap wait timed out after %u ms\n",
+        uint32_t now_ms = bt_now_ms();
+        if (now_ms - last_beat_ms >= 1000u) {
+            last_beat_ms = now_ms;
+            bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u hci=%u\n",
+                        (unsigned)bt->bootstrap_state, (unsigned)now_ms,
+                        (unsigned)bt->bootstrap_deadline_ms,
+                        (unsigned)bt->init_deadline_ms,
+                        (unsigned)bt->phase1_complete,
+                        (unsigned)bt->hci_ready);
+        }
+        if ((int32_t)(now_ms - deadline_ms) >= 0) {
+            bt_diag_log("[BT] bootstrap wait timed out after %u ms\n",
                     (unsigned)(timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS));
             return false;
         }

@@ -419,3 +419,63 @@ bool fat32_seek(Fat32File *f, uint32_t byte_offset)
     f->cur_offset  = byte_offset;
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// In-place overwrite (conservative write support)
+// ---------------------------------------------------------------------------
+
+void fat32_set_writer(Fat32State *fs, Fat32WriteBlockFn write_fn, void *ctx)
+{
+    if (!fs) return;
+    fs->write_block = write_fn;
+    fs->write_ctx   = ctx;
+}
+
+// Separate buffer: s_sector is clobbered by fat_next_cluster() between
+// sector writes (it reads the FAT through the shared buffer).
+static uint8_t s_wsector[512] __attribute__((aligned(32)));
+
+uint32_t fat32_overwrite_in_place(Fat32State *fs, const char *name,
+                                  const void *data, uint32_t len)
+{
+    Fat32File f;
+    const uint8_t *src = (const uint8_t *)data;
+
+    if (!fs || !fs->initialized || !fs->write_block || !data) return 0u;
+    if (!fat32_open(fs, name, &f)) {
+        kprintf("[FAT32] overwrite: '%s' not found\n", name);
+        return 0u;
+    }
+    if (f.file_size == 0u || f.start_cluster < 2u) return 0u;
+
+    if (len > f.file_size) {
+        kprintf("[FAT32] overwrite: '%s' truncating %u -> %u bytes\n",
+                name, (unsigned)len, (unsigned)f.file_size);
+        len = f.file_size;
+    }
+
+    uint32_t cluster = f.start_cluster;
+    uint32_t pos     = 0u;   // byte offset within the file
+
+    while (pos < f.file_size && cluster >= 2u && cluster < 0x0FFFFFF8u) {
+        uint32_t lba = cluster_to_lba(fs, cluster);
+
+        for (uint32_t s = 0u; s < fs->cluster_size && pos < f.file_size; s++) {
+            for (uint32_t i = 0u; i < 512u; i++) {
+                uint32_t off = pos + i;
+                s_wsector[i] = (off < len) ? src[off] : (uint8_t)' ';
+            }
+            if (!fs->write_block(fs->write_ctx, lba + s, s_wsector)) {
+                kprintf("[FAT32] overwrite: write error lba=%u\n",
+                        (unsigned)(lba + s));
+                return 0u;
+            }
+            pos += 512u;
+        }
+
+        cluster = fat_next_cluster(fs, cluster);
+        if (cluster == 0u) return 0u;
+    }
+
+    return len;
+}

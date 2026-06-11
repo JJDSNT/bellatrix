@@ -17,6 +17,9 @@
 // Block reader callback: read one 512-byte sector at LBA into buf.
 typedef bool (*Fat32ReadBlockFn)(void *ctx, uint32_t lba, uint8_t *buf);
 
+// Block writer callback: write one 512-byte sector at LBA from buf.
+typedef bool (*Fat32WriteBlockFn)(void *ctx, uint32_t lba, const uint8_t *buf);
+
 typedef struct Fat32State {
     uint32_t part_lba;          // partition start LBA
     uint32_t cluster_size;      // sectors per cluster
@@ -28,6 +31,8 @@ typedef struct Fat32State {
     bool     initialized;
     Fat32ReadBlockFn read_block; // pluggable block reader
     void            *read_ctx;  // opaque context for read_block
+    Fat32WriteBlockFn write_block; // optional block writer (NULL = read-only)
+    void             *write_ctx;   // opaque context for write_block
 } Fat32State;
 
 typedef struct Fat32File {
@@ -64,3 +69,15 @@ bool fat32_read_all(Fat32File *f, void *buf, uint32_t buf_size);
 // Seek to byte_offset within the file; updates cur_cluster accordingly.
 // Returns false if byte_offset >= file_size or FAT chain is broken.
 bool fat32_seek(Fat32File *f, uint32_t byte_offset);
+
+// Attach a block writer (e.g. SD CMD24).  Required before overwrite.
+void fat32_set_writer(Fat32State *fs, Fat32WriteBlockFn write_fn, void *ctx);
+
+// Overwrite the DATA of an existing root-directory file in place.
+// Deliberately conservative: never touches the FAT or directory entries
+// (no allocation, no size change, no corruption risk).  Data beyond len is
+// padded with spaces up to the existing file size; len is clamped to the
+// file size.  Returns bytes of payload actually written, 0 on failure
+// (file missing, no writer attached, or I/O error).
+uint32_t fat32_overwrite_in_place(Fat32State *fs, const char *name,
+                                  const void *data, uint32_t len);

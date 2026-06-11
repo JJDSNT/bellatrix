@@ -65,6 +65,7 @@ static inline uint32_t rd32_data(uintptr_t a)
 // INTERRUPT bits
 #define INT_CMD_DONE        (1u << 0)
 #define INT_DATA_DONE       (1u << 1)
+#define INT_WRITE_RDY       (1u << 4)
 #define INT_READ_RDY        (1u << 5)
 #define INT_ERR             (1u << 15)
 #define INT_CTO_ERR         (1u << 16)
@@ -397,6 +398,52 @@ bool bcm_emmc_read_block(uint32_t lba, void *buf)
     irq = emmc_wait_int(INT_DATA_DONE);
     if (irq == 0xFFFFFFFFu) {
         kprintf("[EMMC] data_done timeout (lba=%u)\n", (unsigned)lba);
+        return false;
+    }
+    emmc_clear_int(INT_DATA_DONE);
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Block write (CMD24 — WRITE_SINGLE_BLOCK)
+// ---------------------------------------------------------------------------
+
+bool bcm_emmc_write_block(uint32_t lba, const void *buf)
+{
+    if (!s_initialized || !buf) {
+        return false;
+    }
+
+    uint32_t arg = s_is_hc ? lba : (lba * 512u);
+
+    wr32(EMMC_BLKSIZECNT, (1u << 16) | 512u);  // 1 block, 512 bytes
+
+    uint32_t cmdtm = CMDTM_IDX(24u) | CMDTM_RESP_48 |
+                     CMDTM_IXCHK_EN | CMDTM_CRCCHK_EN |
+                     CMDTM_ISDATA;              // direction: host → card
+
+    if (!emmc_send_cmd(cmdtm, arg)) {
+        return false;
+    }
+
+    uint32_t irq = emmc_wait_int(INT_WRITE_RDY);
+    if (irq == 0xFFFFFFFFu) {
+        kprintf("[EMMC] write_rdy timeout (lba=%u)\n", (unsigned)lba);
+        return false;
+    }
+    emmc_clear_int(INT_WRITE_RDY);
+
+    // Write 128 words (512 bytes) — raw writes, no bswap (mirrors read path)
+    const uint32_t *src = (const uint32_t *)buf;
+    for (unsigned i = 0; i < 128u; i++) {
+        *(volatile uint32_t *)EMMC_DATA = src[i];
+    }
+    dsb();
+
+    irq = emmc_wait_int(INT_DATA_DONE);
+    if (irq == 0xFFFFFFFFu) {
+        kprintf("[EMMC] write data_done timeout (lba=%u)\n", (unsigned)lba);
         return false;
     }
     emmc_clear_int(INT_DATA_DONE);

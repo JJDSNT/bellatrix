@@ -22,6 +22,8 @@
 #endif
 #if BELLATRIX_ENABLE_BTSTACK
 #include "io/bluetooth/bt_scan.h"
+#include "io/bluetooth/bt_diag.h"
+#include "storage/sdcard/bcm_emmc.h"
 #endif
 
 #include <string.h>
@@ -506,18 +508,90 @@ static void bt_draw_scan_frame(void)
                     COL_TEXT, COL_STATUS_BG);
 }
 
+// Append a string to a bounded text buffer; returns new length.
+static uint32_t txt_append(char *buf, uint32_t len, uint32_t cap, const char *s)
+{
+    while (*s && len + 1u < cap) buf[len++] = *s++;
+    buf[len] = '\0';
+    return len;
+}
+
+// Format the scan results + bring-up diagnostics and overwrite BTSCAN.TXT
+// on the SD card (in place — the file must already exist, any size).
+#define BT_REPORT_CAP 12288u
+static char s_bt_report[BT_REPORT_CAP];
+
+static bool sd_read_block_cb(void *ctx, uint32_t lba, uint8_t *buf)
+{
+    (void)ctx;
+    return bcm_emmc_read_block(lba, buf);
+}
+
+static bool sd_write_block_cb(void *ctx, uint32_t lba, const uint8_t *buf)
+{
+    (void)ctx;
+    return bcm_emmc_write_block(lba, buf);
+}
+
+// Returns: 1 saved, 0 file missing, -1 SD/FS error.
+static int bt_save_report_to_sd(void)
+{
+    uint32_t len = 0u;
+
+    len = txt_append(s_bt_report, len, BT_REPORT_CAP,
+                     "=== BELLATRIX BLUETOOTH REPORT ===\r\n\r\n--- scan results ---\r\n");
+
+    unsigned count = bt_scan_count();
+    if (count == 0u)
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP, "(no devices found)\r\n");
+
+    for (unsigned i = 0u; i < count; i++) {
+        const BTScanResult *r = bt_scan_get(i);
+        char addr[18];
+        if (!r) break;
+        bt_format_addr(addr, r->addr);
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP,
+                         (r->transport == BT_SCAN_TRANSPORT_CLASSIC) ? "CL " : "LE ");
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP, addr);
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP, " ");
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP,
+                         r->name[0] ? r->name : "(no name)");
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n");
+    }
+
+    len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n--- bring-up log ---\r\n");
+    len += bt_diag_snapshot(s_bt_report + len,
+                            (BT_REPORT_CAP > len) ? BT_REPORT_CAP - len : 0u);
+
+    static Fat32State s_sd_fs;
+    if (!bcm_emmc_init() ||
+        !fat32_init_with_reader(&s_sd_fs, sd_read_block_cb, NULL))
+        return -1;
+    fat32_set_writer(&s_sd_fs, sd_write_block_cb, NULL);
+
+    if (!fat32_overwrite_in_place(&s_sd_fs, "BTSCAN.TXT", s_bt_report, len)) {
+        Fat32File probe;
+        return fat32_open(&s_sd_fs, "BTSCAN.TXT", &probe) ? -1 : 0;
+    }
+    return 1;
+}
+
 // Run the scan screen until the user continues or ~90 s elapse.
+// Shown even when the controller bootstrap failed, so the failure is
+// visible (the serial console is dark during BT operation) and the
+// diagnostics still get saved to the SD card.
 static void bt_scan_screen(void)
 {
-    // Controller absent or bootstrap failed (e.g. QEMU): skip silently.
-    if (!bellatrix_launcher_bt_ready()) return;
+    bool working = bellatrix_launcher_bt_ready() != 0;
 
-    bt_scan_start();
+    if (working)
+        bt_scan_start();
 
     uint32_t last_gen = 0xFFFFFFFFu;
+    uint32_t budget   = working ? 90000u : 12000u;   // ≈90 s / ≈12 s
 
     // Outer iteration ≈ 1 ms (matching the single-core BT step cadence).
-    for (uint32_t iter = 0u; iter < 90000u; iter++) {
+    for (uint32_t iter = 0u; iter < budget; iter++) {
         bellatrix_launcher_pump_bt();
         if ((iter & 7u) == 0u) pump_usb();
 
@@ -529,17 +603,31 @@ static void bt_scan_screen(void)
         if ((iter & 255u) == 0u && bt_scan_generation() != last_gen) {
             last_gen = bt_scan_generation();
             bt_draw_scan_frame();
+            if (!working)
+                fb_puts(s_margin_x, s_title_h + 4u,
+                        "controller bootstrap FAILED - report goes to BTSCAN.TXT",
+                        COL_CURSOR_BG, COL_BG);
         }
 
         for (volatile uint32_t d = 0u; d < 800000u; d++) asm volatile("nop");
     }
 
-    bt_scan_stop();
-    // Let the stack flush the inquiry/scan-stop commands before moving on.
-    for (uint32_t i = 0u; i < 200u; i++) {
-        bellatrix_launcher_pump_bt();
-        for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
+    if (working) {
+        bt_scan_stop();
+        // Let the stack flush the inquiry/scan-stop commands before moving on.
+        for (uint32_t i = 0u; i < 200u; i++) {
+            bellatrix_launcher_pump_bt();
+            for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
+        }
     }
+
+    int saved = bt_save_report_to_sd();
+    const char *msg =
+        (saved == 1) ? "Report saved to SD:BTSCAN.TXT" :
+        (saved == 0) ? "Create BTSCAN.TXT (any size, e.g. 16KB) on the SD card to save reports"
+                     : "SD write failed - report not saved";
+    draw_message(msg, (saved == 1) ? COL_STATUS_BG : COL_TITLE_BG);
+    for (volatile uint32_t d = 0u; d < 2000000000u; d++) asm volatile("nop");
 }
 
 #endif // BELLATRIX_ENABLE_BTSTACK

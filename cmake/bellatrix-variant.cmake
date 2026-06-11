@@ -292,6 +292,7 @@ if(BELLATRIX_ENABLE_BTSTACK)
     list(APPEND BELLATRIX_SOURCES
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_hal_raspi3.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_scan.c
+        ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_diag.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/ad_parser.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_linked_list.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_memory.c
@@ -380,6 +381,7 @@ if(BELLATRIX_LAUNCHER)
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32.c
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32_lfn.c
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32_unicode.c
+        ${CMAKE_SOURCE_DIR}/../src/storage/sdcard/bcm_emmc.c
     )
     message(STATUS "[BUILD] Launcher: enabled (SD FAT32 ADF+ISO selector)")
 else()
