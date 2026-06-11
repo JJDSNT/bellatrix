@@ -301,20 +301,62 @@ porta raiz (XACTERR + port disable) mesmo com FSLSS=1 desde o init — teclados
 LS antigos não funcionam. PRE+LS no DWC2/BCM2837 em porta FS segue sem
 solução; alternativas: investigar chirp HS (splits) ou aceitar FS-only.
 
+### Sprint 45: MSC big-endian + input HID de verdade + undervoltage
+
+Commits: `72fabff` (CBW LE), `ddf2bf8` (ODDFRM/single-core/hub-ack),
+`f0b2935` (telemetria).
+
+1. **MSC CBW/CSW little-endian** (`usbh_msc.c`, patch 0004) — host BE
+   enviava os uint32 do CBW (dSignature/dTag/dDataLength) byte-swapped;
+   o device STALLava ambos bulk EPs por CBW inválido (BOT 6.6.1, erro -8).
+   Serialização LE explícita resolve; `testunitready`/`readcapacity10`
+   passaram em hardware.
+2. **ODDFRM invertido** (`usb_hc_bellatrix.c` dwc2_chan_transfer + sof
+   kick) — ao armar canal periódico, ODDFRM era setado com a paridade
+   *atual* do HFNUM; transfers periódicos executam no frame *seguinte*,
+   então tem que ser a paridade oposta (HAL ST: `(HFNUM&1)?0:1`). Com o
+   bug, FRMOR (hcint=0x202) em 100% dos interrupt IN — HID enumerava mas
+   nunca entregava input. QEMU não modela paridade de frame, mascarando.
+   **Após o fix: input de teclado funcionando no launcher.**
+3. **Single-core não pisava USB pós-launcher** — `PAL_Runtime_Poll` agora
+   chama `bellatrix_runtime_io_step` com throttle ~1ms; e havia *duas*
+   definições weak de `bellatrix_runtime_io_step` (stub vazio em
+   pal_core.c vs real em core_io.c, linker escolhia por ordem) — a de
+   core_io.c agora é strong.
+4. **Hub-level change (bitmap bit 0) nunca ACKado** — o LAN9514 reporta
+   local-power change no arranque; sem GetHubStatus+ClearHubFeature
+   (C_HUB_LOCAL_POWER) o intr EP re-reporta para sempre (era o loop
+   bitmap=0x8101). Fix: `_usbh_hub_handle_hub_change` em usbh_hub.c.
+5. **Loop attach/detach do MSC era UNDERVOLTAGE** — padrão: drive ready →
+   primeira read10 XACTERR → device cai (status=0x0100) → re-enumera em
+   loop; Cruzer Blade chegou a subir em modo fallback (PID 5530, 64MB
+   fictícios = firmware do stick não carregou da NAND por brownout).
+   `GET_THROTTLED` (mailbox 0x30046, `usb_glue_vc_get_throttled`)
+   confirmou `0x00050005` = undervoltage ativo. Causa física: Pi
+   alimentado através de hub USB com interruptor; ligando direto na
+   fonte resolve. Telemetria logada no attach/detach do MSC.
+
+**Workflow do patch 0004**: regenerar com `rtk proxy git diff` dentro de
+`external/cherryusb` (o hook rtk filtra `git diff` puro e corrompe o
+patch); setup.sh valida com `apply --reverse --check`, então qualquer
+edit novo no cherryusb exige regenerar.
+
 ## Estado Atual
 
-### Funcionando (QEMU e Pi 3B hardware)
-- Hub LAN9514 + HID keyboard/mouse FS (`/dev/input0`, `/dev/input1`)
-- Pendrive MSC enumera; build com `BELLATRIX_USB_MSC=1` compilado p/ teste
+### Funcionando (Pi 3B hardware)
+- Hub LAN9514 + HID keyboard/mouse FS com **input real** no launcher
+- MSC: enumeração + scsi_init completos; leituras dependem de
+  alimentação adequada (verificar `throttled=0x0` no drive ready)
 
 Build: `BELLATRIX_CPU_BACKEND=musashi BELLATRIX_USBSTACK=1 BELLATRIX_USB_MSC=1
 ./scripts/build.sh`
 
 ### Pendente
-- Testar launcher completo (HID + MSC/FAT32 lendo ADF/ISO do pendrive)
-- Hub interrupt poll com bitmap espúrio 0x8101 em loop (ruído, baixa prioridade)
+- Validar launcher listando/carregando ADF/ISO do pendrive com
+  alimentação direta (sem hub no caminho do 5V)
+- HID → input do lado Amiga (pós-launcher): ponte relatórios HID →
+  keycodes CIA-A ainda não existe
 - LS devices atrás do hub (teclados antigos) — sem suporte por ora
-- Commitar os fixes (working tree com tudo não commitado!)
 - `usb_class_info` sentinels em ordem correta (link order issue)
 
 ## Registros Observados em Hardware
