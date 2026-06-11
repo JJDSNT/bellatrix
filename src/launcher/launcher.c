@@ -40,10 +40,8 @@ extern uint32_t  fb_height;
 // Constants
 // ---------------------------------------------------------------------------
 
-#define MAX_ADF_FILES   64u
-#define MAX_ISO_FILES   32u
+#define MAX_FILES       96u
 #define ADF_BUF_SIZE    (1024u * 1024u)   // 1 MB — large enough for any DD/HD ADF
-#define VISIBLE_ROWS    18u               // entries visible on screen at once
 
 // Combined media list entry
 typedef enum {
@@ -174,9 +172,33 @@ static const uint8_t s_font[95][8] = {
 
 static uint32_t s_stride;  // pixels per row (derived from pitch)
 
-static void fb_init_stride(void)
+// Font scale and derived layout metrics, set from the framebuffer size so
+// text stays readable on high resolutions (8 px glyphs are tiny at 1080p).
+static uint32_t s_scale;        // integer glyph magnification (1..3)
+static uint32_t s_char;         // glyph cell size in pixels (8 * s_scale)
+static uint32_t s_margin_x;     // left margin of the file list
+static uint32_t s_title_h;      // title bar height
+static uint32_t s_row_h;        // file list row height
+static uint32_t s_status_h;     // status bar height
+static uint32_t s_visible_rows; // entries visible on screen at once
+
+static void ui_init_metrics(void)
 {
     s_stride = pitch / 2u;
+
+    s_scale = fb_width / 640u;
+    if (s_scale < 1u) s_scale = 1u;
+    if (s_scale > 3u) s_scale = 3u;
+
+    s_char     = 8u * s_scale;
+    s_margin_x = 2u * s_char;
+    s_title_h  = s_char + 12u;
+    s_row_h    = s_char + 4u;
+    s_status_h = s_char + 6u;
+
+    uint32_t list_h = fb_height - s_title_h - 4u - s_status_h;
+    s_visible_rows  = list_h / s_row_h;
+    if (s_visible_rows == 0u) s_visible_rows = 1u;
 }
 
 static void fb_fill_rect(uint32_t x, uint32_t y,
@@ -203,10 +225,15 @@ static void fb_putchar(uint32_t px, uint32_t py,
     const uint8_t *glyph = s_font[idx];
 
     for (unsigned row = 0u; row < 8u; row++) {
-        uint8_t  bits = glyph[row];
-        uint16_t *dst  = framebuffer + (py + row) * s_stride + px;
-        for (unsigned col = 0u; col < 8u; col++) {
-            dst[col] = (bits & (0x80u >> col)) ? fg : bg;
+        uint8_t bits = glyph[row];
+        for (uint32_t sy = 0u; sy < s_scale; sy++) {
+            uint16_t *dst = framebuffer + (py + row * s_scale + sy) * s_stride + px;
+            for (unsigned col = 0u; col < 8u; col++) {
+                uint16_t c = (bits & (0x80u >> col)) ? fg : bg;
+                for (uint32_t sx = 0u; sx < s_scale; sx++) {
+                    dst[col * s_scale + sx] = c;
+                }
+            }
         }
     }
 }
@@ -218,7 +245,7 @@ static uint32_t fb_puts(uint32_t x, uint32_t y,
 {
     while (*s) {
         fb_putchar(x, y, *s, fg, bg);
-        x += 8u;
+        x += s_char;
         s++;
     }
     return x;
@@ -232,23 +259,37 @@ static void fb_puts_centred(uint32_t x0, uint32_t x1,
 {
     uint32_t len = 0u;
     for (const char *p = s; *p; p++) len++;
-    uint32_t w   = len * 8u;
+    uint32_t w   = len * s_char;
     uint32_t mid = x0 + (x1 - x0) / 2u;
     uint32_t px  = (w < (x1 - x0)) ? (mid - w / 2u) : x0;
 
     // Fill background for the full row width
-    fb_fill_rect(x0, y, x1 - x0, 8u, bg);
+    fb_fill_rect(x0, y, x1 - x0, s_char, bg);
     fb_puts(px, y, s, fg, bg);
 }
 
 // ---------------------------------------------------------------------------
-// Layout constants (all in pixels)
+// Media type filter — the FAT32 layer lists everything; deciding what is
+// bootable media is the launcher's call.
 // ---------------------------------------------------------------------------
 
-#define MARGIN_X    16u
-#define TITLE_H     20u
-#define ROW_H       12u
-#define STATUS_H    14u
+static bool name_has_ext(const char *name, const char *ext /* e.g. ".adf" */)
+{
+    const char *dot = NULL;
+    for (const char *p = name; *p; p++) {
+        if (*p == '.') dot = p;
+    }
+    if (!dot) return false;
+
+    const char *a = dot, *b = ext;
+    while (*a && *b) {
+        char ca = *a++, cb = *b++;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + ('a' - 'A'));
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
+        if (ca != cb) return false;
+    }
+    return *a == *b;
+}
 
 // ---------------------------------------------------------------------------
 // Screen helpers
@@ -266,15 +307,15 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
     fb_fill_rect(0, 0, W, H, COL_BG);
 
     // Title bar
-    fb_fill_rect(0, 0, W, TITLE_H, COL_TITLE_BG);
-    fb_puts_centred(0, W, (TITLE_H - 8u) / 2u,
+    fb_fill_rect(0, 0, W, s_title_h, COL_TITLE_BG);
+    fb_puts_centred(0, W, (s_title_h - s_char) / 2u,
                     "BELLATRIX LAUNCHER  --  Select a disk (ADF=floppy, ISO=CD-ROM):",
                     COL_TEXT, COL_TITLE_BG);
 
     // File list
-    uint32_t list_y = TITLE_H + 4u;
+    uint32_t list_y = s_title_h + 4u;
 
-    for (uint32_t i = 0u; i < VISIBLE_ROWS && (scroll + i) < count; i++) {
+    for (uint32_t i = 0u; i < s_visible_rows && (scroll + i) < count; i++) {
         uint32_t         idx      = scroll + i;
         const MediaEntry *e       = &entries[idx];
         bool              selected = (idx == cursor);
@@ -282,23 +323,23 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
         uint16_t bg  = selected ? COL_CURSOR_BG : COL_BG;
         uint16_t fg  = selected ? COL_TEXT_SEL  : COL_TEXT;
 
-        uint32_t row_y = list_y + i * ROW_H;
+        uint32_t row_y = list_y + i * s_row_h;
 
-        fb_fill_rect(0, row_y, W, ROW_H, bg);
+        fb_fill_rect(0, row_y, W, s_row_h, bg);
 
         if (selected) {
-            fb_putchar(MARGIN_X - 10u, row_y, '>', fg, bg);
+            fb_putchar(s_margin_x - s_char - 2u, row_y + 2u, '>', fg, bg);
         }
 
         // Type tag
         const char *tag = (e->type == MEDIA_ISO) ? "[ISO] " : "[ADF] ";
-        uint32_t    x   = fb_puts(MARGIN_X, row_y, tag, COL_HINT, bg);
-        fb_puts(x, row_y, e->name, fg, bg);
+        uint32_t    x   = fb_puts(s_margin_x, row_y + 2u, tag, COL_HINT, bg);
+        fb_puts(x, row_y + 2u, e->name, fg, bg);
     }
 
     // Status bar
-    uint32_t status_y = H - STATUS_H;
-    fb_fill_rect(0, status_y, W, STATUS_H, COL_STATUS_BG);
+    uint32_t status_y = H - s_status_h;
+    fb_fill_rect(0, status_y, W, s_status_h, COL_STATUS_BG);
 
     char hint[80];
     const char *prefix = "Files: ";
@@ -315,7 +356,7 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
     for (const char *p = suffix; *p; p++) hint[n_chars++] = *p;
     hint[n_chars] = '\0';
 
-    fb_puts_centred(0, W, status_y + (STATUS_H - 8u) / 2u,
+    fb_puts_centred(0, W, status_y + (s_status_h - s_char) / 2u,
                     hint, COL_TEXT, COL_STATUS_BG);
 }
 
@@ -327,8 +368,8 @@ static void draw_message(const char *msg, uint16_t bg_col)
     const uint32_t H = fb_height;
 
     fb_fill_rect(0, 0, W, H, COL_BG);
-    fb_fill_rect(0, H / 2u - 12u, W, 24u, bg_col);
-    fb_puts_centred(0, W, H / 2u - 4u, msg, COL_TEXT, bg_col);
+    fb_fill_rect(0, H / 2u - (s_char + 8u), W, 2u * (s_char + 8u), bg_col);
+    fb_puts_centred(0, W, H / 2u - s_char / 2u, msg, COL_TEXT, bg_col);
 }
 
 // ---------------------------------------------------------------------------
@@ -452,7 +493,7 @@ bool launcher_run(void)
         return false;
     }
 
-    fb_init_stride();
+    ui_init_metrics();
 
     launcher_input_init();
     launcher_input_set_active(true);
@@ -479,12 +520,12 @@ bool launcher_run(void)
         return true;
     }
 
-    static char       s_adf_names[MAX_ADF_FILES][FAT32_NAME_MAX];
-    static char       s_iso_names[MAX_ISO_FILES][FAT32_NAME_MAX];
-    static MediaEntry s_entries[(MAX_ADF_FILES + MAX_ISO_FILES) * 2u];
+    static MediaEntry s_entries[MAX_FILES];
     uint32_t count = 0u;
 
 #if BELLATRIX_ENABLE_USBSTACK
+    static char s_names[MAX_FILES][FAT32_NAME_MAX];
+
     // Wait for USB MSC to enumerate (up to ~1 s additional)
     draw_message("Scanning USB drive...", COL_TITLE_BG);
     for (uint32_t i = 0u; i < 200u; i++) {
@@ -494,20 +535,21 @@ bool launcher_run(void)
     }
 
     if (usb_msc_is_ready() && fat32_init_usb(&s_fat32)) {
-        uint32_t n_adf = fat32_list_adf(&s_fat32, s_adf_names, MAX_ADF_FILES);
-        uint32_t n_iso = fat32_list_iso(&s_fat32, s_iso_names, MAX_ISO_FILES);
-        kprintf("[LAUNCHER] USB: %u ADF, %u ISO\n", (unsigned)n_adf, (unsigned)n_iso);
+        uint32_t n_files = fat32_list(&s_fat32, s_names, MAX_FILES);
 
-        for (uint32_t i = 0u; i < n_adf; i++) {
-            memcpy(s_entries[count].name, s_adf_names[i], FAT32_NAME_MAX);
-            s_entries[count].type = MEDIA_ADF;
+        for (uint32_t i = 0u; i < n_files && count < MAX_FILES; i++) {
+            MediaType type;
+            if      (name_has_ext(s_names[i], ".adf")) type = MEDIA_ADF;
+            else if (name_has_ext(s_names[i], ".iso")) type = MEDIA_ISO;
+            else continue;
+
+            memcpy(s_entries[count].name, s_names[i], FAT32_NAME_MAX);
+            s_entries[count].type = type;
             count++;
         }
-        for (uint32_t i = 0u; i < n_iso; i++) {
-            memcpy(s_entries[count].name, s_iso_names[i], FAT32_NAME_MAX);
-            s_entries[count].type = MEDIA_ISO;
-            count++;
-        }
+
+        kprintf("[LAUNCHER] USB: %u files, %u bootable media\n",
+                (unsigned)n_files, (unsigned)count);
     }
 #endif
 
@@ -549,7 +591,7 @@ bool launcher_run(void)
         case LAUNCHER_KEY_DOWN:
             if (cursor + 1u < count) {
                 cursor++;
-                if (cursor >= scroll + VISIBLE_ROWS) scroll = cursor - VISIBLE_ROWS + 1u;
+                if (cursor >= scroll + s_visible_rows) scroll = cursor - s_visible_rows + 1u;
                 draw_frame(count, cursor, scroll, s_entries);
             }
             break;
@@ -580,15 +622,15 @@ bool launcher_run(void)
 
     const MediaEntry *sel = &s_entries[cursor];
 
-#if BELLATRIX_ENABLE_USBSTACK
-    Fat32State *sel_fs       = &s_fat32;
-    Fat32File  *sel_iso_file = &s_iso_file;
-    const char *src_tag      = "USB";
-#else
-    /* count is always 0 without USB stack — unreachable */
+#if !BELLATRIX_ENABLE_USBSTACK
+    /* count is always 0 without USB stack — cannot reach here */
     launcher_input_set_active(false);
     return false;
 #endif
+
+    Fat32State *sel_fs       = &s_fat32;
+    Fat32File  *sel_iso_file = &s_iso_file;
+    const char *src_tag      = "USB";
 
     if (sel->type == MEDIA_ADF) {
         // ADF: preload entire image into RAM buffer
