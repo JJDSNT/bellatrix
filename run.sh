@@ -39,6 +39,8 @@ Common options (env vars):
   BELLATRIX_USBSTACK=1
                       Enable CherryUSB host stack scaffold in Bellatrix build
                       (default: off)
+  BELLATRIX_USB_MSC=1 Enable CherryUSB USB mass-storage class when USB stack is
+                      enabled (default: on)
   BELLATRIX_QEMU_USB_KBD=1
                       In qemu mode, attach a virtual USB keyboard device
                       (default: on when BELLATRIX_USBSTACK=1)
@@ -268,6 +270,9 @@ load_launcher_selection() {
                 ;;
             BELLATRIX_USBSTACK)
                 BELLATRIX_USBSTACK="$value"
+                ;;
+            BELLATRIX_USB_MSC)
+                BELLATRIX_USB_MSC="$value"
                 ;;
             BELLATRIX_USB_POINTER)
                 BELLATRIX_USB_POINTER="$value"
@@ -502,6 +507,7 @@ case "$BUILD_KIND" in
         export BELLATRIX_MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
+        export BELLATRIX_USB_MSC="${BELLATRIX_USB_MSC:-1}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
         export BELLATRIX_CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-rigel}"
         export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"

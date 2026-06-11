@@ -9,8 +9,8 @@ import (
 )
 
 type launchResult struct {
-	emuProfile string
-	harnessCPU string
+	emuProfile     string
+	harnessCPU     string
 	kickstart      string
 	adf            string
 	iso            string
@@ -20,6 +20,7 @@ type launchResult struct {
 	multicoreLogs  bool
 	btstack        bool
 	usbstack       bool
+	usbMSC         bool
 	usbPointer     string
 	emu68Boards    string
 	fpuEnabled     bool
@@ -56,9 +57,10 @@ type model struct {
 	multicoreLogs  bool
 	btstack        bool
 	usbstack       bool
+	usbMSC         bool
 	usbPointer     string
-	emu68Boards string
-	cpuBackend  string
+	emu68Boards    string
+	cpuBackend     string
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
@@ -87,9 +89,10 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		multicoreLogs:  false,
 		btstack:        false,
 		usbstack:       true,
+		usbMSC:         true,
 		usbPointer:     "mouse",
-		emu68Boards: "legacy",
-		cpuBackend:  "musashi",
+		emu68Boards:    "legacy",
+		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
 		serialBackend:  "miniuart",
@@ -140,9 +143,10 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		multicoreLogs:  fm.multicoreLogs,
 		btstack:        fm.btstack,
 		usbstack:       fm.usbstack,
+		usbMSC:         fm.usbMSC,
 		usbPointer:     fm.usbPointer,
-		emu68Boards: fm.emu68Boards,
-		fpuEnabled:  fm.fpuEnabled,
+		emu68Boards:    fm.emu68Boards,
+		fpuEnabled:     fm.fpuEnabled,
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
 		rigelTrace:     fm.rigelTrace,
@@ -342,6 +346,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "u":
 			m.usbstack = !m.usbstack
+			return m, nil
+
+		case "x":
+			m.usbMSC = !m.usbMSC
 			return m, nil
 
 		case "p":
@@ -546,6 +554,13 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("USB stack:"), usbstackBadge))
 	b.WriteString("\n")
 
+	usbMSCBadge := offBadgeStyle.Render("OFF")
+	if m.usbstack && m.usbMSC {
+		usbMSCBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("USB MSC:"), usbMSCBadge))
+	b.WriteString("\n")
+
 	usbPointerBadge := offBadgeStyle.Render(strings.ToUpper(m.usbPointer))
 	if m.usbstack {
 		usbPointerBadge = onBadgeStyle.Render(strings.ToUpper(m.usbPointer))
@@ -621,7 +636,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • A Logs off • T BTStack • U USB • P Pointer • E Boards • G Chipset • R Rigel trace • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • A Logs off • T BTStack • U USB • X MSC • P Pointer • E Boards • G Chipset • R Rigel trace • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -657,11 +672,12 @@ func (m model) qemuCommand() string {
 	}
 
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_USB_MSC=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
+		boolEnv(m.usbMSC),
 		m.emu68Boards,
 		rigelTraceEnv,
 		perfLogsEnv,
