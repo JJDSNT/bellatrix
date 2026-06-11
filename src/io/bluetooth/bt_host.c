@@ -547,6 +547,11 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
     return bt->bootstrap_state == BT_BOOTSTRAP_WORKING;
 }
 
+bool bt_host_is_working(const BTHost *bt)
+{
+    return bt && bt->bootstrap_state == (uint8_t)BT_BOOTSTRAP_WORKING;
+}
+
 void bt_host_step(BTHost *bt) {
     if (!bt || !bt->enabled) return;
 
@@ -597,6 +602,11 @@ bool bt_host_init(BTHost *bt) {
 bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms) {
     (void)bt;
     (void)timeout_ms;
+    return false;
+}
+
+bool bt_host_is_working(const BTHost *bt) {
+    (void)bt;
     return false;
 }
 

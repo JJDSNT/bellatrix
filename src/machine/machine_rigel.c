@@ -62,6 +62,10 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list ap)
     vkprintf_pc(rigel_snprintf_putc, &ctx, fmt, ap);
     return (int)ctx.pos;
 }
+#else  /* BELLATRIX_ENABLE_BTSTACK */
+/* Definition lives in bt_hal_raspi3.c; snprintf below still needs the
+ * prototype. */
+int vsnprintf(char *str, size_t size, const char *fmt, va_list ap);
 #endif /* !BELLATRIX_ENABLE_BTSTACK */
 
 int snprintf(char *str, size_t size, const char *fmt, ...)

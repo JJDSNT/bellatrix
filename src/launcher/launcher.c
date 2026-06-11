@@ -20,6 +20,9 @@
 #if BELLATRIX_ENABLE_USBSTACK
 #include "io/usb/usb_msc_bellatrix.h"
 #endif
+#if BELLATRIX_ENABLE_BTSTACK
+#include "io/bluetooth/bt_scan.h"
+#endif
 
 #include <string.h>
 #include <stdint.h>
@@ -30,6 +33,8 @@ int      bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size)
 int      bellatrix_machine_insert_iso(const void *data, size_t size);
 int      bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx, uint32_t sector_count);
 void     bellatrix_launcher_pump_usb(void);
+void     bellatrix_launcher_pump_bt(void);
+int      bellatrix_launcher_bt_ready(void);
 
 extern uint16_t *framebuffer;
 extern uint32_t  pitch;
@@ -422,6 +427,124 @@ static void wait_ack(void)
 }
 
 // ---------------------------------------------------------------------------
+// Bluetooth scan screen (diagnostic / pairing front-end)
+//
+// The serial console is dark while BTStack owns the PL011, so discovery
+// results can only be shown here, on the framebuffer.
+// ---------------------------------------------------------------------------
+
+#if BELLATRIX_ENABLE_BTSTACK
+
+static char bt_hex_digit(uint8_t v)
+{
+    return (char)(v < 10u ? (int)'0' + (int)v : (int)'A' + (int)v - 10);
+}
+
+// "11:22:33:44:55:66" — out must hold 18 bytes
+static void bt_format_addr(char *out, const uint8_t *a)
+{
+    for (unsigned i = 0u; i < 6u; i++) {
+        out[i * 3u]      = bt_hex_digit((uint8_t)(a[i] >> 4));
+        out[i * 3u + 1u] = bt_hex_digit((uint8_t)(a[i] & 0x0Fu));
+        out[i * 3u + 2u] = (i < 5u) ? ':' : '\0';
+    }
+}
+
+static void bt_draw_scan_frame(void)
+{
+    const uint32_t W = fb_width;
+    const uint32_t H = fb_height;
+
+    fb_fill_rect(0, 0, W, H, COL_BG);
+    fb_fill_rect(0, 0, W, s_title_h, COL_TITLE_BG);
+    fb_puts_centred(0, W, (s_title_h - s_char) / 2u,
+                    "BLUETOOTH SCAN  --  put your devices in pairing mode",
+                    COL_TEXT, COL_TITLE_BG);
+
+    uint32_t y = s_title_h + 4u;
+
+    // Status line
+    fb_puts(s_margin_x, y, bt_scan_status(), COL_CURSOR_BG, COL_BG);
+    y += s_row_h + s_row_h / 2u;
+
+    unsigned count = bt_scan_count();
+    if (count == 0u) {
+        fb_puts(s_margin_x, y, "(no devices found yet)", COL_TEXT, COL_BG);
+    }
+
+    for (unsigned i = 0u; i < count; i++) {
+        const BTScanResult *r = bt_scan_get(i);
+        if (!r) break;
+        if (y + s_row_h + s_status_h >= H) break;
+
+        char line[64];
+        unsigned p = 0u;
+
+        line[p++] = (char)('1' + (char)i);
+        line[p++] = ' ';
+        line[p++] = (r->transport == BT_SCAN_TRANSPORT_CLASSIC) ? 'C' : 'L';
+        line[p++] = (r->transport == BT_SCAN_TRANSPORT_CLASSIC) ? 'L' : 'E';
+        line[p++] = ' ';
+        bt_format_addr(&line[p], r->addr);
+        p += 17u;
+        line[p++] = ' ';
+
+        const char *name = r->name[0] ? r->name
+                         : (r->name_state == 1u ? "(resolving...)" : "(no name)");
+        for (const char *s = name; *s && p < sizeof(line) - 1u; s++)
+            line[p++] = *s;
+        line[p] = '\0';
+
+        fb_puts(s_margin_x, y, line, COL_TEXT, COL_BG);
+        y += s_row_h;
+    }
+
+    // Footer
+    fb_fill_rect(0, H - s_status_h, W, s_status_h, COL_STATUS_BG);
+    fb_puts_centred(0, W, H - s_status_h + (s_status_h - s_char) / 2u,
+                    "ENTER/ESC = continue boot",
+                    COL_TEXT, COL_STATUS_BG);
+}
+
+// Run the scan screen until the user continues or ~90 s elapse.
+static void bt_scan_screen(void)
+{
+    // Controller absent or bootstrap failed (e.g. QEMU): skip silently.
+    if (!bellatrix_launcher_bt_ready()) return;
+
+    bt_scan_start();
+
+    uint32_t last_gen = 0xFFFFFFFFu;
+
+    // Outer iteration ≈ 1 ms (matching the single-core BT step cadence).
+    for (uint32_t iter = 0u; iter < 90000u; iter++) {
+        bellatrix_launcher_pump_bt();
+        if ((iter & 7u) == 0u) pump_usb();
+
+        uint8_t key = launcher_input_pop();
+        if (key == LAUNCHER_KEY_ENTER || key == LAUNCHER_KEY_KPENTER ||
+            key == LAUNCHER_KEY_ESC)
+            break;
+
+        if ((iter & 255u) == 0u && bt_scan_generation() != last_gen) {
+            last_gen = bt_scan_generation();
+            bt_draw_scan_frame();
+        }
+
+        for (volatile uint32_t d = 0u; d < 800000u; d++) asm volatile("nop");
+    }
+
+    bt_scan_stop();
+    // Let the stack flush the inquiry/scan-stop commands before moving on.
+    for (uint32_t i = 0u; i < 200u; i++) {
+        bellatrix_launcher_pump_bt();
+        for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
+    }
+}
+
+#endif // BELLATRIX_ENABLE_BTSTACK
+
+// ---------------------------------------------------------------------------
 // QEMU fallback: load ADF placed by "-device loader,addr=0x18000000"
 //
 // When running under QEMU with no SD card, the host tool injects the ADF at
@@ -504,6 +627,10 @@ bool launcher_run(void)
         pump_usb();
         for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
     }
+
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_scan_screen();
+#endif
 
     // QEMU: images injected via -device loader land at fixed physical addresses.
     // On real hardware these locations contain random RAM and the magic checks fail.

@@ -25,6 +25,9 @@ typedef struct BTHost {
 bool bt_host_init(BTHost *bt);
 bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms);
 
+/* True once the controller reached HCI WORKING (bootstrap succeeded). */
+bool bt_host_is_working(const BTHost *bt);
+
 /**
  * Process Bluetooth stack events and timers.
  * Should be called periodically from Core 3 step.

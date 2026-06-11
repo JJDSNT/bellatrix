@@ -291,6 +291,7 @@ if(BELLATRIX_ENABLE_BTSTACK)
     set(BELLATRIX_BTSTACK_PATCHRAM_SOURCE "" CACHE STRING "Path to generated BCM PatchRAM C source for Bellatrix BTStack")
     list(APPEND BELLATRIX_SOURCES
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_hal_raspi3.c
+        ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_scan.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/ad_parser.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_linked_list.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_memory.c

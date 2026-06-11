@@ -626,6 +626,24 @@ void bellatrix_launcher_pump_usb(void)
 {
     usb_host_step(&g_runtime.io.usb_host);
 }
+
+/* BT pump + readiness for the launcher's scan/pairing screen.  Defined even
+ * without BTSTACK so launcher.c links unconditionally. */
+void bellatrix_launcher_pump_bt(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_step(&g_runtime.bluetooth);
+#endif
+}
+
+int bellatrix_launcher_bt_ready(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    return bt_host_is_working(&g_runtime.bluetooth) ? 1 : 0;
+#else
+    return 0;
+#endif
+}
 #endif
 
 void bellatrix_sync_overlay_from_ciaa(void)
