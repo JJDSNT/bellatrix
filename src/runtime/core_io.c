@@ -65,8 +65,9 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
     usb_host_step(&core->usb_host);
 }
 
-/* Weak override — called from Core 3's loop in pal_core.c. */
-__attribute__((weak)) void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
+/* Strong definition — overrides the weak stub in pal_core.c. Called from
+ * Core 3's loop (multicore) or the PAL_Runtime_Poll throttle (single-core). */
+void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
     (void)now;
     (void)freq;

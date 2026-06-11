@@ -275,6 +275,18 @@ void PAL_Runtime_Poll(void)
     const uint64_t now = pal_read_cntpct();
     bellatrix_runtime_host_step(now, s_rt.host_counter_freq);
 
+    // Single-core has no Core 3 loop, so physical IO (USB/BT) must be
+    // serviced here. Throttle to ~1ms: usb_host_step pumps the whole
+    // CherryUSB event chain and is far too heavy for every MMIO access.
+    if (!PAL_Core_IsMulticoreEnabled()) {
+        static uint64_t io_last;
+        const uint64_t io_interval = s_rt.host_counter_freq / 1000u;
+        if (now - io_last >= io_interval) {
+            io_last = now;
+            bellatrix_runtime_io_step(now, s_rt.host_counter_freq);
+        }
+    }
+
     // Publish latest IPL snapshot for consumers that still rely on PAL.
     atomic_store_explicit(&s_rt.pending_ipl,
                           bellatrix_runtime_get_pending_ipl(),

@@ -452,7 +452,10 @@ static inline void dwc2_chan_transfer(struct usbh_bus *bus, uint8_t ch_num, uint
                USB_OTG_HCINTMSK_FRMORM | USB_OTG_HCINTMSK_DTERRM | USB_OTG_HCINTMSK_AHBERR;
     dwc2_hc_wr32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCINTMSK), hcintmsk);
 
-    is_oddframe = (((uint32_t)dwc2_rd32(bus, DWC2_HOST_OFF(HFNUM)) & 0x01U) != 0U) ? 1U : 0U;
+    /* Periodic transfers execute in the *next* frame, so ODDFRM must be the
+     * opposite of the current frame parity (ST HAL does the same). Getting
+     * this wrong makes the core flag FRMOR on every interrupt IN transfer. */
+    is_oddframe = (((uint32_t)dwc2_rd32(bus, DWC2_HOST_OFF(HFNUM)) & 0x01U) != 0U) ? 0U : 1U;
     tmpreg = dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCCHAR));
     tmpreg &= ~USB_OTG_HCCHAR_ODDFRM;
     tmpreg |= (uint32_t)is_oddframe << 29;
@@ -532,7 +535,7 @@ static void dwc2_sof_kick_pending_channels(struct usbh_bus *bus)
         dwc2_hc_wr32(bus, i, offsetof(DWC2_HostChannelTypeDef, HCDMA),  chan->saved_hcdma);
 
         hcchar &= ~(USB_OTG_HCCHAR_CHDIS | USB_OTG_HCCHAR_ODDFRM);
-        hcchar |= (((uint32_t)dwc2_rd32(bus, DWC2_HOST_OFF(HFNUM)) & 0x01U) != 0U) ? USB_OTG_HCCHAR_ODDFRM : 0U;
+        hcchar |= (((uint32_t)dwc2_rd32(bus, DWC2_HOST_OFF(HFNUM)) & 0x01U) != 0U) ? 0U : USB_OTG_HCCHAR_ODDFRM;
         hcchar |= USB_OTG_HCCHAR_CHENA;
         dwc2_hc_wr32(bus, i, offsetof(DWC2_HostChannelTypeDef, HCCHAR), hcchar);
 
@@ -1488,6 +1491,16 @@ static void dwc2_inchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
     if (chan_intstatus & USB_OTG_HCINT_CHH) {
         dwc2_hc_wr32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCINT), chan_intstatus);
 
+        if (urb && USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes) != USB_ENDPOINT_TYPE_CONTROL &&
+            (chan_intstatus & (USB_OTG_HCINT_AHBERR | USB_OTG_HCINT_STALL | USB_OTG_HCINT_TXERR |
+                               USB_OTG_HCINT_BBERR | USB_OTG_HCINT_DTERR | USB_OTG_HCINT_FRMOR))) {
+            USB_LOG_INFO("Bellatrix DWC2: bulk/intr in err ch=%u hcint=0x%08x ep=0x%02x hctsiz=0x%08x hcchar=0x%08x\r\n",
+                         (unsigned int)ch_num, (unsigned int)chan_intstatus,
+                         (unsigned int)urb->ep->bEndpointAddress,
+                         (unsigned int)dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCTSIZ)),
+                         (unsigned int)dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCCHAR)));
+        }
+
         if (chan_intstatus & USB_OTG_HCINT_XFRC) {
             uint32_t hctsiz = dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCTSIZ));
             uint32_t count  = chan->xferlen - (hctsiz & USB_OTG_HCTSIZ_XFRSIZ);
@@ -1649,6 +1662,16 @@ static void dwc2_outchan_irq_handler(struct usbh_bus *bus, uint8_t ch_num)
 
     if (chan_intstatus & USB_OTG_HCINT_CHH) {
         dwc2_hc_wr32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCINT), chan_intstatus);
+
+        if (urb && USB_GET_ENDPOINT_TYPE(urb->ep->bmAttributes) != USB_ENDPOINT_TYPE_CONTROL &&
+            (chan_intstatus & (USB_OTG_HCINT_AHBERR | USB_OTG_HCINT_STALL | USB_OTG_HCINT_TXERR |
+                               USB_OTG_HCINT_BBERR | USB_OTG_HCINT_DTERR | USB_OTG_HCINT_FRMOR))) {
+            USB_LOG_INFO("Bellatrix DWC2: bulk/intr out err ch=%u hcint=0x%08x ep=0x%02x hctsiz=0x%08x hcchar=0x%08x\r\n",
+                         (unsigned int)ch_num, (unsigned int)chan_intstatus,
+                         (unsigned int)urb->ep->bEndpointAddress,
+                         (unsigned int)dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCTSIZ)),
+                         (unsigned int)dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCCHAR)));
+        }
 
         if (chan_intstatus & USB_OTG_HCINT_XFRC) {
             uint32_t hctsiz = dwc2_hc_rd32(bus, ch_num, offsetof(DWC2_HostChannelTypeDef, HCTSIZ));
