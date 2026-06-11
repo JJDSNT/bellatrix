@@ -42,7 +42,13 @@ void hal_cpu_enable_irqs(void) {
 
 void hal_cpu_enable_irqs_and_sleep(void) {
     hal_cpu_enable_irqs();
-    asm volatile("wfe");
+    /* NO wfe here.  Bellatrix drives the btstack run loop by polling
+     * (bt_host_step → execute_once); on single-core, sev-free bare metal
+     * with no routed IRQs a real WFE parks the core forever the moment no
+     * event happens to be pending — observed as a silent boot hang right
+     * after "waiting for bootstrap window".  Earlier builds only survived
+     * because stray pending interrupts (USB) kept waking the WFE. */
+    asm volatile("yield");
 }
 
 // --- HAL UART DMA over PL011 ---
