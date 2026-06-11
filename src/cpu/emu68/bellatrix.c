@@ -313,14 +313,14 @@ void bellatrix_init(void)
 #endif
 
 #if !BELLATRIX_ENABLE_EMU68_BOARDS
-    /* Legacy path: Bellatrix owns the Zorro II protocol instead of Emu68
-     * boards. Configure Z2 RAM size before machine_init() so the board is
-     * present from the first bus reset. */
+    /* Legacy non-boards path: Bellatrix owns the Zorro II protocol when
+     * Emu68 board support is not compiled in. Configure Z2 RAM before
+     * machine_init() so the board is present from the first bus reset. */
 #ifndef BELLATRIX_LEGACY_Z2_RAM_MB
 #define BELLATRIX_LEGACY_Z2_RAM_MB 8u
 #endif
     bellatrix_zorro2_enable_fast_ram((uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u);
-    kprintf("[BELA] legacy mode: Z2 RAM %uMB via Bellatrix autoconfig\n",
+    kprintf("[BELA] legacy non-boards: Z2 RAM %uMB via Bellatrix autoconfig\n",
             (unsigned)(BELLATRIX_LEGACY_Z2_RAM_MB));
 #endif
 
@@ -406,8 +406,8 @@ void bellatrix_init(void)
     }
 
     /* Chip RAM: configured visible window.
-     * Legacy path extends the mapped region to 2MB so that 0x100000-0x1FFFFF
-     * is accessible to the CPU as "Slow RAM" (not DMA-accessible).  This
+     * Legacy non-boards path extends the mapped region to 2MB so that
+     * 0x100000-0x1FFFFF is accessible to the CPU as "Slow RAM" (not DMA-accessible). This
      * matches the original Bellatrix approach and gives the OS more room,
      * which is why the boot progressed further.  Z2 fast RAM at 0x200000+
      * does not overlap with this range. */
@@ -417,7 +417,7 @@ void bellatrix_init(void)
 #else
     mmu_map(0x000000, 0x000000, 0x00200000u,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-    kprintf("[BELA] legacy MMU: chip+slow RAM 0x000000-0x1FFFFF (2MB)\n");
+    kprintf("[BELA] legacy non-boards MMU: chip+slow RAM 0x000000-0x1FFFFF (2MB)\n");
 #endif
 
     /* Install the low-memory window according to the initial OVL state. */
@@ -445,7 +445,7 @@ void bellatrix_init(void)
     mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 #else
-    /* Legacy path: Bellatrix handles Zorro II config via its own memory map.
+    /* Legacy non-boards path: Bellatrix handles Zorro II config via its own memory map.
      * Fault-drive the config window so every read/write reaches
      * bellatrix_bus_access → memory_map → zorro2_bus.c. */
     mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
@@ -459,7 +459,7 @@ void bellatrix_init(void)
             BELLATRIX_FAST_RAM_BASE,
             (uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-    kprintf("[BELA] legacy MMU: Z2 Fast RAM %08x-%08x mapped\n",
+    kprintf("[BELA] legacy non-boards MMU: Z2 Fast RAM %08x-%08x mapped\n",
             (unsigned)BELLATRIX_FAST_RAM_BASE,
             (unsigned)(BELLATRIX_FAST_RAM_BASE +
                        (uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u - 1u));
