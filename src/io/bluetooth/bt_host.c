@@ -31,6 +31,7 @@ const btstack_uart_block_t * btstack_uart_block_embedded_instance(void);
 bool pl011_backend_route_header_console(void);
 bool pl011_backend_route_bluetooth_pi3(void);
 void pl011_backend_wait_idle(void);
+uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div);
 
 void btstack_chipset_bcm_set_device_name(const char * device_name) {
     (void)device_name;
@@ -537,6 +538,15 @@ bool bt_host_init(BTHost *bt) {
         bt_diag_log("[BT] clock probe: t0=%u t1=%u t2=%u (us, mono=%s)\n",
                     (unsigned)t0, (unsigned)t1, (unsigned)t2,
                     (t1 >= t0 && t2 >= t1) ? "yes" : "NO");
+    }
+
+    /* 32.768 kHz LPO for the BT radio low-power domain (GPCLK2 → GPIO 43).
+     * Must be stable before BT_REG_EN releases the chip from reset. */
+    {
+        uint32_t old_ctl, old_div, new_ctl;
+        new_ctl = pl011_backend_setup_bt_lpo(&old_ctl, &old_div);
+        bt_diag_log("[BT] LPO GPCLK2: old ctl=%08x div=%08x -> ctl=%08x\n",
+                    (unsigned)old_ctl, (unsigned)old_div, (unsigned)new_ctl);
     }
 
     btstack_memory_init();

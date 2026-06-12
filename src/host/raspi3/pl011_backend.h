@@ -38,6 +38,9 @@ bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out);
 bool pl011_backend_write_byte(PL011Backend *b, uint8_t byte);
 bool pl011_backend_route_header_console(void);
 bool pl011_backend_route_bluetooth_pi3(void);
+/* Program GPCLK2 → GPIO 43 as the BT 32.768 kHz LPO clock; returns the new
+ * CM_GP2CTL value and reports the previous CTL/DIV through the pointers. */
+uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div);
 void pl011_backend_wait_idle(void);
 
 #endif

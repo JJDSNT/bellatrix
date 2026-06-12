@@ -155,6 +155,45 @@ bool pl011_backend_route_bluetooth_pi3(void)
     return true;
 }
 
+/*
+ * BT LPO clock: the BCM4343x sleep/radio timing domain needs a 32.768 kHz
+ * reference, fed on the Pi 3B from GPCLK2 via GPIO 43.  Routing the pin is
+ * not enough — the Clock Manager GP2 generator must be programmed and
+ * enabled.  19.2 MHz osc / 585.9375 = 32768.0 Hz exactly (MASH-1).
+ * Symptoms of a missing LPO: host commands fine, radio ops (inquiry
+ * complete, paging) hang or crash the firmware.
+ */
+#define CM_GP2CTL  (ARM_PERI_VIRT_BASE + 0x101080UL)
+#define CM_GP2DIV  (ARM_PERI_VIRT_BASE + 0x101084UL)
+#define CM_PASSWD  0x5A000000u
+#define CM_CTL_ENAB (1u << 4)
+#define CM_CTL_BUSY (1u << 7)
+
+uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div)
+{
+    uint32_t ctl = pl_rd32(CM_GP2CTL);
+    uint32_t div = pl_rd32(CM_GP2DIV);
+    int timeout = 1000000;
+
+    if (old_ctl) *old_ctl = ctl;
+    if (old_div) *old_div = div;
+
+    /* route GPIO 43 to GPCLK2 (ALT0) before the chip leaves reset */
+    pl_wr32(GPFSEL4, gpio_fsel_update(pl_rd32(GPFSEL4), 43u, GPIO_FSEL_ALT0));
+
+    pl_wr32(CM_GP2CTL, CM_PASSWD | (ctl & ~(CM_CTL_ENAB | (0xFFu << 24))));
+    while ((pl_rd32(CM_GP2CTL) & CM_CTL_BUSY) && --timeout > 0) {
+        ;
+    }
+
+    /* DIVI=585, DIVF=3840/4096 (= .9375); MASH stage 1; source 1 = 19.2 MHz osc */
+    pl_wr32(CM_GP2DIV, CM_PASSWD | (585u << 12) | 3840u);
+    pl_wr32(CM_GP2CTL, CM_PASSWD | (1u << 9) | 1u);
+    pl_wr32(CM_GP2CTL, CM_PASSWD | (1u << 9) | 1u | CM_CTL_ENAB);
+
+    return pl_rd32(CM_GP2CTL);
+}
+
 void pl011_backend_wait_idle(void)
 {
     int timeout = 1000000;
@@ -286,6 +325,13 @@ bool pl011_backend_write_byte(PL011Backend *b, uint8_t byte)
 {
     (void)b; (void)byte;
     return false;
+}
+
+uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div)
+{
+    if (old_ctl) *old_ctl = 0u;
+    if (old_div) *old_div = 0u;
+    return 0u;
 }
 
 #endif
