@@ -11,6 +11,7 @@
 #include "bluetooth_data_types.h"
 #include "gap.h"
 #include "hci.h"
+#include "io/bluetooth/bt_diag.h"
 
 #define BT_SCAN_INQUIRY_1280MS_UNITS 4u      /* ≈5.1s classic inquiry  */
 #define BT_SCAN_LE_PHASE_MS          5000u   /* LE scan slice           */
@@ -107,15 +108,19 @@ static void bt_scan_le_phase_timeout(btstack_timer_source_t *ts)
 
 static void bt_scan_enter_classic(void)
 {
+    int err;
+
     s_phase = SCAN_CLASSIC_INQUIRY;
     touched();
-    gap_inquiry_start(BT_SCAN_INQUIRY_1280MS_UNITS);
+    err = gap_inquiry_start(BT_SCAN_INQUIRY_1280MS_UNITS);
+    bt_diag_log("[SCAN] classic inquiry start: err=%d\n", err);
 }
 
 static void bt_scan_enter_le(void)
 {
     s_phase = SCAN_LE;
     touched();
+    bt_diag_log("[SCAN] LE scan start\n");
     /* Active scan so devices answer with scan responses (names). */
     gap_set_scan_parameters(1u, 0x0030u, 0x0030u);
     gap_start_scan();
@@ -136,6 +141,10 @@ static void bt_scan_handle_adv_report(uint8_t *packet)
     r = find_or_add(addr, BT_SCAN_TRANSPORT_LE);
     if (!r)
         return;
+    if (r->rssi == 0)
+        bt_diag_log("[SCAN] LE adv %02x:%02x:%02x:%02x:%02x:%02x rssi=%d\n",
+                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
+                    (int)(int8_t)gap_event_advertising_report_get_rssi(packet));
 
     r->addr_type = gap_event_advertising_report_get_address_type(packet);
     r->rssi      = (int8_t)gap_event_advertising_report_get_rssi(packet);
@@ -163,6 +172,8 @@ static void bt_scan_handle_inquiry_result(uint8_t *packet)
     BTScanResult *r;
 
     gap_event_inquiry_result_get_bd_addr(packet, addr);
+    bt_diag_log("[SCAN] inquiry result %02x:%02x:%02x:%02x:%02x:%02x\n",
+                addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
     r = find_or_add(addr, BT_SCAN_TRANSPORT_CLASSIC);
     if (!r)
         return;
@@ -199,6 +210,9 @@ static void bt_scan_packet_handler(uint8_t packet_type, uint16_t channel,
         break;
 
     case GAP_EVENT_INQUIRY_COMPLETE:
+        bt_diag_log("[SCAN] inquiry complete: status=%u found=%u\n",
+                    (unsigned)gap_event_inquiry_complete_get_status(packet),
+                    s_count);
         if (s_phase == SCAN_CLASSIC_INQUIRY) {
             s_phase = SCAN_CLASSIC_NAMES;
             touched();
@@ -246,6 +260,7 @@ void bt_scan_start(void)
     s_name_req_index = -1;
     touched();
 
+    bt_diag_log("[SCAN] start (hci state=%u)\n", (unsigned)hci_get_state());
     if (hci_get_state() == HCI_STATE_WORKING) {
         bt_scan_enter_classic();
     } else {
