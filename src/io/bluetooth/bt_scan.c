@@ -15,6 +15,11 @@
 
 #define BT_SCAN_INQUIRY_1280MS_UNITS 4u      /* ≈5.1s classic inquiry  */
 #define BT_SCAN_LE_PHASE_MS          5000u   /* LE scan slice           */
+/* BCM43430A1 delivers inquiry results but sometimes never sends the
+ * Inquiry Complete event — without a watchdog the phase machine stalls
+ * in classic forever (seen on Pi 3B; chip still answers Inquiry Cancel). */
+#define BT_SCAN_CLASSIC_WATCHDOG_MS  (BT_SCAN_INQUIRY_1280MS_UNITS * 1280u + 3000u)
+#define BT_SCAN_CANCEL_GRACE_MS      2000u
 
 typedef enum {
     SCAN_OFF = 0,
@@ -26,6 +31,8 @@ typedef enum {
 
 static btstack_packet_callback_registration_t s_scan_event_cb;
 static btstack_timer_source_t s_le_phase_timer;
+static btstack_timer_source_t s_classic_watchdog;
+static bool s_classic_cancel_sent;
 
 static BTScanResult s_results[BT_SCAN_MAX_RESULTS];
 static unsigned     s_count;
@@ -88,6 +95,8 @@ static void bt_scan_next_name_request(void)
             memcpy(addr, r->addr, 6);
             r->name_state = 1u;
             s_name_req_index = (int)i;
+            bt_diag_log("[SCAN] name request %02x:%02x:%02x:%02x:%02x:%02x\n",
+                        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
             gap_remote_name_request(addr, r->psrm,
                                     (uint16_t)(r->clock_offset | 0x8000u));
             return;
@@ -106,14 +115,46 @@ static void bt_scan_le_phase_timeout(btstack_timer_source_t *ts)
     bt_scan_enter_classic();
 }
 
+/* Two stages: first cancel the inquiry (btstack emits the missing
+ * GAP_EVENT_INQUIRY_COMPLETE on the cancel's Command Complete); if even
+ * that brings nothing, force-advance the phase machine. */
+static void bt_scan_classic_watchdog_fired(btstack_timer_source_t *ts)
+{
+    (void)ts;
+    if (s_phase != SCAN_CLASSIC_INQUIRY)
+        return;
+
+    if (!s_classic_cancel_sent) {
+        s_classic_cancel_sent = true;
+        bt_diag_log("[SCAN] inquiry complete missing after %u ms, cancelling\n",
+                    (unsigned)BT_SCAN_CLASSIC_WATCHDOG_MS);
+        gap_inquiry_stop();
+        btstack_run_loop_set_timer(&s_classic_watchdog, BT_SCAN_CANCEL_GRACE_MS);
+        btstack_run_loop_set_timer_handler(&s_classic_watchdog,
+                                           bt_scan_classic_watchdog_fired);
+        btstack_run_loop_add_timer(&s_classic_watchdog);
+        return;
+    }
+
+    bt_diag_log("[SCAN] inquiry cancel brought no event either, forcing name phase\n");
+    s_phase = SCAN_CLASSIC_NAMES;
+    touched();
+    bt_scan_next_name_request();
+}
+
 static void bt_scan_enter_classic(void)
 {
     int err;
 
     s_phase = SCAN_CLASSIC_INQUIRY;
+    s_classic_cancel_sent = false;
     touched();
     err = gap_inquiry_start(BT_SCAN_INQUIRY_1280MS_UNITS);
     bt_diag_log("[SCAN] classic inquiry start: err=%d\n", err);
+    btstack_run_loop_set_timer(&s_classic_watchdog, BT_SCAN_CLASSIC_WATCHDOG_MS);
+    btstack_run_loop_set_timer_handler(&s_classic_watchdog,
+                                       bt_scan_classic_watchdog_fired);
+    btstack_run_loop_add_timer(&s_classic_watchdog);
 }
 
 static void bt_scan_enter_le(void)
@@ -220,6 +261,7 @@ static void bt_scan_packet_handler(uint8_t packet_type, uint16_t channel,
         break;
 
     case GAP_EVENT_INQUIRY_COMPLETE:
+        btstack_run_loop_remove_timer(&s_classic_watchdog);
         bt_diag_log("[SCAN] inquiry complete: status=%u found=%u\n",
                     (unsigned)gap_event_inquiry_complete_get_status(packet),
                     s_count);
@@ -290,6 +332,7 @@ void bt_scan_stop(void)
 
     switch (s_phase) {
     case SCAN_CLASSIC_INQUIRY:
+        btstack_run_loop_remove_timer(&s_classic_watchdog);
         gap_inquiry_stop();
         break;
     case SCAN_LE:
