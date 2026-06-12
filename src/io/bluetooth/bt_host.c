@@ -70,12 +70,37 @@ static void bt_pairing_window_close(BTHost *bt);
 static void bt_phase2_start(int status);
 static void bt_setup_hci_main(BTHost *bt);
 
+/* While BT owns the PL011, kprintf is redirected to the mini-UART on the
+ * same header pins (GPIO 14/15 ALT5, 115200 8N1) — boot logs keep flowing
+ * to the user's serial adapter.  Requires enable_uart=1 in config.txt so
+ * the firmware pins core_freq (the mini-UART baud divisor tracks it). */
+#include "io/serial/miniuart_backend.h"
+void kprintf_set_putc_override(void (*fn)(char chr));
+
+static MiniUartBackend s_console_miniuart;
+
+static void bt_console_miniuart_putc(char chr)
+{
+    /* LSR bit 5 = TX FIFO has space; the 8-deep FIFO drops bytes if we
+     * write blind during log bursts */
+    int spin = 1000000;
+    if (chr == '\n') {
+        while (!(miniuart_backend_read_lsr() & 0x20u) && --spin > 0) { }
+        miniuart_backend_write_byte(&s_console_miniuart, (uint8_t)'\r');
+        spin = 1000000;
+    }
+    while (!(miniuart_backend_read_lsr() & 0x20u) && --spin > 0) { }
+    miniuart_backend_write_byte(&s_console_miniuart, (uint8_t)chr);
+}
+
 static void bt_console_release(void)
 {
     if (!s_bt_console_handed_off) {
         return;
     }
 
+    kprintf_set_putc_override(NULL);
+    miniuart_backend_close(&s_console_miniuart);
     pl011_backend_route_header_console();
     kprintf_set_enabled(1);
     s_bt_console_handed_off = false;
@@ -89,10 +114,15 @@ static void bt_console_handoff(void)
     }
 
     bt_hal_raspi3_trace_reset();
-    kprintf("[BT] handing PL011 from debug console to Bluetooth controller\n");
+    kprintf("[BT] handing PL011 to BT; console continues on mini-UART (same pins)\n");
     pl011_backend_wait_idle();
-    kprintf_set_enabled(0);
     pl011_backend_route_bluetooth_pi3();
+    if (miniuart_backend_open(&s_console_miniuart, 115200u)) {
+        kprintf_set_putc_override(bt_console_miniuart_putc);
+        kprintf("[BT] console now on mini-UART (GPIO 14/15 ALT5, 115200)\n");
+    } else {
+        kprintf_set_enabled(0);
+    }
     s_bt_console_handed_off = true;
 }
 

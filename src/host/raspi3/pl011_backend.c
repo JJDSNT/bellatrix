@@ -75,6 +75,7 @@ static inline uint32_t pl_rd32(uintptr_t a)             { return *(volatile uint
 #define GPIO_FSEL_INPUT 0u
 #define GPIO_FSEL_ALT0  4u
 #define GPIO_FSEL_ALT3  7u
+#define GPIO_FSEL_ALT5  2u
 
 static void gpio_wait_cycles(void)
 {
@@ -136,8 +137,10 @@ bool pl011_backend_route_bluetooth_pi3(void)
     uint32_t sel3 = pl_rd32(GPFSEL3);
     uint32_t sel4 = pl_rd32(GPFSEL4);
 
-    sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_INPUT);
-    sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_INPUT);
+    /* header pins move to the mini-UART (TXD1/RXD1) so kprintf keeps
+     * reaching the user's serial adapter while BT owns the PL011 */
+    sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_ALT5);
+    sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_ALT5);
     /* GPIO 30/31 carry the BCM4343x CTS0/RTS0 pair on the Pi 3B — hardware
      * flow control is what keeps the 16-byte RX FIFO from overrunning at the
      * 921600-baud H5 transport between polls. */
