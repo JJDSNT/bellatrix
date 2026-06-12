@@ -39,7 +39,6 @@ static unsigned     s_count;
 static uint32_t     s_generation;
 static ScanPhase    s_phase = SCAN_OFF;
 static bool         s_registered;
-static int          s_name_req_index = -1;
 
 static void bt_scan_enter_classic(void);
 static void bt_scan_enter_le(void);
@@ -82,30 +81,6 @@ static void set_name(BTScanResult *r, const uint8_t *name, unsigned len)
     touched();
 }
 
-/* Kick the next pending classic remote-name request; advance to the LE
- * phase when none are left. */
-static void bt_scan_next_name_request(void)
-{
-    unsigned i;
-
-    for (i = 0u; i < s_count; i++) {
-        BTScanResult *r = &s_results[i];
-        if (r->transport == BT_SCAN_TRANSPORT_CLASSIC && r->name_state == 0u) {
-            bd_addr_t addr;
-            memcpy(addr, r->addr, 6);
-            r->name_state = 1u;
-            s_name_req_index = (int)i;
-            bt_diag_log("[SCAN] name request %02x:%02x:%02x:%02x:%02x:%02x\n",
-                        addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-            gap_remote_name_request(addr, r->psrm,
-                                    (uint16_t)(r->clock_offset | 0x8000u));
-            return;
-        }
-    }
-    s_name_req_index = -1;
-    bt_scan_enter_le();
-}
-
 static void bt_scan_le_phase_timeout(btstack_timer_source_t *ts)
 {
     (void)ts;
@@ -136,10 +111,8 @@ static void bt_scan_classic_watchdog_fired(btstack_timer_source_t *ts)
         return;
     }
 
-    bt_diag_log("[SCAN] inquiry cancel brought no event either, forcing name phase\n");
-    s_phase = SCAN_CLASSIC_NAMES;
-    touched();
-    bt_scan_next_name_request();
+    bt_diag_log("[SCAN] inquiry cancel brought no event either, forcing LE phase\n");
+    bt_scan_enter_le();
 }
 
 static void bt_scan_diag_tap_arm(uint32_t n)
@@ -276,25 +249,12 @@ static void bt_scan_packet_handler(uint8_t packet_type, uint16_t channel,
                     (unsigned)gap_event_inquiry_complete_get_status(packet),
                     s_count);
         if (s_phase == SCAN_CLASSIC_INQUIRY) {
-            s_phase = SCAN_CLASSIC_NAMES;
-            touched();
-            bt_scan_next_name_request();
-        }
-        break;
-
-    case HCI_EVENT_REMOTE_NAME_REQUEST_COMPLETE:
-        if (s_phase == SCAN_CLASSIC_NAMES && s_name_req_index >= 0) {
-            BTScanResult *r = &s_results[s_name_req_index];
-            /* status byte at [2], bd_addr at [3], name at [9] */
-            if (packet[2] == 0u) {
-                const uint8_t *name = &packet[9];
-                unsigned len = 0u;
-                while (len < 240u && name[len] != 0u) len++;
-                set_name(r, name, len);
-            } else {
-                r->name_state = 2u;   /* gave up */
-            }
-            bt_scan_next_name_request();
+            /* Remote Name Request crashes the BCM43430A1 firmware mid
+             * delivery (seen twice: 18 zero bytes; 248-of-255 byte stall).
+             * Classic names are cosmetic here — CoD identifies the device
+             * type and pairing gets names via SDP/GATT — so skip straight
+             * to the LE phase. */
+            bt_scan_enter_le();
         }
         break;
 
@@ -319,7 +279,6 @@ void bt_scan_start(void)
     }
 
     s_count = 0u;
-    s_name_req_index = -1;
     s_evt_logged = 0u;
     touched();
 
