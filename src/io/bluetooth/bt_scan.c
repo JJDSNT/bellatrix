@@ -170,8 +170,10 @@ static void bt_scan_enter_le(void)
     touched();
     bt_scan_diag_tap_arm(24u);
     bt_diag_log("[SCAN] LE scan start\n");
-    /* Active scan so devices answer with scan responses (names). */
-    gap_set_scan_parameters(1u, 0x0030u, 0x0030u);
+    /* Active scan so devices answer with scan responses (names).
+     * Window 0x10/interval 0x60 ≈ 17% duty: a 100% window floods the
+     * 115200 line (~10KB/s of adverts) and any pump gap loses bytes. */
+    gap_set_scan_parameters(1u, 0x0060u, 0x0010u);
     gap_start_scan();
     btstack_run_loop_set_timer(&s_le_phase_timer, BT_SCAN_LE_PHASE_MS);
     btstack_run_loop_set_timer_handler(&s_le_phase_timer, bt_scan_le_phase_timeout);

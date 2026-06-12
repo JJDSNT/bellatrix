@@ -456,13 +456,29 @@ static void bt_format_addr(char *out, const uint8_t *a)
     }
 }
 
+/* Fill in horizontal bands, draining the BT UART between bands: a full
+ * 1920x1080 fill takes tens of ms and the 16-byte PL011 RX FIFO overruns
+ * in ~1.4ms at 115200 — lost bytes desync the H4 parser (phantom devices). */
+static void bt_fill_rect_pumped(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                                uint32_t col)
+{
+    const uint32_t band = 32u;
+    while (h) {
+        uint32_t hh = (h < band) ? h : band;
+        fb_fill_rect(x, y, w, hh, col);
+        bellatrix_launcher_pump_bt();
+        y += hh;
+        h -= hh;
+    }
+}
+
 static void bt_draw_scan_frame(void)
 {
     const uint32_t W = fb_width;
     const uint32_t H = fb_height;
 
-    fb_fill_rect(0, 0, W, H, COL_BG);
-    fb_fill_rect(0, 0, W, s_title_h, COL_TITLE_BG);
+    bt_fill_rect_pumped(0, 0, W, H, COL_BG);
+    bt_fill_rect_pumped(0, 0, W, s_title_h, COL_TITLE_BG);
     fb_puts_centred(0, W, (s_title_h - s_char) / 2u,
                     "BLUETOOTH SCAN  --  put your devices in pairing mode",
                     COL_TEXT, COL_TITLE_BG);
@@ -502,11 +518,12 @@ static void bt_draw_scan_frame(void)
         line[p] = '\0';
 
         fb_puts(s_margin_x, y, line, COL_TEXT, COL_BG);
+        bellatrix_launcher_pump_bt();
         y += s_row_h;
     }
 
     // Footer
-    fb_fill_rect(0, H - s_status_h, W, s_status_h, COL_STATUS_BG);
+    bt_fill_rect_pumped(0, H - s_status_h, W, s_status_h, COL_STATUS_BG);
     fb_puts_centred(0, W, H - s_status_h + (s_status_h - s_char) / 2u,
                     "ENTER/ESC = continue boot",
                     COL_TEXT, COL_STATUS_BG);
@@ -592,16 +609,17 @@ static void bt_scan_screen(void)
         bt_scan_start();
 
     uint32_t last_gen = 0xFFFFFFFFu;
-    uint32_t budget   = working ? 90000u : 12000u;   // ≈90 s / ≈12 s
+    // Outer iteration ≈ 0.125 ms — tight cadence keeps the 16-byte PL011
+    // FIFO drained during LE advert floods (~10KB/s at 115200).
+    uint32_t budget   = working ? 720000u : 96000u;   // ≈90 s / ≈12 s
 
-    // Outer iteration ≈ 1 ms (matching the single-core BT step cadence).
     for (uint32_t iter = 0u; iter < budget; iter++) {
         bellatrix_launcher_pump_bt();
-        if ((iter & 7u) == 0u) pump_usb();
+        if ((iter & 63u) == 0u) pump_usb();
 
         // ~2s heartbeat into the SD report: UART byte counter shows whether
-        // the H5 link is moving at all while the scan appears silent.
-        if (working && iter != 0u && (iter & 2047u) == 0u) {
+        // the link is moving at all while the scan appears silent.
+        if (working && iter != 0u && (iter & 16383u) == 0u) {
             uint32_t rxq_filled, rxq_wanted;
             bt_hal_raspi3_rx_pending(&rxq_filled, &rxq_wanted);
             bt_diag_log("[SCAN] hb iter=%u tx=%u rx=%u rxq=%u/%u status=%s found=%u\n",
@@ -617,7 +635,7 @@ static void bt_scan_screen(void)
             key == LAUNCHER_KEY_ESC)
             break;
 
-        if ((iter & 255u) == 0u && bt_scan_generation() != last_gen) {
+        if ((iter & 4095u) == 0u && bt_scan_generation() != last_gen) {
             last_gen = bt_scan_generation();
             bt_draw_scan_frame();
             if (!working)
@@ -626,7 +644,7 @@ static void bt_scan_screen(void)
                         COL_CURSOR_BG, COL_BG);
         }
 
-        for (volatile uint32_t d = 0u; d < 800000u; d++) asm volatile("nop");
+        for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
     }
 
     if (working) {
