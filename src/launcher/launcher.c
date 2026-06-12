@@ -38,6 +38,8 @@ void     bellatrix_launcher_pump_usb(void);
 void     bellatrix_launcher_pump_bt(void);
 int      bellatrix_launcher_bt_ready(void);
 uint32_t bt_hal_raspi3_io_activity(void);
+uint32_t bt_hal_raspi3_io_tx(void);
+uint32_t bt_hal_raspi3_io_rx(void);
 
 extern uint16_t *framebuffer;
 extern uint32_t  pitch;
@@ -599,8 +601,10 @@ static void bt_scan_screen(void)
         // ~2s heartbeat into the SD report: UART byte counter shows whether
         // the H5 link is moving at all while the scan appears silent.
         if (working && iter != 0u && (iter & 2047u) == 0u)
-            bt_diag_log("[SCAN] hb iter=%u io=%u status=%s found=%u\n",
-                        (unsigned)iter, (unsigned)bt_hal_raspi3_io_activity(),
+            bt_diag_log("[SCAN] hb iter=%u tx=%u rx=%u status=%s found=%u\n",
+                        (unsigned)iter,
+                        (unsigned)bt_hal_raspi3_io_tx(),
+                        (unsigned)bt_hal_raspi3_io_rx(),
                         bt_scan_status(), bt_scan_count());
 
         uint8_t key = launcher_input_pop();

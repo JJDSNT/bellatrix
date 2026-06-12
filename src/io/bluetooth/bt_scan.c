@@ -271,6 +271,10 @@ void bt_scan_start(void)
     s_evt_logged = 0u;
     touched();
 
+    {
+        void bt_hal_raspi3_diag_tap(uint32_t rx_bytes, uint32_t tx_bytes);
+        bt_hal_raspi3_diag_tap(96u, 96u);
+    }
     bt_diag_log("[SCAN] start (hci state=%u)\n", (unsigned)hci_get_state());
     if (hci_get_state() == HCI_STATE_WORKING) {
         bt_scan_enter_classic();

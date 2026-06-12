@@ -5,6 +5,7 @@
 
 #include "host/raspi3/time.h"
 #include "host/raspi3/pl011_backend.h"
+#include "io/bluetooth/bt_diag.h"
 #include "support.h"
 
 #include <stddef.h>
@@ -74,9 +75,28 @@ static uint32_t bt_uart_tx_bytes_logged = 0;
 /* uncapped rx+tx byte counter — lets bootstrap timeouts distinguish a dead
  * link from a slow PatchRAM upload that is still making progress */
 static uint32_t bt_uart_io_activity = 0;
+static uint32_t bt_uart_tx_total = 0;
+static uint32_t bt_uart_rx_total = 0;
+/* wire tap: dump the next N raw rx/tx bytes into the bt_diag ring so the SD
+ * report shows what is actually on the line (armed by bt_scan_start) */
+static uint32_t bt_diag_tap_rx_remaining = 0;
+static uint32_t bt_diag_tap_tx_remaining = 0;
 
 uint32_t bt_hal_raspi3_io_activity(void) {
     return bt_uart_io_activity;
+}
+
+uint32_t bt_hal_raspi3_io_tx(void) {
+    return bt_uart_tx_total;
+}
+
+uint32_t bt_hal_raspi3_io_rx(void) {
+    return bt_uart_rx_total;
+}
+
+void bt_hal_raspi3_diag_tap(uint32_t rx_bytes, uint32_t tx_bytes) {
+    bt_diag_tap_rx_remaining = rx_bytes;
+    bt_diag_tap_tx_remaining = tx_bytes;
 }
 
 #define BT_UART_LOG_BYTES_MAX 32u
@@ -281,6 +301,11 @@ void bt_hal_raspi3_poll_uart(void) {
         uint8_t byte;
         while (pl011_backend_read_byte(&bt_uart, &byte)) {
             bt_uart_io_activity++;
+            bt_uart_rx_total++;
+            if (bt_diag_tap_rx_remaining) {
+                bt_diag_tap_rx_remaining--;
+                bt_diag_log("[BT-RX] %02x\n", (unsigned)byte);
+            }
             bt_uart_trace_add(BT_TRACE_RX_BYTE, byte, 0, bt_uart_rx_bytes_logged);
             if (bt_uart_rx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
                 kprintf("[BT-HAL] rx byte[%u]=%02x\n",
@@ -305,6 +330,11 @@ void bt_hal_raspi3_poll_uart(void) {
                 break;
             }
             bt_uart_io_activity++;
+            bt_uart_tx_total++;
+            if (bt_diag_tap_tx_remaining) {
+                bt_diag_tap_tx_remaining--;
+                bt_diag_log("[BT-TX] %02x\n", (unsigned)uart_tx_buffer[uart_tx_pos]);
+            }
             bt_uart_trace_add(BT_TRACE_TX_BYTE, uart_tx_buffer[uart_tx_pos], 0, bt_uart_tx_bytes_logged);
             if (bt_uart_tx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
                 kprintf("[BT-HAL] tx byte[%u]=%02x\n",
