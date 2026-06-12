@@ -214,7 +214,7 @@ static void bt_uart_log_preview(const char *tag, const uint8_t *buffer, uint16_t
 
 void hal_uart_dma_init(void) {
     if (!pl011_backend_is_open(&bt_uart)) {
-        if (!pl011_backend_open(&bt_uart, bt_uart_baudrate)) {
+        if (!pl011_backend_open_flow(&bt_uart, bt_uart_baudrate, true)) {
             bt_uart_trace_add(BT_TRACE_OPEN_FAILED, 0, 0, bt_uart_baudrate);
             kprintf("[BT-HAL] Failed to open PL011 at %u baud\n", (unsigned)bt_uart_baudrate);
         } else {
@@ -242,7 +242,7 @@ int hal_uart_dma_set_baud(uint32_t baud) {
     if (pl011_backend_is_open(&bt_uart)) {
         pl011_backend_close(&bt_uart);
     }
-    return pl011_backend_open(&bt_uart, baud) ? 0 : -1;
+    return pl011_backend_open_flow(&bt_uart, baud, true) ? 0 : -1;
 }
 
 void hal_uart_dma_send_block(const uint8_t *buffer, uint16_t length) {

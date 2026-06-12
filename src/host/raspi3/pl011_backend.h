@@ -27,6 +27,10 @@ typedef struct {
 } PL011Backend;
 
 bool pl011_backend_open(PL011Backend *b, uint32_t baud);
+/* flow=true enables hardware RTS/CTS (CR.RTSEn/CTSEn) — required for the
+ * Pi 3 Bluetooth path at 921600 baud, where the 16-byte RX FIFO overruns
+ * between polls; GPIO 30/31 must be routed ALT3 (route_bluetooth_pi3). */
+bool pl011_backend_open_flow(PL011Backend *b, uint32_t baud, bool flow);
 void pl011_backend_close(PL011Backend *b);
 bool pl011_backend_is_open(const PL011Backend *b);
 

@@ -66,6 +66,8 @@ static inline uint32_t pl_rd32(uintptr_t a)             { return *(volatile uint
 #define CR_UARTEN (1u << 0)
 #define CR_TXE    (1u << 8)
 #define CR_RXE    (1u << 9)
+#define CR_RTSEN  (1u << 14)   /* hardware nUARTRTS from RX FIFO level */
+#define CR_CTSEN  (1u << 15)   /* gate TX on nUARTCTS                  */
 
 /* 48 MHz PL011 clock */
 #define PL011_CLK_HZ 48000000UL
@@ -136,6 +138,11 @@ bool pl011_backend_route_bluetooth_pi3(void)
 
     sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_INPUT);
     sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_INPUT);
+    /* GPIO 30/31 carry the BCM4343x CTS0/RTS0 pair on the Pi 3B — hardware
+     * flow control is what keeps the 16-byte RX FIFO from overrunning at the
+     * 921600-baud H5 transport between polls. */
+    sel3 = gpio_fsel_update(sel3, 30u, GPIO_FSEL_ALT3);
+    sel3 = gpio_fsel_update(sel3, 31u, GPIO_FSEL_ALT3);
     sel3 = gpio_fsel_update(sel3, 32u, GPIO_FSEL_ALT3);
     sel3 = gpio_fsel_update(sel3, 33u, GPIO_FSEL_ALT3);
     sel4 = gpio_fsel_update(sel4, 43u, GPIO_FSEL_ALT0);
@@ -143,7 +150,8 @@ bool pl011_backend_route_bluetooth_pi3(void)
     pl_wr32(GPFSEL1, sel1);
     pl_wr32(GPFSEL3, sel3);
     pl_wr32(GPFSEL4, sel4);
-    gpio_set_pull_none((1u << 14) | (1u << 15), (1u << 0) | (1u << 1) | (1u << 11));
+    gpio_set_pull_none((1u << 14) | (1u << 15) | (1u << 30) | (1u << 31),
+                       (1u << 0) | (1u << 1) | (1u << 11));
     return true;
 }
 
@@ -157,6 +165,11 @@ void pl011_backend_wait_idle(void)
 }
 
 bool pl011_backend_open(PL011Backend *b, uint32_t baud)
+{
+    return pl011_backend_open_flow(b, baud, false);
+}
+
+bool pl011_backend_open_flow(PL011Backend *b, uint32_t baud, bool flow)
 {
     if (!b || baud == 0) return false;
 
@@ -186,8 +199,9 @@ bool pl011_backend_open(PL011Backend *b, uint32_t baud)
     /* 8N1, FIFOs enabled */
     pl_wr32(PL011_LCRH, LCRH_WLEN8 | LCRH_FEN);
 
-    /* Enable UART + TX + RX */
-    pl_wr32(PL011_CR, CR_UARTEN | CR_TXE | CR_RXE);
+    /* Enable UART + TX + RX (+ hardware flow control when requested) */
+    pl_wr32(PL011_CR, CR_UARTEN | CR_TXE | CR_RXE |
+                      (flow ? (CR_RTSEN | CR_CTSEN) : 0u));
 
     b->baud = baud;
     b->open = true;
@@ -241,6 +255,13 @@ bool pl011_backend_write_byte(PL011Backend *b, uint8_t byte)
 bool pl011_backend_open(PL011Backend *b, uint32_t baud)
 {
     (void)baud;
+    if (b) b->open = false;
+    return false;
+}
+
+bool pl011_backend_open_flow(PL011Backend *b, uint32_t baud, bool flow)
+{
+    (void)baud; (void)flow;
     if (b) b->open = false;
     return false;
 }
