@@ -190,13 +190,23 @@ static void bt_scan_handle_inquiry_result(uint8_t *packet)
     touched();
 }
 
+static unsigned s_evt_logged;
+
 static void bt_scan_packet_handler(uint8_t packet_type, uint16_t channel,
                                    uint8_t *packet, uint16_t size)
 {
     (void)channel;
-    (void)size;
     if (packet_type != HCI_EVENT_PACKET || s_phase == SCAN_OFF)
         return;
+
+    /* raw view of the first events after scan start — tells a dead H5 link
+     * (nothing at all) apart from a scan that runs but finds nobody */
+    if (s_evt_logged < 16u) {
+        s_evt_logged++;
+        bt_diag_log("[SCAN] evt 0x%02x len=%u\n",
+                    (unsigned)hci_event_packet_get_type(packet),
+                    (unsigned)size);
+    }
 
     switch (hci_event_packet_get_type(packet)) {
     case BTSTACK_EVENT_STATE:
@@ -258,6 +268,7 @@ void bt_scan_start(void)
 
     s_count = 0u;
     s_name_req_index = -1;
+    s_evt_logged = 0u;
     touched();
 
     bt_diag_log("[SCAN] start (hci state=%u)\n", (unsigned)hci_get_state());
