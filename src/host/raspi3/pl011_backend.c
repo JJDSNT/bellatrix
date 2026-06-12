@@ -225,10 +225,13 @@ bool pl011_backend_write_byte(PL011Backend *b, uint8_t byte)
                 (unsigned)pl_rd32(PL011_CR),
                 (unsigned)pl_rd32(PL011_FR));
     }
-    /* For the bridged Amiga serial path, prefer forward progress over TXFF
-     * polling. We emit at a very low rate compared to the PL011 FIFO depth,
-     * and the existing TXFF gate appears to wedge the first byte on bare
-     * metal even though Emu68's own PL011 console keeps working. */
+    /* The PL011 TX FIFO is only 16 bytes deep; writes while TXFF is set are
+     * silently dropped by the hardware.  Every HCI command <= 16 bytes worked
+     * and the first one above (74-byte PatchRAM Write_RAM) died truncated —
+     * the caller must treat 'false' as "FIFO full, retry on next poll". */
+    if (pl_rd32(PL011_FR) & FR_TXFF) {
+        return false;
+    }
     pl_wr32(PL011_DR, byte);
     return true;
 }
