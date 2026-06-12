@@ -142,12 +142,19 @@ static void bt_scan_classic_watchdog_fired(btstack_timer_source_t *ts)
     bt_scan_next_name_request();
 }
 
+static void bt_scan_diag_tap_arm(uint32_t n)
+{
+    void bt_hal_raspi3_diag_tap(uint32_t rx_bytes, uint32_t tx_bytes);
+    bt_hal_raspi3_diag_tap(n, n);
+}
+
 static void bt_scan_enter_classic(void)
 {
     int err;
 
     s_phase = SCAN_CLASSIC_INQUIRY;
     s_classic_cancel_sent = false;
+    bt_scan_diag_tap_arm(24u);
     touched();
     err = gap_inquiry_start(BT_SCAN_INQUIRY_1280MS_UNITS);
     bt_diag_log("[SCAN] classic inquiry start: err=%d\n", err);
@@ -161,6 +168,7 @@ static void bt_scan_enter_le(void)
 {
     s_phase = SCAN_LE;
     touched();
+    bt_scan_diag_tap_arm(24u);
     bt_diag_log("[SCAN] LE scan start\n");
     /* Active scan so devices answer with scan responses (names). */
     gap_set_scan_parameters(1u, 0x0030u, 0x0030u);
@@ -313,10 +321,7 @@ void bt_scan_start(void)
     s_evt_logged = 0u;
     touched();
 
-    {
-        void bt_hal_raspi3_diag_tap(uint32_t rx_bytes, uint32_t tx_bytes);
-        bt_hal_raspi3_diag_tap(96u, 96u);
-    }
+    bt_scan_diag_tap_arm(96u);
     bt_diag_log("[SCAN] start (hci state=%u)\n", (unsigned)hci_get_state());
     if (hci_get_state() == HCI_STATE_WORKING) {
         bt_scan_enter_classic();

@@ -99,6 +99,14 @@ void bt_hal_raspi3_diag_tap(uint32_t rx_bytes, uint32_t tx_bytes) {
     bt_diag_tap_tx_remaining = tx_bytes;
 }
 
+/* H4 parser state: what the transport is currently waiting for.  A stall
+ * "waiting 200+ bytes, few filled" = parser desync after a lost byte; a
+ * stall "waiting 1 byte, 0 filled" with rx frozen = controller went mute. */
+void bt_hal_raspi3_rx_pending(uint32_t *filled, uint32_t *wanted) {
+    if (filled) *filled = (uint32_t)uart_rx_pos;
+    if (wanted) *wanted = (uint32_t)uart_rx_size;
+}
+
 #define BT_UART_LOG_BYTES_MAX 32u
 #define BT_UART_TRACE_MAX_EVENTS 256u
 
