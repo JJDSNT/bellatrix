@@ -71,6 +71,13 @@ static uint32_t bt_uart_tx_blocks = 0;
 static uint32_t bt_uart_rx_blocks = 0;
 static uint32_t bt_uart_rx_bytes_logged = 0;
 static uint32_t bt_uart_tx_bytes_logged = 0;
+/* uncapped rx+tx byte counter — lets bootstrap timeouts distinguish a dead
+ * link from a slow PatchRAM upload that is still making progress */
+static uint32_t bt_uart_io_activity = 0;
+
+uint32_t bt_hal_raspi3_io_activity(void) {
+    return bt_uart_io_activity;
+}
 
 #define BT_UART_LOG_BYTES_MAX 32u
 #define BT_UART_TRACE_MAX_EVENTS 256u
@@ -273,6 +280,7 @@ void bt_hal_raspi3_poll_uart(void) {
     if (uart_rx_buffer && uart_rx_pos < uart_rx_size) {
         uint8_t byte;
         while (pl011_backend_read_byte(&bt_uart, &byte)) {
+            bt_uart_io_activity++;
             bt_uart_trace_add(BT_TRACE_RX_BYTE, byte, 0, bt_uart_rx_bytes_logged);
             if (bt_uart_rx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
                 kprintf("[BT-HAL] rx byte[%u]=%02x\n",
@@ -296,6 +304,7 @@ void bt_hal_raspi3_poll_uart(void) {
             if (!pl011_backend_write_byte(&bt_uart, uart_tx_buffer[uart_tx_pos])) {
                 break;
             }
+            bt_uart_io_activity++;
             bt_uart_trace_add(BT_TRACE_TX_BYTE, uart_tx_buffer[uart_tx_pos], 0, bt_uart_tx_bytes_logged);
             if (bt_uart_tx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
                 kprintf("[BT-HAL] tx byte[%u]=%02x\n",

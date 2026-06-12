@@ -24,6 +24,7 @@
 
 // HAL declarations
 void bt_hal_raspi3_poll_uart(void);
+uint32_t bt_hal_raspi3_io_activity(void);
 void bt_hal_raspi3_trace_dump(void);
 void bt_hal_raspi3_trace_reset(void);
 const btstack_uart_block_t * btstack_uart_block_embedded_instance(void);
@@ -299,7 +300,17 @@ static void bt_bootstrap_step(BTHost *bt)
             bt_schedule_power_on(bt);
             return;
 
-        case BT_BOOTSTRAP_WAIT_FOR_PHASE1:
+        case BT_BOOTSTRAP_WAIT_FOR_PHASE1: {
+            /* The PatchRAM upload (~141 records at 115200 baud) plus the
+             * post-minidriver reboot pause can outlast a fixed deadline.
+             * Slide the deadline while UART bytes keep moving: the timeout
+             * then means "link dead", not "upload slow". */
+            static uint32_t last_phase1_activity;
+            uint32_t activity = bt_hal_raspi3_io_activity();
+            if (activity != last_phase1_activity) {
+                last_phase1_activity = activity;
+                bt->init_deadline_ms = now + BELLATRIX_BT_INIT_TIMEOUT_MS;
+            }
             if ((bt->init_deadline_ms != 0u) &&
                 ((int32_t)(now - bt->init_deadline_ms) >= 0)) {
                 bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
@@ -308,6 +319,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 bt_diag_log("[BT] BCM phase 1 timed out before H5 startup\n");
             }
             return;
+        }
 
         case BT_BOOTSTRAP_WAIT_FOR_WORKING:
             if ((bt->init_deadline_ms != 0u) &&
@@ -572,10 +584,18 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
      * RAM ring even when the console is handed to the controller, and is
      * the primary clue when the bootstrap silently stalls. */
     uint32_t last_beat_ms = start_ms;
+    uint32_t last_activity = bt_hal_raspi3_io_activity();
 
     while (!bt_bootstrap_is_terminal(bt)) {
         bt_host_step(bt);
         uint32_t now_ms = bt_now_ms();
+        /* keep waiting while the UART link is visibly alive (PatchRAM
+         * upload in progress) — only time out on real silence */
+        uint32_t activity = bt_hal_raspi3_io_activity();
+        if (activity != last_activity) {
+            last_activity = activity;
+            deadline_ms = now_ms + (timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS);
+        }
         if (now_ms - last_beat_ms >= 1000u) {
             last_beat_ms = now_ms;
             bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u hci=%u\n",

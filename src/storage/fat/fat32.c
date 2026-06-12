@@ -80,22 +80,32 @@ bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx)
         return false;
     }
 
-    // Scan partition table (4 entries starting at 0x1BE)
+    // Scan partition table (4 entries starting at 0x1BE).  Accept any
+    // FAT-ish partition type — Raspberry Pi boot partitions show up as
+    // 0x0B/0x0C (FAT32) but also 0x0E/0x06/0x04 (FAT16 ids, sometimes used
+    // for FAT32 volumes by formatters); the FAT32 BPB check below decides.
     uint32_t part_lba = 0u;
     for (unsigned i = 0; i < 4u; i++) {
         const uint8_t *entry = s_sector + 0x1BE + i * 16u;
         uint8_t  type = entry[4];
         uint32_t lba  = le32(entry + 8);
 
-        if ((type == 0x0Bu || type == 0x0Cu) && lba != 0u) {
+        if (type != 0u)
+            kprintf("[FAT32] MBR part %u: type=0x%02x lba=%u size=%u\n",
+                    i, (unsigned)type, (unsigned)lba,
+                    (unsigned)le32(entry + 12));
+
+        if (part_lba == 0u && lba != 0u &&
+            (type == 0x0Bu || type == 0x0Cu ||
+             type == 0x0Eu || type == 0x06u || type == 0x04u)) {
             part_lba = lba;
-            break;
         }
     }
 
+    // No MBR partition? Some cards are formatted as a superfloppy
+    // (filesystem starts at sector 0); try the BPB right there.
     if (part_lba == 0u) {
-        kprintf("[FAT32] no FAT32 partition found in MBR\n");
-        return false;
+        kprintf("[FAT32] no FAT partition in MBR, trying superfloppy\n");
     }
 
     // Read FAT32 boot sector (BPB)
@@ -109,11 +119,21 @@ bool fat32_init_with_reader(Fat32State *fs, Fat32ReadBlockFn read_fn, void *ctx)
     uint8_t  sec_per_clust = s_sector[13];
     uint16_t reserved_sec  = le16(s_sector + 14);
     uint8_t  num_fats      = s_sector[16];
+    uint16_t fat16_size    = le16(s_sector + 22);
     uint32_t fat32_size    = le32(s_sector + 36);
     uint32_t root_cluster  = le32(s_sector + 44);
 
     if (bytes_per_sec != 512u) {
         kprintf("[FAT32] unsupported sector size %u\n", (unsigned)bytes_per_sec);
+        return false;
+    }
+
+    // FAT32 has fat_size16 == 0 and a real fat_size32; FAT12/16 volumes
+    // (small boot partitions) are not supported by this reader.
+    if (fat16_size != 0u || fat32_size == 0u || root_cluster < 2u) {
+        kprintf("[FAT32] volume at LBA %u is not FAT32 (fat16_size=%u) — "
+                "reformat the partition as FAT32 to use it\n",
+                (unsigned)part_lba, (unsigned)fat16_size);
         return false;
     }
 
