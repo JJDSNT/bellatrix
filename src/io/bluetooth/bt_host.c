@@ -14,7 +14,7 @@
 #include "btstack_run_loop_embedded.h"
 #include "btstack_chipset_bcm.h"
 #include "btstack_chipset_bcm_download_firmware.h"
-#include "hci_transport_h5.h"
+#include "hci_transport_h4.h"
 #include "btstack_uart_block.h"
 #include "gap.h"
 #include "hci.h"
@@ -39,10 +39,14 @@ void btstack_chipset_bcm_set_device_name(const char * device_name) {
 extern const int brcm_patch_ram_length;
 extern const char brcm_patch_version[];
 
+/* Main transport: H4 at 115200, hardware RTS/CTS at the PL011 level.
+ * BCM4343x ships H4 in every proven config (Linux hciattach, Circle,
+ * Ultibo); its H5 path wedged on the first radio command (HCI Inquiry
+ * acked nothing, retransmitted forever).  115200 is plenty for HID. */
 static const hci_transport_config_uart_t bt_transport_config = {
     HCI_TRANSPORT_CONFIG_UART,
     115200,
-    921600,
+    115200,
     BTSTACK_UART_FLOWCONTROL_OFF,
     NULL,
     BTSTACK_UART_PARITY_OFF,
@@ -364,9 +368,8 @@ static void bt_setup_hci_main(BTHost *bt)
     chipset = btstack_chipset_bcm_instance();
     chipset->init(&bt_transport_config);
 
-    uart_driver = btstack_uart_slip_wrapper_instance(
-        (const btstack_uart_t *) btstack_uart_block_embedded_instance());
-    transport = hci_transport_h5_instance(uart_driver);
+    uart_driver = (const btstack_uart_t *) btstack_uart_block_embedded_instance();
+    transport = hci_transport_h4_instance_for_uart(uart_driver);
 
     hci_init(transport, &bt_transport_config);
     hci_set_chipset(chipset);
@@ -393,7 +396,7 @@ static void bt_phase2_start(int status)
 
     s_bt_host->phase1_complete = true;
     s_bt_host->init_deadline_ms = 0;
-    bt_diag_log("[BT] BCM phase 1 complete, switching to H5 main transport\n");
+    bt_diag_log("[BT] BCM phase 1 complete, switching to H4 main transport\n");
     bt_setup_hci_main(s_bt_host);
     bt_schedule_power_on(s_bt_host);
 }
@@ -519,7 +522,7 @@ bool bt_host_init(BTHost *bt) {
 
     if (!bt) return false;
 
-    kprintf("[BT] Initializing BTStack (Raspberry Pi 3B, H5 over PL011)...\n");
+    kprintf("[BT] Initializing BTStack (Raspberry Pi 3B, H4 over PL011)...\n");
     kprintf("[BT] PatchRAM: version=%s size=%u bytes\n",
             brcm_patch_version, (unsigned)brcm_patch_ram_length);
 
