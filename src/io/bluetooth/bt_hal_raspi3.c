@@ -77,6 +77,23 @@ static uint32_t bt_uart_tx_bytes_logged = 0;
 static uint32_t bt_uart_io_activity = 0;
 static uint32_t bt_uart_tx_total = 0;
 static uint32_t bt_uart_rx_total = 0;
+
+/* Software RX ring buffer — decouples hardware FIFO drain from the btstack
+ * H4 parser.  bt_hal_raspi3_drain_fifo() can be called from anywhere (e.g.
+ * framebuffer fill loops) without touching btstack state; the poll path
+ * consumes bytes from the ring at its normal cadence.
+ *
+ * Future improvement: replace the drain call sites with a FIQ handler that
+ * routes UART0 IRQ (BCM2835 source 57) via the FIQ control register
+ * (ARM_PERI_VIRT_BASE+0xB20C, value 0x80|57=0xB9) and drains the FIFO in
+ * the curr_el_spx_fiq vector (currently a redundant copy of the IRQ handler).
+ * That would eliminate all pump-gap overruns without polling overhead.
+ * Requires a patch to emu68/src/aarch64/vectors.c — deferred pending
+ * architecture review. */
+#define BT_RX_RING_SIZE 4096u   /* power of 2; fits ~35 ms of max-rate LE adverts */
+static uint8_t  s_rx_ring[BT_RX_RING_SIZE];
+static uint32_t s_rx_ring_head; /* producer: drain_fifo writes here */
+static uint32_t s_rx_ring_tail; /* consumer: poll_uart reads here   */
 /* wire tap: dump the next N raw rx/tx bytes into the bt_diag ring so the SD
  * report shows what is actually on the line (armed by bt_scan_start) */
 static uint32_t bt_diag_tap_rx_remaining = 0;
@@ -101,10 +118,16 @@ void bt_hal_raspi3_diag_tap(uint32_t rx_bytes, uint32_t tx_bytes) {
 
 /* H4 parser state: what the transport is currently waiting for.  A stall
  * "waiting 200+ bytes, few filled" = parser desync after a lost byte; a
- * stall "waiting 1 byte, 0 filled" with rx frozen = controller went mute. */
+ * stall "waiting 1 byte, 0 filled" with rx frozen = controller went mute.
+ * filled counts bytes already in the H4 block (consumed from ring); the
+ * ring backlog is a separate diagnostic available via bt_hal_raspi3_rx_ring_used(). */
 void bt_hal_raspi3_rx_pending(uint32_t *filled, uint32_t *wanted) {
     if (filled) *filled = (uint32_t)uart_rx_pos;
     if (wanted) *wanted = (uint32_t)uart_rx_size;
+}
+
+uint32_t bt_hal_raspi3_rx_ring_used(void) {
+    return (s_rx_ring_head - s_rx_ring_tail) & (BT_RX_RING_SIZE - 1u);
 }
 
 #define BT_UART_LOG_BYTES_MAX 32u
@@ -300,13 +323,39 @@ void hal_uart_dma_set_sleep(uint8_t sleep) {
     (void)sleep;
 }
 
+/* Drain the hardware RX FIFO into the software ring buffer.  Safe to call
+ * from any context (framebuffer fill loops, USB pump, etc.) — never touches
+ * btstack state or callbacks.  Bytes sit in the ring until poll_uart picks
+ * them up and feeds them to the H4 parser. */
+void bt_hal_raspi3_drain_fifo(void)
+{
+    uint8_t byte;
+    if (!pl011_backend_is_open(&bt_uart))
+        return;
+    while (pl011_backend_read_byte(&bt_uart, &byte)) {
+        uint32_t next = (s_rx_ring_head + 1u) & (BT_RX_RING_SIZE - 1u);
+        if (next != s_rx_ring_tail) {
+            s_rx_ring[s_rx_ring_head] = byte;
+            s_rx_ring_head = next;
+        }
+        bt_uart_io_activity++;
+        bt_uart_rx_total++;
+        if (bt_diag_tap_rx_remaining) {
+            bt_diag_tap_rx_remaining--;
+            bt_diag_log("[BT-RX] %02x\n", (unsigned)byte);
+        }
+    }
+}
+
 /* Link-recovery helper: throw away whatever half-parsed garbage is in
- * flight (stale FIFO bytes + the H4 block stuck mid-fill) so the stack
- * can restart from a clean line after an RX overrun desync. */
+ * flight (stale FIFO bytes + ring contents + the H4 block stuck mid-fill)
+ * so the stack can restart from a clean line after an RX overrun desync. */
 void bt_hal_raspi3_flush_rx(void) {
     uint8_t byte;
     while (pl011_backend_is_open(&bt_uart) &&
            pl011_backend_read_byte(&bt_uart, &byte)) { }
+    s_rx_ring_head = 0;
+    s_rx_ring_tail = 0;
     uart_rx_buffer = NULL;
     uart_rx_size = 0;
     uart_rx_pos = 0;
@@ -317,15 +366,15 @@ void bt_hal_raspi3_poll_uart(void) {
         return;
     }
 
+    /* Always drain hardware FIFO into the ring first so that bytes arriving
+     * during any gap (framebuffer writes, USB pump, etc.) are not lost even
+     * when the btstack H4 parser is not ready to consume them yet. */
+    bt_hal_raspi3_drain_fifo();
+
     if (uart_rx_buffer && uart_rx_pos < uart_rx_size) {
-        uint8_t byte;
-        while (pl011_backend_read_byte(&bt_uart, &byte)) {
-            bt_uart_io_activity++;
-            bt_uart_rx_total++;
-            if (bt_diag_tap_rx_remaining) {
-                bt_diag_tap_rx_remaining--;
-                bt_diag_log("[BT-RX] %02x\n", (unsigned)byte);
-            }
+        while (s_rx_ring_tail != s_rx_ring_head) {
+            uint8_t byte = s_rx_ring[s_rx_ring_tail];
+            s_rx_ring_tail = (s_rx_ring_tail + 1u) & (BT_RX_RING_SIZE - 1u);
             bt_uart_trace_add(BT_TRACE_RX_BYTE, byte, 0, bt_uart_rx_bytes_logged);
             if (bt_uart_rx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
                 kprintf("[BT-HAL] rx byte[%u]=%02x\n",
