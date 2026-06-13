@@ -28,6 +28,9 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms);
 /* True once the controller reached HCI WORKING (bootstrap succeeded). */
 bool bt_host_is_working(const BTHost *bt);
 
+/* Connect to all pairs currently in bt_pairs (call after launcher loads BTPAIRS.TXT). */
+void bt_host_connect_pairs(BTHost *bt);
+
 /**
  * Process Bluetooth stack events and timers.
  * Should be called periodically from Core 3 step.

@@ -658,17 +658,22 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                     }
                     bt_diag_log("[BT] stack up and running, BD_ADDR=%s\n", bd_addr_to_str(local_addr));
                     bt_pairing_window_open(s_bt_host);
-                    /* Re-connect to all saved pairs */
-                    for (unsigned i = 0u; i < bt_pairs_count(); i++) {
-                        const BTPair *p = bt_pairs_get(i);
-                        if (!p) continue;
-                        bd_addr_t addr;
-                        memcpy(addr, p->addr, 6u);
-                        uint16_t cid = 0u;
-                        int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
-                        bt_diag_log("[BT] hid_host_connect pair[%u] %s type=%u -> cid=0x%04x ret=%d\n",
-                                    i, bd_addr_to_str(addr),
-                                    (unsigned)p->device_type, (unsigned)cid, ret);
+                    /* bt_pairs is populated only after launcher_run() reads BTPAIRS.TXT.
+                     * Recovery-triggered WORKING events fire during emulation when bt_pairs
+                     * is already in memory — reconnect then.  Initial connect is done by
+                     * bt_host_connect_pairs() called from bellatrix.c after launcher_run(). */
+                    if (bt_pairs_count() > 0u) {
+                        for (unsigned i = 0u; i < bt_pairs_count(); i++) {
+                            const BTPair *p = bt_pairs_get(i);
+                            if (!p) continue;
+                            bd_addr_t addr;
+                            memcpy(addr, p->addr, 6u);
+                            uint16_t cid = 0u;
+                            int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
+                            bt_diag_log("[BT] hid_host_connect (recovery) pair[%u] %s type=%u -> cid=0x%04x ret=%d\n",
+                                        i, bd_addr_to_str(addr),
+                                        (unsigned)p->device_type, (unsigned)cid, ret);
+                        }
                     }
                     break;
                 }
@@ -716,6 +721,27 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             break;
         default:
             break;
+    }
+}
+
+void bt_host_connect_pairs(BTHost *bt)
+{
+    if (!bt || !bt_host_is_working(bt)) return;
+    unsigned n = bt_pairs_count();
+    if (n == 0u) {
+        bt_diag_log("[BT] connect_pairs: no pairs saved\n");
+        return;
+    }
+    for (unsigned i = 0u; i < n; i++) {
+        const BTPair *p = bt_pairs_get(i);
+        if (!p) continue;
+        bd_addr_t addr;
+        memcpy(addr, p->addr, 6u);
+        uint16_t cid = 0u;
+        int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
+        bt_diag_log("[BT] connect_pairs[%u] %s type=%u -> cid=0x%04x ret=%d\n",
+                    i, bd_addr_to_str(addr),
+                    (unsigned)p->device_type, (unsigned)cid, ret);
     }
 }
 
@@ -1075,6 +1101,10 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms) {
 bool bt_host_is_working(const BTHost *bt) {
     (void)bt;
     return false;
+}
+
+void bt_host_connect_pairs(BTHost *bt) {
+    (void)bt;
 }
 
 void bt_host_step(BTHost *bt) {

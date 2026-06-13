@@ -267,6 +267,7 @@ static inline uint32_t read_be32(const uint8_t *p)
 }
 
 #if BELLATRIX_ENABLE_BTSTACK
+#include "io/bluetooth/bt_host.h"
 static void bellatrix_init_bluetooth(BellatrixRuntime *rt, BellatrixMachine *m)
 {
     if (!rt || !m) {
@@ -605,6 +606,12 @@ void bellatrix_init(void)
 
 #ifdef BELLATRIX_LAUNCHER
     launcher_run();
+#endif
+
+#if BELLATRIX_ENABLE_BTSTACK
+    /* bt_pairs is populated by launcher_run() (reads BTPAIRS.TXT from SD).
+     * Connect to saved HID devices now that the list is available. */
+    bt_host_connect_pairs(&g_runtime.bluetooth);
 #endif
 
 
