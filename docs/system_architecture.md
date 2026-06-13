@@ -72,10 +72,9 @@ The machine is composed of:
 ```text id="w2jlwm"
 BellatrixMachine
  ├── Runtime
- │    ├── Core 0 — Execution Runtime
- │    ├── Core 1 — Video/DMA Runtime
- │    ├── Core 2 — Paula Runtime
- │    └── Core 3 — IO/CIA Runtime
+ │    ├── Core 0 — CPU Runtime (Emu68 JIT)
+ │    ├── Core 1 — Chipset Runtime (Rigel: CIA+Agnus+Paula+Denise)
+ │    └── Core 3 — IO Runtime (USB + Bluetooth)
  │
  ├── CPU
  │    └── Emu68 backend
@@ -249,54 +248,37 @@ Denise consumes visual timeline state.
 
 # 7. Runtime Organization
 
-## Core 0 — Execution Runtime
+## Core 0 — CPU Runtime
 
 Responsibilities:
 
-* Emu68/JIT
+* Emu68 JIT
 * CPU execution
 * memory access
+* bus dispatch
 * host integration
-* modern services
 
 ---
 
-## Core 1 — Video/DMA Runtime
+## Core 1 — Chipset Runtime (Rigel)
 
 Responsibilities:
 
-* Agnus
-* Denise
-* raster
-* DMA
-* copper
-* blitter
-* bitplanes
+* Full Rigel chipset domain:
+  * CIA A/B (timers, TOD, keyboard protocol)
+  * Agnus (raster, beam, DMA, copper, blitter)
+  * Paula (audio, serial, disk, INTREQ/INTENA, IPL)
+  * Denise (bitplanes, sprites, scanout)
 
 ---
 
-## Core 2 — Paula Runtime
+## Core 3 — IO Runtime
 
 Responsibilities:
 
-* Paula audio
-* Paula serial
-* Paula disk
-* interrupt consolidation
-* IPL publication
-
----
-
-## Core 3 — IO/CIA Runtime
-
-Responsibilities:
-
-* CIA A/B
-* timers
-* RTC
-* keyboard protocol
-* UART host integration
-* classic IO
+* USB host (CherryUSB) — HID + MSC
+* Bluetooth host (BTStack) — HID
+* physical peripheral IO
 
 ---
 

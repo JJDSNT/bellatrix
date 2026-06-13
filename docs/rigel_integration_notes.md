@@ -1,5 +1,10 @@
 # Rigel Integration Notes
 
+> **Status (current):** The multicore architecture recommended in this document
+> has been implemented. Core 0 = CPU (Emu68), Core 1 = full Rigel chipset domain,
+> Core 3 = IO (USB + Bluetooth). The `CPU core + chipset core` shape described
+> in "A better Bellatrix multicore shape" is the current production layout.
+
 ## Context
 
 This note summarizes the parts of `external/rigel` that matter most for Bellatrix,

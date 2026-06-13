@@ -129,8 +129,9 @@ Therefore:
 
 * CIA never derives IPL
 * Agnus never consolidates IRQ
-* Core 3 never publishes IPL
-* Core 1 never manipulates INTREQ directly
+* Core 3 (IO) never publishes IPL
+* Core 3 (IO) never manipulates INTREQ directly
+* IPL derivation belongs exclusively to Paula, inside Core 1 (Rigel)
 
 ---
 
@@ -190,39 +191,26 @@ Must NOT own:
 
 ---
 
-## Core 1
+## Core 1 — Chipset (Rigel)
 
 Owns:
 
-* Agnus
-* Denise
-* raster
-* DMA
-* copper
-* blitter
+* full Rigel chipset domain:
+  * CIA A/B (timers, TOD, keyboard protocol)
+  * Agnus (beam, raster, DMA, copper, blitter)
+  * Paula (audio, serial, disk, INTREQ/INTENA, IPL derivation)
+  * Denise (bitplanes, sprites, scanout)
 
 Must NOT own:
 
-* IPL derivation
-* Paula interrupt consolidation
+* USB/Bluetooth IO
+* CPU execution
 
 ---
 
 ## Core 2
 
-Owns:
-
-* Paula
-* audio
-* serial
-* disk Paula
-* INTREQ
-* IPL publication
-
-Must NOT own:
-
-* CIA timer evolution
-* raster ownership
+(unused — Core 2 is not assigned in the current runtime)
 
 ---
 
@@ -230,17 +218,16 @@ Must NOT own:
 
 Owns:
 
-* CIA
-* timers
-* keyboard protocol
-* UART host
-* classic IO
+* USB host (CherryUSB) — HID + MSC
+* Bluetooth host (BTStack) — HID
+* physical peripheral IO
 
 Must NOT own:
 
 * Paula interrupt consolidation
 * IPL derivation
 * DMA arbitration
+* CIA timer evolution
 
 ---
 
@@ -430,10 +417,9 @@ Per-core logging is strongly recommended.
 
 | Domain     | Tag           |
 | ---------- | ------------- |
-| Core 0     | [CORE0-CPU]   |
-| Core 1     | [CORE1-GFX]   |
-| Core 2     | [CORE2-PAULA] |
-| Core 3     | [CORE3-IO]    |
+| Core 0     | [CORE0-CPU]     |
+| Core 1     | [CORE1-CHIPSET] |
+| Core 3     | [CORE3-IO]      |
 | Cross-core | [XCORE-*]     |
 
 ---

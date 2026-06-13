@@ -440,12 +440,12 @@ Future cores may evolve toward capability runtimes.
 
 ## Current Direction
 
-| Core | Current Runtime   |
-| ---- | ----------------- |
-| 0    | Execution Runtime |
-| 1    | Video/DMA Runtime |
-| 2    | Paula Runtime     |
-| 3    | IO/CIA Runtime    |
+| Core | Current Runtime                              |
+| ---- | -------------------------------------------- |
+| 0    | CPU Runtime (Emu68 JIT)                      |
+| 1    | Chipset Runtime — full Rigel domain (CIA + Agnus + Paula + Denise) |
+| 2    | (unused)                                     |
+| 3    | IO Runtime (USB + Bluetooth)                 |
 
 ---
 

@@ -145,18 +145,15 @@ Each runtime domain should have isolated validation tests.
 
 ---
 
-# 8. Core 3 — IO/CIA Tests
+# 8. Core 3 — IO Tests
 
 ## Responsibilities
 
 Core 3 owns:
 
-* CIA A/B
-* timers
-* TOD
-* keyboard protocol
-* UART host integration
-* classic IO
+* USB host (CherryUSB) — HID + MSC
+* Bluetooth host (BTStack) — HID
+* physical peripheral IO
 
 ---
 
@@ -219,17 +216,16 @@ select state updated
 
 ---
 
-# 9. Core 2 — Paula Tests
+# 9. Core 1 — Chipset Tests (Rigel)
 
 ## Responsibilities
 
-Core 2 owns:
+Core 1 owns the full Rigel chipset domain:
 
-* Paula audio
-* Paula serial
-* Paula disk
-* interrupt consolidation
-* IPL publication
+* CIA A/B (timers, TOD, keyboard protocol, classic IO)
+* Agnus (beam, raster, DMA arbitration, copper, blitter)
+* Paula (audio, serial, disk, INTREQ/INTENA, IPL derivation)
+* Denise (bitplanes, sprites, scanout)
 
 ---
 
@@ -291,11 +287,37 @@ IRQ generated if appropriate
 
 ---
 
-# 10. Core 1 — Video/DMA Tests
+### Raster / DMA / Video (Agnus + Denise)
 
-## Responsibilities
+Input:
 
-Core 1 owns:
+```text id="zwu5lh2"
+beam advances through active window
+copper list loaded
+```
+
+Expected Output:
+
+```text id="5i92s42"
+DMA slots granted per priority
+copper executes WAIT/MOVE correctly
+Denise receives bitplane data at right beam position
+```
+
+---
+
+# 10. (removed — Core 1 previously split into Core1=Video and Core2=Paula; now unified in Rigel on Core 1)
+
+## Note
+
+The old four-core model (Core0=CPU, Core1=GFX, Core2=Paula, Core3=IO/CIA) has
+been superseded. All chipset state is now owned by Core 1 via Rigel.
+
+---
+
+# 10b. Core 1 — Chipset sub-domain: Video/DMA
+
+## Responsibilities (within Rigel on Core 1)
 
 * Agnus
 * Denise
@@ -420,11 +442,9 @@ These tests validate event propagation across domains.
 ## Flow
 
 ```text id="0cwyca"
-Core 3 CIA
+Core 1 (Rigel): CIA timer underflow → Paula consolidates INTREQ → IPL derived
     ↓
-Core 2 Paula
-    ↓
-Core 0 CPU
+Core 0 CPU accepts interrupt
 ```
 
 ---
@@ -450,11 +470,9 @@ CPU accepts interrupt
 ## Flow
 
 ```text id="2ozx0v"
-Core 3 floppy lines
+Core 3 IO (USB floppy / peripheral lines)
     ↓
-Core 2 Paula disk
-    ↓
-Core 1 DMA arbitration
+Core 1 (Rigel): Paula disk → DMA arbitration (Agnus)
 ```
 
 ---
@@ -528,10 +546,9 @@ Per-core runtime logs are strongly recommended.
 
 | Domain     | Tag           |
 | ---------- | ------------- |
-| Core 0     | [CORE0-CPU]   |
-| Core 1     | [CORE1-GFX]   |
-| Core 2     | [CORE2-PAULA] |
-| Core 3     | [CORE3-IO]    |
+| Core 0     | [CORE0-CPU]     |
+| Core 1     | [CORE1-CHIPSET] |
+| Core 3     | [CORE3-IO]      |
 | Cross-core | [XCORE-*]     |
 
 ---

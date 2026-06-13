@@ -180,59 +180,37 @@ Machine/runtime coordinate propagation only.
 
 # 6. Current Multicore Runtime
 
-## Core 0 — Execution Runtime
+## Core 0 — CPU Runtime
 
 Responsibilities:
 
-* Emu68/JIT
+* Emu68 JIT
 * instruction execution
 * bus access
 * memory access
 * host integration
-* modern services
 
 ---
 
-## Core 1 — Video/DMA Runtime
+## Core 1 — Chipset Runtime (Rigel)
 
 Responsibilities:
 
-* Agnus
-* Denise
-* beam
-* raster
-* copper
-* DMA
-* bitplanes
-* blitter
-* scanout
+* Full Rigel chipset domain:
+  * CIA A/B (timers, TOD, keyboard protocol)
+  * Agnus (beam, raster, DMA, copper, blitter)
+  * Paula (audio, serial, disk, INTREQ/INTENA, IPL)
+  * Denise (bitplanes, sprites, scanout)
 
 ---
 
-## Core 2 — Paula Runtime
+## Core 3 — IO Runtime
 
 Responsibilities:
 
-* audio Paula
-* serial Paula
-* disk Paula
-* interrupt consolidation
-* INTREQ
-* INTENA
-* IPL publication
-
----
-
-## Core 3 — IO/CIA Runtime
-
-Responsibilities:
-
-* CIA A/B
-* timers
-* RTC
-* keyboard protocol
-* UART host integration
-* classic physical IO
+* USB host (CherryUSB) — HID + MSC
+* Bluetooth host (BTStack) — HID
+* physical peripheral IO
 
 ---
 
@@ -243,13 +221,13 @@ Current runtime flow:
 ```text
 ticks
   ↓
-Core 3 evolves IO/timers
-Core 1 evolves raster/DMA
-Core 2 consolidates streams/IRQ
+Core 1 (Rigel) evolves full chipset:
+  CIA timers / Agnus raster+DMA / Paula IRQ / Denise scanout
+Core 3 (IO) evolves USB + Bluetooth
   ↓
-IPL derived
+IPL derived (Paula → Rigel → bus)
   ↓
-CPU reacts
+Core 0 CPU reacts
 ```
 
 ---
