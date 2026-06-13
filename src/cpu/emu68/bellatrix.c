@@ -610,8 +610,16 @@ void bellatrix_init(void)
 
 #if BELLATRIX_ENABLE_BTSTACK
     /* bt_pairs is populated by launcher_run() (reads BTPAIRS.TXT from SD).
-     * Connect to saved HID devices now that the list is available. */
+     * Connect to saved HID devices now that the list is available.
+     * Then pump the BT stack for ~3 s so SDP + L2CAP + HID SET_PROTOCOL
+     * can complete before the emulation loop takes over io_step. */
     bt_host_connect_pairs(&g_runtime.bluetooth);
+    if (g_runtime.bluetooth.initialized) {
+        for (uint32_t _i = 0u; _i < 6000u; _i++) {
+            bt_host_step(&g_runtime.bluetooth);
+            for (volatile uint32_t _d = 0u; _d < 20000u; _d++) asm volatile("nop");
+        }
+    }
 #endif
 
 

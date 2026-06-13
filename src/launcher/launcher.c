@@ -638,6 +638,33 @@ static int bt_save_report_to_sd(void)
         len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n");
     }
 
+    /* Saved pairs — shows what BTPAIRS.TXT contained at boot */
+    len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n--- saved pairs (BTPAIRS.TXT) ---\r\n");
+    unsigned pair_count = bt_pairs_count();
+    if (pair_count == 0u) {
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP, "(none)\r\n");
+    } else {
+        static const char *type_tag[4] = { "?", "K", "M", "J" };
+        static const char *tr_tag[4]   = { "??", "CL", "LE", "DM" };
+        for (unsigned i = 0u; i < pair_count; i++) {
+            const BTPair *p = bt_pairs_get(i);
+            if (!p) break;
+            char paddr[18];
+            bt_format_addr(paddr, p->addr);
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP,
+                             tr_tag[p->transport & 3u]);
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP, " ");
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP,
+                             type_tag[p->device_type < 4u ? p->device_type : 0u]);
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP, " ");
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP, paddr);
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP, " ");
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP,
+                             p->name[0] ? p->name : "(no name)");
+            len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n");
+        }
+    }
+
     len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n--- bring-up log ---\r\n");
     len += bt_diag_snapshot(s_bt_report + len,
                             (BT_REPORT_CAP > len) ? BT_REPORT_CAP - len : 0u);
