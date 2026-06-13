@@ -4,7 +4,7 @@ Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68
 
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel. Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 
-**Current state:** works with the Musashi M68K interpreter backend — Kickstart boots, USB HID and Bluetooth HID are functional on the Pi. Two goals are not yet achieved:
+Four SD card images are released: Musashi or Emu68 backend × single-core or multi-core. The Musashi builds are the stable ones — Kickstart boots, USB HID and Bluetooth HID are functional on the Pi. Two goals are not yet achieved:
 
 - **Emu68 JIT integration is broken** — the Emu68 bus hook needs to be revisited; execution does not reach a stable state.
 - **AROS does not boot** — the kitty screen appears but does not complete AROS boot (no workbench).
