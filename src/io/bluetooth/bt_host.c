@@ -776,7 +776,7 @@ static void bt_link_watchdog(BTHost *bt)
     static uint32_t recoveries;
     uint32_t filled, wanted, now_ms;
 
-    if (!bt->phase1_complete || !bt->hci_ready)
+    if (bt->bootstrap_state != BT_BOOTSTRAP_WORKING || !bt->hci_ready)
         return;
 
     bt_hal_raspi3_rx_pending(&filled, &wanted);
@@ -804,7 +804,22 @@ static void bt_link_watchdog(BTHost *bt)
     bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms) - full power cycle %u/%u\n",
                 (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS,
                 (unsigned)recoveries, (unsigned)BT_LINK_MAX_RECOVERIES);
+
+    /* Force the stack to OFF *synchronously*.  A single POWER_OFF from
+     * WORKING enters the graceful HALTING path, which needs answers from
+     * the (dead) chip and closes the transport asynchronously — last
+     * round that close landed mid PatchRAM upload and killed phase 1.
+     * Public-API workaround using btstack's own state machine:
+     *   OFF: WORKING → HALTING        (async, don't wait for it)
+     *   ON : HALTING → INITIALIZING   (immediate; resets num_cmd_packets,
+     *                                  freeing the stuck command slot)
+     *   OFF: INITIALIZING → OFF       (hci_power_control_off(): closes
+     *                                  the transport right here, sync)
+     * Same off/on pattern btstack itself uses on HCI_EVENT_HARDWARE_ERROR. */
     hci_power_control(HCI_POWER_OFF);
+    hci_power_control(HCI_POWER_ON);
+    hci_power_control(HCI_POWER_OFF);
+
     bt_hal_raspi3_flush_rx();
     /* Force phase 1 to run again and rewind the chipset init script so
      * the PatchRAM upload starts from record zero. */
