@@ -14,27 +14,31 @@ Emu68 handles M68K→AArch64 JIT translation; Bellatrix replaces only its bus ba
 # One-time setup (applies patches to emu68/ submodule)
 ./scripts/setup.sh
 
-# Standard build — Musashi CPU, BT + USB enabled (active development config)
-BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
-  ./scripts/build.sh
+# Four release configurations (CPU backend × core mode):
 
-# Clean rebuild
-BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
-  ./scripts/build.sh clean
+# Emu68 single-core  →  emu68/install-bellatrix-rigel/
+BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
 
-# Output lives in:
-#   emu68/install-bellatrix-rigel-musashi/   (musashi backend)
-#   emu68/install-bellatrix-rigel/           (emu68 backend)
+# Musashi single-core  →  emu68/install-bellatrix-rigel-musashi/
+BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
+
+# Emu68 multi-core  →  emu68/install-bellatrix-rigel/
+BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
+
+# Musashi multi-core  →  emu68/install-bellatrix-rigel-musashi/
+BELLATRIX_CPU_BACKEND=musashi BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
+
+# Append "clean" for a clean rebuild
 ```
 
-**Key build env vars** (all optional, shown with defaults):
+**Build env vars:**
 | Variable | Default | Description |
 |---|---|---|
-| `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` or `musashi` |
-| `BELLATRIX_BTSTACK` | `0` | Enable BTStack (Bluetooth) |
-| `BELLATRIX_USBSTACK` | `0` | Enable CherryUSB (USB HID/MSC) |
+| `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` (JIT) or `musashi` (interpreter) |
+| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 GFX / Core2 Paula / Core3 IO |
+| `BELLATRIX_BTSTACK` | `0` | Bluetooth HID host (BTStack) |
+| `BELLATRIX_USBSTACK` | `0` | USB HID + mass storage (CherryUSB) |
 | `BELLATRIX_LAUNCHER` | `1` | ADF/ISO selector UI |
-| `BELLATRIX_MULTICORE_BUILD` | `0` | Multi-core (Core1=GFX, Core2=Paula, Core3=IO) |
 | `BELLATRIX_OSD` | `1` | On-screen display overlay |
 
 Prerequisites: `gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake` on Ubuntu.

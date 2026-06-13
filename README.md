@@ -95,25 +95,58 @@ cd bellatrix
 ./scripts/setup.sh        # applies patches to emu68/ submodule
 ```
 
+### Release configurations
+
+There are four release builds, defined by two orthogonal axes:
+
+| | Single-core | Multi-core |
+|---|---|---|
+| **Emu68** (JIT) | `BELLATRIX_CPU_BACKEND=emu68` | `+ BELLATRIX_MULTICORE_BUILD=1` |
+| **Musashi** (interpreter) | `BELLATRIX_CPU_BACKEND=musashi` | `+ BELLATRIX_MULTICORE_BUILD=1` |
+
+**Single-core:** all components (CPU, chipset, IO) run on Core 0. Simpler, no synchronization overhead, currently the most stable.
+
+**Multi-core:** Core 0 = CPU/JIT, Core 1 = GFX/DMA (Agnus+Denise), Core 2 = Paula, Core 3 = IO/CIA. Better timing separation; higher complexity.
+
+**Emu68:** full M68K→AArch64 JIT. Fast, close to real hardware speed.
+
+**Musashi:** M68K interpreter in C. Slower, but easier to instrument and iterate on without reflashing.
+
 ### Build
 
 ```bash
-# Recommended: Musashi CPU backend with Bluetooth and USB
+# Emu68 single-core (JIT, production target)
+BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
+  ./scripts/build.sh
+# → emu68/install-bellatrix-rigel/
+
+# Musashi single-core (interpreter, active development)
 BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
   ./scripts/build.sh
+# → emu68/install-bellatrix-rigel-musashi/
 
-# Output: emu68/install-bellatrix-rigel-musashi/
+# Emu68 multi-core
+BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
+  ./scripts/build.sh
+
+# Musashi multi-core
+BELLATRIX_CPU_BACKEND=musashi BELLATRIX_MULTICORE_BUILD=1 \
+  BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
+
+# Clean rebuild: append "clean"
+BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
+  ./scripts/build.sh clean
 ```
 
-**Build options:**
+**All build options:**
 
 | Variable | Default | Description |
 |---|---|---|
-| `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` (JIT) or `musashi` (interpreter, faster iteration) |
+| `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` (JIT) or `musashi` (interpreter) |
+| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 GFX / Core2 Paula / Core3 IO |
 | `BELLATRIX_BTSTACK` | `0` | Bluetooth HID host (BTStack) |
 | `BELLATRIX_USBSTACK` | `0` | USB HID + mass storage (CherryUSB) |
 | `BELLATRIX_LAUNCHER` | `1` | ADF/ISO selector UI |
-| `BELLATRIX_MULTICORE_BUILD` | `0` | Multi-core mode (Core1=GFX, Core2=Paula, Core3=IO) |
 | `BELLATRIX_OSD` | `1` | On-screen display overlay |
 
 ### Flash to SD
