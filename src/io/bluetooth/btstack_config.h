@@ -4,6 +4,7 @@
 // BTstack features that can be enabled
 #define ENABLE_H5
 #define ENABLE_CLASSIC
+#define ENABLE_AIROC_DOWNLOAD_MODE  /* skip HCI_Read_Local_Name: BCM43430A1 sends 251 of 252 bytes, stalling H4 */
 #define ENABLE_BLE
 #define ENABLE_LE_PERIPHERAL
 #define ENABLE_LE_CENTRAL

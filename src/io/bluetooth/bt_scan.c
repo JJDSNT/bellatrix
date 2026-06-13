@@ -39,6 +39,7 @@ static unsigned     s_count;
 static uint32_t     s_generation;
 static ScanPhase    s_phase = SCAN_OFF;
 static bool         s_registered;
+static unsigned     s_stall_count;
 
 static void bt_scan_enter_classic(void);
 static void bt_scan_enter_le(void);
@@ -131,12 +132,27 @@ static const char *label_from_cod(uint32_t cod)
     }
 }
 
+/* LE scan is disabled: the BCM43430A1 batches LE adverts into single
+ * large HCI events (up to 1220 bytes observed) that overflow the 16-byte
+ * PL011 FIFO before drain_fifo runs, desyncing the H4 parser.  SCAN_LE
+ * phase is now repurposed as a 2 s "inter-inquiry rest" so the chip
+ * can clear its own inquiry state before the next round.
+ *
+ * TODO(LE): when re-enabling LE scan, note that HID peripherals (keyboard,
+ * mouse) typically advertise on a *different* BDA than their BR/EDR address,
+ * so they will appear as separate entries (CL + LE) rather than merging into
+ * DM.  LE HID connection would be preferable long-term (lower latency,
+ * better coexistence with WiFi), but requires GATT HID host support in
+ * btstack (HID-over-GATT profile) which is not yet wired up.
+ * To re-enable: restore gap_set_scan_parameters(0,0x60,0x08)+gap_start_scan()
+ * in bt_scan_enter_le() and gap_stop_scan() in bt_scan_le_phase_timeout(),
+ * and raise the PL011 RX FIFO threshold or switch to interrupt-driven drain
+ * so burst events don't overflow before drain_fifo runs. */
 static void bt_scan_le_phase_timeout(btstack_timer_source_t *ts)
 {
     (void)ts;
     if (s_phase != SCAN_LE)
         return;
-    gap_stop_scan();
     bt_scan_enter_classic();
 }
 
@@ -187,18 +203,14 @@ static void bt_scan_enter_classic(void)
     btstack_run_loop_add_timer(&s_classic_watchdog);
 }
 
+/* LE scan is disabled (see comment on bt_scan_le_phase_timeout).
+ * This function is now a 2 s rest timer between classic inquiry rounds. */
 static void bt_scan_enter_le(void)
 {
     s_phase = SCAN_LE;
     touched();
-    bt_scan_diag_tap_arm(24u);
-    bt_diag_log("[SCAN] LE scan start\n");
-    /* Active scan so devices answer with scan responses (names).
-     * Window 0x10/interval 0x60 ≈ 17% duty: a 100% window floods the
-     * 115200 line (~10KB/s of adverts) and any pump gap loses bytes. */
-    gap_set_scan_parameters(1u, 0x0060u, 0x0010u);
-    gap_start_scan();
-    btstack_run_loop_set_timer(&s_le_phase_timer, BT_SCAN_LE_PHASE_MS);
+    bt_diag_log("[SCAN] inter-inquiry rest start\n");
+    btstack_run_loop_set_timer(&s_le_phase_timer, 2000u);
     btstack_run_loop_set_timer_handler(&s_le_phase_timer, bt_scan_le_phase_timeout);
     btstack_run_loop_add_timer(&s_le_phase_timer);
 }
@@ -458,19 +470,55 @@ const BTScanResult *bt_scan_get(unsigned index)
 
 const char *bt_scan_status(void)
 {
+    static char buf[48];
+    const char *base;
+    unsigned p, i;
+
     switch (s_phase) {
     case SCAN_OFF:             return "stopped";
-    case SCAN_WAIT_STACK:      return "waiting for controller...";
-    case SCAN_CLASSIC_INQUIRY: return "scanning (classic)...";
-    case SCAN_CLASSIC_NAMES:   return "resolving names...";
-    case SCAN_LE:              return "scanning (LE)...";
+    case SCAN_WAIT_STACK:      base = "waiting for controller..."; break;
+    case SCAN_CLASSIC_INQUIRY: base = "scanning (classic)...";     break;
+    case SCAN_CLASSIC_NAMES:   base = "resolving names...";        break;
+    case SCAN_LE:              base = "pausing...";                break;
     default:                   return "?";
     }
+
+    if (s_stall_count == 0u)
+        return base;
+
+    /* append " [N err]" so the screen shows link stall count */
+    p = 0u;
+    for (i = 0u; base[i] && p < sizeof(buf) - 10u; i++)
+        buf[p++] = base[i];
+    buf[p++] = ' '; buf[p++] = '[';
+    if (s_stall_count >= 10u) buf[p++] = (char)('0' + s_stall_count / 10u % 10u);
+    buf[p++] = (char)('0' + s_stall_count % 10u);
+    buf[p++] = ' '; buf[p++] = 'e'; buf[p++] = 'r'; buf[p++] = 'r'; buf[p++] = ']';
+    buf[p] = '\0';
+    return buf;
 }
 
 uint32_t bt_scan_generation(void)
 {
     return s_generation;
+}
+
+void bt_scan_notify_recovery(void)
+{
+    if (s_phase == SCAN_OFF)
+        return;
+    s_stall_count++;
+    bt_diag_log("[SCAN] notify_recovery: stall=%u phase=%u\n",
+                (unsigned)s_stall_count, (unsigned)s_phase);
+    btstack_run_loop_remove_timer(&s_classic_watchdog);
+    btstack_run_loop_remove_timer(&s_le_phase_timer);
+    s_phase = SCAN_WAIT_STACK;
+    touched();
+}
+
+unsigned bt_scan_stall_count(void)
+{
+    return s_stall_count;
 }
 
 #else /* !BELLATRIX_ENABLE_BTSTACK */
@@ -481,5 +529,7 @@ unsigned bt_scan_count(void) { return 0u; }
 const BTScanResult *bt_scan_get(unsigned index) { (void)index; return 0; }
 const char *bt_scan_status(void) { return "bluetooth disabled"; }
 uint32_t bt_scan_generation(void) { return 0u; }
+unsigned bt_scan_stall_count(void) { return 0u; }
+void bt_scan_notify_recovery(void) {}
 
 #endif /* BELLATRIX_ENABLE_BTSTACK */

@@ -41,6 +41,9 @@ uint32_t bt_hal_raspi3_io_activity(void);
 uint32_t bt_hal_raspi3_io_tx(void);
 uint32_t bt_hal_raspi3_io_rx(void);
 void     bt_hal_raspi3_rx_pending(uint32_t *filled, uint32_t *wanted);
+#if BELLATRIX_ENABLE_BTSTACK
+void     bt_hal_raspi3_drain_fifo(void);
+#endif
 
 extern uint16_t *framebuffer;
 extern uint32_t  pitch;
@@ -221,6 +224,12 @@ static void fb_fill_rect(uint32_t x, uint32_t y,
         for (uint32_t col = 0u; col < w; col++) {
             line[col] = colour;
         }
+#if BELLATRIX_ENABLE_BTSTACK
+        /* Drain the PL011 FIFO into the BT ring buffer after each scanline so
+         * that slow framebuffer writes (uncached MMIO) do not create gaps long
+         * enough to overflow the 16-byte hardware FIFO and desync the H4 parser. */
+        bt_hal_raspi3_drain_fifo();
+#endif
     }
 }
 
@@ -284,6 +293,7 @@ static void fb_puts_centred(uint32_t x0, uint32_t x1,
 // bootable media is the launcher's call.
 // ---------------------------------------------------------------------------
 
+#if BELLATRIX_ENABLE_USBSTACK
 static bool name_has_ext(const char *name, const char *ext /* e.g. ".adf" */)
 {
     const char *dot = NULL;
@@ -301,6 +311,7 @@ static bool name_has_ext(const char *name, const char *ext /* e.g. ".adf" */)
     }
     return *a == *b;
 }
+#endif /* BELLATRIX_ENABLE_USBSTACK */
 
 // ---------------------------------------------------------------------------
 // Screen helpers
@@ -399,6 +410,7 @@ static Fat32State s_fat32;
 static Fat32File  s_iso_file;
 #endif
 
+#if BELLATRIX_ENABLE_USBSTACK
 static bool fat32_iso_read_cb(void *ctx, uint32_t lba, uint32_t count, void *dst)
 {
     Fat32File *f   = (Fat32File *)ctx;
@@ -411,6 +423,7 @@ static bool fat32_iso_read_cb(void *ctx, uint32_t lba, uint32_t count, void *dst
     uint32_t got  = fat32_read(f, dst, want);
     return got == want;
 }
+#endif /* BELLATRIX_ENABLE_USBSTACK */
 
 // ---------------------------------------------------------------------------
 // USB polling / acknowledgement
@@ -481,6 +494,17 @@ static void bt_draw_scan_chrome(void)
     const uint32_t W = fb_width;
     const uint32_t H = fb_height;
 
+    /* build tag: date + feature flags so we can confirm which binary is running */
+    static const char build_tag[] =
+        "build:" __DATE__ " " __TIME__
+#if BELLATRIX_ENABLE_BTSTACK
+        " BT"
+#endif
+#if BELLATRIX_ENABLE_USBSTACK
+        " USB"
+#endif
+        ;
+
     bt_fill_rect_pumped(0, 0, W, H, COL_BG);
     bt_fill_rect_pumped(0, 0, W, s_title_h, COL_TITLE_BG);
     fb_puts_centred(0, W, (s_title_h - s_char) / 2u,
@@ -488,6 +512,9 @@ static void bt_draw_scan_chrome(void)
                     COL_TEXT, COL_TITLE_BG);
 
     bt_fill_rect_pumped(0, H - s_status_h, W, s_status_h, COL_STATUS_BG);
+    /* status bar: left = build tag, right = key hint */
+    fb_puts(s_margin_x, H - s_status_h + (s_status_h - s_char) / 2u,
+            build_tag, COL_TEXT, COL_STATUS_BG);
     fb_puts_centred(0, W, H - s_status_h + (s_status_h - s_char) / 2u,
                     "ENTER/ESC = continue boot",
                     COL_TEXT, COL_STATUS_BG);
@@ -894,14 +921,14 @@ bool launcher_run(void)
         return false;
     }
 
-    const MediaEntry *sel = &s_entries[cursor];
-
 #if !BELLATRIX_ENABLE_USBSTACK
     /* count is always 0 without USB stack — cannot reach here */
+    (void)s_entries;
     launcher_input_set_active(false);
     return false;
-#endif
+#else
 
+    const MediaEntry *sel = &s_entries[cursor];
     Fat32State *sel_fs       = &s_fat32;
     Fat32File  *sel_iso_file = &s_iso_file;
     const char *src_tag      = "USB";
@@ -964,4 +991,5 @@ bool launcher_run(void)
 
     for (volatile uint32_t i = 0; i < 5000000u; i++) asm volatile("nop");
     return true;
+#endif /* !BELLATRIX_ENABLE_USBSTACK */
 }

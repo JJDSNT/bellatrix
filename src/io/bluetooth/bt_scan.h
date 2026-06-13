@@ -48,4 +48,14 @@ const char *bt_scan_status(void);
 /* Increments whenever results/status change — cheap redraw check. */
 uint32_t bt_scan_generation(void);
 
+/* Number of link stall events that triggered a power-cycle recovery.
+ * Shown in bt_scan_status() when > 0 as "[N err]". */
+unsigned bt_scan_stall_count(void);
+
+/* Called by bt_host when a link recovery power cycle is starting.
+ * Cancels in-flight timers and parks the phase machine in WAIT_STACK so
+ * the watchdog/LE timers don't fire HCI commands during re-initialisation.
+ * Results collected so far are preserved. */
+void bt_scan_notify_recovery(void);
+
 #endif /* BELLATRIX_IO_BT_SCAN_H */
