@@ -22,6 +22,7 @@
 #endif
 #if BELLATRIX_ENABLE_BTSTACK
 #include "io/bluetooth/bt_scan.h"
+#include "io/bluetooth/bt_pairs.h"
 #include "io/bluetooth/bt_diag.h"
 #include "storage/sdcard/bcm_emmc.h"
 #endif
@@ -516,9 +517,11 @@ static void bt_draw_scan_chrome(void)
     fb_puts(s_margin_x, H - s_status_h + (s_status_h - s_char) / 2u,
             build_tag, COL_TEXT, COL_STATUS_BG);
     fb_puts_centred(0, W, H - s_status_h + (s_status_h - s_char) / 2u,
-                    "ENTER/ESC = continue boot",
+                    "UP/DOWN=select  ENTER=pair/unpair  ESC=boot",
                     COL_TEXT, COL_STATUS_BG);
 }
+
+static unsigned s_bt_cursor; /* selected row index in scan list */
 
 // Dynamic rows, overwritten in place: every line is padded to a fixed
 // width so stale text disappears without clearing the background.
@@ -552,9 +555,14 @@ static void bt_draw_scan_rows(void)
         } else {
             static const char *transport_tag[4] = { "??", "CL", "LE", "DM" };
             const char *tag = transport_tag[r->transport & 3u];
+            bool paired = bt_pairs_is_known(r->addr);
 
-            line[p++] = (char)('1' + (char)i);
-            line[p++] = r->hid ? '*' : ' ';   /* HID-capable device */
+            /* cursor arrow */
+            line[p++] = (i == s_bt_cursor) ? '>' : ' ';
+            /* paired marker */
+            line[p++] = paired ? 'P' : ' ';
+            /* HID marker */
+            line[p++] = r->hid ? '*' : ' ';
             line[p++] = tag[0];
             line[p++] = tag[1];
             line[p++] = ' ';
@@ -569,7 +577,10 @@ static void bt_draw_scan_rows(void)
         while (p < sizeof(line) - 1u) line[p++] = ' ';
         line[p] = '\0';
 
-        fb_puts(s_margin_x, y, line, COL_TEXT, COL_BG);
+        /* highlight cursor row */
+        uint16_t fg = (i == s_bt_cursor) ? COL_BG        : COL_TEXT;
+        uint16_t bg = (i == s_bt_cursor) ? COL_CURSOR_BG : COL_BG;
+        fb_puts(s_margin_x, y, line, fg, bg);
         bellatrix_launcher_pump_bt();
         y += s_row_h;
     }
@@ -644,6 +655,28 @@ static int bt_save_report_to_sd(void)
     return 1;
 }
 
+/* Load BTPAIRS.TXT from SD into bt_pairs.  Reuses s_bt_report as read buffer. */
+static void bt_pairs_load_from_sd(Fat32State *fs)
+{
+    Fat32File f;
+    if (!fat32_open(fs, BT_PAIRS_FILENAME, &f)) {
+        bt_pairs_load(NULL, 0u);
+        return;
+    }
+    uint32_t got = fat32_read(&f, s_bt_report, BT_REPORT_CAP - 1u);
+    s_bt_report[got] = '\0';
+    bt_pairs_load(s_bt_report, got);
+}
+
+/* Write BTPAIRS.TXT back to SD if pairs changed. */
+static void bt_pairs_save_to_sd(Fat32State *fs)
+{
+    if (!bt_pairs_dirty()) return;
+    static char pairs_buf[BT_PAIRS_FILE_CAP];
+    bt_pairs_serialise(pairs_buf, BT_PAIRS_FILE_CAP);
+    fat32_overwrite_in_place(fs, BT_PAIRS_FILENAME, pairs_buf, BT_PAIRS_FILE_CAP - 1u);
+}
+
 // Run the scan screen until the user continues or ~90 s elapse.
 // Shown even when the controller bootstrap failed, so the failure is
 // visible (the serial console is dark during BT operation) and the
@@ -651,6 +684,17 @@ static int bt_save_report_to_sd(void)
 static void bt_scan_screen(void)
 {
     bool working = bellatrix_launcher_bt_ready() != 0;
+
+    /* Mount SD early so we can load BTPAIRS.TXT before the scan starts. */
+    static Fat32State s_sd_fs_scan;
+    bool sd_ok = bcm_emmc_init() &&
+                 fat32_init_with_reader(&s_sd_fs_scan, sd_read_block_cb, NULL);
+    if (sd_ok) {
+        fat32_set_writer(&s_sd_fs_scan, sd_write_block_cb, NULL);
+        bt_pairs_load_from_sd(&s_sd_fs_scan);
+    }
+
+    s_bt_cursor = 0u;
 
     if (working)
         bt_scan_start();
@@ -665,6 +709,7 @@ static void bt_scan_screen(void)
     // Outer iteration ≈ 0.125 ms — tight cadence keeps the 16-byte PL011
     // FIFO drained during LE advert floods (~10KB/s at 115200).
     uint32_t budget   = working ? 720000u : 96000u;   // ≈90 s / ≈12 s
+    bool needs_redraw = false;
 
     for (uint32_t iter = 0u; iter < budget; iter++) {
         bellatrix_launcher_pump_bt();
@@ -686,13 +731,60 @@ static void bt_scan_screen(void)
         }
 
         uint8_t key = launcher_input_pop();
-        if (key == LAUNCHER_KEY_ENTER || key == LAUNCHER_KEY_KPENTER ||
-            key == LAUNCHER_KEY_ESC)
+        if (key == LAUNCHER_KEY_ESC)
             break;
+
+        if (key == LAUNCHER_KEY_ENTER || key == LAUNCHER_KEY_KPENTER) {
+            unsigned count = bt_scan_count();
+            if (count > 0u) {
+                const BTScanResult *r = bt_scan_get(s_bt_cursor);
+                if (r) {
+                    if (bt_pairs_is_known(r->addr))
+                        bt_pairs_remove(r->addr);
+                    else
+                        bt_pairs_add(r);
+                    needs_redraw = true;
+                }
+            } else {
+                break; /* ENTER with no devices = exit */
+            }
+        }
+
+        if (key == LAUNCHER_KEY_DEL || key == LAUNCHER_KEY_BKSP) {
+            unsigned count = bt_scan_count();
+            if (count > 0u) {
+                const BTScanResult *r = bt_scan_get(s_bt_cursor);
+                if (r && bt_pairs_is_known(r->addr)) {
+                    bt_pairs_remove(r->addr);
+                    needs_redraw = true;
+                }
+            }
+        }
+
+        if (key == LAUNCHER_KEY_UP && s_bt_cursor > 0u) {
+            s_bt_cursor--;
+            needs_redraw = true;
+        }
+        if (key == LAUNCHER_KEY_DOWN) {
+            unsigned count = bt_scan_count();
+            if (s_bt_cursor + 1u < count) {
+                s_bt_cursor++;
+                needs_redraw = true;
+            }
+        }
 
         if ((iter & 4095u) == 0u && bt_scan_generation() != last_gen) {
             last_gen = bt_scan_generation();
+            /* clamp cursor to current result count */
+            unsigned count = bt_scan_count();
+            if (count > 0u && s_bt_cursor >= count)
+                s_bt_cursor = count - 1u;
+            needs_redraw = true;
+        }
+
+        if (needs_redraw) {
             bt_draw_scan_rows();
+            needs_redraw = false;
         }
 
         for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
@@ -706,6 +798,9 @@ static void bt_scan_screen(void)
             for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
         }
     }
+
+    if (sd_ok)
+        bt_pairs_save_to_sd(&s_sd_fs_scan);
 
     int saved = bt_save_report_to_sd();
     const char *msg =
