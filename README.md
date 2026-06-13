@@ -68,14 +68,62 @@ EMU_PROFILE=bellatrix-musashi ./run.sh qemu       # use Musashi instead of Emu68
 
 ### Musashi harness (Linux, no hardware)
 
-The harness runs the full chipset (Rigel) with a Musashi M68K interpreter as a native Linux process with an SDL2 window. No Pi needed.
+The harness runs the full Rigel chipset with a Musashi M68K interpreter as a native Linux process. It is the primary development loop — no Pi, no QEMU, no cross-compile required. It opens an SDL2 window by default; pass `FRAMES` or `CYCLES` for headless runs.
 
 ```bash
-./run.sh harness                                  # TUI selects ROM
-KICKSTART=src/roms/aros.rom ./run.sh harness      # run AROS
-KICKSTART=src/roms/DiagROM.rom ./run.sh harness-serial   # serial PTY mode
-KICKSTART=src/roms/aros.rom FRAMES=50 ./run.sh harness   # headless, 50 frames
+./run.sh harness                                   # TUI selects ROM
+KICKSTART=src/roms/aros.rom ./run.sh harness       # interactive SDL2 window
 KICKSTART=src/roms/KS13.rom ADF=disks/WB13.adf ./run.sh harness
+KICKSTART=src/roms/aros.rom FRAMES=50 ./run.sh harness    # headless, stop after 50 frames
+KICKSTART=src/roms/KS31.rom CYCLES=5000000 ./run.sh harness
+```
+
+**CPU model:**
+
+```bash
+HARNESS_CPU=68000    # default
+HARNESS_CPU=68020    # also: 68010, 68ec020
+```
+
+**Serial injection** — automates boot sequences that require keyboard input on the serial port (e.g. AROS boot menu, DiagROM commands). Bytes are injected into Paula's UART RX at specific frame numbers:
+
+```bash
+# Inject a single early byte (e.g. space to dismiss a boot menu at frame 5)
+HARNESS_SERIAL_BOOTKEY=' ' KICKSTART=src/roms/aros.rom ./run.sh harness
+
+# Inject two bytes at specific frames
+HARNESS_SERIAL_BOOTKEY=' ' HARNESS_SERIAL_BOOTKEY_FRAME=900 \
+  HARNESS_SERIAL_INJECT=4 HARNESS_SERIAL_INJECT_FRAME=1050 \
+  KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+
+# Script: comma-separated frame:byte pairs
+HARNESS_SERIAL_SCRIPT="900:0x20,1050:4" KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+
+# Hold: repeat a byte every N frames for a count
+HARNESS_SERIAL_HOLD=0x20 HARNESS_SERIAL_HOLD_FRAME=900 \
+  HARNESS_SERIAL_HOLD_COUNT=40 HARNESS_SERIAL_HOLD_STEP=1 \
+  HARNESS_SERIAL_INJECT=4 HARNESS_SERIAL_INJECT_FRAME=1050 \
+  KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+```
+
+**Mouse simulation** — holds the right mouse button for N frames (useful for triggering Early Startup menus):
+
+```bash
+HARNESS_MOUSE_RMB_FRAME=900 HARNESS_MOUSE_RMB_COUNT=60 \
+  HARNESS_SERIAL_INJECT=4 HARNESS_SERIAL_INJECT_FRAME=1050 \
+  KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+
+# Inject a serial byte after a real SDL right-click
+HARNESS_SERIAL_AFTER_RMB=4 HARNESS_SERIAL_AFTER_RMB_DELAY=80 \
+  KICKSTART=src/roms/DiagROM.rom ./run.sh harness
+```
+
+**Serial PTY mode** — exposes Paula serial as a PTY; attach with `screen`:
+
+```bash
+KICKSTART=src/roms/DiagROM.rom ./run.sh harness-serial
+# → prints: screen /dev/pts/X 9600
+# → press Enter here after attaching to continue boot
 ```
 
 ### Raspberry Pi 3B
