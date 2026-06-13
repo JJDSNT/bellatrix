@@ -2,8 +2,6 @@
 
 **Bellatrix** is a bare-metal Amiga machine emulator for the Raspberry Pi 3B. It integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/jfdelnero/Rigel) chipset library and a full suite of bare-metal IO subsystems, producing a complete Amiga-compatible machine that runs directly on the Pi hardware — no OS, no Linux, no hypervisor.
 
-The goal: boot Kickstart to the "Happy Hand" Workbench screen on bare metal.
-
 ---
 
 ## Architecture
@@ -42,18 +40,10 @@ Bellatrix is the machine layer that integrates three main pieces:
 
 ---
 
-## Status
+## Current focus
 
-Active development.
-
-| Phase | Goal | Status |
-|---|---|---|
-| 0 | Infrastructure + bus trace | ✅ done |
-| 1 | Chip RAM + ROM load, JIT first instructions | ✅ done |
-| 2 | CIA 8520 complete | ✅ done |
-| 3 | INTENA/INTREQ/VBL | 🔄 in progress |
-| 4 | Copper + Bitplanes + HDMI | ⏳ next |
-| 5 | Happy Hand | ⏳ goal |
+- **Emu68 integration** — full JIT backend running with the Rigel chipset
+- **AROS boot** — AROS reaches the kitty screen but does not complete the boot sequence
 
 ---
 
