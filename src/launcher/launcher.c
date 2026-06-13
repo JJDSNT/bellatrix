@@ -523,6 +523,17 @@ static void bt_draw_scan_chrome(void)
 
 static unsigned s_bt_cursor; /* selected row index in scan list */
 
+/* True if addr from bt_pairs has already been found by the current inquiry. */
+static bool scan_has_addr(const uint8_t addr[6])
+{
+    unsigned n = bt_scan_count();
+    for (unsigned i = 0u; i < n; i++) {
+        const BTScanResult *r = bt_scan_get(i);
+        if (r && memcmp(r->addr, addr, 6u) == 0) return true;
+    }
+    return false;
+}
+
 // Dynamic rows, overwritten in place: every line is padded to a fixed
 // width so stale text disappears without clearing the background.
 static void bt_draw_scan_rows(void)
@@ -540,6 +551,31 @@ static void bt_draw_scan_rows(void)
     fb_puts(s_margin_x, y, line, COL_CURSOR_BG, COL_BG);
     bellatrix_launcher_pump_bt();
     y += s_row_h + s_row_h / 2u;
+
+    /* Saved pairs not yet found by inquiry — show immediately on boot */
+    unsigned pair_count = bt_pairs_count();
+    for (unsigned i = 0u; i < pair_count; i++) {
+        const BTPair *pair = bt_pairs_get(i);
+        if (!pair || scan_has_addr(pair->addr)) continue;
+        if (y + s_row_h + s_status_h >= H) break;
+        p = 0u;
+        static const char *type_char[4] = { "?", "K", "M", "J" };
+        /* "  S CL 12:34:21:ED:D1:1E name" — S = Saved, not yet visible */
+        line[p++] = ' '; line[p++] = 'S'; line[p++] = ' ';
+        line[p++] = type_char[pair->device_type < 4u ? pair->device_type : 0u][0];
+        line[p++] = ' ';
+        bt_format_addr(&line[p], pair->addr);
+        p += 17u;
+        line[p++] = ' ';
+        const char *name = pair->name[0] ? pair->name : "(no name)";
+        for (const char *s = name; *s && p < sizeof(line) - 1u; s++)
+            line[p++] = *s;
+        while (p < sizeof(line) - 1u) line[p++] = ' ';
+        line[p] = '\0';
+        fb_puts(s_margin_x, y, line, COL_STATUS_BG, COL_BG);
+        bellatrix_launcher_pump_bt();
+        y += s_row_h;
+    }
 
     unsigned count = bt_scan_count();
 
@@ -612,6 +648,10 @@ static bool sd_write_block_cb(void *ctx, uint32_t lba, const uint8_t *buf)
 }
 
 // Returns: 1 saved, 0 file missing, -1 SD/FS error.
+static int bt_save_report_to_sd(void);
+
+void launcher_save_bt_report(void) { bt_save_report_to_sd(); }
+
 static int bt_save_report_to_sd(void)
 {
     uint32_t len = 0u;

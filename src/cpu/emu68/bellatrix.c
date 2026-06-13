@@ -268,6 +268,7 @@ static inline uint32_t read_be32(const uint8_t *p)
 
 #if BELLATRIX_ENABLE_BTSTACK
 #include "io/bluetooth/bt_host.h"
+#include "hal_time_ms.h"
 static void bellatrix_init_bluetooth(BellatrixRuntime *rt, BellatrixMachine *m)
 {
     if (!rt || !m) {
@@ -611,15 +612,18 @@ void bellatrix_init(void)
 #if BELLATRIX_ENABLE_BTSTACK
     /* bt_pairs is populated by launcher_run() (reads BTPAIRS.TXT from SD).
      * Connect to saved HID devices now that the list is available.
-     * Then pump the BT stack for ~3 s so SDP + L2CAP + HID SET_PROTOCOL
-     * can complete before the emulation loop takes over io_step. */
+     * Pump for 5 s: paging + SDP + L2CAP + HID SET_PROTOCOL take 3-6 s. */
     bt_host_connect_pairs(&g_runtime.bluetooth);
     if (g_runtime.bluetooth.initialized) {
-        for (uint32_t _i = 0u; _i < 6000u; _i++) {
+        uint32_t _t0 = hal_time_ms();
+        while ((hal_time_ms() - _t0) < 5000u)
             bt_host_step(&g_runtime.bluetooth);
-            for (volatile uint32_t _d = 0u; _d < 20000u; _d++) asm volatile("nop");
-        }
     }
+#ifdef BELLATRIX_LAUNCHER
+    /* Write BTSCAN.TXT again — this time it captures the connect_pairs
+     * log entries and any HID connection events from the pump above. */
+    launcher_save_bt_report();
+#endif
 #endif
 
 
