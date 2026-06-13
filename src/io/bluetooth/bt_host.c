@@ -71,6 +71,7 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 static void bt_pairing_window_close(BTHost *bt);
 static void bt_phase2_start(int status);
 static void bt_setup_hci_main(BTHost *bt);
+static void bt_hardware_error_callback(uint8_t error_code);
 
 /* While BT owns the PL011, kprintf is redirected to the mini-UART on the
  * same header pins (GPIO 14/15 ALT5, 115200 8N1) — boot logs keep flowing
@@ -499,6 +500,7 @@ static void bt_setup_hci_main(BTHost *bt)
      * to get classic names on the BCM43430A1 (Remote Name Request crashes
      * its firmware mid-event). */
     hci_set_inquiry_mode(INQUIRY_MODE_RSSI_AND_EIR);
+    hci_set_hardware_error_callback(&bt_hardware_error_callback);
 
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
@@ -769,41 +771,18 @@ bool bt_host_is_working(const BTHost *bt)
 #define BT_LINK_STALL_MS 3000u
 #define BT_LINK_MAX_RECOVERIES 4u
 
-static void bt_link_watchdog(BTHost *bt)
+static uint32_t s_link_recoveries;
+
+static void bt_link_recover(BTHost *bt, const char *reason)
 {
-    static uint32_t stall_filled;
-    static uint32_t stall_since_ms;
-    static uint32_t recoveries;
-    uint32_t filled, wanted, now_ms;
-
-    if (bt->bootstrap_state != BT_BOOTSTRAP_WORKING || !bt->hci_ready)
-        return;
-
-    bt_hal_raspi3_rx_pending(&filled, &wanted);
-    if (filled == 0u || filled >= wanted) {        /* idle or completing */
-        stall_since_ms = 0u;
+    if (s_link_recoveries >= BT_LINK_MAX_RECOVERIES) {
+        bt_diag_log("[BT] %s, but recovery budget exhausted (%u)\n",
+                    reason, (unsigned)s_link_recoveries);
         return;
     }
-
-    now_ms = bt_now_ms();
-    if (stall_since_ms == 0u || filled != stall_filled) {
-        stall_filled = filled;
-        stall_since_ms = now_ms;
-        return;
-    }
-    if (now_ms - stall_since_ms < BT_LINK_STALL_MS)
-        return;
-
-    stall_since_ms = 0u;
-    if (recoveries >= BT_LINK_MAX_RECOVERIES) {
-        bt_diag_log("[BT] link stalled again but recovery budget exhausted (%u)\n",
-                    (unsigned)recoveries);
-        return;
-    }
-    recoveries++;
-    bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms) - full power cycle %u/%u\n",
-                (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS,
-                (unsigned)recoveries, (unsigned)BT_LINK_MAX_RECOVERIES);
+    s_link_recoveries++;
+    bt_diag_log("[BT] %s - full power cycle %u/%u\n", reason,
+                (unsigned)s_link_recoveries, (unsigned)BT_LINK_MAX_RECOVERIES);
 
     /* Force the stack to OFF *synchronously*.  A single POWER_OFF from
      * WORKING enters the graceful HALTING path, which needs answers from
@@ -826,7 +805,56 @@ static void bt_link_watchdog(BTHost *bt)
     bt->phase1_complete = false;
     bt->power_cycle_attempts = 0;
     btstack_chipset_bcm_instance()->init(&bt_transport_config);
-    bt_begin_power_cycle(bt, "link stalled");
+    bt_begin_power_cycle(bt, "link recovery");
+}
+
+/* The chip can also confess on its own: HCI Hardware Error (evt 0x10).
+ * btstack's default reaction is a bare off+on, which would skip the
+ * PatchRAM upload — route it to the full recovery instead. */
+static void bt_hardware_error_callback(uint8_t error_code)
+{
+    char reason[48];
+    unsigned i = 0u;
+    static const char prefix[] = "hardware error 0x";
+    static const char hexd[] = "0123456789abcdef";
+
+    for (; prefix[i]; i++) reason[i] = prefix[i];
+    reason[i++] = hexd[(error_code >> 4) & 0xF];
+    reason[i++] = hexd[error_code & 0xF];
+    reason[i] = '\0';
+
+    if (s_bt_host)
+        bt_link_recover(s_bt_host, reason);
+}
+
+static void bt_link_watchdog(BTHost *bt)
+{
+    static uint32_t stall_filled;
+    static uint32_t stall_since_ms;
+    uint32_t filled, wanted, now_ms;
+
+    if (bt->bootstrap_state != BT_BOOTSTRAP_WORKING || !bt->hci_ready)
+        return;
+
+    bt_hal_raspi3_rx_pending(&filled, &wanted);
+    if (filled == 0u || filled >= wanted) {        /* idle or completing */
+        stall_since_ms = 0u;
+        return;
+    }
+
+    now_ms = bt_now_ms();
+    if (stall_since_ms == 0u || filled != stall_filled) {
+        stall_filled = filled;
+        stall_since_ms = now_ms;
+        return;
+    }
+    if (now_ms - stall_since_ms < BT_LINK_STALL_MS)
+        return;
+
+    stall_since_ms = 0u;
+    bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms)\n",
+                (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS);
+    bt_link_recover(bt, "link stalled");
 }
 
 void bt_host_step(BTHost *bt) {
