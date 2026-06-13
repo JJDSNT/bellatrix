@@ -106,7 +106,7 @@ There are four release builds, defined by two orthogonal axes:
 
 **Single-core:** all components (CPU, chipset, IO) run on Core 0. Simpler, no synchronization overhead, currently the most stable.
 
-**Multi-core:** Core 0 = CPU/JIT, Core 1 = GFX/DMA (Agnus+Denise), Core 2 = Paula, Core 3 = IO/CIA. Better timing separation; higher complexity.
+**Multi-core:** Core 0 = CPU (Emu68 JIT), Core 1 = full chipset (Rigel: CIA+Agnus+Paula+Denise), Core 3 = IO (USB + Bluetooth). Better timing isolation between CPU and chipset.
 
 **Emu68:** full M68K→AArch64 JIT. Fast, close to real hardware speed.
 
@@ -143,7 +143,7 @@ BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
 | Variable | Default | Description |
 |---|---|---|
 | `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` (JIT) or `musashi` (interpreter) |
-| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 GFX / Core2 Paula / Core3 IO |
+| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 Chipset (Rigel) / Core3 IO |
 | `BELLATRIX_BTSTACK` | `0` | Bluetooth HID host (BTStack) |
 | `BELLATRIX_USBSTACK` | `0` | USB HID + mass storage (CherryUSB) |
 | `BELLATRIX_LAUNCHER` | `1` | ADF/ISO selector UI |

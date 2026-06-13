@@ -35,7 +35,7 @@ BELLATRIX_CPU_BACKEND=musashi BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BE
 | Variable | Default | Description |
 |---|---|---|
 | `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` (JIT) or `musashi` (interpreter) |
-| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 GFX / Core2 Paula / Core3 IO |
+| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 Chipset (Rigel) / Core3 IO |
 | `BELLATRIX_BTSTACK` | `0` | Bluetooth HID host (BTStack) |
 | `BELLATRIX_USBSTACK` | `0` | USB HID + mass storage (CherryUSB) |
 | `BELLATRIX_LAUNCHER` | `1` | ADF/ISO selector UI |
