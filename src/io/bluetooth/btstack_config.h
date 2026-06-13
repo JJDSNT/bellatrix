@@ -15,8 +15,9 @@
 // BTstack configuration.
 #define HCI_ACL_PAYLOAD_SIZE (1691 + 4)
 #define MAX_NR_HCI_CONNECTIONS 2
-#define MAX_NR_L2CAP_SERVICES  3
-#define MAX_NR_L2CAP_CHANNELS  4
+#define MAX_NR_L2CAP_SERVICES  4
+#define MAX_NR_L2CAP_CHANNELS  10  /* 3 HID conns × 2 channels + 4 spare */
+#define MAX_NR_HID_HOST_CONNECTIONS 3  /* keyboard + mouse + gamepad */
 #define MAX_NR_GATT_CLIENT_VALUETYPES 0
 #define MAX_NR_GATT_SUBCLIENTS 0
 #define MAX_NR_RFCOMM_MULTIPLEXERS 1

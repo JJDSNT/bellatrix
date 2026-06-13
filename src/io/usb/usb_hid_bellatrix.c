@@ -1,4 +1,5 @@
 #include "machine/machine.h"
+#include "io/hid/hid_amiga_map.h"
 #include "support.h"
 
 #ifdef BELLATRIX_LAUNCHER
@@ -53,88 +54,11 @@ static BellatrixUSBHIDMouse *bellatrix_usb_hid_mouse_for_minor(uint8_t minor)
     return &g_bellatrix_usb_hid_mice[minor];
 }
 
+/* Thin wrapper kept for call-site compatibility inside this file. */
 static bool bellatrix_usb_hid_usage_to_amiga_raw(uint8_t usage, uint8_t *rawkey)
 {
-    if (!rawkey) {
-        return false;
-    }
-
-    if (usage >= 0x04u && usage <= 0x1du) {
-        static const uint8_t letter_rawkeys[] = {
-            0x20u, 0x35u, 0x33u, 0x22u, 0x12u, 0x23u, 0x24u, 0x25u, 0x17u,
-            0x26u, 0x27u, 0x28u, 0x37u, 0x36u, 0x18u, 0x19u, 0x10u, 0x13u,
-            0x21u, 0x14u, 0x16u, 0x34u, 0x11u, 0x32u, 0x15u, 0x31u
-        };
-
-        *rawkey = letter_rawkeys[usage - 0x04u];
-        return true;
-    }
-
-    if (usage >= 0x1eu && usage <= 0x27u) {
-        *rawkey = (uint8_t)(usage - 0x1du);
-        return true;
-    }
-
-    if (usage >= 0x59u && usage <= 0x61u) {
-        static const uint8_t keypad_rawkeys[] = {
-            0x1du, 0x1eu, 0x1fu, 0x2du, 0x2eu, 0x2fu, 0x3du, 0x3eu, 0x3fu
-        };
-
-        *rawkey = keypad_rawkeys[usage - 0x59u];
-        return true;
-    }
-
-    switch (usage) {
-    case HID_KBD_USAGE_SPACE: *rawkey = 0x40u; return true;
-    case HID_KBD_USAGE_ENTER: *rawkey = 0x44u; return true;
-    case HID_KBD_USAGE_KPDEMTER: *rawkey = 0x43u; return true;
-    case HID_KBD_USAGE_ESCAPE: *rawkey = 0x45u; return true;
-    case HID_KBD_USAGE_UP: *rawkey = 0x4Cu; return true;
-    case HID_KBD_USAGE_DOWN: *rawkey = 0x4Du; return true;
-    case HID_KBD_USAGE_RIGHT: *rawkey = 0x4Eu; return true;
-    case HID_KBD_USAGE_LEFT: *rawkey = 0x4Fu; return true;
-    case HID_KBD_USAGE_KPD0: *rawkey = 0x0Fu; return true;
-    default:
-        break;
-    }
-
-    switch (usage) {
-    case HID_KBD_USAGE_DELETE: *rawkey = 0x41u; return true;
-    case HID_KBD_USAGE_TAB: *rawkey = 0x42u; return true;
-    case HID_KBD_USAGE_HYPHEN: *rawkey = 0x0Bu; return true;
-    case HID_KBD_USAGE_EQUAL: *rawkey = 0x0Cu; return true;
-    case HID_KBD_USAGE_LBRACKET: *rawkey = 0x1Au; return true;
-    case HID_KBD_USAGE_RBRACKET: *rawkey = 0x1Bu; return true;
-    case HID_KBD_USAGE_BSLASH: *rawkey = 0x0Du; return true;
-    case HID_KBD_USAGE_SEMICOLON: *rawkey = 0x29u; return true;
-    case HID_KBD_USAGE_SQUOTE: *rawkey = 0x2Au; return true;
-    case HID_KBD_USAGE_GACCENT: *rawkey = 0x00u; return true;
-    case HID_KBD_USAGE_COMMON: *rawkey = 0x38u; return true;
-    case HID_KBD_USAGE_PERIOD: *rawkey = 0x39u; return true;
-    case HID_KBD_USAGE_DIV: *rawkey = 0x3Au; return true;
-    case HID_KBD_USAGE_CAPSLOCK: *rawkey = 0x62u; return true;
-    case HID_KBD_USAGE_F1: *rawkey = 0x50u; return true;
-    case HID_KBD_USAGE_F2: *rawkey = 0x51u; return true;
-    case HID_KBD_USAGE_F3: *rawkey = 0x52u; return true;
-    case HID_KBD_USAGE_F4: *rawkey = 0x53u; return true;
-    case HID_KBD_USAGE_F5: *rawkey = 0x54u; return true;
-    case HID_KBD_USAGE_F6: *rawkey = 0x55u; return true;
-    case HID_KBD_USAGE_F7: *rawkey = 0x56u; return true;
-    case HID_KBD_USAGE_F8: *rawkey = 0x57u; return true;
-    case HID_KBD_USAGE_F9: *rawkey = 0x58u; return true;
-    case HID_KBD_USAGE_F10: *rawkey = 0x59u; return true;
-    case HID_KBD_USAGE_DELFWD: *rawkey = 0x46u; return true;
-    case HID_KBD_USAGE_LCTRL: *rawkey = 0x63u; return true;
-    case HID_KBD_USAGE_LSHIFT: *rawkey = 0x60u; return true;
-    case HID_KBD_USAGE_LALT: *rawkey = 0x64u; return true;
-    case HID_KBD_USAGE_LGUI: *rawkey = 0x66u; return true;
-    case HID_KBD_USAGE_RCTRL: *rawkey = 0x63u; return true;
-    case HID_KBD_USAGE_RSHIFT: *rawkey = 0x61u; return true;
-    case HID_KBD_USAGE_RALT: *rawkey = 0x65u; return true;
-    case HID_KBD_USAGE_RGUI: *rawkey = 0x67u; return true;
-    default:
-        return false;
-    }
+    if (!rawkey) return false;
+    return hid_usage_to_amiga_raw(usage, rawkey);
 }
 
 static bool bellatrix_usb_hid_report_contains(const uint8_t keys[6], uint8_t usage)

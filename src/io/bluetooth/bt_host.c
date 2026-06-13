@@ -1,5 +1,8 @@
 #include "io/bluetooth/bt_host.h"
 #include "io/bluetooth/bt_diag.h"
+#include "io/bluetooth/bt_scan.h"
+#include "io/bluetooth/bt_pairs.h"
+#include "io/bluetooth/bt_hid.h"
 #include "debug/core_log.h"
 #include "support.h"
 
@@ -20,6 +23,10 @@
 #include "hci.h"
 #include "hci_cmd.h"
 #include "hci_transport.h"
+#include "l2cap.h"
+#include "classic/hid_host.h"
+#include "classic/sdp_server.h"
+#include "classic/btstack_link_key_db_memory.h"
 #include "mmu.h"
 
 // HAL declarations
@@ -67,7 +74,41 @@ static btstack_timer_source_t bt_pairing_window_timer;
 static BTHost *s_bt_host = NULL;
 static bool s_bt_console_handed_off = false;
 
+/* HID host descriptor storage — used for report-protocol devices.
+ * In boot protocol mode this is largely unused, but hid_host_init() requires it. */
+#define BT_HID_DESCRIPTOR_STORAGE_SIZE 512u
+static uint8_t s_hid_descriptor_storage[BT_HID_DESCRIPTOR_STORAGE_SIZE];
+
+/* cid → device-type table for routing HID reports in hid_packet_handler */
+#define BT_HID_CID_TABLE_MAX 4u
+typedef struct { uint16_t cid; uint8_t dtype; } BTHIDCIDEntry;
+static BTHIDCIDEntry s_hid_cid_table[BT_HID_CID_TABLE_MAX];
+static unsigned      s_hid_cid_count;
+
+static void hid_cid_register(uint16_t cid, uint8_t dtype)
+{
+    if (s_hid_cid_count >= BT_HID_CID_TABLE_MAX) return;
+    s_hid_cid_table[s_hid_cid_count].cid   = cid;
+    s_hid_cid_table[s_hid_cid_count].dtype = dtype;
+    s_hid_cid_count++;
+}
+static uint8_t hid_cid_type(uint16_t cid)
+{
+    for (unsigned i = 0u; i < s_hid_cid_count; i++)
+        if (s_hid_cid_table[i].cid == cid) return s_hid_cid_table[i].dtype;
+    return BT_PAIRS_TYPE_UNKNOWN;
+}
+static void hid_cid_unregister(uint16_t cid)
+{
+    for (unsigned i = 0u; i < s_hid_cid_count; i++) {
+        if (s_hid_cid_table[i].cid != cid) continue;
+        s_hid_cid_table[i] = s_hid_cid_table[--s_hid_cid_count];
+        return;
+    }
+}
+
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+static void hid_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void bt_pairing_window_close(BTHost *bt);
 static void bt_phase2_start(int status);
 static void bt_setup_hci_main(BTHost *bt);
@@ -451,12 +492,13 @@ static void bt_bootstrap_step(BTHost *bt)
         case BT_BOOTSTRAP_WAIT_FOR_WORKING:
             if ((bt->init_deadline_ms != 0u) &&
                 ((int32_t)(now - bt->init_deadline_ms) >= 0)) {
-                if ((!bt->phase1_complete) &&
-                    (bt->power_cycle_attempts < BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS)) {
+                if (bt->power_cycle_attempts < BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS) {
                     bt_diag_log("[BT] still stuck in initializing after %u ms, retrying bring-up\n",
                             (unsigned)BELLATRIX_BT_INIT_TIMEOUT_MS);
                     hci_power_control(HCI_POWER_OFF);
+                    bt_hal_raspi3_flush_rx();
                     bt_pairing_window_close(bt);
+                    bt->phase1_complete = false;
                     bt_begin_power_cycle(bt, "retry after initializing timeout");
                 } else {
                     bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
@@ -496,11 +538,23 @@ static void bt_setup_hci_main(BTHost *bt)
 
     hci_init(transport, &bt_transport_config);
     hci_set_chipset(chipset);
-    /* EIR inquiry results carry the device name inline — the only safe way
-     * to get classic names on the BCM43430A1 (Remote Name Request crashes
-     * its firmware mid-event). */
-    hci_set_inquiry_mode(INQUIRY_MODE_RSSI_AND_EIR);
+    /* RSSI mode (not EIR): EIR results are up to 255 bytes per device and
+     * the BCM43430A1 firmware wedges mid-delivery when two consecutive large
+     * EIR events arrive (rxq=165/233 stall pattern seen with 3+ nearby
+     * devices). RSSI mode uses fixed-size 14-byte per-device records, which
+     * never overflow. Device names are lost, but CoD labels cover gamepads,
+     * TVs, etc. Remote Name Request crashes the firmware anyway. */
+    hci_set_inquiry_mode(INQUIRY_MODE_RSSI);
     hci_set_hardware_error_callback(&bt_hardware_error_callback);
+    hci_set_link_key_db(btstack_link_key_db_memory_instance());
+
+    l2cap_init();
+    sdp_init();
+    hid_host_init(s_hid_descriptor_storage, BT_HID_DESCRIPTOR_STORAGE_SIZE);
+    hid_host_register_packet_handler(hid_packet_handler);
+
+    bt_hid_init();
+    s_hid_cid_count = 0u;
 
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
@@ -526,6 +580,14 @@ static void bt_phase2_start(int status)
     s_bt_host->init_deadline_ms = 0;
     bt_diag_log("[BT] BCM phase 1 complete, switching to H4 main transport\n");
     bt_setup_hci_main(s_bt_host);
+    /* Phase 1 (btstack_uart_block) and our drain_fifo both read the same
+     * PL011 FIFO concurrently during the bootstrap wait loop.  drain_fifo
+     * wins some bytes that phase 1 never sees; those bytes accumulate in
+     * our ring.  If left there they are fed to the H4 parser as the first
+     * bytes of the real HCI init, producing a large garbage "packet" —
+     * seen as rxq=251/252 stall right after phase 1 on every recovery.
+     * Flushing here, before hci_power_control(ON), gives H4 a clean start. */
+    bt_hal_raspi3_flush_rx();
     bt_schedule_power_on(s_bt_host);
 }
 
@@ -596,6 +658,18 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                     }
                     bt_diag_log("[BT] stack up and running, BD_ADDR=%s\n", bd_addr_to_str(local_addr));
                     bt_pairing_window_open(s_bt_host);
+                    /* Re-connect to all saved pairs */
+                    for (unsigned i = 0u; i < bt_pairs_count(); i++) {
+                        const BTPair *p = bt_pairs_get(i);
+                        if (!p) continue;
+                        bd_addr_t addr;
+                        memcpy(addr, p->addr, 6u);
+                        uint16_t cid = 0u;
+                        int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
+                        bt_diag_log("[BT] hid_host_connect pair[%u] %s type=%u -> cid=0x%04x ret=%d\n",
+                                    i, bd_addr_to_str(addr),
+                                    (unsigned)p->device_type, (unsigned)cid, ret);
+                    }
                     break;
                 }
                 case HCI_STATE_INITIALIZING:
@@ -640,6 +714,82 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                 hci_send_cmd(&hci_user_confirmation_request_negative_reply, &event_addr);
             }
             break;
+        default:
+            break;
+    }
+}
+
+static void hid_packet_handler(uint8_t packet_type, uint16_t channel,
+                                uint8_t *packet, uint16_t size)
+{
+    (void)channel;
+    (void)size;
+
+    if (packet_type != HCI_EVENT_PACKET) return;
+    if (hci_event_packet_get_type(packet) != HCI_EVENT_HID_META) return;
+
+    bd_addr_t addr;
+    uint16_t hid_cid;
+    uint8_t  status;
+
+    switch (hci_event_hid_meta_get_subevent_code(packet)) {
+        case HID_SUBEVENT_CONNECTION_OPENED:
+            hid_cid = hid_subevent_connection_opened_get_hid_cid(packet);
+            status  = hid_subevent_connection_opened_get_status(packet);
+            if (status != ERROR_CODE_SUCCESS) {
+                bt_diag_log("[BT] HID connect failed: cid=0x%04x status=0x%02x\n",
+                            (unsigned)hid_cid, (unsigned)status);
+                break;
+            }
+            hid_subevent_connection_opened_get_bd_addr(packet, addr);
+            {
+                uint8_t dtype = BT_PAIRS_TYPE_UNKNOWN;
+                for (unsigned i = 0u; i < bt_pairs_count(); i++) {
+                    const BTPair *p = bt_pairs_get(i);
+                    if (p && memcmp(p->addr, addr, 6u) == 0) {
+                        dtype = p->device_type;
+                        break;
+                    }
+                }
+                hid_cid_register(hid_cid, dtype);
+                bt_diag_log("[BT] HID connected: %s type=%u cid=0x%04x\n",
+                            bd_addr_to_str(addr), (unsigned)dtype, (unsigned)hid_cid);
+            }
+            break;
+
+        case HID_SUBEVENT_REPORT: {
+            hid_cid = hid_subevent_report_get_hid_cid(packet);
+            const uint8_t *data = hid_subevent_report_get_report(packet);
+            uint16_t len = (uint16_t)hid_subevent_report_get_report_len(packet);
+            uint8_t rtype = hid_cid_type(hid_cid);
+            switch (rtype) {
+                case BT_PAIRS_TYPE_KEYBOARD:
+                    bt_hid_handle_keyboard_report(hid_cid, data, len);
+                    break;
+                case BT_PAIRS_TYPE_MOUSE:
+                    bt_hid_handle_mouse_report(hid_cid, data, len);
+                    break;
+                case BT_PAIRS_TYPE_JOYSTICK:
+                    bt_hid_handle_joystick_report(hid_cid, data, len);
+                    break;
+                default:
+                    /* Unknown type: guess from report length */
+                    if (len >= 8u)
+                        bt_hid_handle_keyboard_report(hid_cid, data, len);
+                    else
+                        bt_hid_handle_mouse_report(hid_cid, data, len);
+                    break;
+            }
+            break;
+        }
+
+        case HID_SUBEVENT_CONNECTION_CLOSED:
+            hid_cid = hid_subevent_connection_closed_get_hid_cid(packet);
+            bt_diag_log("[BT] HID disconnected: cid=0x%04x\n", (unsigned)hid_cid);
+            bt_hid_release_all(hid_cid);
+            hid_cid_unregister(hid_cid);
+            break;
+
         default:
             break;
     }
@@ -769,7 +919,7 @@ bool bt_host_is_working(const BTHost *bt)
  * full bring-up: BT_REG_EN power cycle + PatchRAM re-upload (~5 s).
  * The existing bootstrap state machine does all of it. */
 #define BT_LINK_STALL_MS 3000u
-#define BT_LINK_MAX_RECOVERIES 4u
+#define BT_LINK_MAX_RECOVERIES 8u
 
 static uint32_t s_link_recoveries;
 
@@ -783,6 +933,12 @@ static void bt_link_recover(BTHost *bt, const char *reason)
     s_link_recoveries++;
     bt_diag_log("[BT] %s - full power cycle %u/%u\n", reason,
                 (unsigned)s_link_recoveries, (unsigned)BT_LINK_MAX_RECOVERIES);
+
+    /* Park the scan phase machine before touching the stack: its watchdog and
+     * LE timers would otherwise fire gap_inquiry_stop()/gap_stop_scan() during
+     * HCI re-initialisation, corrupting the init sequence and preventing the
+     * stack from ever reaching WORKING after the power cycle. */
+    bt_scan_notify_recovery();
 
     /* Force the stack to OFF *synchronously*.  A single POWER_OFF from
      * WORKING enters the graceful HALTING path, which needs answers from

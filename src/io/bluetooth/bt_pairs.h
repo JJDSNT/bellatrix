@@ -7,8 +7,8 @@
 
 /* Persistent list of preferred BT devices saved to SD as BTPAIRS.TXT.
  * File format (one device per line):
- *   CL AA:BB:CC:DD:EE:FF device name
- * Transport tag matches BT_SCAN_TRANSPORT_* (CL/LE/DM).
+ *   CL K AA:BB:CC:DD:EE:FF device name
+ * Transport tag: CL/LE/DM.  Device type: K=keyboard M=mouse J=joystick ?=unknown.
  * The file must already exist on the SD (any size ≥ capacity needed). */
 
 #define BT_PAIRS_MAX      8u
@@ -16,9 +16,16 @@
 /* Reserve 512 bytes on the SD: enough for 8 entries + padding. */
 #define BT_PAIRS_FILE_CAP 512u
 
+/* Device type codes (stored as single char in BTPAIRS.TXT) */
+#define BT_PAIRS_TYPE_UNKNOWN   0u  /* '?' */
+#define BT_PAIRS_TYPE_KEYBOARD  1u  /* 'K' */
+#define BT_PAIRS_TYPE_MOUSE     2u  /* 'M' */
+#define BT_PAIRS_TYPE_JOYSTICK  3u  /* 'J' */
+
 typedef struct {
     uint8_t addr[6];
     uint8_t transport;              /* BT_SCAN_TRANSPORT_* bitmask */
+    uint8_t device_type;            /* BT_PAIRS_TYPE_* */
     char    name[BT_SCAN_NAME_LEN];
 } BTPair;
 

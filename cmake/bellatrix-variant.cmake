@@ -293,6 +293,7 @@ if(BELLATRIX_ENABLE_BTSTACK)
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_hal_raspi3.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_scan.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_pairs.c
+        ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_hid.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_diag.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/ad_parser.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_linked_list.c
@@ -303,15 +304,24 @@ if(BELLATRIX_ENABLE_BTSTACK)
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_util.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_uart_slip_wrapper.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_ltv_builder.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_hid.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_hid_parser.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_cmd.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_dump.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_transport_h4.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/hci_transport_h5.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/l2cap.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/l2cap_signaling.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded/btstack_run_loop_embedded.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/platform/embedded/btstack_uart_block_embedded.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm/btstack_chipset_bcm.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/chipset/bcm/btstack_chipset_bcm_download_firmware.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/classic/sdp_util.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/classic/sdp_server.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/classic/sdp_client.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/classic/btstack_link_key_db_memory.c
+        ${CMAKE_SOURCE_DIR}/../external/btstack/src/classic/hid_host.c
     )
     if(BELLATRIX_BTSTACK_PATCHRAM_SOURCE)
         message(STATUS "Bellatrix BTStack PatchRAM source: ${BELLATRIX_BTSTACK_PATCHRAM_SOURCE}")

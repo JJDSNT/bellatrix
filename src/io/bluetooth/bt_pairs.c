@@ -48,6 +48,40 @@ static unsigned fmt_addr(char *out, const uint8_t a[6])
     return 17u;
 }
 
+/* Derive device type from Class of Device (low byte encodes peripheral sub-type).
+ * CoD peripheral minor class bits (bits 7:2 of byte 0):
+ *   bit 6 (0x40) = keyboard
+ *   bit 7 (0x80) = pointing device
+ *   bit 2 (0x04) = joystick / bit 3 (0x08) = gamepad */
+static uint8_t type_from_cod(uint32_t cod)
+{
+    uint8_t minor = (uint8_t)(cod & 0xFFu);
+    if (minor & 0x40u) return BT_PAIRS_TYPE_KEYBOARD;
+    if (minor & 0x80u) return BT_PAIRS_TYPE_MOUSE;
+    if (minor & 0x0Cu) return BT_PAIRS_TYPE_JOYSTICK;
+    return BT_PAIRS_TYPE_UNKNOWN;
+}
+
+static uint8_t type_char_to_val(char c)
+{
+    switch (c) {
+    case 'K': return BT_PAIRS_TYPE_KEYBOARD;
+    case 'M': return BT_PAIRS_TYPE_MOUSE;
+    case 'J': return BT_PAIRS_TYPE_JOYSTICK;
+    default:  return BT_PAIRS_TYPE_UNKNOWN;
+    }
+}
+
+static char type_val_to_char(uint8_t t)
+{
+    switch (t) {
+    case BT_PAIRS_TYPE_KEYBOARD:  return 'K';
+    case BT_PAIRS_TYPE_MOUSE:     return 'M';
+    case BT_PAIRS_TYPE_JOYSTICK:  return 'J';
+    default:                      return '?';
+    }
+}
+
 /* ---- public API ---- */
 
 void bt_pairs_load(const char *text, uint32_t len)
@@ -64,15 +98,15 @@ void bt_pairs_load(const char *text, uint32_t len)
     const char *end = text + len;
 
     while (p < end && s_count < BT_PAIRS_MAX) {
-        /* skip blank lines / CR/LF */
         while (p < end && (*p == '\r' || *p == '\n' || *p == ' ')) p++;
         if (p >= end) break;
 
         const char *line = p;
         while (p < end && *p != '\r' && *p != '\n') p++;
         uint32_t line_len = (uint32_t)(p - line);
-        /* minimum: "CL AA:BB:CC:DD:EE:FF x" = 22 chars */
-        if (line_len < 22u) continue;
+
+        /* minimum: "CL K AA:BB:CC:DD:EE:FF x" = 24 chars */
+        if (line_len < 24u) continue;
 
         uint8_t transport = 0u;
         for (unsigned t = 0u; t < 3u; t++) {
@@ -84,16 +118,20 @@ void bt_pairs_load(const char *text, uint32_t len)
         }
         if (!transport || line[2] != ' ') continue;
 
+        uint8_t device_type = type_char_to_val(line[3]);
+        if (line[4] != ' ') continue;
+
         uint8_t addr[6];
-        if (!parse_addr(line + 3u, addr)) continue;
+        if (!parse_addr(line + 5u, addr)) continue;
 
-        BTPair *pair   = &s_pairs[s_count++];
+        BTPair *pair    = &s_pairs[s_count++];
         memcpy(pair->addr, addr, 6u);
-        pair->transport = transport;
+        pair->transport   = transport;
+        pair->device_type = device_type;
 
-        /* name starts after "CL AA:BB:CC:DD:EE:FF " (3+17+1 = 21 chars) */
-        const char *name = line + 21u;
-        uint32_t nlen    = line_len - 21u;
+        /* name starts after "CL K AA:BB:CC:DD:EE:FF " (5+17+1 = 23 chars) */
+        const char *name = line + 23u;
+        uint32_t nlen    = line_len - 23u;
         if (nlen >= BT_SCAN_NAME_LEN) nlen = BT_SCAN_NAME_LEN - 1u;
         memcpy(pair->name, name, nlen);
         pair->name[nlen] = '\0';
@@ -130,12 +168,13 @@ bool bt_pairs_add(const BTScanResult *r)
             changed = true;
         }
         if (changed) s_dirty = true;
-        return false; /* already in list */
+        return false;
     }
     if (s_count >= BT_PAIRS_MAX) return false;
-    BTPair *pair   = &s_pairs[s_count++];
+    BTPair *pair    = &s_pairs[s_count++];
     memcpy(pair->addr, r->addr, 6u);
-    pair->transport = r->transport;
+    pair->transport   = r->transport;
+    pair->device_type = type_from_cod(r->cod);
     memcpy(pair->name, r->name, BT_SCAN_NAME_LEN);
     s_dirty = true;
     return true;
@@ -161,11 +200,12 @@ uint32_t bt_pairs_serialise(char *buf, uint32_t cap)
 
     for (unsigned i = 0u; i < s_count; i++) {
         const BTPair *pair = &s_pairs[i];
-        /* "CL AA:BB:CC:DD:EE:FF name\r\n" — max 2+1+17+1+24+2 = 47 */
-        if (len + 48u >= cap) break;
+        /* "CL K AA:BB:CC:DD:EE:FF name\r\n" — max 2+1+1+1+17+1+24+2 = 49 */
+        if (len + 50u >= cap) break;
 
         const char *t = transport_str[pair->transport & 3u];
         buf[len++] = t[0]; buf[len++] = t[1]; buf[len++] = ' ';
+        buf[len++] = type_val_to_char(pair->device_type); buf[len++] = ' ';
         len += fmt_addr(buf + len, pair->addr);
         buf[len++] = ' ';
         const char *name = pair->name[0] ? pair->name : "(unknown)";
@@ -173,8 +213,6 @@ uint32_t bt_pairs_serialise(char *buf, uint32_t cap)
         buf[len++] = '\r'; buf[len++] = '\n';
     }
 
-    /* pad remainder with spaces so fat32_overwrite_in_place doesn't
-     * leave stale bytes from a longer previous write */
     while (len < cap - 1u) buf[len++] = ' ';
     buf[len] = '\0';
     return len;
