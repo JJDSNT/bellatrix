@@ -7,7 +7,7 @@ The chipset (CIA, Agnus, Paula, Denise) lives in Rigel. Bellatrix owns the machi
 **Current state:** works with the Musashi M68K interpreter backend — Kickstart boots, USB HID and Bluetooth HID are functional on the Pi. Two goals are not yet achieved:
 
 - **Emu68 JIT integration is broken** — the Emu68 bus hook needs to be revisited; execution does not reach a stable state.
-- **AROS does not boot** — the kitty screen appears but the system hangs before completing boot. This is a separate goal; Musashi could boot AROS in principle, but it doesn't yet.
+- **AROS does not boot** — the kitty screen appears but does not complete AROS boot (no workbench).
 
 ---
 
