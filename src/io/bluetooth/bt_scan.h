@@ -23,14 +23,17 @@
 typedef struct BTScanResult {
     uint8_t  addr[6];          /* big-endian, as printed */
     uint8_t  addr_type;        /* LE only: 0=public 1=random */
-    uint8_t  transport;        /* BT_SCAN_TRANSPORT_* */
+    uint8_t  transport;        /* BT_SCAN_TRANSPORT_* bitmask — dual-mode
+                                  devices (public addr) merge into one entry */
     int8_t   rssi;
     uint32_t cod;              /* Classic only: class of device */
     char     name[BT_SCAN_NAME_LEN];   /* "" until known */
     /* Classic remote-name-request bookkeeping */
     uint8_t  psrm;
     uint16_t clock_offset;
-    uint8_t  name_state;       /* 0=none 1=pending 2=done/gave up */
+    uint8_t  name_state;       /* 0=none 1=synthesized label 2=real name */
+    bool     hid;              /* HID device (CoD peripheral / LE 0x1812) */
+    uint16_t appearance;       /* LE appearance AD, 0 if absent */
 } BTScanResult;
 
 void bt_scan_start(void);

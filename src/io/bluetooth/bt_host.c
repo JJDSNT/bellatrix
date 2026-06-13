@@ -493,6 +493,10 @@ static void bt_setup_hci_main(BTHost *bt)
 
     hci_init(transport, &bt_transport_config);
     hci_set_chipset(chipset);
+    /* EIR inquiry results carry the device name inline — the only safe way
+     * to get classic names on the BCM43430A1 (Remote Name Request crashes
+     * its firmware mid-event). */
+    hci_set_inquiry_mode(INQUIRY_MODE_RSSI_AND_EIR);
 
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);

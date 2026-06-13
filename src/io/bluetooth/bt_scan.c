@@ -50,10 +50,14 @@ static BTScanResult *find_or_add(const uint8_t *addr, uint8_t transport)
     unsigned i;
     BTScanResult *r;
 
+    /* Match by address regardless of transport: a dual-mode device (public
+     * address on both BR/EDR and LE, like the user's keyboard) must show up
+     * as one entry, not two. */
     for (i = 0u; i < s_count; i++) {
-        if (s_results[i].transport == transport &&
-            memcmp(s_results[i].addr, addr, 6) == 0)
+        if (memcmp(s_results[i].addr, addr, 6) == 0) {
+            s_results[i].transport |= transport;
             return &s_results[i];
+        }
     }
     if (s_count >= BT_SCAN_MAX_RESULTS)
         return NULL;
@@ -79,6 +83,48 @@ static void set_name(BTScanResult *r, const uint8_t *name, unsigned len)
     r->name[n] = '\0';
     r->name_state = 2u;
     touched();
+}
+
+/* Readable placeholder ("<keyboard>") until a real name arrives. */
+static void set_label(BTScanResult *r, const char *label)
+{
+    unsigned i;
+
+    if (r->name_state >= 2u || !label)
+        return;
+    for (i = 0u; label[i] && i < BT_SCAN_NAME_LEN - 1u; i++)
+        r->name[i] = label[i];
+    r->name[i] = '\0';
+    r->name_state = 1u;
+    touched();
+}
+
+static const char *label_from_appearance(uint16_t appearance)
+{
+    switch (appearance) {
+    case 961: return "<keyboard>";
+    case 962: return "<mouse>";
+    case 963: return "<joystick>";
+    case 964: return "<gamepad>";
+    default:  return (appearance >> 6) == 15u ? "<HID device>" : NULL;
+    }
+}
+
+static const char *label_from_cod(uint32_t cod)
+{
+    if (((cod >> 8) & 0x1Fu) != 0x05u)   /* major class: peripheral */
+        return NULL;
+    switch ((cod >> 2) & 0x0Fu) {        /* minor: pointing/gaming   */
+    case 1: return "<joystick>";
+    case 2: return "<gamepad>";
+    default: break;
+    }
+    switch ((cod >> 6) & 0x03u) {        /* minor: keyboard/pointing */
+    case 1: return "<keyboard>";
+    case 2: return "<mouse>";
+    case 3: return "<keyboard+mouse>";
+    default: return "<HID device>";
+    }
 }
 
 static void bt_scan_le_phase_timeout(btstack_timer_source_t *ts)
@@ -153,40 +199,108 @@ static void bt_scan_enter_le(void)
     btstack_run_loop_add_timer(&s_le_phase_timer);
 }
 
+#define BT_UUID16_HID_SERVICE 0x1812u
+
+static bool ad_uuid16_list_has(const uint8_t *d, unsigned len, uint16_t uuid)
+{
+    unsigned i;
+    for (i = 0u; i + 1u < len; i += 2u) {
+        if ((uint16_t)(d[i] | (d[i + 1] << 8)) == uuid)
+            return true;
+    }
+    return false;
+}
+
 static void bt_scan_handle_adv_report(uint8_t *packet)
 {
     bd_addr_t addr;
     BTScanResult *r;
     const uint8_t *data;
     uint8_t data_len;
+    uint8_t addr_type;
     ad_context_t ctx;
+    const uint8_t *name = NULL, *short_name = NULL;
+    unsigned name_len = 0u, short_name_len = 0u;
+    uint16_t appearance = 0u;
+    bool hid = false;
 
     gap_event_advertising_report_get_address(packet, addr);
-    r = find_or_add(addr, BT_SCAN_TRANSPORT_LE);
-    if (!r)
-        return;
-    if (r->rssi == 0)
-        bt_diag_log("[SCAN] LE adv %02x:%02x:%02x:%02x:%02x:%02x rssi=%d\n",
-                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
-                    (int)(int8_t)gap_event_advertising_report_get_rssi(packet));
-
-    r->addr_type = gap_event_advertising_report_get_address_type(packet);
-    r->rssi      = (int8_t)gap_event_advertising_report_get_rssi(packet);
-
-    data     = gap_event_advertising_report_get_data(packet);
-    data_len = gap_event_advertising_report_get_data_length(packet);
+    addr_type = gap_event_advertising_report_get_address_type(packet);
+    data      = gap_event_advertising_report_get_data(packet);
+    data_len  = gap_event_advertising_report_get_data_length(packet);
 
     for (ad_iterator_init(&ctx, data_len, data);
          ad_iterator_has_more(&ctx);
          ad_iterator_next(&ctx)) {
         uint8_t type = ad_iterator_get_data_type(&ctx);
-        if (type == BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME ||
-            (type == BLUETOOTH_DATA_TYPE_SHORTENED_LOCAL_NAME &&
-             r->name[0] == '\0')) {
-            set_name(r, ad_iterator_get_data(&ctx),
-                     ad_iterator_get_data_len(&ctx));
+        const uint8_t *d = ad_iterator_get_data(&ctx);
+        unsigned dlen = ad_iterator_get_data_len(&ctx);
+
+        switch (type) {
+        case BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME:
+            name = d; name_len = dlen;
+            break;
+        case BLUETOOTH_DATA_TYPE_SHORTENED_LOCAL_NAME:
+            short_name = d; short_name_len = dlen;
+            break;
+        case BLUETOOTH_DATA_TYPE_INCOMPLETE_LIST_OF_16_BIT_SERVICE_CLASS_UUIDS:
+        case BLUETOOTH_DATA_TYPE_COMPLETE_LIST_OF_16_BIT_SERVICE_CLASS_UUIDS:
+            if (ad_uuid16_list_has(d, dlen, BT_UUID16_HID_SERVICE))
+                hid = true;
+            break;
+        case BLUETOOTH_DATA_TYPE_SERVICE_DATA:
+            if (dlen >= 2u &&
+                (uint16_t)(d[0] | (d[1] << 8)) == BT_UUID16_HID_SERVICE)
+                hid = true;
+            break;
+        case BLUETOOTH_DATA_TYPE_APPEARANCE:
+            if (dlen >= 2u)
+                appearance = (uint16_t)(d[0] | (d[1] << 8));
+            break;
+        default:
+            break;
         }
     }
+
+    /* Resolvable/non-resolvable private addresses rotate every few minutes,
+     * so each ambient phone shows up as a parade of "new" devices.  Only
+     * accept a NEW entry with a stable identity: public address, static
+     * random (top two bits 11), or an advert that says who it is. */
+    r = NULL;
+    {
+        unsigned i;
+        for (i = 0u; i < s_count; i++) {
+            if (memcmp(s_results[i].addr, addr, 6) == 0) {
+                r = &s_results[i];
+                r->transport |= BT_SCAN_TRANSPORT_LE;
+                break;
+            }
+        }
+    }
+    if (!r) {
+        bool stable = (addr_type == 0u) || ((addr[0] & 0xC0u) == 0xC0u);
+        if (!stable && !name && !short_name && !hid && appearance == 0u)
+            return;
+        r = find_or_add(addr, BT_SCAN_TRANSPORT_LE);
+        if (!r)
+            return;
+        bt_diag_log("[SCAN] LE adv %02x:%02x:%02x:%02x:%02x:%02x rssi=%d\n",
+                    addr[0], addr[1], addr[2], addr[3], addr[4], addr[5],
+                    (int)(int8_t)gap_event_advertising_report_get_rssi(packet));
+    }
+
+    r->addr_type = addr_type;
+    r->rssi      = (int8_t)gap_event_advertising_report_get_rssi(packet);
+    if (hid)
+        r->hid = true;
+    if (appearance) {
+        r->appearance = appearance;
+        set_label(r, label_from_appearance(appearance));
+    }
+    if (name)
+        set_name(r, name, name_len);
+    else if (short_name && r->name_state < 2u)
+        set_name(r, short_name, short_name_len);
     touched();
 }
 
@@ -205,6 +319,9 @@ static void bt_scan_handle_inquiry_result(uint8_t *packet)
     r->cod          = gap_event_inquiry_result_get_class_of_device(packet);
     r->psrm         = gap_event_inquiry_result_get_page_scan_repetition_mode(packet);
     r->clock_offset = gap_event_inquiry_result_get_clock_offset(packet);
+    if (((r->cod >> 8) & 0x1Fu) == 0x05u)   /* peripheral major class */
+        r->hid = true;
+    set_label(r, label_from_cod(r->cod));
     if (gap_event_inquiry_result_get_rssi_available(packet))
         r->rssi = (int8_t)gap_event_inquiry_result_get_rssi(packet);
     if (gap_event_inquiry_result_get_name_available(packet)) {

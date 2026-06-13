@@ -502,17 +502,19 @@ static void bt_draw_scan_frame(void)
         char line[64];
         unsigned p = 0u;
 
+        static const char *transport_tag[4] = { "??", "CL", "LE", "DM" };
+        const char *tag = transport_tag[r->transport & 3u];
+
         line[p++] = (char)('1' + (char)i);
-        line[p++] = ' ';
-        line[p++] = (r->transport == BT_SCAN_TRANSPORT_CLASSIC) ? 'C' : 'L';
-        line[p++] = (r->transport == BT_SCAN_TRANSPORT_CLASSIC) ? 'L' : 'E';
+        line[p++] = r->hid ? '*' : ' ';   /* HID-capable device */
+        line[p++] = tag[0];
+        line[p++] = tag[1];
         line[p++] = ' ';
         bt_format_addr(&line[p], r->addr);
         p += 17u;
         line[p++] = ' ';
 
-        const char *name = r->name[0] ? r->name
-                         : (r->name_state == 1u ? "(resolving...)" : "(no name)");
+        const char *name = r->name[0] ? r->name : "(no name)";
         for (const char *s = name; *s && p < sizeof(line) - 1u; s++)
             line[p++] = *s;
         line[p] = '\0';
@@ -570,11 +572,12 @@ static int bt_save_report_to_sd(void)
         const BTScanResult *r = bt_scan_get(i);
         char addr[18];
         if (!r) break;
+        static const char *transport_tag[4] = { "?? ", "CL ", "LE ", "DM " };
         bt_format_addr(addr, r->addr);
         len = txt_append(s_bt_report, len, BT_REPORT_CAP,
-                         (r->transport == BT_SCAN_TRANSPORT_CLASSIC) ? "CL " : "LE ");
+                         transport_tag[r->transport & 3u]);
         len = txt_append(s_bt_report, len, BT_REPORT_CAP, addr);
-        len = txt_append(s_bt_report, len, BT_REPORT_CAP, " ");
+        len = txt_append(s_bt_report, len, BT_REPORT_CAP, r->hid ? " [HID] " : " ");
         len = txt_append(s_bt_report, len, BT_REPORT_CAP,
                          r->name[0] ? r->name : "(no name)");
         len = txt_append(s_bt_report, len, BT_REPORT_CAP, "\r\n");
