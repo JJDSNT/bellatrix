@@ -333,12 +333,15 @@ if(BELLATRIX_ENABLE_BTSTACK)
         ${CMAKE_SOURCE_DIR}/../external/btstack/3rd-party/yxml
     )
     add_compile_definitions(BTSTACK_CONFIG_H="btstack_config.h")
-    # BTSCAN.TXT placeholder: the bare-metal FAT32 writer only overwrites an
-    # existing file in place (never allocates clusters), so ship a pre-sized
-    # target file alongside Emu68.img for the user to copy to the SD root.
+    # BTSCAN.TXT / BTPAIRS.TXT placeholders: the bare-metal FAT32 writer only
+    # overwrites an existing file in place (never allocates clusters), so ship
+    # pre-sized target files alongside Emu68.img for the user to copy to the SD root.
     string(REPEAT " " 16384 _bellatrix_btscan_fill)
     file(WRITE ${CMAKE_BINARY_DIR}/BTSCAN.TXT "${_bellatrix_btscan_fill}")
     install(FILES ${CMAKE_BINARY_DIR}/BTSCAN.TXT DESTINATION .)
+    string(REPEAT " " 512 _bellatrix_btpairs_fill)
+    file(WRITE ${CMAKE_BINARY_DIR}/BTPAIRS.TXT "${_bellatrix_btpairs_fill}")
+    install(FILES ${CMAKE_BINARY_DIR}/BTPAIRS.TXT DESTINATION .)
 endif()
 if(BELLATRIX_ENABLE_USBSTACK)
     if(EXISTS "${CMAKE_SOURCE_DIR}/../external/cherryusb/CMakeLists.txt")
