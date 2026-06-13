@@ -26,7 +26,7 @@
 #include "l2cap.h"
 #include "classic/hid_host.h"
 #include "classic/sdp_server.h"
-#include "classic/btstack_link_key_db_memory.h"
+#include "io/bluetooth/bt_link_key_db_sd.h"
 #include "mmu.h"
 
 // HAL declarations
@@ -546,7 +546,7 @@ static void bt_setup_hci_main(BTHost *bt)
      * TVs, etc. Remote Name Request crashes the firmware anyway. */
     hci_set_inquiry_mode(INQUIRY_MODE_RSSI);
     hci_set_hardware_error_callback(&bt_hardware_error_callback);
-    hci_set_link_key_db(btstack_link_key_db_memory_instance());
+    hci_set_link_key_db(bt_link_key_db_sd_instance());
 
     l2cap_init();
     sdp_init();

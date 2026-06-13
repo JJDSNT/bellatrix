@@ -294,6 +294,7 @@ if(BELLATRIX_ENABLE_BTSTACK)
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_scan.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_pairs.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_hid.c
+        ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_link_key_db_sd.c
         ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_diag.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/ad_parser.c
         ${CMAKE_SOURCE_DIR}/../external/btstack/src/btstack_linked_list.c
@@ -352,6 +353,9 @@ if(BELLATRIX_ENABLE_BTSTACK)
     string(REPEAT " " 512 _bellatrix_btpairs_fill)
     file(WRITE ${CMAKE_BINARY_DIR}/BTPAIRS.TXT "${_bellatrix_btpairs_fill}")
     install(FILES ${CMAKE_BINARY_DIR}/BTPAIRS.TXT DESTINATION .)
+    string(REPEAT " " 512 _bellatrix_btkeys_fill)
+    file(WRITE ${CMAKE_BINARY_DIR}/BTKEYS.TXT "${_bellatrix_btkeys_fill}")
+    install(FILES ${CMAKE_BINARY_DIR}/BTKEYS.TXT DESTINATION .)
 endif()
 if(BELLATRIX_ENABLE_USBSTACK)
     if(EXISTS "${CMAKE_SOURCE_DIR}/../external/cherryusb/CMakeLists.txt")

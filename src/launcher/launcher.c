@@ -24,6 +24,7 @@
 #include "io/bluetooth/bt_scan.h"
 #include "io/bluetooth/bt_pairs.h"
 #include "io/bluetooth/bt_diag.h"
+#include "io/bluetooth/bt_link_key_db_sd.h"
 #include "storage/sdcard/bcm_emmc.h"
 #endif
 
@@ -719,29 +720,56 @@ static int bt_save_report_to_sd(void)
         Fat32File probe;
         return fat32_open(&s_sd_fs, "BTSCAN.TXT", &probe) ? -1 : 0;
     }
+
+    /* Save link keys if a new pairing happened since last write. */
+    if (bt_link_key_db_sd_dirty()) {
+        static char keys_buf[BT_LINK_KEY_FILE_CAP];
+        bt_link_key_db_sd_serialise(keys_buf, BT_LINK_KEY_FILE_CAP);
+        fat32_overwrite_in_place(&s_sd_fs, BT_LINK_KEY_FILENAME,
+                                 keys_buf, BT_LINK_KEY_FILE_CAP - 1u);
+        bt_link_key_db_sd_clear_dirty();
+    }
+
     return 1;
 }
 
-/* Load BTPAIRS.TXT from SD into bt_pairs.  Reuses s_bt_report as read buffer. */
+/* Load BTPAIRS.TXT and BTKEYS.TXT from SD.  Reuses s_bt_report as read buffer. */
 static void bt_pairs_load_from_sd(Fat32State *fs)
 {
     Fat32File f;
     if (!fat32_open(fs, BT_PAIRS_FILENAME, &f)) {
         bt_pairs_load(NULL, 0u);
-        return;
+    } else {
+        uint32_t got = fat32_read(&f, s_bt_report, BT_REPORT_CAP - 1u);
+        s_bt_report[got] = '\0';
+        bt_pairs_load(s_bt_report, got);
     }
-    uint32_t got = fat32_read(&f, s_bt_report, BT_REPORT_CAP - 1u);
-    s_bt_report[got] = '\0';
-    bt_pairs_load(s_bt_report, got);
+
+    static char s_keys_buf[BT_LINK_KEY_FILE_CAP];
+    Fat32File kf;
+    if (!fat32_open(fs, BT_LINK_KEY_FILENAME, &kf)) {
+        bt_link_key_db_sd_load(NULL, 0u);
+    } else {
+        uint32_t got = fat32_read(&kf, s_keys_buf, BT_LINK_KEY_FILE_CAP - 1u);
+        s_keys_buf[got] = '\0';
+        bt_link_key_db_sd_load(s_keys_buf, got);
+    }
 }
 
-/* Write BTPAIRS.TXT back to SD if pairs changed. */
+/* Write BTPAIRS.TXT and BTKEYS.TXT back to SD if changed. */
 static void bt_pairs_save_to_sd(Fat32State *fs)
 {
-    if (!bt_pairs_dirty()) return;
-    static char pairs_buf[BT_PAIRS_FILE_CAP];
-    bt_pairs_serialise(pairs_buf, BT_PAIRS_FILE_CAP);
-    fat32_overwrite_in_place(fs, BT_PAIRS_FILENAME, pairs_buf, BT_PAIRS_FILE_CAP - 1u);
+    if (bt_pairs_dirty()) {
+        static char pairs_buf[BT_PAIRS_FILE_CAP];
+        bt_pairs_serialise(pairs_buf, BT_PAIRS_FILE_CAP);
+        fat32_overwrite_in_place(fs, BT_PAIRS_FILENAME, pairs_buf, BT_PAIRS_FILE_CAP - 1u);
+    }
+    if (bt_link_key_db_sd_dirty()) {
+        static char keys_buf[BT_LINK_KEY_FILE_CAP];
+        bt_link_key_db_sd_serialise(keys_buf, BT_LINK_KEY_FILE_CAP);
+        fat32_overwrite_in_place(fs, BT_LINK_KEY_FILENAME, keys_buf, BT_LINK_KEY_FILE_CAP - 1u);
+        bt_link_key_db_sd_clear_dirty();
+    }
 }
 
 // Run the scan screen until the user continues or ~90 s elapse.
