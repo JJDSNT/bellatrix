@@ -1,6 +1,6 @@
 # Bellatrix
 
-Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/jfdelnero/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
+Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/JJDSNT/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
 
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel. Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 
@@ -58,7 +58,7 @@ docs/               architecture documentation
 ## Credits
 
 - [Emu68](https://github.com/michalsc/Emu68) by Michal Schulz — M68K→AArch64 JIT
-- [Rigel](https://github.com/jfdelnero/Rigel) — Amiga chipset library
+- [Rigel](https://github.com/JJDSNT/Rigel) — Amiga chipset library
 - [BTStack](https://github.com/bluekitchen/btstack) — Bluetooth host stack
 - [CherryUSB](https://github.com/cherry-embedded/CherryUSB) — USB host stack
 - [Musashi](https://github.com/kstenerud/musashi) — M68K interpreter
