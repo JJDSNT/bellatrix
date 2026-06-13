@@ -6,16 +6,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Bellatrix is a software Amiga chipset emulator that replaces the PiStorm hardware backend in Emu68. The goal is to run Amiga software (starting with Kickstart booting to "Happy Hand") entirely on a Raspberry Pi 3, with no Amiga hardware.
 
-Emu68 handles M68K→AArch64 JIT translation; Bellatrix replaces only its bus backend. The JIT core is untouched.
+Emu68 handles M68K→AArch64 JIT translation; Bellatrix replaces only its bus backend. The JIT core is untouched. There is also a Musashi (C M68K interpreter) backend used for development and the test harness.
+
+## Build Commands
+
+```bash
+# One-time setup (applies patches to emu68/ submodule)
+./scripts/setup.sh
+
+# Standard build — Musashi CPU, BT + USB enabled (active development config)
+BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
+  ./scripts/build.sh
+
+# Clean rebuild
+BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
+  ./scripts/build.sh clean
+
+# Output lives in:
+#   emu68/install-bellatrix-rigel-musashi/   (musashi backend)
+#   emu68/install-bellatrix-rigel/           (emu68 backend)
+```
+
+**Key build env vars** (all optional, shown with defaults):
+| Variable | Default | Description |
+|---|---|---|
+| `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` or `musashi` |
+| `BELLATRIX_BTSTACK` | `0` | Enable BTStack (Bluetooth) |
+| `BELLATRIX_USBSTACK` | `0` | Enable CherryUSB (USB HID/MSC) |
+| `BELLATRIX_LAUNCHER` | `1` | ADF/ISO selector UI |
+| `BELLATRIX_MULTICORE_BUILD` | `0` | Multi-core (Core1=GFX, Core2=Paula, Core3=IO) |
+| `BELLATRIX_OSD` | `1` | On-screen display overlay |
+
+Prerequisites: `gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake` on Ubuntu.
+
+```bash
+# Flash to SD card
+./scripts/flash.sh /media/user/BOOT
+
+# Musashi harness (runs without hardware, for chipset development)
+cd build_harness_rigel && cmake .. && make && ./bellatrix_harness
+```
 
 ## Architectural Principles
 
-The authoritative architecture is documented in `docs/timing_and_architetura.md` and `docs/roadmap.md`.
+The authoritative architecture is in `docs/timing_and_architetura.md` and `docs/roadmap.md`.
 
 Key rules:
 - **The chipset owns observable time** — not the machine, not Emu68.
-- **The machine integrates** — init, reset, wiring, IPL publication.
-- **The bus is a synchronisation protocol** — not just address decode.
 - **Paula owns INTREQ/INTENA** — CIA and Agnus raise events; Paula consolidates.
 - **DMA belongs to Agnus** — arbitration, copper, blitter, beam.
 - **Denise is an explicit instance** — not a singleton global.
@@ -38,130 +75,121 @@ BellatrixMachine
 ```
 bellatrix/
   emu68/                    # git submodule → michalsc/Emu68 (READ-ONLY upstream)
+  external/                 # git submodules: btstack, cherryusb, musashi, rigel, aros
   src/
     cpu/
       bellatrix.h/.c        # Emu68 bus entry point: init + bus dispatch
-      cpu_iface.h/.c        # CPU interface helpers
     core/
       machine.h/.c          # BellatrixMachine — integration and bus protocol
       btrace.h/.c           # bus trace — JSON Lines logging
     chipset/
-      cia/cia.h/.c          # CIA 8520 (CIA_State / CIA typedef)
-      agnus/
-        agnus.h/.c          # Agnus beam, DMA, copper, blitter (AgnusState / Agnus typedef)
-        copper.h/.c         # Copper co-processor (subordinate to Agnus)
-        blitter.h/.c        # Blitter (subordinate to Agnus)
-        dma.h/.c            # DMA arbitration
-      denise/denise.h/.c    # Denise bitplane render (instance-based)
-      paula/paula.h/.c      # Paula: INTREQ/INTENA ownership, IRQ consolidation
+      cia/cia.h/.c          # CIA 8520
+      agnus/agnus.h/.c      # Agnus beam, DMA, copper, blitter
+      agnus/copper.h/.c
+      agnus/blitter.h/.c
+      denise/denise.h/.c    # Bitplane render
+      paula/paula.h/.c      # IRQ consolidation, serial, audio
+    io/
+      bluetooth/            # BTStack HID host (bt_host, bt_scan, bt_pairs,
+                            #   bt_hid, bt_link_key_db_sd, bt_hal_raspi3)
+      usb/                  # CherryUSB HID + MSC
+      hid/hid_amiga_map.h  # Shared HID→Amiga rawkey table (USB + BT)
+    launcher/               # Bare-metal ADF/ISO selector UI (FAT32 + VC4)
+    storage/
+      fat/fat32.h/.c        # FAT32 reader/writer (in-place overwrite only)
+      sdcard/bcm_emmc.h/.c  # EMMC/SD card driver
+      iso/                  # ISO 9660 reader
     host/
       pal.h                 # Platform Abstraction Layer
-      raspi3/
-        pal_debug.c         # PAL_Debug_* via Emu68's kprintf
-        pal_ipl.c           # PAL_IPL_Set/Clear → M68KState.INT
-        pal_core.c          # runtime poll + single-core stubs
-        time.c/.h           # host timer abstraction
-  patches/
-    0001-add-bellatrix-variant-cmake.patch
-    0002-add-bellatrix-bus-hook.patch
-  scripts/
-    setup.sh    # apply patches + prerequisite check
-    build.sh    # cmake + make with VARIANT=bellatrix
-    flash.sh    # copy to SD card or upload via TFTP
-  tools/
-    btrace/
-      btrace.py    # serial capture → JSON Lines
-      analyze.py   # log analysis → unimplemented register report
-  referencias/Emu68/   # reference copy of Emu68 source — READ ONLY, never modify
+      raspi3/               # PAL implementations: IPL, debug, timer, core
+  patches/                  # git-format-patch diffs applied to emu68/ submodule
+    0001 – bellatrix variant cmake
+    0002 – bus hook (vectors.c + start.c)
+    0003 – ExecutionLoop cycle ownership
+    0004 – CherryUSB DWC2 host
+    0005 – BTStack BCM bare-metal init
+    0006 – Musashi instruction hook
+  tools/harness/            # Musashi-based chipset test harness (no hardware needed)
+  referencias/Emu68/        # READ-ONLY reference copy of Emu68 source
   docs/
-    roadmap.md                  # migration roadmap — architectural decisions
-    timing_and_architetura.md   # timing model and component responsibilities
-  AI_context/                   # sprint-style session logs
+    roadmap.md
+    timing_and_architetura.md
+  AI_context/               # Sprint-style session logs — read before starting work
 ```
-
-## Build Commands
-
-```bash
-# One-time setup (applies patches to emu68/ submodule)
-./scripts/setup.sh
-
-# Build
-./scripts/build.sh
-
-# Clean rebuild
-./scripts/build.sh clean
-
-# Flash to SD card
-./scripts/flash.sh /media/user/BOOT
-
-# Flash via TFTP
-TFTP_HOST=192.168.1.10 ./scripts/flash.sh tftp
-```
-
-Prerequisites: `gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake` on Ubuntu.
-
-## How Patches Work
-
-The `patches/` directory holds minimal git-format-patch diffs for Emu68. Apply/update cycle:
-
-```bash
-# Apply (done by setup.sh)
-cd emu68 && git apply ../patches/0001-... && git apply ../patches/0002-...
-
-# Update after Emu68 upstream changes
-cd emu68 && git pull origin master && git apply ../patches/...
-# If a patch fails: fix conflict, regenerate patch with git format-patch
-```
-
-The patches are intentionally minimal — two files changed: `CMakeLists.txt` (variant registration) and `src/aarch64/vectors.c` + `src/aarch64/start.c` (bus hook + init call).
 
 ## Key Integration Points in Emu68
 
 **Bus access hook** — `emu68/src/aarch64/vectors.c`:
-- All M68K accesses to unmapped addresses (chipset, CIA, I/O) trigger AArch64 data abort
-- `SYSHandler` → `SYSPageFaultWriteHandler`/`SYSPageFaultReadHandler` → `SYSWriteValToAddr`/`SYSReadValFromAddr`
-- The patch adds `#elif defined(BELLATRIX)` between the PiStorm block and the bare block
-- Bellatrix entry point: `bellatrix_bus_access(addr, value, size, dir)`
+- M68K accesses to unmapped addresses trigger AArch64 data abort
+- `SYSHandler` → `SYSPageFaultWriteHandler/ReadHandler` → `SYSWriteValToAddr/SYSReadValFromAddr`
+- Patch adds `#elif defined(BELLATRIX)` block; entry point: `bellatrix_bus_access(addr, value, size, dir)`
 
-**Chip RAM** — Phase 1+: direct MMU mapping of `0x000000–0x1FFFFF` to a static ARM buffer (bypasses fault handler; uses `mmu_map()`).
+**Chip RAM** — direct MMU mapping `0x000000–0x1FFFFF` to static ARM buffer via `mmu_map()`, bypassing the fault handler.
 
-**IPL injection** — `M68KState.INT.IPL` + `M68KState.INT.ARM`; accessed via `TPIDRRO_EL0` system register. `PAL_IPL_Set()` writes both and issues a DMB barrier.
+**IPL injection** — `M68KState.INT.IPL` + `M68KState.INT.ARM` via `TPIDRRO_EL0`. `PAL_IPL_Set()` writes both + DMB barrier.
 
-**ABI note** — `ExecutionLoop.c` breaks the C ABI: M68K registers are pinned to ARM x13–x29, x12=JIT temp, x18=M68K PC. Any code in the hot path must respect these constraints.
+**ABI constraint** — `ExecutionLoop.c` pins M68K registers to ARM x13–x29, x12=JIT temp, x18=M68K PC. Never touch these in hot-path code.
+
+## Bluetooth Subsystem
+
+BTStack HID host running on the BCM43430A1 chip (Pi 3B onboard BT).
+
+**Initialization chain:** `bt_host_init()` → power-cycle BCM via GPIO → PatchRAM download → H4 UART at 115200 → `btstack_run_loop_embedded_execute_once()` in polling loop.
+
+**Pairing flow:** `bt_scan_screen()` (launcher) → inquiry → user selects device → `bt_pairs_add()` → saved to `BTPAIRS.TXT` on SD. Link keys saved to `BTKEYS.TXT` via `bt_link_key_db_sd` (implements `btstack_link_key_db_t`).
+
+**Connection flow (post-launcher):** `bt_host_connect_pairs()` → `hid_host_connect()` per saved pair → `hid_packet_handler()` routes HID reports to `bt_hid_handle_keyboard/mouse/joystick_report()`.
+
+**RX architecture:** `bt_hal_raspi3_drain_fifo()` drains PL011 FIFO into a 4KB software ring buffer (safe to call from any context). `bt_hal_raspi3_poll_uart()` consumes the ring and feeds the H4 parser.
+
+**SD files** (must exist on SD before first boot; shipped as placeholders in install dir):
+- `BTPAIRS.TXT` — paired device list (addr, type, name)
+- `BTKEYS.TXT` — BT Classic link keys for automatic reconnection
+- `BTSCAN.TXT` — diagnostic log written after each scan + connection attempt
+
+## How Patches Work
+
+```bash
+# Applied by setup.sh — do not apply manually
+cd emu68 && git apply ../patches/0001-...
+
+# Regenerate after upstream changes
+cd emu68 && git pull origin master
+git apply ../patches/NNNN-...
+# On conflict: fix, then git format-patch HEAD~1 > ../patches/NNNN-...
+```
+
+Patches are kept minimal. The `emu68/` and `external/cherryusb` submodule files tracked by patches are set with `git update-index --assume-unchanged` to suppress dirty status.
 
 ## Development Cycle
 
 ```
-build → flash → boot → capture (btrace) → analyze → implement → repeat
+build → flash → boot → read BTSCAN.TXT / serial → fix → repeat
 ```
 
 ```bash
-# Capture boot log
+# Capture boot log via serial (btrace)
 python3 tools/btrace/btrace.py --port /dev/ttyUSB0 --save boot.jsonl
-
-# Analyze: show unimplemented registers
 python3 tools/btrace/analyze.py --unimpl boot.jsonl
-
-# Machine-readable report (for Claude Code consumption)
 python3 tools/btrace/analyze.py --report boot.jsonl > report.json
 ```
 
-Btrace verbosity is controlled at runtime by writing to address `0xDFFF00`:
-- `0x0001` — only unimplemented (default)
+Btrace verbosity (write to address `0xDFFF00` at runtime):
+- `0x0001` — unimplemented only (default)
 - `0x0004` — chipset only
 - `0xFFFF` — all accesses
 
 ## Session Continuity
 
-- `AI_context/` — sprint-style session log. Read all files here before starting work.
+- `AI_context/` — sprint-style session logs; read all files before starting work.
 - `docs/roadmap.md` — architectural decisions and migration plan.
-- `docs/timing_and_architetura.md` — timing model and component contract.
-- `referencias/Emu68/` — reference copy of Emu68 for reading only.
+- `docs/timing_and_architetura.md` — timing model and component contracts.
+- `referencias/Emu68/` — reference Emu68 source; READ ONLY, never modify.
 
 ## Implementation Phases
 
 | Phase | Deliverable | Success Criterion |
-|-------|-------------|-------------------|
+|---|---|---|
 | 0 | Infrastructure + btrace | Build succeeds; UART shows bus trace |
 | 1 | Chip RAM MMU + ROM load | JIT executes first Kickstart instructions |
 | 2 | CIA 8520 complete | Kickstart passes hardware detection |
