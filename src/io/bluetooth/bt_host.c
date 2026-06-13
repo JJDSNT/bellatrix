@@ -758,19 +758,22 @@ bool bt_host_is_working(const BTHost *bt)
     return bt && bt->bootstrap_state == (uint8_t)BT_BOOTSTRAP_WORKING;
 }
 
-/* An RX overrun desyncs the H4 parser: it reads a garbage length, waits
- * for a packet that will never finish (rxq frozen mid-block), the lost
- * Command Complete leaves btstack with the command slot busy and every
- * gap_* call returns COMMAND_DISALLOWED — the link is dead for good.
- * HCI events complete in microseconds at 115200, so a block stuck
- * mid-fill for seconds is unambiguous.  Recovery: flush the line and
- * power-cycle the HCI layer (PatchRAM survives — BT_REG_EN stays up). */
+/* An H4 block stuck mid-fill for seconds is unambiguous (HCI events
+ * complete in microseconds at 115200): either an RX overrun desynced
+ * the parser, or the BCM43430A1 firmware wedged outright and stopped
+ * transmitting — observed during LE advert floods, same family as the
+ * H5 and Remote Name Request firmware bugs.  A soft HCI restart is not
+ * enough for the wedge (the chip ignores HCI Reset), so recovery is the
+ * full bring-up: BT_REG_EN power cycle + PatchRAM re-upload (~5 s).
+ * The existing bootstrap state machine does all of it. */
 #define BT_LINK_STALL_MS 3000u
+#define BT_LINK_MAX_RECOVERIES 4u
 
 static void bt_link_watchdog(BTHost *bt)
 {
     static uint32_t stall_filled;
     static uint32_t stall_since_ms;
+    static uint32_t recoveries;
     uint32_t filled, wanted, now_ms;
 
     if (!bt->phase1_complete || !bt->hci_ready)
@@ -792,11 +795,23 @@ static void bt_link_watchdog(BTHost *bt)
         return;
 
     stall_since_ms = 0u;
-    bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms) - restarting HCI\n",
-                (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS);
+    if (recoveries >= BT_LINK_MAX_RECOVERIES) {
+        bt_diag_log("[BT] link stalled again but recovery budget exhausted (%u)\n",
+                    (unsigned)recoveries);
+        return;
+    }
+    recoveries++;
+    bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms) - full power cycle %u/%u\n",
+                (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS,
+                (unsigned)recoveries, (unsigned)BT_LINK_MAX_RECOVERIES);
     hci_power_control(HCI_POWER_OFF);
     bt_hal_raspi3_flush_rx();
-    hci_power_control(HCI_POWER_ON);
+    /* Force phase 1 to run again and rewind the chipset init script so
+     * the PatchRAM upload starts from record zero. */
+    bt->phase1_complete = false;
+    bt->power_cycle_attempts = 0;
+    btstack_chipset_bcm_instance()->init(&bt_transport_config);
+    bt_begin_power_cycle(bt, "link stalled");
 }
 
 void bt_host_step(BTHost *bt) {

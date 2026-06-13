@@ -641,7 +641,9 @@ static void bt_scan_screen(void)
 
     for (uint32_t iter = 0u; iter < budget; iter++) {
         bellatrix_launcher_pump_bt();
-        if ((iter & 63u) == 0u) pump_usb();
+        // USB pump can hold the CPU for >1.4 ms (a full PL011 RX FIFO at
+        // 115200) — keep it rare; ~64 ms of input latency is invisible.
+        if ((iter & 511u) == 0u) pump_usb();
 
         // ~2s heartbeat into the SD report: UART byte counter shows whether
         // the link is moving at all while the scan appears silent.
