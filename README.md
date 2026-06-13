@@ -1,209 +1,201 @@
 # Bellatrix
 
-**Bellatrix** is a bare-metal Amiga machine emulator for the Raspberry Pi 3B. It integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/jfdelnero/Rigel) chipset library and a full suite of bare-metal IO subsystems, producing a complete Amiga-compatible machine that runs directly on the Pi hardware — no OS, no Linux, no hypervisor.
+Bellatrix is a bare-metal Amiga machine emulator for the Raspberry Pi 3B. It integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/jfdelnero/Rigel) Amiga chipset library and a full suite of bare-metal IO subsystems (USB HID, Bluetooth HID, SD card, framebuffer), producing a complete Amiga-compatible machine that runs directly on Pi hardware — no Linux, no hypervisor.
+
+---
+
+## Quick start
+
+```bash
+git clone --recurse-submodules https://github.com/YOUR_USERNAME/bellatrix
+cd bellatrix
+./scripts/setup.sh   # one-time: apply patches to emu68/ submodule
+./run.sh             # build and run in QEMU (opens a TUI to select ROM/config)
+```
+
+`./run.sh` is the single entry point for every workflow — QEMU emulation, the Musashi harness, and flashing to SD card.
 
 ---
 
 ## Architecture
 
-Bellatrix is the machine layer that integrates three main pieces:
+Bellatrix is the machine layer that sits between the CPU backend and the chipset:
 
 ```
-┌─────────────────────────────────────────────────┐
-│               Amiga software                     │
-│          (Kickstart / Workbench / demos)         │
-└─────────────────────┬───────────────────────────┘
-                      │  M68K instructions
-┌─────────────────────▼───────────────────────────┐
-│                   Emu68                          │
-│          M68K → AArch64 JIT + MMU               │
-└─────────────────────┬───────────────────────────┘
-                      │  bus accesses (data abort hook)
-┌─────────────────────▼───────────────────────────┐
-│                 Bellatrix                        │
-│   machine runtime · bus protocol · IO · timing  │
-│                      │                          │
-│          ┌───────────▼───────────┐              │
-│          │         Rigel         │              │
-│          │  Amiga chipset (CIA   │              │
-│          │  Agnus·Paula·Denise)  │              │
-│          └───────────────────────┘              │
-└─────────────────────────────────────────────────┘
-              Raspberry Pi 3B bare metal
+┌────────────────────────────────────────────────┐
+│              Amiga software                     │
+│         (Kickstart / AROS / demos)             │
+└────────────────────┬───────────────────────────┘
+                     │  M68K instructions
+              ┌──────┴──────┐
+              │    Emu68    │  ← CPU backend (default)
+              │  M68K JIT   │    or Musashi (interpreter)
+              └──────┬──────┘
+                     │  bus accesses
+┌────────────────────▼───────────────────────────┐
+│                 Bellatrix                       │
+│  machine runtime · bus protocol · IO · timing  │
+│                     │                          │
+│         ┌───────────▼──────────┐               │
+│         │        Rigel         │               │
+│         │   Amiga chipset      │               │
+│         │  CIA·Agnus·Paula     │               │
+│         │  Denise              │               │
+│         └──────────────────────┘               │
+└────────────────────────────────────────────────┘
+             Raspberry Pi 3B bare metal
 ```
 
-**Emu68** provides the M68K execution engine. All accesses to chipset and CIA addresses trigger an AArch64 data abort, which Emu68 routes to Bellatrix's bus hook. Bellatrix decodes the address, dispatches to Rigel (chipset) or its own IO subsystems, and returns — the M68K software never knows it is running on ARM.
+**Emu68** translates M68K to AArch64 JIT. All chipset/CIA bus accesses trigger a data abort that Emu68 routes to Bellatrix.
 
-**Rigel** is the chipset library: it owns CIA, Agnus, Paula, and Denise behavior, timing, DMA arbitration, and interrupt consolidation. Bellatrix forwards chipset bus accesses to Rigel and drives its temporal evolution.
+**Rigel** is the Amiga chipset library (extracted from Bellatrix into its own project). It owns CIA, Agnus, Paula, and Denise — timing, DMA arbitration, interrupt consolidation.
 
-**Bellatrix** owns everything else: machine composition, the bus protocol, chip RAM MMU mapping, the launcher UI, Bluetooth and USB HID input, SD card storage, and the multicore runtime that coordinates all domains.
-
----
-
-## Current focus
-
-- **Emu68 integration** — full JIT backend running with the Rigel chipset
-- **AROS boot** — AROS reaches the kitty screen but does not complete the boot sequence
+**Bellatrix** owns the machine integration: bus protocol, chip RAM MMU mapping, multicore runtime, launcher UI, Bluetooth and USB HID input, and SD card storage.
 
 ---
 
-## Features
+## Running
 
-- **Bare-metal** — boots directly on Pi 3B hardware (BCM2837, AArch64). No Linux.
-- **Launcher UI** — framebuffer menu for selecting ADF (floppy) and ISO (CD-ROM) images from SD card or USB drive.
-- **Bluetooth HID** — pairs keyboards, mice, and gamepads via the Pi 3B's onboard BCM43430A1. Devices reconnect automatically across reboots (link keys persisted to SD).
-- **USB HID + MSC** — USB keyboard, mouse, gamepad, and USB drives via CherryUSB.
-- **Bus trace** — chipset register accesses logged as JSON Lines over serial for offline analysis.
-- **Musashi harness** — an interpreter-based development backend that runs the same chipset code without hardware.
-
----
-
-## Hardware
-
-- Raspberry Pi 3B (BCM2837, onboard BCM43430A1 Bluetooth/WiFi)
-- MicroSD card with FAT32 boot partition
-- Kickstart ROM image (not included)
-- Optional: USB keyboard/mouse, Bluetooth keyboard/mouse, USB drive
-
-The Pi 3B+ works but is not the primary target. Pi 4 is not supported.
-
----
-
-## Building
-
-### Prerequisites
+### QEMU (development)
 
 ```bash
-sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake
+./run.sh                                          # TUI selects ROM and options
+./run.sh qemu                                     # same, explicit mode
+KICKSTART=src/roms/aros.rom ./run.sh qemu         # skip TUI, run AROS
+KICKSTART=src/roms/KS31.rom ./run.sh qemu         # run Kickstart 3.1
+EMU_PROFILE=bellatrix-musashi ./run.sh qemu       # use Musashi instead of Emu68
 ```
 
-### One-time setup
+### Musashi harness (Linux, no hardware)
+
+The harness runs the full chipset (Rigel) with a Musashi M68K interpreter as a native Linux process with an SDL2 window. No Pi needed.
 
 ```bash
-git clone --recurse-submodules https://github.com/YOUR_USERNAME/bellatrix
-cd bellatrix
-./scripts/setup.sh        # applies patches to emu68/ submodule
+./run.sh harness                                  # TUI selects ROM
+KICKSTART=src/roms/aros.rom ./run.sh harness      # run AROS
+KICKSTART=src/roms/DiagROM.rom ./run.sh harness-serial   # serial PTY mode
+KICKSTART=src/roms/aros.rom FRAMES=50 ./run.sh harness   # headless, 50 frames
+KICKSTART=src/roms/KS13.rom ADF=disks/WB13.adf ./run.sh harness
 ```
 
-### Release configurations
+### Raspberry Pi 3B
 
-There are four release builds, defined by two orthogonal axes:
+```bash
+./run.sh raspi /media/user/BOOT    # build and flash to SD card
+./run.sh tftp                      # build and upload via TFTP
+```
 
-| | Single-core | Multi-core |
+---
+
+## Runtime profiles
+
+`EMU_PROFILE` selects the CPU backend and install directory:
+
+| Profile | CPU | Install directory |
 |---|---|---|
-| **Emu68** (JIT) | `BELLATRIX_CPU_BACKEND=emu68` | `+ BELLATRIX_MULTICORE_BUILD=1` |
-| **Musashi** (interpreter) | `BELLATRIX_CPU_BACKEND=musashi` | `+ BELLATRIX_MULTICORE_BUILD=1` |
+| `bellatrix` _(default)_ | Emu68 JIT | `emu68/install-bellatrix-rigel/` |
+| `bellatrix-musashi` | Musashi interpreter | `emu68/install-bellatrix-rigel-musashi/` |
+| `emu68` | Emu68 upstream (no Bellatrix) | `emu68/build/` |
 
-**Single-core:** all components (CPU, chipset, IO) run on Core 0. Simpler, no synchronization overhead, currently the most stable.
+Each profile has two core modes:
 
-**Multi-core:** Core 0 = CPU (Emu68 JIT), Core 1 = full chipset (Rigel: CIA+Agnus+Paula+Denise), Core 3 = IO (USB + Bluetooth). Better timing isolation between CPU and chipset.
-
-**Emu68:** full M68K→AArch64 JIT. Fast, close to real hardware speed.
-
-**Musashi:** M68K interpreter in C. Slower, but easier to instrument and iterate on without reflashing.
-
-### Build
-
-```bash
-# Emu68 single-core (JIT, production target)
-BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
-  ./scripts/build.sh
-# → emu68/install-bellatrix-rigel/
-
-# Musashi single-core (interpreter, active development)
-BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
-  ./scripts/build.sh
-# → emu68/install-bellatrix-rigel-musashi/
-
-# Emu68 multi-core
-BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
-  ./scripts/build.sh
-
-# Musashi multi-core
-BELLATRIX_CPU_BACKEND=musashi BELLATRIX_MULTICORE_BUILD=1 \
-  BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
-
-# Clean rebuild: append "clean"
-BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 \
-  ./scripts/build.sh clean
-```
-
-**All build options:**
-
-| Variable | Default | Description |
+| | Single-core | Multi-core (`BELLATRIX_MULTICORE_BUILD=1`) |
 |---|---|---|
-| `BELLATRIX_CPU_BACKEND` | `emu68` | `emu68` (JIT) or `musashi` (interpreter) |
-| `BELLATRIX_MULTICORE_BUILD` | `0` | `1` = Core0 CPU / Core1 Chipset (Rigel) / Core3 IO |
-| `BELLATRIX_BTSTACK` | `0` | Bluetooth HID host (BTStack) |
-| `BELLATRIX_USBSTACK` | `0` | USB HID + mass storage (CherryUSB) |
-| `BELLATRIX_LAUNCHER` | `1` | ADF/ISO selector UI |
-| `BELLATRIX_OSD` | `1` | On-screen display overlay |
-
-### Flash to SD
-
-Copy the install directory to the FAT32 boot partition:
-
-```bash
-cp emu68/install-bellatrix-rigel-musashi/* /media/user/BOOT/
-```
-
-The SD card must also contain three pre-sized placeholder files (shipped in the install directory). The bare-metal FAT32 writer can only overwrite files in place — it never allocates new clusters — so these must exist before the first boot:
-
-- `BTPAIRS.TXT` — saved paired Bluetooth device list
-- `BTKEYS.TXT` — Bluetooth Classic link keys (for automatic reconnection)
-- `BTSCAN.TXT` — diagnostic log written on each boot
+| All on Core 0 | ✓ | — |
+| Core 0 = CPU, Core 1 = Chipset (Rigel), Core 3 = IO | — | ✓ |
 
 ---
 
-## Bluetooth pairing
+## Key options
 
-On first boot, the launcher shows a Bluetooth scan screen. Put your keyboard or mouse into pairing mode and press ENTER to pair. The device address and link key are saved to the SD card.
+```bash
+KICKSTART=<path>                  # ROM to boot (required for most modes)
+ADF=<path>                        # mount ADF image as DF0
+ISO=<path>                        # mount ISO as CD-ROM
+EMU_PROFILE=bellatrix-musashi     # switch CPU backend
+BELLATRIX_MULTICORE_BUILD=1       # enable multicore runtime
+BELLATRIX_BTSTACK=1               # enable Bluetooth HID host
+BELLATRIX_USBSTACK=1              # enable USB HID + mass storage
+DISPLAY_MODE=none                 # headless QEMU (no window)
+FRAMES=<n>                        # harness: stop after N frames (headless)
+CYCLES=<n>                        # harness: stop after N M68K cycles
+```
 
-On subsequent boots, paired devices reconnect automatically — no need to press any button.
+Full option reference: `./run.sh --help`
+
+---
+
+## Hardware requirements
+
+- Raspberry Pi 3B (BCM2837 AArch64, onboard BCM43430A1 Bluetooth)
+- MicroSD card — FAT32 boot partition
+- Kickstart or AROS ROM (not included)
+- Optional: USB keyboard/mouse, Bluetooth HID devices, USB drive
+
+---
+
+## Bluetooth pairing (bare metal)
+
+On first boot the launcher shows a Bluetooth scan screen. Put the device into pairing mode and press ENTER. The device address and link key are saved to `BTPAIRS.TXT` and `BTKEYS.TXT` on the SD card. On subsequent boots, paired devices reconnect automatically.
+
+The SD card must contain pre-sized placeholder files for these (shipped in the install directory — the FAT32 writer can only overwrite in place, never allocate new clusters).
 
 ---
 
 ## Diagnostics
 
-Chipset register accesses can be logged over the Pi's serial port (GPIO 14/15, 115200 8N1):
-
 ```bash
+# Bus trace over serial (GPIO 14/15, 115200 8N1)
 python3 tools/btrace/btrace.py --port /dev/ttyUSB0 --save boot.jsonl
 python3 tools/btrace/analyze.py --unimpl boot.jsonl
-```
 
-Bluetooth diagnostics are written to `BTSCAN.TXT` on the SD card after each scan and connection attempt.
+# Bluetooth diagnostic log
+# → BTSCAN.TXT on SD card, written after each scan + connection attempt
+```
 
 ---
 
 ## Repository layout
 
 ```
-emu68/          Emu68 submodule — M68K JIT (READ-ONLY upstream)
-external/       rigel (chipset), btstack, cherryusb, musashi, aros (submodules)
+run.sh              single entry point — build + run (QEMU / harness / raspi / tftp)
+scripts/
+  setup.sh          one-time: apply patches to emu68/ submodule
+  build.sh          cmake + make (called by run.sh)
+  flash.sh          copy to SD or TFTP upload
+emu68/              Emu68 submodule — M68K JIT (READ-ONLY upstream)
+external/           rigel, btstack, cherryusb, musashi, aros (submodules)
 src/
-  cpu/          bus entry point — bridges Emu68 data abort to Bellatrix
-  core/         BellatrixMachine, bus protocol, bus trace
-  chipset/      thin wrappers / legacy chipset code (transitioning to Rigel)
+  cpu/              bus entry point — Emu68 data abort → Bellatrix
+  core/             BellatrixMachine, bus protocol, bus trace
+  runtime/          multicore runtime (core_cpu, core_chipset, core_io)
   io/
-    bluetooth/  BTStack HID host (scan, pairs, link keys, HAL, HID dispatch)
-    usb/        CherryUSB HID + MSC
-    hid/        shared HID→Amiga rawkey map (used by both BT and USB)
-  launcher/     bare-metal ADF/ISO selector UI (VC4 framebuffer)
-  storage/      FAT32, EMMC/SD card, ISO 9660
-  host/         Platform Abstraction Layer (IPL, timer, debug, core stubs)
-patches/        minimal diffs applied to emu68/ (6 patches)
-tools/harness/  Musashi-based chipset test harness — runs without hardware
-docs/           architecture specifications
-referencias/    READ-ONLY reference copy of Emu68 source
+    bluetooth/      BTStack HID host
+    usb/            CherryUSB HID + MSC
+    hid/            shared HID→Amiga rawkey table
+  launcher/         bare-metal ADF/ISO selector UI (VC4 framebuffer)
+  storage/          FAT32, EMMC/SD, ISO 9660
+  host/             Platform Abstraction Layer (IPL, timer, debug)
+tools/
+  harness/          Musashi + Rigel test harness — runs on Linux, no hardware
+  launcher/         TUI launcher (Go) — ROM/config selector for QEMU and harness
+patches/            minimal diffs applied to emu68/ (6 patches)
+docs/               architecture specifications
 ```
+
+---
+
+## Current focus
+
+- **Emu68 integration** — full JIT path running with Rigel chipset
+- **AROS boot** — reaches the kitty screen; boot sequence does not yet complete
 
 ---
 
 ## Credits
 
-- [Emu68](https://github.com/michalsc/Emu68) by Michal Schulz — M68K→AArch64 JIT engine
+- [Emu68](https://github.com/michalsc/Emu68) by Michal Schulz — M68K→AArch64 JIT
 - [Rigel](https://github.com/jfdelnero/Rigel) — Amiga chipset library (CIA, Agnus, Paula, Denise)
 - [BTStack](https://github.com/bluekitchen/btstack) — Bluetooth host stack
 - [CherryUSB](https://github.com/cherry-embedded/CherryUSB) — USB host stack
-- [Musashi](https://github.com/kstenerud/musashi) — M68K interpreter (development backend)
+- [Musashi](https://github.com/kstenerud/musashi) — M68K interpreter
