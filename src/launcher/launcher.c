@@ -472,7 +472,11 @@ static void bt_fill_rect_pumped(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     }
 }
 
-static void bt_draw_scan_frame(void)
+// Static parts of the scan screen — drawn ONCE.  Full-screen fills on
+// the uncached framebuffer cost several ms even in pumped bands, and a
+// redraw per discovered device was the last blind window that lost HCI
+// RX bytes (the chip outruns the 16-byte PL011 FIFO in ~1.4 ms).
+static void bt_draw_scan_chrome(void)
 {
     const uint32_t W = fb_width;
     const uint32_t H = fb_height;
@@ -483,52 +487,65 @@ static void bt_draw_scan_frame(void)
                     "BLUETOOTH SCAN  --  put your devices in pairing mode",
                     COL_TEXT, COL_TITLE_BG);
 
-    uint32_t y = s_title_h + 4u;
+    bt_fill_rect_pumped(0, H - s_status_h, W, s_status_h, COL_STATUS_BG);
+    fb_puts_centred(0, W, H - s_status_h + (s_status_h - s_char) / 2u,
+                    "ENTER/ESC = continue boot",
+                    COL_TEXT, COL_STATUS_BG);
+}
 
-    // Status line
-    fb_puts(s_margin_x, y, bt_scan_status(), COL_CURSOR_BG, COL_BG);
+// Dynamic rows, overwritten in place: every line is padded to a fixed
+// width so stale text disappears without clearing the background.
+static void bt_draw_scan_rows(void)
+{
+    const uint32_t H = fb_height;
+    uint32_t y = s_title_h + 4u;
+    char line[64];
+    unsigned p;
+
+    p = 0u;
+    for (const char *s = bt_scan_status(); *s && p < sizeof(line) - 1u; s++)
+        line[p++] = *s;
+    while (p < sizeof(line) - 1u) line[p++] = ' ';
+    line[p] = '\0';
+    fb_puts(s_margin_x, y, line, COL_CURSOR_BG, COL_BG);
+    bellatrix_launcher_pump_bt();
     y += s_row_h + s_row_h / 2u;
 
     unsigned count = bt_scan_count();
-    if (count == 0u) {
-        fb_puts(s_margin_x, y, "(no devices found yet)", COL_TEXT, COL_BG);
-    }
 
-    for (unsigned i = 0u; i < count; i++) {
-        const BTScanResult *r = bt_scan_get(i);
-        if (!r) break;
+    for (unsigned i = 0u; i < count || i == 0u; i++) {
+        const BTScanResult *r = (count > 0u) ? bt_scan_get(i) : NULL;
+        if (count > 0u && !r) break;
         if (y + s_row_h + s_status_h >= H) break;
 
-        char line[64];
-        unsigned p = 0u;
+        p = 0u;
+        if (!r) {
+            for (const char *s = "(no devices found yet)"; *s; s++)
+                line[p++] = *s;
+        } else {
+            static const char *transport_tag[4] = { "??", "CL", "LE", "DM" };
+            const char *tag = transport_tag[r->transport & 3u];
 
-        static const char *transport_tag[4] = { "??", "CL", "LE", "DM" };
-        const char *tag = transport_tag[r->transport & 3u];
+            line[p++] = (char)('1' + (char)i);
+            line[p++] = r->hid ? '*' : ' ';   /* HID-capable device */
+            line[p++] = tag[0];
+            line[p++] = tag[1];
+            line[p++] = ' ';
+            bt_format_addr(&line[p], r->addr);
+            p += 17u;
+            line[p++] = ' ';
 
-        line[p++] = (char)('1' + (char)i);
-        line[p++] = r->hid ? '*' : ' ';   /* HID-capable device */
-        line[p++] = tag[0];
-        line[p++] = tag[1];
-        line[p++] = ' ';
-        bt_format_addr(&line[p], r->addr);
-        p += 17u;
-        line[p++] = ' ';
-
-        const char *name = r->name[0] ? r->name : "(no name)";
-        for (const char *s = name; *s && p < sizeof(line) - 1u; s++)
-            line[p++] = *s;
+            const char *name = r->name[0] ? r->name : "(no name)";
+            for (const char *s = name; *s && p < sizeof(line) - 1u; s++)
+                line[p++] = *s;
+        }
+        while (p < sizeof(line) - 1u) line[p++] = ' ';
         line[p] = '\0';
 
         fb_puts(s_margin_x, y, line, COL_TEXT, COL_BG);
         bellatrix_launcher_pump_bt();
         y += s_row_h;
     }
-
-    // Footer
-    bt_fill_rect_pumped(0, H - s_status_h, W, s_status_h, COL_STATUS_BG);
-    fb_puts_centred(0, W, H - s_status_h + (s_status_h - s_char) / 2u,
-                    "ENTER/ESC = continue boot",
-                    COL_TEXT, COL_STATUS_BG);
 }
 
 // Append a string to a bounded text buffer; returns new length.
@@ -611,7 +628,13 @@ static void bt_scan_screen(void)
     if (working)
         bt_scan_start();
 
-    uint32_t last_gen = 0xFFFFFFFFu;
+    bt_draw_scan_chrome();
+    if (!working)
+        fb_puts(s_margin_x, s_title_h + 4u,
+                "controller bootstrap FAILED - report goes to BTSCAN.TXT",
+                COL_CURSOR_BG, COL_BG);
+
+    uint32_t last_gen = working ? 0xFFFFFFFFu : bt_scan_generation();
     // Outer iteration ≈ 0.125 ms — tight cadence keeps the 16-byte PL011
     // FIFO drained during LE advert floods (~10KB/s at 115200).
     uint32_t budget   = working ? 720000u : 96000u;   // ≈90 s / ≈12 s
@@ -640,11 +663,7 @@ static void bt_scan_screen(void)
 
         if ((iter & 4095u) == 0u && bt_scan_generation() != last_gen) {
             last_gen = bt_scan_generation();
-            bt_draw_scan_frame();
-            if (!working)
-                fb_puts(s_margin_x, s_title_h + 4u,
-                        "controller bootstrap FAILED - report goes to BTSCAN.TXT",
-                        COL_CURSOR_BG, COL_BG);
+            bt_draw_scan_rows();
         }
 
         for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");

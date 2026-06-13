@@ -300,6 +300,18 @@ void hal_uart_dma_set_sleep(uint8_t sleep) {
     (void)sleep;
 }
 
+/* Link-recovery helper: throw away whatever half-parsed garbage is in
+ * flight (stale FIFO bytes + the H4 block stuck mid-fill) so the stack
+ * can restart from a clean line after an RX overrun desync. */
+void bt_hal_raspi3_flush_rx(void) {
+    uint8_t byte;
+    while (pl011_backend_is_open(&bt_uart) &&
+           pl011_backend_read_byte(&bt_uart, &byte)) { }
+    uart_rx_buffer = NULL;
+    uart_rx_size = 0;
+    uart_rx_pos = 0;
+}
+
 void bt_hal_raspi3_poll_uart(void) {
     if (!pl011_backend_is_open(&bt_uart)) {
         return;

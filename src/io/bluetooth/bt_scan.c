@@ -76,11 +76,15 @@ static void set_name(BTScanResult *r, const uint8_t *name, unsigned len)
 
     if (n >= BT_SCAN_NAME_LEN)
         n = BT_SCAN_NAME_LEN - 1u;
-    for (i = 0u; i < n; i++) {
+    /* EIR names are NUL-padded to the field size; stop at the first NUL
+     * instead of rendering the padding as '?' */
+    for (i = 0u; i < n && name[i]; i++) {
         char c = (char)name[i];
         r->name[i] = (c >= 0x20 && c <= 0x7E) ? c : '?';
     }
-    r->name[n] = '\0';
+    while (i > 0u && r->name[i - 1u] == ' ')
+        i--;
+    r->name[i] = '\0';
     r->name_state = 2u;
     touched();
 }
@@ -351,9 +355,20 @@ static void bt_scan_packet_handler(uint8_t packet_type, uint16_t channel,
 
     switch (hci_event_packet_get_type(packet)) {
     case BTSTACK_EVENT_STATE:
-        if (s_phase == SCAN_WAIT_STACK &&
-            btstack_event_state_get_state(packet) == HCI_STATE_WORKING)
+        if (btstack_event_state_get_state(packet) != HCI_STATE_WORKING)
+            break;
+        if (s_phase == SCAN_WAIT_STACK) {
             bt_scan_enter_classic();
+        } else {
+            /* WORKING arriving mid-scan = the link watchdog power-cycled
+             * the HCI after a desync; the controller forgot any inquiry/
+             * scan in progress, so restart the phase machine (results
+             * collected so far are kept). */
+            bt_diag_log("[SCAN] stack recovered, restarting scan cycle\n");
+            btstack_run_loop_remove_timer(&s_classic_watchdog);
+            btstack_run_loop_remove_timer(&s_le_phase_timer);
+            bt_scan_enter_classic();
+        }
         break;
 
     case GAP_EVENT_INQUIRY_RESULT:

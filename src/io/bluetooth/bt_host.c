@@ -25,6 +25,8 @@
 // HAL declarations
 void bt_hal_raspi3_poll_uart(void);
 uint32_t bt_hal_raspi3_io_activity(void);
+void bt_hal_raspi3_rx_pending(uint32_t *filled, uint32_t *wanted);
+void bt_hal_raspi3_flush_rx(void);
 void bt_hal_raspi3_trace_dump(void);
 void bt_hal_raspi3_trace_reset(void);
 const btstack_uart_block_t * btstack_uart_block_embedded_instance(void);
@@ -756,6 +758,47 @@ bool bt_host_is_working(const BTHost *bt)
     return bt && bt->bootstrap_state == (uint8_t)BT_BOOTSTRAP_WORKING;
 }
 
+/* An RX overrun desyncs the H4 parser: it reads a garbage length, waits
+ * for a packet that will never finish (rxq frozen mid-block), the lost
+ * Command Complete leaves btstack with the command slot busy and every
+ * gap_* call returns COMMAND_DISALLOWED — the link is dead for good.
+ * HCI events complete in microseconds at 115200, so a block stuck
+ * mid-fill for seconds is unambiguous.  Recovery: flush the line and
+ * power-cycle the HCI layer (PatchRAM survives — BT_REG_EN stays up). */
+#define BT_LINK_STALL_MS 3000u
+
+static void bt_link_watchdog(BTHost *bt)
+{
+    static uint32_t stall_filled;
+    static uint32_t stall_since_ms;
+    uint32_t filled, wanted, now_ms;
+
+    if (!bt->phase1_complete || !bt->hci_ready)
+        return;
+
+    bt_hal_raspi3_rx_pending(&filled, &wanted);
+    if (filled == 0u || filled >= wanted) {        /* idle or completing */
+        stall_since_ms = 0u;
+        return;
+    }
+
+    now_ms = bt_now_ms();
+    if (stall_since_ms == 0u || filled != stall_filled) {
+        stall_filled = filled;
+        stall_since_ms = now_ms;
+        return;
+    }
+    if (now_ms - stall_since_ms < BT_LINK_STALL_MS)
+        return;
+
+    stall_since_ms = 0u;
+    bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms) - restarting HCI\n",
+                (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS);
+    hci_power_control(HCI_POWER_OFF);
+    bt_hal_raspi3_flush_rx();
+    hci_power_control(HCI_POWER_ON);
+}
+
 void bt_host_step(BTHost *bt) {
     if (!bt || !bt->enabled) return;
 
@@ -766,6 +809,9 @@ void bt_host_step(BTHost *bt) {
 
     // Execute run loop tasks
     btstack_run_loop_embedded_execute_once();
+
+    // Detect and recover a desynced/dead H4 link
+    bt_link_watchdog(bt);
 
     // Move buffered console bytes to the mini-UART (never blocks)
     bt_console_drain();
