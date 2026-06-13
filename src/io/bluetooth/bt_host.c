@@ -79,19 +79,65 @@ void kprintf_set_putc_override(void (*fn)(char chr));
 
 static MiniUartBackend s_console_miniuart;
 
-static void bt_console_miniuart_putc(char chr)
+/* kprintf must never block while BT owns the PL011: a busy-wait on the
+ * 8-deep mini-UART FIFO costs ~87µs per byte at 115200, and a single log
+ * line opens a multi-ms blind window in which HCI RX bytes are lost (the
+ * chip ignores our RTS).  So the putc override only deposits into this
+ * ring; bt_console_drain() — called from the BT pump — moves bytes to the
+ * FIFO when there is space. */
+#define BT_CONSOLE_RING_SIZE 32768u
+static volatile uint8_t s_console_ring[BT_CONSOLE_RING_SIZE];
+static volatile uint32_t s_console_ring_head; /* producer (kprintf) */
+static volatile uint32_t s_console_ring_tail; /* consumer (drain)   */
+static volatile uint32_t s_console_ring_dropped;
+
+static void bt_console_ring_push(uint8_t byte)
 {
-    /* LSR bit 5 = TX FIFO has space; the 8-deep FIFO drops bytes if we
-     * write blind during log bursts */
-    int spin = 1000000;
-    if (chr == '\n') {
-        while (!(miniuart_backend_read_lsr() & 0x20u) && --spin > 0) { }
-        miniuart_backend_write_byte(&s_console_miniuart, (uint8_t)'\r');
-        spin = 1000000;
+    uint32_t head = s_console_ring_head;
+    uint32_t next = (head + 1u) % BT_CONSOLE_RING_SIZE;
+    if (next == s_console_ring_tail) {
+        s_console_ring_dropped++;
+        return;
     }
-    while (!(miniuart_backend_read_lsr() & 0x20u) && --spin > 0) { }
-    miniuart_backend_write_byte(&s_console_miniuart, (uint8_t)chr);
+    s_console_ring[head] = byte;
+    s_console_ring_head = next;
 }
+
+static void bt_console_ring_putc(char chr)
+{
+    if (chr == '\n') {
+        bt_console_ring_push((uint8_t)'\r');
+    }
+    bt_console_ring_push((uint8_t)chr);
+}
+
+static void bt_console_drain(void)
+{
+    if (!miniuart_backend_is_open(&s_console_miniuart)) {
+        return;
+    }
+    /* LSR bit 5 = TX FIFO has space */
+    while (s_console_ring_tail != s_console_ring_head
+           && (miniuart_backend_read_lsr() & 0x20u)) {
+        miniuart_backend_write_byte(&s_console_miniuart,
+                                    s_console_ring[s_console_ring_tail]);
+        s_console_ring_tail = (s_console_ring_tail + 1u) % BT_CONSOLE_RING_SIZE;
+    }
+}
+
+static void bt_console_flush(uint32_t budget_bytes)
+{
+    /* Blocking flush — only safe outside BT traffic (release path). */
+    while (s_console_ring_tail != s_console_ring_head && budget_bytes--) {
+        int spin = 1000000;
+        while (!(miniuart_backend_read_lsr() & 0x20u) && --spin > 0) { }
+        miniuart_backend_write_byte(&s_console_miniuart,
+                                    s_console_ring[s_console_ring_tail]);
+        s_console_ring_tail = (s_console_ring_tail + 1u) % BT_CONSOLE_RING_SIZE;
+    }
+}
+
+static uint32_t vc_get_core_clock_hz(void);
 
 static void bt_console_release(void)
 {
@@ -100,10 +146,16 @@ static void bt_console_release(void)
     }
 
     kprintf_set_putc_override(NULL);
+    bt_console_flush(BT_CONSOLE_RING_SIZE);
     miniuart_backend_close(&s_console_miniuart);
     pl011_backend_route_header_console();
     kprintf_set_enabled(1);
     s_bt_console_handed_off = false;
+    if (s_console_ring_dropped) {
+        kprintf("[BT] console ring dropped %u bytes during BT operation\n",
+                (unsigned)s_console_ring_dropped);
+        s_console_ring_dropped = 0;
+    }
     bt_hal_raspi3_trace_dump();
 }
 
@@ -114,12 +166,21 @@ static void bt_console_handoff(void)
     }
 
     bt_hal_raspi3_trace_reset();
-    kprintf("[BT] handing PL011 to BT; console continues on mini-UART (same pins)\n");
+    uint32_t core_hz = vc_get_core_clock_hz();
+    if (core_hz == 0) {
+        core_hz = 250000000u;
+    }
+    kprintf("[BT] handing PL011 to BT; console continues on mini-UART "
+            "(same pins, core clk %u Hz)\n", (unsigned)core_hz);
     pl011_backend_wait_idle();
     pl011_backend_route_bluetooth_pi3();
-    if (miniuart_backend_open(&s_console_miniuart, 115200u)) {
-        kprintf_set_putc_override(bt_console_miniuart_putc);
+    s_console_ring_head = 0;
+    s_console_ring_tail = 0;
+    s_console_ring_dropped = 0;
+    if (miniuart_backend_open_clk(&s_console_miniuart, 115200u, core_hz)) {
+        kprintf_set_putc_override(bt_console_ring_putc);
         kprintf("[BT] console now on mini-UART (GPIO 14/15 ALT5, 115200)\n");
+        bt_console_flush(BT_CONSOLE_RING_SIZE);
     } else {
         kprintf_set_enabled(0);
     }
@@ -144,6 +205,8 @@ static void bt_console_handoff(void)
 #define VC_FIRMWARE_STATUS_SUCCESS 0x80000000u
 #define VC_FIRMWARE_PROPERTY_END 0u
 #define VC_FIRMWARE_SET_GPIO_STATE 0x00038041u
+#define VC_FIRMWARE_GET_CLOCK_RATE 0x00030002u
+#define VC_CLOCK_ID_CORE 4u
 #define ARM_PERI_VIRT_BASE 0xF2000000u
 #define VC_MBOX_READ_ADDR   (ARM_PERI_VIRT_BASE + 0xB880u)
 #define VC_MBOX_STATUS_ADDR (ARM_PERI_VIRT_BASE + 0xB898u)
@@ -206,6 +269,32 @@ static void vc_mbox_send(uint32_t channel, uint32_t data)
 
     dmb();
     wr32le(VC_MBOX_WRITE_ADDR, value);
+}
+
+/* Real VPU/core clock — the mini-UART baud divisor tracks it, so never
+ * assume 250 MHz (garbled console when the firmware runs the core at 400). */
+static uint32_t vc_get_core_clock_hz(void)
+{
+    vc_property_buffer[0] = LE32(sizeof(vc_property_buffer));
+    vc_property_buffer[1] = LE32(VC_FIRMWARE_STATUS_REQUEST);
+    vc_property_buffer[2] = LE32(VC_FIRMWARE_GET_CLOCK_RATE);
+    vc_property_buffer[3] = LE32(8);
+    vc_property_buffer[4] = 0;
+    vc_property_buffer[5] = LE32(VC_CLOCK_ID_CORE);
+    vc_property_buffer[6] = 0;
+    vc_property_buffer[7] = LE32(VC_FIRMWARE_PROPERTY_END);
+
+    arm_flush_cache((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
+    vc_mbox_send(VC_MBOX_CH_PROP, (uint32_t)mmu_virt2phys((uintptr_t)vc_property_buffer));
+    if (!vc_mbox_recv(VC_MBOX_CH_PROP, NULL)) {
+        return 0;
+    }
+    arm_dcache_invalidate((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
+
+    if (LE32(vc_property_buffer[1]) != VC_FIRMWARE_STATUS_SUCCESS) {
+        return 0;
+    }
+    return LE32(vc_property_buffer[6]);
 }
 
 static bool vc_set_gpio_state(uint32_t gpio, uint32_t state)
@@ -673,6 +762,9 @@ void bt_host_step(BTHost *bt) {
 
     // Execute run loop tasks
     btstack_run_loop_embedded_execute_once();
+
+    // Move buffered console bytes to the mini-UART (never blocks)
+    bt_console_drain();
 }
 
 void bt_host_shutdown(BTHost *bt) {

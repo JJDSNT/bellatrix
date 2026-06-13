@@ -42,9 +42,9 @@ static inline uint32_t mu_rd32(uintptr_t a)             { return *(volatile uint
 /* raspi3 / BCM2837 system clock: 250 MHz */
 #define SYS_CLK_HZ 250000000UL
 
-bool miniuart_backend_open(MiniUartBackend *m, uint32_t baud)
+bool miniuart_backend_open_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_hz)
 {
-    if (!m) return false;
+    if (!m || !baud || !clk_hz) return false;
 
     mu_wr32(AUX_ENABLES_ADDR, mu_rd32(AUX_ENABLES_ADDR) | 1u);
     mu_wr32(AUX_MU_CNTL_ADDR, 0);
@@ -52,12 +52,17 @@ bool miniuart_backend_open(MiniUartBackend *m, uint32_t baud)
     mu_wr32(AUX_MU_LCR_ADDR,  3);
     mu_wr32(AUX_MU_MCR_ADDR,  0);
     mu_wr32(AUX_MU_IIR_ADDR,  0xC6u);
-    mu_wr32(AUX_MU_BAUD_ADDR, SYS_CLK_HZ / (8u * baud) - 1u);
+    mu_wr32(AUX_MU_BAUD_ADDR, clk_hz / (8u * baud) - 1u);
     mu_wr32(AUX_MU_CNTL_ADDR, 3);
 
     m->baud = baud;
     m->open = true;
     return true;
+}
+
+bool miniuart_backend_open(MiniUartBackend *m, uint32_t baud)
+{
+    return miniuart_backend_open_clk(m, baud, SYS_CLK_HZ);
 }
 
 uint32_t miniuart_backend_read_lsr(void)
@@ -100,6 +105,13 @@ bool miniuart_backend_write_byte(MiniUartBackend *m, uint8_t byte)
 bool miniuart_backend_open(MiniUartBackend *m, uint32_t baud)
 {
     (void)baud;
+    if (m) m->open = false;
+    return false;
+}
+
+bool miniuart_backend_open_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_hz)
+{
+    (void)baud; (void)clk_hz;
     if (m) m->open = false;
     return false;
 }
