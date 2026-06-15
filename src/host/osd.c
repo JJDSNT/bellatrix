@@ -88,28 +88,35 @@ static void osd_update_fps(uint64_t frame)
 /* Rendering                                                                 */
 /* ------------------------------------------------------------------------- */
 
-static int osd_u64_to_str(char *buf, uint64_t val, int min_digits)
+static int osd_u64_to_str(char *buf, int cap, uint64_t val, int min_digits)
 {
-    char tmp[24];
+    char tmp[20];
     int len = 0;
+
+    if (cap <= 0)
+        return 0;
 
     if (val == 0) {
         tmp[len++] = '0';
     } else {
-        while (val > 0) {
+        while (val > 0 && len < (int)sizeof(tmp)) {
             tmp[len++] = (char)('0' + (int)(val % 10));
             val /= 10;
         }
     }
 
-    while (len < min_digits)
+    while (len < min_digits && len < (int)sizeof(tmp))
         tmp[len++] = '0';
 
-    for (int i = 0; i < len; i++)
+    int out_len = len;
+    if (out_len >= cap)
+        out_len = cap - 1;
+
+    for (int i = 0; i < out_len; i++)
         buf[i] = tmp[len - 1 - i];
 
-    buf[len] = '\0';
-    return len;
+    buf[out_len] = '\0';
+    return out_len;
 }
 
 static void osd_putchar(uint16_t *fb, uint32_t stride, int x, int y,
@@ -133,13 +140,13 @@ void osd_render(uint64_t frame)
     osd_update_fps(frame);
 
     /* build string "FRM:00000000 FPS:000" */
-    char buf[32];
+    char buf[40];
     int  pos = 0;
     buf[pos++] = 'F'; buf[pos++] = 'R'; buf[pos++] = 'M'; buf[pos++] = ':';
-    pos += osd_u64_to_str(buf + pos, frame, 8);
+    pos += osd_u64_to_str(buf + pos, (int)sizeof(buf) - pos, frame, 8);
     buf[pos++] = ' ';
     buf[pos++] = 'F'; buf[pos++] = 'P'; buf[pos++] = 'S'; buf[pos++] = ':';
-    pos += osd_u64_to_str(buf + pos, (uint64_t)osd_fps, 3);
+    pos += osd_u64_to_str(buf + pos, (int)sizeof(buf) - pos, (uint64_t)osd_fps, 3);
     buf[pos] = '\0';
 
     int sx = 4;
