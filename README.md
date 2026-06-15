@@ -12,6 +12,25 @@ Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img
 
 ---
 
+## Using release images
+
+The released `.img` files are Raspberry Pi kernel images, not complete SD card images. Use one of them on an Emu68-style Raspberry Pi boot FAT32 partition, together with the usual Pi firmware files and a `config.txt`.
+
+Example `config.txt`:
+
+```ini
+kernel=bellatrix_musashi.img
+initramfs kick.rom
+arm_64bit=1
+enable_uart=1
+```
+
+Copy your Kickstart ROM to the same boot partition and make the `initramfs` line point to that file. For example, with `initramfs kick.rom`, the file must be named `kick.rom` on the SD boot partition. Use a legally obtained Kickstart ROM.
+
+The Musashi images are currently the recommended hardware builds. The Emu68 JIT images are published for testing the JIT integration path.
+
+---
+
 ## Quick start
 
 ```bash
