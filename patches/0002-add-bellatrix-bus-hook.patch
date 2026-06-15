@@ -124,7 +124,7 @@ diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
 index 329d470..fb62c27 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -661,6 +661,53 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -661,6 +661,57 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
      return 1;
  }
 
@@ -132,6 +132,10 @@ index 329d470..fb62c27 100644
 +
 +#include "cpu/emu68/bellatrix.h"
 +#include "cpu/cpu_bridge.h"
++
++void bellatrix_emu68_boards_reset(void)
++{
++}
 +
 +int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
 +{

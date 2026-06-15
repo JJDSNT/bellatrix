@@ -110,6 +110,7 @@ if(BELLATRIX_PYTHON3 AND EXISTS ${BELLATRIX_LIDE_ROM})
     list(APPEND BASE_FILES ${BELLATRIX_LIDE_ROM_C})
 else()
     message(WARNING "lide.rom or python3 not found — lide_cdrom will be stub-only in Bellatrix build")
+    list(APPEND BASE_FILES ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/lide_rom_stub.c)
 endif()
 
 list(APPEND BASE_FILES
