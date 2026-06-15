@@ -5,7 +5,7 @@
  #include "cache.h"
  #include "sponsoring.h"
 +#ifdef BELLATRIX
-+#include "bellatrix.h"
++#include "cpu/emu68/bellatrix.h"
 +#endif
  
  void _start();
@@ -130,8 +130,8 @@ index 329d470..fb62c27 100644
 
 +#elif defined(BELLATRIX)
 +
-+#include "bellatrix.h"
-+#include "bridge/bellatrix_bridge.h"
++#include "cpu/emu68/bellatrix.h"
++#include "cpu/cpu_bridge.h"
 +
 +int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
 +{
