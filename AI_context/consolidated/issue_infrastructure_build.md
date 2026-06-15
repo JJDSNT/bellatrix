@@ -118,6 +118,24 @@ BELLATRIX_USBSTACK=1 ./scripts/build.sh  # build com USB host stack
 ### Sprint 43: Patch 0004 divergente de cherryusb local
 Build.sh temporariamente relaxado para aceitar cherryusb com mudanças locais mais novas que o patch. Sprint 43 restaura invariante: patch 0004 é source of truth, `git apply --check` deve passar em subtree limpa.
 
+### 2026-06-15: Workaround provisório para release `v0.0.0`
+Durante a primeira tentativa de release via GitHub Actions, o build chegou ao link e falhou por dois símbolos ausentes:
+
+- `bellatrix_emu68_boards_reset`
+- `g_lide_rom_data` / `g_lide_rom_size`
+
+Workaround aplicado:
+
+- `patches/0002-add-bellatrix-bus-hook.patch` injeta um `bellatrix_emu68_boards_reset()` no-op no caminho `#elif defined(BELLATRIX)` de `emu68/src/aarch64/vectors.c`.
+- `cmake/bellatrix-variant.cmake` adiciona `src/machine/expansions/lide_cdrom/lide_rom_stub.c` quando `external/lide.device/lide.rom` não existe no runner.
+- `lide_rom_stub.c` define `g_lide_rom_data` e `g_lide_rom_size` apenas para destravar o link sem embutir o ROM do lide.device.
+
+Isto é provisório. O caminho correto é:
+
+- regenerar o patch 0002 para manter a integração Bellatrix/Emu68 completa e coerente com `BELLATRIX_ENABLE_EMU68_BOARDS`;
+- garantir que o pipeline de release construa ou forneça `external/lide.device/lide.rom`;
+- remover `lide_rom_stub.c` quando o ROM real estiver sempre disponível no build de release.
+
 ## O que Funciona
 - Build verde em todos os cenários documentados
 - `setup.sh` idempotente (detecta patches já aplicados)
