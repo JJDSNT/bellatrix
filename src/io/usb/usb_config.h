@@ -9,7 +9,7 @@ int bellatrix_usb_snprintf(char *str, size_t size, const char *format, ...);
 long bellatrix_usb_strtol(const char *nptr, char **endptr, int base);
 
 #define CONFIG_USB_PRINTF(...) kprintf(__VA_ARGS__)
-#define CONFIG_USB_DBG_LEVEL USB_DBG_INFO
+#define CONFIG_USB_DBG_LEVEL USB_DBG_ERROR
 
 #define snprintf bellatrix_usb_snprintf
 #define strtol bellatrix_usb_strtol

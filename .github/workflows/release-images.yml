@@ -72,6 +72,11 @@ jobs:
           mkdir -p dist
 
           cp "${{ matrix.install_dir }}/Emu68.img" "dist/${{ matrix.image }}"
+          if ! grep -aF "[BELA] CPU backend: ${{ matrix.backend }}" "dist/${{ matrix.image }}" >/dev/null; then
+            echo "ERROR: ${{ matrix.image }} does not contain expected CPU backend marker: ${{ matrix.backend }}"
+            grep -aF "[BELA] CPU backend:" "dist/${{ matrix.image }}" || true
+            exit 1
+          fi
           (
             cd dist
             sha256sum "${{ matrix.image }}" > "${{ matrix.image }}.sha256"

@@ -168,6 +168,13 @@ else
     echo "[BUILD] usb stack: disabled"
 fi
 
+if [ "${BELLATRIX_USB_LOG:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_USB_LOG=1"
+    echo "[BUILD] usb log: enabled"
+else
+    echo "[BUILD] usb log: disabled"
+fi
+
 OSD_FLAG="OFF"
 if [ "$OSD_ENABLED" = "1" ]; then
     OSD_FLAG="ON"
