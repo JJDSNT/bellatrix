@@ -187,7 +187,7 @@ static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
         return;
     }
 
-    if (nbytes > 0) {
+    if (nbytes >= (int)sizeof(struct usb_hid_kbd_report)) {
         report = (struct usb_hid_kbd_report *)g_bellatrix_usb_hid_report[hid_class->minor];
 
         bellatrix_usb_hid_emit_modifier_changes(keyboard->modifiers, report->modifier);
@@ -207,7 +207,9 @@ static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
         }
 
         keyboard->modifiers = report->modifier;
-        memcpy(keyboard->keys, report->key, sizeof(keyboard->keys));
+        for (i = 0; i < 6u; ++i) {
+            keyboard->keys[i] = report->key[i];
+        }
     }
 
     /* Interrupt endpoints must always be re-armed regardless of error code.
