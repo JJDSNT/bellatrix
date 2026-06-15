@@ -64,7 +64,7 @@
      {
          extern uint32_t rom_mapped;
  
-@@ -1499,7 +1524,11 @@
+@@ -1499,7 +1524,14 @@
      if (fast_page0) {
          mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
      }
@@ -72,6 +72,9 @@
 +
 +#ifdef BELLATRIX
 +    bellatrix_init();
++    if (bellatrix_cpu_backend_owns_execution_loop()) {
++        bellatrix_run_selected_cpu_backend();
++    }
 +#endif
 +
      M68K_StartEmu(0, NULL);
