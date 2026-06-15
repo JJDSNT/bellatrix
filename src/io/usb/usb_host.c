@@ -44,6 +44,10 @@ static void bellatrix_usb_log_hprt(USBHost *host, const char *reason)
 {
     uint32_t hprt;
 
+#ifndef BELLATRIX_USB_LOG
+    (void)reason;
+#endif
+
     if (!host) {
         return;
     }
