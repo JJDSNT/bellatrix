@@ -62,6 +62,8 @@ jobs:
           BELLATRIX_CHIPSET_BACKEND: rigel
           BELLATRIX_CPU_BACKEND: ${{ matrix.backend }}
           BELLATRIX_MULTICORE_BUILD: ${{ matrix.multicore }}
+          BELLATRIX_USBSTACK: "1"
+          BELLATRIX_USB_MSC: "1"
         run: ./scripts/build.sh clean
 
       - name: Prepare image artifact
