@@ -34,7 +34,7 @@ The Musashi images are currently the recommended hardware builds. The Emu68 JIT 
 ## Quick start
 
 ```bash
-git clone --recurse-submodules https://github.com/YOUR_USERNAME/bellatrix
+git clone --recurse-submodules https://github.com/JJDSNT/bellatrix
 cd bellatrix
 ./scripts/setup.sh   # one-time: apply patches to the emu68 submodule
 ./run.sh             # build and run (opens a TUI to select ROM and options)
