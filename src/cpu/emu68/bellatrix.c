@@ -4,6 +4,7 @@
 // Routes every unmapped M68K bus access to the appropriate chipset module.
 
 #include "cpu/emu68/bellatrix.h"
+#include "cpu/emu68/bellatrix_profile.h"
 #include "cpu/cpu_bridge.h"
 #include "runtime/runtime.h"
 #ifdef BELLATRIX_LAUNCHER
@@ -13,7 +14,9 @@
 #include "cpu/cpu_backend.h"
 #include "cpu/musashi/musashi_backend.h"
 #include "machine/machine.h"
+#include "rigel/rigel_custom.h"
 #include "rigel/rigel_cia.h"
+#include "rigel/rigel_mmio.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
@@ -30,6 +33,8 @@ uint32_t rom_mapped = 0;
  * JIT/cache initialisation.  Used by M68K_StartEmu() BELLATRIX path. */
 uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc = 0;
+
+extern struct M68KState *__m68k_state;
 
 /* ---------------------------------------------------------------------------
  * Emu68 CpuBackend — wires machine's two CPU callbacks to Emu68 internals
@@ -69,7 +74,20 @@ static CpuBackend *bellatrix_selected_cpu_backend(void)
 }
 #endif
 
-static void bellatrix_runtime_notify_cpu_progress(uint32_t cycles);
+static void bellatrix_singlecore_advance_cpu_cycles(uint32_t cycles);
+
+static void bellatrix_runtime_poll_from_emu68(void)
+{
+    static uint32_t poll_countdown;
+
+    if (PAL_Core_IsMulticoreEnabled())
+        return;
+
+    if (poll_countdown++ & 0x3ffu)
+        return;
+
+    PAL_Runtime_Poll();
+}
 
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
@@ -89,57 +107,146 @@ void bellatrix_run_selected_cpu_backend(void)
 
     for (;;) {
         uint32_t ran = cpu_backend_run(backend, 454u);
-        bellatrix_runtime_notify_cpu_progress(ran > 0u ? ran : 454u);
-        /* The Musashi loop never goes through bellatrix_bus_access (that is
-         * the Emu68 JIT fault hook), so the single-core IO service point
-         * (USB/BT via PAL_Runtime_Poll's ~1ms throttle) must live here. */
-        PAL_Runtime_Poll();
+        uint32_t cycles = ran > 0u ? ran : 454u;
+
+        if (PAL_Core_IsMulticoreEnabled()) {
+            /* Multicore: Core 2 (chipset) and Core 3 (IO) run independently;
+             * publish cross-core like the Emu68 JIT path does instead of
+             * stepping Rigel synchronously on this (CPU) core. */
+            bellatrix_bridge_publish_cpu_cycles(cycles);
+        } else {
+            bellatrix_singlecore_advance_cpu_cycles(cycles);
+            /* The Musashi loop never goes through bellatrix_bus_access (that is
+             * the Emu68 JIT fault hook), so the single-core IO service point
+             * (USB/BT via PAL_Runtime_Poll's ~1ms throttle) must live here. */
+            PAL_Runtime_Poll();
+        }
     }
 }
 
 /* ---------------------------------------------------------------------------
  * Multicore runtime state.
  *
- * s_chipset_cycles_pending    : Core 0 → Core 1 (chipset).
- * s_io_cycles_pending         : Core 0 → Core 3 (physical IO).
- * s_chipset_lock              : Coarse spinlock protecting all chipset state.
- *                               Held by Core 0 (MMIO) and Core 1 while
- *                               advancing the chipset.
+ * Cycle/MMIO synchronisation between the CPU core (Core 1) and the chipset
+ * core (Core 2) is handled by core_chipset.c (cycle target + access lock) —
+ * see core_chipset_lock_acquire/release(), called from cpu_bridge.c.
  * ------------------------------------------------------------------------- */
-#if defined(BELLATRIX_ENABLE_MULTICORE)
-static atomic_flag      s_chipset_lock             = ATOMIC_FLAG_INIT;
-#endif
 
-/* Per-core runtime objects — advanced by Core 1 via bellatrix_runtime_host_step(). */
+/* Per-core runtime objects — advanced by Core 2 via bellatrix_runtime_host_step(). */
 BellatrixRuntime g_runtime;
 
-static inline void chipset_lock_acquire(void)
+/* ---------------------------------------------------------------------------
+ * Core 0 (boot/Machine) → Core 1 (CPU) handoff.
+ *
+ * Single-core: entry() runs forever inline on the boot core, unchanged from
+ * the pre-multicore boot path.
+ * Multicore: Core 1 is launched to run entry(); Core 0 parks as the light
+ * Machine/scheduler arbiter described in multicore.md — it has no recurring
+ * work of its own because the CPU<->chipset protocol already lives inside
+ * the CPU's MMIO fault path and the chipset's step function.
+ * ------------------------------------------------------------------------- */
+void bellatrix_launch_cpu_and_park(void (*entry)(void))
 {
-#if defined(BELLATRIX_ENABLE_MULTICORE)
-    while (atomic_flag_test_and_set_explicit(&s_chipset_lock, memory_order_acquire))
-        asm volatile("wfe" ::: "memory");
-#endif
-}
+    if (!entry)
+        return;
 
-static inline void chipset_lock_release(void)
-{
-#if defined(BELLATRIX_ENABLE_MULTICORE)
-    atomic_flag_clear_explicit(&s_chipset_lock, memory_order_release);
-    asm volatile("dsb sy\n\t sev" ::: "memory");
-#endif
+    if (!PAL_Core_IsMulticoreEnabled()) {
+        entry();
+        return;
+    }
+
+    PAL_Core_LaunchCpu(entry);
+
+    for (;;)
+        asm volatile("wfe");
 }
 
 /* ---------------------------------------------------------------------------
- * Strong override: notify the chipset side of CPU progress.
+ * Emu68/Musashi single-core CPU progress.
  *
- * In multicore mode (Core 0): add cycles to the shared counter and wake
- * Core 1 via SEV.  Core 1 will drain the counter in bellatrix_runtime_host_step.
- *
- * In single-core mode: advance the chipset directly (no locking needed).
+ * This path advances the machine synchronously on the caller's core.  Do not
+ * route it through cpu_bridge/runtime publish symbols; those are intentionally
+ * owned by the generic runtime path and may resolve to the multicore publisher.
  * ------------------------------------------------------------------------- */
-void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
+static void bellatrix_singlecore_advance_cpu_cycles(uint32_t cycles)
 {
+#if BELLATRIX_PROFILE_ENABLED
+    uint64_t t0 = bprof_now();
     bellatrix_machine_advance(cycles);
+    bprof_record(&g_bprof.advance_time, bprof_now() - t0);
+    g_bprof.advance_stats.calls++;
+    g_bprof.advance_stats.cpu_cycles_total += cycles;
+    if (cycles < g_bprof.advance_stats.cpu_cycles_min)
+        g_bprof.advance_stats.cpu_cycles_min = cycles;
+    if (cycles > g_bprof.advance_stats.cpu_cycles_max)
+        g_bprof.advance_stats.cpu_cycles_max = cycles;
+#else
+    bellatrix_machine_advance(cycles);
+#endif
+}
+
+void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
+{
+    static uint64_t s_prev_insn_count;
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    static uint32_t s_last_pc;
+    static uint32_t s_same_pc_reports;
+#endif
+    uint32_t cycles = 0u;
+
+    g_bellatrix_exec_pc = pc;
+
+    if (!s_prev_insn_count || insn_count <= s_prev_insn_count) {
+        s_prev_insn_count = insn_count;
+        cycles = 8u;
+    } else {
+        uint64_t delta = insn_count - s_prev_insn_count;
+        s_prev_insn_count = insn_count;
+        cycles = (uint32_t)delta * 8u;
+    }
+
+    if (cycles > 0u) {
+        if (PAL_Core_IsMulticoreEnabled())
+            bellatrix_bridge_publish_cpu_cycles(cycles);
+        else
+            bellatrix_singlecore_advance_cpu_cycles(cycles);
+    }
+
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    if (pc == s_last_pc) {
+        if (++s_same_pc_reports == 512u || s_same_pc_reports == 4096u ||
+            s_same_pc_reports == 32768u || s_same_pc_reports == 262144u) {
+            RigelContext *ctx = bellatrix_machine_rigel_ctx();
+            uint16_t vposr = ctx ? rigel_custom_read16(ctx, RIGEL_REG_VPOSR) : 0u;
+            uint16_t vhposr = ctx ? rigel_custom_read16(ctx, RIGEL_REG_VHPOSR) : 0u;
+            uint16_t intena = ctx ? rigel_custom_read16(ctx, RIGEL_REG_INTENAR) : 0u;
+            uint16_t intreq = ctx ? rigel_custom_read16(ctx, RIGEL_REG_INTREQR) : 0u;
+            BellatrixMachine *machine = bellatrix_machine_get();
+            uint64_t tick_cck = machine ? machine->tick_count : 0u;
+            uint32_t int32 = __m68k_state ? __m68k_state->INT32 : 0u;
+            uint32_t ipl = __m68k_state ? __m68k_state->INT.IPL : 0u;
+
+            kprintf("[EMU68-STUCK] pc=%08x repeats=%u insn=%llu cycles=%u "
+                    "INT32=%08x IPL=%u INTENA=%04x INTREQ=%04x beam=%04x/%04x cck=%llu\n",
+                    (unsigned)pc,
+                    (unsigned)s_same_pc_reports,
+                    (unsigned long long)insn_count,
+                    (unsigned)cycles,
+                    (unsigned)int32,
+                    (unsigned)ipl,
+                    (unsigned)intena,
+                    (unsigned)intreq,
+                    (unsigned)vposr,
+                    (unsigned)vhposr,
+                    (unsigned long long)tick_cck);
+        }
+    } else {
+        s_last_pc = pc;
+        s_same_pc_reports = 0u;
+    }
+#endif
+
+    bellatrix_runtime_poll_from_emu68();
 }
 
 /* ---------------------------------------------------------------------------
@@ -626,9 +733,13 @@ void bellatrix_init(void)
 #endif
 #endif
 
+    core_chipset_init(&g_runtime.chipset,
+                      bellatrix_machine_rigel_ctx(),
+                      g_runtime.machine);
 
+    kprintf("[BELA] build: " __DATE__ " " __TIME__ "\n");
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[BELA] Initialized (multicore enabled: Core1=Chipset Core3=IO)\n");
+        kprintf("[BELA] Initialized (multicore enabled: Core1=CPU Core2=Chipset Core3=IO)\n");
     } else {
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }
@@ -637,6 +748,12 @@ void bellatrix_init(void)
     kprintf("[BELA] CPU backend: musashi\n");
 #else
     kprintf("[BELA] CPU backend: emu68\n");
+#endif
+#if BELLATRIX_PROFILE_ENABLED
+    bellatrix_profile_reset();
+    kprintf("[BELA] MMIO profiling: ENABLED (BELLATRIX_PROFILE=1)\n");
+#else
+    kprintf("[BELA] MMIO profiling: disabled\n");
 #endif
 }
 
@@ -690,14 +807,41 @@ void bellatrix_sync_overlay_from_ciaa(void)
 
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 {
-    PAL_Runtime_Poll();
+#if BELLATRIX_PROFILE_ENABLED
+    uint64_t _t0 = bprof_now();
+    uint64_t _t1 = _t0;
+    bellatrix_runtime_poll_from_emu68();
+    bprof_record(&g_bprof.poll, bprof_now() - _t1);
+#else
+    bellatrix_runtime_poll_from_emu68();
+#endif
 
     uint32_t result = 0;
 
+#if BELLATRIX_PROFILE_ENABLED
+    {
+        uint64_t _ta = bprof_now();
+        if (!bellatrix_slow_contains(bellatrix_machine_memory(), addr, (unsigned int)size))
+            addr = bellatrix_bridge_normalize_addr(addr);
+        bprof_record(&g_bprof.addr_fix, bprof_now() - _ta);
+    }
+    /* Region classification (after normalization) */
+    {
+        BellatrixProfileBucket *_rbkt;
+        if      (addr >= 0xBFE000u && addr <= 0xBFEFFFu) _rbkt = &g_bprof.region_cia_a;
+        else if (addr >= 0xBFD000u && addr <= 0xBFDFFFu) _rbkt = &g_bprof.region_cia_b;
+        else if (addr >= 0xDFF09Au && addr <= 0xDFF09Du) _rbkt = &g_bprof.region_ocs_intr;
+        else if (addr >= 0xDFF000u && addr <= 0xDFF1FFu) _rbkt = &g_bprof.region_ocs_other;
+        else                                              _rbkt = &g_bprof.region_other;
+        _rbkt->calls++;
+        bprof_hot_record(addr, g_bellatrix_fault_pc, dir);
+    }
+#else
     if (!bellatrix_slow_contains(bellatrix_machine_memory(), addr, (unsigned int)size))
         addr = bellatrix_bridge_normalize_addr(addr);
+#endif
 
-#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
     {
         static int s_bus_n = 0;
         if (s_bus_n < 120)
@@ -720,7 +864,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
                     dir == BUS_READ ? "R" : "W", size);
         }
 
-        if (real_pc >= 0xfc5e00u && real_pc <= 0xfc5fffu)
+        if (dir == BUS_WRITE && real_pc >= 0xfc5e00u && real_pc <= 0xfc5fffu)
         {
             kprintf("[PC-TRAP] pc=%08x addr=%06x %s size=%d val=%08x\n",
                     (unsigned)real_pc, (unsigned)addr,
@@ -729,16 +873,24 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     }
 #endif
 
-    /* Btrace verbosity control */
+    /* Control addresses — not counted in profiling totals */
     if (addr == BTRACE_CONTROL_ADDR && dir == BUS_WRITE)
     {
         bellatrix_machine_btrace_set_filter((uint16_t)value);
         return 0;
     }
+#if BELLATRIX_PROFILE_ENABLED
+    if (addr == BPROF_CONTROL_ADDR && dir == BUS_WRITE)
+    {
+        if (value == 0x01u) bellatrix_profile_dump();
+        if (value == 0x02u) bellatrix_profile_reset();
+        return 0;
+    }
+#endif
 
     if (dir == BUS_WRITE)
     {
-#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
         if (addr < 0x400u)
         {
             kprintf("[VEC-W] %05x[%d]=%08x\n",
@@ -757,16 +909,22 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 #endif
 
         /*
-         * Acquire chipset lock for MMIO: prevents concurrent
-         * bellatrix_machine_advance() on Core 1 while Core 0 writes.
+         * core_chipset_lock_acquire/release() (held inside
+         * bellatrix_bridge_cpu_write itself) prevents concurrent
+         * rigel_step() on Core 2 while Core 1 writes.
          */
-        chipset_lock_acquire();
-
+#if BELLATRIX_PROFILE_ENABLED
+        { uint64_t _td = bprof_now(); bellatrix_bridge_cpu_write(addr, value, (unsigned)size); bprof_record(&g_bprof.dispatch_write, bprof_now() - _td); }
+        g_bprof.writes++;
+#else
         bellatrix_bridge_cpu_write(addr, value, (unsigned)size);
+#endif
 
         /*
          * CIA-A PRA bit 0 controls the host MMU overlay mapping.
          * The logical CIA state was already updated by bellatrix_machine_write().
+         * This reads Rigel directly (bypassing the bridge), so it needs its
+         * own lock around the read.
          */
         if (addr >= 0xBFE001u &&
             addr <= 0xBFEF01u &&
@@ -774,10 +932,12 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
             cia_reg(addr) == 0)
         {
             struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
+            core_chipset_lock_acquire();
             uint8_t pra = ctx ? (uint8_t)rigel_cia_read(ctx, 0u, 0x0u) : 0u;
+            core_chipset_lock_release();
             int new_ovl = (int)(pra & 1u);
 
-#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
             if (new_ovl != s_overlay)
             {
                 kprintf("[OVL-TRIG] ciaa_pra_write addr=%08x val=%02x pra=%02x new_ovl=%d\n",
@@ -790,13 +950,34 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
             set_overlay(new_ovl);
         }
 
-        chipset_lock_release();
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_record(&g_bprof.total_access, bprof_now() - _t0);
+        if (g_bprof.total_access.calls % BPROF_AUTODUMP_INTERVAL == 0)
+            bellatrix_profile_dump();
+#endif
         return 0;
     }
 
-    chipset_lock_acquire();
+#if BELLATRIX_PROFILE_ENABLED
+    { uint64_t _td = bprof_now(); result = bellatrix_bridge_cpu_read(addr, (unsigned)size); bprof_record(&g_bprof.dispatch_read, bprof_now() - _td); }
+    g_bprof.reads++;
+    bprof_record(&g_bprof.total_access, bprof_now() - _t0);
+    if (g_bprof.total_access.calls % BPROF_AUTODUMP_INTERVAL == 0)
+        bellatrix_profile_dump();
+#else
     result = bellatrix_bridge_cpu_read(addr, (unsigned)size);
-    chipset_lock_release();
+#endif
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    {
+        uint32_t real_pc = g_bellatrix_fault_pc;
+        if (real_pc >= 0xfc5e00u && real_pc <= 0xfc5fffu)
+        {
+            kprintf("[PC-TRAP] pc=%08x addr=%06x R size=%d result=%08x\n",
+                    (unsigned)real_pc, (unsigned)addr, size,
+                    (unsigned)result);
+        }
+    }
+#endif
     return result;
 }
 
@@ -806,5 +987,5 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 
 void bellatrix_cpu_step(uint32_t cycles)
 {
-    bellatrix_bridge_cpu_progress(cycles);
+    bellatrix_bridge_publish_cpu_cycles(cycles);
 }

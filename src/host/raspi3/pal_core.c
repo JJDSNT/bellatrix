@@ -16,7 +16,7 @@
 // Expected next steps elsewhere in the project:
 //   - implement bellatrix_runtime_host_init()
 //   - implement bellatrix_runtime_host_step()
-//   - implement bellatrix_runtime_notify_cpu_progress()
+//   - implement bellatrix_runtime_publish_cpu_cycles()
 //   - implement bellatrix_runtime_get_pending_ipl()
 //   - wire single-core polling into the CPU/JIT side when multicore is disabled
 
@@ -26,6 +26,7 @@
 
 #include "pal.h"
 #include "host/osd.h"
+#include "runtime/cpu_progress.h"
 
 // ---------------------------------------------------------------------------
 // BCM2836 local interrupt controller (RPi3)
@@ -77,8 +78,8 @@ static struct BellatrixPalRuntime s_rt = {
     .runtime_running      = 0,
     .multicore_enabled    = 0,  // default: single-core mode
     .chipset_core_started = 0,
-    .cpu_core_id          = 0,
-    .chipset_core_id      = 1,
+    .cpu_core_id          = 1,
+    .chipset_core_id      = 2,
     .cpu_priority         = BELLATRIX_PRIO_HIGH,
     .chipset_priority     = BELLATRIX_PRIO_REALTIME,
     .pending_ipl          = 0,
@@ -110,13 +111,6 @@ void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
 }
 
 __attribute__((weak))
-void bellatrix_runtime_audio_step(uint64_t host_now, uint64_t host_freq)
-{
-    (void)host_now;
-    (void)host_freq;
-}
-
-__attribute__((weak))
 void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
 {
     (void)host_now;
@@ -124,7 +118,7 @@ void bellatrix_runtime_io_step(uint64_t host_now, uint64_t host_freq)
 }
 
 __attribute__((weak))
-void bellatrix_runtime_notify_cpu_progress(uint32_t cycles)
+void bellatrix_runtime_publish_cpu_cycles(uint32_t cycles)
 {
     (void)cycles;
 }
@@ -301,11 +295,11 @@ void PAL_Runtime_Poll(void)
 // ---------------------------------------------------------------------------
 void PAL_Runtime_ReportCpuProgress(uint32_t cycles)
 {
-    bellatrix_runtime_notify_cpu_progress(cycles);
+    bellatrix_runtime_publish_cpu_cycles(cycles);
 }
 
 // ---------------------------------------------------------------------------
-// Core 1 — GFX/Agnus main loop
+// Core 2 — Chipset (Rigel) main loop
 // ---------------------------------------------------------------------------
 static void chipset_core_loop(void)
 {
@@ -335,21 +329,6 @@ static void chipset_core_loop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Core 2 — Audio (Paula) main loop
-// ---------------------------------------------------------------------------
-static void chipset_audio_loop(void)
-{
-    while (!atomic_load_explicit(&s_rt.runtime_ready, memory_order_acquire))
-        pal_wfe();
-
-    while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
-        const uint64_t now = pal_read_cntpct();
-        bellatrix_runtime_audio_step(now, s_rt.host_counter_freq);
-        pal_wfe();
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Core 3 — IO (CIA / serial / disk) main loop
 // ---------------------------------------------------------------------------
 static void chipset_io_loop(void)
@@ -370,17 +349,17 @@ static void chipset_io_loop(void)
 // Each is called by secondary_boot() in start.c for the matching cpu_id.
 // The entry spins on its function pointer until PAL_Core_Launch*() sets it.
 // ---------------------------------------------------------------------------
+static void (*volatile s_cpu_entry)(void)     = NULL;
 static void (*volatile s_chipset_entry)(void) = NULL;
-static void (*volatile s_audio_entry)(void)   = NULL;
 static void (*volatile s_io_entry)(void)      = NULL;
 
 void bellatrix_core1_entry(void)
 {
-    /* Core 1 — Agnus/GFX. */
-    while (!s_chipset_entry)
+    /* Core 1 — CPU (Emu68 JIT or Musashi). Parks until PAL_Core_LaunchCpu(). */
+    while (!s_cpu_entry)
         pal_wfe();
 
-    s_chipset_entry();
+    s_cpu_entry();
 
     while (1)
         pal_wfe();
@@ -388,11 +367,11 @@ void bellatrix_core1_entry(void)
 
 void bellatrix_core2_entry(void)
 {
-    /* Core 2 — Audio (Paula). Parks until PAL_Core_LaunchAudio() is called. */
-    while (!s_audio_entry)
+    /* Core 2 — Chipset (Rigel). Parks until PAL_Core_LaunchChipset(). */
+    while (!s_chipset_entry)
         pal_wfe();
 
-    s_audio_entry();
+    s_chipset_entry();
 
     while (1)
         pal_wfe();
@@ -437,11 +416,31 @@ void PAL_ChipsetTimer_Stop(void)
 }
 
 // ---------------------------------------------------------------------------
+// Launch the CPU backend (Emu68 JIT or Musashi).
+//
+// If multicore is disabled, this is a no-op — the caller (bellatrix.c) runs
+// entry() inline on the boot core instead, exactly like before this existed.
+// If multicore is enabled, core 1 is woken and runs entry() forever.
+// ---------------------------------------------------------------------------
+void PAL_Core_LaunchCpu(void (*entry)(void))
+{
+    pal_runtime_init_once();
+
+    if (!atomic_load_explicit(&s_rt.multicore_enabled, memory_order_acquire))
+        return;
+
+    s_cpu_entry = entry;
+
+    pal_dsb_sy();
+    pal_sev();
+}
+
+// ---------------------------------------------------------------------------
 // Launch chipset execution.
 //
 // If multicore is disabled, no secondary core is launched and the caller is
 // expected to drive PAL_Runtime_Poll() from the CPU/JIT side.
-// If multicore is enabled, core 1 is woken and runs chipset_core_loop().
+// If multicore is enabled, core 2 is woken and runs chipset_core_loop().
 // ---------------------------------------------------------------------------
 void PAL_Core_LaunchChipset(void (*entry)(void))
 {
@@ -455,19 +454,6 @@ void PAL_Core_LaunchChipset(void (*entry)(void))
     }
 
     s_chipset_entry = chipset_core_loop;
-
-    pal_dsb_sy();
-    pal_sev();
-}
-
-void PAL_Core_LaunchAudio(void)
-{
-    pal_runtime_init_once();
-
-    if (!atomic_load_explicit(&s_rt.multicore_enabled, memory_order_acquire))
-        return;
-
-    s_audio_entry = chipset_audio_loop;
 
     pal_dsb_sy();
     pal_sev();

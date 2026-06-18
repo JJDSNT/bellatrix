@@ -2,19 +2,20 @@
 #define BELLATRIX_DEBUG_CORE_LOG_H
 
 /*
- * Per-core log tags — canonical taxonomy from docs/runtime_core_testing.md
- * and docs/regression_and_validation_strategy.md.
+ * Per-core log tags — canonical taxonomy from multicore.md and
+ * docs/runtime_core_testing.md.
  *
  * Tags:
- *   [CORE0-CPU]    Core 0 — Emu68 JIT execution, CPU state, IPL consumption
- *   [CORE1-GFX]    Core 1 — Agnus, Denise, raster, DMA, copper, blitter
- *   [CORE2-PAULA]  Core 2 — Paula: INTREQ/INTENA, IPL publication, audio, serial, disk
- *   [CORE3-IO]     Core 3 — CIA-A/B, timers, TOD, keyboard, host UART, floppy lines
+ *   [CORE0-HOST]    Core 0 — Machine/boot/scheduler arbiter (light; parks
+ *                   once the CPU and chipset cores are launched)
+ *   [CORE1-CPU]     Core 1 — CPU backend (Emu68 JIT or Musashi)
+ *   [CORE2-CHIPSET] Core 2 — Rigel: Agnus, Denise, Paula, CIA (single-thread)
+ *   [CORE3-IO]      Core 3 — physical IO: USB, Bluetooth, host UART
  *   [XCORE-<tag>]  Cross-core event propagation (use a descriptive tag)
  *
  * Usage:
- *   CORE0_LOG("IPL=%u", ipl);
- *   XCORE_LOG("CIA->PAULA", "INTREQ=%04x", intreq);
+ *   CORE1_LOG("IPL=%u", ipl);
+ *   XCORE_LOG("CPU->CHIPSET", "cck_target=%llu", target);
  *
  * Enable by defining BELLATRIX_CORE_LOG before including this header,
  * or via the build system: -DBELLATRIX_CORE_LOG
@@ -26,10 +27,10 @@
 
 #ifdef BELLATRIX_CORE_LOG
 
-#define CORE0_LOG(fmt, ...)        kprintf("[CORE0-CPU] "   fmt "\n", ##__VA_ARGS__)
-#define CORE1_LOG(fmt, ...)        kprintf("[CORE1-GFX] "   fmt "\n", ##__VA_ARGS__)
-#define CORE2_LOG(fmt, ...)        kprintf("[CORE2-PAULA] " fmt "\n", ##__VA_ARGS__)
-#define CORE3_LOG(fmt, ...)        kprintf("[CORE3-IO] "    fmt "\n", ##__VA_ARGS__)
+#define CORE0_LOG(fmt, ...)        kprintf("[CORE0-HOST] "    fmt "\n", ##__VA_ARGS__)
+#define CORE1_LOG(fmt, ...)        kprintf("[CORE1-CPU] "     fmt "\n", ##__VA_ARGS__)
+#define CORE2_LOG(fmt, ...)        kprintf("[CORE2-CHIPSET] " fmt "\n", ##__VA_ARGS__)
+#define CORE3_LOG(fmt, ...)        kprintf("[CORE3-IO] "      fmt "\n", ##__VA_ARGS__)
 #define XCORE_LOG(tag, fmt, ...)   kprintf("[XCORE-" tag "] " fmt "\n", ##__VA_ARGS__)
 
 #else

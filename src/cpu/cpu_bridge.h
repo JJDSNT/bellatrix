@@ -21,5 +21,6 @@ uint32_t bellatrix_bridge_cpu_access(uint32_t addr,
                                      unsigned int size,
                                      int dir);
 
+void bellatrix_bridge_publish_cpu_cycles(uint32_t cycles);
 void bellatrix_bridge_cpu_progress(uint32_t cycles);
 void bellatrix_bridge_cpu_sync_ipl(void);

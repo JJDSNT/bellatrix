@@ -72,8 +72,9 @@ The machine is composed of:
 ```text id="w2jlwm"
 BellatrixMachine
  ├── Runtime
- │    ├── Core 0 — CPU Runtime (Emu68 JIT)
- │    ├── Core 1 — Chipset Runtime (Rigel: CIA+Agnus+Paula+Denise)
+ │    ├── Core 0 — Machine/Host (boot; parks after launching Core 1-3)
+ │    ├── Core 1 — CPU Runtime (Emu68 JIT or Musashi)
+ │    ├── Core 2 — Chipset Runtime (Rigel: CIA+Agnus+Paula+Denise)
  │    └── Core 3 — IO Runtime (USB + Bluetooth)
  │
  ├── CPU
@@ -248,11 +249,21 @@ Denise consumes visual timeline state.
 
 # 7. Runtime Organization
 
-## Core 0 — CPU Runtime
+## Core 0 — Machine / Host
 
 Responsibilities:
 
-* Emu68 JIT
+* boot (`bellatrix_init()`)
+* launching Core 1/2/3
+* parks in a light `wfe` loop once launched — no recurring work
+
+---
+
+## Core 1 — CPU Runtime
+
+Responsibilities:
+
+* Emu68 JIT or Musashi (whichever backend is selected)
 * CPU execution
 * memory access
 * bus dispatch
@@ -260,7 +271,7 @@ Responsibilities:
 
 ---
 
-## Core 1 — Chipset Runtime (Rigel)
+## Core 2 — Chipset Runtime (Rigel)
 
 Responsibilities:
 

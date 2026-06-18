@@ -99,10 +99,10 @@ uint64_t PAL_Time_GetFrequency(void);
 
 /* ---- Dedicated ARM core ---- */
 
-/* Launch chipset loop on a secondary ARM core via spin-table.
-   Stub in Phase 0. */
+/* Launch a runtime loop on a secondary ARM core via spin-table.
+   Core 1 = CPU backend, Core 2 = chipset (Rigel), Core 3 = physical IO. */
+void PAL_Core_LaunchCpu(void (*entry)(void));
 void PAL_Core_LaunchChipset(void (*entry)(void));
-void PAL_Core_LaunchAudio(void);
 void PAL_Core_LaunchIO(void);
 void PAL_Core_SetMulticoreEnabled(int enabled);
 int  PAL_Core_IsMulticoreEnabled(void);

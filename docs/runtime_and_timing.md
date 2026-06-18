@@ -180,11 +180,21 @@ Machine/runtime coordinate propagation only.
 
 # 6. Current Multicore Runtime
 
-## Core 0 — CPU Runtime
+## Core 0 — Machine / Host
 
 Responsibilities:
 
-* Emu68 JIT
+* boot (`bellatrix_init()`)
+* launching the CPU (Core 1), chipset (Core 2), and IO (Core 3) cores
+* parks in a light `wfe` loop afterward — no recurring work of its own
+
+---
+
+## Core 1 — CPU Runtime
+
+Responsibilities:
+
+* Emu68 JIT or Musashi (whichever backend is selected)
 * instruction execution
 * bus access
 * memory access
@@ -192,7 +202,7 @@ Responsibilities:
 
 ---
 
-## Core 1 — Chipset Runtime (Rigel)
+## Core 2 — Chipset Runtime (Rigel)
 
 Responsibilities:
 
@@ -221,13 +231,13 @@ Current runtime flow:
 ```text
 ticks
   ↓
-Core 1 (Rigel) evolves full chipset:
+Core 2 (Rigel) evolves full chipset:
   CIA timers / Agnus raster+DMA / Paula IRQ / Denise scanout
 Core 3 (IO) evolves USB + Bluetooth
   ↓
 IPL derived (Paula → Rigel → bus)
   ↓
-Core 0 CPU reacts
+Core 1 CPU reacts
 ```
 
 ---

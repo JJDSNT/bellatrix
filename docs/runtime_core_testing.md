@@ -216,11 +216,11 @@ select state updated
 
 ---
 
-# 9. Core 1 — Chipset Tests (Rigel)
+# 9. Core 2 — Chipset Tests (Rigel)
 
 ## Responsibilities
 
-Core 1 owns the full Rigel chipset domain:
+Core 2 owns the full Rigel chipset domain:
 
 * CIA A/B (timers, TOD, keyboard protocol, classic IO)
 * Agnus (beam, raster, DMA arbitration, copper, blitter)
@@ -306,18 +306,19 @@ Denise receives bitplane data at right beam position
 
 ---
 
-# 10. (removed — Core 1 previously split into Core1=Video and Core2=Paula; now unified in Rigel on Core 1)
+# 10. (removed — chipset previously split into Core1=Video and Core2=Paula; now unified in Rigel on Core 2)
 
 ## Note
 
 The old four-core model (Core0=CPU, Core1=GFX, Core2=Paula, Core3=IO/CIA) has
-been superseded. All chipset state is now owned by Core 1 via Rigel.
+been superseded. All chipset state is now owned by Core 2 via Rigel
+(Core 0=Machine/Host, Core 1=CPU, Core 2=Rigel, Core 3=IO — see `multicore.md`).
 
 ---
 
-# 10b. Core 1 — Chipset sub-domain: Video/DMA
+# 10b. Core 2 — Chipset sub-domain: Video/DMA
 
-## Responsibilities (within Rigel on Core 1)
+## Responsibilities (within Rigel on Core 2)
 
 * Agnus
 * Denise
@@ -383,13 +384,13 @@ VBL event generated
 
 ---
 
-# 11. Core 0 — Execution Tests
+# 11. Core 1 — Execution Tests
 
 ## Responsibilities
 
-Core 0 owns:
+Core 1 owns:
 
-* Emu68 execution
+* Emu68 (or Musashi) execution
 * CPU state
 * interrupt consumption
 * memory execution
@@ -442,9 +443,9 @@ These tests validate event propagation across domains.
 ## Flow
 
 ```text id="0cwyca"
-Core 1 (Rigel): CIA timer underflow → Paula consolidates INTREQ → IPL derived
+Core 2 (Rigel): CIA timer underflow → Paula consolidates INTREQ → IPL derived
     ↓
-Core 0 CPU accepts interrupt
+Core 1 CPU accepts interrupt
 ```
 
 ---
@@ -472,7 +473,7 @@ CPU accepts interrupt
 ```text id="2ozx0v"
 Core 3 IO (USB floppy / peripheral lines)
     ↓
-Core 1 (Rigel): Paula disk → DMA arbitration (Agnus)
+Core 2 (Rigel): Paula disk → DMA arbitration (Agnus)
 ```
 
 ---
@@ -504,7 +505,7 @@ Core 3 MUST NOT call:
 paula_interrupt_update()
 ```
 
-Core 1 MUST NOT:
+Core 2 (Rigel, outside Paula) MUST NOT:
 
 ```text id="jlwm7p"
 derive IPL
@@ -544,12 +545,13 @@ Per-core runtime logs are strongly recommended.
 
 ## Recommended Tags
 
-| Domain     | Tag           |
-| ---------- | ------------- |
-| Core 0     | [CORE0-CPU]     |
-| Core 1     | [CORE1-CHIPSET] |
+| Domain     | Tag             |
+| ---------- | --------------- |
+| Core 0     | [CORE0-HOST]    |
+| Core 1     | [CORE1-CPU]     |
+| Core 2     | [CORE2-CHIPSET] |
 | Core 3     | [CORE3-IO]      |
-| Cross-core | [XCORE-*]     |
+| Cross-core | [XCORE-*]       |
 
 ---
 

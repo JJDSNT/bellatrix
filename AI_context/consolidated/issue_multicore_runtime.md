@@ -3,155 +3,162 @@
 ## Contexto
 
 Bellatrix usa os 4 cores do RPi3 com responsabilidades dedicadas. A arquitetura
-foi iterada em 3 sprints (27-29) para alinhar os domínios corretamente.
+foi iterada nos Sprints 27-29 (GFX/Paula/IO split sobre Agnus/Denise/Paula
+internos) e depois substituída pela migração para o Rigel (chipset unificado,
+externo). Este documento descreve a arquitetura **atual** (pós-migração Rigel
++ relabeling de cores conforme `multicore.md`); ver `project_refactoring_sprint11.md`
+e `project_refactoring_sprint12.md` para o histórico da migração Rigel, e
+`multicore.md` para a proposta original e a matriz de aderência.
 
-## Arquitetura Final (Sprint 29)
+## Arquitetura Atual
 
 | Core | Domínio | Loop | Implementação |
 |------|---------|------|--------------|
-| 0 | Emu68 JIT (CPU) | MainLoop | fixo — não alterado |
-| 1 | GFX: Agnus+Denise+DMA | `core_gfx_step()` | `src/runtime/core_gfx.c` |
-| 2 | Paula: áudio+disk+serial+IRQ/IPL | `core_audio_step()` | `src/runtime/core_audio.c` |
-| 3 | IO físico: CIA+teclado+UART host | `core_io_step()` | `src/runtime/core_io.c` |
+| 0 | Machine/Host — boot, `bellatrix_init()`, depois estaciona em `wfe` | — | `emu68/src/aarch64/start.c`, `bellatrix_launch_cpu_and_park()` em `src/cpu/emu68/bellatrix.c` |
+| 1 | CPU — Emu68 JIT (`M68K_StartEmu`/`MainLoop`) ou Musashi | `bellatrix_run_selected_cpu_backend()` / `MainLoop()` | `src/cpu/emu68/bellatrix.c`, `emu68/src/ExecutionLoop.c` |
+| 2 | Chipset (Rigel) — Agnus+Denise+Paula+CIA via `rigel_step()` | `chipset_core_loop()` → `bellatrix_runtime_host_step()` | `src/runtime/core_chipset.c` |
+| 3 | IO físico — USB host + Bluetooth | `chipset_io_loop()` → `bellatrix_runtime_io_step()` | `src/runtime/core_io.c` |
+
+Core 0 nunca executa CPU nem chipset: depois de `bellatrix_init()` lançar
+Core 1/2/3, ele só estaciona (`while(1) wfe`). Em single-core
+(`BELLATRIX_ENABLE_MULTICORE` off), nenhum core secundário é lançado — o
+backend de CPU roda inline no boot core exatamente como antes desta mudança,
+e o chipset avança de forma síncrona via `bellatrix_machine_advance()`.
 
 ## Fluxo de Ciclos
 
-### Core 0 → Core 1 (ciclos GFX)
+### Core 1 (CPU) → Core 2 (Chipset)
 ```c
-// ExecutionLoop.c (Core 0):
-bellatrix_bridge_cpu_progress(bela_delta * 8u)
-  → bellatrix_runtime_notify_cpu_progress(cycles)
-     → atomic_fetch_add(&s_gfx_cycles_pending, cycles)
-     → atomic_fetch_add(&s_io_cycles_pending, cycles)
-     → sev                                    ← acorda Core 1 e Core 3
+// Emu68: bellatrix_emu68_report_jit_progress() em src/cpu/emu68/bellatrix.c
+// Musashi: bellatrix_run_selected_cpu_backend() — mesmo padrão
+if (PAL_Core_IsMulticoreEnabled())
+    bellatrix_bridge_publish_cpu_cycles(cycles)
+        → bellatrix_runtime_publish_cpu_cycles(m68k_cycles)   // core_chipset.c
+           → s_cpu_cck_target += (m68k_cycles / 2)             // M68K → CCK
+           → PAL_Runtime_WakeupChipset()                       // sev — acorda Core 2
+else
+    bellatrix_singlecore_advance_cpu_cycles(cycles)            // síncrono, sem cross-core
 ```
 
-### Core 1 (GFX):
+### Core 2 (Chipset)
 ```c
-bellatrix_runtime_host_step():
-  cycles = atomic_exchange(&s_gfx_cycles_pending, 0)
-  [acquire chipset lock]
-  core_gfx_step(&g_runtime.gfx, cycles)    ← agnus_step, denise, DMA
-  s_published_master_cycles = gfx.master_cycles   ← publish para Core 2
-  [release chipset lock + sev]
+bellatrix_runtime_host_step():                    // src/runtime/core_chipset.c
+  target = atomic_load(&s_cpu_cck_target)
+  while (s_chipset_cck < target):
+    rigel_step(rigel, min(remaining, CHIPSET_QUANTUM))
+    on RIGEL_EVENT_IRQ_CHANGED   → bellatrix_machine_on_ipl_changed(ipl)  // IPL → Core 1
+    on RIGEL_EVENT_FRAME_READY   → bellatrix_machine_on_frame_ready()
 ```
 
-### Core 2 (Paula/Audio):
+### Core 3 (IO)
 ```c
-bellatrix_runtime_audio_step():
-  master = acquire_load(&s_published_master_cycles)
-  [acquire chipset lock]
-  core_audio_step(&g_runtime.audio, master)
-    → paula_audio_step(..., audio_cycles)
-    → paula_disk_step(..., raw_cycles)
-    → paula_serial_step(..., raw_cycles)
-    → paula_interrupt_update(...)
-    → bellatrix_machine_sync_ipl()          ← IPL → JIT
-  [release chipset lock + sev]
+bellatrix_runtime_io_step():                       // src/runtime/core_io.c
+  bt_host_step(&g_runtime.bluetooth)
+  usb_host_step(&core->usb_host)
 ```
-
-### Core 3 (IO):
-```c
-bellatrix_runtime_io_step():
-  cycles = atomic_exchange(&s_io_cycles_pending, 0)
-  [acquire chipset lock]
-  core_io_step(&g_runtime.io, cycles)
-    → cia_step(cia_a, cia_ticks)
-    → cia_step(cia_b, cia_ticks)
-    → cia_tod_pulse(cia_b, hsync_pulses)
-    → bellatrix_keyboard_step(...)
-    → uart_host_poll(...)                   ← serial bridge
-  [release chipset lock + sev]
-```
+Não depende do contador de ciclos da CPU — só faz polling de hardware físico.
 
 ## Sincronização
 
-### Spinlock Principal
-`s_chipset_lock` — `atomic_flag` (TAS spinlock + WFE)
+### Lock de acesso ao chipset
+`core_chipset_lock_acquire()` / `core_chipset_lock_release()` —
+`atomic_flag` (TAS spinlock + WFE/SEV), definido em `src/runtime/core_chipset.c`.
 
-**Holders**: Core 0 (MMIO write), Core 1 (GFX step), Core 2 (Paula step), Core 3 (IO step)
+**Holders**: `bellatrix_bridge_cpu_read()`/`bellatrix_bridge_cpu_write()` em
+`src/cpu/cpu_bridge.c` — chamado tanto pelo caminho de fault do Emu68
+(`bellatrix_bus_access()`) quanto pelas chamadas diretas do Musashi
+(`musashi_read()`/`musashi_write()`). Cobre os dois backends uniformemente
+desde esta mudança; antes, só o caminho Emu68 tinha o lock.
 
-**Invariante**: Core 0 (MMIO) e Core 1 (advance) nunca seguram o lock simultaneamente.
+**No-op** quando `BELLATRIX_ENABLE_MULTICORE` não está definido (single-core:
+não há core de chipset concorrente).
 
-### Accumulators Atômicos
-- `s_gfx_cycles_pending` — `_Atomic uint32_t` — Core 0 produz, Core 1 drena
-- `s_io_cycles_pending` — `_Atomic uint32_t` — Core 0 produz, Core 3 drena
-- `s_published_master_cycles` — `_Atomic uint64_t` — Core 1 publica, Core 2 lê
+### Cycle target atômico
+`s_cpu_cck_target` (`_Atomic uint64_t`, em `core_chipset.c`) — Core 1 produz
+(soma), Core 2 drena (compara e avança `rigel_step()` em blocos de
+`CHIPSET_QUANTUM=128` CCK).
 
 ### WFE/SEV
-- Core 1/2/3 dormem em WFE quando idle
-- Core 0 emite SEV quando adiciona ciclos (`notify_cpu_progress`)
-- Cada core emite SEV ao liberar lock (para acordar waiters)
+- Core 0/2/3 dormem em WFE quando idle (Core 0 dorme para sempre depois do boot)
+- Core 1 emite SEV ao publicar ciclos (`bellatrix_runtime_publish_cpu_cycles`)
+- Cada core emite SEV ao liberar o lock de acesso ao chipset
 
 ## Secondary Boot (start.c — BELLATRIX)
 
 ```c
 secondary_boot(cpu_id):
   if BELLATRIX:
-    if cpu_id == 1: bellatrix_core1_entry()  → chipset_core_loop()
-    if cpu_id == 2: bellatrix_core2_entry()  → chipset_audio_loop()
-    if cpu_id == 3: bellatrix_core3_entry()  → chipset_io_loop()
+    if cpu_id == 1: bellatrix_core1_entry()  → espera s_cpu_entry (CPU backend)
+    if cpu_id == 2: bellatrix_core2_entry()  → espera s_chipset_entry → chipset_core_loop()
+    if cpu_id == 3: bellatrix_core3_entry()  → espera s_io_entry → chipset_io_loop()
     else: while(1) wfe
 ```
 
-`PAL_Core_LaunchChipset()` → `s_chipset_entry = chipset_core_loop; dsb+sev`
-`PAL_Core_LaunchAudio()` → `s_audio_entry = chipset_audio_loop; dsb+sev`
-`PAL_Core_LaunchIO()` → `s_io_entry = chipset_io_loop; dsb+sev`
+```c
+// emu68/src/aarch64/start.c, cauda de boot() — roda no boot core (Core 0)
+bellatrix_init();
+bellatrix_launch_cpu_and_park(
+    bellatrix_cpu_backend_owns_execution_loop()
+        ? bellatrix_run_selected_cpu_backend   // Musashi
+        : bellatrix_emu68_cpu_entry);          // Emu68: wraps M68K_StartEmu(0, NULL)
+```
 
-Chamados de `bellatrix_init()` quando `BELLATRIX_MULTICORE=1`.
+`bellatrix_launch_cpu_and_park()` (em `src/cpu/emu68/bellatrix.c`): single-core
+chama `entry()` direto no boot core (nunca retorna); multicore chama
+`PAL_Core_LaunchCpu(entry)` e estaciona o boot core em `wfe` para sempre.
+
+`PAL_Core_LaunchCpu()`     → `s_cpu_entry = entry; dsb+sev`      (Core 1)
+`PAL_Core_LaunchChipset()` → `s_chipset_entry = chipset_core_loop; dsb+sev` (Core 2)
+`PAL_Core_LaunchIO()`      → `s_io_entry = chipset_io_loop; dsb+sev`        (Core 3)
+
+`PAL_Core_LaunchChipset()`/`LaunchIO()` chamados de dentro de
+`bellatrix_init()` quando `BELLATRIX_ENABLE_MULTICORE` está definido;
+`PAL_Core_LaunchCpu()` chamado depois, da cauda de `boot()` em start.c.
 
 ## Modo Single-Core (Harness / Debug)
 
-`pal_posix.c`: `PAL_Core_IsMulticoreEnabled() = 0`
+`pal_posix.c`: `PAL_Core_IsMulticoreEnabled() = 0`; `PAL_Core_LaunchCpu/Chipset/IO`
+são no-ops. `bellatrix_runtime_publish_cpu_cycles()` cai no stub fraco de
+`pal_core.c`/`pal_posix.c` quando não há override forte — mas o harness não
+passa por `bellatrix_init()`/`start.c` (driver próprio em `tools/harness/main.c`),
+então essa cadeia de boot não se aplica a ele.
 
-Weak stubs para todas as funções de runtime. `bellatrix_runtime_notify_cpu_progress()`
-cai no stub → `bellatrix_machine_advance()` direto.
+## Histórico: migração Sprint 27-29 → Rigel (obsoleto)
 
-## Bug Sprint 28: Correção de Domínios (Sprint 29)
-
-**Problema em Sprint 28**: `paula_interrupt_update`, `paula_disk_step` e
-`paula_serial_step` estavam em `core_io_step` (Core 3). Correto seria Core 2.
-
-**Confusão inicial**: Core 2 chamado "Audio" (nome do loop), mas domínio é Paula
-completo (áudio + disk + serial + IRQ/IPL).
-
-**Fix Sprint 29**: movidos todos os módulos Paula para `core_audio_step` (Core 2).
-Core 3 ficou apenas com CIA, teclado e UART host.
-
-## Bug Sprint 28: SEV Spurious em Single-Core
-
-**Problema**: código single-core emitia `sev` que acordava Cores 1/2/3 no QEMU,
-fazendo-os tentar executar antes de `bellatrix_core*_entry()` estar definido.
-
-**Fix**: `bellatrix_runtime_notify_cpu_progress()` verifica
-`PAL_Core_IsMulticoreEnabled()` antes de emitir SEV. Em single-core: advance direto.
+Antes da migração para o Rigel, o chipset era dividido em módulos internos
+(Agnus/Denise/Paula/CIA) espalhados por dois cores: "Core 1 GFX"
+(`core_gfx.c`: Agnus+Denise+DMA) e "Core 2 Paula"
+(`core_audio.c`: áudio+disk+serial+IRQ). Esses arquivos não existem mais — o
+Rigel unificou todo o domínio do chipset em `rigel_step()`, rodando
+single-thread, e o esqueleto de "Core 2 Audio" ficou morto (nunca lançado)
+até ser reaproveitado nesta mudança para se tornar o Core 2 = Chipset real.
 
 ## Pendentes / Riscos
 
-### Cross-Core CIA→INTREQ (Não Garantido)
-Core 3 roda `cia_step()`. Core 2 roda `paula_interrupt_update()`. Propagação
-`CIA ICR → INTREQ` depende de ordenação temporal não garantida.
-`RuntimeMailbox` ou evento atômico ainda não implementados.
-**Risco**: Interrupções CIA podem ser perdidas ou atrasadas.
+### Barreira temporal de MMIO crítico (lacuna da proposta original)
+`bellatrix_bus_access()`/`bellatrix_bridge_cpu_read/write()` não forçam o
+chipset (Core 2) a alcançar o tempo da CPU (`rigel_step_until(cpu_time)`)
+antes de aplicar leitura/escrita crítica (`DMACON`, `INTENA/INTREQ`,
+`COPJMP`, `BLTSIZE`, etc.) — ver `multicore.md`, seção "MMIO crítico". Isso é
+uma lacuna funcional aberta, não resolvida por este relabeling de cores.
 
-### RuntimeSync Ready-Flags
-`RuntimeSync` ready-flags não conectados. Parte do design mas não wired.
+### Scheduler por deadline (lacuna da proposta original)
+O scheduler ainda é um acumulador de ciclos com quantum fixo
+(`CHIPSET_QUANTUM=128`), não um `T = min(próximo evento...)` deadline-oriented.
 
-### machine_drain_serial_fallback
-`machine_drain_serial_fallback` (kprintf quando sem backend) ausente do caminho
-multicore. Afeta apenas debug sem UART aberto.
-
-### Audio Cycle Clamping
-Audio em Core 2 recebe `delta` clamped a 4096 ciclos para prevenir burst.
-Disk/serial/interrupts recebem `raw_cycles` sem clamp.
+### RuntimeMailbox / Event Queue
+`src/runtime/event.c/h` e `src/runtime/mailbox.c/h` existem mas não estão
+integrados — sincronização hoje é só atomics + lock + WFE/SEV.
 
 ## Arquivos Relevantes
-- `src/cpu/bellatrix.c` — `s_chipset_lock`, `s_gfx/io_cycles_pending`,
-  `bellatrix_runtime_notify_cpu_progress`, `bellatrix_init` (launch cores)
-- `src/host/raspi3/pal_core.c` — loops de Core 1/2/3, `PAL_Core_Launch*`
+- `src/cpu/emu68/bellatrix.c` — `bellatrix_launch_cpu_and_park`,
+  `bellatrix_run_selected_cpu_backend`, `bellatrix_bus_access`, `bellatrix_init`
+- `src/cpu/cpu_bridge.c` — `core_chipset_lock_acquire/release` aplicado a
+  `bellatrix_bridge_cpu_read/write` (cobre Emu68 e Musashi)
+- `src/host/raspi3/pal_core.c` — `PAL_Core_LaunchCpu/LaunchChipset/LaunchIO`,
+  `bellatrix_core1/2/3_entry`, `chipset_core_loop`, `chipset_io_loop`
 - `src/host/posix/pal_posix.c` — stubs single-core
-- `src/runtime/core_gfx.h/.c` — Core 1: Agnus+Denise step
-- `src/runtime/core_audio.h/.c` — Core 2: Paula (audio+disk+serial+IRQ)
-- `src/runtime/core_io.h/.c` — Core 3: CIA+keyboard+UART
-- `emu68/src/aarch64/start.c` — `secondary_boot()` BELLATRIX block
-- `patches/0002-add-bellatrix-bus-hook.patch` — secondary_boot hunk
+- `src/runtime/core_chipset.h/.c` — Core 2: Rigel step + lock de acesso
+- `src/runtime/core_io.h/.c` — Core 3: USB + Bluetooth
+- `emu68/src/aarch64/start.c` — `secondary_boot()` BELLATRIX block,
+  `bellatrix_emu68_cpu_entry()` wrapper, cauda de `boot()`

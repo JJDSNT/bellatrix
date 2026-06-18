@@ -18,6 +18,11 @@ int  bellatrix_cpu_backend_owns_execution_loop(void);
 void bellatrix_run_selected_cpu_backend(void);
 void bellatrix_emu68_boards_reset(void);
 
+// Single-core: calls entry() directly, forever, on the boot core (today's
+// behavior). Multicore: launches entry() on Core 1 and parks the boot core
+// (Core 0) as the light Machine/scheduler arbiter — it never returns.
+void bellatrix_launch_cpu_and_park(void (*entry)(void));
+
 // Sync the host MMU overlay mapping with the logical CIA-A PRA OVL bit.
 // This is the live path used by Emu68's fault bridge after CIA writes.
 void bellatrix_sync_overlay_from_ciaa(void);
@@ -39,6 +44,11 @@ extern uint32_t bellatrix_reset_pc;
 // Returns the value to load into the destination register (BUS_READ),
 // or 0 (BUS_WRITE).
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir);
+
+// Called by the Emu68 JIT integration whenever the current v30 instruction
+// counter is observable (JIT loop boundary or MMIO fault handler). Bellatrix
+// owns the delta calculation and CPU→chipset progress notification.
+void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc);
 
 // Actual M68K PC (x18) captured by SYSWriteValToAddr/SYSReadValFromAddr
 // immediately before calling bellatrix_bus_access.  More accurate than

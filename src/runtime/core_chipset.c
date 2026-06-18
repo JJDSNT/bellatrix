@@ -1,18 +1,24 @@
 // src/runtime/core_chipset.c
 //
-// Core 1 — Rigel chipset domain.
+// Core 2 — Rigel chipset domain.
 //
 // Owns the full chipset tick (Agnus, Denise, Paula, CIA) via rigel_step().
-// Runs on Core 1 in multicore mode; driven from the single-core poll path
+// Runs on Core 2 in multicore mode; driven from the single-core poll path
 // via bellatrix_runtime_host_step() when multicore is disabled.
 //
-// Synchronisation with Core 0 (CPU):
-//   - Core 0 calls bellatrix_runtime_notify_cpu_progress() after each JIT
-//     block, publishing M68K cycles converted to CCK into s_cpu_cck_target.
-//   - Core 1 wakes on SEV, drains cycles until caught up, then WFEs again.
-//   - IPL changes and frame events are published atomically back to Core 0.
+// Synchronisation with Core 1 (CPU):
+//   - Core 1 calls bellatrix_runtime_publish_cpu_cycles() after each JIT
+//     block (or Musashi quantum), publishing M68K cycles converted to CCK
+//     into s_cpu_cck_target.
+//   - Core 2 wakes on SEV, drains cycles until caught up, then WFEs again.
+//   - IPL changes and frame events are published atomically back to Core 1.
+//
+// core_chipset_lock_acquire/release() guard chipset state from concurrent
+// CPU-side bus access (called from cpu_bridge.c, not from this core).
 
 #include "runtime/core_chipset.h"
+#include "runtime/cpu_progress.h"
+#include "cpu/emu68/bellatrix_profile.h"
 
 #include <stdatomic.h>
 #include <string.h>
@@ -26,16 +32,38 @@
 /* Rigel step granularity in CCK cycles. */
 #define CHIPSET_QUANTUM 128u
 
-/* Published by Core 0; consumed by Core 1. */
+/* Published by Core 1 (CPU); consumed by Core 2 (chipset). */
 static _Atomic uint64_t s_cpu_cck_target = 0;
 
-/* Local to Core 1 — never written by Core 0. */
+/* Local to Core 2 — never written by Core 1. */
 static uint64_t s_chipset_cck = 0;
 
-/* Remainder for M68K→CCK conversion (local to Core 0 call site). */
+/* Remainder for M68K→CCK conversion (local to Core 1 call site). */
 static uint32_t s_m68k_rem = 0;
 
 static RuntimeCoreChipset *s_core = NULL;
+
+/* Guards chipset state from concurrent CPU-side bus access. Held by the CPU
+ * core (cpu_bridge.c) while dispatching MMIO; not needed by this core. */
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+static atomic_flag s_chipset_access_lock = ATOMIC_FLAG_INIT;
+#endif
+
+void core_chipset_lock_acquire(void)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    while (atomic_flag_test_and_set_explicit(&s_chipset_access_lock, memory_order_acquire))
+        asm volatile("wfe" ::: "memory");
+#endif
+}
+
+void core_chipset_lock_release(void)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    atomic_flag_clear_explicit(&s_chipset_access_lock, memory_order_release);
+    asm volatile("dsb sy\n\t sev" ::: "memory");
+#endif
+}
 
 bool core_chipset_init(RuntimeCoreChipset *core,
                        RigelContext *rigel,
@@ -55,7 +83,7 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     s_chipset_cck = 0;
     s_m68k_rem    = 0;
 
-    CORE1_LOG("chipset init (Rigel)");
+    CORE2_LOG("chipset init (Rigel)");
     return true;
 }
 
@@ -64,7 +92,7 @@ void core_chipset_shutdown(RuntimeCoreChipset *core)
     if (!core) return;
     core->running = false;
     s_core = NULL;
-    CORE1_LOG("chipset shutdown cck=%llu", (unsigned long long)core->local_cycles);
+    CORE2_LOG("chipset shutdown cck=%llu", (unsigned long long)core->local_cycles);
 }
 
 void core_chipset_reset(RuntimeCoreChipset *core)
@@ -74,27 +102,44 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
     s_chipset_cck = 0;
     s_m68k_rem    = 0;
-    CORE1_LOG("chipset reset");
+    CORE2_LOG("chipset reset");
 }
 
 /* ---------------------------------------------------------------------------
- * Called by Core 0 (CPU / JIT) after each advance quantum.
- * Converts M68K cycles → CCK and signals Core 1.
+ * Called by Core 1 (CPU / JIT or Musashi) after each advance quantum.
+ * Converts M68K cycles → CCK and signals Core 2.
  * ------------------------------------------------------------------------- */
-void bellatrix_runtime_notify_cpu_progress(uint32_t m68k_cycles)
+void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
 {
+#if BELLATRIX_PROFILE_ENABLED
+    uint64_t t0 = bprof_now();
+#endif
     uint32_t total = s_m68k_rem + m68k_cycles;
     uint32_t cck   = total >> 1u;          /* M68K / 2 = CCK */
     s_m68k_rem     = total & 1u;
+#if BELLATRIX_PROFILE_ENABLED
+    uint64_t target = atomic_load_explicit(&s_cpu_cck_target,
+                                           memory_order_acquire);
+#endif
 
     if (cck > 0u) {
-        atomic_fetch_add_explicit(&s_cpu_cck_target, cck, memory_order_release);
-        PAL_Runtime_WakeupChipset();        /* sev — wake Core 1 */
+#if BELLATRIX_PROFILE_ENABLED
+        target = atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
+                                           memory_order_release) + cck;
+#else
+        atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
+                                  memory_order_release);
+#endif
+        PAL_Runtime_WakeupChipset();        /* sev — wake Core 2 */
     }
+#if BELLATRIX_PROFILE_ENABLED
+    bprof_multicore_publish(m68k_cycles, cck, target);
+    bprof_record(&g_bprof.publish_time, bprof_now() - t0);
+#endif
 }
 
 /* ---------------------------------------------------------------------------
- * Called by Core 1 from chipset_core_loop() in pal_core.c.
+ * Called by Core 2 from chipset_core_loop() in pal_core.c.
  * Advances Rigel until caught up with the CPU target.
  * ------------------------------------------------------------------------- */
 void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
@@ -108,15 +153,32 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
 
     uint64_t target = atomic_load_explicit(&s_cpu_cck_target, memory_order_acquire);
 
+    if (s_chipset_cck >= target) {
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_multicore_empty_host_step(s_chipset_cck, target);
+#endif
+        bellatrix_machine_post_chipset_step();
+        return;
+    }
+
     while (s_chipset_cck < target) {
         uint64_t remaining = target - s_chipset_cck;
         uint32_t step = (remaining > CHIPSET_QUANTUM) ? CHIPSET_QUANTUM
                                                       : (uint32_t)remaining;
 
+#if BELLATRIX_PROFILE_ENABLED
+        uint64_t t0 = bprof_now();
+#endif
         rigel_step_result_t r = rigel_step(core->rigel, step);
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_record(&g_bprof.chipset_step_time, bprof_now() - t0);
+#endif
         s_chipset_cck      += step;
         core->local_cycles += step;
         core->machine->tick_count = (uint64_t)r.time;
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_multicore_chipset_step(step, s_chipset_cck, target);
+#endif
 
         if (r.events & RIGEL_EVENT_IRQ_CHANGED)
             bellatrix_machine_on_ipl_changed(

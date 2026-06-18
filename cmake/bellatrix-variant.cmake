@@ -19,12 +19,19 @@ option(BELLATRIX_UART_PL011 "Use PL011 (GPIO 14/15) as Amiga serial backend" OFF
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
-option(BELLATRIX_ENABLE_MULTICORE "Enable multicore chipset runtime (Core1=Chipset Core3=IO)" OFF)
-option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-CPU] [CORE1-CHIPSET] [CORE3-IO]" OFF)
+option(BELLATRIX_ENABLE_MULTICORE "Enable multicore runtime (Core1=CPU Core2=Chipset Core3=IO)" OFF)
+option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO]" OFF)
+option(BELLATRIX_PROFILE "Enable MMIO profiling instrumentation (zero cost when OFF)" OFF)
 add_compile_definitions(BELLATRIX BELLATRIX_ENABLE_MINIUART_BACKEND BELLATRIX_ENABLE_PL011_BACKEND)
+if(BELLATRIX_PROFILE)
+    add_compile_definitions(BELLATRIX_PROFILE=1)
+    message(STATUS "[BUILD] MMIO profiling: enabled (BELLATRIX_PROFILE=1)")
+else()
+    message(STATUS "[BUILD] MMIO profiling: disabled")
+endif()
 if(BELLATRIX_ENABLE_MULTICORE)
     add_compile_definitions(BELLATRIX_ENABLE_MULTICORE)
-    message(STATUS "[BUILD] Multicore: enabled (Core1=Chipset Core3=IO)")
+    message(STATUS "[BUILD] Multicore: enabled (Core1=CPU Core2=Chipset Core3=IO)")
 else()
     message(STATUS "[BUILD] Multicore: disabled (single-core mode)")
 endif()
@@ -115,6 +122,7 @@ endif()
 
 list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_bridge.c
     ${BELLATRIX_MACHINE_SOURCE}
@@ -386,6 +394,15 @@ if(BELLATRIX_ENABLE_USBSTACK)
             list(APPEND BELLATRIX_INCLUDE_DIRS
                 ${CMAKE_SOURCE_DIR}/../external/cherryusb/class/msc
             )
+            if(NOT BELLATRIX_LAUNCHER)
+                # fat32 is required by usb_msc_bellatrix.c; normally provided
+                # by the launcher block, but must be added here when launcher=OFF
+                list(APPEND BELLATRIX_SOURCES
+                    ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32.c
+                    ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32_lfn.c
+                    ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32_unicode.c
+                )
+            endif()
         endif()
     else()
         message(FATAL_ERROR "Bellatrix USB stack requested but external/cherryusb is missing")
