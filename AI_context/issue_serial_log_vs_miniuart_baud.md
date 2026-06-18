@@ -1,11 +1,16 @@
 // AI_context/issue_serial_log_vs_miniuart_baud.md
 
-# Issue: Split serial log mode from raw mini-UART mode and revisit baud policy
+# Issue: Make log mode the primary serial UX while preserving raw mini-UART
 
 ## Status: open
 
-The current console/logging work clarified two distinct use cases that were
-being treated as one:
+The PL011 ownership problem is resolved and consolidated in
+`AI_context/consolidated/issue_logging_miniuart.md`: PL011 belongs to
+Bluetooth, and Bellatrix no longer tries to use PL011 as Paula's host serial
+bridge. The remaining issue is the user-facing serial mode and baud policy.
+
+The current console/logging work clarified two distinct use cases that should
+not be collapsed into one:
 
 1. **Debug/log sink**
    - Goal: see early `kprintf` boot logs and useful Paula/DiagROM text in QEMU
@@ -13,6 +18,7 @@ being treated as one:
    - Text-oriented, lossy under pressure is acceptable.
    - Should be fast enough to avoid drowning boot/runtime diagnostics.
    - A higher physical baud such as 115200 is likely appropriate.
+   - This is the first priority: make logs easy and reliable by default.
 
 2. **Raw Amiga serial bridge**
    - Goal: expose Paula serial as a real byte stream.
@@ -22,6 +28,8 @@ being treated as one:
    - Baud semantics need to be explicit. The host wire rate does not have to
      equal Paula's internal SERPER timing if the backend is a byte bridge, but
      the chosen behavior must be documented.
+   - Keep this mode available. Do not remove the raw mini-UART option just
+     because the default UX should favor logs.
 
 ## What was learned
 
@@ -51,8 +59,8 @@ Keep the modes conceptually separate:
   - Debug-first mode.
   - Single console/log sink.
   - Paula TX can be presented as text via `[SERIAL]` lines.
-  - Candidate default for the TUI because it makes logs visible and avoids raw
-    protocol ambiguity.
+  - Default for the TUI because it makes logs visible and avoids raw protocol
+    ambiguity.
   - Candidate physical baud: 115200 or another higher rate.
 
 - `BELLATRIX_SERIAL=miniuart`
@@ -61,8 +69,9 @@ Keep the modes conceptually separate:
     14/15, and for QEMU tests of the actual UART bridge.
   - Should avoid mixing arbitrary `kprintf` bytes into the raw stream, or make
     that mixing explicitly opt-in.
-  - Candidate default for non-TUI scripts until the raw/log split is fully
-    specified.
+  - Keep as an explicit option for QEMU and real hardware serial-debugger work.
+  - It may remain the non-TUI/script default until the raw/log split is fully
+    specified, but it should not be the first TUI experience.
 
 ## Open decisions
 
@@ -86,4 +95,3 @@ Keep the modes conceptually separate:
 - `scripts/build.sh`
 - `run.sh`
 - `tools/launcher/tui.go`
-

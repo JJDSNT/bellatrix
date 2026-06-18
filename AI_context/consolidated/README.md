@@ -19,6 +19,7 @@ tópico funcional. Substitui os arquivos `sprint_NN.md` individuais.
 | [issue_multicore_runtime.md](issue_multicore_runtime.md) | RPi3 multicore: Core 1=GFX, Core 2=Paula, Core 3=IO | 27, 28, 29 | ✅ Funciona (⚠️ cross-core sync) |
 | [issue_usb_host_dwc2.md](issue_usb_host_dwc2.md) | CherryUSB + DWC2 host, BCM2837 bring-up | 30-43 | ⚠️ QEMU OK, Pi 3B pendente |
 | [issue_bluetooth.md](issue_bluetooth.md) | BCM43430A1 bootstrap | 30 | 🔴 Bloqueado em phase 1 |
+| [issue_logging_miniuart.md](issue_logging_miniuart.md) | Console fora do PL011, mini-UART compartilhado com Paula | — | ✅ Resolvido |
 | [issue_cdrom_boot.md](issue_cdrom_boot.md) | ATAPI CD-ROM boot: RIPPLE board, lide.device, FindCDFS, AROS CDFS gap | — | 🔴 Bloqueado: sem 'CD01' em FSR |
 
 ## Ações Imediatas (Próxima Sessão)
