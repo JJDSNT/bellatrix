@@ -1,144 +1,129 @@
---- a/src/aarch64/start.c
-+++ b/src/aarch64/start.c
-@@ -28,6 +28,9 @@
- #include "version.h"
- #include "cache.h"
- #include "sponsoring.h"
-+#ifdef BELLATRIX
-+#include "cpu/emu68/bellatrix.h"
-+#endif
- 
- void _start();
- void _boot();
-@@ -459,6 +462,26 @@
-         wb_init();
-         wb_task();
-     }
-+#elif defined(BELLATRIX)
-+    (void)async_log;
-+    if (cpu_id == 1)
-+    {
-+        /* Core 1 — Agnus / GFX. */
-+        extern void bellatrix_core1_entry(void);
-+        bellatrix_core1_entry();
-+    }
-+    else if (cpu_id == 2)
-+    {
-+        /* Core 2 — Audio (Paula). */
-+        extern void bellatrix_core2_entry(void);
-+        bellatrix_core2_entry();
-+    }
-+    else if (cpu_id == 3)
-+    {
-+        /* Core 3 — IO (CIA / serial / disk). */
-+        extern void bellatrix_core3_entry(void);
-+        bellatrix_core3_entry();
-+    }
- #else
-     (void)async_log;
- #endif
-@@ -1189,7 +1212,7 @@
-         InitFunctions++;
-     }
- 
--#ifndef PISTORM
-+#if !defined(PISTORM) && !defined(BELLATRIX)
-     if (initramfs_loc != NULL && initramfs_size != 0)
-     {
-         void *image_start, *image_end;
-@@ -1305,6 +1328,7 @@
- 
- #else
- 
-+#ifdef PISTORM
-     if (rom_copy != 0)
-     {
-         kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
-@@ -1351,7 +1375,8 @@
-             mmu_map(0xf80000, 0xe00000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
-         }
-     }
--    else if (initramfs_loc != NULL && initramfs_size != 0)
-+#endif /* PISTORM */
-+    if (initramfs_loc != NULL && initramfs_size != 0)
-     {
-         extern uint32_t rom_mapped;
- 
-@@ -1499,7 +1524,14 @@
-     if (fast_page0) {
-         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
-     }
--    
-+
-+#ifdef BELLATRIX
-+    bellatrix_init();
-+    if (bellatrix_cpu_backend_owns_execution_loop()) {
-+        bellatrix_run_selected_cpu_backend();
-+    }
-+#endif
-+
-     M68K_StartEmu(0, NULL);
- 
- #endif
-@@ -2080,7 +2109,7 @@
- 
- #ifdef PISTORM
-     (void)fdt;
--    
-+
-     asm volatile("mov %0, #0":"=r"(addr));
- 
-     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
-@@ -2097,10 +2126,32 @@
-     __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
-     __m68k.JIT_CONTROL2 = chip_slowdown ? JC2F_CHIP_SLOWDOWN : 0;
-     __m68k.JIT_CONTROL2 |= dbf_slowdown ? JC2F_DBF_SLOWDOWN : 0;
--    __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH); 
-+    __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH);
-     __m68k.JIT_CONTROL2 |= ((cs_dist - 1) << JC2B_CHIP_SLOWDOWN_RATIO);
-     __m68k.JIT_CONTROL2 |= blitwait ? JC2F_BLITWAIT : 0;
- 
-+#elif defined(BELLATRIX)
-+    (void)fdt;
-+    (void)addr;
-+
-+    {
-+        extern uint32_t bellatrix_reset_isp;
-+        extern uint32_t bellatrix_reset_pc;
-+        __m68k.ISP.u32 = BE32(bellatrix_reset_isp);
-+        __m68k.PC      = BE32(bellatrix_reset_pc);
-+    }
-+    __m68k.SR   = BE16(SR_S | SR_IPL);
-+    __m68k.FPCR = 0;
-+    __m68k.CACR = BE32(CACR_IE);
-+    __m68k.JIT_CACHE_TOTAL = tlsf_get_total_size(jit_tlsf);
-+    __m68k.JIT_CACHE_FREE  = tlsf_get_free_size(jit_tlsf);
-+    __m68k.JIT_UNIT_COUNT  = 0;
-+    __m68k.JIT_SOFTFLUSH_THRESH = EMU68_WEAK_CFLUSH_LIMIT;
-+    __m68k.JIT_CONTROL = EMU68_WEAK_CFLUSH ? JCCF_SOFT : 0;
-+    __m68k.JIT_CONTROL |= (emu68_icnt & JCCB_INSN_DEPTH_MASK) << JCCB_INSN_DEPTH;
-+    __m68k.JIT_CONTROL |= (emu68_irng & JCCB_INLINE_RANGE_MASK) << JCCB_INLINE_RANGE;
-+    __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
-+
- #else
-     __m68k.D[0].u32 = BE32((uint32_t)pitch);
-     __m68k.D[1].u32 = BE32((uint32_t)fb_width);
 diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 329d470..fb62c27 100644
+index 329d470..b186318 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -661,6 +661,57 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -293,7 +293,9 @@ static int getOPsize(uint32_t opcode)
+ 
+ #include "ps_protocol.h"
+ 
++#if BELLATRIX_ENABLE_EMU68_BOARDS
+ #include <boards.h>
++#endif
+ 
+ int board_idx;
+ struct ExpansionBoard **board;
+@@ -661,6 +663,174 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
      return 1;
  }
-
+ 
 +#elif defined(BELLATRIX)
 +
 +#include "cpu/emu68/bellatrix.h"
 +#include "cpu/cpu_bridge.h"
++#include <boards.h>
++
++#if BELLATRIX_ENABLE_EMU68_BOARDS
++static int bellatrix_board_idx;
++static struct ExpansionBoard **bellatrix_board;
++
++extern struct ExpansionBoard *__boards_start;
++extern int zorro_disable;
++
++static void bellatrix_emu68_boards_init_once(void)
++{
++    if (!bellatrix_board)
++        bellatrix_board = &__boards_start;
++}
 +
 +void bellatrix_emu68_boards_reset(void)
 +{
++    bellatrix_board = &__boards_start;
++    bellatrix_board_idx = 0;
 +}
++
++static struct ExpansionBoard *bellatrix_emu68_current_board(void)
++{
++    bellatrix_emu68_boards_init_once();
++
++    while (bellatrix_board[bellatrix_board_idx] &&
++           !bellatrix_board[bellatrix_board_idx]->enabled) {
++        bellatrix_board_idx++;
++    }
++
++    return bellatrix_board[bellatrix_board_idx];
++}
++
++static int bellatrix_emu68_handle_board_write(uint32_t far, uint32_t value)
++{
++    struct ExpansionBoard *board;
++
++    if (zorro_disable || far < 0x00e80000u || far > 0x00e8ffffu)
++        return 0;
++
++    board = bellatrix_emu68_current_board();
++    if (!board)
++        return 0;
++
++    if (board->is_z3) {
++        if (far == 0x00e80044u) {
++            board->map_base = (value & 0xffffu) << 16;
++            board->map(board);
++            bellatrix_board_idx++;
++            return 1;
++        }
++    } else {
++        if (far == 0x00e80048u) {
++            board->map_base = (value & 0xffu) << 16;
++            board->map(board);
++            bellatrix_board_idx++;
++            return 1;
++        }
++    }
++
++    if (far == 0x00e8004cu || far == 0x00e8004eu) {
++        bellatrix_board_idx++;
++        return 1;
++    }
++
++    return 0;
++}
++
++static int bellatrix_emu68_handle_board_read(uint64_t *value, int size, uint32_t far)
++{
++    struct ExpansionBoard *board;
++    const uint8_t *rom;
++
++    if (zorro_disable || size != 1 || far < 0x00e80000u || far > 0x00e8ffffu)
++        return 0;
++
++    board = bellatrix_emu68_current_board();
++    if (!board)
++        return 0;
++
++    rom = board->rom_file;
++    *value = rom[far - 0x00e80000u];
++    return 1;
++}
++#else
++void bellatrix_emu68_boards_reset(void)
++{
++}
++
++static int bellatrix_emu68_handle_board_write(uint32_t far, uint32_t value)
++{
++    (void)far;
++    (void)value;
++    return 0;
++}
++
++static int bellatrix_emu68_handle_board_read(uint64_t *value, int size, uint32_t far)
++{
++    (void)value;
++    (void)size;
++    (void)far;
++    return 0;
++}
++#endif
 +
 +int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
 +{
@@ -149,13 +134,21 @@ index 329d470..fb62c27 100644
 +        far &= 0xffffffff;
 +
 +    /* kprintf inside the Bellatrix bridge path clobbers x18 (M68K PC) and v30
-+     * (JIT instruction counter — caller-saved SIMD reg). Save/restore both. */
++     * (JIT instruction counter; caller-saved SIMD reg). Save/restore both. */
 +    uint64_t _x18_save, _v30_save;
 +    asm volatile("mov %0, x18" : "=r"(_x18_save));
 +    asm volatile("mov %0, v30.d[0]" : "=r"(_v30_save));
++    bellatrix_emu68_report_jit_progress(_v30_save, (uint32_t)_x18_save);
++
++    if (bellatrix_emu68_handle_board_write((uint32_t)far, (uint32_t)value)) {
++        asm volatile("mov v30.d[0], %0" :: "r"(_v30_save));
++        asm volatile("mov x18, %0" :: "r"(_x18_save));
++        return 1;
++    }
++
 +    /* Expose actual M68K PC (x18) so the Bellatrix bridge can log it accurately. */
 +    g_bellatrix_fault_pc = (uint32_t)_x18_save;
-+    bellatrix_bridge_cpu_access((uint32_t)far, (uint32_t)value, (unsigned)size, BELLATRIX_BUS_WRITE);
++    bellatrix_bus_access((uint32_t)far, (uint32_t)value, size, BUS_WRITE);
 +    asm volatile("mov v30.d[0], %0" :: "r"(_v30_save));
 +    asm volatile("mov x18, %0" :: "r"(_x18_save));
 +    return 1;
@@ -169,13 +162,22 @@ index 329d470..fb62c27 100644
 +        far &= 0xffffffff;
 +
 +    /* kprintf inside the Bellatrix bridge path clobbers x18 (M68K PC) and v30
-+     * (JIT instruction counter — caller-saved SIMD reg). Save/restore both. */
++     * (JIT instruction counter; caller-saved SIMD reg). Save/restore both. */
 +    uint64_t _x18_save, _v30_save;
 +    asm volatile("mov %0, x18" : "=r"(_x18_save));
 +    asm volatile("mov %0, v30.d[0]" : "=r"(_v30_save));
++    bellatrix_emu68_report_jit_progress(_v30_save, (uint32_t)_x18_save);
++
++    if (bellatrix_emu68_handle_board_read(value, size, (uint32_t)far)) {
++        asm volatile("mov v30.d[0], %0" :: "r"(_v30_save));
++        asm volatile("mov x18, %0" :: "r"(_x18_save));
++        if (value2) *value2 = 0;
++        return 1;
++    }
++
 +    /* Expose actual M68K PC (x18) so the Bellatrix bridge can log it accurately. */
 +    g_bellatrix_fault_pc = (uint32_t)_x18_save;
-+    *value = bellatrix_bridge_cpu_access((uint32_t)far, 0, (unsigned)size, BELLATRIX_BUS_READ);
++    *value = bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);
 +    asm volatile("mov v30.d[0], %0" :: "r"(_v30_save));
 +    asm volatile("mov x18, %0" :: "r"(_x18_save));
 +    if (value2) *value2 = 0;
@@ -183,5 +185,5 @@ index 329d470..fb62c27 100644
 +}
 +
  #else
-
+ 
  int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)

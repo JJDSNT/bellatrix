@@ -36,7 +36,7 @@ int cpu_backend_run(CpuBackend *backend, uint32_t cycles)
 
     used = backend->run(backend->ctx, cycles);
     if (used > 0 && !backend->progress_in_run) {
-        bellatrix_bridge_cpu_progress((uint32_t)used);
+        bellatrix_bridge_publish_cpu_cycles((uint32_t)used);
     }
 
     return used;
