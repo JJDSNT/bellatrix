@@ -28,6 +28,7 @@
 #include "classic/sdp_server.h"
 #include "io/bluetooth/bt_link_key_db_sd.h"
 #include "mmu.h"
+#include "host/raspi3/vc_mailbox.h"
 
 // HAL declarations
 void bt_hal_raspi3_poll_uart(void);
@@ -37,7 +38,6 @@ void bt_hal_raspi3_flush_rx(void);
 void bt_hal_raspi3_trace_dump(void);
 void bt_hal_raspi3_trace_reset(void);
 const btstack_uart_block_t * btstack_uart_block_embedded_instance(void);
-bool pl011_backend_route_header_console(void);
 bool pl011_backend_route_bluetooth_pi3(void);
 void pl011_backend_wait_idle(void);
 uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div);
@@ -72,7 +72,6 @@ static const btstack_uart_config_t bt_phase1_uart_config = {
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 static btstack_timer_source_t bt_pairing_window_timer;
 static BTHost *s_bt_host = NULL;
-static bool s_bt_console_handed_off = false;
 
 /* HID host descriptor storage — used for report-protocol devices.
  * In boot protocol mode this is largely unused, but hid_host_init() requires it. */
@@ -114,122 +113,10 @@ static void bt_phase2_start(int status);
 static void bt_setup_hci_main(BTHost *bt);
 static void bt_hardware_error_callback(uint8_t error_code);
 
-/* While BT owns the PL011, kprintf is redirected to the mini-UART on the
- * same header pins (GPIO 14/15 ALT5, 115200 8N1) — boot logs keep flowing
- * to the user's serial adapter.  Requires enable_uart=1 in config.txt so
- * the firmware pins core_freq (the mini-UART baud divisor tracks it). */
-#include "io/serial/miniuart_backend.h"
-void kprintf_set_putc_override(void (*fn)(char chr));
-
-static MiniUartBackend s_console_miniuart;
-
-/* kprintf must never block while BT owns the PL011: a busy-wait on the
- * 8-deep mini-UART FIFO costs ~87µs per byte at 115200, and a single log
- * line opens a multi-ms blind window in which HCI RX bytes are lost (the
- * chip ignores our RTS).  So the putc override only deposits into this
- * ring; bt_console_drain() — called from the BT pump — moves bytes to the
- * FIFO when there is space. */
-#define BT_CONSOLE_RING_SIZE 32768u
-static volatile uint8_t s_console_ring[BT_CONSOLE_RING_SIZE];
-static volatile uint32_t s_console_ring_head; /* producer (kprintf) */
-static volatile uint32_t s_console_ring_tail; /* consumer (drain)   */
-static volatile uint32_t s_console_ring_dropped;
-
-static void bt_console_ring_push(uint8_t byte)
-{
-    uint32_t head = s_console_ring_head;
-    uint32_t next = (head + 1u) % BT_CONSOLE_RING_SIZE;
-    if (next == s_console_ring_tail) {
-        s_console_ring_dropped++;
-        return;
-    }
-    s_console_ring[head] = byte;
-    s_console_ring_head = next;
-}
-
-static void bt_console_ring_putc(char chr)
-{
-    if (chr == '\n') {
-        bt_console_ring_push((uint8_t)'\r');
-    }
-    bt_console_ring_push((uint8_t)chr);
-}
-
-static void bt_console_drain(void)
-{
-    if (!miniuart_backend_is_open(&s_console_miniuart)) {
-        return;
-    }
-    /* LSR bit 5 = TX FIFO has space */
-    while (s_console_ring_tail != s_console_ring_head
-           && (miniuart_backend_read_lsr() & 0x20u)) {
-        miniuart_backend_write_byte(&s_console_miniuart,
-                                    s_console_ring[s_console_ring_tail]);
-        s_console_ring_tail = (s_console_ring_tail + 1u) % BT_CONSOLE_RING_SIZE;
-    }
-}
-
-static void bt_console_flush(uint32_t budget_bytes)
-{
-    /* Blocking flush — only safe outside BT traffic (release path). */
-    while (s_console_ring_tail != s_console_ring_head && budget_bytes--) {
-        int spin = 1000000;
-        while (!(miniuart_backend_read_lsr() & 0x20u) && --spin > 0) { }
-        miniuart_backend_write_byte(&s_console_miniuart,
-                                    s_console_ring[s_console_ring_tail]);
-        s_console_ring_tail = (s_console_ring_tail + 1u) % BT_CONSOLE_RING_SIZE;
-    }
-}
-
-static uint32_t vc_get_core_clock_hz(void);
-
-static void bt_console_release(void)
-{
-    if (!s_bt_console_handed_off) {
-        return;
-    }
-
-    kprintf_set_putc_override(NULL);
-    bt_console_flush(BT_CONSOLE_RING_SIZE);
-    miniuart_backend_close(&s_console_miniuart);
-    pl011_backend_route_header_console();
-    kprintf_set_enabled(1);
-    s_bt_console_handed_off = false;
-    if (s_console_ring_dropped) {
-        kprintf("[BT] console ring dropped %u bytes during BT operation\n",
-                (unsigned)s_console_ring_dropped);
-        s_console_ring_dropped = 0;
-    }
-    bt_hal_raspi3_trace_dump();
-}
-
-static void bt_console_handoff(void)
-{
-    if (s_bt_console_handed_off) {
-        return;
-    }
-
-    bt_hal_raspi3_trace_reset();
-    uint32_t core_hz = vc_get_core_clock_hz();
-    if (core_hz == 0) {
-        core_hz = 250000000u;
-    }
-    kprintf("[BT] handing PL011 to BT; console continues on mini-UART "
-            "(same pins, core clk %u Hz)\n", (unsigned)core_hz);
-    pl011_backend_wait_idle();
-    pl011_backend_route_bluetooth_pi3();
-    s_console_ring_head = 0;
-    s_console_ring_tail = 0;
-    s_console_ring_dropped = 0;
-    if (miniuart_backend_open_clk(&s_console_miniuart, 115200u, core_hz)) {
-        kprintf_set_putc_override(bt_console_ring_putc);
-        kprintf("[BT] console now on mini-UART (GPIO 14/15 ALT5, 115200)\n");
-        bt_console_flush(BT_CONSOLE_RING_SIZE);
-    } else {
-        kprintf_set_enabled(0);
-    }
-    s_bt_console_handed_off = true;
-}
+/* kprintf already lives permanently on the mini-UART by the time BT exists
+ * (bellatrix_early_console_init(), called at the very start of boot) — PL011
+ * is BT's alone, no runtime handoff needed here. See
+ * AI_context/issue_logging_miniuart.md. */
 
 #define BELLATRIX_BT_PAIRING_WINDOW_MS 120000u
 /* Phase 1 alone pushes ~36KB of PatchRAM at 115200 baud (≈3.2s on the wire),
@@ -241,20 +128,10 @@ static void bt_console_handoff(void)
 #define BELLATRIX_BT_BOOT_ROM_SETTLE_MS 250u
 #define BELLATRIX_BT_INIT_TIMEOUT_MS 15000u
 #define BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS 2u
-#define VC_MBOX_CH_PROP 8u
-#define VC_MBOX_TX_FULL 0x80000000u
-#define VC_MBOX_RX_EMPTY 0x40000000u
-#define VC_MBOX_CHANMASK 0xFu
 #define VC_FIRMWARE_STATUS_REQUEST 0u
 #define VC_FIRMWARE_STATUS_SUCCESS 0x80000000u
 #define VC_FIRMWARE_PROPERTY_END 0u
 #define VC_FIRMWARE_SET_GPIO_STATE 0x00038041u
-#define VC_FIRMWARE_GET_CLOCK_RATE 0x00030002u
-#define VC_CLOCK_ID_CORE 4u
-#define ARM_PERI_VIRT_BASE 0xF2000000u
-#define VC_MBOX_READ_ADDR   (ARM_PERI_VIRT_BASE + 0xB880u)
-#define VC_MBOX_STATUS_ADDR (ARM_PERI_VIRT_BASE + 0xB898u)
-#define VC_MBOX_WRITE_ADDR  (ARM_PERI_VIRT_BASE + 0xB8A0u)
 
 typedef enum BTBootstrapState {
     BT_BOOTSTRAP_IDLE = 0,
@@ -266,79 +143,13 @@ typedef enum BTBootstrapState {
     BT_BOOTSTRAP_FAILED
 } BTBootstrapState;
 
+#define VC_MBOX_CH_PROP 8u
+
 static uint32_t vc_property_buffer[8] __attribute__((aligned(16)));
 
 static uint32_t bt_now_ms(void)
 {
     return hal_time_ms();
-}
-
-/* Bounded mailbox receive — a missing firmware response must degrade to the
- * warm-boot fallback, not hang the whole boot with the console dark. */
-#define VC_MBOX_RECV_SPINS 4000000u
-
-static bool vc_mbox_recv(uint32_t channel, uint32_t *out)
-{
-    uint32_t response;
-    uint32_t spins = VC_MBOX_RECV_SPINS;
-
-    do {
-        while (rd32le(VC_MBOX_STATUS_ADDR) & VC_MBOX_RX_EMPTY) {
-            dsb();
-            if (--spins == 0u) {
-                bt_diag_log("[BT] vc mailbox recv timeout (ch=%u)\n",
-                            (unsigned)channel);
-                return false;
-            }
-        }
-
-        dmb();
-        response = rd32le(VC_MBOX_READ_ADDR);
-        dmb();
-    } while ((response & VC_MBOX_CHANMASK) != channel);
-
-    if (out) {
-        *out = response & ~VC_MBOX_CHANMASK;
-    }
-    return true;
-}
-
-static void vc_mbox_send(uint32_t channel, uint32_t data)
-{
-    uint32_t value = (data & ~VC_MBOX_CHANMASK) | (channel & VC_MBOX_CHANMASK);
-
-    while (rd32le(VC_MBOX_STATUS_ADDR) & VC_MBOX_TX_FULL) {
-        dsb();
-    }
-
-    dmb();
-    wr32le(VC_MBOX_WRITE_ADDR, value);
-}
-
-/* Real VPU/core clock — the mini-UART baud divisor tracks it, so never
- * assume 250 MHz (garbled console when the firmware runs the core at 400). */
-static uint32_t vc_get_core_clock_hz(void)
-{
-    vc_property_buffer[0] = LE32(sizeof(vc_property_buffer));
-    vc_property_buffer[1] = LE32(VC_FIRMWARE_STATUS_REQUEST);
-    vc_property_buffer[2] = LE32(VC_FIRMWARE_GET_CLOCK_RATE);
-    vc_property_buffer[3] = LE32(8);
-    vc_property_buffer[4] = 0;
-    vc_property_buffer[5] = LE32(VC_CLOCK_ID_CORE);
-    vc_property_buffer[6] = 0;
-    vc_property_buffer[7] = LE32(VC_FIRMWARE_PROPERTY_END);
-
-    arm_flush_cache((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
-    vc_mbox_send(VC_MBOX_CH_PROP, (uint32_t)mmu_virt2phys((uintptr_t)vc_property_buffer));
-    if (!vc_mbox_recv(VC_MBOX_CH_PROP, NULL)) {
-        return 0;
-    }
-    arm_dcache_invalidate((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
-
-    if (LE32(vc_property_buffer[1]) != VC_FIRMWARE_STATUS_SUCCESS) {
-        return 0;
-    }
-    return LE32(vc_property_buffer[6]);
 }
 
 static bool vc_set_gpio_state(uint32_t gpio, uint32_t state)
@@ -452,7 +263,9 @@ static void bt_bootstrap_step(BTHost *bt)
                 const btstack_uart_t *uart_phase1;
 
                 bt_diag_log("[BT] controller boot ROM settle complete, starting BCM phase 1 over H4\n");
-                bt_console_handoff();
+                bt_hal_raspi3_trace_reset();
+                pl011_backend_wait_idle();
+                pl011_backend_route_bluetooth_pi3();
                 bt->bootstrap_state = BT_BOOTSTRAP_WAIT_FOR_PHASE1;
                 bt->init_deadline_ms = now + BELLATRIX_BT_INIT_TIMEOUT_MS;
                 uart_phase1 = (const btstack_uart_t *)btstack_uart_block_embedded_instance();
@@ -483,7 +296,7 @@ static void bt_bootstrap_step(BTHost *bt)
                 ((int32_t)(now - bt->init_deadline_ms) >= 0)) {
                 bt->bootstrap_state = BT_BOOTSTRAP_FAILED;
                 bt->init_deadline_ms = 0;
-                bt_console_release();
+                bt_hal_raspi3_trace_dump();
                 bt_diag_log("[BT] BCM phase 1 timed out before H5 startup\n");
             }
             return;
@@ -571,7 +384,7 @@ static void bt_phase2_start(int status)
     if (status != 0) {
         s_bt_host->bootstrap_state = BT_BOOTSTRAP_FAILED;
         s_bt_host->init_deadline_ms = 0;
-        bt_console_release();
+        bt_hal_raspi3_trace_dump();
         bt_diag_log("[BT] BCM phase 1 failed with status=%d\n", status);
         return;
     }
@@ -1052,9 +865,6 @@ void bt_host_step(BTHost *bt) {
 
     // Detect and recover a desynced/dead H4 link
     bt_link_watchdog(bt);
-
-    // Move buffered console bytes to the mini-UART (never blocks)
-    bt_console_drain();
 }
 
 void bt_host_shutdown(BTHost *bt) {
@@ -1064,7 +874,6 @@ void bt_host_shutdown(BTHost *bt) {
     btstack_run_loop_remove_timer(&bt_pairing_window_timer);
     bt_pairing_window_close(bt);
     hci_power_control(HCI_POWER_OFF);
-    bt_console_release();
     bt->enabled = false;
     bt->bootstrap_state = BT_BOOTSTRAP_IDLE;
     bt->bootstrap_deadline_ms = 0;
