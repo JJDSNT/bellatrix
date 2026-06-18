@@ -120,14 +120,18 @@ static int osd_u64_to_str(char *buf, int cap, uint64_t val, int min_digits)
 }
 
 static void osd_putchar(uint16_t *fb, uint32_t stride, int x, int y,
-                        char c, uint16_t color)
+                        char c, uint16_t color, uint32_t scale)
 {
     const uint8_t *glyph = osd_font[osd_char_idx(c)];
     for (int row = 0; row < 8; row++) {
         uint8_t bits = glyph[row];
         for (int col = 0; col < 8; col++) {
-            if (bits & (uint8_t)(0x80u >> col))
-                fb[(y + row) * stride + (x + col)] = color;
+            if (bits & (uint8_t)(0x80u >> col)) {
+                for (uint32_t sy2 = 0; sy2 < scale; sy2++)
+                    for (uint32_t sx2 = 0; sx2 < scale; sx2++)
+                        fb[((uint32_t)(y + row) * scale + sy2) * stride +
+                           (uint32_t)(x + col) * scale + sx2] = color;
+            }
         }
     }
 }
@@ -139,6 +143,11 @@ void osd_render(uint64_t frame)
 
     osd_update_fps(frame);
 
+    uint32_t scale = fb_width / 640u;
+    if (scale < 1u) scale = 1u;
+    if (scale > 3u) scale = 3u;
+    uint32_t cell = 8u * scale;
+
     /* build string "FRM:00000000 FPS:000" */
     char buf[40];
     int  pos = 0;
@@ -149,15 +158,15 @@ void osd_render(uint64_t frame)
     pos += osd_u64_to_str(buf + pos, (int)sizeof(buf) - pos, (uint64_t)osd_fps, 3);
     buf[pos] = '\0';
 
-    int sx = 4;
-    int sy = 4;
-    int text_w = pos * 8;
+    int sx     = 4;
+    int sy     = 4;
+    int text_w = pos * (int)cell;
     int pad    = 2;
 
     uint32_t stride = pitch / 2u;  /* pitch is bytes; each pixel = 2 bytes */
 
     /* black background rectangle */
-    for (int row = sy - pad; row < sy + 8 + pad; row++) {
+    for (int row = sy - pad; row < sy + (int)cell + pad; row++) {
         uint16_t *line = framebuffer + (uint32_t)row * stride + (uint32_t)(sx - pad);
         for (int col = 0; col < text_w + 2 * pad; col++)
             line[col] = LE16(0x0000u);
@@ -166,7 +175,8 @@ void osd_render(uint64_t frame)
     /* white text */
     uint16_t white = LE16(0xFFFFu);
     for (int i = 0; i < pos; i++)
-        osd_putchar(framebuffer, stride, sx + i * 8, sy, buf[i], white);
+        osd_putchar(framebuffer, stride, sx / (int)scale + i * 8,
+                    sy / (int)scale, buf[i], white, scale);
 }
 
 #endif /* BELLATRIX_OSD */
