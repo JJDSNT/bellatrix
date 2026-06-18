@@ -382,29 +382,13 @@ static void bellatrix_init_bluetooth(BellatrixRuntime *rt, BellatrixMachine *m)
         return;
     }
 
-#if defined(BELLATRIX_UART_PL011)
-    kprintf("[BT] skipped: PL011 host bridge build conflicts with Pi 3B on-board Bluetooth pins\n");
-    return;
-#else
-    /*
-     * Bring BT up only after:
-     *   1. PAL runtime/timer state exists
-     *   2. serial ownership has been decided
-     *
-     * On Raspberry Pi 3B the controller uses the primary UART path, so the
-     * host serial bridge must not claim a competing backend first.
-     */
-    if (m->uart_host.backend_type != UART_HOST_BACKEND_NONE) {
-        kprintf("[BT] skipped: serial backend already owns the UART path (backend=%d)\n",
-                (int)m->uart_host.backend_type);
-        return;
-    }
-
+    /* Bring BT up only after PAL runtime/timer state exists. PL011 belongs
+     * to Bluetooth unconditionally — Paula's serial backends (PTY/mini-UART/
+     * log) never touch it, so there's no ownership conflict to check here. */
     if (!bt_host_init(&rt->bluetooth)) {
         kprintf("[BT] init failed\n");
         return;
     }
-#endif
 }
 #endif
 
@@ -601,29 +585,6 @@ void bellatrix_init(void)
 
 #if defined(BELLATRIX_UART_LOG)
     kprintf("[SERIAL] log mode — Paula TX forwarded to kprintf [SERIAL] prefix; no UART bridge\n");
-#elif defined(BELLATRIX_UART_PL011)
-#ifndef BELLATRIX_UART_BAUD
-#define BELLATRIX_UART_BAUD 115200
-#endif
-    if (uart_host_open_pl011(&m->uart_host, BELLATRIX_UART_BAUD))
-    {
-#if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
-        uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK);
-#elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
-        uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
-#endif
-        kprintf("[SERIAL] PL011 host bridge open at %u baud — GPIO 14/15 (USB-TTL adapter)\n",
-                (unsigned)BELLATRIX_UART_BAUD);
-#if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
-        kprintf("[SERIAL] internal serial loopback enabled\n");
-#elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)
-        kprintf("[SERIAL] internal serial probe loopback enabled\n");
-#endif
-    }
-    else
-    {
-        kprintf("[SERIAL] PL011 open failed\n");
-    }
 #else
     if (uart_host_open_pty(&m->uart_host))
     {

@@ -17,7 +17,6 @@ type launchResult struct {
 	displayMode    string
 	bootArgs       string
 	multicoreBuild bool
-	multicoreLogs  bool
 	btstack        bool
 	usbstack       bool
 	usbMSC         bool
@@ -26,8 +25,9 @@ type launchResult struct {
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
-	rigelTrace     bool
+	traceLogs      bool
 	perfLogsOff    bool
+	profile        bool
 	osd            bool
 	launcher       bool
 	cancelled      bool
@@ -54,7 +54,6 @@ type model struct {
 	displayMode    string
 	debugMode      string // "", "debug", "disassemble"
 	multicoreBuild bool
-	multicoreLogs  bool
 	btstack        bool
 	usbstack       bool
 	usbMSC         bool
@@ -64,8 +63,9 @@ type model struct {
 	fpuEnabled     bool
 	z2RamSize      string
 	serialBackend  string
-	rigelTrace     bool
+	traceLogs      bool
 	perfLogsOff    bool
+	profile        bool
 	osd            bool
 	launcher       bool
 
@@ -86,17 +86,17 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		active:         paneKickstart,
 		displayMode:    "gtk",
 		multicoreBuild: false,
-		multicoreLogs:  false,
 		btstack:        false,
 		usbstack:       true,
 		usbMSC:         true,
 		usbPointer:     "mouse",
 		emu68Boards:    "legacy",
+		profile:        false,
 		cpuBackend:     "musashi",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
-		serialBackend:  "miniuart",
-		rigelTrace:     false,
+		serialBackend:  "log",
+		traceLogs:      false,
 		perfLogsOff:    true,
 		osd:            true,
 		launcher:       true,
@@ -140,7 +140,6 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		displayMode:    fm.displayMode,
 		bootArgs:       buildBootArgs(fm.debugMode, fm.fpuEnabled),
 		multicoreBuild: fm.multicoreBuild,
-		multicoreLogs:  fm.multicoreLogs,
 		btstack:        fm.btstack,
 		usbstack:       fm.usbstack,
 		usbMSC:         fm.usbMSC,
@@ -149,8 +148,9 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		fpuEnabled:     fm.fpuEnabled,
 		z2RamSize:      fm.z2RamSize,
 		serialBackend:  fm.serialBackend,
-		rigelTrace:     fm.rigelTrace,
+		traceLogs:      fm.traceLogs,
 		perfLogsOff:    fm.perfLogsOff,
+		profile:        fm.profile,
 		osd:            fm.osd,
 		launcher:       fm.launcher,
 	}, nil
@@ -223,8 +223,6 @@ func installDirForSelection(cpuBackend string) string {
 func nextSerialBackend(current string) string {
 	switch current {
 	case "miniuart":
-		return "pl011"
-	case "pl011":
 		return "log"
 	default:
 		return "miniuart"
@@ -335,11 +333,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.multicoreBuild = !m.multicoreBuild
 			return m, nil
 
-		case "l":
-			m.multicoreLogs = !m.multicoreLogs
-			m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
-			return m, nil
-
 		case "t":
 			m.btstack = !m.btstack
 			return m, nil
@@ -378,21 +371,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "s":
 			m.serialBackend = nextSerialBackend(m.serialBackend)
-			m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
 			return m, nil
 
 		case "r":
-			m.rigelTrace = !m.rigelTrace
-			m.perfLogsOff = m.serialBackend == "miniuart" && !m.rigelTrace && !m.multicoreLogs
+			m.traceLogs = !m.traceLogs
 			return m, nil
 
 		case "a":
 			m.perfLogsOff = !m.perfLogsOff
-			if m.perfLogsOff {
-				m.multicoreLogs = false
-				m.rigelTrace = false
-				m.serialBackend = "miniuart"
-			}
+			return m, nil
+
+		case "i":
+			m.profile = !m.profile
 			return m, nil
 
 		case "o":
@@ -526,18 +516,11 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Multicore build:"), multicoreBadge))
 	b.WriteString("\n")
 
-	logsBadge := offBadgeStyle.Render("OFF")
-	if m.multicoreLogs {
-		logsBadge = onBadgeStyle.Render("ON")
-	}
-	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Multicore logs:"), logsBadge))
-	b.WriteString("\n")
-
-	perfLogsBadge := offBadgeStyle.Render("CUSTOM")
+	perfLogsBadge := offBadgeStyle.Render("OFF")
 	if m.perfLogsOff {
-		perfLogsBadge = onBadgeStyle.Render("OFF")
+		perfLogsBadge = onBadgeStyle.Render("ON")
 	}
-	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Build logs:"), perfLogsBadge))
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Perf logs off:"), perfLogsBadge))
 	b.WriteString("\n")
 
 	btstackBadge := offBadgeStyle.Render("OFF")
@@ -575,11 +558,11 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Emu68 boards:"), boardsBadge))
 	b.WriteString("\n")
 
-	rigelTraceBadge := offBadgeStyle.Render("OFF")
-	if m.rigelTrace {
-		rigelTraceBadge = onBadgeStyle.Render("ON")
+	traceBadge := offBadgeStyle.Render("OFF")
+	if m.traceLogs {
+		traceBadge = onBadgeStyle.Render("ON")
 	}
-	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Rigel trace log:"), rigelTraceBadge))
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Logs:"), traceBadge))
 	b.WriteString("\n")
 
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
@@ -607,8 +590,6 @@ func (m model) renderPanel() string {
 
 	var serialBadge string
 	switch m.serialBackend {
-	case "pl011":
-		serialBadge = onBadgeStyle.Render("PL011")
 	case "log":
 		serialBadge = onBadgeStyle.Render("LOG")
 	default:
@@ -629,6 +610,13 @@ func (m model) renderPanel() string {
 		launcherBadge = onBadgeStyle.Render("ON")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("ADF launcher:"), launcherBadge))
+	b.WriteString("\n")
+
+	profileBadge := offBadgeStyle.Render("OFF")
+	if m.profile {
+		profileBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("MMIO profiling:"), profileBadge))
 	b.WriteString("\n\n")
 
 	b.WriteString(sectionTitleStyle.Render("QEMU command"))
@@ -636,7 +624,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • L Logs • A Logs off • T BTStack • U USB • X MSC • P Pointer • E Boards • G Chipset • R Rigel trace • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • A Perf mute • T BTStack • U USB • X MSC • P Pointer • E Boards • R Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • I Profile • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -655,15 +643,17 @@ func (m model) qemuCommand() string {
 
 	serialEnv := ""
 	switch m.serialBackend {
-	case "pl011":
-		serialEnv = " BELLATRIX_SERIAL=pl011"
+	case "miniuart":
+		serialEnv = " BELLATRIX_SERIAL=miniuart"
 	case "log":
 		serialEnv = " BELLATRIX_SERIAL=log"
 	}
 
-	rigelTraceEnv := ""
-	if m.rigelTrace {
-		rigelTraceEnv = " BELLATRIX_RIGEL_TRACE=1"
+	serialArgs := "-serial null -serial stdio"
+
+	traceEnv := ""
+	if m.traceLogs {
+		traceEnv = " BELLATRIX_LOGS=1"
 	}
 
 	perfLogsEnv := " BELLATRIX_PERF_LOGS_OFF=0"
@@ -671,21 +661,27 @@ func (m model) qemuCommand() string {
 		perfLogsEnv = " BELLATRIX_PERF_LOGS_OFF=1"
 	}
 
+	profileEnv := ""
+	if m.profile {
+		profileEnv = " BELLATRIX_PROFILE=1"
+	}
+
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_MULTICORE_LOGS=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_USB_MSC=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s -serial stdio -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_USB_MSC=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s %s -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
-		boolEnv(m.multicoreLogs),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
 		boolEnv(m.usbMSC),
 		m.emu68Boards,
-		rigelTraceEnv,
+		traceEnv,
 		perfLogsEnv,
+		profileEnv,
 		boolEnv(m.osd),
 		boolEnv(m.launcher),
 		serialEnv,
 		image,
 		dtb,
+		serialArgs,
 		displayArg,
 		bootArgs,
 		qemuUSBDeviceArgs(m.usbstack, m.usbPointer),

@@ -1,18 +1,19 @@
 diff --git a/src/aarch64/start.c b/src/aarch64/start.c
-index f2060ad..65ae33d 100644
+index f2060ad..9376f45 100644
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
-@@ -28,6 +28,9 @@
+@@ -28,6 +28,10 @@
  #include "version.h"
  #include "cache.h"
  #include "sponsoring.h"
 +#ifdef BELLATRIX
 +#include "cpu/emu68/bellatrix.h"
++#include "host/raspi3/console_log.h"
 +#endif
  
  void _start();
  void _boot();
-@@ -459,6 +462,26 @@ void secondary_boot(void)
+@@ -459,6 +463,26 @@ void secondary_boot(void)
          wb_init();
          wb_task();
      }
@@ -39,7 +40,7 @@ index f2060ad..65ae33d 100644
  #else
      (void)async_log;
  #endif
-@@ -524,6 +547,16 @@ uint32_t firmware_size = 0;
+@@ -524,6 +548,16 @@ uint32_t firmware_size = 0;
  uint32_t cs_dist = 1;
  int fast_page0 = 0;
  
@@ -56,7 +57,21 @@ index f2060ad..65ae33d 100644
  void boot(void *dtree)
  {
      uintptr_t kernel_top_virt = ((uintptr_t)boot + (KERNEL_SYS_PAGES << 21)) & ~((1 << 21)-1);
-@@ -1189,7 +1222,7 @@ void boot(void *dtree)
+@@ -927,6 +961,13 @@ void boot(void *dtree)
+     /* Setup debug console on serial port */
+     setup_serial();
+ 
++#ifdef BELLATRIX
++    /* Claims the mini-UART for kprintf before the very first log line — PL011
++     * belongs to Bluetooth, in every build. Shares the wire with Paula's
++     * serial bridge via a priority ring buffer (Paula always wins). */
++    console_log_init();
++#endif
++
+     kprintf("\033[2J[BOOT] Booting %s\n", bootstrapName);
+     p = dt_find_property(dt_find_node("/"), "model");
+     if (p) {
+@@ -1189,7 +1230,7 @@ void boot(void *dtree)
          InitFunctions++;
      }
  
@@ -65,7 +80,7 @@ index f2060ad..65ae33d 100644
      if (initramfs_loc != NULL && initramfs_size != 0)
      {
          void *image_start, *image_end;
-@@ -1305,6 +1338,7 @@ void boot(void *dtree)
+@@ -1305,6 +1346,7 @@ void boot(void *dtree)
  
  #else
  
@@ -73,7 +88,7 @@ index f2060ad..65ae33d 100644
      if (rom_copy != 0)
      {
          kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
-@@ -1351,7 +1385,8 @@ void boot(void *dtree)
+@@ -1351,7 +1393,8 @@ void boot(void *dtree)
              mmu_map(0xf80000, 0xe00000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
          }
      }
@@ -83,7 +98,7 @@ index f2060ad..65ae33d 100644
      {
          extern uint32_t rom_mapped;
  
-@@ -1499,7 +1534,18 @@ void boot(void *dtree)
+@@ -1499,7 +1542,18 @@ void boot(void *dtree)
      if (fast_page0) {
          mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
      }
@@ -103,7 +118,7 @@ index f2060ad..65ae33d 100644
      M68K_StartEmu(0, NULL);
  
  #endif
-@@ -2080,7 +2126,7 @@ void M68K_StartEmu(void *addr, void *fdt)
+@@ -2080,7 +2134,7 @@ void M68K_StartEmu(void *addr, void *fdt)
  
  #ifdef PISTORM
      (void)fdt;
@@ -112,7 +127,7 @@ index f2060ad..65ae33d 100644
      asm volatile("mov %0, #0":"=r"(addr));
  
      __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
-@@ -2097,10 +2143,32 @@ void M68K_StartEmu(void *addr, void *fdt)
+@@ -2097,10 +2151,32 @@ void M68K_StartEmu(void *addr, void *fdt)
      __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
      __m68k.JIT_CONTROL2 = chip_slowdown ? JC2F_CHIP_SLOWDOWN : 0;
      __m68k.JIT_CONTROL2 |= dbf_slowdown ? JC2F_DBF_SLOWDOWN : 0;
@@ -146,7 +161,7 @@ index f2060ad..65ae33d 100644
  #else
      __m68k.D[0].u32 = BE32((uint32_t)pitch);
      __m68k.D[1].u32 = BE32((uint32_t)fb_width);
-@@ -2233,4 +2301,3 @@ asm volatile(
+@@ -2233,4 +2309,3 @@ asm volatile(
      }
          //kprintf("[BOOT] reg 0xf3000034 = %08x\n", LE32(*(volatile uint32_t *)0xf3000034));
  }

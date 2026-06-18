@@ -19,30 +19,6 @@ static bool uart_host_backend_send(void *opaque, uint8_t byte)
 #endif
     case UART_HOST_BACKEND_MINIUART:
         return miniuart_backend_write_byte(&host->mini_uart, byte);
-    case UART_HOST_BACKEND_PL011: {
-        bool ok = pl011_backend_write_byte(&host->pl011, byte);
-        static int s_first_pl011_backend_attempt_logged = 0;
-        static int s_first_pl011_backend_failure_logged = 0;
-
-        if (!s_first_pl011_backend_attempt_logged) {
-            s_first_pl011_backend_attempt_logged = 1;
-            kprintf("[SERIAL-BRIDGE] first PL011 backend send byte=%02x open=%d enabled=%d ok=%d\n",
-                    (unsigned)byte,
-                    pl011_backend_is_open(&host->pl011) ? 1 : 0,
-                    host->enabled ? 1 : 0,
-                    ok ? 1 : 0);
-        }
-
-        if (!ok && !s_first_pl011_backend_failure_logged) {
-            s_first_pl011_backend_failure_logged = 1;
-            kprintf("[SERIAL-BRIDGE-FAIL] PL011 backend rejected byte=%02x open=%d enabled=%d\n",
-                    (unsigned)byte,
-                    pl011_backend_is_open(&host->pl011) ? 1 : 0,
-                    host->enabled ? 1 : 0);
-        }
-
-        return ok;
-    }
 
     case UART_HOST_BACKEND_NONE:
     default:
@@ -65,8 +41,6 @@ static bool uart_host_backend_recv(void *opaque, uint8_t *byte_out)
 #endif
     case UART_HOST_BACKEND_MINIUART:
         return miniuart_backend_read_byte(&host->mini_uart, byte_out);
-    case UART_HOST_BACKEND_PL011:
-        return pl011_backend_read_byte(&host->pl011, byte_out);
 
     case UART_HOST_BACKEND_NONE:
     default:
@@ -105,9 +79,6 @@ void uart_host_shutdown(UARTHost *host)
 #endif
     case UART_HOST_BACKEND_MINIUART:
         miniuart_backend_close(&host->mini_uart);
-        break;
-    case UART_HOST_BACKEND_PL011:
-        pl011_backend_close(&host->pl011);
         break;
     default:
         break;
@@ -180,25 +151,6 @@ bool uart_host_open_miniuart(UARTHost *host, uint32_t baud)
     }
 
     host->backend_type = UART_HOST_BACKEND_MINIUART;
-    host->enabled = true;
-    return true;
-}
-
-bool uart_host_open_pl011(UARTHost *host, uint32_t baud)
-{
-    if (!host) {
-        return false;
-    }
-
-    uart_host_shutdown(host);
-
-    if (!pl011_backend_open(&host->pl011, baud)) {
-        host->backend_type = UART_HOST_BACKEND_NONE;
-        host->enabled = false;
-        return false;
-    }
-
-    host->backend_type = UART_HOST_BACKEND_PL011;
     host->enabled = true;
     return true;
 }

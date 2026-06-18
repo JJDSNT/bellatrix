@@ -7,13 +7,11 @@
 #include "io/serial/null_modem.h"
 #include "io/serial/pty_backend.h"
 #include "io/serial/miniuart_backend.h"
-#include "host/raspi3/pl011_backend.h"
 
 typedef enum UARTHostBackendType {
     UART_HOST_BACKEND_NONE = 0,
     UART_HOST_BACKEND_PTY,
-    UART_HOST_BACKEND_MINIUART,
-    UART_HOST_BACKEND_PL011
+    UART_HOST_BACKEND_MINIUART
 } UARTHostBackendType;
 
 typedef struct UARTHost {
@@ -21,7 +19,6 @@ typedef struct UARTHost {
 
     PtyBackend pty;
     MiniUartBackend mini_uart;
-    PL011Backend pl011;
     NullModem null_modem;
 
     bool enabled;
@@ -34,7 +31,6 @@ bool uart_host_open_pty(UARTHost *host);
 const char *uart_host_pty_name(const UARTHost *host);
 
 bool uart_host_open_miniuart(UARTHost *host, uint32_t baud);
-bool uart_host_open_pl011(UARTHost *host, uint32_t baud);
 
 void uart_host_set_null_modem_mode(UARTHost *host, NullModemMode mode);
 

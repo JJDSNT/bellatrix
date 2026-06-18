@@ -15,7 +15,6 @@ endif()
 set(BELLATRIX_INCLUDE_DIRS "")
 set(BELLATRIX_SOURCES "")
 
-option(BELLATRIX_UART_PL011 "Use PL011 (GPIO 14/15) as Amiga serial backend" OFF)
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
@@ -40,9 +39,6 @@ if(BELLATRIX_CORE_LOG)
     message(STATUS "[BUILD] Core log: enabled ([CORE0-CPU] [CORE1-CHIPSET] [CORE3-IO])")
 else()
     message(STATUS "[BUILD] Core log: disabled")
-endif()
-if(BELLATRIX_UART_PL011)
-    add_compile_definitions(BELLATRIX_UART_PL011)
 endif()
 list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src
@@ -184,6 +180,8 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/machine/input/keyboard.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/miniuart_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pl011_backend.c
+    ${CMAKE_SOURCE_DIR}/../src/host/raspi3/vc_mailbox.c
+    ${CMAKE_SOURCE_DIR}/../src/host/raspi3/console_log.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_debug.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_ipl.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_core.c

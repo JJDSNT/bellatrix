@@ -126,11 +126,14 @@ if [ -n "${BTRACE_FILTER:-}" ]; then
 fi
 
 MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
-MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
+MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${BELLATRIX_LOGS:-${CORE_LOG:-0}}}"
+if [ "$MULTICORE_BUILD" != "1" ]; then
+    MULTICORE_LOGS="0"
+fi
 BTSTACK_ENABLED="${BELLATRIX_BTSTACK:-0}"
 USBSTACK_ENABLED="${BELLATRIX_USBSTACK:-0}"
 USB_MSC_ENABLED="${BELLATRIX_USB_MSC:-1}"
-EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
 OSD_ENABLED="${BELLATRIX_OSD:-1}"
 LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
 
@@ -207,30 +210,23 @@ case "$EMU68_BOARDS_MODE" in
         ;;
 esac
 
-# BELLATRIX_SERIAL=pl011           → use PL011 UART on GPIO 14/15
-# BELLATRIX_SERIAL_BAUD=115200     → host-side UART baud rate
 # BELLATRIX_SERIAL_LOOPBACK=1      → full internal TX->RX echo
 # BELLATRIX_SERIAL_LOOPBACK=probe  → short detection echo, then disable
 #
-# The physical host UART speed is independent from Paula's emulated SERPER
-# timing. Keeping the host link at 115200 avoids a silent baud switch between
-# Emu68 boot logs and the bridged Amiga serial console.
-PL011_FLAG="OFF"
+# PL011 belongs to Bluetooth in every build; kprintf and Paula's serial
+# bridge share the mini-UART (see AI_context/issue_logging_miniuart.md).
 UART_LOG_FLAG=""
 case "${BELLATRIX_SERIAL:-}" in
-    pl011)
-        PL011_FLAG="ON"
-        BAUD="${BELLATRIX_SERIAL_BAUD:-115200}"
-        EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_UART_BAUD=${BAUD}"
-        echo "[BUILD] Serial backend: PL011 (GPIO 14/15, ${BAUD} baud)"
-        ;;
     log)
         UART_LOG_FLAG="-DBELLATRIX_UART_LOG=1"
         EXTRA_DEFINES="$EXTRA_DEFINES ${UART_LOG_FLAG}"
         echo "[BUILD] Serial backend: log (Paula TX → kprintf [SERIAL], no UART bridge)"
         ;;
-    *)
+    miniuart|"")
         echo "[BUILD] Serial backend: miniUART (default)"
+        ;;
+    *)
+        echo "[BUILD] Serial backend: miniUART (unknown BELLATRIX_SERIAL=${BELLATRIX_SERIAL}, using fallback)"
         ;;
 esac
 
@@ -245,6 +241,16 @@ fi
 if [ "${BELLATRIX_RIGEL_TRACE_BUILD:-0}" = "1" ]; then
     EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_RIGEL_TRACE_BUILD=1"
     echo "[BUILD] Rigel trace: enabled unconditionally (bare-metal)"
+fi
+
+if [ "${BELLATRIX_TRACE_BUILD:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_TRACE_BUILD=1"
+    echo "[BUILD] Bellatrix trace: enabled unconditionally (bare-metal)"
+fi
+
+PROFILE_FLAG="OFF"
+if [ "${BELLATRIX_PROFILE:-0}" = "1" ]; then
+    PROFILE_FLAG="ON"
 fi
 
 BT_PATCHRAM_SOURCE=""
@@ -263,7 +269,6 @@ cmake "$EMU68" \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DCMAKE_C_FLAGS="$EXTRA_DEFINES" \
     -DCMAKE_CXX_FLAGS="$EXTRA_DEFINES" \
-    -DBELLATRIX_UART_PL011="$PL011_FLAG" \
     -DBELLATRIX_ENABLE_EMU68_BOARDS="$EMU68_BOARDS_ENABLED" \
     -DBELLATRIX_USE_MUSASHI_CPU="$MUSASHI_CPU_FLAG" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \
@@ -273,7 +278,8 @@ cmake "$EMU68" \
     -DBELLATRIX_OSD="$OSD_FLAG" \
     -DBELLATRIX_ENABLE_MULTICORE="$MULTICORE_FLAG" \
     -DBELLATRIX_CORE_LOG="$CORELOG_FLAG" \
-    -DBELLATRIX_LAUNCHER="$LAUNCHER_FLAG"
+    -DBELLATRIX_LAUNCHER="$LAUNCHER_FLAG" \
+    -DBELLATRIX_PROFILE="$PROFILE_FLAG"
 
 make -j"$(nproc)"
 make install

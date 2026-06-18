@@ -131,14 +131,28 @@ bool pl011_backend_route_header_console(void)
     return true;
 }
 
+bool pl011_backend_route_header_to_miniuart(void)
+{
+    uint32_t sel1 = pl_rd32(GPFSEL1);
+
+    sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_ALT5);
+    sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_ALT5);
+
+    pl_wr32(GPFSEL1, sel1);
+    gpio_set_pull_none((1u << 14) | (1u << 15), 0);
+    return true;
+}
+
 bool pl011_backend_route_bluetooth_pi3(void)
 {
     uint32_t sel1 = pl_rd32(GPFSEL1);
     uint32_t sel3 = pl_rd32(GPFSEL3);
     uint32_t sel4 = pl_rd32(GPFSEL4);
 
-    /* header pins move to the mini-UART (TXD1/RXD1) so kprintf keeps
-     * reaching the user's serial adapter while BT owns the PL011 */
+    /* Header pins are already on the mini-UART (ALT5) by the time this
+     * runs — bellatrix_early_console_init() claims them at the start of
+     * boot, before BT exists, via kprintf_set_putc_override(). This just
+     * re-asserts ALT5 defensively and focuses on the BT-internal pins. */
     sel1 = gpio_fsel_update(sel1, 14u, GPIO_FSEL_ALT5);
     sel1 = gpio_fsel_update(sel1, 15u, GPIO_FSEL_ALT5);
     /* GPIO 30/31 carry the BCM4343x CTS0/RTS0 pair on the Pi 3B — hardware

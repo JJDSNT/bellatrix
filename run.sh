@@ -32,9 +32,9 @@ Modes:
 Common options (env vars):
   BELLATRIX_MULTICORE_BUILD=1
                       Enable Bellatrix multicore build/runtime (default: off)
-  BELLATRIX_MULTICORE_LOGS=1
-                      Enable per-core runtime logs: [CORE0-CPU] [CORE1-GFX]
-                      [CORE2-PAULA] [CORE3-IO] [XCORE-*] (default: off)
+  BELLATRIX_LOGS=1   Enable Bellatrix/Rigel trace logs; also enables
+                      multicore/core logs only when multicore build is enabled
+                      (default: off)
   BELLATRIX_BTSTACK=1 Enable BTStack in Bellatrix build (default: off)
   BELLATRIX_USBSTACK=1
                       Enable CherryUSB host stack scaffold in Bellatrix build
@@ -51,7 +51,7 @@ Common options (env vars):
   BELLATRIX_EMU68_BOARDS_MODE=<boards|legacy>
                       Build Bellatrix either with Emu68 expansion boards
                       enabled or with the legacy Bellatrix Fast RAM path
-                      (default: boards)
+                      (default: legacy)
   BELLATRIX_CHIPSET_BACKEND=<legacy|rigel>
                       Select Bellatrix chipset backend
                       (default: rigel)
@@ -67,7 +67,7 @@ Common options (env vars):
                       build and embed it in the image (default: 1)
   BELLATRIX_BT_FIRMWARE_URL=<url>
                       Override the build-time firmware download URL
-  CORE_LOG=1          Legacy alias for BELLATRIX_MULTICORE_LOGS=1
+  CORE_LOG=1          Legacy alias for multicore/core logs
 
 QEMU options (env vars):
   EMU_PROFILE=<name>  Runtime profile: bellatrix or emu68 (default: bellatrix)
@@ -265,6 +265,9 @@ load_launcher_selection() {
             BELLATRIX_MULTICORE_LOGS)
                 BELLATRIX_MULTICORE_LOGS="$value"
                 ;;
+            BELLATRIX_LOGS)
+                BELLATRIX_LOGS="$value"
+                ;;
             BELLATRIX_BTSTACK)
                 BELLATRIX_BTSTACK="$value"
                 ;;
@@ -283,11 +286,20 @@ load_launcher_selection() {
             BELLATRIX_CHIPSET_BACKEND)
                 BELLATRIX_CHIPSET_BACKEND="$value"
                 ;;
+            BELLATRIX_TRACE_LOGS)
+                BELLATRIX_TRACE_LOGS="$value"
+                ;;
+            BELLATRIX_TRACE)
+                BELLATRIX_TRACE="$value"
+                ;;
             BELLATRIX_RIGEL_TRACE)
                 BELLATRIX_RIGEL_TRACE="$value"
                 ;;
             BELLATRIX_PERF_LOGS_OFF)
                 BELLATRIX_PERF_LOGS_OFF="$value"
+                ;;
+            BELLATRIX_PROFILE)
+                BELLATRIX_PROFILE="$value"
                 ;;
             BELLATRIX_Z2_RAM_SIZE)
                 BELLATRIX_Z2_RAM_SIZE="$value"
@@ -389,7 +401,11 @@ if [ "$MODE" = "harness" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
     fi
 
-    export BELLATRIX_RIGEL_TRACE="${BELLATRIX_RIGEL_TRACE:-0}"
+    TRACE_LOGS="${BELLATRIX_LOGS:-${BELLATRIX_TRACE_LOGS:-${BELLATRIX_TRACE:-${BELLATRIX_RIGEL_TRACE:-0}}}}"
+    export BELLATRIX_LOGS="$TRACE_LOGS"
+    export BELLATRIX_TRACE_LOGS="$TRACE_LOGS"
+    export BELLATRIX_TRACE="$TRACE_LOGS"
+    export BELLATRIX_RIGEL_TRACE="$TRACE_LOGS"
     exec "$HARNESS_BIN" "${HARNESS_ARGS[@]}"
 fi
 
@@ -449,7 +465,11 @@ if [ "$MODE" = "harness-serial" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
     fi
 
-    export BELLATRIX_RIGEL_TRACE="${BELLATRIX_RIGEL_TRACE:-0}"
+    TRACE_LOGS="${BELLATRIX_LOGS:-${BELLATRIX_TRACE_LOGS:-${BELLATRIX_TRACE:-${BELLATRIX_RIGEL_TRACE:-0}}}}"
+    export BELLATRIX_LOGS="$TRACE_LOGS"
+    export BELLATRIX_TRACE_LOGS="$TRACE_LOGS"
+    export BELLATRIX_TRACE="$TRACE_LOGS"
+    export BELLATRIX_RIGEL_TRACE="$TRACE_LOGS"
 
     tmpfile="$(mktemp)"
     trap 'rm -f "$tmpfile"; [ -n "${HARNESS_PID:-}" ] && kill "$HARNESS_PID" 2>/dev/null || true' EXIT
@@ -484,6 +504,13 @@ if [ "$MODE" = "harness-serial" ]; then
     exit $?
 fi
 
+case "$MODE" in
+    harness|harness-serial)
+        echo "ERROR: internal harness dispatch failed"
+        exit 1
+        ;;
+esac
+
 # ---------------------------------------------------------------------------
 # QEMU / raspi / tftp modes — Emu68 build path
 # ---------------------------------------------------------------------------
@@ -504,29 +531,36 @@ case "$BUILD_KIND" in
     bellatrix)
         echo "[BUILD] Profile: bellatrix"
         export BELLATRIX_MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
-        export BELLATRIX_MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-0}}"
+        TRACE_LOGS="${BELLATRIX_LOGS:-${BELLATRIX_TRACE_LOGS:-${BELLATRIX_TRACE:-${BELLATRIX_RIGEL_TRACE:-0}}}}"
+        CORE_LOGS_REQUESTED="${BELLATRIX_MULTICORE_LOGS:-${CORE_LOG:-$TRACE_LOGS}}"
+        if [ "$BELLATRIX_MULTICORE_BUILD" = "1" ]; then
+            export BELLATRIX_MULTICORE_LOGS="$CORE_LOGS_REQUESTED"
+        else
+            export BELLATRIX_MULTICORE_LOGS="0"
+        fi
+        export BELLATRIX_LOGS="$TRACE_LOGS"
+        export BELLATRIX_TRACE_LOGS="$TRACE_LOGS"
+        export BELLATRIX_TRACE="$TRACE_LOGS"
+        export BELLATRIX_RIGEL_TRACE="$TRACE_LOGS"
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_USB_MSC="${BELLATRIX_USB_MSC:-1}"
-        export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+        export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
+        export BELLATRIX_PROFILE="${BELLATRIX_PROFILE:-0}"
         export BELLATRIX_CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-rigel}"
         export BELLATRIX_OSD="${BELLATRIX_OSD:-1}"
         export BELLATRIX_LAUNCHER="${BELLATRIX_LAUNCHER:-1}"
         export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         if [ "${BELLATRIX_PERF_LOGS_OFF:-0}" = "1" ]; then
-            export BELLATRIX_MULTICORE_LOGS=0
-            export BELLATRIX_RIGEL_TRACE=0
-            if [ "${BELLATRIX_SERIAL:-}" = "log" ]; then
-                export BELLATRIX_SERIAL=""
-            fi
-            echo "[BUILD] Performance logs: off"
+            echo "[BUILD] Performance log mute: on"
         fi
-        export BELLATRIX_RIGEL_TRACE_BUILD="${BELLATRIX_RIGEL_TRACE:-0}"
+        export BELLATRIX_TRACE_BUILD="$TRACE_LOGS"
+        export BELLATRIX_RIGEL_TRACE_BUILD="$TRACE_LOGS"
         _SERIAL_RAW="${BELLATRIX_SERIAL:-miniuart}"
         case "$_SERIAL_RAW" in
-            pl011) export BELLATRIX_SERIAL="pl011" ;;
-            log)   export BELLATRIX_SERIAL="log"   ;;
-            *)     export BELLATRIX_SERIAL=""       ;;
+            log)      export BELLATRIX_SERIAL="log"      ;;
+            miniuart) export BELLATRIX_SERIAL="miniuart" ;;
+            *)        export BELLATRIX_SERIAL="miniuart" ;;
         esac
         export CORE_LOG="$BELLATRIX_MULTICORE_LOGS"
         "$SCRIPTS/setup.sh"
@@ -593,10 +627,14 @@ case "$MODE" in
             -accel tcg,tb-size=64
             -kernel "$IMAGE"
             -dtb "$DTB"
-            -serial stdio
+            -serial null
             -display "$DISPLAY_ARG"
             -append "$FINAL_BOOTARGS"
         )
+
+        if [ "${AMIGA_SERIAL:-log}" != "pty" ]; then
+            QEMU_ARGS+=(-serial stdio)
+        fi
 
         QEMU_USB_KBD="${BELLATRIX_QEMU_USB_KBD:-}"
         QEMU_USB_POINTER="${BELLATRIX_USB_POINTER:-tablet}"
@@ -658,7 +696,7 @@ case "$MODE" in
             echo "[RUN] CPU backend profile: ${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         fi
         echo "[RUN] Chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-rigel}"
-        echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-boards}"
+        echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
         echo "[RUN] Boot args: $FINAL_BOOTARGS"
 
         if [ "${AMIGA_SERIAL:-log}" = "pty" ]; then

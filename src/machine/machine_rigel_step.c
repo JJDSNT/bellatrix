@@ -19,6 +19,12 @@
 #include "rigel/rigel_input.h"
 #include "rigel/rigel_irq.h"
 #include "rigel/rigel_serial.h"
+#include "host/raspi3/console_log.h"
+
+/* Weak fallback: tools/harness doesn't link host/raspi3/console_log.c (no
+ * bare-metal mini-UART there); the raspi3 build's strong definition
+ * overrides this when linked. */
+__attribute__((weak)) void console_log_drain(void) {}
 
 /* ---------------------------------------------------------------------------
  * Step accumulators — defined here; exported via internal header for bus.c
@@ -163,18 +169,22 @@ void machine_step_host_serial_rigel(void)
 {
     uint8_t byte = 0;
 
-    if (!g_rigel || !g_machine.uart_host.enabled)
-        return;
+    if (g_rigel && g_machine.uart_host.enabled) {
+        while (rigel_serial_tx_available(g_rigel) &&
+               rigel_serial_pop_tx_byte(g_rigel, &byte))
+        {
+            if (!uart_host_send_byte(&g_machine.uart_host, byte))
+                break;
+        }
 
-    while (rigel_serial_tx_available(g_rigel) &&
-           rigel_serial_pop_tx_byte(g_rigel, &byte))
-    {
-        if (!uart_host_send_byte(&g_machine.uart_host, byte))
-            break;
+        while (uart_host_receive_byte(&g_machine.uart_host, &byte))
+            rigel_serial_receive_byte(g_rigel, byte);
     }
 
-    while (uart_host_receive_byte(&g_machine.uart_host, &byte))
-        rigel_serial_receive_byte(g_rigel, byte);
+    /* kprintf's log ring only drains here, strictly after Paula's TX FIFO
+     * above — Paula's bytes always reach the mini-UART first. See
+     * AI_context/issue_logging_miniuart.md. */
+    console_log_drain();
 }
 
 /* ---------------------------------------------------------------------------
@@ -345,6 +355,7 @@ void bellatrix_machine_advance(uint32_t ticks)
 
 void bellatrix_machine_on_frame_ready(void)
 {
+    g_machine.frame_counter++;
     machine_present_frame_from_rigel();
 }
 
