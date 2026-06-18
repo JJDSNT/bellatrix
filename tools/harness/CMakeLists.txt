@@ -242,6 +242,8 @@ target_include_directories(harness PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${ODFS}/include
     ${ODFS}/backends
+    ${ROOT}/external/rigel/src
+    ${ROOT}/external/rigel/src/chipset
 )
 
 target_compile_definitions(harness PRIVATE BELLATRIX_USE_RIGEL_CHIPSET=1)

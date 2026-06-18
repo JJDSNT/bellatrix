@@ -191,6 +191,22 @@ static uint32_t machine_custom_read(uint32_t addr, unsigned int size)
         value = (uint32_t)word;
 
     pc = bellatrix_debug_cpu_pc();
+    if (machine_rigel_rtrace_enabled() &&
+        (reg == RIGEL_REG_VPOSR || reg == RIGEL_REG_VHPOSR) &&
+        (pc >= 0x00fc5e00u && pc <= 0x00fc5fffu)) {
+        static unsigned s_beam_read_log_count = 0;
+        if (s_beam_read_log_count < 256u) {
+            kprintf("[RIGEL-BEAM-R] pc=%08x addr=%06x reg=%03x size=%u word=%04x val=%08x cyc=%llu\n",
+                    (unsigned)pc,
+                    (unsigned)(addr & 0x00ffffffu),
+                    (unsigned)reg,
+                    (unsigned)size,
+                    (unsigned)word,
+                    (unsigned)value,
+                    (unsigned long long)rigel_get_time(g_rigel));
+            s_beam_read_log_count++;
+        }
+    }
     if (machine_rigel_blitter_trace_enabled() &&
         reg == 0x002u &&
         (pc == 0x00fc5a70u || pc == 0x00fc5a78u || pc == 0x00fc5a6cu)) {
