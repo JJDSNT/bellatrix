@@ -1,0 +1,33 @@
+diff --git a/src/boards/z2ram.c b/src/boards/z2ram.c
+index b1cc885..90fbc2b 100644
+--- a/src/boards/z2ram.c
++++ b/src/boards/z2ram.c
+@@ -12,7 +12,14 @@
+ 
+ static void map(struct ExpansionBoard *board)
+ {
+-    kprintf("[BOARD] Mapping ZII RAM board at address %08x\n", board->map_base);
++    kprintf("[BOARD] Mapping ZII RAM board at address %08x size %08x end %08x\n",
++            board->map_base,
++            board->rom_size,
++            board->map_base + board->rom_size - 1);
++    kprintf("[BOARD] ZII RAM uses identity mapping phys=%08x -> amiga=%08x size=%08x\n",
++            board->map_base,
++            board->map_base,
++            board->rom_size);
+     mmu_map(board->map_base, board->map_base, board->rom_size, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+ }
+ 
+@@ -66,10 +73,11 @@ static void init()
+         {
+             if (strstr(prop->op_value, "z2_ram_size=8")) {
+                 board.rom_size = 8*1024*1024;
++                z2_ram[1] = 0x0000;
+                 board.enabled = 1;
+                 kprintf("[BOOT]   use 8MB expansion RAM\n");
+             }
+-            if (strstr(prop->op_value, "z2_ram_size=4")) {
++            else if (strstr(prop->op_value, "z2_ram_size=4")) {
+                 board.rom_size = 4*1024*1024;
+                 z2_ram[1] = 0x7000;
+                 board.enabled = 1;

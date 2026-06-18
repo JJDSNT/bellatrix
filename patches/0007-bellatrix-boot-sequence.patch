@@ -1,0 +1,153 @@
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+index f2060ad..65ae33d 100644
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -28,6 +28,9 @@
+ #include "version.h"
+ #include "cache.h"
+ #include "sponsoring.h"
++#ifdef BELLATRIX
++#include "cpu/emu68/bellatrix.h"
++#endif
+ 
+ void _start();
+ void _boot();
+@@ -459,6 +462,26 @@ void secondary_boot(void)
+         wb_init();
+         wb_task();
+     }
++#elif defined(BELLATRIX)
++    (void)async_log;
++    if (cpu_id == 1)
++    {
++        /* Core 1 — CPU (Emu68 JIT or Musashi). */
++        extern void bellatrix_core1_entry(void);
++        bellatrix_core1_entry();
++    }
++    else if (cpu_id == 2)
++    {
++        /* Core 2 — Chipset (Rigel). */
++        extern void bellatrix_core2_entry(void);
++        bellatrix_core2_entry();
++    }
++    else if (cpu_id == 3)
++    {
++        /* Core 3 — IO (CIA / serial / disk). */
++        extern void bellatrix_core3_entry(void);
++        bellatrix_core3_entry();
++    }
+ #else
+     (void)async_log;
+ #endif
+@@ -524,6 +547,16 @@ uint32_t firmware_size = 0;
+ uint32_t cs_dist = 1;
+ int fast_page0 = 0;
+ 
++#ifdef BELLATRIX
++/* M68K_StartEmu() isn't exported outside this file, so wrap it with the
++ * void(void) shape bellatrix_launch_cpu_and_park()/PAL_Core_LaunchCpu()
++ * expect. Never returns (MainLoop() runs forever). */
++static void bellatrix_emu68_cpu_entry(void)
++{
++    M68K_StartEmu(0, NULL);
++}
++#endif
++
+ void boot(void *dtree)
+ {
+     uintptr_t kernel_top_virt = ((uintptr_t)boot + (KERNEL_SYS_PAGES << 21)) & ~((1 << 21)-1);
+@@ -1189,7 +1222,7 @@ void boot(void *dtree)
+         InitFunctions++;
+     }
+ 
+-#ifndef PISTORM
++#if !defined(PISTORM) && !defined(BELLATRIX)
+     if (initramfs_loc != NULL && initramfs_size != 0)
+     {
+         void *image_start, *image_end;
+@@ -1305,6 +1338,7 @@ void boot(void *dtree)
+ 
+ #else
+ 
++#ifdef PISTORM
+     if (rom_copy != 0)
+     {
+         kprintf("[BOOT] %dk ROM copy requested\n", rom_copy);
+@@ -1351,7 +1385,8 @@ void boot(void *dtree)
+             mmu_map(0xf80000, 0xe00000, 524288, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+         }
+     }
+-    else if (initramfs_loc != NULL && initramfs_size != 0)
++#endif /* PISTORM */
++    if (initramfs_loc != NULL && initramfs_size != 0)
+     {
+         extern uint32_t rom_mapped;
+ 
+@@ -1499,7 +1534,18 @@ void boot(void *dtree)
+     if (fast_page0) {
+         mmu_map(0xf80000, 0x0, 4096, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+     }
+-    
++
++#ifdef BELLATRIX
++    bellatrix_init();
++    /* Core 0 (this core, boot CPU) hands the CPU backend off to Core 1 and
++     * parks as the light Machine/scheduler arbiter (single-core: runs the
++     * backend inline here instead, forever, exactly like before). */
++    bellatrix_launch_cpu_and_park(
++        bellatrix_cpu_backend_owns_execution_loop()
++            ? bellatrix_run_selected_cpu_backend
++            : bellatrix_emu68_cpu_entry);
++#endif
++
+     M68K_StartEmu(0, NULL);
+ 
+ #endif
+@@ -2080,7 +2126,7 @@ void M68K_StartEmu(void *addr, void *fdt)
+ 
+ #ifdef PISTORM
+     (void)fdt;
+-    
++
+     asm volatile("mov %0, #0":"=r"(addr));
+ 
+     __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
+@@ -2097,10 +2143,32 @@ void M68K_StartEmu(void *addr, void *fdt)
+     __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
+     __m68k.JIT_CONTROL2 = chip_slowdown ? JC2F_CHIP_SLOWDOWN : 0;
+     __m68k.JIT_CONTROL2 |= dbf_slowdown ? JC2F_DBF_SLOWDOWN : 0;
+-    __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH); 
++    __m68k.JIT_CONTROL2 |= (emu68_ccrd  << JC2B_CCR_SCAN_DEPTH);
+     __m68k.JIT_CONTROL2 |= ((cs_dist - 1) << JC2B_CHIP_SLOWDOWN_RATIO);
+     __m68k.JIT_CONTROL2 |= blitwait ? JC2F_BLITWAIT : 0;
+ 
++#elif defined(BELLATRIX)
++    (void)fdt;
++    (void)addr;
++
++    {
++        extern uint32_t bellatrix_reset_isp;
++        extern uint32_t bellatrix_reset_pc;
++        __m68k.ISP.u32 = BE32(bellatrix_reset_isp);
++        __m68k.PC      = BE32(bellatrix_reset_pc);
++    }
++    __m68k.SR   = BE16(SR_S | SR_IPL);
++    __m68k.FPCR = 0;
++    __m68k.CACR = BE32(CACR_IE);
++    __m68k.JIT_CACHE_TOTAL = tlsf_get_total_size(jit_tlsf);
++    __m68k.JIT_CACHE_FREE  = tlsf_get_free_size(jit_tlsf);
++    __m68k.JIT_UNIT_COUNT  = 0;
++    __m68k.JIT_SOFTFLUSH_THRESH = EMU68_WEAK_CFLUSH_LIMIT;
++    __m68k.JIT_CONTROL = EMU68_WEAK_CFLUSH ? JCCF_SOFT : 0;
++    __m68k.JIT_CONTROL |= (emu68_icnt & JCCB_INSN_DEPTH_MASK) << JCCB_INSN_DEPTH;
++    __m68k.JIT_CONTROL |= (emu68_irng & JCCB_INLINE_RANGE_MASK) << JCCB_INLINE_RANGE;
++    __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
++
+ #else
+     __m68k.D[0].u32 = BE32((uint32_t)pitch);
+     __m68k.D[1].u32 = BE32((uint32_t)fb_width);
+@@ -2233,4 +2301,3 @@ asm volatile(
+     }
+         //kprintf("[BOOT] reg 0xf3000034 = %08x\n", LE32(*(volatile uint32_t *)0xf3000034));
+ }
+-

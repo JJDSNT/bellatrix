@@ -1,0 +1,15 @@
+diff --git a/scripts/config.txt b/scripts/config.txt
+index efe0551..ba3c6d7 100644
+--- a/scripts/config.txt
++++ b/scripts/config.txt
+@@ -7,6 +7,10 @@ disable_splash=1
+ arm_64bit=1
+ avoid_warnings=1
+ 
++# Pin core_freq so the mini-UART baud stays stable — when Bluetooth owns
++# the PL011, the Bellatrix console moves to the mini-UART on GPIO 14/15.
++enable_uart=1
++
+ # Limit GPU memory a little, force 1080p video mode
+ gpu_mem=32
+ hdmi_group=2

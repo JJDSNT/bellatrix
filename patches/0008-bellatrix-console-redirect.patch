@@ -1,0 +1,84 @@
+diff --git a/include/support.h b/include/support.h
+index 742d6c3..6eca088 100644
+--- a/include/support.h
++++ b/include/support.h
+@@ -117,6 +117,8 @@ void vkprintf_pc(putc_func putc_f, void *putc_data, const char * format, va_list
+ void kprintf_pc(putc_func putc_f, void *putc_data, const char * format, ...);
+ void vkprintf(const char * format, va_list args);
+ void kprintf(const char * format, ...);
++void kprintf_set_enabled(int enabled);
++int kprintf_get_enabled(void);
+ void arm_flush_cache(uintptr_t addr, uint32_t length);
+ void arm_icache_invalidate(uintptr_t addr, uint32_t length);
+ void arm_dcache_invalidate(uintptr_t addr, uint32_t length);
+diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
+index 8e8bd73..212c8a6 100644
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -127,15 +127,50 @@ static inline void putByte(void *io_base, char chr)
+ #define ARM_PERIIOBASE 0xf2000000
+ 
+ volatile unsigned char print_lock = 0;
++static volatile int print_enabled = 1;
++
++void kprintf_set_enabled(int enabled)
++{
++    __atomic_store_n(&print_enabled, enabled ? 1 : 0, __ATOMIC_RELEASE);
++}
++
++int kprintf_get_enabled(void)
++{
++    return __atomic_load_n(&print_enabled, __ATOMIC_ACQUIRE);
++}
++
++/* BELLATRIX: console redirect.  When Bluetooth owns the PL011, Bellatrix
++ * installs a putc override that writes to the mini-UART (same header pins,
++ * GPIO 14/15 ALT5) so boot logs survive BT bring-up. */
++static void (*putc_override)(char chr) = NULL;
++
++void kprintf_set_putc_override(void (*fn)(char chr))
++{
++    __atomic_store_n(&putc_override, fn, __ATOMIC_RELEASE);
++}
++
++static void putByte_dispatch(void *io_base, char chr)
++{
++    void (*fn)(char) = __atomic_load_n(&putc_override, __ATOMIC_ACQUIRE);
++    if (fn) {
++        fn(chr);
++        return;
++    }
++    putByte(io_base, chr);
++}
+ 
+ void kprintf(const char * restrict format, ...)
+ {
++    if (!kprintf_get_enabled()) {
++        return;
++    }
++
+     va_list v;
+     va_start(v, format);
+ 
+     while(__atomic_test_and_set(&print_lock, __ATOMIC_ACQUIRE)) asm volatile("yield");
+ 
+-    vkprintf_pc(putByte, (void*)ARM_PERIIOBASE, format, v);
++    vkprintf_pc(putByte_dispatch, (void*)ARM_PERIIOBASE, format, v);
+ 
+     __atomic_clear(&print_lock, __ATOMIC_RELEASE);
+ 
+@@ -144,9 +179,13 @@ void kprintf(const char * restrict format, ...)
+ 
+ void vkprintf(const char * restrict format, va_list args)
+ {
++    if (!kprintf_get_enabled()) {
++        return;
++    }
++
+     while(__atomic_test_and_set(&print_lock, __ATOMIC_ACQUIRE)) asm volatile("yield");
+ 
+-    vkprintf_pc(putByte, (void*)ARM_PERIIOBASE, format, args);
++    vkprintf_pc(putByte_dispatch, (void*)ARM_PERIIOBASE, format, args);
+ 
+     __atomic_clear(&print_lock, __ATOMIC_RELEASE);
+ }

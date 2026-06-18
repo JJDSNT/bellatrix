@@ -50,8 +50,16 @@ apply_patch_if_needed() {
     fi
 
     if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
-        if grep -Fq 'bellatrix_bridge_cpu_access((uint32_t)far, 0, (unsigned)size, BELLATRIX_BUS_READ);' src/aarch64/vectors.c &&
+        if grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c &&
            grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
+            echo "Patch already applied (built-in integration detected): $name"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
+        if grep -Fq 'bellatrix_bridge_cpu_progress(bela_delta' src/ExecutionLoop.c &&
+           grep -Fq 'cpu/cpu_bridge.h' src/ExecutionLoop.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
         fi
@@ -141,6 +149,10 @@ EMU68_PATCHES=(
     "$PATCHES/0001-add-bellatrix-variant-cmake.patch"
     "$PATCHES/0002-add-bellatrix-bus-hook.patch"
     "$PATCHES/0003-bellatrix-execution-loop.patch"
+    "$PATCHES/0007-bellatrix-boot-sequence.patch"
+    "$PATCHES/0008-bellatrix-console-redirect.patch"
+    "$PATCHES/0009-bellatrix-boot-config.patch"
+    "$PATCHES/0010-bellatrix-z2ram-fixes.patch"
 )
 
 CHERRYUSB_PATCHES=(
@@ -185,8 +197,16 @@ check_emu68_patch_applied() {
     fi
 
     if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
-        if grep -Fq 'bellatrix_bridge_cpu_access((uint32_t)far, 0, (unsigned)size, BELLATRIX_BUS_READ);' src/aarch64/vectors.c &&
+        if grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c &&
            grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
+            echo "  OK  $name  [content match; context drifted — regenerate patch]"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
+        if grep -Fq 'bellatrix_bridge_cpu_progress(bela_delta' src/ExecutionLoop.c &&
+           grep -Fq 'cpu/cpu_bridge.h' src/ExecutionLoop.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
         fi
