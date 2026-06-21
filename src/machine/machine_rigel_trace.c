@@ -71,6 +71,48 @@ void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
     if (!g_rtrace.enabled || event == NULL)
         return;
 
+    /* AUD0-3 timing trace — all 4 channels. See
+     * AI_context/issue_paula_audio_timing_and_simd.md. CCK-stamped via
+     * rigel_get_time(), read live at the moment the event fires (more
+     * precise than r->time, which only reflects the end of a step batch). */
+    switch (event->id) {
+    case RIGEL_LOG_EVENT_AUDIO_PER_WRITE:
+        kprintf("[RIGEL-AUDIO-PER] ch=%u value=%04x audper=%u cyc=%llu\n",
+                (unsigned)event->fields[0], (unsigned)event->fields[1],
+                (unsigned)event->fields[2],
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+        return;
+    case RIGEL_LOG_EVENT_AUDIO_PERIOD:
+        kprintf("[RIGEL-AUDIO-TICK] ch=%u audper=%u cyc=%llu\n",
+                (unsigned)event->fields[0], (unsigned)event->fields[1],
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+        return;
+    case RIGEL_LOG_EVENT_AUDIO_IRQ:
+        kprintf("[RIGEL-AUDIO-IRQ] ch=%u intreq_bit=%04x cyc=%llu\n",
+                (unsigned)event->fields[0], (unsigned)event->fields[1],
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+        return;
+    case RIGEL_LOG_EVENT_AUDIO_RELOAD:
+        kprintf("[RIGEL-AUDIO-RELOAD] ch=%u audlc=%06x audlen=%u cyc=%llu\n",
+                (unsigned)event->fields[0], (unsigned)event->fields[1],
+                (unsigned)event->fields[2],
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+        return;
+    case RIGEL_LOG_EVENT_AUDIO_FETCH:
+        kprintf("[RIGEL-AUDIO-FETCH] ch=%u addr=%06x word=%04x remaining=%u cyc=%llu\n",
+                (unsigned)event->fields[0], (unsigned)event->fields[1],
+                (unsigned)event->fields[2], (unsigned)event->fields[3],
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+        return;
+    case RIGEL_LOG_EVENT_AUDIO_DAT_WRITE:
+        kprintf("[RIGEL-AUDIO-DAT] ch=%u value=%04x cyc=%llu\n",
+                (unsigned)event->fields[0], (unsigned)event->fields[1],
+                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+        return;
+    default:
+        break;
+    }
+
     kprintf("[RIGEL-EVENT] %s", event->name ? event->name : "unknown");
     for (rigel_u8 i = 0u; i < event->field_count && i < 16u; i++) {
         kprintf(" f%u=%08x", (unsigned)i, (unsigned)event->fields[i]);
