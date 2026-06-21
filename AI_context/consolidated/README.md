@@ -21,6 +21,7 @@ tópico funcional. Substitui os arquivos `sprint_NN.md` individuais.
 | [issue_bluetooth.md](issue_bluetooth.md) | BCM43430A1 bootstrap | 30 | 🔴 Bloqueado em phase 1 |
 | [issue_logging_miniuart.md](issue_logging_miniuart.md) | Console fora do PL011, mini-UART compartilhado com Paula | — | ✅ Resolvido |
 | [issue_cdrom_boot.md](issue_cdrom_boot.md) | ATAPI CD-ROM boot: RIPPLE board, lide.device, FindCDFS, AROS CDFS gap | — | 🔴 Bloqueado: sem 'CD01' em FSR |
+| [issue_multicore_boundary_logging.md](issue_multicore_boundary_logging.md) | Cross-core boundary logging (CORE1↔CORE2, CORE3↔CORE2), cmake source-list cleanup | — | ✅ Resolvido (⚠️ ver `issue_core_log_vs_rigeltrace.md`) |
 
 ## Ações Imediatas (Próxima Sessão)
 
