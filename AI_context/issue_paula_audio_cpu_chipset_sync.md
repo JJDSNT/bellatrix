@@ -2,7 +2,7 @@
 
 # Issue: Paula audio sounds choppy in the harness — CPU↔chipset stepping is too coarse/stale for sample extraction
 
-## Status: open
+## Status: open — root cause #2 confirmed by real session data, not yet fixed
 
 ## Why this exists as a separate issue
 
@@ -124,8 +124,38 @@ fixing.
   during a session with audible choppiness, to confirm root cause #1's
   bus-touch gaps correlate with the stutter independently of #2.
 
-This is still a code-reading hypothesis until the duplicate-trace output
-above is actually read from a real session.
+### Confirmed: root cause #2 is real, not just a code-reading hypothesis
+
+Real session output (`HARNESS_AUDIO_DUP_TRACE=1`):
+
+```
+[AUDIO-DUP] pushed=661500  duplicate=661499  (100.0%) max_run=661499
+[AUDIO-DUP] pushed=705600  duplicate=705599  (100.0%) max_run=705599
+[AUDIO-DUP] pushed=749700  duplicate=745543  (99.4%)  max_run=726744
+...
+[AUDIO-DUP] pushed=1543500 duplicate=1332039 (86.3%)  max_run=726744
+```
+
+Reading it: the first ~705600 samples (~16s) are one unbroken duplicate
+run — almost certainly a silent boot screen, not itself proof of the bug
+(silence is legitimately constant). `max_run` then freezes at `726744`
+(~16.5s) and never grows again, while `pushed`/`duplicate` keep climbing —
+meaning that one giant frozen run ended and real, varying audio started.
+
+The decisive part: once real audio is playing, the duplicate rate doesn't
+drop to something upsampling would explain — it **stabilizes at 86-94%**
+over multiple consecutive one-second windows. Paula's native per-channel
+rate (`M68K_HZ / audper`, roughly 8-33 kHz for the `audper` values seen in
+`[[issue_paula_audio_timing]]`'s captures) is close enough to the 44.1 kHz
+host rate that correct nearest-neighbor upsampling would produce occasional
+repeats, not 9-out-of-10 samples identical, sustained for seconds. **Root
+cause #2 confirmed**: the extraction loop is reading Paula's mixed sample
+far more often than Paula's state actually changes.
+
+Root cause #1 (bus-touch-gated stepping) is the more likely explanation for
+*why* Paula's state isn't changing between reads as often as expected, but
+that correlation hasn't been measured directly yet — only inferred from
+#2's confirmed symptom matching the #1 hypothesis's predicted effect.
 
 ## Files to revisit
 
