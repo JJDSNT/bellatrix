@@ -187,6 +187,9 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
 
         if (r.events & RIGEL_EVENT_FRAME_READY)
             bellatrix_machine_on_frame_ready();
+
+        if (r.events & RIGEL_EVENT_HBLANK)
+            bellatrix_machine_on_audio_sample_ready();
     }
 
     bellatrix_machine_post_chipset_step();

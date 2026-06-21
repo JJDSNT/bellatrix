@@ -213,19 +213,45 @@ Rigel/Paula (scalar, hardware-faithful)
    tables, or a WinUAE/FS-UAE trace comparison) — not done; the cadence
    self-consistency check in #1 is internal (AUDLEN/AUDPER agree with each
    other), not cross-checked against an independent source yet.
-4. Implement the missing consumer: drain
-   `bellatrix_machine_audio_left/right()` into an actual buffer once per
-   audio period — this is the first real caller and doubles as the bring-up
-   target for Part 1's instrumentation.
-5. Only after #3/#4 are verified correct: implement the NEON mixer +
-   resampler in `src/audio/mixer.c`, and decide the host output driver
-   (I2S vs HDMI) before fixing the resampler's target rate.
+4. ~~Implement the missing consumer: drain
+   `bellatrix_machine_audio_left/right()` into an actual buffer.~~
+   **Done — push side validated against a real harness run.** Added
+   `src/audio/mixer.c`/`mixer.h` (a 2048-sample stereo ring buffer,
+   drop-oldest-on-full, matching the `RuntimeEventQueue` style in
+   `runtime/event.c`), a `BellatrixMachine.audio_queue` field, and
+   `bellatrix_machine_on_audio_sample_ready()` wired to
+   `RIGEL_EVENT_HBLANK` (the rate `rigel_audio.h` documents as the natural
+   tick for `rigel_get_audio_sample()`) in **both** `rigel_step()` call
+   sites — `core_chipset.c` (multicore) and `machine_quantum_step()` in
+   `machine_rigel_step.c` (single-core/harness; this path also had its own
+   inline `FRAME_READY` handling instead of calling
+   `bellatrix_machine_on_frame_ready()` — unified it, since that's also
+   where the new per-frame `[RIGEL-AUDIO-QUEUE]` diagnostic lives).
+   Verified end-to-end on the harness: `count=2048` (always full) and
+   `dropped` growing by exactly 312/frame (= PAL scanlines = HBLANKs per
+   frame) — internally consistent, confirms the push path is alive. No pop
+   consumer exists yet by design (no host output driver), so the queue
+   filling and discarding the oldest sample every push is the correct,
+   expected steady state, not a bug.
+5. Only after #3 is verified correct: implement the NEON mixer +
+   resampler in `src/audio/mixer.c` (the ring buffer's pop side is what
+   they'll drain from), and decide the host output driver (I2S vs HDMI)
+   before fixing the resampler's target rate.
 
 ## Files to revisit
 
 - `external/rigel/src/chipset/paula/audio.c` (6 trace points, all 4 channels)
 - `external/rigel/include/rigel/rigel_config.h` (6 new `RIGEL_LOG_EVENT_AUDIO_*` IDs)
 - `src/machine/machine_rigel_trace.c` (`machine_rigel_log_event()` — new cases added)
+- `src/audio/mixer.c` / `mixer.h` (no longer empty — ring buffer implemented)
+- `src/machine/machine.h` (`BellatrixMachine.audio_queue`,
+  `bellatrix_machine_on_audio_sample_ready()` declaration)
+- `src/machine/machine_rigel.c` (`audio_mixer_init()` in init/reset)
+- `src/machine/machine_rigel_step.c` (`bellatrix_machine_on_audio_sample_ready()`
+  definition; `machine_quantum_step()` HBLANK hook + FRAME_READY unification)
+- `src/runtime/core_chipset.c` (HBLANK hook, multicore path)
+- `cmake/bellatrix-variant.cmake` and `tools/harness/CMakeLists.txt`
+  (both needed `src/audio/mixer.c` added to their source lists)
 - `external/rigel/src/domains/audio/audio_domain.c`
 - `src/machine/machine_rigel.c`
 - `src/audio/mixer.c` / `mixer.h` (empty stubs — intended landing spot)

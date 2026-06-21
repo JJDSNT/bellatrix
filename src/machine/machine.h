@@ -19,6 +19,7 @@
 
 #include "machine/memory/memory.h"
 #include "io/serial/uart_host.h"
+#include "audio/mixer.h"
 
 typedef struct BellatrixDebug
 {
@@ -74,6 +75,11 @@ typedef struct BellatrixMachine
      */
     UARTHost uart_host;
 
+    /* Mixed stereo samples drained from Rigel once per HBLANK (see
+     * bellatrix_machine_on_audio_sample_ready()). No host output driver
+     * consumes this yet — see AI_context/issue_paula_audio_timing_and_simd.md. */
+    AudioMixerQueue audio_queue;
+
 } BellatrixMachine;
 
 /* ------------------------------------------------------------------------- */
@@ -98,6 +104,7 @@ uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles);
 /* Hooks called by the chipset core (Core 1) after each Rigel step. */
 void bellatrix_machine_on_frame_ready(void);
 void bellatrix_machine_on_ipl_changed(uint8_t ipl);
+void bellatrix_machine_on_audio_sample_ready(void);
 void bellatrix_machine_post_chipset_step(void);
 
 struct RigelContext *bellatrix_machine_rigel_ctx(void);

@@ -149,6 +149,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/io/serial/uart_host.c
     ${CMAKE_SOURCE_DIR}/../src/machine/input/controller_port.c
     ${CMAKE_SOURCE_DIR}/../src/machine/input/keyboard.c
+    ${CMAKE_SOURCE_DIR}/../src/audio/mixer.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/miniuart_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pl011_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/vc_mailbox.c

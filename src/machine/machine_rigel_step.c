@@ -285,12 +285,12 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
      * keypress, delivering keystrokes several events late. */
     machine_keyboard_drain_rigel();
 
-    if (r.events & RIGEL_EVENT_FRAME_READY) {
-        g_machine.frame_counter++;
-        machine_present_frame_from_rigel();
-    }
+    if (r.events & RIGEL_EVENT_FRAME_READY)
+        bellatrix_machine_on_frame_ready();
     if (r.events & RIGEL_EVENT_IRQ_CHANGED)
         machine_publish_ipl(m, rigel_get_ipl(g_rigel));
+    if (r.events & RIGEL_EVENT_HBLANK)
+        bellatrix_machine_on_audio_sample_ready();
 
     return r.events;
 }
@@ -357,11 +357,28 @@ void bellatrix_machine_on_frame_ready(void)
 {
     g_machine.frame_counter++;
     machine_present_frame_from_rigel();
+
+    if (machine_rigel_rtrace_enabled())
+        kprintf("[RIGEL-AUDIO-QUEUE] count=%u dropped=%llu\n",
+                (unsigned)audio_mixer_count(&g_machine.audio_queue),
+                (unsigned long long)audio_mixer_dropped(&g_machine.audio_queue));
 }
 
 void bellatrix_machine_on_ipl_changed(uint8_t ipl)
 {
     machine_publish_ipl(&g_machine, ipl);
+}
+
+/* Drains one mixed stereo sample per RIGEL_EVENT_HBLANK (~15 kHz at PAL),
+ * the rate rigel_audio.h documents as the natural tick for this getter.
+ * No host output driver consumes the queue yet — this exists so the
+ * fetch/mix/queue path has a real, regularly-driven caller to validate
+ * against, per AI_context/issue_paula_audio_timing_and_simd.md. */
+void bellatrix_machine_on_audio_sample_ready(void)
+{
+    audio_mixer_push(&g_machine.audio_queue,
+                     bellatrix_machine_audio_left(),
+                     bellatrix_machine_audio_right());
 }
 
 void bellatrix_machine_post_chipset_step(void)

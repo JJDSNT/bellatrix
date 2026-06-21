@@ -182,6 +182,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     bellatrix_keyboard_init(&m->keyboard);
     bellatrix_controller_ports_init(&m->controller_ports);
     uart_host_init(&m->uart_host);
+    audio_mixer_init(&m->audio_queue);
     superbuster_init(&m->superbuster);
     bellatrix_zorro2_init();
     bellatrix_zorro3_init();
@@ -251,6 +252,7 @@ void bellatrix_machine_reset(void)
     bellatrix_keyboard_reset(&m->keyboard);
     bellatrix_controller_ports_reset(&m->controller_ports);
     machine_sync_controller_ports_rigel(m);
+    audio_mixer_init(&m->audio_queue);
 
     superbuster_reset(&m->superbuster);
     bellatrix_zorro2_reset();

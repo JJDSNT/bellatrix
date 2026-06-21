@@ -169,6 +169,9 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/input/controller_port.c
     ${SRC}/machine/input/keyboard.c
 
+    # Audio
+    ${SRC}/audio/mixer.c
+
     # Debug
     ${SRC}/debug/btrace.c
     ${SRC}/debug/debug.c
