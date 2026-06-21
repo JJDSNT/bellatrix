@@ -22,7 +22,7 @@ tópico funcional. Substitui os arquivos `sprint_NN.md` individuais.
 | [issue_logging_miniuart.md](issue_logging_miniuart.md) | Console fora do PL011, mini-UART compartilhado com Paula | — | ✅ Resolvido |
 | [issue_cdrom_boot.md](issue_cdrom_boot.md) | ATAPI CD-ROM boot: RIPPLE board, lide.device, FindCDFS, AROS CDFS gap | — | 🔴 Bloqueado: sem 'CD01' em FSR |
 | [issue_multicore_boundary_logging.md](issue_multicore_boundary_logging.md) | Cross-core boundary logging (CORE1↔CORE2, CORE3↔CORE2), cmake source-list cleanup | — | ✅ Resolvido (⚠️ ver `issue_core_log_vs_rigeltrace.md`) |
-| [issue_paula_audio_timing.md](issue_paula_audio_timing.md) | Paula AUD0-3 timing trace (6 eventos, 4 canais) + ring buffer consumer | — | ✅ Resolvido (⚠️ ver `issue_paula_audio_neon_mixer.md` e `issue_paula_audio_output_driver.md`) |
+| [issue_paula_audio_timing.md](issue_paula_audio_timing.md) | Paula AUD0-3 timing trace (6 eventos, 4 canais) + ring buffer consumer | — | ✅ Resolvido (⚠️ áudio ainda engasgado — ver `issue_paula_audio_cpu_chipset_sync.md`) |
 
 ## Ações Imediatas (Próxima Sessão)
 

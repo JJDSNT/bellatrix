@@ -4,6 +4,17 @@
 
 ## Status: resolved (2026-06-21)
 
+**Scope of "resolved," read carefully**: this covers the instrumentation
+itself and the conclusion that AUDLEN/AUDPER/fetch/IRQ are *internally*
+self-consistent (retrigger cadence matches `audlen × audper` in every
+channel). It does **not** mean Paula audio sounds correct end to end — the
+user reports audibly choppy playback in the harness. That's a real, still
+open problem with a different root cause (CPU↔chipset stepping granularity
+at the point samples are extracted for host playback, not the chipset's
+own internal state machine) — tracked separately in
+`AI_context/issue_paula_audio_cpu_chipset_sync.md`. Don't read this file's
+"resolved" as "audio works."
+
 ## Origin
 
 Paula audio has three conceptually distinct stages, with very different
@@ -133,7 +144,13 @@ still open.
 
 ## What's still open
 
-See `AI_context/issue_paula_audio_simd_backend.md`: the `word=0000`
-residual in fetch traces, external-reference timing validation, the NEON
-mixer/resampler implementation itself, and the deferred I2S-vs-HDMI
-decision.
+- `AI_context/issue_paula_audio_cpu_chipset_sync.md` — **the actual choppy
+  playback bug**, likely caused by sample extraction not stepping the
+  chipset to the exact corresponding moment in chip time. Read this one
+  first; it's about correctness, not optimization.
+- `AI_context/issue_paula_audio_neon_mixer.md` — the `word=0000` residual,
+  external-reference timing validation, and the NEON mixer/resampler
+  implementation itself. Building the mixer before the sync issue above is
+  fixed means polishing samples that are already wrong.
+- `AI_context/issue_paula_audio_output_driver.md` — the deferred
+  I2S-vs-HDMI decision.

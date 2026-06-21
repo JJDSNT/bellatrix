@@ -19,6 +19,14 @@ write the mixer/resampler once the upstream timing is trusted, which the
 consolidated work above established for cadence (not full content
 correctness — see residual #1 below).
 
+**Blocking prerequisite, found after this issue was first written**: Paula
+audio is currently audibly choppy on the host (reported in the harness).
+Root cause is believed to be CPU↔chipset stepping granularity at the point
+samples are extracted, not anything this issue would touch — see
+`AI_context/issue_paula_audio_cpu_chipset_sync.md`. Fix that first; a NEON
+mixer/resampler built on top of samples extracted at the wrong moments
+just makes wrong audio faster.
+
 Where the final mixed/resampled output actually goes (I2S vs HDMI) is a
 **separate, independent decision** — see
 `AI_context/issue_paula_audio_output_driver.md`. This issue is just the
