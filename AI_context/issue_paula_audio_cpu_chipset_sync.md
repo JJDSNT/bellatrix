@@ -2,7 +2,10 @@
 
 # Issue: Paula audio sounds choppy in the harness — CPU↔chipset stepping is too coarse/stale for sample extraction
 
-## Status: open — root cause #2 confirmed by real session data, not yet fixed
+## Status: open — duplicate-rate hypothesis (#2) mostly retracted (expected
+upsampling, not a bug); real anomaly is a long stale-freeze pattern,
+pointing at #1. General CCK-gap-vs-bus-touch instrumentation in progress
+to confirm before fixing anything.
 
 ## Why this exists as a separate issue
 
@@ -124,7 +127,7 @@ fixing.
   during a session with audible choppiness, to confirm root cause #1's
   bus-touch gaps correlate with the stutter independently of #2.
 
-### Confirmed: root cause #2 is real, not just a code-reading hypothesis
+### Correction: the 86-94% duplicate rate is largely expected upsampling, not proof of a bug
 
 Real session output (`HARNESS_AUDIO_DUP_TRACE=1`):
 
@@ -136,26 +139,29 @@ Real session output (`HARNESS_AUDIO_DUP_TRACE=1`):
 [AUDIO-DUP] pushed=1543500 duplicate=1332039 (86.3%)  max_run=726744
 ```
 
-Reading it: the first ~705600 samples (~16s) are one unbroken duplicate
-run — almost certainly a silent boot screen, not itself proof of the bug
-(silence is legitimately constant). `max_run` then freezes at `726744`
-(~16.5s) and never grows again, while `pushed`/`duplicate` keep climbing —
-meaning that one giant frozen run ended and real, varying audio started.
+First pass at this data jumped to "root cause #2 confirmed" by comparing
+86-94% against intuition rather than against Paula's actual native rate —
+that was wrong. Redone properly: one host audio sample = `M68K_HZ / 2 /
+AUDIO_RATE` ≈ 80.5 CCK. The channels seen in `[[issue_paula_audio_timing]]`'s
+captures have `audper=214` (≈16.6 kHz native) and `audper=856`
+(≈4.1 kHz native, three of the four channels). Nearest-neighbor upsampling
+an ~4.1 kHz source to 44.1 kHz produces **~90% duplicates by construction**
+— almost exactly the observed range. Also checked
+`rigel_get_next_deadline()` (`external/rigel/src/core/rigel.c:277`): it
+already includes `audio_cycles_to_next_event()` in its deadline
+computation, so Rigel's quantum scheduler isn't ignoring audio's timing
+need either — there's no scheduling gap there to blame.
 
-The decisive part: once real audio is playing, the duplicate rate doesn't
-drop to something upsampling would explain — it **stabilizes at 86-94%**
-over multiple consecutive one-second windows. Paula's native per-channel
-rate (`M68K_HZ / audper`, roughly 8-33 kHz for the `audper` values seen in
-`[[issue_paula_audio_timing]]`'s captures) is close enough to the 44.1 kHz
-host rate that correct nearest-neighbor upsampling would produce occasional
-repeats, not 9-out-of-10 samples identical, sustained for seconds. **Root
-cause #2 confirmed**: the extraction loop is reading Paula's mixed sample
-far more often than Paula's state actually changes.
-
-Root cause #1 (bus-touch-gated stepping) is the more likely explanation for
-*why* Paula's state isn't changing between reads as often as expected, but
-that correlation hasn't been measured directly yet — only inferred from
-#2's confirmed symptom matching the #1 hypothesis's predicted effect.
+So the steady-state 86-94% is mostly **correct, expected behavior** for
+upsampling a sub-44.1kHz source, not a confirmed bug. What's NOT explained
+by any legitimate audper value is the `max_run=726744` plateau — **16.5
+real seconds** frozen on one exact sample. No realistic `audper` holds a
+value that long; this is the actual anomaly worth chasing, and it points
+at root cause #1 (bus-touch-gated stepping causing occasional long
+freezes), not #2. Whether that freeze was just an idle/silent boot screen
+(harmless) or a genuine multi-second stall during active content (the
+actual "engasgado" the user hears) isn't known yet from this data alone —
+need the general CCK-gap instrumentation below to tell the difference.
 
 ## Files to revisit
 
