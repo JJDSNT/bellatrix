@@ -143,7 +143,7 @@ echo "[BUILD] chipset backend: rigel"
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
     MULTICORE_FLAG="ON"
-    echo "[BUILD] multicore build: enabled (Core1=GFX Core2=Paula Core3=IO)"
+    echo "[BUILD] multicore build: enabled (Core1=CPU Core2=Chipset/Rigel Core3=IO)"
 fi
 
 if [ "$MULTICORE_BUILD" != "1" ]; then
@@ -154,7 +154,7 @@ fi
 CORELOG_FLAG="OFF"
 if [ "$MULTICORE_LOGS" = "1" ]; then
     CORELOG_FLAG="ON"
-    echo "[BUILD] core log: enabled ([CORE0-CPU] [CORE1-GFX] [CORE2-PAULA] [CORE3-IO] [XCORE-*])"
+    echo "[BUILD] core log: enabled ([CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO] [XCORE-*])"
 else
     echo "[BUILD] core log: disabled"
 fi

@@ -36,7 +36,7 @@ else()
 endif()
 if(BELLATRIX_CORE_LOG)
     add_compile_definitions(BELLATRIX_CORE_LOG)
-    message(STATUS "[BUILD] Core log: enabled ([CORE0-CPU] [CORE1-CHIPSET] [CORE3-IO])")
+    message(STATUS "[BUILD] Core log: enabled ([CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO] [XCORE-*])")
 else()
     message(STATUS "[BUILD] Core log: disabled")
 endif()
@@ -138,36 +138,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/debug/debug.c
     ${CMAKE_SOURCE_DIR}/../src/debug/emu_debug.c
     ${CMAKE_SOURCE_DIR}/../src/debug/os_debug.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_interrupt.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_ports.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_serial.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_timers.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_tod.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/rtc/rtc.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/agnus.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_command.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_debug.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_dma.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_ref.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_regs.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_timing.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_regs.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_service.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/denise/denise.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/denise/sprites.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_input.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_interrupt.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_disk.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_audio.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_serial.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/floppy/floppy_drive.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/dma.c
     ${CMAKE_SOURCE_DIR}/../src/storage/iso/iso_image.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/beam.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/bitplanes.c
     ${CMAKE_SOURCE_DIR}/../src/machine/memory/memory.c
     ${CMAKE_SOURCE_DIR}/../src/machine/memory/memory_map.c
     ${CMAKE_SOURCE_DIR}/../src/machine/memory/chip_ram.c
@@ -187,66 +158,13 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_core.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/time.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/posix_time.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime_core.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/core_cpu.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/affinity.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/clock.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/event.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/mailbox.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/stats.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/sync.c
-    ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
-    ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
-)
-list(REMOVE_ITEM BASE_FILES
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_interrupt.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_ports.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_serial.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_timers.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/cia/cia_tod.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/rtc/rtc.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/agnus.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_command.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_debug.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_dma.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_ref.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_regs.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/blitter/blitter_timing.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_regs.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/copper/copper_service.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/dma.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/beam.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/agnus/bitplanes.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/denise/denise.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/denise/sprites.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_input.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_interrupt.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_disk.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_audio.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/paula/paula_serial.c
-    ${CMAKE_SOURCE_DIR}/../src/chipset/floppy/floppy_drive.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/runtime_core.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/core_cpu.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/affinity.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/clock.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/event.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/mailbox.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/stats.c
-    ${CMAKE_SOURCE_DIR}/../src/runtime/sync.c
-)
-list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/runtime/core_chipset.c
     # core_io.c provides the STRONG bellatrix_runtime_io_step (and
     # core_io_init/step).  Without it the weak no-op stub in pal_core.c
     # links instead and USB/BT silently stop after the launcher.
     ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
+    ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
+    ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 )
 if(BELLATRIX_USE_MUSASHI_CPU)
     list(APPEND BASE_FILES
