@@ -105,16 +105,27 @@ rather than reading whatever stale value happens to be sitting in
 ## Suggested next step before fixing
 
 Per this project's own working pattern this session: instrument before
-fixing. Concretely:
-- Count/log consecutive duplicate `(left, right)` values pushed to
-  `pal_audio_push_sample()` in `main.c`, to confirm root cause #2 is
-  actually happening and how often.
-- Log the CCK delta between consecutive `harness_sync_cpu_progress()`
-  calls (or the `[RIGEL-AUDIO-TICK]`/`[RIGEL-AUDIO-QUEUE]` cadence already
-  in place) during a session with audible choppiness, to confirm root
-  cause #1's bus-touch gaps correlate with the stutter.
-Neither has been done yet — this issue is a code-reading hypothesis, not
-yet a confirmed diagnosis.
+fixing.
+
+- **Done**: duplicate-sample counter added directly in `main.c`'s audio
+  extraction loop, gated by `HARNESS_AUDIO_DUP_TRACE=1` (off by default,
+  one int check when disabled). Counts total samples pushed to
+  `pal_audio_push_sample()`, how many were exact `(left, right)` repeats
+  of the immediately preceding one, and the longest consecutive run of
+  repeats — printed once per second of audio as
+  `[AUDIO-DUP] pushed=... duplicate=... (...%) max_run=...`. Run with
+  `HARNESS_AUDIO_DUP_TRACE=1 ./run.sh harness`. A high duplicate
+  percentage and/or a large `max_run` (hundreds+) would confirm root
+  cause #2 directly. Not run yet — needs a real interactive session
+  (SDL display), which isn't available in the sandbox this was written in.
+- **Not done yet**: log the CCK delta between consecutive
+  `harness_sync_cpu_progress()` calls (or correlate against the
+  `[RIGEL-AUDIO-TICK]`/`[RIGEL-AUDIO-QUEUE]` cadence already in place)
+  during a session with audible choppiness, to confirm root cause #1's
+  bus-touch gaps correlate with the stutter independently of #2.
+
+This is still a code-reading hypothesis until the duplicate-trace output
+above is actually read from a real session.
 
 ## Files to revisit
 

@@ -1059,12 +1059,57 @@ int main(int argc, char **argv)
 
         /* Audio output: push samples at 44100 Hz using fractional accumulator */
         if (!headless) {
+            /* Diagnostic for AI_context/issue_paula_audio_cpu_chipset_sync.md:
+             * counts samples pushed twice in a row with the same (left,
+             * right) value. Paula's mixed sample only changes when the
+             * chipset is actually stepped (on CPU bus touches), so a run of
+             * duplicates here means this loop drained the accumulator
+             * faster than the chipset advanced — a candidate root cause for
+             * the reported choppy playback. HARNESS_AUDIO_DUP_TRACE=1 to
+             * enable; off by default (one int check when disabled). */
+            static int s_dup_trace = -1;
+            static int16_t s_prev_left = 0, s_prev_right = 0;
+            static int s_prev_valid = 0;
+            static uint64_t s_pushed = 0;
+            static uint64_t s_duplicates = 0;
+            static uint64_t s_cur_run = 0;
+            static uint64_t s_max_run = 0;
+
+            if (s_dup_trace < 0) {
+                const char *env = getenv("HARNESS_AUDIO_DUP_TRACE");
+                s_dup_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+            }
+
             audio_acc += (uint64_t)(unsigned)used * AUDIO_RATE;
             while (audio_acc >= M68K_HZ) {
                 audio_acc -= M68K_HZ;
-                pal_audio_push_sample(
-                    bellatrix_machine_audio_left(),
-                    bellatrix_machine_audio_right());
+
+                int16_t left  = bellatrix_machine_audio_left();
+                int16_t right = bellatrix_machine_audio_right();
+
+                if (s_dup_trace) {
+                    s_pushed++;
+                    if (s_prev_valid && left == s_prev_left && right == s_prev_right) {
+                        s_duplicates++;
+                        s_cur_run++;
+                        if (s_cur_run > s_max_run) s_max_run = s_cur_run;
+                    } else {
+                        s_cur_run = 0;
+                    }
+                    s_prev_left  = left;
+                    s_prev_right = right;
+                    s_prev_valid = 1;
+
+                    if (s_pushed % AUDIO_RATE == 0) {
+                        printf("[AUDIO-DUP] pushed=%llu duplicate=%llu (%.1f%%) max_run=%llu\n",
+                               (unsigned long long)s_pushed,
+                               (unsigned long long)s_duplicates,
+                               100.0 * (double)s_duplicates / (double)s_pushed,
+                               (unsigned long long)s_max_run);
+                    }
+                }
+
+                pal_audio_push_sample(left, right);
             }
         }
 
