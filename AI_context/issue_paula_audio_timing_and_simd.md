@@ -175,14 +175,39 @@ Rigel/Paula (scalar, hardware-faithful)
     -> host output (I2S / HDMI — driver does not exist yet)
 ```
 
-- Mixer and resampler should be implemented in the currently-empty
-  `src/audio/mixer.c`/`mixer.h`.
+- Mixer and resampler land in `src/audio/mixer.c`/`mixer.h`, on the pop
+  side of the ring buffer already implemented there (see "consumer" step
+  below) — they don't need the host output decision resolved first.
 - Keep Rigel/Paula scalar and portable; all acceleration stays in the
   Bellatrix backend, never inside Rigel.
 - With only 4 channels, raw mixing gain may be modest — the resampler +
   format conversion stage is the one expected to actually matter
   (consistent with planar→framebuffer conversion being the other
   NEON-worthy subsystem in this project).
+
+### Host output driver: HDMI vs I2S — deferred, not blocking
+
+Asked to decide; chose HDMI, then researched what that actually requires
+before implementing. Findings: bare-metal HDMI audio on the Pi needs
+**VCHIQ** — the VideoCore's RPC channel — because the GPU firmware does the
+actual PCM-into-HDMI-stream mixing, not the ARM core. VCHIQ has no public
+spec; the few known bare-metal implementations (e.g. Ultibo) are 10,000+
+lines ported from Linux kernel driver internals, and multi-year-old
+Raspberry Pi forum threads from experienced bare-metal developers never
+reached a complete solution. Checked whether upstream Emu68
+(`emu68/`, this project's JIT/display base) already solved this — it
+doesn't; no audio code at all there, HDMI/VCHIQ or otherwise, so there's
+nothing to port from the one codebase most likely to have it.
+
+I2S (the BCM2837's PCM/I2S peripheral) is the documented, register-level
+alternative — same effort tier as the CIA/USB/BT work already done in this
+project — but the decision is **deferred for now**, not made. Part 2's
+mixer/resampler work doesn't need it resolved first.
+
+Sources consulted:
+- [How to way bare metal HDMI Audio?](https://www.raspberrypi.org/forums/viewtopic.php?f=72&t=147423)
+- [bare metal hdmi audio](https://forums.raspberrypi.com/viewtopic.php?t=306441)
+- [Bare metal HDMI audio programming](https://forums.raspberrypi.com/viewtopic.php?f=72&t=80750)
 
 ## Next steps
 
@@ -235,8 +260,10 @@ Rigel/Paula (scalar, hardware-faithful)
    expected steady state, not a bug.
 5. Only after #3 is verified correct: implement the NEON mixer +
    resampler in `src/audio/mixer.c` (the ring buffer's pop side is what
-   they'll drain from), and decide the host output driver (I2S vs HDMI)
-   before fixing the resampler's target rate.
+   they'll drain from). Host output driver (I2S vs HDMI) is deliberately
+   deferred — see the research note above — and isn't needed to write the
+   mixer/resampler themselves, only to fix the final target rate
+   (44.1/48 kHz) and pick where the resampled output actually goes.
 
 ## Files to revisit
 
