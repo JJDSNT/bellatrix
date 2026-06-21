@@ -1,11 +1,12 @@
 // AI_context/issue_paula_audio_cpu_chipset_sync.md
 
-# Issue: Paula audio sounds choppy in the harness — CPU↔chipset stepping is too coarse/stale for sample extraction
+# Issue: Paula audio sounds choppy in the harness — cause not yet found
 
-## Status: open — duplicate-rate hypothesis (#2) mostly retracted (expected
-upsampling, not a bug); real anomaly is a long stale-freeze pattern,
-pointing at #1. General CCK-gap-vs-bus-touch instrumentation in progress
-to confirm before fixing anything.
+## Status: open — both original root-cause hypotheses (#1 and #2) have been
+walked back after closer reading. Two general-purpose diagnostics are now
+in place (CCK-gap tracer, wall-clock-drift tracer); the real cause is not
+yet known and needs an interactive (SDL display) session to find, which
+isn't available in this session's sandbox.
 
 ## Why this exists as a separate issue
 
@@ -45,7 +46,7 @@ while (audio_acc >= M68K_HZ) {                           // M68K_HZ = 7093790
 `rigel_get_audio_sample()` — Paula's *current* mixed L/R value, a snapshot,
 not something that advances on its own.
 
-## Two likely root causes, found by reading the code (not yet confirmed by instrumentation)
+## Two likely root causes, found by reading the code (both later walked back — see "Corrections" below; kept for the record of how this was investigated)
 
 1. **Chipset time only advances when the CPU touches the bus.**
    `harness_sync_cpu_progress()` (`tools/harness/musashi_backend.c:80`,
@@ -93,39 +94,24 @@ samples rather than duplicating them — a different symptom, same root
 cause. Not confirmed either way yet; flagging so whoever picks this up
 checks both consumers, not just the harness one.
 
-## Proposed fix direction (not implemented, not yet agreed)
+## Proposed fix direction — superseded, kept for the record
 
-Rigel's own API includes `rigel_step_until()`
-(`external/rigel/include/rigel/rigel_time.h`) specifically for stepping to
-an exact target time, instead of stepping by an arbitrary `cycles` amount
-and hoping it lines up. The likely fix: before each audio sample
-extraction (both in `main.c`'s loop and in the ring-buffer HBLANK path),
-call `rigel_step_until()` (or equivalent) to guarantee Paula's state is
-caught up to the *exact* CCK corresponding to that sample's nominal time,
-rather than reading whatever stale value happens to be sitting in
-`audio_state_t` after the last unrelated bus touch.
+The original plan was to call `rigel_step_until()`
+(`external/rigel/include/rigel/rigel_time.h`) before each audio sample
+extraction, to force Paula's state to the exact target CCK instead of
+reading a possibly-stale snapshot. That was based on root cause #1's
+"long freeze" framing, which the quantum-capping discovery above ruled
+out — there's no staleness of the size that would require this. Not
+pursuing this fix direction unless the interactive drift/gap data points
+back at chipset staleness after all.
 
-## Suggested next step before fixing
-
-Per this project's own working pattern this session: instrument before
-fixing.
-
-- **Done**: duplicate-sample counter added directly in `main.c`'s audio
-  extraction loop, gated by `HARNESS_AUDIO_DUP_TRACE=1` (off by default,
-  one int check when disabled). Counts total samples pushed to
-  `pal_audio_push_sample()`, how many were exact `(left, right)` repeats
-  of the immediately preceding one, and the longest consecutive run of
-  repeats — printed once per second of audio as
-  `[AUDIO-DUP] pushed=... duplicate=... (...%) max_run=...`. Run with
-  `HARNESS_AUDIO_DUP_TRACE=1 ./run.sh harness`. A high duplicate
-  percentage and/or a large `max_run` (hundreds+) would confirm root
-  cause #2 directly. Not run yet — needs a real interactive session
-  (SDL display), which isn't available in the sandbox this was written in.
-- **Not done yet**: log the CCK delta between consecutive
-  `harness_sync_cpu_progress()` calls (or correlate against the
-  `[RIGEL-AUDIO-TICK]`/`[RIGEL-AUDIO-QUEUE]` cadence already in place)
-  during a session with audible choppiness, to confirm root cause #1's
-  bus-touch gaps correlate with the stutter independently of #2.
+If the wall-clock-drift run instead confirms a vsync/PAL-rate mismatch,
+the actual fix would be in `tools/harness/main.c`'s main loop: replace the
+vsync-only pacing with an explicit real-time throttle (e.g. sleep to a
+target wall-clock time per Amiga frame, independent of host display
+refresh rate), or decouple audio delivery timing from frame-presentation
+timing entirely. Not designed in detail yet — depends on what the
+interactive run actually shows.
 
 ### Correction: the 86-94% duplicate rate is largely expected upsampling, not proof of a bug
 
@@ -163,12 +149,117 @@ freezes), not #2. Whether that freeze was just an idle/silent boot screen
 actual "engasgado" the user hears) isn't known yet from this data alone —
 need the general CCK-gap instrumentation below to tell the difference.
 
+### Second correction: root cause #1 (long bus-touch-free freezes) doesn't hold either
+
+Read `musashi_run()` (the `CpuBackend.run` implementation,
+`tools/harness/musashi_backend.c:1951-1964`) closely:
+
+```c
+static int musashi_run(void *ctx, uint32_t cycles)
+{
+    s_run_sync_active = 1;
+    s_run_sync_published = 0;
+    used = m68k_execute((int)cycles);
+    harness_sync_cpu_progress();   /* unconditional final flush */
+    s_run_sync_active = 0;
+    return used;
+}
+```
+
+Two things this reveals:
+
+1. The main loop calls this with `quantum = bellatrix_machine_recommended_cpu_quantum(QUANTUM)`,
+   where `QUANTUM = 454` M68K cycles — a small, fixed cap. Musashi never
+   executes more than ~454 cycles before control returns to the main loop.
+2. **Regardless of how many bus touches happened during that quantum**, the
+   function unconditionally calls `harness_sync_cpu_progress()` one more
+   time right after `m68k_execute()` returns, before clearing
+   `s_run_sync_active`. Since `s_run_sync_published` was reset to 0 at the
+   start of this call, that final flush always publishes the *entire*
+   `used` delta for the quantum, bus touches or not.
+
+Together: the maximum possible staleness in Paula's state, even in the
+total-silence worst case (zero bus touches all quantum), is bounded by
+~454 M68K cycles (≈64 µs, ≈227 CCK) — nowhere near enough to produce a
+multi-second freeze. **Root cause #1 as originally framed doesn't apply to
+this loop.** The `max_run=726744` (~16.5s) plateau in the duplicate-trace
+data is almost certainly just a genuinely silent boot/loading screen, not
+a sync bug.
+
+### New lead: no real-time throttle, only vsync — possible speed drift
+
+`tools/harness/main.c`'s loop has no `usleep`/`SDL_Delay`/explicit
+real-time pacing at all (confirmed by grep — only `PAL_Time_ReadCounter()`
+calls, used for FPS display, not throttling). The only thing that blocks
+the loop at all is `SDL_RenderPresent()`
+(`src/host/posix/pal_posix.c:526`), called with `SDL_RENDERER_PRESENTVSYNC`
+— i.e. the loop is paced by the **host display's vsync** (commonly 60 Hz),
+once per *presented* Amiga frame, not by wall-clock time directly. Amiga
+PAL software expects ~50 Hz. If the loop runs as fast as the host allows
+within each Amiga frame's worth of iterations (it does — there's no
+per-iteration throttle, only the one vsync wait after a frame completes),
+and vsync paces frame delivery to 60 Hz instead of 50 Hz, emulated time
+could run systematically ~20% fast — or, if the host can't keep up with
+real-time rendering/audio overhead, systematically slow. Either direction
+would desync the SDL audio queue (`SDL_QueueAudio`, real-time-rate
+playback device) from production rate, independent of whether Paula's own
+state machine is correct — a plausible source of audible choppiness that
+has nothing to do with chipset timing at all.
+
+### Diagnostics implemented so far
+
+1. **`HARNESS_AUDIO_DUP_TRACE=1`** (`tools/harness/main.c`) — duplicate
+   `(left, right)` sample counter. Implemented and run once (see
+   "Correction" above); conclusion was that the steady-state rate is
+   expected upsampling, not a smoking gun on its own.
+2. **`HARNESS_CCK_GAP_TRACE=1`** (`tools/harness/musashi_backend.c`,
+   `harness_cck_gap_trace()`) — general-purpose (not audio-specific) gap
+   tracker: histograms the M68K-cycle delta `harness_sync_cpu_progress()`
+   publishes each call, flags new max-gap records above 500 cycles with
+   the PC at that point, prints a bucketed summary every 200,000 calls.
+   Meant for diagnosing *any* subsystem that depends on regular chipset
+   stepping (disk, serial, CIA timers — not just audio), per the request
+   that motivated building it as general-purpose rather than audio-only.
+   Tested in `--headless --cycles 5000000`: **zero output**, including zero
+   max-gap records above 500 cycles. Consistent with the quantum-capping
+   finding above — gaps physically cannot exceed ~454 cycles in this loop,
+   so this tool currently has nothing to report for the harness's
+   interactive path. Still useful for the bare-metal/multicore path or any
+   future code path that doesn't have the same small-quantum-with-flush
+   guarantee — kept in the tree for that.
+3. **`HARNESS_TIME_DRIFT_TRACE=1`** (`tools/harness/main.c`) — wall-clock
+   (`PAL_Time_ReadCounter`) vs. emulated-time (`total_cycles / M68K_HZ`)
+   ratio, printed once per real second. Sanity-checked in `--headless`
+   mode (no vsync at all): ratio settled around 2.7-4.7x, exactly the
+   "runs as fast as the host allows" behavior expected for that mode —
+   confirms the measurement itself is correct. **Not yet run
+   interactively** (needs SDL display, not available in this sandbox) —
+   that's the run that would actually confirm or rule out the vsync/PAL
+   mismatch hypothesis. A ratio far from 1.0 in an interactive run would
+   point straight at this; a ratio near 1.0 would mean the slowdown is
+   somewhere else entirely (SDL buffer sizing, OS audio scheduling, etc.).
+
+## Next step
+
+Run an **interactive** session (real SDL display, not `--headless`) with
+both `HARNESS_TIME_DRIFT_TRACE=1` and `HARNESS_AUDIO_DUP_TRACE=1` (and
+optionally `HARNESS_CCK_GAP_TRACE=1`, though it's expected to stay quiet
+per the analysis above) while the choppy audio is audible, and read
+`[TIME-DRIFT]`'s ratio. That's the next real signal — not available in
+this session's sandbox.
+
 ## Files to revisit
 
-- `tools/harness/main.c` (lines ~982-1069 — the audio sample-rate-conversion loop)
-- `tools/harness/musashi_backend.c` (`harness_sync_cpu_progress()`, its call sites in `harness_read`/`harness_write`)
-- `src/host/posix/pal_posix.c` (`bellatrix_runtime_publish_cpu_cycles()`, `pal_audio_push_sample()` — two definitions in this file, check which is active and what backend (SDL?) it drives)
-- `external/rigel/include/rigel/rigel_time.h` (`rigel_step_until()` — likely fix primitive)
-- `src/machine/machine_rigel_step.c` (`machine_quantum_step()` — same stepping path on the bare-metal/single-core side)
+- `tools/harness/main.c` (lines ~982-1069 audio loop; the new
+  `HARNESS_TIME_DRIFT_TRACE`/`HARNESS_AUDIO_DUP_TRACE` blocks)
+- `tools/harness/musashi_backend.c` (`harness_sync_cpu_progress()`,
+  `musashi_run()`'s unconditional final flush; the new
+  `harness_cck_gap_trace()`)
+- `src/host/posix/pal_posix.c` (`pal_audio_push_sample()` — `SDL_QueueAudio`
+  based, line ~365; `SDL_RenderPresent`/vsync at line ~526; two
+  `pal_audio_push_sample` definitions in this file — check which is active)
+- `src/machine/machine_rigel_step.c` (`machine_quantum_step()` — same
+  stepping path on the bare-metal/single-core side, worth checking whether
+  it has the same small-quantum-with-unconditional-flush guarantee)
 - `AI_context/consolidated/issue_paula_audio_timing.md` (what "resolved" actually covers — internal cadence, not this)
 - `AI_context/issue_paula_audio_neon_mixer.md` (the NEON mixer is downstream of whichever consumer reads this queue — building it before this is fixed means polishing the wrong samples)
