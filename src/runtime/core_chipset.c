@@ -123,13 +123,14 @@ void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
 #endif
 
     if (cck > 0u) {
+        uint64_t old_target = atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
+                                                         memory_order_release);
 #if BELLATRIX_PROFILE_ENABLED
-        target = atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
-                                           memory_order_release) + cck;
-#else
-        atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
-                                  memory_order_release);
+        target = old_target + cck;
 #endif
+        XCORE_LOG("CPU->CHIPSET", "m68k=%u cck=%u target=%llu",
+                  (unsigned)m68k_cycles, (unsigned)cck,
+                  (unsigned long long)(old_target + cck));
         PAL_Runtime_WakeupChipset();        /* sev — wake Core 2 */
     }
 #if BELLATRIX_PROFILE_ENABLED

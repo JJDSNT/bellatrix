@@ -41,7 +41,7 @@ bool core_cpu_init(RuntimeCoreCPU *core,
     core->halted = false;
     core->last_ipl = 0;
 
-    CORE0_LOG("init");
+    CORE1_LOG("init");
     return true;
 }
 
@@ -51,7 +51,7 @@ void core_cpu_shutdown(RuntimeCoreCPU *core)
         return;
     }
 
-    CORE0_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
+    CORE1_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->base.state = RUNTIME_CORE_STOPPED;
     core->halted = true;
 }
@@ -62,7 +62,7 @@ void core_cpu_reset(RuntimeCoreCPU *core)
         return;
     }
 
-    CORE0_LOG("reset");
+    CORE1_LOG("reset");
     core->local_cycles = 0;
     core->last_ipl = 0;
     core->halted = false;

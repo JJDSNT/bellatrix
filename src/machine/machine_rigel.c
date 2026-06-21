@@ -13,6 +13,7 @@
 #include "machine/memory/chip_ram.h"
 
 #include "debug/btrace.h"
+#include "debug/core_log.h"
 #include "debug/cpu_pc.h"
 #include "debug/probe.h"
 #include "host/pal.h"
@@ -326,6 +327,8 @@ void machine_keyboard_drain_rigel(void)
     kbd->count--;
 
     cia_receive_sdr(cia_a, byte);
+    XCORE_LOG("IO->CHIPSET", "kbd byte 0x%02x delivered to CIA-A SDR queue_remaining=%u",
+              (unsigned)byte, (unsigned)kbd->count);
     s_kbd_await_handshake = 1u;
     s_kbd_sent_tick = g_machine.tick_count;
 }

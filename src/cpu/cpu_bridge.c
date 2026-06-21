@@ -3,11 +3,34 @@
 #include "cpu/cpu_bridge.h"
 #include "cpu/emu68/bellatrix_profile.h"
 
+#include "debug/core_log.h"
 #include "machine/machine.h"
 #include "machine/memory/memory.h"
 #include "runtime/cpu_progress.h"
 #include "runtime/core_chipset.h"
 #include <stdint.h>
+
+/* Critical custom-chip registers where "CPU wrote it but chipset saw it
+ * late/never" bugs would show up. Logged on write only, filtered to this
+ * allow-list — these registers are written far too often to log
+ * unconditionally without flooding output and perturbing timing. See
+ * AI_context/issue_multicore_boundary_logging.md. */
+#if defined(BELLATRIX_CORE_LOG)
+static void cpu_bridge_log_critical_write(uint32_t addr, uint32_t value)
+{
+    uint32_t reg = bellatrix_bridge_normalize_addr(addr) & 0x1FFu;
+
+    switch (reg) {
+    case 0x058u: XCORE_LOG("CPU->CHIPSET", "BLTSIZE write value=0x%04x", (unsigned)value); break;
+    case 0x088u: XCORE_LOG("CPU->CHIPSET", "COPJMP1 write"); break;
+    case 0x08Au: XCORE_LOG("CPU->CHIPSET", "COPJMP2 write"); break;
+    case 0x096u: XCORE_LOG("CPU->CHIPSET", "DMACON write value=0x%04x", (unsigned)value); break;
+    case 0x09Au: XCORE_LOG("CPU->CHIPSET", "INTENA write value=0x%04x", (unsigned)value); break;
+    case 0x09Cu: XCORE_LOG("CPU->CHIPSET", "INTREQ write value=0x%04x", (unsigned)value); break;
+    default: break;
+    }
+}
+#endif
 
 /* Weak no-op fallback for build configurations that don't link
  * runtime/core_chipset.c (e.g. tools/harness, which drives the machine
@@ -55,6 +78,9 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
 {
 #if BELLATRIX_PROFILE_ENABLED
     uint64_t _t = bprof_now();
+#endif
+#if defined(BELLATRIX_CORE_LOG)
+    cpu_bridge_log_critical_write(addr, value);
 #endif
     core_chipset_lock_acquire();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
