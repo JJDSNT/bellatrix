@@ -1151,6 +1151,50 @@ int main(int argc, char **argv)
                 }
             }
 
+            /* Wall-clock vs. emulated-time drift, for
+             * AI_context/issue_paula_audio_cpu_chipset_sync.md: does the
+             * harness actually run at real-time speed, or does it drift?
+             * The host display's vsync (commonly 60 Hz) doesn't match
+             * Amiga PAL's ~50 Hz frame rate, and the main loop has no
+             * explicit real-time throttle of its own (paced only by
+             * vsync, once per presented frame) — if that mismatch makes
+             * emulated time run systematically fast or slow, the SDL
+             * audio queue would over/underrun independently of whether
+             * Paula's own state machine is correct. HARNESS_TIME_DRIFT_TRACE=1
+             * to enable; off by default. */
+            {
+                static int s_drift_trace = -1;
+                static uint64_t s_drift_t0 = 0;
+                static uint64_t s_drift_last_print = 0;
+                static long s_drift_cycles0 = 0;
+
+                if (s_drift_trace < 0) {
+                    const char *env = getenv("HARNESS_TIME_DRIFT_TRACE");
+                    s_drift_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+                }
+
+                if (s_drift_trace) {
+                    uint64_t now  = PAL_Time_ReadCounter();
+                    uint64_t freq = PAL_Time_GetFrequency();
+
+                    if (s_drift_t0 == 0) {
+                        s_drift_t0 = now;
+                        s_drift_last_print = now;
+                        s_drift_cycles0 = total_cycles;
+                    } else if (now - s_drift_last_print >= freq) {
+                        double real_elapsed = (double)(now - s_drift_t0) / (double)freq;
+                        double emulated_elapsed =
+                            (double)(total_cycles - s_drift_cycles0) / (double)M68K_HZ;
+                        printf("[TIME-DRIFT] real=%.3fs emulated=%.3fs ratio=%.4f"
+                               " (>1=running fast, <1=running slow) frame=%ld\n",
+                               real_elapsed, emulated_elapsed,
+                               real_elapsed > 0.0 ? emulated_elapsed / real_elapsed : 0.0,
+                               frame_count);
+                        s_drift_last_print = now;
+                    }
+                }
+            }
+
             if (headless) {
                 if (max_frames > 0 && frame_count >= max_frames) {
                     printf("[HARNESS] Reached %ld frames — stopping\n",
