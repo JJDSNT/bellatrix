@@ -1,12 +1,46 @@
 // AI_context/issue_paula_audio_cpu_chipset_sync.md
 
-# Issue: Paula audio sounds choppy in the harness — cause not yet found
+# Issue: Paula audio sounds choppy in the harness — mostly fixed
 
-## Status: open — both original root-cause hypotheses (#1 and #2) have been
-walked back after closer reading. Two general-purpose diagnostics are now
-in place (CCK-gap tracer, wall-clock-drift tracer); the real cause is not
-yet known and needs an interactive (SDL display) session to find, which
-isn't available in this session's sandbox.
+## Status: mostly fixed — root cause found in harness CPU quantum scheduling
+
+Interactive testing with `KS13.rom` + `src/disks/battle.adf` confirmed that
+Paula's internal AUDx timing was not the main cause of the choppy host audio.
+The harness was feeding Musashi with `bellatrix_machine_recommended_cpu_quantum()`,
+which included `rigel_get_next_bus_change()`. Once bitplanes/audio DMA became
+active, bus/slot deadlines could occur every few CCK, so Musashi was called
+hundreds of thousands of times per second with tiny quanta. The emulator then
+fell behind wall-clock time, the SDL audio queue drained to one 1024-frame
+block (~23 ms), and playback became choppy.
+
+Fix now in place:
+
+- SDL audio is prebuffered and queue-throttled in `src/host/posix/pal_posix.c`.
+- Harness CPU quantum now defaults to the fixed caller cap (`QUANTUM = 454`
+  M68K cycles) instead of being cut by every bus/slot deadline. Bus accesses
+  still call `harness_sync_cpu_progress()` and `machine_flush_for_bus()`, so
+  register/chip RAM accesses remain synchronized at the access point.
+- The old deadline-limited CPU quantum can be restored with
+  `HARNESS_CPU_DEADLINE_QUANTUM=1` for comparison.
+- Diagnostics remain available: `HARNESS_AUDIO_QUEUE_TRACE=1`,
+  `HARNESS_TIME_DRIFT_TRACE=1`, `HARNESS_PERF_TRACE=1`, and
+  `HARNESS_CCK_GAP_TRACE=1`.
+
+Observed result after the quantum change: the same Battle run holds
+`[TIME-DRIFT] ratio` around `1.00` for more than 30 seconds and the harness
+returns to about 50 fps. Audio is much smoother, though not claimed perfect.
+
+Important diagnostic signature before the fix:
+
+```text
+[AUDIO-QUEUE] queued=23ms min=23ms max=23ms ...
+[TIME-DRIFT] real=47.430s emulated=20.205s ratio=0.4260 ...
+[HARNESS-PERF] steps=300k+ cck=~1.0M rigel_ms=~120-140 ...
+```
+
+The key signal was not `rigel_ms`; it was `steps/cck`: the harness was doing
+many `rigel_step()` calls averaging only ~3-4 CCK each, with overhead outside
+Rigel dominating. With the fixed CPU quantum, the time drift remains near 1.0.
 
 ## Why this exists as a separate issue
 
@@ -186,25 +220,31 @@ this loop.** The `max_run=726744` (~16.5s) plateau in the duplicate-trace
 data is almost certainly just a genuinely silent boot/loading screen, not
 a sync bug.
 
-### New lead: no real-time throttle, only vsync — possible speed drift
+### Correction: no real-time throttle was a symptom amplifier, not the root cause
 
-`tools/harness/main.c`'s loop has no `usleep`/`SDL_Delay`/explicit
-real-time pacing at all (confirmed by grep — only `PAL_Time_ReadCounter()`
-calls, used for FPS display, not throttling). The only thing that blocks
-the loop at all is `SDL_RenderPresent()`
-(`src/host/posix/pal_posix.c:526`), called with `SDL_RENDERER_PRESENTVSYNC`
-— i.e. the loop is paced by the **host display's vsync** (commonly 60 Hz),
-once per *presented* Amiga frame, not by wall-clock time directly. Amiga
-PAL software expects ~50 Hz. If the loop runs as fast as the host allows
-within each Amiga frame's worth of iterations (it does — there's no
-per-iteration throttle, only the one vsync wait after a frame completes),
-and vsync paces frame delivery to 60 Hz instead of 50 Hz, emulated time
-could run systematically ~20% fast — or, if the host can't keep up with
-real-time rendering/audio overhead, systematically slow. Either direction
-would desync the SDL audio queue (`SDL_QueueAudio`, real-time-rate
-playback device) from production rate, independent of whether Paula's own
-state machine is correct — a plausible source of audible choppiness that
-has nothing to do with chipset timing at all.
+The drift tracer did show real/emulated time diverging, but the cause was not
+simply display vsync. `HARNESS_SDL_VSYNC=0` and `HARNESS_VIDEO_SKIP=2` improved
+presentation cost only slightly; the run still degraded until the CPU quantum
+fragmentation was removed. Vsync is still configurable for diagnostics via
+`HARNESS_SDL_VSYNC=0`, but the harness now stays close to realtime because
+Musashi no longer wakes for every bus/slot deadline.
+
+### Confirmed root cause: CPU quantum fragmented by bus/slot deadlines
+
+`bellatrix_machine_recommended_cpu_quantum()` used both:
+
+```c
+rigel_get_next_deadline(g_rigel);
+rigel_get_next_bus_change(g_rigel);
+```
+
+That made sense as a conservative first integration, but in the interactive
+harness it is too conservative: the CPU already synchronizes chipset progress
+inside memory callbacks and at the end of each `m68k_execute()` quantum. When
+DMA slots are active, `rigel_get_next_bus_change()` can be only a few CCK away,
+so the host calls Musashi far too often. The fix is harness-specific: default
+to the caller's fixed cap (`454` M68K cycles) and use bus-access flushing for
+correct access-time state.
 
 ### Diagnostics implemented so far
 
@@ -232,34 +272,44 @@ has nothing to do with chipset timing at all.
    ratio, printed once per real second. Sanity-checked in `--headless`
    mode (no vsync at all): ratio settled around 2.7-4.7x, exactly the
    "runs as fast as the host allows" behavior expected for that mode —
-   confirms the measurement itself is correct. **Not yet run
-   interactively** (needs SDL display, not available in this sandbox) —
-   that's the run that would actually confirm or rule out the vsync/PAL
-   mismatch hypothesis. A ratio far from 1.0 in an interactive run would
-   point straight at this; a ratio near 1.0 would mean the slowdown is
-   somewhere else entirely (SDL buffer sizing, OS audio scheduling, etc.).
+   confirms the measurement itself is correct. Later interactive runs showed
+   the ratio falling to ~0.37-0.45 in the Battle workload before the quantum
+   fix, then holding near 1.00 after the fix.
+4. **`HARNESS_AUDIO_QUEUE_TRACE=1`** (`src/host/posix/pal_posix.c`) — SDL
+   queued-audio depth in milliseconds. Before the quantum fix, the queue often
+   pinned at ~23 ms (one 1024-frame block), indicating production was slower
+   than real-time consumption. After the fix it stays around the configured
+   target window.
+5. **`HARNESS_PERF_TRACE=1`** (`src/machine/machine_rigel_step.c`) — per-second
+   aggregate of Rigel step count, CCK advanced, Rigel time, post-step time, and
+   presentation time. This identified the real issue: step count was enormous
+   relative to CCK advanced.
 
 ## Next step
 
-Run an **interactive** session (real SDL display, not `--headless`) with
-both `HARNESS_TIME_DRIFT_TRACE=1` and `HARNESS_AUDIO_DUP_TRACE=1` (and
-optionally `HARNESS_CCK_GAP_TRACE=1`, though it's expected to stay quiet
-per the analysis above) while the choppy audio is audible, and read
-`[TIME-DRIFT]`'s ratio. That's the next real signal — not available in
-this session's sandbox.
+The main choppiness source is fixed for the harness. Remaining audio
+roughness should be investigated separately as Paula fidelity/output quality,
+not as gross real-time drift. Useful follow-ups:
+
+- Compare Battle with and without `HARNESS_CPU_DEADLINE_QUANTUM=1` only when
+  deliberately reproducing the old behavior.
+- Keep `HARNESS_AUDIO_QUEUE_TRACE=1 HARNESS_TIME_DRIFT_TRACE=1` for quick
+  sanity checks; realtime should stay close to ratio 1.0.
+- If audio is still imperfect while ratio is stable, inspect Paula sample
+  interpolation/mixing and DMA fetch fidelity rather than harness pacing.
 
 ## Files to revisit
 
-- `tools/harness/main.c` (lines ~982-1069 audio loop; the new
-  `HARNESS_TIME_DRIFT_TRACE`/`HARNESS_AUDIO_DUP_TRACE` blocks)
+- `tools/harness/main.c` (audio production loop and
+  `HARNESS_TIME_DRIFT_TRACE`/`HARNESS_AUDIO_DUP_TRACE`)
 - `tools/harness/musashi_backend.c` (`harness_sync_cpu_progress()`,
   `musashi_run()`'s unconditional final flush; the new
   `harness_cck_gap_trace()`)
 - `src/host/posix/pal_posix.c` (`pal_audio_push_sample()` — `SDL_QueueAudio`
-  based, line ~365; `SDL_RenderPresent`/vsync at line ~526; two
-  `pal_audio_push_sample` definitions in this file — check which is active)
-- `src/machine/machine_rigel_step.c` (`machine_quantum_step()` — same
-  stepping path on the bare-metal/single-core side, worth checking whether
-  it has the same small-quantum-with-unconditional-flush guarantee)
+  based; SDL audio prebuffer/throttle; `HARNESS_AUDIO_QUEUE_TRACE`;
+  `HARNESS_SDL_VSYNC`)
+- `src/machine/machine_rigel_step.c` (`HARNESS_CPU_DEADLINE_QUANTUM` opt-out,
+  `HARNESS_VIDEO_SKIP`, `HARNESS_PERF_TRACE`, and the harness CPU quantum
+  policy; `machine_quantum_step()` remains the common Rigel stepping path)
 - `AI_context/consolidated/issue_paula_audio_timing.md` (what "resolved" actually covers — internal cadence, not this)
 - `AI_context/issue_paula_audio_neon_mixer.md` (the NEON mixer is downstream of whichever consumer reads this queue — building it before this is fixed means polishing the wrong samples)

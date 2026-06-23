@@ -144,10 +144,10 @@ still open.
 
 ## What's still open
 
-- `AI_context/issue_paula_audio_cpu_chipset_sync.md` — **the actual choppy
-  playback bug**, likely caused by sample extraction not stepping the
-  chipset to the exact corresponding moment in chip time. Read this one
-  first; it's about correctness, not optimization.
+- `AI_context/issue_paula_audio_cpu_chipset_sync.md` — harness-side choppy
+  playback investigation. The gross realtime drift was traced to Musashi CPU
+  quantum fragmentation by bus/slot deadlines and is now mostly fixed; use it
+  first for the current harness audio status and remaining roughness.
 - `AI_context/issue_paula_audio_neon_mixer.md` — the `word=0000` residual,
   external-reference timing validation, and the NEON mixer/resampler
   implementation itself. Building the mixer before the sync issue above is
