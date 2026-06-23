@@ -337,10 +337,125 @@ static uint8_t s_key_count = 0;
 
 #define PAL_AUDIO_SAMPLE_RATE 44100
 #define PAL_AUDIO_BUF_FRAMES  1024
+#define PAL_AUDIO_DEFAULT_START_MS 50u
+#define PAL_AUDIO_DEFAULT_TARGET_MS 70u
+#define PAL_AUDIO_DEFAULT_MAX_MS 120u
 
 static SDL_AudioDeviceID s_audio_dev = 0;
 static int16_t s_audio_buf[PAL_AUDIO_BUF_FRAMES * 2];
 static int s_audio_buf_pos = 0;
+static int s_audio_started = 0;
+
+static uint32_t pal_audio_env_ms(const char *name, uint32_t fallback)
+{
+    const char *env = getenv(name);
+    char *end = NULL;
+    unsigned long value;
+
+    if (!env || env[0] == '\0') {
+        return fallback;
+    }
+
+    value = strtoul(env, &end, 10);
+    if (end == env || value > 1000ul) {
+        return fallback;
+    }
+
+    return (uint32_t)value;
+}
+
+static int pal_audio_queue_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_AUDIO_QUEUE_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+static uint32_t pal_audio_frames_to_bytes(uint32_t frames)
+{
+    return frames * 2u * (uint32_t)sizeof(int16_t);
+}
+
+static uint32_t pal_audio_ms_to_frames(uint32_t ms)
+{
+    return (uint32_t)(((uint64_t)PAL_AUDIO_SAMPLE_RATE * (uint64_t)ms) / 1000u);
+}
+
+static uint32_t pal_audio_bytes_to_ms(uint32_t bytes)
+{
+    uint32_t frames = bytes / (2u * (uint32_t)sizeof(int16_t));
+    return (uint32_t)(((uint64_t)frames * 1000u) / PAL_AUDIO_SAMPLE_RATE);
+}
+
+static void pal_audio_after_queue(void)
+{
+    static uint64_t s_trace_last = 0;
+    static uint32_t s_trace_min = UINT32_MAX;
+    static uint32_t s_trace_max = 0;
+    uint32_t queued;
+    uint32_t start_ms = pal_audio_env_ms("HARNESS_AUDIO_START_QUEUE_MS",
+                                         PAL_AUDIO_DEFAULT_START_MS);
+    uint32_t target_ms = pal_audio_env_ms("HARNESS_AUDIO_TARGET_QUEUE_MS",
+                                          PAL_AUDIO_DEFAULT_TARGET_MS);
+    uint32_t max_ms = pal_audio_env_ms("HARNESS_AUDIO_MAX_QUEUE_MS",
+                                       PAL_AUDIO_DEFAULT_MAX_MS);
+    uint32_t start_bytes = pal_audio_frames_to_bytes(pal_audio_ms_to_frames(start_ms));
+    uint32_t target_bytes = pal_audio_frames_to_bytes(pal_audio_ms_to_frames(target_ms));
+    uint32_t max_bytes = pal_audio_frames_to_bytes(pal_audio_ms_to_frames(max_ms));
+
+    if (target_ms > max_ms) {
+        target_ms = max_ms;
+        target_bytes = max_bytes;
+    }
+
+    queued = SDL_GetQueuedAudioSize(s_audio_dev);
+
+    if (!s_audio_started && queued >= start_bytes) {
+        SDL_PauseAudioDevice(s_audio_dev, 0);
+        s_audio_started = 1;
+    }
+
+    if (queued > max_bytes && target_bytes < queued) {
+        uint32_t excess_bytes = queued - target_bytes;
+        uint32_t delay_ms = pal_audio_bytes_to_ms(excess_bytes);
+
+        if (delay_ms > 0u) {
+            SDL_Delay(delay_ms);
+            queued = SDL_GetQueuedAudioSize(s_audio_dev);
+        }
+    }
+
+    if (pal_audio_queue_trace_enabled()) {
+        uint64_t now = PAL_Time_ReadCounter();
+        uint64_t freq = PAL_Time_GetFrequency();
+
+        if (queued < s_trace_min) s_trace_min = queued;
+        if (queued > s_trace_max) s_trace_max = queued;
+
+        if (s_trace_last == 0u) {
+            s_trace_last = now;
+        } else if (now - s_trace_last >= freq) {
+            fprintf(stderr,
+                    "[AUDIO-QUEUE] queued=%ums min=%ums max=%ums"
+                    " started=%d start=%ums target=%ums max_cfg=%ums\n",
+                    pal_audio_bytes_to_ms(queued),
+                    pal_audio_bytes_to_ms(s_trace_min),
+                    pal_audio_bytes_to_ms(s_trace_max),
+                    s_audio_started,
+                    start_ms,
+                    target_ms,
+                    max_ms);
+            s_trace_last = now;
+            s_trace_min = UINT32_MAX;
+            s_trace_max = 0;
+        }
+    }
+}
 
 static void pal_audio_sdl_init(void)
 {
@@ -358,8 +473,8 @@ static void pal_audio_sdl_init(void)
         return;
     }
 
-    SDL_PauseAudioDevice(s_audio_dev, 0);
-    fprintf(stderr, "[PAL] audio: %d Hz stereo S16\n", PAL_AUDIO_SAMPLE_RATE);
+    SDL_PauseAudioDevice(s_audio_dev, 1);
+    fprintf(stderr, "[PAL] audio: %d Hz stereo S16 queued\n", PAL_AUDIO_SAMPLE_RATE);
 }
 
 void pal_audio_push_sample(int16_t left, int16_t right)
@@ -375,6 +490,7 @@ void pal_audio_push_sample(int16_t left, int16_t right)
                        s_audio_buf,
                        (uint32_t)sizeof(s_audio_buf));
         s_audio_buf_pos = 0;
+        pal_audio_after_queue();
     }
 }
 
@@ -461,9 +577,16 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
         return -1;
     }
 
-    s_renderer = SDL_CreateRenderer(s_window, -1,
-                                    SDL_RENDERER_ACCELERATED |
-                                    SDL_RENDERER_PRESENTVSYNC);
+    {
+        uint32_t renderer_flags = SDL_RENDERER_ACCELERATED;
+        const char *vsync = getenv("HARNESS_SDL_VSYNC");
+
+        if (!vsync || vsync[0] == '\0' || strcmp(vsync, "0") != 0) {
+            renderer_flags |= SDL_RENDERER_PRESENTVSYNC;
+        }
+
+        s_renderer = SDL_CreateRenderer(s_window, -1, renderer_flags);
+    }
     if (!s_renderer)
         s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_SOFTWARE);
 

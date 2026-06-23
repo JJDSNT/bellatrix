@@ -77,6 +77,81 @@ static int harness_boot_trace_enabled(void)
     return enabled;
 }
 
+/* General-purpose diagnostic for AI_context/issue_paula_audio_cpu_chipset_sync.md:
+ * the chipset (Rigel/Paula/CIA/...) only advances when this function runs,
+ * which only happens on a CPU bus touch (see call sites in harness_read/
+ * harness_write below). A long stretch of bus-touch-free M68K execution
+ * (tight ALU loop, register-only work) means the chipset silently stalls
+ * for that whole stretch, no matter how many CCK "should" have elapsed.
+ * Not audio-specific — any subsystem that depends on regular chipset
+ * stepping (disk, serial, CIA timers, ...) can stall the same way.
+ * HARNESS_CCK_GAP_TRACE=1 to enable; off by default (one int check). */
+static int harness_cck_gap_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_CCK_GAP_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+/* Bucket edges in M68K cycles since the previous sync. Bucket i covers
+ * (edges[i-1], edges[i]]; the last bucket is "bigger than all edges". */
+static const uint32_t HARNESS_CCK_GAP_EDGES[] = {
+    100u, 500u, 2000u, 10000u, 100000u
+};
+#define HARNESS_CCK_GAP_BUCKETS \
+    (sizeof(HARNESS_CCK_GAP_EDGES) / sizeof(HARNESS_CCK_GAP_EDGES[0]) + 1u)
+
+static void harness_cck_gap_trace(uint32_t delta)
+{
+    static uint64_t s_calls = 0;
+    static uint64_t s_buckets[HARNESS_CCK_GAP_BUCKETS] = {0};
+    static uint32_t s_max_delta = 0;
+    unsigned i;
+
+    s_calls++;
+
+    for (i = 0; i < HARNESS_CCK_GAP_BUCKETS - 1u; i++) {
+        if (delta <= HARNESS_CCK_GAP_EDGES[i]) {
+            s_buckets[i]++;
+            break;
+        }
+    }
+    if (i == HARNESS_CCK_GAP_BUCKETS - 1u)
+        s_buckets[i]++;
+
+    /* Flag every new record stall immediately, with the PC that was
+     * executing when the gap finally closed — directly points at the code
+     * region responsible for a long chipset-stall stretch. */
+    if (delta > s_max_delta && delta > HARNESS_CCK_GAP_EDGES[1]) {
+        s_max_delta = delta;
+        printf("[CCK-GAP-MAX] delta_m68k=%u (%u CCK) pc=%08x\n",
+               (unsigned)delta, (unsigned)(delta / 2u),
+               (unsigned)m68k_get_reg(NULL, M68K_REG_PC));
+    }
+
+    if ((s_calls % 200000u) == 0u) {
+        printf("[CCK-GAP] calls=%llu max=%u (%u CCK)"
+               " buckets(<=%u,<=%u,<=%u,<=%u,<=%u,>%u)="
+               "%llu,%llu,%llu,%llu,%llu,%llu\n",
+               (unsigned long long)s_calls,
+               (unsigned)s_max_delta, (unsigned)(s_max_delta / 2u),
+               (unsigned)HARNESS_CCK_GAP_EDGES[0],
+               (unsigned)HARNESS_CCK_GAP_EDGES[1],
+               (unsigned)HARNESS_CCK_GAP_EDGES[2],
+               (unsigned)HARNESS_CCK_GAP_EDGES[3],
+               (unsigned)HARNESS_CCK_GAP_EDGES[4],
+               (unsigned)HARNESS_CCK_GAP_EDGES[4],
+               (unsigned long long)s_buckets[0], (unsigned long long)s_buckets[1],
+               (unsigned long long)s_buckets[2], (unsigned long long)s_buckets[3],
+               (unsigned long long)s_buckets[4], (unsigned long long)s_buckets[5]);
+    }
+}
+
 static void harness_sync_cpu_progress(void)
 {
     int ran;
@@ -91,6 +166,10 @@ static void harness_sync_cpu_progress(void)
 
     delta = (uint32_t)ran - s_run_sync_published;
     s_run_sync_published = (uint32_t)ran;
+
+    if (harness_cck_gap_trace_enabled())
+        harness_cck_gap_trace(delta);
+
     bellatrix_bridge_cpu_progress(delta);
 }
 

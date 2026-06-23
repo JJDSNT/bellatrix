@@ -21,6 +21,12 @@
 #include "rigel/rigel_serial.h"
 #include "host/raspi3/console_log.h"
 
+#ifdef BELLATRIX_HARNESS
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#endif
+
 /* Weak fallback: tools/harness doesn't link host/raspi3/console_log.c (no
  * bare-metal mini-UART there); the raspi3 build's strong definition
  * overrides this when linked. */
@@ -50,6 +56,55 @@ static uint16_t machine_rgb8888_to_le565(uint32_t rgba)
     return LE16(rgb565);
 }
 
+#ifdef BELLATRIX_HARNESS
+static int machine_perf_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_PERF_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+typedef struct HarnessPerfTrace {
+    uint64_t last_print;
+    uint64_t step_calls;
+    uint64_t step_cck;
+    uint64_t rigel_ticks;
+    uint64_t post_ticks;
+    uint64_t present_ticks;
+    uint64_t present_calls;
+    uint64_t present_skips;
+} HarnessPerfTrace;
+
+static HarnessPerfTrace s_perf_trace;
+
+static uint32_t machine_video_skip_interval(void)
+{
+    static int initialized = 0;
+    static uint32_t interval = 0;
+
+    if (!initialized) {
+        const char *env = getenv("HARNESS_VIDEO_SKIP");
+        char *end = NULL;
+        unsigned long value = 0;
+
+        if (env && env[0] != '\0') {
+            value = strtoul(env, &end, 10);
+            if (end != env && value <= 60ul) {
+                interval = (uint32_t)value;
+            }
+        }
+        initialized = 1;
+    }
+
+    return interval;
+}
+#endif
+
 void machine_present_frame_from_rigel(void)
 {
     rigel_frame_t frame;
@@ -61,8 +116,23 @@ void machine_present_frame_from_rigel(void)
     uint32_t dst_y0;
     const uint32_t *src;
 
+#ifdef BELLATRIX_HARNESS
+    {
+        static uint32_t s_present_count = 0;
+        uint32_t skip = machine_video_skip_interval();
+
+        if (skip > 0u && (s_present_count++ % (skip + 1u)) != 0u) {
+            if (machine_perf_trace_enabled())
+                s_perf_trace.present_skips++;
+            return;
+        }
+    }
+#endif
+
     if (g_rigel_zero_copy_video) {
         PAL_Video_Flip();
+        if (machine_perf_trace_enabled())
+            s_perf_trace.present_calls++;
         return;
     }
 
@@ -132,6 +202,11 @@ void machine_present_frame_from_rigel(void)
     }
 
     PAL_Video_Flip();
+
+#ifdef BELLATRIX_HARNESS
+    if (machine_perf_trace_enabled())
+        s_perf_trace.present_calls++;
+#endif
 }
 
 /* ---------------------------------------------------------------------------
@@ -270,10 +345,24 @@ rigel_cycle_t machine_next_quantum(void)
 static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle_t cycles)
 {
     rigel_step_result_t r;
+#ifdef BELLATRIX_HARNESS
+    int perf = machine_perf_trace_enabled();
+    uint64_t t0 = 0;
+    uint64_t t1 = 0;
+    uint64_t t2 = 0;
+#endif
 
     if (!m || !g_rigel || cycles == 0u) return 0;
 
+#ifdef BELLATRIX_HARNESS
+    if (perf)
+        t0 = PAL_Time_ReadCounter();
+#endif
     r = rigel_step(g_rigel, cycles);
+#ifdef BELLATRIX_HARNESS
+    if (perf)
+        t1 = PAL_Time_ReadCounter();
+#endif
     m->tick_count = (uint64_t)r.time;
 
     machine_rigel_trace_step(&r);
@@ -285,12 +374,64 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
      * keypress, delivering keystrokes several events late. */
     machine_keyboard_drain_rigel();
 
-    if (r.events & RIGEL_EVENT_FRAME_READY)
+#ifdef BELLATRIX_HARNESS
+    if (perf)
+        t2 = PAL_Time_ReadCounter();
+#endif
+
+    if (r.events & RIGEL_EVENT_FRAME_READY) {
+#ifdef BELLATRIX_HARNESS
+        uint64_t frame_t0 = 0;
+        if (perf)
+            frame_t0 = PAL_Time_ReadCounter();
+#endif
         bellatrix_machine_on_frame_ready();
+#ifdef BELLATRIX_HARNESS
+        if (perf)
+            s_perf_trace.present_ticks += PAL_Time_ReadCounter() - frame_t0;
+#endif
+    }
     if (r.events & RIGEL_EVENT_IRQ_CHANGED)
         machine_publish_ipl(m, rigel_get_ipl(g_rigel));
     if (r.events & RIGEL_EVENT_HBLANK)
         bellatrix_machine_on_audio_sample_ready();
+
+#ifdef BELLATRIX_HARNESS
+    if (perf) {
+        uint64_t now = PAL_Time_ReadCounter();
+        uint64_t freq = PAL_Time_GetFrequency();
+
+        s_perf_trace.step_calls++;
+        s_perf_trace.step_cck += cycles;
+        s_perf_trace.rigel_ticks += t1 - t0;
+        s_perf_trace.post_ticks += t2 - t1;
+
+        if (s_perf_trace.last_print == 0u) {
+            s_perf_trace.last_print = now;
+        } else if (now - s_perf_trace.last_print >= freq) {
+            double scale = 1000.0 / (double)freq;
+            fprintf(stderr,
+                    "[HARNESS-PERF] steps=%llu cck=%llu"
+                    " rigel_ms=%.2f post_ms=%.2f present_ms=%.2f"
+                    " present=%llu skip=%llu\n",
+                    (unsigned long long)s_perf_trace.step_calls,
+                    (unsigned long long)s_perf_trace.step_cck,
+                    (double)s_perf_trace.rigel_ticks * scale,
+                    (double)s_perf_trace.post_ticks * scale,
+                    (double)s_perf_trace.present_ticks * scale,
+                    (unsigned long long)s_perf_trace.present_calls,
+                    (unsigned long long)s_perf_trace.present_skips);
+            s_perf_trace.last_print = now;
+            s_perf_trace.step_calls = 0;
+            s_perf_trace.step_cck = 0;
+            s_perf_trace.rigel_ticks = 0;
+            s_perf_trace.post_ticks = 0;
+            s_perf_trace.present_ticks = 0;
+            s_perf_trace.present_calls = 0;
+            s_perf_trace.present_skips = 0;
+        }
+    }
+#endif
 
     return r.events;
 }
@@ -403,6 +544,20 @@ uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles)
 
     if (!g_rigel)
         return max_cycles != 0u ? max_cycles : 1u;
+
+#ifdef BELLATRIX_HARNESS
+    {
+        static int fixed_quantum = -1;
+
+        if (fixed_quantum < 0) {
+            const char *env = getenv("HARNESS_CPU_DEADLINE_QUANTUM");
+            fixed_quantum = (env && env[0] != '\0' && strcmp(env, "0") != 0) ? 0 : 1;
+        }
+
+        if (fixed_quantum)
+            return max_cycles != 0u ? max_cycles : 1u;
+    }
+#endif
 
     now = rigel_get_time(g_rigel);
 
