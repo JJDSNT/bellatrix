@@ -451,15 +451,23 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                 uint16_t ddfstrt = rigel_custom_read16(g_rigel, 0x092u);
                 uint16_t ddfstop = rigel_custom_read16(g_rigel, 0x094u);
                 uint16_t diwhigh = rigel_custom_read16(g_rigel, 0x1e4u);
+                rigel_denise_video_desc_t video;
+                memset(&video, 0, sizeof(video));
+                (void)rigel_denise_get_video_desc(g_rigel, &video);
                 kprintf("[RIGEL-FRAME-VIDEO] N=%llu size=%ux%u bplcon0=%04x"
                         " bplcon1=%04x bplcon3=%04x diwhigh=%04x"
-                        " dmacon=%04x diw=%04x/%04x ddf=%04x/%04x\n",
+                        " dmacon=%04x diw=%04x/%04x ddf=%04x/%04x"
+                        " vis=%u..%u/%u..%u\n",
                         (unsigned long long)g_rtrace.frame_count,
                         (unsigned)frame.width, (unsigned)frame.height,
                         (unsigned)bp, (unsigned)bplcon1, (unsigned)bplcon3,
                         (unsigned)diwhigh, (unsigned)dm,
                         (unsigned)diwstrt, (unsigned)diwstop,
-                        (unsigned)ddfstrt, (unsigned)ddfstop);
+                        (unsigned)ddfstrt, (unsigned)ddfstop,
+                        (unsigned)video.visible_x_start,
+                        (unsigned)video.visible_x_stop,
+                        (unsigned)video.visible_y_start,
+                        (unsigned)video.visible_y_stop);
                 g_rtrace.last_frame_width = frame.width;
                 g_rtrace.last_frame_height = frame.height;
             }

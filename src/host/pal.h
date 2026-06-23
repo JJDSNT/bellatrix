@@ -80,6 +80,7 @@ void PAL_ChipsetTimer_Stop(void);
 /* Allocate framebuffer via VC4 mailbox. Returns 0 on success.
    Stub in Phase 0. */
 int      PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp);
+int      PAL_Video_Resize(uint32_t w, uint32_t h, uint32_t bpp);
 uint32_t *PAL_Video_GetBuffer(void);
 void     PAL_Video_Flip(void);
 void     PAL_Video_SetPalette(uint8_t idx, uint32_t rgb);

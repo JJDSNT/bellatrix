@@ -12,6 +12,7 @@
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/memory/chip_ram.h"
 
+#include "audio/output.h"
 #include "debug/btrace.h"
 #include "debug/core_log.h"
 #include "debug/cpu_pc.h"
@@ -183,6 +184,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     bellatrix_controller_ports_init(&m->controller_ports);
     uart_host_init(&m->uart_host);
     audio_mixer_init(&m->audio_queue);
+    bellatrix_audio_output_init();
     superbuster_init(&m->superbuster);
     bellatrix_zorro2_init();
     bellatrix_zorro3_init();
@@ -212,6 +214,16 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
      * FIFO. Without this the guest stalls in a TBE polling loop (krnPutC). */
     config.serial.tx_instant = true;
 
+#ifdef BELLATRIX_HARNESS
+    /*
+     * The host SDL window is 640 pixels wide by default, while Rigel can export
+     * a wider raster when border pixels are included (WB1.3 currently reaches
+     * 892 pixels).  A direct RGB565 target would clip the right side.  Use the
+     * presenter path in the harness so it can scale the full frame to the SDL
+     * framebuffer instead of cropping it.
+     */
+    g_rigel_zero_copy_video = false;
+#else
     g_rigel_zero_copy_video = false;
     if (framebuffer && pitch && fb_width <= 1024u && fb_height <= 312u) {
         config.pixel_format = RIGEL_PIXEL_RGB565;
@@ -223,6 +235,7 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
         config.framebuffer.little_endian = true;
         g_rigel_zero_copy_video = true;
     }
+#endif
 
     if (g_rigel) {
         rigel_destroy(g_rigel);
@@ -253,6 +266,7 @@ void bellatrix_machine_reset(void)
     bellatrix_controller_ports_reset(&m->controller_ports);
     machine_sync_controller_ports_rigel(m);
     audio_mixer_init(&m->audio_queue);
+    bellatrix_audio_output_reset();
 
     superbuster_reset(&m->superbuster);
     bellatrix_zorro2_reset();
@@ -372,14 +386,77 @@ void bellatrix_machine_controller_set_device(unsigned port, unsigned device)
 
 void bellatrix_machine_mouse_button(unsigned port, unsigned button, int pressed)
 {
+    if (port > 1u || button > BELLATRIX_MOUSE_BUTTON_RIGHT)
+        return;
+
     bellatrix_controller_port_set_mouse_button(&g_machine.controller_ports, port, button, pressed);
     machine_sync_controller_ports_rigel(&g_machine);
 }
 
+/* AmigaOS samples JOY0DAT/JOY1DAT once per VBL and recovers the move as a
+ * signed 8-bit delta (new - old). If more than +-127 counts land on the
+ * register within a single VBL, the OS misreads direction/magnitude and its
+ * internal pointer position drifts from then on -- this is what made clicks
+ * land away from the visible cursor. Cap how much of each request actually
+ * reaches the register per frame and carry the rest over to the next one, so
+ * the net change between two VBL samples always stays inside the range the
+ * OS can recover exactly. */
+#define MOUSE_MOTION_PER_FRAME_LIMIT 100
+
+static int s_mouse_pending_dx[2];
+static int s_mouse_pending_dy[2];
+static int s_mouse_applied_dx[2];
+static int s_mouse_applied_dy[2];
+
+static int mouse_motion_drain(int *pending, int *applied_this_frame)
+{
+    int total = *applied_this_frame + *pending;
+    int room_hi = MOUSE_MOTION_PER_FRAME_LIMIT - *applied_this_frame;
+    int room_lo = -MOUSE_MOTION_PER_FRAME_LIMIT - *applied_this_frame;
+    int apply = total;
+
+    if (apply > room_hi)
+        apply = room_hi;
+    if (apply < room_lo)
+        apply = room_lo;
+
+    *pending -= apply;
+    *applied_this_frame += apply;
+    return apply;
+}
+
 void bellatrix_machine_mouse_motion(unsigned port, int dx, int dy)
 {
-    bellatrix_controller_port_add_mouse_motion(&g_machine.controller_ports, port, dx, dy);
-    machine_sync_controller_ports_rigel(&g_machine);
+    if (port > 1u)
+        return;
+
+    s_mouse_pending_dx[port] += dx;
+    s_mouse_pending_dy[port] += dy;
+}
+
+void machine_mouse_frame_tick(void)
+{
+    unsigned port;
+
+    /* New frame: fresh +-LIMIT budget. Drain into it right away so motion
+     * queued from a single large/fast swipe keeps catching up every VBL even
+     * if the host mouse has since gone still (no further motion() calls to
+     * piggyback the drain on). */
+    for (port = 0u; port < 2u; ++port) {
+        int apply_dx, apply_dy;
+
+        s_mouse_applied_dx[port] = 0;
+        s_mouse_applied_dy[port] = 0;
+
+        apply_dx = mouse_motion_drain(&s_mouse_pending_dx[port], &s_mouse_applied_dx[port]);
+        apply_dy = mouse_motion_drain(&s_mouse_pending_dy[port], &s_mouse_applied_dy[port]);
+
+        if (apply_dx == 0 && apply_dy == 0)
+            continue;
+
+        bellatrix_controller_port_add_mouse_motion(&g_machine.controller_ports, port, apply_dx, apply_dy);
+        machine_sync_controller_ports_rigel(&g_machine);
+    }
 }
 
 void bellatrix_machine_joystick_button(unsigned port, unsigned button, int pressed)

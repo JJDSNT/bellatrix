@@ -411,6 +411,42 @@ static void harness_load_mouse_hold(HarnessMouseHold *cfg)
     cfg->enabled = 1;
 }
 
+/* Diagnostic-only: inject a one-shot left-click hold, e.g. to dismiss a
+ * cracktro/title screen in headless runs that have no real mouse input.
+ * Reuses HarnessMouseHold; same shape as the RMB hold above. */
+static void harness_load_mouse_lmb_hold(HarnessMouseHold *cfg)
+{
+    const char *frame_str = getenv("HARNESS_MOUSE_LMB_FRAME");
+    const char *count_str = getenv("HARNESS_MOUSE_LMB_COUNT");
+    char *end = NULL;
+
+    memset(cfg, 0, sizeof(*cfg));
+
+    if (!frame_str || !*frame_str || !count_str || !*count_str)
+        return;
+
+    cfg->start_frame = strtol(frame_str, &end, 10);
+    if (!end || *end != '\0' || cfg->start_frame < 0) {
+        fprintf(stderr,
+                "[HARNESS] Ignoring HARNESS_MOUSE_LMB_FRAME=%s (expected non-negative frame)\n",
+                frame_str);
+        memset(cfg, 0, sizeof(*cfg));
+        return;
+    }
+
+    cfg->count = strtol(count_str, &end, 10);
+    if (!end || *end != '\0' || cfg->count <= 0) {
+        fprintf(stderr,
+                "[HARNESS] Ignoring HARNESS_MOUSE_LMB_COUNT=%s (expected positive count)\n",
+                count_str);
+        memset(cfg, 0, sizeof(*cfg));
+        return;
+    }
+
+    cfg->port = 0u;
+    cfg->enabled = 1;
+}
+
 static void harness_update_mouse_hold(BellatrixMachine *m,
                                       long frame_count,
                                       HarnessMouseHold *cfg)
@@ -996,6 +1032,7 @@ int main(int argc, char **argv)
     HarnessSerialInject serial_script[HARNESS_MAX_SERIAL_SCRIPT + HARNESS_MAX_SERIAL_HOLD];
     int serial_script_count = 0;
     HarnessMouseHold mouse_rmb;
+    HarnessMouseHold mouse_lmb;
     HarnessMouseSerialTrigger mouse_serial_trigger;
 
     uint64_t fps_t0    = PAL_Time_ReadCounter();
@@ -1016,6 +1053,7 @@ int main(int argc, char **argv)
         serial_script, (size_t)serial_script_count,
         HARNESS_MAX_SERIAL_SCRIPT + HARNESS_MAX_SERIAL_HOLD);
     harness_load_mouse_hold(&mouse_rmb);
+    harness_load_mouse_lmb_hold(&mouse_lmb);
     harness_load_mouse_serial_trigger(&mouse_serial_trigger);
 
     while (running) {
@@ -1038,7 +1076,8 @@ int main(int argc, char **argv)
         bellatrix_machine_mouse_motion(0u, sdl_mouse_dx, sdl_mouse_dy);
         bellatrix_machine_mouse_button(0u,
                                        BELLATRIX_MOUSE_BUTTON_LEFT,
-                                       sdl_mouse_left);
+                                       sdl_mouse_left ||
+                                       (mouse_lmb.enabled && mouse_lmb.active));
         bellatrix_machine_mouse_button(0u,
                                        BELLATRIX_MOUSE_BUTTON_MIDDLE,
                                        sdl_mouse_middle);
@@ -1120,6 +1159,35 @@ int main(int argc, char **argv)
             prev_frame = cur_frame;
 
             harness_update_mouse_hold(m, frame_count, &mouse_rmb);
+        harness_update_mouse_hold(m, frame_count, &mouse_lmb);
+
+            {
+                static int s_move_init = 0;
+                static long s_move_frame = 0;
+                static long s_move_count = 0;
+                static int s_move_dx = 0;
+                static int s_move_dy = 0;
+
+                if (!s_move_init) {
+                    const char *frame_env = getenv("HARNESS_MOUSE_MOVE_FRAME");
+                    const char *count_env = getenv("HARNESS_MOUSE_MOVE_COUNT");
+                    const char *dx_env = getenv("HARNESS_MOUSE_MOVE_DX");
+                    const char *dy_env = getenv("HARNESS_MOUSE_MOVE_DY");
+                    s_move_init = 1;
+                    if (frame_env && *frame_env && count_env && *count_env) {
+                        s_move_frame = strtol(frame_env, NULL, 10);
+                        s_move_count = strtol(count_env, NULL, 10);
+                        s_move_dx = (dx_env && *dx_env) ? (int)strtol(dx_env, NULL, 10) : 0;
+                        s_move_dy = (dy_env && *dy_env) ? (int)strtol(dy_env, NULL, 10) : 0;
+                    }
+                }
+
+                if (s_move_count > 0 &&
+                    frame_count >= s_move_frame &&
+                    frame_count < s_move_frame + s_move_count) {
+                    bellatrix_machine_mouse_motion(0u, s_move_dx, s_move_dy);
+                }
+            }
 
             harness_maybe_inject_serial(m, frame_count, &serial_bootkey, "bootkey");
             harness_maybe_inject_serial(m, frame_count, &serial_menu, "input");

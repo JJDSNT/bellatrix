@@ -171,6 +171,7 @@ set(BELLATRIX_SOURCES
 
     # Audio
     ${SRC}/audio/mixer.c
+    ${SRC}/audio/output.c
 
     # Debug
     ${SRC}/debug/btrace.c

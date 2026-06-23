@@ -63,6 +63,9 @@ void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl);
 void machine_keyboard_drain_rigel(void);
 void machine_keyboard_on_cia_cra_write(uint8_t value);
 
+/* --- machine_rigel.c (per-VBL mouse motion rate limit, see bellatrix_machine_mouse_motion) --- */
+void machine_mouse_frame_tick(void);
+
 /* --- machine_rigel_trace.c (log callbacks passed to rigel_create) --- */
 void machine_rigel_log(const char *msg, void *opaque);
 void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque);

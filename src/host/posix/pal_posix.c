@@ -22,7 +22,8 @@
 #define HARNESS_FB_W 640u
 #define HARNESS_FB_H 512u
 
-static uint16_t s_pixels[HARNESS_FB_W * HARNESS_FB_H];
+static uint16_t *s_pixels = NULL;
+static uint32_t s_pixels_capacity = 0;
 
 typedef enum HarnessSerialMode {
     HARNESS_SERIAL_LINE = 0,
@@ -41,6 +42,34 @@ uint16_t *framebuffer = NULL;
 uint32_t pitch = 0;
 uint32_t fb_width = 0;
 uint32_t fb_height = 0;
+
+static int pal_video_alloc_pixels(uint32_t w, uint32_t h)
+{
+    uint32_t count;
+    uint16_t *pixels;
+
+    if (w == 0u || h == 0u || w > 2048u || h > 1024u)
+        return -1;
+
+    count = w * h;
+    if (count < w)
+        return -1;
+
+    if (count > s_pixels_capacity) {
+        pixels = (uint16_t *)realloc(s_pixels, (size_t)count * sizeof(uint16_t));
+        if (!pixels)
+            return -1;
+        s_pixels = pixels;
+        s_pixels_capacity = count;
+    }
+
+    framebuffer = s_pixels;
+    pitch = w * sizeof(uint16_t);
+    fb_width = w;
+    fb_height = h;
+    memset(framebuffer, 0, (size_t)count * sizeof(uint16_t));
+    return 0;
+}
 
 static int pal_posix_configure_pty_slave_raw(const char *slave_name)
 {
@@ -323,6 +352,7 @@ int PAL_Diag_GetEnvBool(const char *name)
 static SDL_Window *s_window = NULL;
 static SDL_Renderer *s_renderer = NULL;
 static SDL_Texture *s_texture = NULL;
+static SDL_Cursor *s_blank_cursor = NULL;
 static int s_mouse_right_down = 0;
 static uint8_t s_mouse_buttons[3];
 static int s_mouse_dx = 0;
@@ -332,6 +362,69 @@ static PAL_KeyEvent s_key_events[64];
 static uint8_t s_key_head = 0;
 static uint8_t s_key_tail = 0;
 static uint8_t s_key_count = 0;
+
+static int pal_sdl_recreate_texture(uint32_t w, uint32_t h)
+{
+    SDL_Texture *texture;
+
+    if (!s_renderer)
+        return -1;
+
+    texture = SDL_CreateTexture(s_renderer,
+                                SDL_PIXELFORMAT_RGB565,
+                                SDL_TEXTUREACCESS_STREAMING,
+                                (int)w,
+                                (int)h);
+    if (!texture) {
+        fprintf(stderr, "[PAL] SDL_CreateTexture: %s\n", SDL_GetError());
+        return -1;
+    }
+
+    if (s_texture)
+        SDL_DestroyTexture(s_texture);
+    s_texture = texture;
+    return 0;
+}
+
+static void pal_sdl_enable_relative_mouse(void)
+{
+    const char *env;
+    static const uint8_t blank_cursor_bits[8] = { 0 };
+
+    if (!s_window)
+        return;
+
+    if (!PAL_Diag_GetEnvBool("BELLATRIX_SDL_SHOW_HOST_CURSOR")) {
+        if (!s_blank_cursor)
+            s_blank_cursor = SDL_CreateCursor(blank_cursor_bits,
+                                              blank_cursor_bits,
+                                              8,
+                                              8,
+                                              0,
+                                              0);
+        if (s_blank_cursor)
+            SDL_SetCursor(s_blank_cursor);
+        SDL_ShowCursor(SDL_ENABLE);
+    } else {
+        SDL_SetCursor(SDL_GetDefaultCursor());
+        SDL_ShowCursor(SDL_ENABLE);
+    }
+
+    env = getenv("BELLATRIX_SDL_RELATIVE_MOUSE");
+    if (!env || env[0] == '\0' || env[0] == '0') {
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_SetWindowGrab(s_window, SDL_FALSE);
+        (void)SDL_CaptureMouse(SDL_FALSE);
+        return;
+    }
+
+    SDL_SetWindowGrab(s_window, SDL_TRUE);
+    (void)SDL_CaptureMouse(SDL_TRUE);
+    if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0) {
+        int dx, dy;
+        (void)SDL_GetRelativeMouseState(&dx, &dy);
+    }
+}
 
 /* ---- SDL audio ---- */
 
@@ -596,21 +689,24 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
         return -1;
     }
 
-    s_texture = SDL_CreateTexture(s_renderer,
-                                  SDL_PIXELFORMAT_RGB565,
-                                  SDL_TEXTUREACCESS_STREAMING,
-                                  (int)w,
-                                  (int)h);
-    if (!s_texture)
-    {
-        fprintf(stderr, "[PAL] SDL_CreateTexture: %s\n", SDL_GetError());
+    if (pal_video_alloc_pixels(w, h) != 0) {
+        fprintf(stderr, "[PAL] video buffer allocation failed for %ux%u\n",
+                (unsigned)w, (unsigned)h);
         return -1;
     }
 
-    framebuffer = s_pixels;
-    pitch = w * sizeof(uint16_t);
-    fb_width = w;
-    fb_height = h;
+    if (pal_sdl_recreate_texture(w, h) != 0)
+        return -1;
+
+    /* Hide the host OS cursor: it tracks the host's absolute desktop
+     * position, which has no fixed relationship to the Amiga's own
+     * relative-delta-tracked pointer. Showing it makes it look like there's
+     * one cursor when there are actually two, and invites clicking on
+     * whichever one is visually convenient instead of the Amiga's sprite
+     * (the one Intuition actually hit-tests against). Relative/grab mode is
+     * opt-in via BELLATRIX_SDL_RELATIVE_MOUSE=1 because some desktop setups
+     * make pointer control worse when SDL grabs the host mouse. */
+    pal_sdl_enable_relative_mouse();
 
     for (uint32_t i = 0; i < fb_width * fb_height; ++i)
         framebuffer[i] = 0xF800; /* vermelho RGB565 */
@@ -625,6 +721,28 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
 
     PAL_Video_Flip();
 
+    return 0;
+}
+
+int PAL_Video_Resize(uint32_t w, uint32_t h, uint32_t bpp)
+{
+    (void)bpp;
+
+    if (w == 0u || h == 0u)
+        return -1;
+    if (w == fb_width && h == fb_height)
+        return 0;
+    if (!s_window || !s_renderer)
+        return -1;
+
+    if (pal_video_alloc_pixels(w, h) != 0)
+        return -1;
+    if (pal_sdl_recreate_texture(w, h) != 0)
+        return -1;
+
+    SDL_SetWindowSize(s_window, (int)w, (int)h);
+    fprintf(stderr, "[PAL] video resize size=%ux%u pitch=%u\n",
+            (unsigned)fb_width, (unsigned)fb_height, pitch);
     return 0;
 }
 
@@ -664,6 +782,12 @@ int pal_sdl_poll_events(void)
         if (e.type == SDL_QUIT)
             return 0;
 
+        if (e.type == SDL_WINDOWEVENT &&
+            (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED ||
+             e.window.event == SDL_WINDOWEVENT_ENTER)) {
+            pal_sdl_enable_relative_mouse();
+        }
+
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
             return 0;
 
@@ -682,6 +806,9 @@ int pal_sdl_poll_events(void)
                                 (uint32_t)e.key.keysym.scancode,
                                 0u);
         }
+
+        if (e.type == SDL_MOUSEBUTTONDOWN)
+            pal_sdl_enable_relative_mouse();
 
         if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_RIGHT)
             s_mouse_right_down = 1;
@@ -773,15 +900,8 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
     if (h == 0)
         h = HARNESS_FB_H;
 
-    if (w > HARNESS_FB_W)
-        w = HARNESS_FB_W;
-    if (h > HARNESS_FB_H)
-        h = HARNESS_FB_H;
-
-    framebuffer = s_pixels;
-    pitch = w * sizeof(uint16_t);
-    fb_width = w;
-    fb_height = h;
+    if (pal_video_alloc_pixels(w, h) != 0)
+        return -1;
 
     for (uint32_t i = 0; i < fb_width * fb_height; ++i)
         framebuffer[i] = 0xF800;
@@ -795,6 +915,15 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
             framebuffer[0]);
 
     return 0;
+}
+
+int PAL_Video_Resize(uint32_t w, uint32_t h, uint32_t bpp)
+{
+    (void)bpp;
+
+    if (w == fb_width && h == fb_height)
+        return 0;
+    return pal_video_alloc_pixels(w, h);
 }
 
 uint32_t *PAL_Video_GetBuffer(void)

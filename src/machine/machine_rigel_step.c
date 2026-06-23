@@ -9,6 +9,7 @@
 
 #include "machine/machine_rigel_internal.h"
 
+#include "audio/output.h"
 #include "machine/memory/chip_ram.h"
 #include "host/pal.h"
 #include "support.h"
@@ -164,23 +165,33 @@ void machine_present_frame_from_rigel(void)
     if (!src || frame.width == 0u || frame.height == 0u)
         return;
 
-    uint32_t scale_x = fb_width / frame.width;
-    uint32_t scale_y = fb_height / frame.height;
+    if ((frame.width != fb_width || frame.height != fb_height) &&
+        PAL_Video_Resize(frame.width, frame.height, 16u) == 0) {
+        stride = pitch / 2u;
+    }
+
+    uint32_t scale_x = (frame.width <= fb_width) ? (fb_width / frame.width) : 1u;
+    uint32_t scale_y = (frame.height <= fb_height) ? (fb_height / frame.height) : 1u;
+    uint32_t dst_w;
+    uint32_t dst_h;
     if (scale_x < 1u) scale_x = 1u;
     if (scale_y < 1u) scale_y = 1u;
 
-    width = frame.width;
-    if (width > fb_width / scale_x)
-        width = fb_width / scale_x;
-    height = frame.height;
-    if (height > fb_height / scale_y)
-        height = fb_height / scale_y;
+    dst_w = frame.width * scale_x;
+    dst_h = frame.height * scale_y;
+    if (dst_w > fb_width)
+        dst_w = fb_width;
+    if (dst_h > fb_height)
+        dst_h = fb_height;
+
+    width = dst_w;
+    height = dst_h;
 
     if (width == 0u || height == 0u)
         return;
 
-    dst_x0 = (fb_width > width * scale_x) ? (fb_width - width * scale_x) / 2u : 0u;
-    dst_y0 = (fb_height > height * scale_y) ? (fb_height - height * scale_y) / 2u : 0u;
+    dst_x0 = (fb_width > width) ? (fb_width - width) / 2u : 0u;
+    dst_y0 = (fb_height > height) ? (fb_height - height) / 2u : 0u;
 
     {
         uint16_t bg = machine_rgb8888_to_le565(src[0]);
@@ -192,14 +203,16 @@ void machine_present_frame_from_rigel(void)
     }
 
     for (y = 0; y < height; ++y) {
-        const uint32_t *row = (const uint32_t *)((const uint8_t *)src + y * frame.pitch);
+        uint32_t src_y = (frame.height > height)
+            ? (uint32_t)(((uint64_t)y * frame.height) / height)
+            : (y / scale_y);
+        const uint32_t *row = (const uint32_t *)((const uint8_t *)src + src_y * frame.pitch);
+        uint16_t *drow = framebuffer + (dst_y0 + y) * stride;
         for (x = 0; x < width; ++x) {
-            uint16_t pixel = machine_rgb8888_to_le565(row[x]);
-            for (uint32_t sy = 0u; sy < scale_y; ++sy) {
-                uint16_t *drow = framebuffer + (dst_y0 + y * scale_y + sy) * stride;
-                for (uint32_t sx = 0u; sx < scale_x; ++sx)
-                    drow[dst_x0 + x * scale_x + sx] = pixel;
-            }
+            uint32_t src_x = (frame.width > width)
+                ? (uint32_t)(((uint64_t)x * frame.width) / width)
+                : (x / scale_x);
+            drow[dst_x0 + x] = machine_rgb8888_to_le565(row[src_x]);
         }
     }
 
@@ -397,6 +410,7 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
         machine_publish_ipl(m, rigel_get_ipl(g_rigel));
     if (r.events & RIGEL_EVENT_HBLANK)
         bellatrix_machine_on_audio_sample_ready();
+    bellatrix_audio_output_tick((uint32_t)cycles);
 
 #ifdef BELLATRIX_HARNESS
     if (perf) {
@@ -499,6 +513,7 @@ void bellatrix_machine_advance(uint32_t ticks)
 void bellatrix_machine_on_frame_ready(void)
 {
     g_machine.frame_counter++;
+    machine_mouse_frame_tick();
     machine_present_frame_from_rigel();
 
     if (machine_rigel_rtrace_enabled())

@@ -226,7 +226,6 @@ static void bellatrix_usb_hid_mouse_callback(void *arg, int nbytes)
     struct usbh_hid *hid_class = (struct usbh_hid *)arg;
     BellatrixUSBHIDMouse *mouse;
     struct usb_hid_mouse_report *report;
-    BellatrixMachine *m;
     unsigned int btn;
 
     if (!hid_class) {
@@ -240,23 +239,29 @@ static void bellatrix_usb_hid_mouse_callback(void *arg, int nbytes)
 
     if (nbytes > 0) {
         report = (struct usb_hid_mouse_report *)g_bellatrix_usb_hid_report[hid_class->minor];
-        m = bellatrix_machine_get();
+
+        if ((report->buttons & 0x07u) != mouse->buttons ||
+            report->xdisp || report->ydisp) {
+            kprintf("[USB-HID-MOUSE] minor=%u buttons=%02x->%02x dx=%d dy=%d nbytes=%d\n",
+                    (unsigned)hid_class->minor,
+                    (unsigned)(mouse->buttons & 0x07u),
+                    (unsigned)(report->buttons & 0x07u),
+                    (int)report->xdisp,
+                    (int)report->ydisp,
+                    nbytes);
+        }
 
         if (report->xdisp || report->ydisp) {
-            bellatrix_controller_port_add_mouse_motion(&m->controller_ports,
-                                                       BELLATRIX_CONTROLLER_PORT_MOUSE,
-                                                       (int)report->xdisp,
-                                                       (int)report->ydisp);
+            bellatrix_machine_mouse_motion(0u,
+                                           (int)report->xdisp,
+                                           (int)report->ydisp);
         }
 
         for (btn = 0; btn < 3u; ++btn) {
             int was = (mouse->buttons >> btn) & 1;
             int is  = (report->buttons >> btn) & 1;
             if (was != is) {
-                bellatrix_controller_port_set_mouse_button(&m->controller_ports,
-                                                           BELLATRIX_CONTROLLER_PORT_MOUSE,
-                                                           btn,
-                                                           is);
+                bellatrix_machine_mouse_button(0u, btn, is);
             }
         }
 

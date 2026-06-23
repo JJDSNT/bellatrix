@@ -501,6 +501,14 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
     return 0;
 }
 
+int PAL_Video_Resize(uint32_t w, uint32_t h, uint32_t bpp)
+{
+    (void)w;
+    (void)h;
+    (void)bpp;
+    return 0;
+}
+
 uint32_t *PAL_Video_GetBuffer(void)
 {
     return 0;
