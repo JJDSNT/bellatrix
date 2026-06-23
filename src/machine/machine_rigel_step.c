@@ -131,8 +131,10 @@ void machine_present_frame_from_rigel(void)
 
     if (g_rigel_zero_copy_video) {
         PAL_Video_Flip();
+#ifdef BELLATRIX_HARNESS
         if (machine_perf_trace_enabled())
             s_perf_trace.present_calls++;
+#endif
         return;
     }
 
