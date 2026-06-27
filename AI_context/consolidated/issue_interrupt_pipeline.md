@@ -1,5 +1,13 @@
 # Issue: Pipeline de Interrupções — INTENA/INTREQ/IPL/FIQ
 
+## Status: CLOSED (2026-06-26)
+
+Pipeline CIA→Paula→IPL→JIT funcional. Workbench e Happy Hand em hardware
+confirmam VBL 50Hz, DSKBLK, PORTS (CIA-A keyboard) e EXTER todos operacionais.
+`cia_interrupt_sync_irq_line()` implementa level-sensitive raise/clear. Risco
+de sincronização cross-core CIA→INTREQ não manifestou como bug observável.
+Histórico de bugs e decisões arquiteturais preservado como referência.
+
 ## Contexto
 
 O pipeline de interrupções do Amiga envolve: CIA-A/B → Paula (INTREQ/INTENA) →

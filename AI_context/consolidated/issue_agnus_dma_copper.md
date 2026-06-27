@@ -1,5 +1,13 @@
 # Issue: Agnus, DMA Arbitration e Copper
 
+## Status: CLOSED (2026-06-26)
+
+LOF blocker resolvido no Rigel (`beam.lof = 0` na init, `lof_toggle = 0` para
+não-interlace). Workbench e Happy Hand funcionando em hardware confirma que DMA
+arbiter, Copper raster-time e bitplanes estão operacionais. Itens menores
+restantes (VPOSW write handlers, BPL-DMA-FORCE removal) são refinamentos futuros,
+não blockers — abrir issues específicos quando manifestarem.
+
 ## Contexto
 
 Agnus é responsável pelo beam (posição raster), controle de DMA, Copper e Blitter.

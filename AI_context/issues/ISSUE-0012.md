@@ -1,4 +1,23 @@
-// AI_context/issue_core_log_vs_rigeltrace.md
+---
+id: ISSUE-0012
+title: "core_log vs RigelTrace — unify, bridge, or leave as two views?"
+status: backlog
+priority: low
+type: research
+owner: agent
+created_at: 2026-06-26
+updated_at: 2026-06-26
+tags:
+  - logging
+  - debugging
+  - multicore
+  - rigel
+related_files:
+  - src/debug/core_log.h
+  - src/machine/machine_rigel_trace.c
+  - src/cpu/cpu_bridge.c
+  - external/rigel/src/chipset/agnus/debug/agnus_trace.c
+---
 
 # Issue: core_log.h vs RigelTrace — unify, bridge, or leave as two views?
 
@@ -37,17 +56,15 @@ Three options, no decision made yet:
 - **(b) Give both a shared correlation key.** E.g. have `cpu_bridge.c`'s
   critical-write log also stamp the CPU-side cycle count (would need
   `cpu_bridge.c` to gain visibility into a cycle counter it doesn't have
-  today — it runs decoupled from `RuntimeCoreCPU`, see consolidated issue).
+  today — it runs decoupled from `RuntimeCoreCPU`).
   Lets you reconstruct one ordered timeline: "CPU wrote DMACON at cycle X,
-  Rigel's step result reflected it at cycle Y" — directly answers the class
-  of bug newlogs.md originally worried about.
+  Rigel's step result reflected it at cycle Y."
 - **(c) Retire one.** `RigelTrace` is the more mature, already
   comprehensive one (covers DMACON/BPLCON0/IPL/IRQ/frame with cycle+PC
   context); `core_log.h`'s CPU-side additions are newer and thinner. Folding
   the 3 new `XCORE_LOG` call sites into `RigelTrace`-style logging would
   remove the duplication, but `core_log.h` also covers per-core
-  init/shutdown/reset lifecycle logging that `RigelTrace` doesn't and isn't
-  scoped to do.
+  init/shutdown/reset lifecycle logging that `RigelTrace` doesn't.
 
 No recommendation banked yet — depends on whether a real cross-core timing
 bug actually shows up that needs the correlation (b) would give. Per
@@ -62,7 +79,7 @@ writes to DMACON, INTENA, INTREQ, COPJMP1/2, BLTSIZE — sized from the known
 observed bug report. Candidates if real debugging shows the need: COPCON,
 BLTCON0/1. Also consider whether reads (not just writes) of any of these
 ever matter for a bug class, since the current filter is write-only by
-design (writes are where "CPU set it but chipset saw it late" bugs live).
+design.
 
 ## Question 3 — Should Rigel's own internal trace forward through CORE2_LOG?
 
@@ -71,8 +88,7 @@ trace facility (separate submodule, own test suite). Untouched by this
 work. Open question: should Bellatrix forward a subset of Rigel's internal
 events through `CORE2_LOG` at the boundary only (to give the bare-metal
 build one place to look), or is keeping Rigel's tracing fully internal to
-the submodule the right separation of concerns (Rigel doesn't know it's
-running inside Bellatrix's core split, and arguably shouldn't).
+the submodule the right separation of concerns.
 
 ## Files to revisit when picking this back up
 

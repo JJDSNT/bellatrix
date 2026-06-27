@@ -1,6 +1,47 @@
-# Issue: Core 0 arbiter/scheduler — evaluation and next steps
+---
+id: ISSUE-0007
+title: "Multicore runtime — Core 0 arbiter, MMIO critical barrier, deadline scheduling"
+status: doing
+priority: high
+type: feature
+owner: agent
+created_at: 2026-06-26
+updated_at: 2026-06-26
+tags:
+  - multicore
+  - scheduler
+  - arbiter
+  - performance
+  - core0
+  - emu68
+  - mmio
+related_files:
+  - src/runtime/core_cpu.c
+  - src/runtime/core_chipset.c
+  - src/cpu/cpu_bridge.c
+  - src/machine/machine_rigel_step.c
+  - src/cpu/emu68/bellatrix.c
+---
 
-## Status: multicore redesign (core relabeling) — DONE
+# Issue: Multicore runtime — Core 0 arbiter, MMIO critical barrier, deadline scheduling
+
+## Relação com outras issues
+
+Emu68 (ISSUE-0002), IRQ/temporal window (ISSUE-0004, 0006) e esta issue são faces
+da mesma frente: o modelo correto de como CPU/JIT, chipset e IO se sincronizam no
+tempo. O Musashi também roda em multicore (Core 1 = CPU, Core 2 = Rigel) e tem
+papel duplo: referência de comportamento correto, e o backend mais fácil para
+desenvolver e validar o controle multicore. Com Musashi, acessos MMIO são
+chamadas C normais — é possível inserir pontos de sincronização exatamente onde
+é necessário. Com o JIT do Emu68, o único ponto de intervenção é o data-abort
+AArch64, que ocorre fora do controle do caller. Por isso faz sentido implementar
+e estabilizar o modelo multicore no Musashi primeiro, e só depois adaptar para
+o caminho Emu68.
+
+O profiling (ISSUE-0001) é o guardrail para não implementar às cegas, mas não é
+pré-requisito: podemos avançar o design em paralelo.
+
+## Checkpoint: multicore redesign (core relabeling) — DONE
 
 Session 2026-06-18 implemented the `multicore.md` target core mapping:
 
@@ -111,10 +152,7 @@ Before writing any arbiter/scheduler code:
 
 ## Related
 
-* `multicore.md` — original proposal + adherence matrix (now updated with
-  the core-mapping status).
 * `AI_context/consolidated/issue_multicore_runtime.md` — current
   architecture writeup (cycle flow, lock, boot sequence).
-* `AI_context/issue_emu68_integration_performance_architecture.md` — earlier
-  performance analysis that first proposed the MMIO flush-policy distinction
-  this barrier work would build on.
+* ISSUE-0002 — earlier performance analysis that first proposed the MMIO
+  flush-policy distinction this barrier work would build on.

@@ -1,5 +1,12 @@
 # Issue: Harness — Investigação da Tela de Boot KS1.3
 
+## Status: CLOSED (2026-06-26)
+
+Happy Hand e Workbench funcionando em hardware. LOF fix implementado no Rigel
+(`beam.lof = 0` na init). O bitmap producer passou a rodar, bitplane buffers
+populados, tela de boot visível. Esta investigação é histórica — serve como
+referência de debug se regressão aparecer.
+
 ## Contexto
 
 A tela de boot do Kickstart 1.3 ("insert disk" / "happy hand") nunca aparece no

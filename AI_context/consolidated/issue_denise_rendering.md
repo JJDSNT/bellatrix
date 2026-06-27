@@ -1,5 +1,13 @@
 # Issue: Denise — Rendering, Bitplanes, Sprites
 
+## Status: CLOSED (2026-06-26)
+
+Happy Hand e Workbench 1.3 funcionando em hardware. LOF resolvido, sprite
+compositing implementado (Rigel `4847e26`). Rendering raster-time, paleta,
+DIW e DMA grants para sprites todos operacionais. Itens futuros (attached
+sprites, CLXDAT/CLXCON, Copper mid-scanline) são Phase 5+ — abrir issues
+específicos quando necessário.
+
 ## Contexto
 
 Denise é responsável por renderizar bitplanes e sprites em um framebuffer.

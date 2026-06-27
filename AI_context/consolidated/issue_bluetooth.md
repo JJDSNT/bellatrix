@@ -1,5 +1,12 @@
 # Issue: Bluetooth — BCM43430A1 (Pi 3B On-Board)
 
+## Status: EM PROGRESSO (2026-06-26)
+
+Scanning HID funcionando em hardware (launcher exibe dispositivos). Pairing e
+conexão HID ainda não funcionam — próximo passo é o fluxo de pareamento
+completo e confirmação de input chegando ao Amiga. Suspenso temporariamente
+em favor de USB HID como canal principal de input.
+
 ## Contexto
 
 Tentativa de bring-up do Bluetooth on-board do Raspberry Pi 3B (BCM43430A1)

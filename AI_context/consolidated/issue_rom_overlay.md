@@ -1,5 +1,11 @@
 # Issue: ROM Loading e Overlay Management
 
+## Status: CLOSED (2026-06-26)
+
+Boot completo com Happy Hand e Workbench em hardware valida ROM loading,
+overlay MMU remap e OVL trigger via CIA-A PRA. Histórico de bugs preservado
+como referência.
+
 ## Contexto do Problema
 
 O Kickstart ROM precisa ser visível em `0x000000` no boot (overlay ativo) e depois

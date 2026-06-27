@@ -1,5 +1,13 @@
 # Issue: Multicore Runtime — RPi3 Bare-Metal
 
+## Status: CLOSED (2026-06-26)
+
+Arquitetura Core0=Machine/Core1=CPU/Core2=Rigel/Core3=IO implementada e
+estável. Workbench e Happy Hand em hardware confirmam protocolo CPU↔chipset,
+locks e publicação de ciclos operacionais. Lacunas residuais (MMIO catch-up
+barrier, deadline scheduling) rastreadas em `issue_core0_arbiter_scheduler_evaluation.md`
+e `issue_temporal_window_truncation.md`.
+
 ## Contexto
 
 Bellatrix usa os 4 cores do RPi3 com responsabilidades dedicadas. A arquitetura

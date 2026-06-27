@@ -1,5 +1,12 @@
 # Issue: Paula, Serial, Floppy/Disk
 
+## Status: CLOSED (2026-06-26)
+
+Floppy (ADF), disk DMA, DSKBLK, MFM, serial bridge e audio channels
+operacionais — confirmado pelo boot do Workbench via ADF. PORTS level-sensitive
+implementado em `cia_interrupt_sync_irq_line`. Itens pendentes menores
+(DiagROM loopback, audio DMA como requester real) são refinamentos futuros.
+
 ## Contexto
 
 Paula é dona de INTREQ/INTENA e hospeda o motor de disk DMA, serial (SERDAT/SERDATR),

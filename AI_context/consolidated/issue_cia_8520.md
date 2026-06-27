@@ -1,5 +1,11 @@
 # Issue: CIA 8520 — Emulação Completa
 
+## Status: CLOSED (2026-06-26)
+
+Workbench e Happy Hand em hardware validam CIA-A (keyboard, timers, TOD, OVL)
+e CIA-B (floppy signals, EXTER IRQ). E-clock, ICR mascaramento, timer A/B com
+todos os modos e `cia_interrupt_sync_irq_line` level-sensitive todos operacionais.
+
 ## Contexto
 
 As duas CIAs (CIA-A em 0xBFE001, CIA-B em 0xBFD000) são responsáveis por timers,

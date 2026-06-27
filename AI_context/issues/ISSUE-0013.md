@@ -1,4 +1,27 @@
-// AI_context/issue_serial_log_vs_miniuart_baud.md
+---
+id: ISSUE-0013
+title: "Serial log mode vs raw mini-UART bridge — UX split"
+status: backlog
+priority: low
+type: feature
+owner: agent
+created_at: 2026-06-26
+updated_at: 2026-06-26
+tags:
+  - serial
+  - uart
+  - logging
+  - paula
+  - qemu
+related_files:
+  - src/host/raspi3/console_log.c
+  - src/cpu/emu68/bellatrix.c
+  - src/io/serial/uart_host.c
+  - src/host/raspi3/miniuart_backend.c
+  - scripts/build.sh
+  - run.sh
+  - tools/launcher/tui.go
+---
 
 # Issue: Make log mode the primary serial UX while preserving raw mini-UART
 
@@ -85,13 +108,3 @@ Keep the modes conceptually separate:
   what should the user-facing documentation say?
 - For real hardware, should the recommended PuTTY setting depend on selected
   mode (`log` vs `miniuart`)?
-
-## Files to revisit
-
-- `src/host/raspi3/console_log.c`
-- `src/cpu/emu68/bellatrix.c`
-- `src/io/serial/uart_host.c`
-- `src/host/raspi3/miniuart_backend.c`
-- `scripts/build.sh`
-- `run.sh`
-- `tools/launcher/tui.go`

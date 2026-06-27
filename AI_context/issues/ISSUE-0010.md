@@ -1,4 +1,24 @@
-// AI_context/issue_paula_audio_neon_mixer.md
+---
+id: ISSUE-0010
+title: "Paula audio — NEON mixer/resampler backend"
+status: backlog
+priority: medium
+type: feature
+owner: agent
+created_at: 2026-06-26
+updated_at: 2026-06-26
+tags:
+  - paula
+  - audio
+  - neon
+  - mixer
+  - resampler
+related_files:
+  - src/audio/mixer.c
+  - src/audio/mixer.h
+  - external/rigel/src/chipset/paula/audio.c
+  - src/machine/machine_rigel.c
+---
 
 # Issue: Paula audio — NEON mixer/resampler backend
 
@@ -19,17 +39,12 @@ write the mixer/resampler once the upstream timing is trusted, which the
 consolidated work above established for cadence (not full content
 correctness — see residual #1 below).
 
-**Blocking prerequisite, found after this issue was first written**: Paula
-audio is currently audibly choppy on the host (reported in the harness).
-Root cause is believed to be CPU↔chipset stepping granularity at the point
-samples are extracted, not anything this issue would touch — see
-`AI_context/issue_paula_audio_cpu_chipset_sync.md`. Fix that first; a NEON
-mixer/resampler built on top of samples extracted at the wrong moments
-just makes wrong audio faster.
+**Blocking prerequisite resolved**: ISSUE-0009 (harness choppiness) is now
+CLOSED. The CPU quantum fragmentation was the root cause; it is fixed.
+This issue can now be picked up.
 
 Where the final mixed/resampled output actually goes (I2S vs HDMI) is a
-**separate, independent decision** — see
-`AI_context/issue_paula_audio_output_driver.md`. This issue is just the
+**separate, independent decision** — see ISSUE-0011. This issue is just the
 algorithm: draining the ring buffer, mixing, resampling. It doesn't need
 the output driver resolved first, only the final target sample rate once
 that's picked.
@@ -67,15 +82,13 @@ that's picked.
        -> Bellatrix audio backend (new)
             -> NEON mixer (4ch -> stereo)
             -> NEON resampler (Paula rate -> 44.1/48 kHz)
-       -> host output (driver TBD — see issue_paula_audio_output_driver.md)
+       -> host output (driver TBD — see ISSUE-0011)
    ```
 
    Lands in `src/audio/mixer.c`/`mixer.h`, draining from the ring buffer's
    pop side (`audio_mixer_pop()`, already implemented and unused so far).
    With only 4 channels, raw mixing gain may be modest — the resampler +
-   format conversion stage is the one expected to matter (same shape as
-   planar→framebuffer conversion, this project's other NEON-worthy
-   subsystem).
+   format conversion stage is the one expected to matter.
 
 ## Suggested order
 
@@ -89,6 +102,6 @@ just an operating constraint, not a task. #4 is the real work.
 - `external/rigel/src/chipset/paula/audio.c` (trace points, if `word=0000` needs more digging)
 - `src/machine/machine_rigel.c` (`rigel_get_audio_sample()` call site, chip RAM read callback wiring)
 - `AI_context/consolidated/issue_paula_audio_timing.md` (full history)
-- `AI_context/consolidated/issue_paula_serial_floppy.md` (historical: audio DMA arbiter gap, untested on hardware)
-- `AI_context/issue_core_log_vs_rigeltrace.md` (related logging-duality question)
-- `AI_context/issue_paula_audio_output_driver.md` (where the resampled output goes)
+- `AI_context/consolidated/issue_paula_serial_floppy.md` (historical: audio DMA arbiter gap)
+- ISSUE-0012 (related logging-duality question)
+- ISSUE-0011 (where the resampled output goes)
