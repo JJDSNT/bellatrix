@@ -442,9 +442,9 @@ Future cores may evolve toward capability runtimes.
 
 | Core | Current Runtime                              |
 | ---- | -------------------------------------------- |
-| 0    | CPU Runtime (Emu68 JIT)                      |
-| 1    | Chipset Runtime — full Rigel domain (CIA + Agnus + Paula + Denise) |
-| 2    | (unused)                                     |
+| 0    | Machine/Host — arbiter, parks in wfe after init |
+| 1    | CPU Runtime (Emu68 JIT or Musashi)           |
+| 2    | Chipset Runtime — full Rigel domain (CIA + Agnus + Paula + Denise) |
 | 3    | IO Runtime (USB + Bluetooth)                 |
 
 ---
