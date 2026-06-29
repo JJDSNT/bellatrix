@@ -8,6 +8,29 @@ Date: 2026-06-06
 
 Investigate `src/disks/bootdisk-amiga-m68k.adf` and `src/disks/megademoA.adf` with `src/roms/aros.rom` through the Rigel chipset backend. The user reports initial artifacts followed by a grey screen. Do not investigate the ISO boot path in this pass.
 
+## 2026-06-28 Current Relevance Note
+
+This file is historical context for the older `src/roms/aros.rom` plus ADF
+paths. It should **not** be used as the primary explanation for the active
+`src/roms/new_aros.rom` blocker.
+
+Current active finding is in `AI_context/issues/ISSUE-0020.md`:
+
+- `new_aros.rom` reproduces with no ADF inserted.
+- Serial stops immediately after `romtaginit done`.
+- The old ROM, also with no ADF, continues to `p96gfx.hidd`, `alert.hook`,
+  `ATA boot wait`, and `dosboot.resource`.
+- Rigel VBL/PORTS IRQs are alive and the CPU returns to `STOP #$2000`.
+- Exec call trace shows `Wait()`/`SetSignal()`/`ReplyMsg()` are alive globally:
+  `input.device` and `trackdisk.device` continue waking and waiting.
+- The frame-3000 OS dump has an empty `TaskReady` list, but no task currently
+  has `tc_SigWait & tc_SigRecvd != 0`.
+
+Therefore, do not steer the new-ROM investigation toward ADF filesystem loops,
+grey Workbench rendering, CD/ISO, ATA boot wait, or Rigel bitplane/Copper
+conclusions from this file unless a new trace shows the boot flow actually
+reaches those stages.
+
 ## Findings
 
 - `aros.rom + bootdisk-amiga-m68k.adf` reaches AROS residents and screen setup but remains grey. This ADF is an AROS emergency boot floppy and expects an AROS Live CD for the full workflow, so it is not the best isolated ADF-only video test.
@@ -362,3 +385,222 @@ Recommended next split before committing:
 1. Commit only the functional slow RAM support plus a small bounds/trace cleanup.
 2. Keep AROS/Rigel diagnostics either in a separate diagnostic commit or behind clean env-gated hooks.
 3. Defer `aros.adf`/`bootdisk-amiga-m68k.adf` visual debugging until the `megademoA.adf` visual path is preserved as a known-good regression target.
+
+## 2026-06-28 Checkpoint: Active `aros.rom + aros.adf` Failure Is the Missing Intuition Requester
+
+Current scope is explicitly back to the old ROM path: ignore `new_aros.rom`
+for this investigation and use only `src/roms/aros.rom` plus
+`src/disks/aros.adf`. The user verified that WinUAE boots this pair and that
+the expected behavior is a visible Intuition requester asking for the missing
+`AROS Live CD:` volume. Therefore the lack of a visual requester in Bellatrix is
+the bug; suppressing requesters is only a diagnostic, not a fix.
+
+Key state from the current harness:
+
+- The old `HARNESS_MSGPORT_OWNER_FIX` / `HARNESS_TRACKDISK_WAITPORT_OWNER_FIX`
+  path was created for `new_aros.rom` and is not currently relevant.
+- `aros.rom + aros.adf` reaches DOS and loads resident resources. Disk I/O is
+  not stuck.
+- The DOS resident segment list includes `Workbook`, so the Workbench
+  replacement is present.
+- Without suppressing requesters, the final OS dump has an empty `TaskReady`
+  list and the process `If` waiting on signal mask `0x00010000`, with a stack
+  consistent with the `WaitPort` path.
+- This matches the floppy startup script:
+  `If EXISTS "AROS Live CD:"` calls into DOS volume lookup, which goes through
+  `ErrorReport(ERROR_DEVICE_NOT_MOUNTED, REPORT_INSERT, ...)` and should open a
+  system requester unless `pr_WindowPtr == (APTR)-1`.
+- A diagnostic `HARNESS_SUPPRESS_DOS_REQUESTERS=1` path forces process
+  `pr_WindowPtr=-1`. With that enabled, boot progresses past the blocked `If`
+  and the OS dump contains a `Workbench` process. This proves the requester wait
+  is the active gate.
+
+Current visual symptom:
+
+- The frame is grey (`COLOR00=0x0aaa`) with the mouse pointer visible.
+- The user confirms this is not enough: the requester should be visible, and
+  Bellatrix gives no visual Intuition response.
+
+Immediate next investigation:
+
+1. Add a focused Intuition dump to `os_debug`: find `intuition.library` in
+   `ExecBase->LibList`, inspect `IntuitionBase->FirstScreen`, enumerate screens
+   and windows, and dump the screen/window `RastPort`/`BitMap` plane pointers
+   plus a non-zero-byte census for the visible bitmap memory.
+2. If the screen/window/requester objects exist and their bitmap planes contain
+   pixels, compare those plane pointers to the active Copper `BPLxPT` values.
+   That would point to a display attach/synchronization issue.
+3. If screen/window objects exist but their planes are blank, continue through
+   Intuition/layers/text rendering paths.
+4. If no requester/window object exists, trace `DisplayError`,
+   `EasyRequestArgs`, `BuildEasyRequestArgs`, and `SysReqHandler` with a stricter
+   library-base check than the current broad `HARNESS_LIBRARY_CALL_TRACE`, which
+   can produce false positives.
+
+## 2026-06-28 Follow-up: Requester Window Exists, But Its Screen Bitmap Is Blank
+
+Added `OSDBG-INTUI` instrumentation to `src/debug/os_debug.c`:
+
+- Finds `IntuitionBase` from the saved stack of the `Intuition menu handler`
+  task, because library names are currently unreadable through the generic
+  `read_name()` path.
+- Dumps `IntuitionBase->FirstScreen`, screen geometry, windows, `RastPort`
+  bitmap pointers, bitplane pointers, and a direct chip-RAM non-zero census.
+- Important correction: bitmap memory must be read directly from chip RAM for
+  low chip addresses. Using `bellatrix_mem_read*()` here can see overlay/ROM and
+  produces a false `0xffffffff` result for addresses like `0x003ab8`.
+
+Current final state for `aros.rom + aros.adf` at 3200 frames:
+
+- `IntuitionBase @00c36354`
+- `activeWindow=00cd36e8`, `activeScreen=firstScreen=00c36d94`
+- Screen: `640x256`, `flags=0611`, bitmap `@00cbede8`, `bpr=80`,
+  `rows=256`, `depth=2`, planes:
+  - `plane0=00003ab8`, `first=00000000`, `nonzero=8/20480`
+  - `plane1=00008ab8`, `first=00000000`, `nonzero=0/20480`
+- Windows:
+  - Active/requester-looking window: `@00cd36e8`, pos `104,100`,
+    size `432x57`, flags `08053006`, `bm=00cbede8`, `userPort=00cd3940`.
+  - Backdrop/window title `AROS`: `@00ccc478`, pos `0,0`, size `640x256`,
+    flags `2804101f`, same bitmap.
+
+Independent video/fetch confirmation:
+
+- Frame dump still shows the grey background plus pointer.
+- Active registers match the Intuition bitmap:
+  `BPLCON0=a201`, `BPL1PT=0x003ab8`, `BPL2PT=0x008ab8`,
+  `COLOR00=0x0aaa`.
+- `RIGEL_BPL_FETCH_PROBE=1` confirms the bitplane DMA callback reads zero from
+  `0x003ab8`/`0x008ab8` at display time, matching direct chip RAM.
+
+Updated conclusion:
+
+- The requester/window is being created. The missing visual response is no
+  longer an OpenWindow/OpenScreen failure.
+- The displayed bitmap is almost blank in chip RAM, so Rigel is mostly
+  displaying what is actually there.
+- The active lead is now the drawing path into the Intuition/layers bitmap:
+  window frame/text/requester rendering either is not issuing writes to the
+  bitmap, is writing somewhere else, or a blitter/layers operation is clearing
+  or failing to populate the target.
+
+Next concrete checks:
+
+1. Use `BELLATRIX_CHIP_WRITE_WATCH=0x003ab8:0x003c00` and
+   `BELLATRIX_CHIP_WRITE_WATCH=0x008ab8:0x008c00` or widen the watch range to
+   capture who writes the few non-zero bytes and who clears the rest.
+2. Trace blitter destination writes around `BLTDPT` when it targets the screen
+   bitmap range.
+3. Trace Intuition/layers drawing calls for the active window if bitmap writes
+   are absent.
+
+Layer/cliprect follow-up:
+
+- Active requester-looking window `@00cd36e8` has `WLayer=00cd3b10`.
+- Its layer bounds are `104,100..535,156`, matching the window geometry.
+- Its only cliprect is `104,100..535,156` with `bm=0`, meaning it uses the
+  layer/screen bitmap directly rather than a separate offscreen bitmap.
+- Backdrop window layer `@00ccc6d0` has a cliprect over the active window with
+  `bm=00cd3990`, likely saved obscured background, and other cliprects with
+  `bm=0`.
+
+Bitmap write watch:
+
+- Watching `0x003ab8:0x009000` shows early setup/copy writes from
+  `pc=00f85f26` and allocator/list maintenance writes around `00f8cb78`.
+- The dominant later activity is a massive zero-fill from `pc=00ffddd2`
+  (`~5457` 32-bit zero writes in this watched range).
+- The only later non-zero bitmap writes are 16 byte writes from `pc=00fcf238`
+  at addresses like `0x0089c6`, `0x008976`, etc.; these match the few visible
+  pointer-like pixels.
+- No substantial frame/text/requester drawing writes were observed into the
+  active screen bitmap range.
+
+Interpretation:
+
+- The active window/layer/cliprect path is structurally present and targets the
+  visible screen bitmap.
+- The visible bitmap is being cleared, then only pointer/cursor pixels are
+  written. The requester body, borders, gadget, and text are not reaching chip
+  RAM.
+- The next lead is to trace `graphics.library` calls against the active window
+  `RastPort=00cd3bbc` and backdrop `RastPort=00ccc77c`: `RectFill`, `Text`,
+  `Move`, `Draw`, `WritePixel`, `BltBitMapRastPort`, and `EraseRect`.
+
+---
+
+## 2026-06-28 Root Cause Found: ECS Blitter Trigger at Wrong Register Address — FIXED
+
+### Investigation
+
+Blitter trace with `BELLATRIX_RIGEL_BLITTER_TRACE=1` showed ALL setup registers
+being written (BLTCON0, BLTAFWM, BLTALWM, BLTCMOD, BLTDMOD, BLTBDAT, BLTCPT,
+BLTDPT) but the trigger register **never** written. Filter for `reg=058` (OCS
+BLTSIZE), `reg=1c0` and `reg=1c2` (incorrectly assumed ECS) returned zero results.
+
+Instruction-hook probing at `pc=0xFCB588` (the `JSR (A5)` following the last
+BLTDPT write) showed `A5=0xFCAEF4`. Disassembly of ROM at `0xFCAEF4` revealed
+`startblitter`:
+
+```asm
+00fcaef4: MOVE.L D3,-(SP)
+00fcaef6: MOVE.L D2,-(SP)
+00fcaef8: MOVEA.L ($0c,SP),A0   ; A0 = data (amigavideo_staticdata*)
+00fcaefc: MOVE.L  ($10,SP),D1   ; D1 = w (width in words)
+00fcaf00: MOVE.L  ($14,SP),D0   ; D0 = h (height in lines)
+00fcaf04: TST.W  ($102,A0)      ; test data->ecs_agnus
+00fcaf08: BEQ    ocsPath        ; if FALSE → OCS path at 0xFCAF1C
+; ECS path (ecs_agnus != 0 → fall-through):
+00fcaf0a: MOVE.W D0, $00DFF05C  ; BLTSIZV — latch h, no trigger
+00fcaf10: MOVE.W D1, $00DFF05E  ; BLTSIZH — latch w AND trigger
+00fcaf16: MOVE.L (SP)+,D2
+00fcaf18: MOVE.L (SP)+,D3
+00fcaf1a: RTS
+; OCS path:
+00fcaf1c: CMPI.W #$0400, D0     ; if h > 1024: return early
+00fcaf20: BHI    → 0xFCAF16
+00fcaf22: CMPI.W #$0040, D1     ; if w > 64: return early
+00fcaf26: BHI    → 0xFCAF16
+00fcaf28: LSL.W  #6, D0         ; D0 = h << 6
+00fcaf2a: AND.W  #$003F, D1     ; D1 = w & 63
+00fcaf2e: OR.W   D1, D0         ; D0 = (h<<6)|(w&63)
+00fcaf30: MOVE.W D0, $00DFF058  ; BLTSIZE → OCS trigger
+00fcaf36: BRA    → 0xFCAF16
+```
+
+Rigel is in ECS mode (`config.chipset_model = RIGEL_CHIPSET_ECS`), so AROS sets
+`ecs_agnus=TRUE` and takes the ECS path every time. The compiled ROM writes to
+`$DFF05C` and `$DFF05E` — addresses that were not in Rigel's blitter domain.
+
+Previous session had added `0x1C0`/`0x1C2` to Rigel as the ECS registers, but
+those addresses do not exist in the ECS Agnus hardware. The actual ECS BLTSIZE
+registers from the Commodore hardware reference manual:
+- `$DFF05C` = BLTSIZV (ECS: height latch, 15 bits, does NOT start blit)
+- `$DFF05E` = BLTSIZH (ECS: width latch, 11 bits, STARTS blit)
+
+### Fix
+
+`external/rigel/src/chipset/agnus/blitter/blitter_regs.c`:
+```c
+REG_BLTSIZV = 0x05C,  /* ECS: latch vertical size (does not trigger) */
+REG_BLTSIZH = 0x05E,  /* ECS: set horizontal size and trigger        */
+```
+
+`external/rigel/src/domains/blitter/blitter_domain.c`:
+```c
+case 0x058:
+case 0x05C:  /* ECS BLTSIZV */
+case 0x05E:  /* ECS BLTSIZH */
+case 0x060:
+```
+
+`src/machine/machine_rigel_bus.c` blitter trace filter updated to include
+`0x05c` and `0x05e` in place of `0x1c0`/`0x1c2`.
+
+### Verification
+
+After fix: `grep "reg=(05c|05e)"` returns 1348 trigger events per 3200-frame run.
+Previously zero. First trigger: BLTSIZV=`0x0100` (256 lines), BLTSIZH=`0x0028`
+(40 words × 16 = 640 pixels wide) — a full-screen fill.
+
+Result: screen now renders correctly. The `it's working` confirmation from user.

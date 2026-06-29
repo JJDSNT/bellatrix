@@ -6,17 +6,21 @@ priority: high
 type: bug
 owner: agent
 created_at: 2026-06-26
-updated_at: 2026-06-26
+updated_at: 2026-06-28
 tags:
   - aros
   - workbench
   - disk
   - floppy
   - rigel
+  - blitter
   - dskchg
 related_files:
   - external/rigel/src/core/rigel_cia_api.c
   - external/rigel/src/floppy/floppy_drive.c
+  - external/rigel/src/chipset/agnus/blitter/blitter_regs.c
+  - external/rigel/src/domains/blitter/blitter_domain.c
+  - external/aros/arch/m68k-amiga/hidd/amigavideo/amigavideo_blitter.c
   - external/aros/rom/dosboot/bootstrap.c
   - external/aros/arch/m68k-amiga/devs/trackdisk/trackdisk_hw.c
   - src/roms/aros.rom
@@ -24,6 +28,55 @@ related_files:
 ---
 
 # Issue: AROS Workbench Boot Stall
+
+## 2026-06-28 Root Cause Found & Fixed: ECS Blitter Trigger Registers Wrong Address
+
+**Problem**: AROS detects ECS Agnus (via VPOSR bit 13 = chip_id 0x20) and sets
+`ecs_agnus=TRUE` in `amigavideo_staticdata`. `startblitter()` in the compiled ROM
+then writes to:
+- `$DFF05C` (BLTSIZV) — ECS blit height latch, does NOT trigger
+- `$DFF05E` (BLTSIZH) — ECS blit width AND trigger
+
+Rigel's `blitter_domain.c` did not claim ownership of 0x05C or 0x05E. Writes went
+to the default no-op handler. The blitter never fired; blitter setup registers
+(BLTCON0, BLTCPT, BLTDPT, BLTBDAT etc.) were being written correctly but the
+trigger was silently dropped.
+
+This was found by disassembling the `startblitter` function at ROM address
+`0xFCAEF4` (loaded in A5 before `JSR (A5)` at `0xFCB588`). The compiled code:
+```asm
+TST.W  ($102,A0)        ; test data->ecs_agnus
+BEQ    ocsPath          ; if FALSE, use OCS ($DFF058)
+MOVE.W D0, $DFF05C      ; ECS: write h → BLTSIZV
+MOVE.W D1, $DFF05E      ; ECS: write w → BLTSIZH (triggers)
+RTS
+```
+
+**Wrong assumption**: 0x1C0 (BLTSIZV) and 0x1C2 (BLTSIZH) were added as ECS
+registers in a previous session. Those addresses do not exist in the ECS Agnus
+hardware; they appear in some AGA documentation and are NOT the ECS trigger pair.
+
+**Fix applied** (`external/rigel/`):
+- `blitter_regs.c`: `REG_BLTSIZV = 0x05C`, `REG_BLTSIZH = 0x05E` (was 0x1C0/0x1C2)
+- `blitter_domain.c`: case 0x05C, 0x05E replace 0x1C0, 0x1C2
+- `src/machine/machine_rigel_bus.c`: blitter trace filter updated to 0x05C/0x05E
+
+**Verification**: With the fix, 1348 blitter trigger events fire per 3200-frame run
+via `BELLATRIX_RIGEL_BLITTER_TRACE=1`. Previously zero.
+
+## 2026-06-28 Scope Note: not the active `new_aros.rom` blocker
+
+This issue is historical context for `src/roms/aros.rom` plus AROS ADF boot
+paths. Do **not** use its "ROM/ADF version mismatch", afs-handler loop, grey
+Workbench backdrop, or disk-read conclusions as the primary explanation for the
+current `src/roms/new_aros.rom` failure.
+
+Current active blocker is tracked in `ISSUE-0020`: `new_aros.rom` reproduces
+with **no ADF inserted**, stops after `romtaginit done`, never reaches the old
+ROM's next logged resident (`p96gfx.hidd`), and has live VBL/PORTS interrupts
+plus live `Wait()`/`ReplyMsg()` activity in `input.device`/`trackdisk.device`.
+That makes ADF/floppy/Workbench rendering a downstream or separate topic for
+the new ROM.
 
 ## Status: DISK DMA WORKING — VERSION MISMATCH SUSPECTED (2026-06-26)
 
@@ -99,7 +152,7 @@ Workbench content was never rendered.
 
 ---
 
-## Strongest Remaining Hypothesis: ROM ↔ ADF Version Mismatch
+## Historical Hypothesis For This Old-ROM ADF Path: ROM ↔ ADF Version Mismatch
 
 The user notes: "AROS builds change and you need correct pairs between ROM and ADF."
 
