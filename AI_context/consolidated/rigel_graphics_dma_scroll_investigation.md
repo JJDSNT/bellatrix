@@ -234,9 +234,53 @@ rtk env BELLATRIX_RIGEL_TRACE=1 \
 rtk convert /tmp/eon_1722_lores_groups.ppm /tmp/eon_1722_lores_groups.png
 ```
 
+## Frame Counter Caveat
+
+There is no single global frame counter in the current harness/Rigel stack.
+Do not compare frame numbers from different layers as exact timestamps unless
+they are logged at the same trace point.
+
+- The SDL title `frame=...`, `FRAMES=...` stop condition, and scripted input
+  use the harness-local counter in `tools/harness/main.c`. It increments when
+  `bellatrix_machine_get()->frame_counter` changes.
+- `g_machine.frame_counter` is the machine/presenter frame counter updated by
+  the Bellatrix machine step path.
+- Rigel/Denise frame dumps use the backend video frame counter exposed through
+  `rigel_get_frame().frame_count`, sourced from `denise.output.frame_counter`.
+  Denise updates this from the Agnus beam frame count when the framebuffer
+  observes a new video frame.
+- `[RIGEL-FRAME-VIDEO] N=...` uses the Rigel trace layer's own
+  `g_rtrace.frame_count`.
+
+Practical consequence observed in EON: the SDL title can show `frame=2619`
+while an internal Denise/scheduler trace reports a different frame number for
+the same visual moment. For graphics debugging, use one counter consistently
+or add a correlation log that prints both harness and Denise/Rigel counters in
+the same trace line.
+
 ## Remaining Problems
 
-EON is improved but not 100% correct. Remaining likely areas:
+EON is improved but not 100% correct. Frame 2619 now has two separated
+failure classes:
+
+- The vertical white rectangle is sprite overlay. Temporarily disabling sprite
+  overlay removes it. A focused trace showed sprites `1..5` drawing `pix=3`
+  as contiguous 16-pixel blocks from `vstart=124` to `vstop=256`.
+- The horizontal lines remain when sprite overlay is disabled, so they are still
+  a playfield/blitter/composition issue.
+
+Additional findings:
+
+- The BPL5 memory range visible in frame 2619 is written by a blitter command
+  `BLTCON0/1=0d0c/0000`, `dspan=009040..00a504`, `size=12x190`. This explains
+  why high-plane data exists, but does not by itself explain the sprite
+  rectangle.
+- Dual-playfield PF1-vs-PF2 priority must use `BPLCON2.PF2PRI` (bit 6), not
+  `PF1P/PF2P`. `PF1P/PF2P` remain sprite priority thresholds. The helper and
+  compositor were corrected, and `test_dualpf`, `test_denise`, `test_priority`
+  passed. This did not change the EON frame 2619 artifact.
+
+Remaining likely areas:
 
 - `bitplane_words_per_plane()` may still over/under-count for some lores DDF
   ranges and depths.
@@ -248,12 +292,14 @@ EON is improved but not 100% correct. Remaining likely areas:
 - Viewport/export still needs targeted checks for Battle Squadron sprites and
   KS20 hires screens.
 - `sota.adf` needs separate classification before it is assigned to a subsystem.
+- EON sprite DMA/state needs focused investigation: why sprites `1..5` remain
+  active as a solid mask through lines 124..255.
 
 ## Next Recommended Target
 
-The highest-value automated target is now SOTA, because it reproduces without
-human interaction and points at Copper/bitplane timing. Battle Squadron remains
-the better gameplay-facing target, but its custom bootloader requires manual
-interaction before the sprite/scroll bug can be captured. EON remains improved
-but not 100%; if returning to EON, review `BPLCON1` hires/per-line behavior and
-its interaction with the compositor's `ddf0`/pipeline positioning.
+The highest-value automated target is EON frame 2619 because it reproduces
+headlessly and now has an isolated sprite-overlay artifact. Battle Squadron
+remains the gameplay-facing sprite/scroll target, but its custom bootloader
+requires manual interaction before the bug can be captured. SOTA is confirmed
+fixed for the previously observed horizontal-line leak and should remain a
+regression reference for blitter line-mode, not a direct comparator for EON.

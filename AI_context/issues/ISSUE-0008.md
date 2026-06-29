@@ -190,6 +190,20 @@ Battle Squadron/player-ship still needs a fresh run with `RIGEL_SPRITE_DMA_TRACE
 to verify whether its remaining invisibility is priority, attach state, palette
 mapping, or another viewport assumption.
 
+EON frame 2619 now provides a headless sprite-overlay reference independent of
+Battle Squadron's custom bootloader. Temporarily disabling sprite overlay
+removes the vertical white rectangle, while horizontal playfield lines remain.
+Trace showed sprites `1..5` drawing solid `pix=3` blocks at `hstart`
+`272,288,304,320,336`, with `vstart=124` and `vstop=256`. This points at sprite
+DMA/state lifetime or sprite/playfield priority before Battle-specific input is
+required.
+
+Frame-number caveat for this reference: the SDL title/harness `frame=...`,
+`BELLATRIX_RIGEL_DUMP_FRAME`, Denise's `output.frame_counter`, and
+`[RIGEL-FRAME-VIDEO] N=...` are separate counters. When using EON as a sprite
+reference, record which counter produced the frame number, or log harness and
+Denise/Rigel counters together at the same trace point.
+
 ## Diagnostic trace added (safe on bare metal)
 
 Two trace points exist, gated by `RIGEL_ENABLE_STDLIB_ENV` and `RIGEL_SPRITE_DMA_TRACE=1`:
