@@ -64,6 +64,8 @@ static uint32_t harness_cpu_ram_read(uint32_t addr, int size);
 static void harness_init_watch_ranges(void);
 static int harness_watch_custom_range_addr(uint32_t addr);
 static void harness_trace_pc_range(uint32_t pc);
+static void harness_trace_exec_call(uint32_t pc);
+static void harness_trace_library_call(uint32_t pc);
 
 static int harness_boot_trace_enabled(void)
 {
@@ -1739,9 +1741,569 @@ static void harness_probe_vbl_dispatch_node(uint32_t pc)
     }
 }
 
+static int harness_exec_call_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_EXEC_CALL_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+static int harness_signal_probe_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_SIGNAL_PROBE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+static int harness_library_call_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_LIBRARY_CALL_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+static uint32_t harness_read_ram32(uint32_t addr)
+{
+    return harness_cpu_ram_read(addr, 4);
+}
+
+static uint16_t harness_read_ram16(uint32_t addr)
+{
+    return (uint16_t)harness_cpu_ram_read(addr, 2);
+}
+
+static uint8_t harness_read_ram8(uint32_t addr)
+{
+    return (uint8_t)harness_cpu_ram_read(addr, 1);
+}
+
+static void harness_write_ram32(uint32_t addr, uint32_t value)
+{
+    BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+
+    addr &= 0x00FFFFFFu;
+    if (bellatrix_chip_addr_contains(addr)) {
+        bellatrix_chip_write32(mem, addr, value);
+        return;
+    }
+    bellatrix_mem_write32(mem, addr, value);
+}
+
+static int harness_ram_addr_valid(uint32_t addr, unsigned int size)
+{
+    BellatrixMemory *mem = &bellatrix_machine_get()->memory;
+
+    addr &= 0x00FFFFFFu;
+    if (bellatrix_chip_addr_contains(addr))
+        return 1;
+    return bellatrix_slow_contains(mem, addr, size);
+}
+
+static int harness_msgport_owner_fix_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_MSGPORT_OWNER_FIX");
+        const char *legacy = getenv("HARNESS_TRACKDISK_WAITPORT_OWNER_FIX");
+        enabled =
+            ((env && env[0] != '\0' && env[0] != '0') ||
+             (legacy && legacy[0] != '\0' && legacy[0] != '0')) ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+static uint32_t harness_exec_lvo_target(uint32_t eb, uint32_t lvo)
+{
+    uint32_t stub = (eb - lvo * 6u) & 0x00FFFFFFu;
+    uint16_t op = harness_read_ram16(stub);
+
+    if (op == 0x4EF9u)
+        return harness_read_ram32(stub + 2u) & 0x00FFFFFFu;
+    return 0;
+}
+
+static void harness_task_name(uint32_t task, char out[32])
+{
+    uint32_t name;
+    int i;
+
+    out[0] = '\0';
+    if (task < 0x400u)
+        return;
+
+    name = harness_read_ram32(task + 10u) & 0x00FFFFFFu;
+    if (name < 0x400u)
+        return;
+
+    for (i = 0; i < 31; i++) {
+        char c = (char)harness_read_ram8(name + (uint32_t)i);
+        if (!c)
+            break;
+        if ((unsigned char)c < 0x20u || (unsigned char)c > 0x7eu)
+            c = '?';
+        out[i] = c;
+        out[i + 1] = '\0';
+    }
+}
+
+static void harness_read_cstring(uint32_t addr, char out[64])
+{
+    int i;
+
+    out[0] = '\0';
+    if (addr < 0x400u)
+        return;
+
+    for (i = 0; i < 63; i++) {
+        char c = (char)harness_read_ram8(addr + (uint32_t)i);
+        if (!c)
+            break;
+        if ((unsigned char)c < 0x20u || (unsigned char)c > 0x7eu)
+            c = '?';
+        out[i] = c;
+        out[i + 1] = '\0';
+    }
+}
+
+static int harness_exec_call_seen(int call_id, uint32_t task, uint32_t d0,
+                                  uint32_t d1, uint32_t a0, uint32_t a1,
+                                  uint32_t ret)
+{
+    enum { MAX_SEEN = 1024 };
+    struct SeenCall {
+        int call_id;
+        uint32_t task;
+        uint32_t d0;
+        uint32_t d1;
+        uint32_t a0;
+        uint32_t a1;
+        uint32_t ret;
+    };
+    static struct SeenCall seen[MAX_SEEN];
+    static unsigned count = 0;
+    unsigned i;
+
+    for (i = 0; i < count; i++) {
+        if (seen[i].call_id == call_id && seen[i].task == task &&
+            seen[i].d0 == d0 && seen[i].d1 == d1 &&
+            seen[i].a0 == a0 && seen[i].a1 == a1 &&
+            seen[i].ret == ret) {
+            return 1;
+        }
+    }
+
+    if (count < MAX_SEEN) {
+        seen[count].call_id = call_id;
+        seen[count].task = task;
+        seen[count].d0 = d0;
+        seen[count].d1 = d1;
+        seen[count].a0 = a0;
+        seen[count].a1 = a1;
+        seen[count].ret = ret;
+        count++;
+        return 0;
+    }
+
+    return 1;
+}
+
+static void harness_trace_exec_call(uint32_t pc)
+{
+    static uint32_t s_eb = 0;
+    static uint32_t s_setsignal = 0;
+    static uint32_t s_wait = 0;
+    static uint32_t s_putmsg = 0;
+    static uint32_t s_replymsg = 0;
+    static uint32_t s_signal = 0;
+    static uint32_t s_waitport = 0;
+    static uint32_t s_waitio = 0;
+    const char *name = NULL;
+    int call_id = 0;
+    uint32_t eb;
+    uint32_t task;
+    uint32_t sp;
+    uint32_t ret;
+    uint32_t d0;
+    uint32_t d1;
+    uint32_t a0;
+    uint32_t a1;
+    uint32_t a6;
+    char task_name[32];
+    int trace_enabled = harness_exec_call_trace_enabled();
+    int owner_fix_enabled = harness_msgport_owner_fix_enabled();
+    int signal_probe = harness_signal_probe_enabled();
+
+    if (!trace_enabled && !owner_fix_enabled && !signal_probe)
+        return;
+
+    eb = harness_chip_read(4u, 4) & 0x00FFFFFFu;
+    if (!harness_ram_addr_valid(eb, 4u))
+        return;
+
+    if (eb != s_eb || s_wait == 0u || s_signal == 0u ||
+            s_putmsg == 0u || s_replymsg == 0u ||
+            s_waitport == 0u || s_waitio == 0u) {
+        uint32_t old_setsignal = s_setsignal;
+        uint32_t old_wait = s_wait;
+        uint32_t old_signal = s_signal;
+        uint32_t old_putmsg = s_putmsg;
+        uint32_t old_replymsg = s_replymsg;
+        uint32_t old_waitport = s_waitport;
+        uint32_t old_waitio = s_waitio;
+        s_eb = eb;
+        s_setsignal = harness_exec_lvo_target(eb, 51);
+        s_wait = harness_exec_lvo_target(eb, 53);
+        s_putmsg = harness_exec_lvo_target(eb, 61);
+        s_replymsg = harness_exec_lvo_target(eb, 63);
+        s_signal = harness_exec_lvo_target(eb, 127);
+        s_waitport = harness_exec_lvo_target(eb, 64);
+        s_waitio = harness_exec_lvo_target(eb, 79);
+        if (trace_enabled && s_wait != 0u &&
+                (s_setsignal != old_setsignal || s_wait != old_wait ||
+                 s_signal != old_signal || s_putmsg != old_putmsg ||
+                 s_replymsg != old_replymsg || s_waitport != old_waitport ||
+                 s_waitio != old_waitio)) {
+            printf("[EXEC-CALL-TRACE] eb=%08x SetSignal=%08x Wait=%08x Signal=%08x PutMsg=%08x ReplyMsg=%08x WaitPort=%08x WaitIO=%08x\n",
+                   (unsigned)eb, (unsigned)s_setsignal, (unsigned)s_wait,
+                   (unsigned)s_signal, (unsigned)s_putmsg,
+                   (unsigned)s_replymsg, (unsigned)s_waitport,
+                   (unsigned)s_waitio);
+        }
+    }
+
+    pc &= 0x00FFFFFFu;
+    if (pc == s_setsignal) { name = "SetSignal"; call_id = 1; }
+    else if (pc == s_wait) { name = "Wait"; call_id = 2; }
+    else if (pc == s_putmsg) { name = "PutMsg"; call_id = 3; }
+    else if (pc == s_replymsg) { name = "ReplyMsg"; call_id = 4; }
+    else if (pc == s_signal) { name = "Signal"; call_id = 5; }
+    else if (pc == s_waitport) { name = "WaitPort"; call_id = 6; }
+    else if (pc == s_waitio) { name = "WaitIO"; call_id = 7; }
+    else return;
+
+    task = harness_read_ram32(s_eb + 276u) & 0x00FFFFFFu;
+    harness_task_name(task, task_name);
+    sp = (uint32_t)m68k_get_reg(NULL, M68K_REG_SP) & 0x00FFFFFFu;
+    ret = harness_ram_addr_valid(sp, 4u) ? (harness_read_ram32(sp) & 0x00FFFFFFu) : 0;
+    d0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D0);
+    d1 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D1);
+    a0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A0);
+    a1 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A1);
+    a6 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A6);
+
+    if (call_id == 6 && owner_fix_enabled) {
+        uint32_t port = a0 & 0x00FFFFFFu;
+        if (harness_ram_addr_valid(port + 16u, 4u)) {
+            uint32_t sigtask = harness_read_ram32(port + 16u) & 0x00FFFFFFu;
+            uint8_t flags = harness_read_ram8(port + 14u);
+            if (flags == 0u && sigtask != 0u && sigtask != task) {
+                printf("[MSGPORT-OWNER-FIX] WaitPort port=%08x sigtask:%08x->%08x\n",
+                       (unsigned)port, (unsigned)sigtask, (unsigned)task);
+                harness_write_ram32(port + 16u, task);
+            }
+        }
+    }
+    if (call_id == 7 && owner_fix_enabled) {
+        uint32_t ioreq = a1 & 0x00FFFFFFu;
+        if (harness_ram_addr_valid(ioreq + 18u, 4u)) {
+            uint32_t port = harness_read_ram32(ioreq + 14u) & 0x00FFFFFFu;
+            if (port != 0u && harness_ram_addr_valid(port + 16u, 4u)) {
+                uint32_t sigtask = harness_read_ram32(port + 16u) & 0x00FFFFFFu;
+                uint8_t flags = harness_read_ram8(port + 14u);
+                if (flags == 0u && sigtask != 0u && sigtask != task) {
+                    printf("[MSGPORT-OWNER-FIX] WaitIO ioreq=%08x port=%08x sigtask:%08x->%08x\n",
+                           (unsigned)ioreq, (unsigned)port,
+                           (unsigned)sigtask, (unsigned)task);
+                    harness_write_ram32(port + 16u, task);
+                }
+            }
+        }
+    }
+
+    /* HARNESS_SIGNAL_PROBE: print Signal/ReplyMsg calls that deliver to bits
+     * outside the target task's tc_SigWait (spurious signal detection).
+     * tc_SigWait is at offset 22 (0x16) in the Task struct. */
+    if (signal_probe) {
+        if (call_id == 5) {
+            /* Signal(task=a0, mask=d0) */
+            uint32_t tgt = a0 & 0x00FFFFFFu;
+            if (harness_ram_addr_valid(tgt + 26u, 4u)) {
+                uint32_t sigwait  = harness_read_ram32(tgt + 22u);
+                uint32_t sigrecvd = harness_read_ram32(tgt + 26u);
+                char tgt_name[32];
+                harness_task_name(tgt, tgt_name);
+                if (sigwait != 0u && (d0 & sigwait) == 0u) {
+                    printf("[SPURIOUS-SIGNAL] caller_task=%08x \"%s\" "
+                           "→ Signal(tgt=%08x \"%s\", mask=%08x) "
+                           "sigwait=%08x sigrecvd=%08x ret=%08x\n",
+                           (unsigned)task, task_name,
+                           (unsigned)tgt, tgt_name,
+                           (unsigned)d0,
+                           (unsigned)sigwait, (unsigned)sigrecvd,
+                           (unsigned)ret);
+                }
+            }
+        } else if (call_id == 4) {
+            /* ReplyMsg(msg=a1): will signal msg->mn_ReplyPort->mp_SigTask */
+            uint32_t msg = a1 & 0x00FFFFFFu;
+            if (harness_ram_addr_valid(msg + 18u, 4u)) {
+                uint32_t rport = harness_read_ram32(msg + 14u) & 0x00FFFFFFu;
+                if (rport && harness_ram_addr_valid(rport + 20u, 4u)) {
+                    uint8_t  sigbit  = harness_read_ram8(rport + 15u);
+                    uint32_t sigtask = harness_read_ram32(rport + 16u) & 0x00FFFFFFu;
+                    uint32_t smask   = 1u << sigbit;
+                    if (sigtask && harness_ram_addr_valid(sigtask + 26u, 4u)) {
+                        uint32_t sigwait  = harness_read_ram32(sigtask + 22u);
+                        uint32_t sigrecvd = harness_read_ram32(sigtask + 26u);
+                        char tgt_name[32];
+                        harness_task_name(sigtask, tgt_name);
+                        if (sigwait != 0u && (smask & sigwait) == 0u) {
+                            printf("[SPURIOUS-REPLY] caller_task=%08x \"%s\" "
+                                   "→ ReplyMsg→Signal(tgt=%08x \"%s\", bit=%u mask=%08x) "
+                                   "sigwait=%08x sigrecvd=%08x msg=%08x rport=%08x ret=%08x\n",
+                                   (unsigned)task, task_name,
+                                   (unsigned)sigtask, tgt_name,
+                                   (unsigned)sigbit, (unsigned)smask,
+                                   (unsigned)sigwait, (unsigned)sigrecvd,
+                                   (unsigned)msg, (unsigned)rport,
+                                   (unsigned)ret);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!trace_enabled)
+        return;
+
+    if (harness_exec_call_seen(call_id, task, d0, d1, a0, a1, ret))
+        return;
+
+    printf("[EXEC-CALL] pc=%08x %-9s task=%08x \"%s\" "
+           "ret=%08x SP=%08x D0=%08x D1=%08x A0=%08x A1=%08x A6=%08x",
+           (unsigned)pc,
+           name,
+           (unsigned)task,
+           task_name,
+           (unsigned)ret,
+           (unsigned)sp,
+           (unsigned)d0,
+           (unsigned)d1,
+           (unsigned)a0,
+           (unsigned)a1,
+           (unsigned)a6);
+    if (call_id == 2) {
+        printf(" stk=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
+               (unsigned)harness_read_ram32(sp + 0u),
+               (unsigned)harness_read_ram32(sp + 4u),
+               (unsigned)harness_read_ram32(sp + 8u),
+               (unsigned)harness_read_ram32(sp + 12u),
+               (unsigned)harness_read_ram32(sp + 16u),
+               (unsigned)harness_read_ram32(sp + 20u),
+               (unsigned)harness_read_ram32(sp + 24u),
+               (unsigned)harness_read_ram32(sp + 28u));
+    }
+    if (call_id == 3 || call_id == 6 || call_id == 7) {
+        uint32_t port = (call_id == 3) ? (a0 & 0x00FFFFFFu) : (a0 & 0x00FFFFFFu);
+        if (call_id == 7 && harness_ram_addr_valid(a1 + 18u, 4u))
+            port = harness_read_ram32((a1 & 0x00FFFFFFu) + 14u) & 0x00FFFFFFu;
+        uint32_t sigtask = harness_read_ram32(port + 16u) & 0x00FFFFFFu;
+        uint8_t flags = harness_read_ram8(port + 14u);
+        uint8_t sigbit = harness_read_ram8(port + 15u);
+        uint32_t head = harness_read_ram32(port + 20u) & 0x00FFFFFFu;
+        uint32_t tailpred = harness_read_ram32(port + 28u) & 0x00FFFFFFu;
+        char sigtask_name[32];
+
+        harness_task_name(sigtask, sigtask_name);
+        printf(" port=%08x port_flags=%02x port_sigbit=%u port_sigtask=%08x \"%s\""
+               " msg_head=%08x msg_tailpred=%08x msg_reply=%08x",
+               (unsigned)port,
+               (unsigned)flags,
+               (unsigned)sigbit,
+               (unsigned)sigtask,
+               sigtask_name,
+               (unsigned)head,
+               (unsigned)tailpred,
+               (unsigned)(harness_ram_addr_valid(a1 + 14u, 4u)
+                          ? (harness_read_ram32(a1 + 14u) & 0x00FFFFFFu)
+                          : 0u));
+    }
+    if (call_id == 4 && harness_ram_addr_valid(a1, 20u)) {
+        uint32_t reply = harness_read_ram32(a1 + 14u) & 0x00FFFFFFu;
+        printf(" msg_reply=%08x", (unsigned)reply);
+    }
+    printf("\n");
+}
+
+static void harness_trace_library_call(uint32_t pc)
+{
+    static uint32_t s_a6;
+    static uint32_t s_createproc;
+    static uint32_t s_loadseg;
+    static uint32_t s_execute;
+    static uint32_t s_createnewproc;
+    static uint32_t s_addsegment;
+    static uint32_t s_findsegment;
+    static uint32_t s_startworkbench;
+    static uint32_t s_printfault;
+    static uint32_t s_displayerror;
+    static uint32_t s_easyrequestargs;
+    static uint32_t s_builderequestargs;
+    static uint32_t s_sysreqhandler;
+    const char *name = NULL;
+    int call_id = 0;
+    uint32_t task;
+    uint32_t sp;
+    uint32_t ret;
+    uint32_t d0;
+    uint32_t d1;
+    uint32_t d2;
+    uint32_t a0;
+    uint32_t a1;
+    uint32_t a2;
+    uint32_t a3;
+    uint32_t a6;
+    char task_name[32];
+    char a0s[64];
+    char d1s[64];
+
+    if (!harness_library_call_trace_enabled())
+        return;
+
+    pc &= 0x00FFFFFFu;
+    a6 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A6) & 0x00FFFFFFu;
+    if (!harness_ram_addr_valid(a6, 4u))
+        return;
+
+    if (a6 != s_a6) {
+        s_a6 = a6;
+        s_createproc = harness_exec_lvo_target(a6, 23);
+        s_loadseg = harness_exec_lvo_target(a6, 25);
+        s_execute = harness_exec_lvo_target(a6, 37);
+        s_createnewproc = harness_exec_lvo_target(a6, 83);
+        s_addsegment = harness_exec_lvo_target(a6, 129);
+        s_findsegment = harness_exec_lvo_target(a6, 130);
+        s_startworkbench = harness_exec_lvo_target(a6, 7);
+        s_printfault = harness_exec_lvo_target(a6, 79);
+        s_displayerror = harness_exec_lvo_target(a6, 81);
+        s_easyrequestargs = harness_exec_lvo_target(a6, 98);
+        s_builderequestargs = harness_exec_lvo_target(a6, 99);
+        s_sysreqhandler = harness_exec_lvo_target(a6, 100);
+    }
+
+    if (pc == s_createproc) { name = "CreateProc"; call_id = 101; }
+    else if (pc == s_loadseg) { name = "LoadSeg"; call_id = 102; }
+    else if (pc == s_execute) { name = "Execute"; call_id = 103; }
+    else if (pc == s_createnewproc) { name = "CreateNewProc"; call_id = 104; }
+    else if (pc == s_addsegment) { name = "AddSegment"; call_id = 105; }
+    else if (pc == s_findsegment) { name = "FindSegment"; call_id = 106; }
+    else if (pc == s_startworkbench) { name = "StartWorkbench"; call_id = 107; }
+    else if (pc == s_printfault) { name = "PrintFault"; call_id = 108; }
+    else if (pc == s_displayerror) { name = "DisplayError"; call_id = 109; }
+    else if (pc == s_easyrequestargs) { name = "EasyRequestArgs"; call_id = 110; }
+    else if (pc == s_builderequestargs) { name = "BuildEasyRequestArgs"; call_id = 111; }
+    else if (pc == s_sysreqhandler) { name = "SysReqHandler"; call_id = 112; }
+    else return;
+
+    task = harness_read_ram32(harness_chip_read(4u, 4) + 276u) & 0x00FFFFFFu;
+    harness_task_name(task, task_name);
+    sp = (uint32_t)m68k_get_reg(NULL, M68K_REG_SP) & 0x00FFFFFFu;
+    ret = harness_ram_addr_valid(sp, 4u) ? (harness_read_ram32(sp) & 0x00FFFFFFu) : 0;
+    d0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D0);
+    d1 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D1);
+    d2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D2);
+    a0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A0) & 0x00FFFFFFu;
+    a1 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A1) & 0x00FFFFFFu;
+    a2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A2) & 0x00FFFFFFu;
+    a3 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A3) & 0x00FFFFFFu;
+    harness_read_cstring(a0, a0s);
+    harness_read_cstring(d1 & 0x00FFFFFFu, d1s);
+
+    if (harness_exec_call_seen(call_id, task, d0, d1, a0, a1, ret))
+        return;
+
+    printf("[LIB-CALL-TRACE] %s base=%08x pc=%08x ret=%08x task=%08x \"%s\" "
+           "D0=%08x D1=%08x \"%s\" D2=%08x D3=%08x A0=%08x \"%s\" A1=%08x\n",
+           name,
+           (unsigned)a6,
+           (unsigned)pc,
+           (unsigned)ret,
+           (unsigned)task,
+           task_name,
+           (unsigned)d0,
+           (unsigned)d1,
+           d1s,
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D2),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D3),
+           (unsigned)a0,
+           a0s,
+           (unsigned)a1);
+
+    if (call_id == 108) {
+        char header[64];
+        harness_read_cstring(d2 & 0x00FFFFFFu, header);
+        printf("[LIB-CALL-DETAIL] PrintFault code=%d header_ptr=%08x header=\"%s\"\n",
+               (int32_t)d1,
+               (unsigned)(d2 & 0x00FFFFFFu),
+               header);
+    } else if (call_id == 109) {
+        char fmt[64];
+        harness_read_cstring(a0, fmt);
+        printf("[LIB-CALL-DETAIL] DisplayError format=\"%s\" flags=%08x args=%08x\n",
+               fmt,
+               (unsigned)d0,
+               (unsigned)a1);
+    } else if ((call_id == 110 || call_id == 111) &&
+            harness_ram_addr_valid(a1 + 20u, 4u)) {
+        char title[64];
+        char text[64];
+        char gadgets[64];
+        uint32_t title_ptr = harness_read_ram32(a1 + 8u) & 0x00FFFFFFu;
+        uint32_t text_ptr = harness_read_ram32(a1 + 12u) & 0x00FFFFFFu;
+        uint32_t gadgets_ptr = harness_read_ram32(a1 + 16u) & 0x00FFFFFFu;
+        harness_read_cstring(title_ptr, title);
+        harness_read_cstring(text_ptr, text);
+        harness_read_cstring(gadgets_ptr, gadgets);
+        printf("[LIB-CALL-DETAIL] %s easy=%08x title=\"%s\" text=\"%s\" gadgets=\"%s\" idcmp=%08x args=%08x\n",
+               name,
+               (unsigned)a1,
+               title,
+               text,
+               gadgets,
+               (unsigned)((call_id == 110 && harness_ram_addr_valid(a2, 4u))
+                          ? harness_read_ram32(a2) : d0),
+               (unsigned)a3);
+    } else if (call_id == 112) {
+        printf("[LIB-CALL-DETAIL] SysReqHandler window=%08x idcmp_ptr=%08x wait=%u\n",
+               (unsigned)a0,
+               (unsigned)a1,
+               (unsigned)(d0 & 0xFFu));
+    }
+}
+
 static void harness_instr_hook(unsigned int pc)
 {
     harness_trace_pc_range((uint32_t)pc);
+    harness_trace_exec_call((uint32_t)pc);
+    harness_trace_library_call((uint32_t)pc);
 
     if (!harness_boot_trace_enabled())
         return;

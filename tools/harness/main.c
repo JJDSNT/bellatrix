@@ -19,6 +19,7 @@
 #include "machine/machine.h"
 #include "cpu/cpu_bridge.h"
 #include "debug/debug.h"
+#include "debug/os_debug.h"
 #include "host/pal.h"
 #include "machine/memory/memory.h"
 #include "plugin/plugin_loader.h"
@@ -915,8 +916,8 @@ int main(int argc, char **argv)
     /* Init display before machine so framebuffer globals are set */
     if (!headless) {
         const char *zc = getenv("BELLATRIX_RIGEL_ZERO_COPY_VIDEO");
-        uint32_t video_w = 640u;
-        uint32_t video_h = 512u;
+        uint32_t video_w = 768u;
+        uint32_t video_h = 576u;
 
         if (zc != NULL && zc[0] != '\0' && zc[0] != '0') {
             video_w = 320u;
@@ -1007,7 +1008,7 @@ int main(int argc, char **argv)
         printf("[HARNESS] Headless mode  max_cycles=%ld  max_frames=%ld\n",
                max_cycles, max_frames);
     } else {
-        printf("[HARNESS] Interactive mode — close window or press Esc to quit\n");
+        printf("[HARNESS] Interactive mode — close window to quit\n");
     }
     printf("[HARNESS] Chipset backend: %s\n", bellatrix_machine_backend_name());
 
@@ -1263,6 +1264,30 @@ int main(int argc, char **argv)
                 }
             }
 
+            {
+                static int s_exec_wake_rescue = -1;
+                if (s_exec_wake_rescue < 0) {
+                    const char *env = getenv("HARNESS_EXEC_WAKE_RESCUE");
+                    s_exec_wake_rescue =
+                        (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+                }
+                if (s_exec_wake_rescue) {
+                    os_debug_rescue_waiting_signaled_tasks(m);
+                }
+            }
+
+            {
+                static int s_suppress_requesters = -1;
+                if (s_suppress_requesters < 0) {
+                    const char *env = getenv("HARNESS_SUPPRESS_DOS_REQUESTERS");
+                    s_suppress_requesters =
+                        (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+                }
+                if (s_suppress_requesters) {
+                    os_debug_suppress_process_requesters(m);
+                }
+            }
+
             if (headless) {
                 if (max_frames > 0 && frame_count >= max_frames) {
                     printf("[HARNESS] Reached %ld frames — stopping\n",
@@ -1275,9 +1300,12 @@ int main(int argc, char **argv)
                 const uint8_t *cr = m->memory.chip_ram;
                 uint32_t eb = ((uint32_t)cr[4] << 24) | ((uint32_t)cr[5] << 16) |
                               ((uint32_t)cr[6] << 8) | (uint32_t)cr[7];
+                const char *osdbg = getenv("HARNESS_OS_DEBUG_DUMP");
                 printf("[EXEC-DUMP] frame=%ld ExecBase=0x%08x  PC=0x%08x\n",
                        frame_count, (unsigned)eb,
                        (unsigned)m68k_get_reg(NULL, M68K_REG_PC));
+                if (osdbg && osdbg[0] != '\0' && osdbg[0] != '0')
+                    os_debug_dump(m);
                 if (eb >= 4 && eb + 0x400 < m->memory.chip_ram_size) {
                     printf("[EXEC-DUMP] eb+0x160:");
                     for (int i = 0; i < 64; i++) printf(" %02x", cr[eb + 0x160 + i]);
