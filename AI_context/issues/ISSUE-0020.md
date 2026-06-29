@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0020
-title: "new_aros.rom (maio/2026) para apos romtaginit sem ADF"
-status: done
+title: "new_aros.rom (maio/2026) boot screen stall — mp_SigTask em getunit()"
+status: doing
 priority: high
 type: bug
 owner: unassigned
@@ -11,28 +11,50 @@ tags:
   - aros
   - rom
   - exec
-  - scheduler
+  - trackdisk
   - harness
-  - interrupts
 related_files:
   - src/roms/new_aros.rom
-  - src/roms/aros.rom
   - tools/harness/main.c
   - tools/harness/musashi_backend.c
-  - src/debug/os_debug.c
-  - src/debug/os_debug.h
-superseded_by: ISSUE-0021
+  - external/aros/arch/m68k-amiga/devs/trackdisk/trackdisk_device.c
+  - external/aros/rom/disk/getunit.c
 ---
 
-> **NOTA (2026-06-28)**: A investigação de renderização em `aros.rom` encontrou e
-> corrigiu o bug de endereços ECS do blitter — `$DFF05C`/`$DFF05E` são os
-> endereços corretos para BLTSIZV/BLTSIZH (não `0x1C0`/`0x1C2`). Fix em Rigel:
-> `blitter_regs.c` e `blitter_domain.c`. Detalhes em ISSUE-0015 e no consolidated.
+> **Issue secundária (2026-06-28)**: boot screen do `new_aros.rom` (ROM mai/2026)
+> trava sem o workaround `HARNESS_MSGPORT_OWNER_FIX=1`. Issue principal
+> (`aros.rom + aros.adf`) foi resolvida por RC1+RC2 — ver ISSUE-0015/ISSUE-0021.
 
-> **SUPERSEDIDA por ISSUE-0021.** A investigação revelou que o problema não é
-> específico do `new_aros.rom`: WinUAE bota `aros.rom` + `aros.adf`
-> corretamente, então o bug primário está no harness. ISSUE-0020 documentou a
-> comparação entre ROMs e o diagnóstico inicial. ISSUE-0021 é o tracking ativo.
+**Root cause**: `getunit()` em `trackdisk_device.c:52` chama `WaitPort` em uma
+porta cujo `mp_SigTask` aponta para a TD task permanentemente. Quando uma task
+cliente chama `beginio()` → `getunit()`, `GiveUnit()` sinaliza a TD task (errada),
+e a task cliente fica bloqueada.
+
+Exposto pelo commit AROS `06c521a903` (abr/2026): corrigiu `&&`→`&` em
+`exec_locks.c` + `Permit()` em `useralert.c`. ROM antiga (jul/2025) ficava em
+`Forbid` permanente durante init → race invisível. ROM nova (mai/2026) com
+task switching real → race exposta.
+
+**Workaround ativo** (`tools/harness/musashi_backend.c`):
+`HARNESS_MSGPORT_OWNER_FIX=1` intercepta `WaitPort` (LVO 64) e `WaitIO` (LVO 74)
+e atualiza `mp_SigTask` para a task chamadora real antes de bloquear. Com o
+workaround, `new_aros.rom + aros.adf` chega ao boot screen.
+
+**Fix limpo proposto** (não aplicado):
+```c
+// external/aros/arch/m68k-amiga/devs/trackdisk/trackdisk_device.c
+static void getunit(struct TrackDiskBase *tdb) {
+    while (GetUnit(&tdb->td_dru) == NULL) {
+        tdb->td_druport.mp_SigTask = FindTask(NULL);  // callee real
+        WaitPort(&tdb->td_druport);
+    }
+}
+```
+Seguro em m68k cooperativo: sem reentrância simultânea em `getunit`.
+
+**Próximo passo**: aplicar o fix no source AROS e verificar com `new_aros.rom + aros.adf`
+sem `HARNESS_MSGPORT_OWNER_FIX`. Pode haver segunda instância similar no
+`console.device` (dump mostra `tc_SigRecvd` fora do `tc_SigWait`).
 
 # Resumo
 

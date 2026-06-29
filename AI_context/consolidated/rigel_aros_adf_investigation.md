@@ -612,10 +612,14 @@ Result: screen now renders correctly. The `it's working` confirmation from user.
 ### Resumo do arco completo
 
 A investigação começou com uma tela cinza ao bootar `aros.rom + aros.adf` no
-harness. Três causas-raiz independentes foram identificadas e corrigidas ao longo
-de múltiplas sessões. Com todas as três aplicadas, o AROS lê o ADF, monta a tela
-gráfica e o blitter renderiza conteúdo. As issues ISSUE-0015 e ISSUE-0021 são
-encerradas como consolidated.
+harness. Duas causas-raiz independentes foram identificadas e corrigidas: RC1
+(DSKCHG) e RC2 (endereços ECS do blitter). Com ambas aplicadas, AROS lê o ADF,
+monta a tela gráfica e o blitter renderiza conteúdo. As issues ISSUE-0015 e
+ISSUE-0021 são encerradas como consolidated.
+
+Uma terceira investigação — bug de `mp_SigTask` em `getunit()` ao rodar
+`new_aros.rom` (ROM mai/2026) — é issue secundária independente rastreada em
+ISSUE-0020, não parte desta resolução principal.
 
 ---
 
@@ -678,11 +682,15 @@ tela completa. Tela renderiza corretamente.
 
 ---
 
-### Causa-Raiz 3: WaitPort com mp_SigTask errado em trackdisk getunit() (ISSUE-0021)
+### Investigação Secundária: WaitPort com mp_SigTask errado em new_aros.rom (ISSUE-0020)
 
-**Sintoma**: Com os dois fixes acima, AROS lê ADF e inicializa parcialmente, mas
-algumas tasks ficam bloqueadas. Dump do OS mostra `tc_SigRecvd` fora de
-`tc_SigWait` em múltiplas tasks (`trackdisk.device`, `console.device`).
+> **Nota**: Esta investigação é independente do issue principal (`aros.rom + aros.adf`).
+> Refere-se ao `new_aros.rom` (ROM mai/2026) e está rastreada em ISSUE-0020.
+> RC1+RC2 acima são suficientes para a resolução do issue principal.
+
+**Sintoma**: Com `new_aros.rom`, AROS inicializa parcialmente mas algumas tasks
+ficam bloqueadas. Dump do OS mostra `tc_SigRecvd` fora de `tc_SigWait` em
+múltiplas tasks (`trackdisk.device`, `console.device`).
 
 **Causa**: `getunit()` em `arch/m68k-amiga/devs/trackdisk/trackdisk_device.c:52`:
 ```c
@@ -721,19 +729,20 @@ patch no source AROS ou manutenção do workaround no harness.
 
 ---
 
-### Estado final após os três fixes
+### Estado final após RC1 + RC2 (`aros.rom` — issue principal)
 
-Com RC1 + RC2 + RC3 (workaround):
+Com RC1 + RC2:
 - AROS detecta DF0, lê boot block, root block e directories
 - Exec inicializa, tasks acordam por VBL/PORTS
 - Intuition abre screen `640×256` 2-bitplane + requester window
 - Blitter renderiza: 1348 triggers/run, conteúdo aparece em chip RAM
 - Tela exibe conteúdo (requester visível)
 
-Ponto de entrada aberto: AROS com `aros.rom + aros.adf` pode ainda não carregar
-o Workbench completo se houver mismatches de versão ROM/ADF. WinUAE é a referência
-— qualquer diferença entre WinUAE e o harness nesse ponto é candidata a próxima
-investigação (ISSUE futura se necessário).
+Ponto de entrada aberto: Workbench completo pode ainda não carregar se houver
+mismatch de versão entre `aros.rom` e `aros.adf`. WinUAE é a referência.
+
+Para `new_aros.rom` (ROM mai/2026): workaround `HARNESS_MSGPORT_OWNER_FIX=1`
+contorna o bug de `mp_SigTask` na boot screen. Fix limpo pendente — ver ISSUE-0020.
 
 ### Arquivos modificados (resumo cross-issue)
 
@@ -744,4 +753,4 @@ investigação (ISSUE futura se necessário).
 | `external/rigel/src/chipset/agnus/blitter/blitter_regs.c` | BLTSIZV=0x05C, BLTSIZH=0x05E |
 | `external/rigel/src/domains/blitter/blitter_domain.c` | route 0x05C/0x05E |
 | `src/machine/machine_rigel_bus.c` | trace filter 0x05C/0x05E |
-| `tools/harness/musashi_backend.c` | HARNESS_MSGPORT_OWNER_FIX workaround |
+| `tools/harness/musashi_backend.c` | HARNESS_MSGPORT_OWNER_FIX workaround (new_aros.rom only) |

@@ -30,8 +30,8 @@ consolidated_in: AI_context/consolidated/rigel_aros_adf_investigation.md
 
 > **CONSOLIDATED (2026-06-28)** — Ver conclusão completa em
 > `AI_context/consolidated/rigel_aros_adf_investigation.md` (seção "Conclusão da
-> Investigação AROS ADF"). Três root causes corrigidas: DSKCHG (RC1), ECS blitter
-> $DFF05C/$DFF05E (RC2), WaitPort mp_SigTask workaround (RC3, via ISSUE-0021).
+> Investigação AROS ADF"). Duas root causes corrigidas: DSKCHG (RC1) e ECS blitter
+> $DFF05C/$DFF05E (RC2). Issue principal (`aros.rom + aros.adf`) resolvida.
 
 # Issue: AROS Workbench Boot Stall
 

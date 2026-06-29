@@ -23,10 +23,11 @@ consolidated_in: AI_context/consolidated/rigel_aros_adf_investigation.md
 ---
 
 > **CONSOLIDATED (2026-06-28)** — Ver conclusão completa em
-> `AI_context/consolidated/rigel_aros_adf_investigation.md` (seção "Causa-Raiz 3").
-> Bug `mp_SigTask` em `getunit()` identificado; workaround via
-> `HARNESS_MSGPORT_OWNER_FIX=1`; fix limpo proposto para source AROS. AROS
-> renderiza tela gráfica após RC1+RC2+RC3 aplicados.
+> `AI_context/consolidated/rigel_aros_adf_investigation.md` (seção "Conclusão da
+> Investigação AROS ADF"). Escopo desta issue: `aros.rom + aros.adf` sem tela
+> gráfica — resolvido por RC1 (DSKCHG) + RC2 (ECS blitter $DFF05C/$DFF05E).
+> O bug `mp_SigTask`/`getunit()` aqui documentado é issue secundária para
+> `new_aros.rom` — ver ISSUE-0020.
 
 # Resumo
 
