@@ -5,10 +5,12 @@ Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68
 Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
-Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — Kickstart boots, Workbench 1.3, Happy Hand, AROS, and USB HID are functional on the Pi. Four areas still in progress:
+Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — boots Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Four areas still in progress:
 
 - **Emu68 JIT integration** — bus API and quantum window stabilization ongoing; Musashi builds are the recommended path for now.
 - **Multicore** — Core 0 (host), Core 1 (CPU), Core 2 (chipset), Core 3 (IO) split defined but cross-core synchronization not fully resolved.
+- **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
+- **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
 - **Bluetooth HID** — device scan works; pairing and connection not yet functional.
 - **HDMI audio** — not yet implemented; video output only.
 
@@ -42,6 +44,12 @@ cat aros-ext.bin aros-rom.bin > aros.rom
 Pass it the same way as a Kickstart ROM (`initramfs aros.rom` in `config.txt`, or via `KICKSTART=` in the harness).
 
 **Boot screen with newer AROS builds**: AROS ROM builds from May 2026 onwards boot correctly when an ADF is inserted, but the boot screen does not appear in the harness without enabling a workaround (`HARNESS_MSGPORT_OWNER_FIX=1`). The Jul/2025 build is the validated baseline. See ISSUE-0020 in `AI_context/` for details.
+
+### Launcher
+
+The Musashi builds include a bare-metal launcher UI that runs before the emulator starts. It reads ADF and ISO files from a FAT32-formatted USB drive and lets you select which one to boot. Insert the USB drive before powering the Pi; the launcher lists available files and waits for input via USB keyboard or HID joystick.
+
+The USB drive must be formatted as FAT32. Place `.adf` files (floppy disk images) or `.iso` files (CD-ROM images) in the root directory or any subdirectory. The launcher also reads from the SD boot partition if no USB drive is present.
 
 ---
 
