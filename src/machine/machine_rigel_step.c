@@ -165,10 +165,12 @@ void machine_present_frame_from_rigel(void)
     if (!src || frame.width == 0u || frame.height == 0u)
         return;
 
+#ifndef BELLATRIX_HARNESS
     if ((frame.width != fb_width || frame.height != fb_height) &&
         PAL_Video_Resize(frame.width, frame.height, 16u) == 0) {
         stride = pitch / 2u;
     }
+#endif
 
     uint32_t scale_x = (frame.width <= fb_width) ? (fb_width / frame.width) : 1u;
     uint32_t scale_y = (frame.height <= fb_height) ? (fb_height / frame.height) : 1u;

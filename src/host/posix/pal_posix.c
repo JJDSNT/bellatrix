@@ -19,8 +19,8 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#define HARNESS_FB_W 640u
-#define HARNESS_FB_H 512u
+#define HARNESS_FB_W 768u
+#define HARNESS_FB_H 576u
 
 static uint16_t *s_pixels = NULL;
 static uint32_t s_pixels_capacity = 0;
@@ -740,8 +740,7 @@ int PAL_Video_Resize(uint32_t w, uint32_t h, uint32_t bpp)
     if (pal_sdl_recreate_texture(w, h) != 0)
         return -1;
 
-    SDL_SetWindowSize(s_window, (int)w, (int)h);
-    fprintf(stderr, "[PAL] video resize size=%ux%u pitch=%u\n",
+    fprintf(stderr, "[PAL] video buffer resize size=%ux%u pitch=%u\n",
             (unsigned)fb_width, (unsigned)fb_height, pitch);
     return 0;
 }
@@ -787,9 +786,6 @@ int pal_sdl_poll_events(void)
              e.window.event == SDL_WINDOWEVENT_ENTER)) {
             pal_sdl_enable_relative_mouse();
         }
-
-        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
-            return 0;
 
         if (e.type == SDL_KEYDOWN && e.key.repeat == 0)
         {
