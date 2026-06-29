@@ -5,7 +5,7 @@ Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68
 Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
-Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — Kickstart boots, Workbench 1.3, Happy Hand, AROS, and USB HID are functional on the Pi. Two areas still in progress:
+Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — Kickstart boots, Workbench 1.3, Happy Hand, AROS, and USB HID are functional on the Pi. Three areas still in progress:
 
 - **Emu68 JIT integration** — bus API and quantum window stabilization ongoing; Musashi builds are the recommended path for now.
 - **Bluetooth HID** — device scan works; pairing and connection not yet functional.
