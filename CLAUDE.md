@@ -204,7 +204,7 @@ Btrace verbosity (write to address `0xDFFF00` at runtime):
 | 1 | Chip RAM MMU + ROM load | ✅ Done |
 | 2 | CIA 8520 complete | ✅ Done |
 | 3 | INTENA/INTREQ/VBL + dedicated core | ✅ Done |
-| 4 | Copper + Bitplanes + VC4 | ⚠️ LOF fix pending (`issue_harness_ks13_boot_screen.md`) |
+| 4 | Copper + Bitplanes + VC4 | ✅ Done |
 | 5 | Happy Hand | ✅ Done |
 | 6 | Emu68 JIT integration | 🔄 In progress |
 | 7 | AROS desktop | 🔄 AROS renders screen; Workbench full load pending |
