@@ -5,10 +5,9 @@ Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68
 Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
-Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — Kickstart boots, USB HID and Bluetooth HID are functional on the Pi. Two goals are not yet achieved:
+Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — Kickstart boots, Workbench 1.3, Happy Hand, AROS, USB HID and Bluetooth HID are all functional on the Pi. One area still in progress:
 
-- **Emu68 JIT integration is broken** — the Emu68 bus hook needs to be revisited; execution does not reach a stable state.
-- **AROS does not boot** — the kitty screen appears but does not complete AROS boot (no workbench).
+- **Emu68 JIT integration** — bus API and quantum window stabilization ongoing; Musashi builds are the recommended path for now.
 
 ---
 
@@ -28,6 +27,16 @@ enable_uart=1
 Copy your Kickstart ROM to the same boot partition and make the `initramfs` line point to that file. For example, with `initramfs kick.rom`, the file must be named `kick.rom` on the SD boot partition. Use a legally obtained Kickstart ROM.
 
 The Musashi images are currently the recommended hardware builds. The Emu68 JIT images are published for testing the JIT integration path.
+
+### AROS ROM
+
+AROS uses a split ROM: an EXT ROM (maps to 0xE00000) and a main ROM (maps to 0xF80000). Bellatrix expects a single 1 MB file produced by concatenating them **in that order**:
+
+```bash
+cat aros-ext.bin aros-rom.bin > aros.rom
+```
+
+Pass it the same way as a Kickstart ROM (`initramfs aros.rom` in `config.txt`, or via `KICKSTART=` in the harness).
 
 ---
 
