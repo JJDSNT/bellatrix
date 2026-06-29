@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is Bellatrix
 
-Bellatrix is a software Amiga chipset emulator that replaces the PiStorm hardware backend in Emu68. The goal is to run Amiga software (starting with Kickstart booting to "Happy Hand") entirely on a Raspberry Pi 3, with no Amiga hardware.
+Bellatrix is a software Amiga chipset emulator that replaces the PiStorm hardware backend in Emu68. It runs entirely on a Raspberry Pi 3, with no Amiga hardware.
+
+Kickstart boot, Workbench 1.3, and Happy Hand (animated mouse pointer) are all working on hardware. Current focus:
+1. **Emu68 JIT integration** — performance, bus API stability, and quantum window correctness under the JIT backend.
+2. **AROS desktop** — AROS reads ADF and renders screen (DSKCHG fix, ECS blitter $DFF05C/$DFF05E fix, WaitPort workaround applied). Workbench full load pending; compare harness vs WinUAE behavior as next step.
 
 Emu68 handles M68K→AArch64 JIT translation; Bellatrix replaces only its bus backend. The JIT core is untouched. There is also a Musashi (C M68K interpreter) backend used for development and the test harness.
 
@@ -185,18 +189,22 @@ Btrace verbosity (write to address `0xDFFF00` at runtime):
 
 ## Session Continuity
 
-- `AI_context/` — sprint-style session logs; read all files before starting work.
-- `docs/roadmap.md` — architectural decisions and migration plan.
-- `docs/timing_and_architetura.md` — timing model and component contracts.
+- `AI_context/` — structured project memory (SDLC). Read open issues (`issues/`) and
+  consolidated knowledge (`consolidated/`) before starting work. See `AI_context/README.md`.
+- `docs/future_roadmap.md` — long-term architectural direction.
+- `docs/runtime_and_timing.md` — timing model and component contracts.
+- `docs/rigel_gap_analysis.md` — Rigel integration status and remaining gaps.
 - `referencias/Emu68/` — reference Emu68 source; READ ONLY, never modify.
 
 ## Implementation Phases
 
-| Phase | Deliverable | Success Criterion |
+| Phase | Deliverable | Status |
 |---|---|---|
-| 0 | Infrastructure + btrace | Build succeeds; UART shows bus trace |
-| 1 | Chip RAM MMU + ROM load | JIT executes first Kickstart instructions |
-| 2 | CIA 8520 complete | Kickstart passes hardware detection |
-| 3 | INTENA/INTREQ/VBL + dedicated core | Idle loop reached; copper list visible |
-| 4 | Copper + Bitplanes + VC4 | Image on HDMI |
-| 5 | Happy Hand | Animated cursor stable |
+| 0 | Infrastructure + btrace | ✅ Done |
+| 1 | Chip RAM MMU + ROM load | ✅ Done |
+| 2 | CIA 8520 complete | ✅ Done |
+| 3 | INTENA/INTREQ/VBL + dedicated core | ✅ Done |
+| 4 | Copper + Bitplanes + VC4 | ⚠️ LOF fix pending (`issue_harness_ks13_boot_screen.md`) |
+| 5 | Happy Hand | ✅ Done |
+| 6 | Emu68 JIT integration | 🔄 In progress |
+| 7 | AROS desktop | 🔄 AROS renders screen; Workbench full load pending |
