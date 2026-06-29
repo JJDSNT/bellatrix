@@ -38,6 +38,8 @@ cat aros-ext.bin aros-rom.bin > aros.rom
 
 Pass it the same way as a Kickstart ROM (`initramfs aros.rom` in `config.txt`, or via `KICKSTART=` in the harness).
 
+**Boot screen with newer AROS builds**: AROS ROM builds from May 2026 onwards boot correctly when an ADF is inserted, but the boot screen does not appear in the harness without enabling a workaround (`HARNESS_MSGPORT_OWNER_FIX=1`). The Jul/2025 build is the validated baseline. See ISSUE-0020 in `AI_context/` for details.
+
 ---
 
 ## Quick start
