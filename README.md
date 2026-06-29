@@ -9,6 +9,7 @@ Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img
 
 - **Emu68 JIT integration** — bus API and quantum window stabilization ongoing; Musashi builds are the recommended path for now.
 - **Bluetooth HID** — device scan works; pairing and connection not yet functional.
+- **HDMI audio** — not yet implemented; video output only.
 
 ---
 
