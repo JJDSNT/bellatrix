@@ -6,7 +6,7 @@ priority: high
 type: bug
 owner: agent
 created_at: 2026-06-26
-updated_at: 2026-06-28
+updated_at: 2026-06-29
 tags:
   - rigel
   - agnus
@@ -102,9 +102,34 @@ Renderizar corretamente o EON no modo 6-plane dual-playfield, sem regressão em:
   (`PF2PRI`); os campos `PF1P/PF2P` são prioridade contra sprites. Cobertura
   atualizada em `test_dualpf`. Esta correção é correta, mas não altera o frame
   2619 do EON.
+- 2026-06-29: latch de `BPLCON0/1/2` no momento do primeiro slot DMA de bitplane
+  de cada scanline (`line_bplcon0/1/2` + `line_bplcon_valid` em
+  `rigel_denise_output_state_t`). O compositor passa a usar os valores travados
+  em vez dos registradores ao vivo, corrigindo frames em que o copper altera
+  BPLCON depois de iniciado o DMA da linha.
+- 2026-06-29: `bitplane_line_depth` separado de `sched->depth`. O avanço de
+  `BPLxPT` e a aplicação de `BPL1MOD/BPL2MOD` no fim da linha usam o depth que
+  estava ativo durante o DMA daquela linha. Evita avanço incorreto de ponteiro
+  quando o copper muda `BPLCON0` mid-frame após o DMA já ter ocorrido.
+- 2026-06-29: clipping DDF (`x_start`/`x_stop`) nos loops de sprites e HAM:
+  pixels fora da janela DDF ativa não são mais escritos no scanline buffer.
+- 2026-06-29: `clear_scanline_to_border()` — linhas que não tiveram nenhum DMA
+  de bitplane agora recebem a cor de borda (`COLOR00`) em vez de preservar
+  conteúdo stale do frame anterior.
+- 2026-06-29: `denise_sprites_reset()` chamado no início do VBL, garantindo que
+  o estado de sprites (armed/vstart/vstop) começa limpo em cada campo.
+- 2026-06-29: offset da janela visível corrigido para `-128` pixels lores (era
+  `-32`); `rigel_get_frame()` aplica altura mínima para sequências de DIWHIGH
+  malformadas ou de curta duração.
+- 2026-06-29: commits em `external/rigel`: `357c4ec` (CIA /DSKCHG) e `67e82ab`
+  (agnus/denise rendering). Nenhuma regressão observada em 1943 nem em EON.
 
 # O que falta fazer
 
+- **Battle Squadron** é o próximo alvo de rendering (2026-06-29). Nave do
+  jogador (sprite 0) desaparece quando o fundo começa a scrollar; copper list
+  de scroll provavelmente sobrescreve `SPRxPT`. Ver seção de diagnóstico em
+  ISSUE-0008.
 - Confirmar se `bitplane_words_per_plane()` está correto para DDF ranges usados
   por EON e outros ranges ainda não validados. O caso específico do 1943
   (`DDF=0038/00d0`, depth change 1->4 antes do fetch) já tem regressão.
@@ -113,8 +138,6 @@ Renderizar corretamente o EON no modo 6-plane dual-playfield, sem regressão em:
 - Criar capturas/dumps apenas quando investigando cada categoria específica de
   bug; não tratar `EON`, `1943`, `KS20`, `battle` e `sota` como comparáveis
   visualmente entre si.
-- Classificar o bug de `sota.adf` quando a investigação atual de EON/scroll
-  estabilizar.
 - ~~Investigar sprite DMA/estado de sprite no EON frame 2619~~ — resolvido como
   efeito colateral do fix ECS blitter (ver log 2026-06-28).
 
@@ -139,9 +162,9 @@ Renderizar corretamente o EON no modo 6-plane dual-playfield, sem regressão em:
 # Critérios de aceite
 
 - [ ] EON frame ~1722 aparece sem cortes horizontais/resíduos evidentes.
-- [x] `1943.adf` não regride no trainer.
-- [ ] `KS20.rom` mantém wrap/black-bar corrigidos.
-- [ ] `battle.adf` não perde nave/sprites por clipping incorreto.
+- [x] `1943.adf` não regride no trainer (verificado 2026-06-29).
+- [x] `KS20.rom` melhorado (bplcon latch + depth por linha + DDF clipping, 2026-06-29); wrap/black-bar corrigidos desde sessão anterior.
+- [ ] `battle.adf` não perde nave/sprites por clipping incorreto. **Próximo alvo.**
 - [x] Testes Rigel focados passam.
 
 # Observações
@@ -193,3 +216,8 @@ rtk env BELLATRIX_RIGEL_TRACE=1 \
   e os sprite registers ficavam com estado espúrio. Com o blitter funcional
   (1348 triggers/run), o estado de sprites é corretamente zerado/inicializado
   pela ROM. A categoria "sprite overlay" do frame 2619 está resolvida.
+- 2026-06-29: latch de BPLCON por linha (`line_bplcon0/1/2`), `bitplane_line_depth`
+  por linha, clipping DDF, border fill em linhas sem DMA, `denise_sprites_reset`
+  no VBL, offset de janela visível corrigido para -128. Commits `357c4ec` e
+  `67e82ab` no rigel; bump de submodule em bellatrix. KS20 melhorado; 1943 e EON
+  sem regressão. Battle Squadron definido como próximo alvo de rendering.

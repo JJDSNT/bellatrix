@@ -68,6 +68,51 @@ Observed after the fixes:
 - Frame dump is still `560x145`, matching Rigel's current ECS/hires DIW decode
   for this ROM sequence.
 
+## Session 2026-06-29 — Rendering Pipeline Correctness Fixes
+
+Targeting KS20 improvement while preserving 1943 and EON correctness.
+
+Changes in `external/rigel` (rigel commits `357c4ec`, `67e82ab`):
+
+**BPLCON latch per scanline** (`denise_state.h`, `slot_scheduler.c/h`, `framebuffer.c`, `compositor.c`):
+- New fields `line_bplcon0/1/2` + `line_bplcon_valid` in `rigel_denise_output_state_t`.
+- Captured at the first bitplane DMA slot on each scanline; reset at line start.
+- Compositor uses latched values, not live registers. Fixes frames where the
+  copper rewrites BPLCON after DMA has already started for that line.
+
+**Per-line bitplane depth** (`slot_scheduler.c/h`):
+- `bitplane_line_depth` captures the actual DMA depth at dispatch time.
+- End-of-line pointer advance and `BPL1MOD/BPL2MOD` application use this
+  captured depth, not the current `sched->depth`. Prevents mis-advance when
+  the copper changes `BPLCON0` mid-frame after DMA already ran.
+
+**DDF window clipping** (`compositor.c`):
+- Sprite and HAM render loops now clamp `screen_x` to `[x_start, x_stop]`.
+- Pixels outside the active DDF fetch window are not written to the scanline
+  buffer. Previously only bounds-checked against the full scanline array.
+
+**Border fill on non-DMA scanlines** (`compositor.c`):
+- `clear_scanline_to_border()` fills the scanline with `COLOR00` on lines
+  that had no bitplane DMA. Prevents stale pixel carry-over from prior frames.
+
+**VBL sprite reset** (`slot_scheduler.c`):
+- `denise_sprites_reset()` called at VBL start each field.
+- Ensures armed/vstart/vstop state from the previous frame cannot bleed into
+  the new frame before the ROM's sprite DMA initializes the channels.
+
+**Display window offset** (`framebuffer.c`, `rigel_denise_api.c`):
+- Visible window left offset corrected to `-128` lores pixels (was `-32`).
+- `rigel_get_frame()` applies a minimum height guard: if the decoded DIW
+  height is < 64 lines and y0 < 64, y1 is set to at least 256. For normal
+  screens, y0 is clamped to 44 and y1 to at least 244.
+
+**CIA /DSKCHG fix** (`rigel_cia_api.c`, `floppy_drive.c`):
+- `/DSKCHG` is open-drain: OR'd from all drives independently of selection.
+- Not-connected drives no longer assert disk-changed at power-on.
+- Drive ID scan correctly overrides /DSKCHG only for the selected drive.
+
+Verified: KS20 improved; 1943 and EON not regressed.
+
 ## Remaining Issue
 
 The KS20 screen is still not visually complete:
