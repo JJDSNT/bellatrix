@@ -67,9 +67,20 @@ void machine_rigel_log(const char *msg, void *opaque)
 
 void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
 {
+    static int generic_event_trace = -1;
+
     (void)opaque;
     if (!g_rtrace.enabled || event == NULL)
         return;
+
+    if (generic_event_trace < 0) {
+#ifdef BELLATRIX_HARNESS
+        const char *env = getenv("BELLATRIX_RIGEL_EVENT_TRACE");
+        generic_event_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+#else
+        generic_event_trace = 0;
+#endif
+    }
 
     /* AUD0-3 timing trace — all 4 channels. See
      * AI_context/issue_paula_audio_timing_and_simd.md. CCK-stamped via
@@ -112,6 +123,9 @@ void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
     default:
         break;
     }
+
+    if (!generic_event_trace)
+        return;
 
     kprintf("[RIGEL-EVENT] %s", event->name ? event->name : "unknown");
     for (rigel_u8 i = 0u; i < event->field_count && i < 16u; i++) {
@@ -296,22 +310,34 @@ static void machine_rigel_maybe_dump_frame(const rigel_frame_t *frame)
 {
     static int init;
     static int done;
+    static int dump_palette;
     static uint64_t dump_frame;
     static const char *dump_path;
 
     if (!init) {
         const char *frame_env = getenv("BELLATRIX_RIGEL_DUMP_FRAME");
+        const char *palette_env = getenv("BELLATRIX_RIGEL_DUMP_PALETTE");
         dump_path = getenv("BELLATRIX_RIGEL_DUMP_PPM");
         init = 1;
         if (frame_env && *frame_env)
             dump_frame = (uint64_t)strtoull(frame_env, NULL, 0);
+        dump_palette = palette_env && *palette_env && *palette_env != '0';
     }
 
     if (done || !dump_frame || !dump_path || !*dump_path ||
-            !frame || !frame->pixels ||
-            frame->frame_count < dump_frame ||
-            frame->width == 0u || frame->height == 0u)
+            g_rtrace.frame_count < dump_frame)
         return;
+
+    if (!frame || !frame->pixels || frame->width == 0u || frame->height == 0u) {
+        kprintf("[RIGEL-DUMP] skipped frame=%llu frame_ptr=%p pixels=%p size=%ux%u\n",
+                (unsigned long long)g_rtrace.frame_count,
+                (const void *)frame,
+                frame ? frame->pixels : NULL,
+                frame ? (unsigned)frame->width : 0u,
+                frame ? (unsigned)frame->height : 0u);
+        done = 1;
+        return;
+    }
 
     FILE *fp = fopen(dump_path, "wb");
     if (!fp) {
@@ -333,11 +359,45 @@ static void machine_rigel_maybe_dump_frame(const rigel_frame_t *frame)
     }
 
     fclose(fp);
-    kprintf("[RIGEL-DUMP] frame=%llu wrote %s size=%ux%u\n",
+    kprintf("[RIGEL-DUMP] frame=%llu rigel_frame=%llu wrote %s size=%ux%u\n",
+            (unsigned long long)g_rtrace.frame_count,
             (unsigned long long)frame->frame_count,
             dump_path,
             (unsigned)frame->width,
             (unsigned)frame->height);
+    if (dump_palette && g_rigel) {
+        kprintf("[RIGEL-DUMP-REGS] bplcon0=%04x bplcon1=%04x bplcon2=%04x "
+                "diw=%04x/%04x ddf=%04x/%04x mod=%04x/%04x\n",
+                rigel_custom_read16(g_rigel, RIGEL_REG_BPLCON0),
+                rigel_custom_read16(g_rigel, RIGEL_REG_BPLCON1),
+                rigel_custom_read16(g_rigel, RIGEL_REG_BPLCON2),
+                rigel_custom_read16(g_rigel, RIGEL_REG_DIWSTRT),
+                rigel_custom_read16(g_rigel, RIGEL_REG_DIWSTOP),
+                rigel_custom_read16(g_rigel, RIGEL_REG_DDFSTRT),
+                rigel_custom_read16(g_rigel, RIGEL_REG_DDFSTOP),
+                rigel_custom_read16(g_rigel, 0x108u),
+                rigel_custom_read16(g_rigel, 0x10au));
+        for (uint32_t i = 0; i < 32u; i += 8u) {
+            kprintf("[RIGEL-DUMP-COLOR] %02u:%04x %02u:%04x %02u:%04x %02u:%04x "
+                    "%02u:%04x %02u:%04x %02u:%04x %02u:%04x\n",
+                    (unsigned)i + 0u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 0u) * 2u),
+                    (unsigned)i + 1u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 1u) * 2u),
+                    (unsigned)i + 2u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 2u) * 2u),
+                    (unsigned)i + 3u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 3u) * 2u),
+                    (unsigned)i + 4u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 4u) * 2u),
+                    (unsigned)i + 5u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 5u) * 2u),
+                    (unsigned)i + 6u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 6u) * 2u),
+                    (unsigned)i + 7u,
+                    rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00 + (i + 7u) * 2u));
+        }
+    }
     done = 1;
 }
 #endif
@@ -445,6 +505,7 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                 uint16_t dm = rigel_custom_read16(g_rigel, 0x096u);
                 uint16_t bp = rigel_custom_read16(g_rigel, 0x100u);
                 uint16_t bplcon1 = rigel_custom_read16(g_rigel, 0x102u);
+                uint16_t bplcon2 = rigel_custom_read16(g_rigel, 0x104u);
                 uint16_t bplcon3 = rigel_custom_read16(g_rigel, 0x106u);
                 uint16_t diwstrt = rigel_custom_read16(g_rigel, 0x08eu);
                 uint16_t diwstop = rigel_custom_read16(g_rigel, 0x090u);
@@ -455,13 +516,13 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                 memset(&video, 0, sizeof(video));
                 (void)rigel_denise_get_video_desc(g_rigel, &video);
                 kprintf("[RIGEL-FRAME-VIDEO] N=%llu size=%ux%u bplcon0=%04x"
-                        " bplcon1=%04x bplcon3=%04x diwhigh=%04x"
+                        " bplcon1=%04x bplcon2=%04x bplcon3=%04x diwhigh=%04x"
                         " dmacon=%04x diw=%04x/%04x ddf=%04x/%04x"
                         " vis=%u..%u/%u..%u\n",
                         (unsigned long long)g_rtrace.frame_count,
                         (unsigned)frame.width, (unsigned)frame.height,
-                        (unsigned)bp, (unsigned)bplcon1, (unsigned)bplcon3,
-                        (unsigned)diwhigh, (unsigned)dm,
+                        (unsigned)bp, (unsigned)bplcon1, (unsigned)bplcon2,
+                        (unsigned)bplcon3, (unsigned)diwhigh, (unsigned)dm,
                         (unsigned)diwstrt, (unsigned)diwstop,
                         (unsigned)ddfstrt, (unsigned)ddfstop,
                         (unsigned)video.visible_x_start,
