@@ -47,7 +47,7 @@ Common options (env vars):
   BELLATRIX_USB_POINTER=<mouse|tablet>
                       In qemu mode with USB enabled, choose the companion USB
                       pointer device to attach alongside the keyboard
-                      (default: tablet)
+                      (default: mouse)
   BELLATRIX_EMU68_BOARDS_MODE=<boards|legacy>
                       Build Bellatrix either with Emu68 expansion boards
                       enabled or with the legacy Bellatrix Fast RAM path
@@ -637,7 +637,7 @@ case "$MODE" in
         fi
 
         QEMU_USB_KBD="${BELLATRIX_QEMU_USB_KBD:-}"
-        QEMU_USB_POINTER="${BELLATRIX_USB_POINTER:-tablet}"
+        QEMU_USB_POINTER="${BELLATRIX_USB_POINTER:-mouse}"
         if [ -z "$QEMU_USB_KBD" ] && [ "${BELLATRIX_USBSTACK:-0}" = "1" ]; then
             QEMU_USB_KBD="1"
         fi
