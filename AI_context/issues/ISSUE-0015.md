@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0015
 title: "AROS Workbench boot stall"
-status: doing
+status: consolidated
 priority: high
 type: bug
 owner: agent
@@ -25,7 +25,13 @@ related_files:
   - external/aros/arch/m68k-amiga/devs/trackdisk/trackdisk_hw.c
   - src/roms/aros.rom
   - src/disks/aros.adf
+consolidated_in: AI_context/consolidated/rigel_aros_adf_investigation.md
 ---
+
+> **CONSOLIDATED (2026-06-28)** — Ver conclusão completa em
+> `AI_context/consolidated/rigel_aros_adf_investigation.md` (seção "Conclusão da
+> Investigação AROS ADF"). Três root causes corrigidas: DSKCHG (RC1), ECS blitter
+> $DFF05C/$DFF05E (RC2), WaitPort mp_SigTask workaround (RC3, via ISSUE-0021).
 
 # Issue: AROS Workbench Boot Stall
 

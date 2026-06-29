@@ -57,4 +57,7 @@ em Raspberry Pi 3, sem hardware Amiga. Ver `CLAUDE.md` e `docs/` para arquitetur
 
 Fases ativas:
 - **Fase 6**: integração Emu68 JIT (MMIO performance, bus API, quantum window)
-- **Fase 7**: AROS desktop (trackdisk, CD-ROM, autoconfig)
+- **Fase 7**: AROS desktop. Investigação ADF concluída (ISSUE-0015 + ISSUE-0021
+  → consolidated em `consolidated/rigel_aros_adf_investigation.md`). Três
+  root causes corrigidas: DSKCHG, ECS blitter ($DFF05C/$DFF05E), WaitPort
+  mp_SigTask. AROS renderiza tela. Próximo: Workbench completo vs WinUAE.

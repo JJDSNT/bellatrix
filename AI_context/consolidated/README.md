@@ -42,7 +42,7 @@ Investigações históricas de sessão também vivem aqui (arquivos prefixados c
 
 | Arquivo | Tópico |
 |---------|--------|
-| [rigel_aros_adf_investigation.md](rigel_aros_adf_investigation.md) | Investigação completa AROS boot (WORDSYNC, Copper halt, GfxBase, slow RAM) |
+| [rigel_aros_adf_investigation.md](rigel_aros_adf_investigation.md) | AROS ADF boot — 3 root causes encontradas e corrigidas; conclusão em 2026-06-28 |
 | [rigel_ks20_video_investigation.md](rigel_ks20_video_investigation.md) | Investigação vídeo KS2.0 — hires DIW, sprite viewport, BPL1MOD |
 | [rigel_graphics_dma_scroll_investigation.md](rigel_graphics_dma_scroll_investigation.md) | Investigação gráfica Rigel — EON 6-plane lores, BPLCON1, DMA bitplane |
 | [kbd_hid_cia_chain.md](kbd_hid_cia_chain.md) | USB HID → CIA-A teclado single-core: 4 root causes, handshake KDAT |
@@ -50,14 +50,18 @@ Investigações históricas de sessão também vivem aqui (arquivos prefixados c
 
 ## Ações Imediatas (ver também issues/ ativas)
 
-### 1. Fix LOF bit — Alta Prioridade
+### 1. Fix LOF bit
 **Arquivo**: `src/chipset/agnus/agnus.c`
 **O quê**: `beam.lof = 0` em modo PAL não-interlace. VHPOSR bit 15 deve ser 0.
 **Impacto**: desbloqueia bitmap producer do KS1.3 → tela de boot aparece.
 Detalhes: `issue_harness_ks13_boot_screen.md` + `issue_agnus_dma_copper.md`.
 
-### 2. AROS ROM+ADF Version Mismatch
-**O quê**: Obter par ROM+ADF do mesmo build AROS. Detalhes: ISSUE-0015.
+### 2. AROS desktop — carregar Workbench completo
+**O quê**: Com os 3 fixes do AROS ADF investigation aplicados (DSKCHG, ECS blitter,
+WaitPort workaround), AROS renderiza tela mas Workbench completo pode ainda não
+carregar. Próximo passo: comparar comportamento harness vs WinUAE com `aros.rom +
+aros.adf`. WinUAE é a referência.
+Detalhes: `rigel_aros_adf_investigation.md` (seção Conclusão).
 
 ### 3. CD Boot: Inject 'CD01' into FileSystem.resource
 **O quê**: `FindCDFS()` in lide.device searches FSR for DosType 'CD01'.
@@ -78,4 +82,4 @@ Detalhes: `issue_multicore_runtime.md` + `issue_interrupt_pipeline.md`.
 | 4 | Copper + Bitplanes | ⚠️ (LOF fix pendente) |
 | 5 | Happy Hand | ✅ DONE |
 | 6 | Emu68 JIT integration | 🔄 Em progresso (ver ISSUE-0001, 0002, 0003) |
-| 7 | AROS desktop | 🔄 Em progresso (ver ISSUE-0015) |
+| 7 | AROS desktop | 🔄 Em progresso — AROS renderiza (ECS blitter fix); Workbench completo pendente |

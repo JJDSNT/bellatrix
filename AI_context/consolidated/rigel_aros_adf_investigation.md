@@ -604,3 +604,144 @@ Previously zero. First trigger: BLTSIZV=`0x0100` (256 lines), BLTSIZH=`0x0028`
 (40 words × 16 = 640 pixels wide) — a full-screen fill.
 
 Result: screen now renders correctly. The `it's working` confirmation from user.
+
+---
+
+## Conclusão da Investigação AROS ADF (2026-06-28)
+
+### Resumo do arco completo
+
+A investigação começou com uma tela cinza ao bootar `aros.rom + aros.adf` no
+harness. Três causas-raiz independentes foram identificadas e corrigidas ao longo
+de múltiplas sessões. Com todas as três aplicadas, o AROS lê o ADF, monta a tela
+gráfica e o blitter renderiza conteúdo. As issues ISSUE-0015 e ISSUE-0021 são
+encerradas como consolidated.
+
+---
+
+### Causa-Raiz 1: /DSKCHG invisível com drive deselecionado (ISSUE-0015)
+
+**Sintoma**: AROS `dosboot_DevicePresent()` retornava FALSE. DSKLEN nunca escrito
+em 5000+ frames. Sem leituras de disco.
+
+**Causa**: `cia_b_prb_update_floppy()` em Rigel atualizava `/DSKCHG` (CIA-A PRA
+bit 2) apenas quando `selected_count == 1`. AROS lê `/DSKCHG` sem selecionar a
+drive — sinal open-drain no hardware real que persiste independente de seleção.
+Além disso, `floppy_init()` inicializava `disk_changed=1` em drives fantasma
+(DF1–3), criando `/DSKCHG` sempre ativo e confundindo o boot.
+
+**Fix**:
+- `external/rigel/src/floppy/floppy_drive.c`: `disk_changed=0` em `floppy_init()`
+  para drives sem disco; `floppy_insert()` mantém `disk_changed=1`.
+- `external/rigel/src/core/rigel_cia_api.c`: bit `/DSKCHG` atualizado via OR de
+  todos os drives, fora do guard `selected_count==1`. Bits WPROT/TRK0/DSKRDY
+  continuam condicionados à seleção.
+
+**Verificação**: Com o fix, AROS detecta DF0 via `TD_CHANGESTATE`, inicia motor,
+recalibra, e disk DMA fica ativo (DSKLEN escrito, DSKBLK dispara).
+
+---
+
+### Causa-Raiz 2: Endereços ECS de BLTSIZV/BLTSIZH incorretos em Rigel (ISSUE-0015)
+
+**Sintoma**: Window e Layer do requester Intuition existiam corretamente em RAM.
+Bitplanes quase vazios (8/20480 bytes não-zero em plane0, 0 em plane1). Tela
+cinza com apenas ponteiro do mouse visível. Registradores de setup do blitter
+(BLTCON0, BLTCPT, BLTDPT, BLTBDAT etc.) escritos 1284× mas trigger nunca
+disparado.
+
+**Causa**: Rigel em modo ECS (`RIGEL_CHIPSET_ECS`). AROS lê VPOSR bit 13
+(chip_id `0x20` = ECS PAL) e seta `ecs_agnus=TRUE`. `startblitter()` compilado
+no ROM em `0xFCAEF4` escreve:
+```
+MOVE.W D0, $00DFF05C   ; BLTSIZV — altura, não dispara
+MOVE.W D1, $00DFF05E   ; BLTSIZH — largura + trigger
+```
+Rigel tinha registradores ECS codificados como `0x1C0`/`0x1C2` (endereços AGA,
+não ECS). Os endereços corretos do hardware ECS Agnus conforme o manual Commodore:
+- `$DFF05C` = BLTSIZV (15 bits, não dispara)
+- `$DFF05E` = BLTSIZH (11 bits, dispara o blit)
+
+Descoberto via sonda de instrução no `JSR (A5)` em `pc=0xFCB588`, revelando
+`A5=0xFCAEF4`, seguido de disassembly do ROM nesse endereço.
+
+**Fix**:
+- `external/rigel/src/chipset/agnus/blitter/blitter_regs.c`:
+  `REG_BLTSIZV=0x05C`, `REG_BLTSIZH=0x05E`
+- `external/rigel/src/domains/blitter/blitter_domain.c`: cases `0x05C`/`0x05E`
+  substituem `0x1C0`/`0x1C2`
+- `src/machine/machine_rigel_bus.c`: filtro de trace atualizado
+
+**Verificação**: 1348 eventos de trigger por run de 3200 frames. BLTSIZV=`0x0100`
+(256 linhas), BLTSIZH=`0x0028` (40 words = 640 px) no primeiro trigger — fill de
+tela completa. Tela renderiza corretamente.
+
+---
+
+### Causa-Raiz 3: WaitPort com mp_SigTask errado em trackdisk getunit() (ISSUE-0021)
+
+**Sintoma**: Com os dois fixes acima, AROS lê ADF e inicializa parcialmente, mas
+algumas tasks ficam bloqueadas. Dump do OS mostra `tc_SigRecvd` fora de
+`tc_SigWait` em múltiplas tasks (`trackdisk.device`, `console.device`).
+
+**Causa**: `getunit()` em `arch/m68k-amiga/devs/trackdisk/trackdisk_device.c:52`:
+```c
+static void getunit(struct TrackDiskBase *tdb) {
+    while (GetUnit(&tdb->td_dru) == NULL) {
+        WaitPort(&tdb->td_druport);  // mp_SigTask = TD task, sempre
+    }
+}
+```
+`td_druport.mp_SigTask` é setado para a TD task e nunca muda. Quando uma task
+cliente chama `beginio()` com `IOF_QUICK` → `getunit()`, o `GiveUnit()`
+sinaliza a TD task (errada). A task cliente fica bloqueada para sempre.
+
+**Contexto**: O commit AROS `06c521a903` corrigiu `useralert.c` (`EXEC_UNLOCK_LIST`
+→ `EXEC_UNLOCK_LIST_AND_PERMIT`). Com a ROM antiga (Jul/2025), `Permit()` não era
+chamado corretamente → sistema ficava em `Forbid` permanente → race invisível.
+Com a ROM nova (Mai/2026), `Permit()` funciona → task switching real → race exposta.
+
+**Workaround no harness** (`tools/harness/musashi_backend.c`):
+`HARNESS_MSGPORT_OWNER_FIX=1` — intercepta `WaitPort` e `WaitIO` (LVOs 64 e 74)
+e atualiza `mp_SigTask` para a task chamadora real antes de bloquear.
+
+**Fix limpo no source AROS** (proposto, não aplicado):
+```c
+static void getunit(struct TrackDiskBase *tdb) {
+    while (GetUnit(&tdb->td_dru) == NULL) {
+        tdb->td_druport.mp_SigTask = FindTask(NULL);  // callee real
+        WaitPort(&tdb->td_druport);
+    }
+}
+```
+
+**Estado**: workaround funciona para `getunit()`. Pode haver outros pontos com
+o mesmo padrão (`console.device` teve sinal similar no dump). Fix limpo requer
+patch no source AROS ou manutenção do workaround no harness.
+
+---
+
+### Estado final após os três fixes
+
+Com RC1 + RC2 + RC3 (workaround):
+- AROS detecta DF0, lê boot block, root block e directories
+- Exec inicializa, tasks acordam por VBL/PORTS
+- Intuition abre screen `640×256` 2-bitplane + requester window
+- Blitter renderiza: 1348 triggers/run, conteúdo aparece em chip RAM
+- Tela exibe conteúdo (requester visível)
+
+Ponto de entrada aberto: AROS com `aros.rom + aros.adf` pode ainda não carregar
+o Workbench completo se houver mismatches de versão ROM/ADF. WinUAE é a referência
+— qualquer diferença entre WinUAE e o harness nesse ponto é candidata a próxima
+investigação (ISSUE futura se necessário).
+
+### Arquivos modificados (resumo cross-issue)
+
+| Arquivo | Mudança |
+|---------|---------|
+| `external/rigel/src/floppy/floppy_drive.c` | `disk_changed=0` em init |
+| `external/rigel/src/core/rigel_cia_api.c` | `/DSKCHG` OR todos os drives |
+| `external/rigel/src/chipset/agnus/blitter/blitter_regs.c` | BLTSIZV=0x05C, BLTSIZH=0x05E |
+| `external/rigel/src/domains/blitter/blitter_domain.c` | route 0x05C/0x05E |
+| `src/machine/machine_rigel_bus.c` | trace filter 0x05C/0x05E |
+| `tools/harness/musashi_backend.c` | HARNESS_MSGPORT_OWNER_FIX workaround |
