@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0020
-title: "new_aros.rom (maio/2026) boot screen stall — mp_SigTask em getunit()"
+title: "new_aros.rom (maio/2026) boot screen nao aparece sem HARNESS_MSGPORT_OWNER_FIX — mp_SigTask em getunit()"
 status: doing
 priority: high
 type: bug
@@ -22,7 +22,8 @@ related_files:
 ---
 
 > **Issue secundária (2026-06-28)**: boot screen do `new_aros.rom` (ROM mai/2026)
-> trava sem o workaround `HARNESS_MSGPORT_OWNER_FIX=1`. Issue principal
+> não aparece sem `HARNESS_MSGPORT_OWNER_FIX=1`; com ADF inserido o boot funciona
+> mesmo sem o fix. Issue principal
 > (`aros.rom + aros.adf`) foi resolvida por RC1+RC2 — ver ISSUE-0015/ISSUE-0021.
 
 **Root cause**: `getunit()` em `trackdisk_device.c:52` chama `WaitPort` em uma

@@ -8,7 +8,7 @@ Bellatrix is a software Amiga chipset emulator that replaces the PiStorm hardwar
 
 Kickstart boot, Workbench 1.3, Happy Hand (animated mouse pointer), and AROS desktop are all working. Current focus:
 1. **Emu68 JIT integration** — performance, bus API stability, and quantum window correctness under the JIT backend.
-2. **AROS newer ROM** — `aros.rom` (Jul/2025) boots to desktop. `new_aros.rom` (May/2026) stalls at boot screen without `HARNESS_MSGPORT_OWNER_FIX=1` workaround; clean fix pending (ISSUE-0020).
+2. **AROS newer ROM** — `aros.rom` (Jul/2025) boots to desktop. `new_aros.rom` (May/2026) boots with ADF inserted; without `HARNESS_MSGPORT_OWNER_FIX=1` the boot screen does not appear but the ADF boot path still works. Clean fix pending (ISSUE-0020).
 
 **ROM format**: AROS uses a 1MB concatenated ROM: `aros-ext.bin` (EXT, 512KB, maps to 0xE00000) followed by `aros-rom.bin` (main ROM, 512KB, maps to 0xF80000). Concatenate in that order to produce the ROM file expected by the harness.
 
