@@ -1,0 +1,101 @@
+diff --git a/device.c b/device.c
+index 5f85f96..36ce808 100644
+--- a/device.c
++++ b/device.c
+@@ -36,6 +36,71 @@ extern const char device_id_string[];
+ extern int endskip;
+ static struct Library * init(BPTR seg_list asm("a0"));
+ 
++#if CDBOOT
++/* Deferred CD mount: polls FindCDFS() until cdrom-handler registers CDFileSystem,
++ * then calls MountDrive(cdBoot=true).  Created when FindCDFS() returns false at
++ * diag-init time (priority 105) so the CD is still mounted after the ROM's
++ * cdrom-handler registers (priority -1). */
++#define LIDE_CD_DEFER_STACK    4096
++#define LIDE_CD_DEFER_POLL_US  500000   /* poll interval: 500 ms */
++#define LIDE_CD_DEFER_TIMEOUT  240      /* give up after 240 polls (~2 min) */
++
++static void cd_deferred_task(void)
++{
++    struct ExecBase  *SysBase   = *(struct ExecBase **)4UL;
++    struct ConfigDev *configDev = (struct ConfigDev *)FindTask(NULL)->tc_UserData;
++
++    struct MsgPort     *timerPort = L_CreatePort(NULL, 0);
++    if (!timerPort) return;
++
++    struct timerequest *timerReq = (struct timerequest *)L_CreateExtIO(timerPort, sizeof(struct timerequest));
++    if (!timerReq) { L_DeletePort(timerPort); return; }
++
++    if (OpenDevice(TIMERNAME, UNIT_MICROHZ, (struct IORequest *)timerReq, 0) != 0) {
++        L_DeleteExtIO((struct IORequest *)timerReq);
++        L_DeletePort(timerPort);
++        return;
++    }
++
++    for (int poll = 0; poll < LIDE_CD_DEFER_TIMEOUT; poll++) {
++        timerReq->tr_node.io_Command = TR_ADDREQUEST;
++        timerReq->tr_time.tv_secs    = 0;
++        timerReq->tr_time.tv_micro   = LIDE_CD_DEFER_POLL_US;
++        DoIO((struct IORequest *)timerReq);
++
++        if (FindCDFS()) {
++            struct DeviceBase *dev;
++            Forbid();
++            dev = (struct DeviceBase *)FindName(&SysBase->DeviceList, DEVICE_NAME);
++            Permit();
++
++            if (dev) {
++                struct IOTask *it = (struct IOTask *)dev->ideTasks.mlh_Head;
++                if (it->mn_Node.mln_Succ) {
++                    struct MountStruct ms = {
++                        .deviceName  = dev->lib.lib_Node.ln_Name,
++                        .creatorName = dev->lib.lib_Node.ln_Name,
++                        .SysBase     = SysBase,
++                        .cdBoot      = true,
++                        .luns        = false,
++                        .slowSpinup  = false,
++                        .ignoreLast  = true,
++                        .configDev   = configDev,
++                    };
++                    MountDrive(&ms);
++                    TweakBootList(SysBase, dev->lib.lib_Node.ln_Name);
++                }
++            }
++            break;
++        }
++    }
++
++    CloseDevice((struct IORequest *)timerReq);
++    L_DeleteExtIO((struct IORequest *)timerReq);
++    L_DeletePort(timerPort);
++}
++#endif  /* CDBOOT */
++
+ /*-----------------------------------------------------------
+ A library or device with a romtag should start with moveq #-1,d0 (to
+ safely return an error if a user tries to execute the file), followed by a
+@@ -1058,6 +1123,24 @@ static struct Library * init(BPTR seg_list asm("a0"))
+ 
+         if (!seg_list) // Only tweak if we're in boot
+             TweakBootList(SysBase,mydev->lib.lib_Node.ln_Name);
++
++#if CDBOOT
++        if (!CDBoot) {
++            /* CDFileSystem not registered yet (cdrom-handler priority -1 hasn't
++             * run).  Spin up a background task that polls FindCDFS() and mounts
++             * the CD once the filesystem becomes available. */
++            BOOL has_atapi = false;
++            struct IDEUnit *u = (struct IDEUnit *)mydev->units.mlh_Head;
++            while (u->mn_Node.mln_Succ) {
++                if (u->flags.atapi) { has_atapi = true; break; }
++                u = (struct IDEUnit *)u->mn_Node.mln_Succ;
++            }
++            if (has_atapi) {
++                L_CreateTask("lide cd defer", 0, cd_deferred_task,
++                             LIDE_CD_DEFER_STACK, (APTR)itask->cd);
++            }
++        }
++#endif
+     }
+ done:
+     return (struct Library *)mydev;

@@ -167,6 +167,10 @@ MUSASHI_PATCHES=(
     "$PATCHES/0006-musashi-enable-instruction-hook.patch"
 )
 
+LIDE_PATCHES=(
+    "$PATCHES/0011-lide-deferred-cdboot.patch"
+)
+
 # ---------------------------------------------------------------------------
 # --verify: check all patches are correctly applied, exit 1 on failure
 #
@@ -336,6 +340,11 @@ if [ "$SETUP_MODE" = "reset" ]; then
         apply_submodule_patch_if_needed "$MUSASHI" "$patch"
     done
 
+    for patch in "${LIDE_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        apply_submodule_patch_if_needed "$ROOT/external/lide.device" "$patch"
+    done
+
     install_be_stub_if_needed
 
     echo ""
@@ -379,6 +388,11 @@ done
 for patch in "${MUSASHI_PATCHES[@]}"; do
     [ -f "$patch" ] || continue
     apply_submodule_patch_if_needed "$MUSASHI" "$patch"
+done
+
+for patch in "${LIDE_PATCHES[@]}"; do
+    [ -f "$patch" ] || continue
+    apply_submodule_patch_if_needed "$ROOT/external/lide.device" "$patch"
 done
 
 install_be_stub_if_needed
