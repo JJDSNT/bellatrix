@@ -94,6 +94,11 @@ apply_submodule_patch_if_needed() {
         return 0
     fi
 
+    if [ ! -e "$repo/.git" ]; then
+        echo "ERROR: submodule not initialized: $repo (run: git submodule update --init $repo)"
+        exit 1
+    fi
+
     if git -C "$repo" apply --reverse --check "$patch" >/dev/null 2>&1; then
         echo "Patch already applied: $name"
         return 0
@@ -223,7 +228,7 @@ check_emu68_patch_applied() {
 if [ "$SETUP_MODE" = "verify" ]; then
     check_cmd git
     cd "$ROOT"
-    git submodule update --init emu68 external/cherryusb external/btstack external/musashi >/dev/null 2>&1 || true
+    git submodule update --init emu68 external/cherryusb external/btstack external/musashi external/rigel external/lide.device external/ODFileSystem >/dev/null 2>&1 || true
 
     failed=0
     echo "=== Patch verification ==="
@@ -361,7 +366,7 @@ check_cmd aarch64-linux-gnu-gcc
 
 cd "$ROOT"
 git submodule sync -- external/cherryusb >/dev/null 2>&1 || true
-git submodule update --init emu68 external/musashi external/cherryusb external/btstack
+git submodule update --init emu68 external/musashi external/cherryusb external/btstack external/rigel external/lide.device external/ODFileSystem
 
 ensure_emu68_gitignore
 
