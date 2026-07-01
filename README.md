@@ -55,6 +55,16 @@ The USB drive must be formatted as FAT32. Place `.adf` files (floppy disk images
 
 ## Quick start
 
+### Prerequisites (Ubuntu/Debian)
+
+```bash
+sudo apt-get install -y cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu golang-go libsdl2-dev
+```
+
+`cmake` and the `aarch64-linux-gnu` cross-compiler are needed to build the Pi image and the Musashi harness; `golang-go` builds the `tools/launcher` ROM/config picker TUI (used by `./run.sh` and `./run.sh harness` whenever `KICKSTART` isn't set). `libsdl2-dev` is recommended for the harness — without it, CMake silently falls back to a headless build (no display window).
+
+You also need a Docker-compatible container runtime on your `PATH` as `docker` (Docker Engine, Docker Desktop, Podman with a `docker` alias, or any other OCI-compatible CLI that understands `docker run`-style flags). `./run.sh harness` uses it to cross-compile `lide.device` and `ODFileSystem` for m68k-AmigaOS (image `amigadev/crosstools:m68k-amigaos`) and embed the resulting ROMs into the harness binary.
+
 ```bash
 git clone --recurse-submodules https://github.com/JJDSNT/bellatrix
 cd bellatrix
