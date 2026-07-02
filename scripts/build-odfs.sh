@@ -61,6 +61,9 @@ CFLAGS="-Os -m68000 -mtune=68020-60 -msoft-float -noixemul -nostartfiles \
  -include $COMPAT_HDR"
 
 echo "[build-odfs] Building ODFileSystem (m68k)..."
+# Always build from scratch: stale objects (headers/flags changed without
+# touching the .c) produce a mixed binary that masquerades as a regression.
+rm -rf "$ODFS_DIR/build/amiga"
 (cd "$REPO_ROOT" && TTY_ENABLED="" "$DOCKER_WRAPPER" bash -c \
     "make -C external/ODFileSystem amiga \
         CFLAGS='$CFLAGS' \

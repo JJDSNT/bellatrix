@@ -92,13 +92,23 @@ add_custom_command(
 set(ODFS_BIN ${ODFS}/build/amiga/ODFileSystem)
 set(ODFS_C   ${CMAKE_BINARY_DIR}/odfs_data.c)
 
+# Track ALL ODFS sources — a stale embedded handler (e.g. cache_block.c
+# edited without triggering a rebuild) is indistinguishable from a real
+# regression and has cost us a full debugging session (ISSUE-0023).
+file(GLOB_RECURSE ODFS_SOURCES
+    ${ODFS}/core/*.c
+    ${ODFS}/backends/*.c
+    ${ODFS}/platform/amiga/*.c
+    ${ODFS}/platform/amiga/*.S
+    ${ODFS}/include/*.h
+    ${ODFS}/Makefile
+)
+
 add_custom_command(
     OUTPUT  ${ODFS_BIN}
     COMMAND ${ROOT}/scripts/build-odfs.sh ${ODFS_BIN}
     DEPENDS
-        ${ODFS}/platform/amiga/handler_main.c
-        ${ODFS}/core/mount.c
-        ${ODFS}/backends/iso9660/iso9660.c
+        ${ODFS_SOURCES}
         ${ROOT}/scripts/build-odfs.sh
         ${ROOT}/scripts/odfs_crosstools_compat.h
     COMMENT "Building ODFileSystem (m68k) via Docker"
