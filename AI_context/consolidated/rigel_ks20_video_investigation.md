@@ -142,3 +142,245 @@ Most likely next areas:
 - Hires planar expansion: compositor currently emits one pixel per bitplane bit
   block position. Verify whether hires needs different source-to-output mapping
   rather than only scaled DIW/DDF coordinates.
+
+## Session 2026-07-02 — KS20 Text Opcode Trace
+
+Added a generic harness diagnostic in `tools/harness/musashi_backend.c`:
+
+- `HARNESS_ROM_WATCH_RANGE1=lo:hi`
+- `HARNESS_ROM_WATCH_RANGE2=lo:hi`
+
+It logs `[WATCH-ROM-R]` for reads from watched ROM ranges, including PC and
+D/A registers. This is necessary because the text block at `0xFCECC4` is data,
+not code; `HARNESS_TRACE_PC_RANGE=0xFCECC4:...` will not fire.
+
+Findings from:
+
+```sh
+rtk env BELLATRIX_CHIPSET_BACKEND=rigel \
+  HARNESS_ROM_WATCH_RANGE1=0xFCECC4:0xFCED24 \
+  ./out/harness-rigel/harness src/roms/KS20.rom --frames 900
+```
+
+- `0xFCECC4` is the KS20 copyright-text script/data:
+  - `2.0 Roms`
+  - `Copyright ...`
+  - `Commodore-Amiga, Inc.`
+  - `All Rights Reserved`
+- The script is first copied/read as longwords by reset code at `PC=0xF800E4`.
+- Later it is interpreted by code around `PC=0xFCE716..0xFCE75E`.
+- Script opcode `0xFB` is definitely reached:
+  - `addr=FCECD2 val=FB` at `PC=FCE71A`
+  - operand `0x16` at `PC=FCE71E`
+- Text characters then go through the glyph/text routine around `PC=0xFA470C`
+  and onward.
+
+Additional run:
+
+```sh
+rtk env BELLATRIX_CHIPSET_BACKEND=rigel \
+  HARNESS_ROM_WATCH_RANGE1=0xFCECD2:0xFCECD3 \
+  HARNESS_WATCH_RANGE1=0x00D700:0x00D900 \
+  ./out/harness-rigel/harness src/roms/KS20.rom --frames 900
+```
+
+showed many non-zero glyph writes to chip RAM around `0x00D73E..0x00D85x`,
+mostly from `PC=0xFA4832` and `PC=0xFA4844`. Therefore the missing visible text
+is no longer explained by the script interpreter aborting before glyph draw.
+The glyph data is being generated in chip RAM.
+
+Updated working hypothesis:
+
+- The failure is downstream of text generation:
+  - the written glyph buffer is not part of the bitplane DMA region being
+    fetched for the visible KS20 screen, or
+  - Rigel fetch/compositor/window/scroll handling maps that buffer outside the
+    exported visible frame, or
+  - the data is overwritten/cleared before the frame dump.
+- Natural next trace: refine `RIGEL_BPL_FETCH_PROBE` so it can filter by frame
+  and address range, then check whether Agnus ever fetches the glyph-written
+  range (`0x00D73x..`) when the KS20 text should be visible.
+
+## Session 2026-07-02 — Boot Timing, DIWHIGH, and Remaining Text Failure
+
+User constraint: the KS20 insert-disk screen, including text and floppy
+animation, should settle before 400 frames. The earlier trace that reached the
+text script only around 900 frames was therefore a symptom, not acceptable
+behavior.
+
+### Floppy/default drive model
+
+Important finding: Rigel was modelling all four floppy drives as connected empty
+drives at reset. KS20 spends time probing non-DF0 drives, which delayed reaching
+the insert-disk/text path.
+
+Local change in `external/rigel`:
+
+- `FloppyDrive` now has `connected`.
+- Reset defaults only DF0 connected; DF1-DF3 are disconnected.
+- `floppy_insert()` connects the target drive.
+- Disconnected drives release lines instead of behaving as empty selected
+  drives:
+  - `/DSKCHG` high
+  - `/WPRO` high
+  - `/TRK0` inactive
+  - `/RDY` inactive
+  - ID bit high
+- CIA-B floppy routing ignores select/motor for disconnected drives.
+- Public `rigel_floppy_get_status()` now reports disconnected drives as not
+  selected.
+
+Verification after this change:
+
+```sh
+rtk cmake --build out/harness-rigel --target harness -j2
+rtk proxy bash -lc 'BELLATRIX_CHIPSET_BACKEND=rigel \
+  HARNESS_ROM_WATCH_RANGE1=0xFCECD2:0xFCECD3 \
+  HARNESS_WATCH_RANGE1=0x00D700:0x00D900 \
+  ./out/harness-rigel/harness src/roms/KS20.rom --frames 400 2>&1 |
+  rg "WATCH-ROM-R|pc=00fa48|WATCH-BPL-RAM-W"'
+```
+
+Result:
+
+- `0xFB` script opcode is reached before 400 frames.
+- Glyph writes from `PC=0xFA4832/0xFA4844` occur before 400 frames.
+- This fixed the "text opcode never runs soon enough" part of the bug.
+
+### ECS DIWHIGH / vertical clipping
+
+KS20 programs:
+
+- `BPLCON0=b302`
+- `DIWSTRT=6395`
+- `DIWSTOP=f4ad`
+- `DIWHIGH=2000`
+- `DDF=0040/00d0`
+- `BPL1MOD=BPL2MOD=fffa`
+
+Rigel decoded this as a short visible vertical window ending around line 244,
+which clipped the lower part of the insert-disk artwork and hid the text region.
+
+Local change in `external/rigel/src/chipset/denise/video/display_window.c`:
+
+- Treat `DIWHIGH=0x2000` with an 8-bit `DIWSTOP` vertical decode as an extended
+  vertical stop for this ECS window.
+- Clamp `vstop` to `RIGEL_DENISE_MAX_LINES` instead of discarding the geometry
+  when the decoded window reaches the PAL raster end.
+
+Observed effect:
+
+- Frame dump size changed from `688x200` to `688x268`.
+- Trace now reports `vis=298..858/99..312`.
+- The lower screen/artwork region is no longer clipped.
+
+### DIWSTRT=ffff transient horizontal beating
+
+After exposing the lower window, the screen began "batendo horizontalmente".
+Trace showed KS20 periodically writes a transient blanking/window value:
+
+- `DIWSTRT=ffff`
+- `DIWSTOP=f4ad`
+
+Rigel was accepting that as a real viewport and alternating exported width
+between `688` and `476`.
+
+Local change:
+
+- Ignore `DIWSTRT=0xffff` in `display_window_update()` when a valid geometry
+  already exists.
+
+Observed effect:
+
+- `RIGEL-FRAME-VIDEO` now remains stable at `688x268`.
+- At frame 250, raw registers can still show `diw=ffff/f4ad`, but exported
+  visible geometry remains the last valid `6395/f4ad` window.
+
+### Current text status
+
+Text is still not visible. The current visual result is stable horizontally and
+shows the extended lower region, but the expected text area renders as blue
+striped/incorrect bitplane data or remains blank depending on animation page.
+
+Important traces:
+
+1. Glyph writes are real:
+
+```sh
+BELLATRIX_CHIPSET_BACKEND=rigel \
+HARNESS_WATCH_RANGE1=0x00D700:0x00D900 \
+./out/harness-rigel/harness src/roms/KS20.rom --frames 430
+```
+
+Shows many writes to `0x00D73E..0x00D85x` from `PC=0xFA4832/0xFA4844`.
+
+2. Bitplane DMA fetch of the same range can occur while the range is still zero:
+
+```sh
+BELLATRIX_CHIPSET_BACKEND=rigel \
+RIGEL_BPL_FETCH_TRACE_RANGE=0x00D700:0x00D900 \
+RIGEL_BPL_FETCH_TRACE_MIN_FRAME=500 \
+RIGEL_BPL_FETCH_TRACE_VFROM=238 \
+RIGEL_BPL_FETCH_TRACE_VTO=260 \
+RIGEL_BPL_FETCH_TRACE_LIMIT=500 \
+./out/harness-rigel/harness src/roms/KS20.rom --frames 620
+```
+
+Shows fetches like:
+
+- `frame=570 v=244 plane=2 addr=00d73a data=0000`
+- `frame=570 v=244 plane=2 addr=00d73e data=0000`
+
+3. Chip RAM dump at frame 600 confirms the `0x00D700` text buffer is zero by
+then:
+
+```sh
+BELLATRIX_CHIPSET_BACKEND=rigel \
+HARNESS_SCREENSHOT_FRAMES=600 \
+HARNESS_SCREENSHOT_DIR=/tmp/ks20_chip \
+HARNESS_CHIPDUMP=0xd700:0x200 \
+./out/harness-rigel/harness src/roms/KS20.rom --frames 602
+
+od -Ax -tx2 -N 128 /tmp/ks20_chip/chip_600_0d700.bin
+```
+
+Output starts with all zero words. Therefore the current failure is not simply
+"Rigel DMA cannot see CPU writes"; either the glyph buffer is later cleared or
+the ROM alternates/double-buffers pages and Rigel is showing/fetching the wrong
+page at the time the text should appear.
+
+### Diagnostic additions currently in tree
+
+`tools/harness/musashi_backend.c`:
+
+- `HARNESS_ROM_WATCH_RANGE1/2=lo:hi`
+- Logs `[WATCH-ROM-R]` with PC and selected D/A registers.
+
+`external/rigel/src/chipset/agnus/timing/slot_scheduler.c`:
+
+- `RIGEL_BPL_FETCH_TRACE_RANGE=lo:hi`
+- `RIGEL_BPL_FETCH_TRACE_FRAME=N`
+- `RIGEL_BPL_FETCH_TRACE_MIN_FRAME=N`
+- `RIGEL_BPL_FETCH_TRACE_VFROM=N`
+- `RIGEL_BPL_FETCH_TRACE_VTO=N`
+- `RIGEL_BPL_FETCH_TRACE_LIMIT=N`
+- `RIGEL_BPL_TABLE_TRACE`
+- `RIGEL_BPL_DISPATCH_TRACE`
+
+These are env-gated diagnostics and were useful to prove the text path and
+bitplane fetch timing.
+
+### Open next steps
+
+- Find who clears or overwrites `0x00D700..0x00D900` after the glyph routine.
+  Use `HARNESS_WATCH_RANGE1=0x00D700:0x00D900` and look for later zero writes
+  after the `PC=0xFA48xx` glyph writes.
+- Track KS20 bitplane pointer page alternation:
+  - known pages observed: `006048/0087ee` and `00d73a/00fee0`
+  - determine which page should contain final text and whether Rigel advances
+    `BPLxPT`/modulos incorrectly.
+- Continue comparing with KS31 on 68020 as a validation ROM; user reports the
+  same symptom there.
+- Revisit ECS register gaps only if traces show KS20 writes them. So far there
+  is no evidence of `BPLCON4` or `FMODE` writes in this path; `DIWHIGH` was the
+  relevant ECS register found in this session.

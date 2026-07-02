@@ -111,6 +111,34 @@ FUNCIONA e do que está ABERTO.
    com device despausado → drop+re-arm; 5 re-arms sem NENHUMA drenagem →
    desabilita áudio de vez. Qualquer drenagem observada zera os contadores
    (evita falso positivo no arranque — regressão reportada e corrigida).
+   **ATUALIZAÇÃO (2026-07-02, sessão seguinte): essa política NÃO tinha sido
+   commitada** — o `pal_posix.c` em HEAD só tinha o `SDL_Delay(excesso)` sem
+   cap (commit cf9f573 "keep audio paced at realtime"). Sintoma reobservado:
+   fps bom no início degradando até <1 fps, MESMO SEM ISO/HDF (lide
+   comprovadamente isolado: `lide_cdrom_register()` só roda via
+   insert/attach; romtag ODFS só carrega pelo bootldr da placa). Perfil
+   confirmou: `audio=` crescendo de 0.07s/s até 1.9s/s de wall dentro do
+   push. A política stall-aware (cap+watchdog) foi tentada e REJEITADA pelo
+   usuário ("hacky", som pior e ainda degradava). **Resolução final: áudio
+   revertido ao comportamento original pré-cf9f573** (fila SDL simples, sem
+   pacing/throttle) com um único acréscimo: device abre pausado e só
+   despausa na primeira amostra não-silenciosa (amostras de silêncio antes
+   disso são descartadas) — sem áudio de fato, nenhum stream abre. Validado
+   120s com HARNESS_LOOP_PROF: iters estáveis ~15-16k/s, audio=0.002s/s,
+   sem degradação.
+   **Diagnóstico final do som ruim (2026-07-02)**: modelo trocado para
+   callback SDL + ring bounded (~743ms) com jitter cushion de 186ms
+   (re-prime após underrun) — emulação nunca bloqueia, latência limitada.
+   Instrumentação (`HARNESS_AUDIO_TRACE=1`) mostrou produção saudável
+   (38-44k amostras/s) mas o callback SDL parando de ser chamado após ~21s.
+   **Reproduzido com SDL puro (senoide 440Hz) fora do harness: o RDPSink do
+   WSLg morre após ~21s de playback** (43 cb/s → ~1/s). Não é o
+   module-suspend-on-idle (descarregado via libpulse, stall persiste);
+   PULSE_LATENCY_MSEC não muda nada; só existe pulseaudio no WSL (sem ALSA/
+   pipewire). Reabrir o device SDL ressuscita o sink mas ele re-morre a
+   cada ~3s. Ambiente: WSL 2.9.3.0, WSLg 1.0.79. É bug do host — candidato
+   a `wsl --update`; qualquer fix no harness seria paliativo (reopen
+   automático em stall).
 6. **Ferramentas novas** (env-gated, default off): `HARNESS_LOOP_PROF=1`
    (breakdown por segundo do loop interativo), frame= no log de READ_10.
 
