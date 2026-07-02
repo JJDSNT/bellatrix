@@ -428,124 +428,54 @@ static void pal_sdl_enable_relative_mouse(void)
 
 /* ---- SDL audio ---- */
 
-#define PAL_AUDIO_SAMPLE_RATE 44100
-#define PAL_AUDIO_BUF_FRAMES  1024
-#define PAL_AUDIO_DEFAULT_START_MS 50u
-#define PAL_AUDIO_DEFAULT_TARGET_MS 70u
-#define PAL_AUDIO_DEFAULT_MAX_MS 120u
+/* Pull model with a jitter buffer: the SDL callback drains a bounded ring.
+ * Playback only starts (and restarts after an underrun) once the ring holds
+ * a cushion of audio, so production jitter never chops output sample-by-
+ * sample.  If the host sink stalls, the ring overflows and the oldest
+ * samples are dropped — latency stays bounded and the emulator never blocks
+ * on audio. */
+
+#define PAL_AUDIO_SAMPLE_RATE   44100
+#define PAL_AUDIO_BUF_FRAMES    1024
+#define PAL_AUDIO_RING_FRAMES   32768   /* ~743 ms */
+#define PAL_AUDIO_CUSHION_FRAMES 8192   /* ~186 ms before (re)starting */
 
 static SDL_AudioDeviceID s_audio_dev = 0;
-static int16_t s_audio_buf[PAL_AUDIO_BUF_FRAMES * 2];
-static int s_audio_buf_pos = 0;
 static int s_audio_started = 0;
+static int s_audio_priming = 1;
+static int16_t s_audio_ring[PAL_AUDIO_RING_FRAMES * 2];
+static uint32_t s_audio_ring_rd = 0;   /* frame index, free-running */
+static uint32_t s_audio_ring_wr = 0;   /* frame index, free-running */
 
-static uint32_t pal_audio_env_ms(const char *name, uint32_t fallback)
+static void pal_audio_sdl_cb(void *userdata, Uint8 *stream, int len)
 {
-    const char *env = getenv(name);
-    char *end = NULL;
-    unsigned long value;
+    int16_t *out = (int16_t *)stream;
+    int frames = len / (2 * (int)sizeof(int16_t));
+    int i;
 
-    if (!env || env[0] == '\0') {
-        return fallback;
-    }
+    (void)userdata;
 
-    value = strtoul(env, &end, 10);
-    if (end == env || value > 1000ul) {
-        return fallback;
-    }
-
-    return (uint32_t)value;
-}
-
-static int pal_audio_queue_trace_enabled(void)
-{
-    static int enabled = -1;
-
-    if (enabled < 0) {
-        const char *env = getenv("HARNESS_AUDIO_QUEUE_TRACE");
-        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
-    }
-
-    return enabled;
-}
-
-static uint32_t pal_audio_frames_to_bytes(uint32_t frames)
-{
-    return frames * 2u * (uint32_t)sizeof(int16_t);
-}
-
-static uint32_t pal_audio_ms_to_frames(uint32_t ms)
-{
-    return (uint32_t)(((uint64_t)PAL_AUDIO_SAMPLE_RATE * (uint64_t)ms) / 1000u);
-}
-
-static uint32_t pal_audio_bytes_to_ms(uint32_t bytes)
-{
-    uint32_t frames = bytes / (2u * (uint32_t)sizeof(int16_t));
-    return (uint32_t)(((uint64_t)frames * 1000u) / PAL_AUDIO_SAMPLE_RATE);
-}
-
-static void pal_audio_after_queue(void)
-{
-    static uint64_t s_trace_last = 0;
-    static uint32_t s_trace_min = UINT32_MAX;
-    static uint32_t s_trace_max = 0;
-    uint32_t queued;
-    uint32_t start_ms = pal_audio_env_ms("HARNESS_AUDIO_START_QUEUE_MS",
-                                         PAL_AUDIO_DEFAULT_START_MS);
-    uint32_t target_ms = pal_audio_env_ms("HARNESS_AUDIO_TARGET_QUEUE_MS",
-                                          PAL_AUDIO_DEFAULT_TARGET_MS);
-    uint32_t max_ms = pal_audio_env_ms("HARNESS_AUDIO_MAX_QUEUE_MS",
-                                       PAL_AUDIO_DEFAULT_MAX_MS);
-    uint32_t start_bytes = pal_audio_frames_to_bytes(pal_audio_ms_to_frames(start_ms));
-    uint32_t target_bytes = pal_audio_frames_to_bytes(pal_audio_ms_to_frames(target_ms));
-    uint32_t max_bytes = pal_audio_frames_to_bytes(pal_audio_ms_to_frames(max_ms));
-
-    if (target_ms > max_ms) {
-        target_ms = max_ms;
-        target_bytes = max_bytes;
-    }
-
-    queued = SDL_GetQueuedAudioSize(s_audio_dev);
-
-    if (!s_audio_started && queued >= start_bytes) {
-        SDL_PauseAudioDevice(s_audio_dev, 0);
-        s_audio_started = 1;
-    }
-
-    if (queued > max_bytes && target_bytes < queued) {
-        uint32_t excess_bytes = queued - target_bytes;
-        uint32_t delay_ms = pal_audio_bytes_to_ms(excess_bytes);
-
-        if (delay_ms > 0u) {
-            SDL_Delay(delay_ms);
-            queued = SDL_GetQueuedAudioSize(s_audio_dev);
+    if (s_audio_priming) {
+        if (s_audio_ring_wr - s_audio_ring_rd >= PAL_AUDIO_CUSHION_FRAMES)
+            s_audio_priming = 0;
+        else {
+            memset(stream, 0, (size_t)len);
+            return;
         }
     }
 
-    if (pal_audio_queue_trace_enabled()) {
-        uint64_t now = PAL_Time_ReadCounter();
-        uint64_t freq = PAL_Time_GetFrequency();
-
-        if (queued < s_trace_min) s_trace_min = queued;
-        if (queued > s_trace_max) s_trace_max = queued;
-
-        if (s_trace_last == 0u) {
-            s_trace_last = now;
-        } else if (now - s_trace_last >= freq) {
-            fprintf(stderr,
-                    "[AUDIO-QUEUE] queued=%ums min=%ums max=%ums"
-                    " started=%d start=%ums target=%ums max_cfg=%ums\n",
-                    pal_audio_bytes_to_ms(queued),
-                    pal_audio_bytes_to_ms(s_trace_min),
-                    pal_audio_bytes_to_ms(s_trace_max),
-                    s_audio_started,
-                    start_ms,
-                    target_ms,
-                    max_ms);
-            s_trace_last = now;
-            s_trace_min = UINT32_MAX;
-            s_trace_max = 0;
+    for (i = 0; i < frames; i++) {
+        if (s_audio_ring_rd != s_audio_ring_wr) {
+            uint32_t slot = (s_audio_ring_rd % PAL_AUDIO_RING_FRAMES) * 2u;
+            out[i * 2]     = s_audio_ring[slot];
+            out[i * 2 + 1] = s_audio_ring[slot + 1u];
+            s_audio_ring_rd++;
+        } else {
+            /* underrun: go silent and rebuild the cushion before resuming */
+            s_audio_priming = 1;
+            memset(&out[i * 2], 0,
+                   (size_t)(frames - i) * 2u * sizeof(int16_t));
+            return;
         }
     }
 }
@@ -558,7 +488,7 @@ static void pal_audio_sdl_init(void)
     desired.format   = AUDIO_S16SYS;
     desired.channels = 2;
     desired.samples  = PAL_AUDIO_BUF_FRAMES;
-    desired.callback = NULL;
+    desired.callback = pal_audio_sdl_cb;
 
     s_audio_dev = SDL_OpenAudioDevice(NULL, 0, &desired, NULL, 0);
     if (s_audio_dev == 0) {
@@ -566,24 +496,50 @@ static void pal_audio_sdl_init(void)
         return;
     }
 
+    /* Stays paused until the guest produces a non-silent sample, so a
+     * machine that never plays audio never opens an output stream. */
     SDL_PauseAudioDevice(s_audio_dev, 1);
-    fprintf(stderr, "[PAL] audio: %d Hz stereo S16 queued\n", PAL_AUDIO_SAMPLE_RATE);
+    fprintf(stderr, "[PAL] audio: %d Hz stereo S16\n", PAL_AUDIO_SAMPLE_RATE);
 }
 
 void pal_audio_push_sample(int16_t left, int16_t right)
 {
+    uint32_t slot;
+
     if (!s_audio_dev)
         return;
 
-    s_audio_buf[s_audio_buf_pos++] = left;
-    s_audio_buf[s_audio_buf_pos++] = right;
+    if (!s_audio_started) {
+        if (left == 0 && right == 0)
+            return;
+        SDL_PauseAudioDevice(s_audio_dev, 0);
+        s_audio_started = 1;
+    }
 
-    if (s_audio_buf_pos >= PAL_AUDIO_BUF_FRAMES * 2) {
-        SDL_QueueAudio(s_audio_dev,
-                       s_audio_buf,
-                       (uint32_t)sizeof(s_audio_buf));
-        s_audio_buf_pos = 0;
-        pal_audio_after_queue();
+    SDL_LockAudioDevice(s_audio_dev);
+    if (s_audio_ring_wr - s_audio_ring_rd >= PAL_AUDIO_RING_FRAMES) {
+        /* ring full: drop the oldest audio, keep latency bounded */
+        s_audio_ring_rd = s_audio_ring_wr - PAL_AUDIO_RING_FRAMES + 1u;
+    }
+    slot = (s_audio_ring_wr % PAL_AUDIO_RING_FRAMES) * 2u;
+    s_audio_ring[slot]      = left;
+    s_audio_ring[slot + 1u] = right;
+    s_audio_ring_wr++;
+    SDL_UnlockAudioDevice(s_audio_dev);
+
+    if (getenv("HARNESS_AUDIO_TRACE")) {
+        static uint64_t last = 0;
+        static uint32_t pushed = 0, last_rd = 0;
+        uint64_t now = PAL_Time_ReadCounter();
+        pushed++;
+        if (last == 0) { last = now; last_rd = s_audio_ring_rd; }
+        else if (now - last >= PAL_Time_GetFrequency()) {
+            fprintf(stderr,
+                    "[AUDIO-TRACE] push=%u/s consumed=%u/s level=%uf priming=%d\n",
+                    pushed, s_audio_ring_rd - last_rd,
+                    s_audio_ring_wr - s_audio_ring_rd, s_audio_priming);
+            last = now; pushed = 0; last_rd = s_audio_ring_rd;
+        }
     }
 }
 
