@@ -384,3 +384,83 @@ bitplane fetch timing.
 - Revisit ECS register gaps only if traces show KS20 writes them. So far there
   is no evidence of `BPLCON4` or `FMODE` writes in this path; `DIWHIGH` was the
   relevant ECS register found in this session.
+
+## Session 2026-07-02 (noite) — BLTSIZV latch bug FIXED; stamp de texto ainda aberto
+
+### Ferramentas novas (env-gated, in-tree)
+
+- `RIGEL_BLT_W_TRACE_RANGE=lo:hi` (blitter_ref.c/blitter_line.c): loga
+  `[BLT-W]` para toda escrita do blitter no range — cobre o que watchpoint
+  de CPU não vê.
+- `RIGEL_BLT_CMD_TRACE=1` (blitter_command.c): loga `[BLT-CMD]` com con0/
+  con1/A/B/C/D/mods/size/adat/fwm/lwm de todo blit.
+- Disassembler m68k standalone: `dasm.c` no scratchpad, compila com
+  musashi/m68kdasm.c — `./dasm KS20.rom 0xFA4700 0xFA4900`.
+
+### BUG CORRIGIDO: BLTSIZV/BLTSIZH zerados após blit (rigel blitter_timing.c)
+
+`blitter_publish_result()` zerava `bltsizh/bltsizv` ao fim do blit. No
+hardware ECS são latches persistentes; o KS2.0 programa BLTSIZV uma vez e
+re-dispara blits da mesma altura escrevendo só BLTSIZH. Consequência: o 2º
+e 3º blits de cada série saíam com altura 0 (nenhuma escrita). Fix: não
+zerar. Resultado visível: logo + floppy + fundo roxo renderizam; os blits
+de texto/animação agora executam nos 3 planos (5x9 nos três, era 5x9/5x0/
+5x0). Animação do disquete deve melhorar (blits perdidos eram isso).
+
+### BLTCON0L (0x05A) implementado no rigel (blitter_regs.c)
+
+Escrita só do minterm, preservando USE/shift. KS20 não usa (verificado),
+mas é correto ECS.
+
+### ABERTO: mecânica do stamp de texto — minterm 0x0A não deposita B
+
+Fluxo completo mapeado:
+1. CPU renderiza a linha de texto num strip scratch (stride 14 bytes,
+   ~9 linhas, em ~0xd722..0xd7b4) via loop `or.l D0,(A0)` em 0xFA47DA/
+   0xFA482A (rotina de glifos, disasm confirmado).
+2. Blits "stamp" por plano: `con0=<ashift>|070a con1=<bshift>|0000`,
+   B=strip (bmod -24), C=D=linha ~102 do plano da página A (0x7c3a/
+   0xa3e0/0xcb86, cmod/dmod -80, size 5x9, adat=ffff, fwm/lwm recortam
+   as colunas). Programado em 0xFA382C/0xFA38A2 (`move.w #$70a,(A5)`).
+3. Minterm 0x0A = ~A·C — pela spec APAGA a faixa e ignora B (embora USEB
+   esteja ligado e o B pointer/mods/bshift estejam todos coerentes com
+   uma cópia). Na prática o rigel zera a área e o texto nunca aparece.
+   No hardware real o texto aparece — logo nossa leitura da semântica de
+   canal/minterm para este caso está errada em algum ponto.
+
+Hipóteses testadas e descartadas: BLTCON0L trocando minterm (KS20 não
+escreve 0x05A); segundo blit "draw" na mesma área (não existe — só 1 stamp
+por plano); texto via CPU direto nos planos visíveis (watch em 0x7bd0-
+0x7d00: só zeros do blitter + clear de boot).
+
+Próximos passos sugeridos: (a) capturar o strip ENTRE o render de glifos e
+o erase (chipdump no frame exato do batch pc=FA48xx) e simular o stamp
+offline com interpretações alternativas de canal (A↔B, masks, adat) até
+reproduzir a referência; (b) comparar com WinUAE logando os mesmos blits
+(con0=070a) para ver o D resultante real; (c) conferir se BLTBDAT/prime de
+B (primeira fetch descartada?) muda o resultado — rigel pode estar errando
+o pipeline de shift do canal B (primeiro word do B shiftado entra no
+SEGUINTE), o que faria B "vazar" para... (verificar se minterm deveria ser
+outro por conta de con1 bit0 line=0 etc).
+
+### Nota sobre a janela vertical (duplicata na parte de baixo)
+
+O shot 688x268 mostra a arte da página A e, abaixo, a página B/scratch
+sendo desenhada (logo prata etc.). Rever a interpretação de DIWHIGH=0x2000
+da sessão anterior: se a janela real for 145 linhas, o "extended vstop"
+está expondo memória que não deveria ser visível; se for mais alta, a
+página B não deveria estar mapeada ali. Decidir com a referência (texto
+fica DENTRO da janela, linha ~102 da página A — não precisa da extensão
+para aparecer).
+
+### RESOLVIDO (2026-07-02, noite): duplicata na parte inferior — decode do DIWHIGH
+
+`DIWHIGH=$2000` é o bit H8 do HSTOP (horizontal), não extensão vertical.
+O decode genérico anterior mapeava bits 11-13 como H8-H10 (errado: 11-12
+são sub-pixel SHRES; H8 = bit 13 no byte de stop / bit 5 no de start) e a
+sessão anterior tinha adicionado um "extended vstop" que esticava a janela
+para 268 linhas, expondo a página de trás do double-buffer (a "duplicata"
+com logo prata + lixo). Corrigido em display_window.c: H8 = (byte>>5)&1,
+vstop = decode normal (244). Janela KS20 agora 688x200 estável, sem
+duplicata. Verificado sem regressão: KS13 (448x256, caminho OCS intocado)
+e AROS (boot screen 768x256 ok).
