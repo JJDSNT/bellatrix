@@ -1,8 +1,26 @@
 #include "machine/expansions/lide_cdrom/atapi_cdrom.h"
 
 #include "support.h"
+#include "machine/machine.h"
 
 #include <string.h>
+
+#include <stdlib.h>
+
+/* Per-command trace logging: enable with HARNESS_CD_TRACE=1.
+ * Off by default — during sustained CD I/O this logging is heavy enough
+ * to throttle the emulator when stdout is a terminal. */
+static int atapi_cd_trace_enabled(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_CD_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    return enabled;
+}
+#define CD_TRACE(...) do { if (atapi_cd_trace_enabled()) kprintf(__VA_ARGS__); } while (0)
+
 
 /* ISO 9660 PVD patching */
 #define ISO9660_PVD_LBA     16u   /* Primary Volume Descriptor is always at LBA 16 */
@@ -43,6 +61,18 @@
  */
 static void patch_pvd_sysid(uint8_t *sector)
 {
+    /* Opt-in (HARNESS_CD_BOOTABLE=1): forging "AMIGA BOOT" makes the lide
+     * mounter register the CD with bootPri=2, so it competes with the
+     * floppy in the boot node list.  For the normal workflow — boot from
+     * ADF, CD mounted as a data volume — the ISO must stay non-bootable. */
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_CD_BOOTABLE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    if (!enabled)
+        return;
+
     /* Verify PVD: type byte = 0x01, standard identifier = "CD001" */
     if (sector[0] != 0x01)
         return;
@@ -251,8 +281,9 @@ static int cmd_read_10(AtapiCdromState *s, const uint8_t *pkt,
             ((uint32_t)pkt[4] <<  8) |  (uint32_t)pkt[5];
     count = (uint16_t)(((uint16_t)pkt[7] << 8) | pkt[8]);
 
-    kprintf("[ATAPI] READ_10 lba=%u count=%u max=%u\n",
-            (unsigned)lba, (unsigned)count, (unsigned)max);
+    CD_TRACE("[ATAPI] READ_10 lba=%u count=%u max=%u frame=%u\n",
+            (unsigned)lba, (unsigned)count, (unsigned)max,
+            (unsigned)bellatrix_machine_get()->frame_counter);
 
     if (count == 0) {
         *len = 0;
@@ -297,7 +328,7 @@ int atapi_cdrom_exec(void *ctx,
     (void)pkt_len;
     *data_len = 0;
 
-    kprintf("[ATAPI] cmd %02x media=%d\n", (unsigned)pkt[0], s->ops->present(s->ops_ctx));
+    CD_TRACE("[ATAPI] cmd %02x media=%d\n", (unsigned)pkt[0], s->ops->present(s->ops_ctx));
     switch (pkt[0]) {
     case CMD_TEST_UNIT_READY:
         return cmd_test_unit_ready(s, buf_out, buf_max, data_len);
