@@ -240,6 +240,7 @@ target_compile_options(odfs PRIVATE -w)
 # ---------------------------------------------------------------------------
 add_executable(harness
     ${CMAKE_CURRENT_SOURCE_DIR}/main.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/screenshot.c
     ${CMAKE_CURRENT_SOURCE_DIR}/musashi_backend.c
     ${SRC}/storage/iso/odfs_iso.c
     ${BELLATRIX_SOURCES}

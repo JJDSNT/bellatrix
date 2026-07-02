@@ -49,6 +49,10 @@ static int s_watch_ranges_init = 0;
 static uint32_t s_watch_range_lo[2] = {0, 0};
 static uint32_t s_watch_range_hi[2] = {0, 0};
 static int s_watch_range_enabled[2] = {0, 0};
+static int s_rom_watch_ranges_init = 0;
+static uint32_t s_rom_watch_range_lo[2] = {0, 0};
+static uint32_t s_rom_watch_range_hi[2] = {0, 0};
+static int s_rom_watch_range_enabled[2] = {0, 0};
 static int s_trace_pc_ranges_init = 0;
 static uint32_t s_trace_pc_lo[2] = {0, 0};
 static uint32_t s_trace_pc_hi[2] = {0, 0};
@@ -63,6 +67,7 @@ static uint32_t harness_cpu_ram_read(uint32_t addr, int size);
 
 static void harness_init_watch_ranges(void);
 static int harness_watch_custom_range_addr(uint32_t addr);
+static int harness_watch_rom_range_addr(uint32_t addr);
 static void harness_trace_pc_range(uint32_t pc);
 static void harness_trace_exec_call(uint32_t pc);
 static void harness_trace_library_call(uint32_t pc);
@@ -355,6 +360,92 @@ static int harness_watch_custom_range_addr(uint32_t addr)
     }
 
     return 0;
+}
+
+static void harness_init_rom_watch_ranges(void)
+{
+    static const char *const env_names[2] = {
+        "HARNESS_ROM_WATCH_RANGE1",
+        "HARNESS_ROM_WATCH_RANGE2"
+    };
+    int i;
+
+    if (s_rom_watch_ranges_init)
+        return;
+    s_rom_watch_ranges_init = 1;
+
+    for (i = 0; i < 2; ++i)
+    {
+        const char *spec = getenv(env_names[i]);
+        char *endptr = NULL;
+        unsigned long lo;
+        unsigned long hi;
+
+        if (!spec || !*spec)
+            continue;
+
+        lo = strtoul(spec, &endptr, 0);
+        if (!endptr || *endptr != ':')
+            continue;
+        hi = strtoul(endptr + 1, &endptr, 0);
+        if (!endptr || *endptr != '\0')
+            continue;
+        if (hi < lo)
+            continue;
+
+        s_rom_watch_range_lo[i] = (uint32_t)lo & 0x00FFFFFFu;
+        s_rom_watch_range_hi[i] = (uint32_t)hi & 0x00FFFFFFu;
+        s_rom_watch_range_enabled[i] = 1;
+
+        printf("[HARNESS-ROM-WATCH-RANGE] slot=%d lo=%06x hi=%06x\n",
+               i + 1,
+               (unsigned)s_rom_watch_range_lo[i],
+               (unsigned)s_rom_watch_range_hi[i]);
+    }
+}
+
+static int harness_watch_rom_range_addr(uint32_t addr)
+{
+    int i;
+
+    harness_init_rom_watch_ranges();
+    addr &= 0x00FFFFFFu;
+
+    for (i = 0; i < 2; ++i)
+    {
+        if (!s_rom_watch_range_enabled[i])
+            continue;
+        if (addr >= s_rom_watch_range_lo[i] && addr <= s_rom_watch_range_hi[i])
+            return 1;
+    }
+
+    return 0;
+}
+
+static void harness_watch_rom_read(uint32_t pc, uint32_t addr, int size, uint32_t value)
+{
+    if (!harness_watch_rom_range_addr(addr))
+        return;
+
+    printf("[WATCH-ROM-R] pc=%08x addr=%06x size=%d val=%08x "
+           "D0=%08x D1=%08x D2=%08x D3=%08x "
+           "A0=%06x A1=%06x A2=%06x A3=%06x A4=%06x A5=%06x A6=%06x A7=%06x\n",
+           (unsigned)pc,
+           (unsigned)(addr & 0x00FFFFFFu),
+           size,
+           (unsigned)value,
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D0),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D1),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D2),
+           (unsigned)m68k_get_reg(NULL, M68K_REG_D3),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A0) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A1) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A2) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A3) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A4) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A5) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A6) & 0x00FFFFFFu),
+           (unsigned)((uint32_t)m68k_get_reg(NULL, M68K_REG_A7) & 0x00FFFFFFu));
 }
 
 /* AROS-LOOP: count SERDATR reads near the TBE poll loop at 0xFE85FA */
@@ -2328,20 +2419,28 @@ static uint32_t harness_read(uint32_t addr, int size)
 
     /* Standard ROM window (0xF80000 or 0xFC0000) */
     if (s_rom_std_size && addr >= s_rom_std_base &&
-        addr < s_rom_std_base + s_rom_std_size)
-        return rom_read_at(s_rom_std_off + (addr - s_rom_std_base), size);
+        addr < s_rom_std_base + s_rom_std_size) {
+        ret = rom_read_at(s_rom_std_off + (addr - s_rom_std_base), size);
+        harness_watch_rom_read(pc, addr, size, ret);
+        return ret;
+    }
 
     /* Extended ROM window (1 MB ROMs only) */
     if (s_rom_ext_size && addr >= s_rom_ext_base &&
-        addr < s_rom_ext_base + s_rom_ext_size)
-        return rom_read_at(s_rom_ext_off + (addr - s_rom_ext_base), size);
+        addr < s_rom_ext_base + s_rom_ext_size) {
+        ret = rom_read_at(s_rom_ext_off + (addr - s_rom_ext_base), size);
+        harness_watch_rom_read(pc, addr, size, ret);
+        return ret;
+    }
 
     /* Chip RAM window */
     if (bellatrix_chip_addr_contains(addr)) {
         /* Overlay: reads from low page redirect to standard ROM */
         if (harness_overlay() && addr < BELLATRIX_CHIP_BOOT_SIZE && s_rom_std_size) {
             uint32_t rom_off = s_rom_std_off + (addr & (s_rom_std_size - 1u));
-            return rom_read_at(rom_off, size);
+            ret = rom_read_at(rom_off, size);
+            harness_watch_rom_read(pc, s_rom_std_base + (addr & (s_rom_std_size - 1u)), size, ret);
+            return ret;
         }
         harness_sync_cpu_progress();
         const BellatrixMemory *mem = &bellatrix_machine_get()->memory;

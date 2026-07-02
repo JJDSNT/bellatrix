@@ -14,6 +14,7 @@
 //                     [--headless] [--cycles N] [--frames N]
 
 #include "musashi_backend.h"
+#include "screenshot.h"
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
 
 #include "machine/machine.h"
@@ -1401,6 +1402,8 @@ int main(int argc, char **argv)
                     break;
                 }
             }
+
+            harness_maybe_screenshot(frame_count);
 
             if (frame_count == 3000) {
                 const uint8_t *cr = m->memory.chip_ram;
