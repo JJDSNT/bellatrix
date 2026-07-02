@@ -1,0 +1,166 @@
+diff --git a/Makefile b/Makefile
+index d5bde13..68e4f81 100644
+--- a/Makefile
++++ b/Makefile
+@@ -140,7 +140,8 @@ HOST_SRCS = platform/host/file_media.c
+ # Amiga handler sources
+ AMIGA_SRCS = platform/amiga/handler_main.c \
+     platform/amiga/libc_stubs.c \
+-    platform/amiga/printf_local.c
++    platform/amiga/printf_local.c \
++    platform/amiga/romtag.c
+ 
+ # Amiga assembly
+ AMIGA_ASM_SRCS = platform/amiga/startup.S
+diff --git a/platform/amiga/romtag.c b/platform/amiga/romtag.c
+new file mode 100644
+index 0000000..f4dfc2f
+--- /dev/null
++++ b/platform/amiga/romtag.c
+@@ -0,0 +1,93 @@
++/*
++ * romtag.c — FileSystem.resource registration for the ROM boot path
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ *
++ * Called from the ROMtag init in startup.S after the lide.device bootldr
++ * relocates this binary from the RIPPLE second ROM bank (InitResident).
++ * Registers ODFileSystem in FileSystem.resource under DosType 'CD01' so
++ * the lide.device mounter (find_filesystem/MountDrive) can create and
++ * patch the CD0: DosNode with our seglist.
++ */
++
++#include <exec/execbase.h>
++#include <exec/memory.h>
++#include <exec/resident.h>
++#include <resources/filesysres.h>
++
++#include <proto/exec.h>
++
++/* FSEF_* patch flag bits consumed by ProcessPatchFlags in the mounter */
++#define ODFS_FSEF_STACKSIZE  0x0010
++#define ODFS_FSEF_SEGLIST    0x0080
++#define ODFS_FSEF_GLOBALVEC  0x0100
++
++#define ODFS_DOSTYPE_CD01    0x43443031UL   /* 'CD01' */
++#define ODFS_HANDLER_STACK   8192
++
++/* Hunk 0 base — startup.S entry point.  The bootldr's relocator (reloc.S)
++ * lays each segment out as AllocMem(len + 8): [length][BPTR next][code...],
++ * so the seglist BPTR for hunk 0 is (base - 4) >> 2. */
++extern UBYTE odfs_hunk0[] asm("_start");
++
++/* proto/exec.h inlines dispatch through this global; handler_main.c
++ * defines it and re-initializes it when the handler process starts. */
++extern struct ExecBase *SysBase;
++
++static const char odfs_fse_name[] = "ODFileSystem";
++
++void odfs_register_cdfs(void);
++
++void odfs_register_cdfs(void)
++{
++    struct FileSysResource *fsr;
++    struct FileSysEntry *fse;
++
++    SysBase = *(struct ExecBase **)4UL;
++
++    fsr = OpenResource((STRPTR)FSRNAME);
++    if (fsr == NULL) {
++        /* First filesystem to register — create the resource ourselves,
++         * same as HDD mounters do on pre-2.0 systems. */
++        fsr = AllocMem(sizeof(*fsr), MEMF_PUBLIC | MEMF_CLEAR);
++        if (fsr == NULL)
++            return;
++        fsr->fsr_Node.ln_Name = (char *)FSRNAME;
++        fsr->fsr_Creator      = (char *)odfs_fse_name;
++        fsr->fsr_FileSysEntries.lh_Head =
++            (struct Node *)&fsr->fsr_FileSysEntries.lh_Tail;
++        fsr->fsr_FileSysEntries.lh_Tail = NULL;
++        fsr->fsr_FileSysEntries.lh_TailPred =
++            (struct Node *)&fsr->fsr_FileSysEntries.lh_Head;
++        AddResource(fsr);
++    }
++
++    Forbid();
++    for (fse = (struct FileSysEntry *)fsr->fsr_FileSysEntries.lh_Head;
++         fse->fse_Node.ln_Succ != NULL;
++         fse = (struct FileSysEntry *)fse->fse_Node.ln_Succ) {
++        if (fse->fse_DosType == ODFS_DOSTYPE_CD01) {
++            Permit();
++            return;     /* a CD filesystem is already registered */
++        }
++    }
++    Permit();
++
++    fse = AllocMem(sizeof(*fse), MEMF_PUBLIC | MEMF_CLEAR);
++    if (fse == NULL)
++        return;
++
++    fse->fse_Node.ln_Name = (char *)odfs_fse_name;
++    fse->fse_DosType      = ODFS_DOSTYPE_CD01;
++    fse->fse_Version      = 1UL << 16;
++    fse->fse_PatchFlags   = ODFS_FSEF_STACKSIZE |
++                            ODFS_FSEF_SEGLIST |
++                            ODFS_FSEF_GLOBALVEC;
++    fse->fse_StackSize    = ODFS_HANDLER_STACK;
++    fse->fse_SegList      = (BPTR)(((ULONG)odfs_hunk0 - 4) >> 2);
++    fse->fse_GlobalVec    = (BPTR)-1;
++
++    Forbid();
++    AddHead(&fsr->fsr_FileSysEntries, &fse->fse_Node);
++    Permit();
++}
+diff --git a/platform/amiga/startup.S b/platform/amiga/startup.S
+index 006c718..85bdbd5 100644
+--- a/platform/amiga/startup.S
++++ b/platform/amiga/startup.S
+@@ -91,3 +91,48 @@ _entrypoint:
+ .done:
+ .fail:
+ 	rts
++
++/*
++ * ROMtag for the RIPPLE second-bank boot path.
++ *
++ * The lide.device bootldr relocates this binary from the board ROM and
++ * scans hunk 0 for a Resident structure (InitRT in bootldr.S).  The init
++ * function registers ODFileSystem in FileSystem.resource with DosType
++ * 'CD01' so lide.device's FindCDFS()/MountDrive(cdBoot) can mount CD0:.
++ *
++ * When the binary is started as a regular handler process the seglist
++ * entry point at offset 0 (_start above) is used and this structure is
++ * plain data — it is only ever invoked via InitResident.
++ */
++
++#define RTC_MATCHWORD	0x4AFC
++#define RTF_COLDSTART	0x01
++#define NT_UNKNOWN	0
++
++	.balign	2
++	.globl	_odfs_romtag
++_odfs_romtag:
++	.word	RTC_MATCHWORD		/* rt_MatchWord */
++	.long	_odfs_romtag		/* rt_MatchTag */
++	.long	_odfs_romtag_end	/* rt_EndSkip */
++	.byte	RTF_COLDSTART		/* rt_Flags */
++	.byte	1			/* rt_Version */
++	.byte	NT_UNKNOWN		/* rt_Type */
++	.byte	0			/* rt_Pri */
++	.long	_odfs_rt_name		/* rt_Name */
++	.long	_odfs_rt_id		/* rt_IdString */
++	.long	_odfs_rt_init		/* rt_Init */
++
++_odfs_rt_init:
++	movem.l	d2-d7/a2-a6,-(sp)
++	jsr	_odfs_register_cdfs	/* C: register CD01 in FileSystem.resource */
++	movem.l	(sp)+,d2-d7/a2-a6
++	moveq	#0,d0
++	rts
++
++_odfs_rt_name:
++	.asciz	"ODFileSystem"
++_odfs_rt_id:
++	.asciz	"ODFileSystem CD01 filesystem"
++	.balign	2
++_odfs_romtag_end:

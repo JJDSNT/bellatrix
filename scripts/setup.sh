@@ -176,6 +176,10 @@ LIDE_PATCHES=(
     "$PATCHES/0011-lide-deferred-cdboot.patch"
 )
 
+ODFS_PATCHES=(
+    "$PATCHES/0012-odfs-cd01-romtag.patch"
+)
+
 # ---------------------------------------------------------------------------
 # --verify: check all patches are correctly applied, exit 1 on failure
 #
@@ -350,6 +354,11 @@ if [ "$SETUP_MODE" = "reset" ]; then
         apply_submodule_patch_if_needed "$ROOT/external/lide.device" "$patch"
     done
 
+    for patch in "${ODFS_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        apply_submodule_patch_if_needed "$ROOT/external/ODFileSystem" "$patch"
+    done
+
     install_be_stub_if_needed
 
     echo ""
@@ -398,6 +407,11 @@ done
 for patch in "${LIDE_PATCHES[@]}"; do
     [ -f "$patch" ] || continue
     apply_submodule_patch_if_needed "$ROOT/external/lide.device" "$patch"
+done
+
+for patch in "${ODFS_PATCHES[@]}"; do
+    [ -f "$patch" ] || continue
+    apply_submodule_patch_if_needed "$ROOT/external/ODFileSystem" "$patch"
 done
 
 install_be_stub_if_needed
