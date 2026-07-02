@@ -577,6 +577,39 @@ int lide_cdrom_attach_iso_fn(BellatrixMachine *machine,
     return 0;
 }
 
+int lide_hd_attach(BellatrixMachine *machine,
+                   lide_hd_read_fn read_fn, lide_hd_write_fn write_fn,
+                   void *ctx, uint32_t sector_count)
+{
+    LideCdromState *s;
+    BellatrixExpansion *exp;
+
+    exp = bellatrix_expansion_find(machine, "lide.cdrom");
+    if (!exp) {
+        kprintf("[LIDE-HD] attach: expansion not found\n");
+        return -1;
+    }
+    s = (LideCdromState *)exp->desc.userdata;
+    if (!s) return -1;
+
+    if (!read_fn || sector_count == 0) {
+        kprintf("[LIDE-HD] attach: invalid backend\n");
+        return -1;
+    }
+
+    s->ide.disk_ctx     = ctx;
+    s->ide.disk_read    = read_fn;
+    s->ide.disk_write   = write_fn;
+    s->ide.disk_sectors = sector_count;
+
+    ata_ide_channel_reset(&s->ide);
+
+    kprintf("[LIDE-HD] HD attached: %u sectors (%u MB)%s\n",
+            (unsigned)sector_count, (unsigned)(sector_count / 2048u),
+            write_fn ? "" : " read-only");
+    return 0;
+}
+
 void lide_cdrom_eject(BellatrixMachine *machine)
 {
     LideCdromState *s;

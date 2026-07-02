@@ -14,6 +14,7 @@ type launchResult struct {
 	kickstart      string
 	adf            string
 	iso            string
+	hdf            string
 	displayMode    string
 	bootArgs       string
 	multicoreBuild bool
@@ -39,16 +40,19 @@ const (
 	paneKickstart activePane = iota
 	paneADF
 	paneISO
+	paneHDF
 )
 
 type model struct {
 	roms []FileEntry
 	adfs []FileEntry
 	isos []FileEntry
+	hdfs []FileEntry
 
 	romCursor int
 	adfCursor int
 	isoCursor int
+	hdfCursor int
 	active    activePane
 
 	displayMode    string
@@ -75,14 +79,16 @@ type model struct {
 	cancelled bool
 }
 
-func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchResult, error) {
+func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry, hdfs []FileEntry) (launchResult, error) {
 	m := model{
 		roms:           roms,
 		adfs:           adfs,
 		isos:           isos,
+		hdfs:           hdfs,
 		romCursor:      defaultROMIndex(roms),
 		adfCursor:      0,
 		isoCursor:      0,
+		hdfCursor:      0,
 		active:         paneKickstart,
 		displayMode:    "gtk",
 		multicoreBuild: false,
@@ -131,12 +137,19 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry) (launchRe
 		iso = selectedISO.Path
 	}
 
+	selectedHDF := fm.hdfs[fm.hdfCursor]
+	hdf := ""
+	if !selectedHDF.None {
+		hdf = selectedHDF.Path
+	}
+
 	return launchResult{
 		emuProfile:     launcherProfileForCPUBackend(fm.cpuBackend),
 		harnessCPU:     harnessCPUForBackend(fm.cpuBackend),
 		kickstart:      kickstart,
 		adf:            adf,
 		iso:            iso,
+		hdf:            hdf,
 		displayMode:    fm.displayMode,
 		bootArgs:       buildBootArgs(fm.debugMode, fm.fpuEnabled),
 		multicoreBuild: fm.multicoreBuild,
@@ -271,6 +284,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.active = paneADF
 			case paneADF:
 				m.active = paneISO
+			case paneISO:
+				m.active = paneHDF
 			default:
 				m.active = paneKickstart
 			}
@@ -290,6 +305,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.isoCursor > 0 {
 					m.isoCursor--
 				}
+			case paneHDF:
+				if m.hdfCursor > 0 {
+					m.hdfCursor--
+				}
 			}
 			return m, nil
 
@@ -306,6 +325,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case paneISO:
 				if m.isoCursor < len(m.isos)-1 {
 					m.isoCursor++
+				}
+			case paneHDF:
+				if m.hdfCursor < len(m.hdfs)-1 {
+					m.hdfCursor++
 				}
 			}
 			return m, nil
@@ -487,6 +510,25 @@ func (m model) renderPanel() string {
 	}
 
 	b.WriteString("\n")
+	b.WriteString(sectionTitleStyle.Render("Hard disk (HDF)"))
+	if m.active == paneHDF {
+		b.WriteString(" ")
+		b.WriteString(onBadgeStyle.Render("ACTIVE"))
+	}
+	b.WriteString("\n")
+
+	for i, hdf := range m.hdfs {
+		line := "  " + hdf.Name
+		if i == m.hdfCursor {
+			line = "> " + hdf.Name
+			b.WriteString(selectedItemStyle.Render(line))
+		} else {
+			b.WriteString(itemStyle.Render(line))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
 	b.WriteString(sectionTitleStyle.Render("Options"))
 	b.WriteString("\n")
 
@@ -624,7 +666,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO) • D Display • B Debug • M Multicore • A Perf mute • T BTStack • U USB • X MSC • P Pointer • E Boards • R Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • I Profile • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Display • B Debug • M Multicore • A Perf mute • T BTStack • U USB • X MSC • P Pointer • E Boards • R Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • I Profile • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }

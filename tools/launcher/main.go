@@ -58,10 +58,20 @@ func main() {
 	}
 
 	/* --------------------------------------------------------------------- */
+	/* Scan HDFs                                                             */
+	/* --------------------------------------------------------------------- */
+
+	hdfs, err := scanHDFs(disksDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to scan HDFs: %v\n", err)
+		os.Exit(1)
+	}
+
+	/* --------------------------------------------------------------------- */
 	/* Run TUI                                                               */
 	/* --------------------------------------------------------------------- */
 
-	result, err := runLauncher(roms, adfs, isos)
+	result, err := runLauncher(roms, adfs, isos, hdfs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "launcher failed: %v\n", err)
 		os.Exit(1)
@@ -76,7 +86,7 @@ func main() {
 	/* --------------------------------------------------------------------- */
 
 	output := fmt.Sprintf(
-		"EMU_PROFILE=%s\nHARNESS_CPU=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_MSC=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_PERF_LOGS_OFF=%s\nBELLATRIX_PROFILE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\n",
+		"EMU_PROFILE=%s\nHARNESS_CPU=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nHDF=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_MSC=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_PERF_LOGS_OFF=%s\nBELLATRIX_PROFILE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\n",
 		result.emuProfile,
 		result.harnessCPU,
 		result.kickstart,
@@ -84,6 +94,7 @@ func main() {
 		result.bootArgs,
 		result.adf,
 		result.iso,
+		result.hdf,
 		boolEnv(result.multicoreBuild),
 		boolEnv(result.traceLogs),
 		boolEnv(result.btstack),

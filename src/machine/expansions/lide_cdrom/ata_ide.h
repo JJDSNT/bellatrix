@@ -49,6 +49,8 @@ typedef enum AtaRegState {
     ATA_ATAPI_DATA_IN,   /* sending ATAPI data to host */
     ATA_ATAPI_DATA_OUT,  /* receiving ATAPI data from host */
     ATA_ATAPI_STATUS,    /* final status after command */
+    ATA_DATA_IN,         /* ATA disk: sending sector data to host */
+    ATA_DATA_OUT,        /* ATA disk: receiving sector data from host */
 } AtaRegState;
 
 typedef struct AtaIdeChannel {
@@ -80,6 +82,22 @@ typedef struct AtaIdeChannel {
                          size_t *data_len_out);
     /* Called on ATA DEVICE RESET so the ATAPI layer can re-raise UNIT_ATTENTION */
     void   (*atapi_reset)(void *ctx);
+
+    /*
+     * ATA disk (device 0 / master) — enabled when disk_read is non-NULL.
+     * When present, the channel becomes a two-device bus: dev_head bit 4
+     * selects between the disk (0) and the ATAPI CD (1).  Without a disk
+     * the legacy behaviour is kept: the ATAPI device answers regardless
+     * of the selection bit.
+     */
+    void    *disk_ctx;
+    int    (*disk_read)(void *ctx, uint32_t lba, uint32_t count, uint8_t *buf);
+    int    (*disk_write)(void *ctx, uint32_t lba, uint32_t count, const uint8_t *buf);
+    uint32_t disk_sectors;      /* total 512-byte sectors */
+
+    /* Pending ATA WRITE transfer (host → disk) */
+    uint32_t disk_wr_lba;
+    uint32_t disk_wr_count;
 } AtaIdeChannel;
 
 /* alloc/free manage the xfer_buf heap allocation.

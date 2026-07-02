@@ -33,6 +33,31 @@
 #include <signal.h>
 #include <unistd.h>
 
+/* HDF hard-disk backend: file kept open read/write; sectors served on
+ * demand so writes persist across runs. */
+typedef struct HarnessHdf {
+    FILE    *fp;
+    uint32_t sectors;
+} HarnessHdf;
+
+static HarnessHdf g_hdf;
+
+static int harness_hdf_read(void *ctx, uint32_t lba, uint32_t count, uint8_t *buf)
+{
+    HarnessHdf *h = (HarnessHdf *)ctx;
+    if (fseeko(h->fp, (off_t)lba * 512, SEEK_SET) != 0) return -1;
+    return fread(buf, 512, count, h->fp) == count ? 0 : -1;
+}
+
+static int harness_hdf_write(void *ctx, uint32_t lba, uint32_t count, const uint8_t *buf)
+{
+    HarnessHdf *h = (HarnessHdf *)ctx;
+    if (fseeko(h->fp, (off_t)lba * 512, SEEK_SET) != 0) return -1;
+    if (fwrite(buf, 512, count, h->fp) != count) return -1;
+    fflush(h->fp);
+    return 0;
+}
+
 typedef struct HarnessSerialInject {
     uint8_t byte;
     long frame;
@@ -794,6 +819,7 @@ int main(int argc, char **argv)
     const char *rom_path      = NULL;
     const char *adf_path      = NULL;
     const char *iso_path      = NULL;
+    const char *hdf_path      = NULL;
     const char *plugins_path  = NULL;
     const char *cpu_type      = NULL;
     int         headless      = 0;
@@ -818,6 +844,8 @@ int main(int argc, char **argv)
             adf_path = argv[++i];
         } else if (strcmp(argv[i], "--iso") == 0 && i + 1 < argc) {
             iso_path = argv[++i];
+        } else if (strcmp(argv[i], "--hdf") == 0 && i + 1 < argc) {
+            hdf_path = argv[++i];
         } else if (strcmp(argv[i], "--plugins") == 0 && i + 1 < argc) {
             plugins_path = argv[++i];
         } else if (strcmp(argv[i], "--cpu") == 0 && i + 1 < argc) {
@@ -828,6 +856,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             fprintf(stderr,
                 "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
+                "               [--hdf disk.hdf]\n"
                 "               [--plugins dir]\n"
                 "               [--cpu 68000|68010|68ec020|68020]\n"
                 "               [--headless] [--cycles N] [--frames N]\n"
@@ -839,6 +868,7 @@ int main(int argc, char **argv)
     if (!rom_path) {
         fprintf(stderr,
             "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
+                "               [--hdf disk.hdf]\n"
             "               [--plugins dir]\n"
             "               [--cpu 68000|68010|68ec020|68020]\n"
             "               [--headless] [--cycles N] [--frames N]\n"
@@ -913,6 +943,35 @@ int main(int argc, char **argv)
                iso_path, iso_size, iso_size / 2048u);
     }
 
+    /* Open HDF, if provided (kept open read/write; sectors served on demand). */
+    if (hdf_path) {
+        g_hdf.fp = fopen(hdf_path, "r+b");
+        if (!g_hdf.fp) {
+            fprintf(stderr, "[HARNESS] Cannot open HDF read/write: %s\n", hdf_path);
+            free(rom_data);
+            if (adf_data) free(adf_data);
+            if (iso_data) free(iso_data);
+            return 1;
+        }
+        fseeko(g_hdf.fp, 0, SEEK_END);
+        off_t hdf_bytes = ftello(g_hdf.fp);
+        if (hdf_bytes < 512 || (hdf_bytes % 512) != 0) {
+            fprintf(stderr,
+                    "[HARNESS] HDF size %lld not a multiple of 512 bytes\n",
+                    (long long)hdf_bytes);
+            fclose(g_hdf.fp);
+            g_hdf.fp = NULL;
+            free(rom_data);
+            if (adf_data) free(adf_data);
+            if (iso_data) free(iso_data);
+            return 1;
+        }
+        g_hdf.sectors = (uint32_t)(hdf_bytes / 512);
+        printf("[HARNESS] HDF: %s  size=%lld bytes  (%u sectors, %u MB)\n",
+               hdf_path, (long long)hdf_bytes, g_hdf.sectors,
+               (unsigned)(hdf_bytes / (1024 * 1024)));
+    }
+
     /* Init display before machine so framebuffer globals are set */
     if (!headless) {
         const char *zc = getenv("BELLATRIX_RIGEL_ZERO_COPY_VIDEO");
@@ -983,11 +1042,25 @@ int main(int argc, char **argv)
      * requested.  AROS polls an empty ATAPI device during boot and can sit on
      * the grey boot-wait screen indefinitely in ADF-only runs. */
     const char *empty_cdrom = getenv("HARNESS_REGISTER_EMPTY_CDROM");
-    int register_cdrom = iso_data != NULL ||
+    int register_cdrom = iso_data != NULL || g_hdf.fp != NULL ||
                          (empty_cdrom && empty_cdrom[0] != '\0' &&
                           empty_cdrom[0] != '0');
     if (register_cdrom && lide_cdrom_register(m) != 0) {
         fprintf(stderr, "[HARNESS] lide_cdrom_register failed\n");
+    }
+
+    /* Attach HDF as ATA disk (device 0 / master) on the lide board. */
+    if (g_hdf.fp) {
+        if (lide_hd_attach(m, harness_hdf_read, harness_hdf_write,
+                           &g_hdf, g_hdf.sectors) != 0) {
+            fprintf(stderr, "[HARNESS] Failed to attach HDF\n");
+            fclose(g_hdf.fp);
+            free(iso_data);
+            free(adf_data);
+            return 1;
+        }
+        printf("[HARNESS] HD: %u sectors attached (master; CD is slave)\n",
+               g_hdf.sectors);
     }
 
     /* Attach ISO image to the lide_cdrom expansion, if loaded via --iso. */
@@ -1094,10 +1167,41 @@ int main(int argc, char **argv)
         harness_pump_serial_rx(m);
 
         uint32_t quantum = bellatrix_machine_recommended_cpu_quantum((uint32_t)QUANTUM);
+
+        /* Loop profiling (HARNESS_LOOP_PROF=1): per-second breakdown of where
+         * wall time goes when the interactive loop degrades (fps < realtime). */
+        static int s_loop_prof = -1;
+        static uint64_t s_lp_t0, s_lp_cpu, s_lp_iters, s_lp_used, s_lp_audio;
+        if (s_loop_prof < 0) {
+            const char *env = getenv("HARNESS_LOOP_PROF");
+            s_loop_prof = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+        }
+        uint64_t lp_a = s_loop_prof ? PAL_Time_ReadCounter() : 0;
+
         int used = cpu_backend_run(musashi_backend_get(), quantum);
         total_cycles += used;
 
+        uint64_t lp_b = s_loop_prof ? PAL_Time_ReadCounter() : 0;
+        if (s_loop_prof) {
+            uint64_t freq = PAL_Time_GetFrequency();
+            s_lp_cpu   += lp_b - lp_a;
+            s_lp_iters += 1;
+            s_lp_used  += (uint64_t)used;
+            if (s_lp_t0 == 0) s_lp_t0 = lp_b;
+            if (lp_b - s_lp_t0 >= freq) {
+                printf("[LOOP-PROF] iters=%llu used=%llu cpu_run=%.3fs audio=%.3fs other=%.3fs quantum=%u\n",
+                       (unsigned long long)s_lp_iters,
+                       (unsigned long long)s_lp_used,
+                       (double)s_lp_cpu / (double)freq,
+                       (double)s_lp_audio / (double)freq,
+                       (double)(lp_b - s_lp_t0 - s_lp_cpu - s_lp_audio) / (double)freq,
+                       (unsigned)quantum);
+                s_lp_t0 = lp_b; s_lp_cpu = 0; s_lp_iters = 0; s_lp_used = 0; s_lp_audio = 0;
+            }
+        }
+
         /* Audio output: push samples at 44100 Hz using fractional accumulator */
+        uint64_t lp_c = s_loop_prof ? PAL_Time_ReadCounter() : 0;
         if (!headless) {
             /* Diagnostic for AI_context/issue_paula_audio_cpu_chipset_sync.md:
              * counts samples pushed twice in a row with the same (left,
@@ -1152,6 +1256,8 @@ int main(int argc, char **argv)
                 pal_audio_push_sample(left, right);
             }
         }
+
+        if (s_loop_prof) s_lp_audio += PAL_Time_ReadCounter() - lp_c;
 
         long cur_frame = (long)bellatrix_machine_get()->frame_counter;
         if (cur_frame != prev_frame) {
@@ -1354,6 +1460,7 @@ int main(int argc, char **argv)
 
     free(adf_data);
     free(iso_data);
+    if (g_hdf.fp) fclose(g_hdf.fp);
 
     return 0;
 }

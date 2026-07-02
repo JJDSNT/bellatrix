@@ -33,6 +33,21 @@ int lide_cdrom_attach_iso_fn(BellatrixMachine *machine,
                              iso_read_fn fn, void *ctx,
                              uint32_t sector_count);
 
+/*
+ * ATA hard disk (HDF) on the same IDE channel: disk = device 0 (master),
+ * CD = device 1 (slave).  The backend serves raw 512-byte sectors; RDB
+ * parsing, partitioning and boot are done by lide.device on the Amiga side.
+ * Both callbacks return 0 on success.  write may be NULL (read-only disk).
+ */
+typedef int (*lide_hd_read_fn)(void *ctx, uint32_t lba, uint32_t count,
+                               uint8_t *buf);
+typedef int (*lide_hd_write_fn)(void *ctx, uint32_t lba, uint32_t count,
+                                const uint8_t *buf);
+
+int lide_hd_attach(BellatrixMachine *machine,
+                   lide_hd_read_fn read_fn, lide_hd_write_fn write_fn,
+                   void *ctx, uint32_t sector_count);
+
 #ifdef __cplusplus
 }
 #endif

@@ -81,6 +81,7 @@ QEMU options (env vars):
 Harness options (env vars):
   KICKSTART=<file>    ROM to run (required, or selected via TUI)
   ADF=<file>          Mount ADF image as DF0 (optional)
+  HDF=<file>          Attach HDF (RDB) image as IDE hard disk (harness only)
   FRAMES=<n>          Stop after N frames and exit (headless mode)
   CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
   HARNESS_CPU=<type>  Musashi CPU type: 68000, 68010, 68ec020, 68020
@@ -247,6 +248,9 @@ load_launcher_selection() {
             ISO)
                 ISO="$value"
                 ;;
+            HDF)
+                HDF="$value"
+                ;;
             DISPLAY_MODE)
                 DISPLAY_MODE="$value"
                 ;;
@@ -375,6 +379,11 @@ if [ "$MODE" = "harness" ]; then
         HARNESS_ARGS+=(--iso "$ISO")
     fi
 
+    if [ -n "${HDF:-}" ]; then
+        [ -f "$HDF" ] || { echo "ERROR: HDF not found: $HDF"; exit 1; }
+        HARNESS_ARGS+=(--hdf "$HDF")
+    fi
+
     PLUGINS_DIR="${PLUGINS_DIR:-$HARNESS_BUILD_DIR/plugins}"
     if [ -d "$PLUGINS_DIR" ]; then
         HARNESS_ARGS+=(--plugins "$PLUGINS_DIR")
@@ -396,6 +405,9 @@ if [ "$MODE" = "harness" ]; then
     fi
     if [ -n "${ISO:-}" ]; then
         echo "[RUN] Harness CD-ROM: $ISO"
+    fi
+    if [ -n "${HDF:-}" ]; then
+        echo "[RUN] Harness HD: $HDF"
     fi
     if [ -d "$PLUGINS_DIR" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
@@ -440,6 +452,11 @@ if [ "$MODE" = "harness-serial" ]; then
         HARNESS_ARGS+=(--iso "$ISO")
     fi
 
+    if [ -n "${HDF:-}" ]; then
+        [ -f "$HDF" ] || { echo "ERROR: HDF not found: $HDF"; exit 1; }
+        HARNESS_ARGS+=(--hdf "$HDF")
+    fi
+
     PLUGINS_DIR="${PLUGINS_DIR:-$HARNESS_BUILD_DIR/plugins}"
     if [ -d "$PLUGINS_DIR" ]; then
         HARNESS_ARGS+=(--plugins "$PLUGINS_DIR")
@@ -460,6 +477,9 @@ if [ "$MODE" = "harness-serial" ]; then
     fi
     if [ -n "${ISO:-}" ]; then
         echo "[RUN] Harness CD-ROM: $ISO"
+    fi
+    if [ -n "${HDF:-}" ]; then
+        echo "[RUN] Harness HD: $HDF"
     fi
     if [ -d "$PLUGINS_DIR" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
