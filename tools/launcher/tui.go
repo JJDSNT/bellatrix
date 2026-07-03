@@ -98,7 +98,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry, hdfs []Fi
 		usbPointer:     "mouse",
 		emu68Boards:    "legacy",
 		profile:        false,
-		cpuBackend:     "musashi",
+		cpuBackend:     "musashi-68040",
 		fpuEnabled:     true,
 		z2RamSize:      "off",
 		serialBackend:  "log",

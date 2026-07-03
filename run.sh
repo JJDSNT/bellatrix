@@ -397,7 +397,7 @@ if [ "$MODE" = "harness" ]; then
     # Without FRAMES or CYCLES: interactive SDL2 window (default)
 
     echo "[RUN] Harness ROM: $KICKSTART"
-    echo "[RUN] Harness CPU: ${HARNESS_CPU:-68000}"
+    echo "[RUN] Harness CPU: ${HARNESS_CPU:-68040}"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
     else
@@ -469,7 +469,7 @@ if [ "$MODE" = "harness-serial" ]; then
     fi
 
     echo "[RUN] Harness ROM: $KICKSTART"
-    echo "[RUN] Harness CPU: ${HARNESS_CPU:-68000}"
+    echo "[RUN] Harness CPU: ${HARNESS_CPU:-68040}"
     if [ -n "${ADF:-}" ]; then
         echo "[RUN] Harness DF0: $ADF"
     else

@@ -1,0 +1,150 @@
+--- a/m68kfpu.c	2026-07-03 18:55:50.431231643 -0300
++++ b/m68kfpu.c	2026-07-03 18:40:05.608594515 -0300
+@@ -1463,6 +1463,147 @@
+ 			USE_CYCLES(6);
+ 			break;
+ 		}
++		case 0x1f:		// FGETMAN
++		{
++			// normalize: force the biased exponent to 0x3fff (i.e. 2^0),
++			// keep sign and mantissa untouched — result is in [1,2)
++			floatx80 res = source;
++			res.high = (uint16)((source.high & 0x8000) | 0x3fff);
++			REG_FP[dst] = res;
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(6);
++			break;
++		}
++		case 0x02:		// FSINH
++		{
++			REG_FP[dst] = double_to_fx80(sinh(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x19:		// FCOSH
++		{
++			REG_FP[dst] = double_to_fx80(cosh(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x09:		// FTANH
++		{
++			REG_FP[dst] = double_to_fx80(tanh(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x0d:		// FATANH
++		{
++			REG_FP[dst] = double_to_fx80(atanh(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x0c:		// FASIN
++		{
++			REG_FP[dst] = double_to_fx80(asin(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x1c:		// FACOS
++		{
++			REG_FP[dst] = double_to_fx80(acos(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x0a:		// FATAN
++		{
++			REG_FP[dst] = double_to_fx80(atan(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x0f:		// FTAN
++		{
++			REG_FP[dst] = double_to_fx80(tan(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(400);
++			break;
++		}
++		case 0x10:		// FETOX
++		{
++			REG_FP[dst] = double_to_fx80(exp(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(571);
++			break;
++		}
++		case 0x08:		// FETOXM1
++		{
++			REG_FP[dst] = double_to_fx80(expm1(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(571);
++			break;
++		}
++		case 0x11:		// FTWOTOX
++		{
++			REG_FP[dst] = double_to_fx80(pow(2.0, fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(571);
++			break;
++		}
++		case 0x12:		// FTENTOX
++		{
++			REG_FP[dst] = double_to_fx80(pow(10.0, fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(571);
++			break;
++		}
++		case 0x14:		// FLOGN
++		{
++			REG_FP[dst] = double_to_fx80(log(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(548);
++			break;
++		}
++		case 0x06:		// FLOGNP1
++		{
++			REG_FP[dst] = double_to_fx80(log1p(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(571);
++			break;
++		}
++		case 0x15:		// FLOG10
++		{
++			REG_FP[dst] = double_to_fx80(log10(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(604);
++			break;
++		}
++		case 0x16:		// FLOG2
++		{
++			REG_FP[dst] = double_to_fx80(log2(fx80_to_double(source)));
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(604);
++			break;
++		}
++		case 0x26:		// FSCALE
++		{
++			// multiply dst by 2^trunc(source) by shifting the biased
++			// exponent directly — exact per spec, no rounding needed
++			sint32 scale = floatx80_to_int32_round_to_zero(source);
++			floatx80 res = REG_FP[dst];
++			if (!floatx80_is_nan(res) && res.high != 0x7fff)
++			{
++				sint32 newexp = (sint32)(res.high & 0x7fff) + scale;
++				if (newexp < 0) newexp = 0;
++				if (newexp > 0x7fff) newexp = 0x7fff;
++				res.high = (uint16)((res.high & 0x8000) | (uint32)newexp);
++			}
++			REG_FP[dst] = res;
++			SET_CONDITION_CODES(REG_FP[dst]);
++			USE_CYCLES(46);
++			break;
++		}
+ 		case 0x20:		// FDIV
+ 		{
+ 			REG_FP[dst] = floatx80_div(REG_FP[dst], source);

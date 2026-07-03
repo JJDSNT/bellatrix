@@ -260,8 +260,10 @@ static CpuBackend g_musashi_backend = {
 
 void bellatrix_musashi_backend_init(void)
 {
+    /* Default is 68040 with FPU — see ISSUE-0034. Requires
+     * M68K_EMULATE_040 on in musashi_baremetal_config.h. */
     m68k_init();
-    m68k_set_cpu_type(M68K_CPU_TYPE_68000);
+    m68k_set_cpu_type(M68K_CPU_TYPE_68040);
 }
 
 CpuBackend *bellatrix_musashi_backend_get(void)

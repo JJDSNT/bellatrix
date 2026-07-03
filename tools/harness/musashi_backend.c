@@ -2898,8 +2898,12 @@ void musashi_backend_init(void)
 {
     const char *cpu = getenv("HARNESS_CPU");
 
-    s_cpu_type = M68K_CPU_TYPE_68000;
-    if (cpu && strcmp(cpu, "68010") == 0)
+    /* Default is 68040 (with FPU) — see ISSUE-0034. Explicit HARNESS_CPU
+     * still selects any other type, including plain "68000". */
+    s_cpu_type = M68K_CPU_TYPE_68040;
+    if (cpu && strcmp(cpu, "68000") == 0)
+        s_cpu_type = M68K_CPU_TYPE_68000;
+    else if (cpu && strcmp(cpu, "68010") == 0)
         s_cpu_type = M68K_CPU_TYPE_68010;
     else if (cpu && strcmp(cpu, "68ec020") == 0)
         s_cpu_type = M68K_CPU_TYPE_68EC020;

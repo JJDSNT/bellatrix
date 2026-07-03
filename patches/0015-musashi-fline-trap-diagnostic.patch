@@ -1,8 +1,20 @@
 diff --git a/m68kcpu.h b/m68kcpu.h
-index a743cdb..f05aa3c 100644
+index a743cdb..906dd23 100644
 --- a/m68kcpu.h
 +++ b/m68kcpu.h
-@@ -1994,6 +1994,21 @@ static inline void m68ki_exception_1111(void)
+@@ -41,6 +41,11 @@ extern "C" {
+ 
+ #include <assert.h>
+ #include <limits.h>
++#include <stdio.h>	/* Bellatrix: printf() for the [F-LINE-TRAP] diagnostic
++			 * below — must be unconditional (not just under
++			 * M68K_LOG_ENABLE) or strict cross-compilers (e.g.
++			 * aarch64-linux-gnu) reject the later real prototype
++			 * as conflicting with an implicit int printf(). */
+ 
+ #include <setjmp.h>
+ 
+@@ -1994,6 +1999,21 @@ static inline void m68ki_exception_1111(void)
  {
  	uint sr;
  
