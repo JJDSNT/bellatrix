@@ -26,12 +26,25 @@ static RtgState s_rtg;
 static uint8_t  s_rtg_config[AUTOCONFIG_DATA_SIZE];
 static int      s_registered = 0;
 
+/* Boot ROM: DiagArea loader (CardLoader) + relocated bellatrix.card hunk,
+ * built by cards/bellatrix.card/{Makefile,bootrom/} and embedded via
+ * scripts/rom_to_c.py (see tools/harness/CMakeLists.txt, rtg_rom_data). */
+extern const unsigned char g_rtg_rom_data[];
+extern const size_t        g_rtg_rom_size;
+
 /* ----------------------------------------------------------------------- */
 /* register file                                                            */
 /* ----------------------------------------------------------------------- */
 
 static uint32_t rtg_reg_read(uint32_t reg)
 {
+    if (reg == RTG_REG_ID) {
+        static int s_id_read_seen = 0;
+        if (!s_id_read_seen) {
+            s_id_read_seen = 1;
+            kprintf("[RTG] REG_ID probed (FindCard reached the board)\n");
+        }
+    }
     switch (reg) {
         case RTG_REG_ID:            return RTG_ID_MAGIC;
         case RTG_REG_VERSION:       return RTG_SPEC_VERSION;
@@ -89,6 +102,21 @@ static uint8_t rtg_read8(void *userdata, uint32_t offset)
     if (offset >= BELLATRIX_RTG_VRAM_OFF) {
         return s_rtg.vram[offset - BELLATRIX_RTG_VRAM_OFF];
     }
+    if (offset >= BELLATRIX_RTG_ROM_OFF) {
+        static int s_rom_read_seen = 0;
+        static int s_hunk_read_seen = 0;
+        uint32_t rom_off = offset - BELLATRIX_RTG_ROM_OFF;
+        if (!s_rom_read_seen) {
+            s_rom_read_seen = 1;
+            kprintf("[RTG] first ROM read at window offset 0x%x — DiagArea probed\n",
+                    (unsigned)offset);
+        }
+        if (offset == BELLATRIX_RTG_CARD_OFF && !s_hunk_read_seen) {
+            s_hunk_read_seen = 1;
+            kprintf("[RTG] card hunk read starting — CardLoader relocating bellatrix.card\n");
+        }
+        return (rom_off < g_rtg_rom_size) ? g_rtg_rom_data[rom_off] : 0u;
+    }
     {
         uint32_t reg  = offset & ~3u;
         uint32_t v    = rtg_reg_read(reg);
@@ -103,6 +131,9 @@ static void rtg_write8(void *userdata, uint32_t offset, uint8_t value)
     if (offset >= BELLATRIX_RTG_VRAM_OFF) {
         s_rtg.vram[offset - BELLATRIX_RTG_VRAM_OFF] = value;
         return;
+    }
+    if (offset >= BELLATRIX_RTG_ROM_OFF) {
+        return;  /* ROM: read-only */
     }
     {
         uint32_t reg  = offset & ~3u;
@@ -140,11 +171,13 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
 
     memset(&s_rtg, 0, sizeof(s_rtg));
     memset(raw, 0, sizeof(raw));
-    raw[0] = (uint8_t)(AC_TYPE_Z2 | AC_SIZE_4MB);
-    raw[1] = BELLATRIX_RTG_PRODUCT;
-    raw[4] = (uint8_t)(BELLATRIX_RTG_MANUFACTURER >> 8);
-    raw[5] = (uint8_t)(BELLATRIX_RTG_MANUFACTURER & 0xFFu);
-    raw[9] = 0x02u;   /* serial */
+    raw[0]  = (uint8_t)(AC_TYPE_Z2 | AC_TYPE_DIAGVALID | AC_SIZE_4MB);
+    raw[1]  = BELLATRIX_RTG_PRODUCT;
+    raw[4]  = (uint8_t)(BELLATRIX_RTG_MANUFACTURER >> 8);
+    raw[5]  = (uint8_t)(BELLATRIX_RTG_MANUFACTURER & 0xFFu);
+    raw[9]  = 0x02u;   /* serial */
+    raw[10] = (uint8_t)(BELLATRIX_RTG_ROM_OFF >> 8);   /* InitDiagVec high */
+    raw[11] = (uint8_t)(BELLATRIX_RTG_ROM_OFF & 0xFFu); /* InitDiagVec low  */
     autoconfig_build(s_rtg_config, raw);
 
     memset(&s_rtg_desc, 0, sizeof(s_rtg_desc));

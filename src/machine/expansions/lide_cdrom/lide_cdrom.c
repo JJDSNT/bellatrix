@@ -229,10 +229,20 @@ static const BellatrixZorro2BoardOps g_ripple_ops = {
 
 static int ripple_bus_owns(BellatrixExpansion *exp, uint32_t addr)
 {
+    uint32_t base;
     (void)exp;
-    /* owned if address falls in the configured Z2 board window */
-    return bellatrix_zorro2_in_board_window(addr) ||
-           bellatrix_zorro2_in_config_window(addr);
+
+    /* Must check THIS board's own window, not "some Z2 board is
+     * configured somewhere" — bellatrix_zorro2_in_board_window() is
+     * true for ANY registered board's window, and with more than one
+     * Z2 board present (fast RAM, RTG, lide) that wrongly steals reads
+     * belonging to a different board. */
+    if (!bellatrix_zorro2_board_configured("lide.cdrom"))
+        return 0;
+    base = bellatrix_zorro2_board_base("lide.cdrom");
+    if (addr >= base && addr < base + BELLATRIX_ZORRO2_WIN_128KB)
+        return 1;
+    return bellatrix_zorro2_in_config_window(addr);
 }
 
 static uint32_t ripple_bus_read(BellatrixExpansion *exp,

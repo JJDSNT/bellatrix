@@ -104,3 +104,59 @@ Pendente (fase 2 = tornar a card residente e validar boot):
   (AC_TYPE_DIAGVALID) — não acoplar ao lide; subsistemas independentes.
 - Depois: saída SDL ao vivo (hoje só screenshot), backend VC4 baremetal,
   arbitragem Denise×RTG pelo ENABLE.
+
+# Implementação fase 2 (2026-07-03) — DiagArea + CardLoader
+
+Adicionado `cards/bellatrix.card/bootrom/` (cardldr.S + reloc.S + defs.i,
+Makefile próprio, `scripts/build-rtg-rom.sh`, embutido via CMake como
+`rtg_rom_data` — mesmo padrão do `lide_rom_data`). Janela do board
+redesenhada em três regiões (`rtg.h`): registradores 0x000–0x0FF, ROM
+(DiagArea+card) 0x100–0x2FFF, VRAM a partir de 0x3000.
+
+**Dois bugs reais encontrados e corrigidos durante a validação** (não
+eram hipóteses — confirmados por instrumentação host-side, byte a byte):
+
+1. **`ripple_bus_owns()` em lide_cdrom.c tinha escopo global demais**:
+   usava `bellatrix_zorro2_in_board_window(addr)`, que é true para
+   QUALQUER board Z2 configurado, não só o próprio lide. Com um único
+   board Z2 (só o lide) isso nunca dava problema; com o RTG como
+   segundo board, o lide passou a "roubar" os acessos ao nosso board
+   (retornando lixo de open-bus). Corrigido para checar especificamente
+   `bellatrix_zorro2_board_base("lide.cdrom")` + seu próprio window
+   size. Bug estrutural — teria pego qualquer segundo board Z2 futuro,
+   não só o RTG.
+2. **`defs.i` (constantes NDK reescritas à mão) tinha os valores ERRADOS
+   para DAC_BUSWIDTH/DAC_NIBBLEWIDE/DAC_BYTEWIDE/DAC_WORDWIDE** — usei
+   bits baixos (0x00–0x03) quando o real (`libraries/configregs.h`) usa
+   o nibble alto (0x00/0x40/0x80, máscara 0xC0). Consequência: o AROS
+   decodificava nossa DiagArea como NIBBLEWIDE em vez de WORDWIDE,
+   produzindo da_Size/da_DiagPoint/da_Name com lixo. DAC_BOOTTIME/
+   DAC_CONFIGTIME coincidiam por acaso e mascararam o bug por um tempo.
+
+**Confirmado funcionando (instrumentação host-side, harness, aros.rom +
+arosone.hdf, 68040)**:
+- `diag init` (romtag nativo do aros.rom) processa nossa DiagArea:
+  `da_Config=90 Size=02e0 DiagPoint=000e ... Name='BellatrixRTG CardLoader'`
+  — todos os valores batem exatamente com o cardldr.S compilado (736B).
+- `romboot.c`'s `romtaginit()` encontra nosso Romtag e chama
+  `InitResident`: `Diag board 00600000 InitResident ... 'BellatrixRTG
+  CardLoader'`.
+- Nosso `Init:` roda e `_relocate` lê o hunk do bellatrix.card **byte a
+  byte, sequencial, exatos 1552/1552 bytes** (tamanho do binário) — sem
+  gaps, sem overshoot. Evidência forte de relocação bem-sucedida.
+
+**Ainda não confirmado**: nenhum sinal de que `InitRT` (scan de romtag
+pós-relocação) ou o `FindCard`/`SetSwitch` do p96gfx tenham rodado —
+`RTG_REG_ID` nunca foi lido (instrumentado, zero hits em 6000 frames).
+p96gfx.hidd tem seu próprio InitResident chamado (prioridade -10), mas
+seus `bug()` de debug parecem compilados fora nesta ROM (diferente de
+diag.c/romboot.c, que têm debug ativo) — não há trace nativo para
+confirmar o scan de "*.card" na LibList.
+
+**Próximo passo concreto**: verificar se "bellatrix.card" chega à
+LibList — via dump de memória guest (ExecBase+LibList, mecanismo já
+existe em `src/debug/os_debug.c:os_debug_dump`, mas o gate por frame
+fixo em main.c não bateu com o timing de boot do RTG; ajustar o frame
+ou adicionar um gatilho por condição) ou breakpoint no LVO
+`_LVOInitResident`/`_LVOOpenLibrary` para "bellatrix.card". Regressão
+verificada: wb20.hdf sem HARNESS_RTG continua bootando normalmente.

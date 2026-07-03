@@ -16,6 +16,7 @@ set(SRC     ${ROOT}/src)
 set(MUSASHI ${ROOT}/external/musashi)
 set(LIDE    ${ROOT}/external/lide.device)
 set(ODFS    ${ROOT}/external/ODFileSystem)
+set(RTGCARD ${ROOT}/cards/bellatrix.card)
 set(PLUGINS_OUT ${CMAKE_BINARY_DIR}/plugins)
 
 # ---------------------------------------------------------------------------
@@ -85,6 +86,41 @@ add_custom_command(
     DEPENDS ${LIDE_ROM} ${ROOT}/scripts/rom_to_c.py
     COMMENT "Embedding lide.rom as C array"
 )
+
+# ---------------------------------------------------------------------------
+# rtg.rom — bellatrix.rtg DiagArea loader + P96 card, build via Docker,
+# embed as C array (served by the RTG board's own ROM region, see
+# src/machine/expansions/rtg/rtg.c). Independent of the lide ROM above.
+# ---------------------------------------------------------------------------
+set(RTG_ROM   ${RTGCARD}/rtg.rom)
+set(RTG_ROM_C ${CMAKE_BINARY_DIR}/rtg_rom_data.c)
+
+add_custom_command(
+    OUTPUT  ${RTG_ROM}
+    COMMAND ${ROOT}/scripts/build-rtg-rom.sh ${RTG_ROM}
+    DEPENDS
+        ${RTGCARD}/src/card.c
+        ${RTGCARD}/src/boardinfo.h
+        ${RTGCARD}/src/settings.h
+        ${RTGCARD}/Makefile
+        ${RTGCARD}/bootrom/cardldr.S
+        ${RTGCARD}/bootrom/reloc.S
+        ${RTGCARD}/bootrom/defs.i
+        ${RTGCARD}/bootrom/Makefile
+        ${ROOT}/scripts/build-rtg-rom.sh
+    COMMENT "Building rtg.rom (bellatrix.card + DiagArea loader) via Docker"
+)
+
+add_custom_command(
+    OUTPUT  ${RTG_ROM_C}
+    COMMAND Python3::Interpreter ${ROOT}/scripts/rom_to_c.py
+            ${RTG_ROM} ${RTG_ROM_C} --symbol rtg_rom
+    DEPENDS ${RTG_ROM} ${ROOT}/scripts/rom_to_c.py
+    COMMENT "Embedding rtg.rom as C array"
+)
+
+add_library(rtg_rom_data STATIC ${RTG_ROM_C})
+set_target_properties(rtg_rom_data PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---------------------------------------------------------------------------
 # ODFileSystem handler — build via Docker, embed for second ROM bank
@@ -291,7 +327,7 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 target_link_libraries(harness PRIVATE musashi m dl Threads::Threads)
-target_link_libraries(harness PRIVATE lide_rom_data odfs_data odfs rigel)
+target_link_libraries(harness PRIVATE lide_rom_data odfs_data odfs rigel rtg_rom_data)
 
 target_compile_options(harness PRIVATE
     -Wall -Wextra -Wno-unused-parameter
