@@ -16,10 +16,10 @@ Gera `bellatrix.card` (hunk executável com romtag `RTF_COLDSTART`).
 ## Estado / pendências (fase 2)
 
 - O p96gfx (residentpri **-10**) escaneia a LibList ANTES do boot de
-  disco — a card precisa estar residente cedo. Mecanismo a decidir:
-  1. DiagArea própria no board bellatrix.rtg (AC_TYPE_DIAGVALID), ou
-  2. estender o Chainloader do lide ROM (que já carrega lide.device do
-     bank2) para InitResident também a card.
+  disco — a card precisa estar residente cedo. Mecanismo escolhido:
+  **DiagArea própria no board bellatrix.rtg** (AC_TYPE_DIAGVALID).
+  RTG e lide são subsistemas independentes — não acoplar ao
+  Chainloader do lide.
 - `boardinfo.h`/`settings.h` copiados de external/VideoCore.card
   (MPL-2.0, projeto Emu68) — atualizar se o upstream mudar.
 - Sem blitter (BIF_NOBLITTER) e sem sprite de hardware: p96gfx faz

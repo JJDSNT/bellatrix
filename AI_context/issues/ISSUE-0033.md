@@ -100,7 +100,7 @@ Feito (ver docs/rtg_design.md):
 
 Pendente (fase 2 = tornar a card residente e validar boot):
 - p96gfx tem residentpri -10 (ANTES do dosboot) → card não pode vir de
-  disco. Opções: DiagArea no próprio board RTG, ou estender o
-  Chainloader do lide ROM (bank2) para InitResident a card também.
+  disco. Decisão (2026-07-03): DiagArea no PRÓPRIO board RTG
+  (AC_TYPE_DIAGVALID) — não acoplar ao lide; subsistemas independentes.
 - Depois: saída SDL ao vivo (hoje só screenshot), backend VC4 baremetal,
   arbitragem Denise×RTG pelo ENABLE.
