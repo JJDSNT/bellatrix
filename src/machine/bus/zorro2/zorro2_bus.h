@@ -84,6 +84,11 @@ void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes);
 int bellatrix_zorro2_fast_ram_registered(void);
 int bellatrix_zorro2_fast_ram_configured(void);
 
+/* Configured fast RAM window (base/size); returns 0 while unconfigured.
+ * Use this instead of assuming the whole 0x200000-0x9FFFFF range — other
+ * Zorro II boards (e.g. bellatrix.rtg) may own part of that space. */
+int bellatrix_zorro2_fast_ram_window(uint32_t *base, uint32_t *size);
+
 #ifdef __cplusplus
 }
 #endif

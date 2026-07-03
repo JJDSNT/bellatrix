@@ -80,3 +80,27 @@ resolução > PAL, com screenshot pelo pipeline existente
   parte da Denise (princípio "Denise é instância explícita").
 - Ver memory_model.md para a discussão de presets (evitar 512MB VRAM
   estilo UAE; 16-32MB bastam).
+
+# Implementação fase 1 (2026-07-03)
+
+Feito (ver docs/rtg_design.md):
+- Board Zorro II `bellatrix.rtg` (src/machine/expansions/rtg/): janela
+  4MB = 4KB registradores + ~4MB VRAM; formatos CLUT/R5G6B5/A8R8G8B8;
+  render p/ RGBA em bellatrix_rtg_get_frame(). `HARNESS_RTG=1` registra
+  o board e reduz o fast Z2 para 4MB (espaço Z2 compartilhado). O branch
+  de fast RAM do backend agora respeita a janela real do board
+  (bellatrix_zorro2_fast_ram_window) para não engolir o RTG.
+- Screenshot do harness prefere o frame RTG quando ENABLE=1.
+- `cards/bellatrix.card` (m68k, compila no docker; 1.5KB): FindCard via
+  FindConfigDev(0x07DB/0x10) + valida magic 'BRTG'; InitCard preenche
+  BoardInfo (BIF_NOBLITTER, formatos, função set completo p/ dumb fb).
+  boardinfo.h/settings.h vindos do VideoCore.card (MPL-2.0).
+- p96gfx popula os modos sozinho (tabela rtgmodes[] interna) — a card
+  não precisa montar ResolutionsList.
+
+Pendente (fase 2 = tornar a card residente e validar boot):
+- p96gfx tem residentpri -10 (ANTES do dosboot) → card não pode vir de
+  disco. Opções: DiagArea no próprio board RTG, ou estender o
+  Chainloader do lide ROM (bank2) para InitResident a card também.
+- Depois: saída SDL ao vivo (hoje só screenshot), backend VC4 baremetal,
+  arbitragem Denise×RTG pelo ENABLE.

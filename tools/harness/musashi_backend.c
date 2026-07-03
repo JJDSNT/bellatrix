@@ -2609,13 +2609,18 @@ static uint32_t harness_read(uint32_t addr, int size)
     }
 
     /* Zorro II fast RAM: respond only after autoconfig assigned the board
-     * a base, so early memory probes do not find RAM before AddMemList. */
-    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END &&
-        bellatrix_zorro2_fast_ram_configured()) {
-        const BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
-        if (size == 1) return bellatrix_fast_read8(fmem, addr);
-        if (size == 2) return bellatrix_fast_read16(fmem, addr);
-        return bellatrix_fast_read32(fmem, addr);
+     * a base, so early memory probes do not find RAM before AddMemList.
+     * Bounded to the configured window: other Zorro II boards (RTG) can
+     * own part of the 0x200000-0x9FFFFF space. */
+    {
+        uint32_t fr_base, fr_size;
+        if (bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size) &&
+            addr >= fr_base && addr < fr_base + fr_size) {
+            const BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
+            if (size == 1) return bellatrix_fast_read8(fmem, addr);
+            if (size == 2) return bellatrix_fast_read16(fmem, addr);
+            return bellatrix_fast_read32(fmem, addr);
+        }
     }
 
     if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
@@ -2705,13 +2710,16 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     }
 
     /* Zorro II fast RAM (see harness_read) */
-    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END &&
-        bellatrix_zorro2_fast_ram_configured()) {
-        BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
-        if (size == 1)      bellatrix_fast_write8(fmem, addr, (uint8_t)value);
-        else if (size == 2) bellatrix_fast_write16(fmem, addr, (uint16_t)value);
-        else                bellatrix_fast_write32(fmem, addr, value);
-        return;
+    {
+        uint32_t fr_base, fr_size;
+        if (bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size) &&
+            addr >= fr_base && addr < fr_base + fr_size) {
+            BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
+            if (size == 1)      bellatrix_fast_write8(fmem, addr, (uint8_t)value);
+            else if (size == 2) bellatrix_fast_write16(fmem, addr, (uint16_t)value);
+            else                bellatrix_fast_write32(fmem, addr, value);
+            return;
+        }
     }
 
     /* Chipset / CIA / RTC */

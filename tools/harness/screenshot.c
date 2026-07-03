@@ -2,6 +2,7 @@
 // Headless framebuffer screenshots — see screenshot.h.
 
 #include "screenshot.h"
+#include "machine/expansions/rtg/rtg.h"
 
 #include "machine/machine.h"
 #include "rigel/rigel.h"
@@ -38,7 +39,14 @@ void harness_maybe_screenshot(long frame_count)
 
     struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
     rigel_frame_t frame;
-    if (!ctx || !rigel_get_frame(ctx, &frame) || !frame.pixels) {
+    BellatrixRtgFrame rtg_frame;
+    if (bellatrix_rtg_get_frame(&rtg_frame)) {
+        /* RTG owns the output (ENABLE set by the guest driver) */
+        frame.pixels = (void *)rtg_frame.pixels;
+        frame.width  = rtg_frame.width;
+        frame.height = rtg_frame.height;
+        frame.pitch  = rtg_frame.pitch;
+    } else if (!ctx || !rigel_get_frame(ctx, &frame) || !frame.pixels) {
         fprintf(stderr, "[SCREENSHOT] frame %ld: no frame available\n", frame_count);
         return;
     }

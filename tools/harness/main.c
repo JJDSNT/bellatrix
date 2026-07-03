@@ -17,6 +17,7 @@
 #include "screenshot.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
+#include "machine/expansions/rtg/rtg.h"
 
 #include "machine/machine.h"
 #include "cpu/cpu_bridge.h"
@@ -1044,11 +1045,20 @@ int main(int argc, char **argv)
 
     /* Announce the 8MB Zorro II fast RAM via autoconfig so the OS adds it
      * to the memory list.  The Musashi backend already backs the
-     * 0x200000-0x9FFFFF window; HARNESS_FASTRAM=0 disables the board. */
+     * 0x200000-0x9FFFFF window; HARNESS_FASTRAM=0 disables the board.
+     * With HARNESS_RTG=1 the RTG board takes a 4MB window out of the
+     * Zorro II space, so fast RAM drops to 4MB. */
+    const char *rtg_env = getenv("HARNESS_RTG");
+    int rtg_enabled = rtg_env && rtg_env[0] != '\0' && rtg_env[0] != '0';
     const char *fastram_env = getenv("HARNESS_FASTRAM");
     if (!(fastram_env && fastram_env[0] == '0')) {
-        bellatrix_zorro2_enable_fast_ram(8u * 1024u * 1024u);
-        printf("[HARNESS] Fast RAM: 8MB Zorro II board registered\n");
+        uint32_t fast_mb = rtg_enabled ? 4u : 8u;
+        bellatrix_zorro2_enable_fast_ram(fast_mb * 1024u * 1024u);
+        printf("[HARNESS] Fast RAM: %uMB Zorro II board registered\n",
+               (unsigned)fast_mb);
+    }
+    if (rtg_enabled && bellatrix_rtg_register(m) != 0) {
+        fprintf(stderr, "[HARNESS] bellatrix_rtg_register failed\n");
     }
 
     /* Register the CD-ROM board only when it has media, unless explicitly
@@ -1277,6 +1287,7 @@ int main(int argc, char **argv)
             frame_count++;
             fps_frames++;
             prev_frame = cur_frame;
+            bellatrix_rtg_frame_tick();
 
             harness_update_mouse_hold(m, frame_count, &mouse_rmb);
         harness_update_mouse_hold(m, frame_count, &mouse_lmb);

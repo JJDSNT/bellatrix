@@ -158,6 +158,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/expansions/lide_cdrom/ata_ide.c
     ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
     ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
+    ${SRC}/machine/expansions/rtg/rtg.c
 
     # Memory
     ${SRC}/machine/memory/memory.c

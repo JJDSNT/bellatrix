@@ -357,6 +357,15 @@ int bellatrix_zorro2_fast_ram_configured(void)
            bellatrix_zorro2_board_configured("bellatrix.fastram");
 }
 
+int bellatrix_zorro2_fast_ram_window(uint32_t *base, uint32_t *size)
+{
+    if (!bellatrix_zorro2_fast_ram_configured())
+        return 0;
+    if (base) *base = bellatrix_zorro2_board_base("bellatrix.fastram");
+    if (size) *size = s_fast_ram_board_desc.window_size;
+    return 1;
+}
+
 void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes)
 {
     uint8_t sz  = bytes_to_ac_size(size_bytes);

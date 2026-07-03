@@ -31,3 +31,6 @@
 [submodule "external/amitools"]
 	path = external/amitools
 	url = https://github.com/cnvogelg/amitools
+[submodule "external/VideoCore.card"]
+	path = external/VideoCore.card
+	url = https://github.com/michalsc/VideoCore.card
