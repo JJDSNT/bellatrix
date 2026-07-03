@@ -201,6 +201,50 @@ Updated working hypothesis:
   and address range, then check whether Agnus ever fetches the glyph-written
   range (`0x00D73x..`) when the KS20 text should be visible.
 
+## Session 2026-07-02 — KS20/WB1.3 Text Fixed; Horizontal Clip Still Open
+
+The missing KS2.0 text was fixed. Root cause: ECS `BLTCON0L` (`$DFF05A`) was
+implemented in the blitter register file but not claimed by
+`rigel_blitter_domain_owns_reg()`, so KS2.0 writes to the low byte of
+`BLTCON0` were dropped before they reached the handler. Adding `0x05A` to the
+blitter domain restores the text path used by `Text()`/font blits; frame 755
+of `KS20.rom --adf wb13.adf` shows both the copyright line and icon label
+`DPaintIV`.
+
+Related blitter fixes from the same session:
+
+- copy-mode A/B shifter carry (`previous_a`/`previous_b`) is preserved across
+  lines within one blit, matching WinUAE's `bltaold`/`bltbold` behavior;
+- `BLTBDAT` maintains a separate B hold value before overwriting the register,
+  so D-only/minterm cases that rely on held B data work.
+
+The remaining horizontal wrap/truncation is separate from the text failure and
+is still open. Observed cases:
+
+- `KS20.rom` boot screen: logo/floppy appear truncated left and right; a
+  too-broad left-clip relaxation makes prefetch show up as wrap.
+- `KS13.rom + wb13.adf`: Workbench title text is clipped on the left.
+- `KS20.rom + wb20.adf`: Workbench is slightly clipped on the right.
+- `KS20.rom + wb13.adf`: the earlier right-edge duplicate improved after
+  clamping normal single-playfield composition to the display word count, but
+  the broader horizontal alignment problem is not closed.
+
+Do not treat this as an export-border problem only. Increasing exported frame
+borders changed frame width but did not solve the underlying clipped content.
+The likely area is horizontal DIW/DDF/BPLCON1 alignment in HIRES, while keeping
+prefetch words from rendering outside the real display window.
+
+Validation:
+
+```sh
+rtk ctest --test-dir out/harness-rigel/rigel-build \
+  -R 'test_(blitter|blitter_dma|denise|mmio)$' --output-on-failure
+```
+
+All focused tests passed. A new Denise regression marks words 40/41 in the
+WB1.3 HIRES mode as sentinels and asserts they are not visible in the exported
+frame.
+
 ## Session 2026-07-02 — Boot Timing, DIWHIGH, and Remaining Text Failure
 
 User constraint: the KS20 insert-disk screen, including text and floppy

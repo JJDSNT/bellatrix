@@ -265,7 +265,7 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
         (reg == 0x040u || reg == 0x042u || reg == 0x044u || reg == 0x046u ||
          reg == 0x048u || reg == 0x04au || reg == 0x04cu || reg == 0x04eu ||
          reg == 0x050u || reg == 0x052u || reg == 0x054u || reg == 0x056u ||
-         reg == 0x058u || reg == 0x05cu || reg == 0x05eu ||
+         reg == 0x058u || reg == 0x05au || reg == 0x05cu || reg == 0x05eu ||
          reg == 0x060u || reg == 0x062u || reg == 0x064u ||
          reg == 0x066u || reg == 0x070u || reg == 0x072u || reg == 0x074u)) {
         uint16_t before = rigel_custom_read16(g_rigel, reg);

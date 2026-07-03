@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0024
 title: "KS20: texto não renderiza — boot screen sem texto; após o boot, requesters e nomes de ícones sem texto"
-status: open
+status: fixed
 priority: high
 type: bug
 owner: unassigned
@@ -22,6 +22,44 @@ related_files:
   - src/chipset/agnus/blitter.c
   - src/chipset/agnus/agnus.c
 ---
+
+# Resolvido em 2026-07-02
+
+O texto ausente no KS2.0/Workbench 1.3 foi resolvido. A causa principal não
+era Denise nem ausência de geração de glifos: o KS2.0 escrevia o registrador
+ECS `BLTCON0L` em `$DFF05A`, mas o domínio MMIO do blitter não declarava
+ownership desse endereço. O handler de registradores já sabia aplicar
+`REG_BLTCON0L`, porém a escrita era descartada antes de chegar nele. Com isso,
+blits de texto/fontes ficavam com minterm/canais incorretos e os glifos não
+eram efetivamente compostos nos bitplanes visíveis.
+
+Correção:
+
+- `external/rigel/src/domains/blitter/blitter_domain.c`: `0x05A` agora é
+  reconhecido como registrador do blitter (`BLTCON0L`).
+- `external/rigel/tests/test_blitter.c`: regressão confirma que escrever
+  `$DFF05A` altera apenas o byte baixo de `BLTCON0`.
+- `src/machine/machine_rigel_bus.c`: trace inclui `0x05a` para diagnóstico.
+
+Achados auxiliares mantidos na mesma sessão:
+
+- O blitter agora preserva carry/hold compatível com WinUAE em casos usados
+  por fontes: `previous_a`/`previous_b` atravessam linhas do mesmo blit, e
+  `BLTBDAT` atualiza o hold de B antes de sobrescrever o dado.
+- O wrap/truncamento horizontal observado em `KS20.rom` boot screen,
+  `KS13.rom + wb13.adf`, `KS20.rom + wb13.adf` e `KS20.rom + wb20.adf` é
+  separado da falha de texto e continua em investigação. Uma tentativa de
+  relaxar o clip à esquerda no compositor recuperou parte de `Workbench`, mas
+  fez prefetch aparecer como wrap no KS20 boot screen; não considerar essa
+  abordagem como solução.
+
+Validação:
+
+- `KS20.rom --adf wb13.adf` no frame 755 mostra copyright e label `DPaintIV`.
+- Testes focados passam: `test_mmio`, `test_denise`, `test_blitter`,
+  `test_blitter_dma`.
+- Pendente: corrigir alinhamento horizontal DIW/DDF/scroll sem renderizar
+  prefetch fora do DIW.
 
 # Investigação 2026-07-02 (sessão screenshot + desmontagem)
 
