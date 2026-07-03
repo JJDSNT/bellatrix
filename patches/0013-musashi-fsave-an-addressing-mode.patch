@@ -1,0 +1,94 @@
+diff --git a/m68kfpu.c b/m68kfpu.c
+index 0367a74..b5e7ad0 100644
+--- a/m68kfpu.c
++++ b/m68kfpu.c
+@@ -1939,6 +1939,20 @@ void m68040_fpu_op1(void)
+ 		{
+ 			switch (mode)
+ 			{
++				case 2:	// (An)
++		    			addr = REG_A[reg];
++
++					if (m68ki_cpu.fpu_just_reset)
++					{
++						m68ki_write_32(addr, 0);
++					}
++					else
++					{
++						// IDLE frame at (An), no register update
++						perform_fsave(addr, 1);
++					}
++					break;
++
+ 				case 3:	// (An)+
+ 		    			addr = EA_AY_PI_32();
+ 
+@@ -1969,6 +1983,32 @@ void m68040_fpu_op1(void)
+ 					}
+ 					break;
+ 
++				case 5:	// (d16,An)
++		    			addr = EA_AY_DI_32();
++
++					if (m68ki_cpu.fpu_just_reset)
++					{
++						m68ki_write_32(addr, 0);
++					}
++					else
++					{
++						perform_fsave(addr, 1);
++					}
++					break;
++
++				case 6:	// (d8,An,Xn)
++		    			addr = EA_AY_IX_32();
++
++					if (m68ki_cpu.fpu_just_reset)
++					{
++						m68ki_write_32(addr, 0);
++					}
++					else
++					{
++						perform_fsave(addr, 1);
++					}
++					break;
++
+ 				default:
+ 					fatalerror("M68kFPU: FSAVE unhandled mode %d reg %d at %x\n", mode, reg, REG_PC);
+ 			}
+@@ -2025,6 +2065,35 @@ void m68040_fpu_op1(void)
+ 					}
+ 					break;
+ 
++				case 5:	// (d16,An)
++					addr = EA_AY_DI_32();
++					temp = m68ki_read_32(addr);
++
++					// check for NULL frame; no register update for this mode
++					if (temp & 0xff000000)
++					{
++						m68ki_cpu.fpu_just_reset = 0;
++					}
++					else
++					{
++						do_frestore_null();
++					}
++					break;
++
++				case 6:	// (d8,An,Xn)
++					addr = EA_AY_IX_32();
++					temp = m68ki_read_32(addr);
++
++					if (temp & 0xff000000)
++					{
++						m68ki_cpu.fpu_just_reset = 0;
++					}
++					else
++					{
++						do_frestore_null();
++					}
++					break;
++
+ 				default:
+ 					fatalerror("M68kFPU: FRESTORE unhandled mode %d reg %d at %x\n", mode, reg, REG_PC);
+ 			}

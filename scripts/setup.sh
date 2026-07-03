@@ -170,6 +170,7 @@ BTSTACK_PATCHES=(
 
 MUSASHI_PATCHES=(
     "$PATCHES/0006-musashi-enable-instruction-hook.patch"
+    "$PATCHES/0013-musashi-fsave-an-addressing-mode.patch"
 )
 
 LIDE_PATCHES=(

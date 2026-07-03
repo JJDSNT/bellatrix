@@ -10,7 +10,7 @@
 //
 // Usage:
 //   harness <rom.bin> [--adf disk.adf] [--iso image.iso] [--plugins dir]
-//                     [--cpu 68000|68010|68ec020|68020]
+//                     [--cpu 68000|68010|68ec020|68020|68030|68040]
 //                     [--headless] [--cycles N] [--frames N]
 
 #include "musashi_backend.h"
@@ -859,7 +859,7 @@ int main(int argc, char **argv)
                 "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
                 "               [--hdf disk.hdf]\n"
                 "               [--plugins dir]\n"
-                "               [--cpu 68000|68010|68ec020|68020]\n"
+                "               [--cpu 68000|68010|68ec020|68020|68030|68040]\n"
                 "               [--headless] [--cycles N] [--frames N]\n"
                 "Example ISO: harness kick.rom --iso game.iso\n");
             return 1;
@@ -871,7 +871,7 @@ int main(int argc, char **argv)
             "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
                 "               [--hdf disk.hdf]\n"
             "               [--plugins dir]\n"
-            "               [--cpu 68000|68010|68ec020|68020]\n"
+            "               [--cpu 68000|68010|68ec020|68020|68030|68040]\n"
             "               [--headless] [--cycles N] [--frames N]\n"
             "Example ISO: harness kick.rom --iso game.iso\n");
         return 1;
@@ -881,7 +881,9 @@ int main(int argc, char **argv)
         if (strcmp(cpu_type, "68000") != 0 &&
             strcmp(cpu_type, "68010") != 0 &&
             strcmp(cpu_type, "68ec020") != 0 &&
-            strcmp(cpu_type, "68020") != 0) {
+            strcmp(cpu_type, "68020") != 0 &&
+            strcmp(cpu_type, "68030") != 0 &&
+            strcmp(cpu_type, "68040") != 0) {
             fprintf(stderr, "[HARNESS] Unknown CPU type: %s\n", cpu_type);
             return 1;
         }

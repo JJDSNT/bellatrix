@@ -209,6 +209,8 @@ func nextCPUBackend(current string) string {
 	case "musashi":
 		return "musashi-68020"
 	case "musashi-68020":
+		return "musashi-68040"
+	case "musashi-68040":
 		return "emu68"
 	default:
 		return "musashi"
@@ -222,6 +224,9 @@ func isMusashiCPUBackend(cpuBackend string) bool {
 func harnessCPUForBackend(cpuBackend string) string {
 	if cpuBackend == "musashi-68020" {
 		return "68020"
+	}
+	if cpuBackend == "musashi-68040" {
+		return "68040"
 	}
 	return ""
 }
@@ -610,6 +615,8 @@ func (m model) renderPanel() string {
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
 	if m.cpuBackend == "musashi-68020" {
 		cpuBackendBadge = onBadgeStyle.Render("MUSASHI 68020")
+	} else if m.cpuBackend == "musashi-68040" {
+		cpuBackendBadge = onBadgeStyle.Render("MUSASHI 68040")
 	} else if m.cpuBackend == "musashi" {
 		cpuBackendBadge = onBadgeStyle.Render("MUSASHI")
 	}

@@ -84,7 +84,7 @@ Harness options (env vars):
   HDF=<file>          Attach HDF (RDB) image as IDE hard disk (harness only)
   FRAMES=<n>          Stop after N frames and exit (headless mode)
   CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
-  HARNESS_CPU=<type>  Musashi CPU type: 68000, 68010, 68ec020, 68020
+  HARNESS_CPU=<type>  Musashi CPU type: 68000, 68010, 68ec020, 68020, 68030, 68040
                       (default: 68000)
   HARNESS_SERIAL_MODE=<mode>
                       Serial presentation: line, raw, ansi, pty (default: line)
