@@ -1,8 +1,8 @@
 ---
 id: ISSUE-0031
-title: "Harness Musashi sem FPU: AROS ISO-desktop crasha com Line-F em 020/030; 68040 aborta silencioso"
+title: "Harness Musashi sem FPU: crasha Line-F em 020/030/040 — bloqueia visual do ArosOne"
 status: open
-priority: medium
+priority: high
 type: bug
 owner: unassigned
 created_at: 2026-07-03
@@ -81,3 +81,34 @@ KICKSTART=src/roms/aros.rom HDF=aros.hdf HARNESS_CPU=68020 FRAMES=1500 ./run.sh 
   stack USB da distro, mas desktop não aparece — suspeita: distro
   configurada para RTG (WinUAE usa uaegfx + 512MB VRAM); forçar screenmode
   PAL nativo é o próximo experimento.
+
+# Confirmado bloqueando o objetivo do RTG (2026-07-03)
+
+Rodando `arosone.hdf` + `aros.rom` (68040) com o board RTG registrado
+(fase 2, ISSUE-0033), o boot chega a tentar carregar bibliotecas/daemons
+e crasha em loop:
+
+```
+Software Failure!
+Task : ... - Lib & Dev Loader Daemon
+Error: 0x8000000B - Line 1111 (F) Emulator/Coprocessor error
+PC   : 0xFFFFFD60
+```
+
+O daemon reinicia, crasha de novo, indefinidamente. Cada crash tenta
+desenhar o alerta de Software Failure na tela — isso aciona
+`AmigaVideoBM__Root__New` (bitmap do Denise nativo), que também falha
+("superclass failed to instantiate a suitable bitmap"), então nem o
+alerta aparece visualmente (só via serial). **O bitmap failure é
+sintoma do crash tentando se renderizar, não causa raiz** — não é bug
+do RTG nem do AmigaVideo em si.
+
+**Conclusão**: o gap de FPU do Musashi é hoje o bloqueio primário para
+ter feedback visual do ArosOne (objetivo da ISSUE-0033), não o
+FindCard do p96gfx incerto. Mesmo com RTG 100% funcional, esse loop de
+crash provavelmente impediria uma tela estável. Prioridade elevada.
+
+Descartado como causa nesta investigação: aliasing de endereço Z3
+(ISSUE-0032) — tinha um bug real e não-determinístico (corrigido,
+commit 8e9ccbd), mas não é o que causa este crash especificamente
+(reproduz igual com o fix aplicado).
