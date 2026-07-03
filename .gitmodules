@@ -28,3 +28,6 @@
 [submodule "external/ODFileSystem"]
 	path = external/ODFileSystem
 	url = https://github.com/reinauer/ODFileSystem
+[submodule "external/amitools"]
+	path = external/amitools
+	url = https://github.com/cnvogelg/amitools

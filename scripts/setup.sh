@@ -171,6 +171,7 @@ BTSTACK_PATCHES=(
 MUSASHI_PATCHES=(
     "$PATCHES/0006-musashi-enable-instruction-hook.patch"
     "$PATCHES/0013-musashi-fsave-an-addressing-mode.patch"
+    "$PATCHES/0014-musashi-fpu-test-condition-mask.patch"
 )
 
 LIDE_PATCHES=(

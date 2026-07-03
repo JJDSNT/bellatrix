@@ -1,0 +1,16 @@
+--- a/m68kfpu.c	2026-07-03 11:51:41.282710093 -0300
++++ b/m68kfpu.c
+@@ -353,7 +353,12 @@
+ 		case 0x1f:
+ 		case 0x0f:		return 1;					// True
+ 
+-		default:		fatalerror("M68kFPU: test_condition: unhandled condition %02X\n", condition);
++		default:
++			/* Predicates >= 0x20 are undefined on the 68881; real hardware
++			 * effectively decodes the low 5 bits. Do not exit(1) the host. */
++			fprintf(stderr, "M68kFPU: test_condition: unhandled condition %02X at PC=%08X IR=%04X (masking to %02X)\n",
++				condition, REG_PC, REG_IR, condition & 0x1f);
++			return TEST_CONDITION(condition & 0x1f);
+ 	}
+ 
+ 	return r;
