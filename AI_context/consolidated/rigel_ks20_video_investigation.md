@@ -245,6 +245,44 @@ All focused tests passed. A new Denise regression marks words 40/41 in the
 WB1.3 HIRES mode as sentinels and asserts they are not visible in the exported
 frame.
 
+## Session 2026-07-02 — RESOLVIDO: truncamento horizontal (DDF→DIW alignment)
+
+O truncamento/wrap horizontal (KS20 boot cortado à esquerda e à direita;
+KS13+WB1.3 e KS20+WB2.0 cortados à direita) foi resolvido no compositor do
+rigel. Três bugs combinados em `compositor.c`:
+
+1. **Pipeline lead errado.** O primeiro pixel de bitplane aparece 8.5 CCK
+   (lores) / 4.5 CCK (hires) depois do DDFSTRT — é exatamente a relação do
+   HRM `DDFSTRT = DIWSTRT_H/2 − 8.5 (lores) / − 4.5 (hires)`. O código usava
+   8/4 CCK. Novo: `ddf0 = (ddfstrt_lores + (hires ? 9 : 17)) * hscale`.
+
+2. **Sinal do scroll (BPLCON1) invertido.** Delay desloca o playfield para a
+   DIREITA, em passos de 1 lores px (×2 em hires). O código subtraía.
+   `screen_x = ddf0 + w*16 + px + scroll*hscale`.
+
+3. **Clamp `w >= display_words` removido.** Cortava words por índice de fetch,
+   matando a última word visível quando o fetch começa antes da janela
+   (caso KS20 com BPLxPT 2 bytes antes da arte + modulo −6).
+
+Verificação da aritmética no KS20 (`DDF=0040/00d0`, `DIW=6395/f4ad`,
+`BPLCON1=0044`, mods `fffa`): fetch de 38 words (608px), stride real
+38·2−6 = 70 bytes = 35 words = 560px = largura exata da janela (298..858).
+Word 0 fica escondida à esquerda do DIW (a "tira" que aparecia na borda era
+ela — o fim da linha anterior), words 36–37 escondidas à direita. Com o
+alinhamento correto tudo fecha flush, igual ao hardware.
+
+Validado visualmente no harness headless: KS20 boot (texto+logo+floppy
+completos), KS13+wb13 (janela AmigaDOS completa), KS20+wb20 (desktop com
+gadgets da direita completos), KS13 insert-hand, 1943 cracktro, AROS boot.
+`test_denise` recalibrado para a semântica de hardware (lead 17/9, scroll à
+direita) e agora imprime o nome do sub-teste que falhar. Suite completa passa,
+exceto `test_copper` que já estava quebrado antes (API
+`rigel_copper_domain_step` mudou sem atualizar o teste standalone).
+
+Diagnósticos novos env-gated em `compositor.c`:
+`RIGEL_COMPOSE_TRACE_FRAME=N` (por linha: ddf0/janela/scroll/word count/span
+não-zero) e `RIGEL_COMPOSE_TRACE_Y=N` (dump das plane words da linha).
+
 ## Session 2026-07-02 — Boot Timing, DIWHIGH, and Remaining Text Failure
 
 User constraint: the KS20 insert-disk screen, including text and floppy
