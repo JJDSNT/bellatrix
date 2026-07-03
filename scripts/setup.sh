@@ -383,6 +383,13 @@ cd "$ROOT"
 git submodule sync -- external/cherryusb >/dev/null 2>&1 || true
 git submodule update --init emu68 external/musashi external/cherryusb external/btstack external/rigel external/lide.device external/ODFileSystem
 
+# emu68's own nested submodules — required for the bare-metal build
+# (BELLATRIX_CPU_BACKEND=musashi or emu68) to configure via CMake.
+# Missing these fails with "does not contain a CMakeLists.txt" deep
+# into the build, not at setup time, so it's easy to miss (ISSUE-0035
+# investigation, 2026-07-03).
+git -C emu68 submodule update --init external/capstone external/libdeflate external/tiny-stl
+
 ensure_emu68_gitignore
 
 cd "$EMU68"
