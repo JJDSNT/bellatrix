@@ -112,3 +112,47 @@ Descartado como causa nesta investigação: aliasing de endereço Z3
 (ISSUE-0032) — tinha um bug real e não-determinístico (corrigido,
 commit 8e9ccbd), mas não é o que causa este crash especificamente
 (reproduz igual com o fix aplicado).
+
+# Mecanismo raiz: AROS assume FPU 68040 nativa, sem fallback de software (2026-07-03)
+
+Achado em `external/aros/arch/m68k-amiga/boot/cpu_detect.S` +
+`boot/start.c:GetAttnFlags()`:
+
+- `cpu_detect_fpu_asm` sonda FPU via `fnop` + `fsave (a0)`, lendo o byte
+  de formato do frame salvo. Se a sonda tiver sucesso (nenhum trap
+  Line-F durante `fnop`/`fsave`), AROS conclui que HÁ FPU.
+- `GetAttnFlags()`: se CPU é 68040/68060 E FPU foi detectada, seta
+  `AFF_FPU40` (assume FPU **integrada nativa**) — `AFF_68881`/
+  `AFF_68882` (que indicariam *emulação por software*, carregando
+  `mathieeedoubbas.library` ou similar) só são setados nos ramos SEM
+  68040/68060.
+- **Consequência**: como o Musashi já implementa `FSAVE` (patch 0013),
+  a sonda passa, `AFF_FPU40` liga, e o AROS nunca carrega fallback de
+  software. Qualquer instrução FPU que o Musashi não implemente depois
+  disso vira crash fatal direto — sem rede de segurança. Isso explica
+  por que só agora (68040, RTG fase 2 destravando mais boot) o gap
+  apareceu: em outros caminhos/CPUs o software fallback cobria.
+
+**Não é uma correção fácil de "fingir sem FPU"**: exigiria interceptar
+especificamente essa sonda sem quebrar `FSAVE` real (usado em outros
+pontos, motivo do patch 0013 existir). Caminho correto continua sendo
+identificar e implementar o(s) opcode(s) FPU específico(s) faltando.
+
+## Diagnóstico em andamento
+
+Instrumentado `m68ki_exception_1111()` (external/musashi/m68kcpu.h,
+edição local não commitada ainda) para logar `[F-LINE-TRAP] pc=... ir=...
+opcode_bytes=...` no fault real. Confirmado: nenhum dos 35 `fatalerror()`
+dentro de `m68kfpu.c` foi atingido em nenhum teste (mataria o processo,
+exit≠0 — nunca aconteceu) — ou seja, o crash não é um caso não-tratado
+DENTRO do dispatch de FPU (`fpgen_rm_reg` etc.), é um opcode Line-F que
+**nem chega** a ser reconhecido como FPU pela tabela do Musashi (só
+`0xF2xx`/`0xF3xx` roteiam para `m68040_fpu_op0/op1`; qualquer outro
+padrão cai direto em `m68ki_exception_1111`). Suspeita: instruções de
+cache do 68040 (CINVL/CPUSHL, também Line-F) usadas por loaders de
+biblioteca ao invalidar i-cache — não aritmética de FPU de verdade.
+
+Reprodução automatizada (headless) trava ANTES do crash real (loop de
+poll determinístico em PC=0x00fe849a, não relacionado — resolve sozinho
+depois de muitos frames, >45000 mas <150000 aparentemente). Run longo
+em andamento para capturar o opcode exato.
