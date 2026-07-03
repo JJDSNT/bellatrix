@@ -1905,6 +1905,63 @@ static int harness_ram_addr_valid(uint32_t addr, unsigned int size)
     return bellatrix_slow_contains(mem, addr, size);
 }
 
+/* HARNESS_WATCH_MEM=addr:len[,addr:len...] — log every CPU write that lands
+ * inside a watched range, with the PC that issued it. */
+#define HARNESS_MAX_MEM_WATCH 8
+static struct { uint32_t base; uint32_t len; } s_mem_watch[HARNESS_MAX_MEM_WATCH];
+static int s_mem_watch_count = -1;
+
+static void harness_mem_watch_init(void)
+{
+    const char *env = getenv("HARNESS_WATCH_MEM");
+    char buf[256];
+    char *item, *save = NULL;
+
+    s_mem_watch_count = 0;
+    if (!env || !env[0])
+        return;
+
+    strncpy(buf, env, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    for (item = strtok_r(buf, ",", &save);
+         item && s_mem_watch_count < HARNESS_MAX_MEM_WATCH;
+         item = strtok_r(NULL, ",", &save)) {
+        char *colon = strchr(item, ':');
+        uint32_t base, len = 4;
+        if (colon) {
+            *colon = '\0';
+            len = (uint32_t)strtoul(colon + 1, NULL, 0);
+        }
+        base = (uint32_t)strtoul(item, NULL, 0);
+        if (!len) len = 4;
+        s_mem_watch[s_mem_watch_count].base = base & 0x00FFFFFFu;
+        s_mem_watch[s_mem_watch_count].len = len;
+        s_mem_watch_count++;
+        fprintf(stderr, "[WATCH-MEM] armed 0x%06x..0x%06x\n",
+                s_mem_watch[s_mem_watch_count - 1].base,
+                s_mem_watch[s_mem_watch_count - 1].base + len - 1);
+    }
+}
+
+static void harness_mem_watch_write(uint32_t pc, uint32_t addr, uint32_t value, int size)
+{
+    int i;
+
+    if (s_mem_watch_count < 0)
+        harness_mem_watch_init();
+
+    for (i = 0; i < s_mem_watch_count; i++) {
+        if (addr + (uint32_t)size > s_mem_watch[i].base &&
+            addr < s_mem_watch[i].base + s_mem_watch[i].len) {
+            fprintf(stderr,
+                    "[WATCH-MEM] W%d 0x%06x = 0x%0*x  pc=0x%06x\n",
+                    size, addr, size * 2, value, pc);
+            break;
+        }
+    }
+}
+
 static int harness_msgport_owner_fix_enabled(void)
 {
     static int enabled = -1;
@@ -2390,8 +2447,105 @@ static void harness_trace_library_call(uint32_t pc)
     }
 }
 
+/* HARNESS_PC_BURST=pc:count[:skip] — when PC first hits `pc` (after `skip`
+ * hits), log the next `count` instruction PCs. One-shot. */
+static void harness_pc_burst(uint32_t pc)
+{
+    static int inited = 0;
+    static uint32_t trig = 0, remaining = 0, skip = 0;
+    static int armed = 0;
+
+    if (!inited) {
+        const char *env = getenv("HARNESS_PC_BURST");
+        inited = 1;
+        if (env && env[0]) {
+            char buf[64];
+            strncpy(buf, env, sizeof(buf) - 1);
+            buf[sizeof(buf) - 1] = '\0';
+            char *c1 = strchr(buf, ':');
+            if (c1) {
+                *c1 = '\0';
+                char *c2 = strchr(c1 + 1, ':');
+                if (c2) { *c2 = '\0'; skip = (uint32_t)strtoul(c2 + 1, NULL, 0); }
+                trig = (uint32_t)strtoul(buf, NULL, 0) & 0x00FFFFFFu;
+                remaining = (uint32_t)strtoul(c1 + 1, NULL, 0);
+                armed = (trig && remaining) ? 1 : 0;
+                if (armed)
+                    fprintf(stderr, "[PC-BURST] armed trig=0x%06x count=%u skip=%u\n",
+                            trig, remaining, skip);
+            }
+        }
+    }
+
+    if (!armed)
+        return;
+
+    if (armed == 1) {
+        if ((pc & 0x00FFFFFFu) != trig)
+            return;
+        if (skip) { skip--; return; }
+        armed = 2;
+    }
+
+    fprintf(stderr, "[PC-BURST] pc=%06x sr=%04x\n",
+            pc & 0x00FFFFFFu, (unsigned)m68k_get_reg(NULL, M68K_REG_SR));
+    if (--remaining == 0)
+        armed = 0;
+}
+
+/* HARNESS_PC_RING=trigpc:depth:d0 — keep a ring of the last `depth` PCs;
+ * when PC hits trigpc with D0 == d0, dump the ring (history) and disarm. */
+#define HARNESS_PC_RING_MAX 4096
+static void harness_pc_ring(uint32_t pc)
+{
+    static int inited = 0, armed = 0;
+    static uint32_t trig = 0, depth = 0, d0_match = 0;
+    static uint32_t ring[HARNESS_PC_RING_MAX];
+    static uint16_t ring_sr[HARNESS_PC_RING_MAX];
+    static uint32_t head = 0, filled = 0;
+
+    if (!inited) {
+        const char *env = getenv("HARNESS_PC_RING");
+        inited = 1;
+        if (env && env[0]) {
+            unsigned long a = 0, b = 0, c = 0;
+            if (sscanf(env, "%lx:%lu:%lx", &a, &b, &c) >= 2) {
+                trig = (uint32_t)a & 0x00FFFFFFu;
+                depth = (uint32_t)(b > HARNESS_PC_RING_MAX ? HARNESS_PC_RING_MAX : b);
+                d0_match = (uint32_t)c;
+                armed = (trig && depth) ? 1 : 0;
+                if (armed)
+                    fprintf(stderr, "[PC-RING] armed trig=0x%06x depth=%u d0=0x%08x\n",
+                            trig, depth, d0_match);
+            }
+        }
+    }
+
+    if (!armed)
+        return;
+
+    ring[head] = pc & 0x00FFFFFFu;
+    ring_sr[head] = (uint16_t)m68k_get_reg(NULL, M68K_REG_SR);
+    head = (head + 1) % depth;
+    if (filled < depth) filled++;
+
+    if ((pc & 0x00FFFFFFu) == trig &&
+        (uint32_t)m68k_get_reg(NULL, M68K_REG_D0) == d0_match) {
+        uint32_t i, idx = (head + depth - filled) % depth;
+        fprintf(stderr, "[PC-RING] === dump (%u entries, oldest first) ===\n", filled);
+        for (i = 0; i < filled; i++) {
+            fprintf(stderr, "[PC-RING] pc=%06x sr=%04x\n", ring[idx], ring_sr[idx]);
+            idx = (idx + 1) % depth;
+        }
+        fprintf(stderr, "[PC-RING] === end ===\n");
+        armed = 0;
+    }
+}
+
 static void harness_instr_hook(unsigned int pc)
 {
+    harness_pc_burst((uint32_t)pc);
+    harness_pc_ring((uint32_t)pc);
     harness_trace_pc_range((uint32_t)pc);
     harness_trace_exec_call((uint32_t)pc);
     harness_trace_library_call((uint32_t)pc);
@@ -2476,6 +2630,8 @@ static uint32_t harness_read(uint32_t addr, int size)
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+
+    harness_mem_watch_write(pc, addr & 0x00FFFFFFu, value, size);
 
     if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
                                 addr,
@@ -2594,13 +2750,52 @@ static uint32_t musashi_get_pc(void *ctx)
     return (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
 }
 
+static int harness_ipl_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_IPL_TRACE");
+        enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+
+    return enabled;
+}
+
+static int harness_int_ack(int level)
+{
+    if (harness_ipl_trace_enabled())
+        fprintf(stderr, "[IPL] int-ack level=%d pc=0x%06x sr=%04x\n", level,
+                (unsigned)m68k_get_reg(NULL, M68K_REG_PC) & 0x00FFFFFF,
+                (unsigned)m68k_get_reg(NULL, M68K_REG_SR));
+    return M68K_INT_ACK_AUTOVECTOR;
+}
+
 static void musashi_set_ipl(void *ctx, int level)
 {
     (void)ctx;
     if (harness_boot_trace_enabled() && level > 0)
         printf("[IPL] set_ipl level=%d  pc=0x%08x\n", level,
                (unsigned)m68k_get_reg(NULL, M68K_REG_PC));
+    if (harness_ipl_trace_enabled()) {
+        static int last_level = -1;
+        if (level != last_level) {
+            fprintf(stderr, "[IPL] set_ipl level=%d pc=0x%06x sr=%04x\n", level,
+                    (unsigned)m68k_get_reg(NULL, M68K_REG_PC) & 0x00FFFFFF,
+                    (unsigned)m68k_get_reg(NULL, M68K_REG_SR));
+            last_level = level;
+        }
+    }
     m68k_set_irq((unsigned int)level);
+
+    /* Musashi only services pending interrupts at the start of an execute
+     * timeslice (or when an instruction writes SR).  An IPL raise arriving
+     * mid-slice would otherwise wait until the slice ends — long enough for
+     * the guest to Disable() and rescind it (lost preemption, see
+     * ISSUE-0026).  End the slice so the IRQ is taken on the next
+     * instruction boundary, as real hardware would. */
+    if (level > 0)
+        m68k_end_timeslice();
 }
 
 static void musashi_reset(void *ctx)
@@ -2653,12 +2848,20 @@ void musashi_backend_init(void)
         s_cpu_type = M68K_CPU_TYPE_68EC020;
     else if (cpu && strcmp(cpu, "68020") == 0)
         s_cpu_type = M68K_CPU_TYPE_68020;
+    else if (cpu && strcmp(cpu, "68030") == 0)
+        s_cpu_type = M68K_CPU_TYPE_68030;
+    else if (cpu && strcmp(cpu, "68040") == 0)
+        s_cpu_type = M68K_CPU_TYPE_68040;
 
     m68k_init();
     m68k_set_cpu_type(s_cpu_type);
     printf("[HARNESS] CPU: %s\n",
+           s_cpu_type == M68K_CPU_TYPE_68040 ? "68040" :
+           s_cpu_type == M68K_CPU_TYPE_68030 ? "68030" :
            s_cpu_type == M68K_CPU_TYPE_68020 ? "68020" :
            s_cpu_type == M68K_CPU_TYPE_68EC020 ? "68ec020" :
            s_cpu_type == M68K_CPU_TYPE_68010 ? "68010" : "68000");
     m68k_set_instr_hook_callback(harness_instr_hook);
+    if (harness_ipl_trace_enabled())
+        m68k_set_int_ack_callback(harness_int_ack);
 }
