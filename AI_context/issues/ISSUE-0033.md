@@ -44,6 +44,20 @@ Desktop de uma distro RTG-only (ArosOne) renderizado pelo harness em
 resolução > PAL, com screenshot pelo pipeline existente
 (HARNESS_SCREENSHOT_FRAMES).
 
+# Arquitetura: dois "RTGs" diferentes (não confundir)
+
+- **Guest API (AROS/AmigaOS)**: RTG = driver `.card` (P96/CGX; uaegfx no
+  UAE). É isso que o ArosOne espera encontrar.
+- **Emu68**: fornece um `.card` cuja implementação fala DIRETO com o
+  VideoCore do Raspberry (mailbox/framebuffer VC4) — não há "placa"
+  emulada.
+- Consequência para o Bellatrix:
+  - **Hardware**: caminho natural é reusar/adaptar o driver VC4 do Emu68
+    (o Bellatrix já usa VC4 para a saída da Denise; falta arbitrar
+    Denise vs RTG na mesma saída).
+  - **Harness**: aí sim seria preciso emular a API do card escolhido
+    (VRAM + registradores/mailbox), pois não há VC4.
+
 # Notas
 
 - Não distorcer o modelo do chipset: RTG é um board de expansão, não
