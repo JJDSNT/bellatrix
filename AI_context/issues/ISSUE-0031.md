@@ -156,3 +156,56 @@ Reprodução automatizada (headless) trava ANTES do crash real (loop de
 poll determinístico em PC=0x00fe849a, não relacionado — resolve sozinho
 depois de muitos frames, >45000 mas <150000 aparentemente). Run longo
 em andamento para capturar o opcode exato.
+
+# Reprodução confiável encontrada + separado do RTG (2026-07-03, tarde)
+
+Reprodução rápida e determinística (~1min, headless):
+```
+KICKSTART=src/roms/new_aros.rom HDF=src/disks/arosone.hdf HARNESS_CPU=68040 FRAMES=4000 ./run.sh harness
+```
+(`HARNESS_RTG=1` opcional — **crash idêntico com ou sem RTG**, confirmado
+por teste de controle. Não é bug do RTG.)
+
+Achado real: `[F-LINE-TRAP] pc=00200144 ir=ffff opcode_bytes=ffff 00fa`.
+`ir=0xFFFF` **não é opcode de FPU real** — é padrão de barramento
+aberto/memória não escrita. Confirmado (instrumentação `[FR-DBG]`) que a
+leitura passa corretamente pela janela de fast RAM configurada
+(`fr_ok=1 match=1`) — ou seja, o conteúdo REAL de `fast_ram[0x144..0x145]`
+é `0xFF 0xFF`. Fast RAM é `memset(0)` na inicialização (memory.c:88), não
+`0xFF` — então algo grava `0xFF` ali durante o boot, ou o AROS pula para
+um endereço nunca populado com código real.
+
+Hipótese mais provável: `new_aros.rom` é build nightly/dev; padrão 0xFF
+é assinatura comum de poison-fill de alocador debug (tipo AROS_MUNGWALL)
+em memória liberada — sugere possível use-after-free ou load de
+biblioteca que falha silenciosamente, do lado do AROS. Não necessariamente
+corrigível pelo nosso lado.
+
+Variação: com `HARNESS_MSGPORT_OWNER_FIX=1` (env específico do
+new_aros.rom, ver bellatrix-workflow-preferences), o sintoma muda para
+`Illegal instruction` em `Exec Bootstrap Task`, incluindo um crash
+secundário com `PC=0x00000010` (endereço do próprio vetor de exceção —
+sugere possível corrupção da vector table ou double-fault). Não
+investigado a fundo ainda.
+
+**Conclusão da sessão**: RTG (board+card+DiagArea, ISSUE-0033) está
+validado até o ponto que testamos; o bloqueio para feedback visual do
+ArosOne não é causado pelo RTG — é esse crash separado e anterior no
+boot do `new_aros.rom`. Com `aros.rom` (build mais antigo) o boot trava
+em ponto diferente e não relacionado (loop de poll em PC=0x00fe849a,
+resolve sozinho em modo interativo após muitos frames, nunca em
+headless — ver ISSUE-0033).
+
+# Referências para a lacuna maior de FPU (fora do escopo do crash acima)
+
+- https://github.com/nonarkitten/femu — emulador de FPU 680x0 em
+  assembly, guest-side (roda NO Amiga, como mathieeedoubbas). Licença
+  "uso pessoal", alpha (v0.14). Não é código pra portar pro Musashi;
+  seria uma biblioteca a carregar no lado guest — caminho alternativo a
+  "implementar opcodes no Musashi", mas exigiria mexer no boot do AROS
+  para carregá-la (ou empacotar no nosso HDF).
+- `emu68/src/M68k_FPU.c` (1069 linhas) — o PRÓPRIO Emu68 tem emulação de
+  FPU em C, testada em produção (roda software Amiga real no Raspberry
+  Pi). Candidato natural a referência/reaproveitamento para preencher
+  os gaps do m68kfpu.c do Musashi, muito mais maduro que escrever do
+  zero. Avaliar antes de qualquer trabalho futuro de FPU no harness.

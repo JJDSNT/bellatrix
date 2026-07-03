@@ -2631,8 +2631,8 @@ static uint32_t harness_read(uint32_t addr, int size)
      * own part of the 0x200000-0x9FFFFF space. */
     {
         uint32_t fr_base, fr_size;
-        if (bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size) &&
-            addr >= fr_base && addr < fr_base + fr_size) {
+        int fr_ok = bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size);
+        if (fr_ok && addr >= fr_base && addr < fr_base + fr_size) {
             const BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
             if (size == 1) return bellatrix_fast_read8(fmem, addr);
             if (size == 2) return bellatrix_fast_read16(fmem, addr);

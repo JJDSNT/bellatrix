@@ -1,0 +1,26 @@
+diff --git a/m68kcpu.h b/m68kcpu.h
+index a743cdb..f05aa3c 100644
+--- a/m68kcpu.h
++++ b/m68kcpu.h
+@@ -1994,6 +1994,21 @@ static inline void m68ki_exception_1111(void)
+ {
+ 	uint sr;
+ 
++	/* Bellatrix: F-line traps are otherwise silent on the host side —
++	 * the guest shows an Alert, but nothing tells us WHICH opcode
++	 * faulted. Capped, so a boot loop that keeps re-triggering this
++	 * can't flood the log. See ISSUE-0031. */
++	{
++		static int s_hits = 0;
++		if (s_hits < 30) {
++			s_hits++;
++			printf("[F-LINE-TRAP] pc=%08x ir=%04x opcode_bytes=%04x %04x\n",
++			        (unsigned)ADDRESS_68K(REG_PPC), (unsigned)REG_IR,
++			        (unsigned)m68k_read_immediate_16(ADDRESS_68K(REG_PPC)),
++			        (unsigned)m68k_read_immediate_16(ADDRESS_68K(REG_PPC) + 2));
++		}
++	}
++
+ #if M68K_LOG_1010_1111 == M68K_OPT_ON
+ 	M68K_DO_LOG_EMU((M68K_LOG_FILEHANDLE "%s at %08x: called 1111 instruction %04x (%s)\n",
+ 					 m68ki_cpu_names[CPU_TYPE], ADDRESS_68K(REG_PPC), REG_IR,
