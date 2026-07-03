@@ -39,6 +39,30 @@ static void cpu_bridge_log_critical_write(uint32_t addr, uint32_t value)
 __attribute__((weak)) void core_chipset_lock_acquire(void) {}
 __attribute__((weak)) void core_chipset_lock_release(void) {}
 
+/* Zorro III / 32-bit space (addr > 0x00FFFFFF, e.g. autoconfig at
+ * 0xFF000000 — EZ3_EXPANSIONBASE) is not implemented (ISSUE-0032). This
+ * MUST read as open bus, not alias into 24-bit space: AROS's Z3 probe
+ * during boot reads 0xFF000000+, and masking it down previously landed
+ * on live chip RAM (0x000000+) and the RTG board's own DiagArea
+ * (0x000100+) — the probe was reading mutable, run-to-run-varying state
+ * instead of "nothing here", which produced non-deterministic boot
+ * behavior (found 2026-07-03 chasing a boot hang that resolved
+ * differently across runs of the same build). */
+static inline int addr_is_unimplemented_z3(uint32_t addr)
+{
+    if (addr <= 0x00FFFFFFu)
+        return 0;
+    {
+        static int s_hits = 0;
+        if (s_hits < 20) {
+            s_hits++;
+            kprintf("[Z3-OPENBUS] addr=%08x (unimplemented — see ISSUE-0032)\n",
+                    (unsigned)addr);
+        }
+    }
+    return 1;
+}
+
 uint32_t bellatrix_bridge_normalize_addr(uint32_t addr)
 {
     addr &= 0x00FFFFFFu;
@@ -62,6 +86,10 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
     uint64_t _t = bprof_now();
 #endif
     uint32_t result;
+
+    if (addr_is_unimplemented_z3(addr))
+        return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
+
     core_chipset_lock_acquire();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
         result = bellatrix_machine_read(addr, size);
@@ -79,6 +107,9 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
 #if BELLATRIX_PROFILE_ENABLED
     uint64_t _t = bprof_now();
 #endif
+    if (addr_is_unimplemented_z3(addr))
+        return;
+
 #if defined(BELLATRIX_CORE_LOG)
     cpu_bridge_log_critical_write(addr, value);
 #endif

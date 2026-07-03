@@ -2568,6 +2568,23 @@ static void harness_instr_hook(unsigned int pc)
 
 static uint32_t harness_read(uint32_t addr, int size)
 {
+    /* Zorro III / 32-bit space is unimplemented (ISSUE-0032) — must read
+     * as open bus, not alias into 24-bit space. AROS's Z3 autoconfig
+     * probe (0xFF000000+) was previously masking onto live chip RAM and
+     * the RTG board's own DiagArea, reading mutable state instead of
+     * "nothing here" and causing non-deterministic boot behavior across
+     * runs (found 2026-07-03; same fix applied in cpu_bridge.c for the
+     * non-harness backends). */
+    if (addr > 0x00FFFFFFu) {
+        static int s_hits = 0;
+        if (s_hits < 20) {
+            s_hits++;
+            uint32_t pc0 = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+            printf("[Z3-OPENBUS] pc=%08x addr=%08x size=%d\n",
+                   (unsigned)pc0, (unsigned)addr, size);
+        }
+        return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
+    }
     addr &= 0x00FFFFFFu;
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
     uint32_t ret = 0;
@@ -2646,6 +2663,17 @@ static uint32_t harness_read(uint32_t addr, int size)
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+
+    /* Zorro III / 32-bit space open bus — see harness_read. */
+    if (addr > 0x00FFFFFFu) {
+        static int s_hits = 0;
+        if (s_hits < 20) {
+            s_hits++;
+            printf("[Z3-OPENBUS] pc=%08x addr=%08x size=%d val=%08x (write, discarded)\n",
+                   (unsigned)pc, (unsigned)addr, size, (unsigned)value);
+        }
+        return;
+    }
 
     harness_mem_watch_write(pc, addr & 0x00FFFFFFu, value, size);
 
