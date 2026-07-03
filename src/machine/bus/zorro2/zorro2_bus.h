@@ -79,6 +79,11 @@ uint32_t bellatrix_zorro2_board_base(const char *id);
  * size_bytes is clamped to the nearest supported AC size (max 8 MB). */
 void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes);
 
+/* Fast RAM board state: registered = enable_fast_ram() was called;
+ * configured = autoconfig assigned it a base (RAM may respond). */
+int bellatrix_zorro2_fast_ram_registered(void);
+int bellatrix_zorro2_fast_ram_configured(void);
+
 #ifdef __cplusplus
 }
 #endif

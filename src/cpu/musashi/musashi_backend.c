@@ -2,6 +2,7 @@
 
 #include "cpu/cpu_bridge.h"
 #include "machine/machine.h"
+#include "machine/bus/zorro2/zorro2_bus.h"
 #include "rigel/rigel_cia.h"
 #include "machine/memory/memory.h"
 
@@ -31,6 +32,17 @@ static int musashi_overlay_enabled(void)
     if (!ctx) return 1;
     if (!(rigel_cia_read(ctx, 0u, 0x2u) & 0x01u)) return 1;
     return (rigel_cia_read(ctx, 0u, 0x0u) & 0x01u) ? 1 : 0;
+}
+
+/* When the fast RAM autoconfig board is registered, the RAM window must
+ * stay silent until the OS assigns it a base — otherwise early memory
+ * probes find RAM at 0x200000 and the later AddMemList duplicates the
+ * range, corrupting the exec memory list. Without a registered board the
+ * window responds unconditionally (legacy harness behaviour). */
+static int musashi_fast_ram_visible(void)
+{
+    if (!bellatrix_zorro2_fast_ram_registered()) return 1;
+    return bellatrix_zorro2_fast_ram_configured();
 }
 
 static uint32_t musashi_chip_read(const BellatrixMemory *mem,
@@ -126,7 +138,8 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
     if (mem->fast_ram &&
         mem->fast_ram_size &&
         addr >= BELLATRIX_FAST_RAM_BASE &&
-        addr <= BELLATRIX_FAST_RAM_END) {
+        addr <= BELLATRIX_FAST_RAM_END &&
+        musashi_fast_ram_visible()) {
         return musashi_fast_read(mem, addr, size);
     }
 
@@ -159,7 +172,8 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
     if (mem->fast_ram &&
         mem->fast_ram_size &&
         addr >= BELLATRIX_FAST_RAM_BASE &&
-        addr <= BELLATRIX_FAST_RAM_END) {
+        addr <= BELLATRIX_FAST_RAM_END &&
+        musashi_fast_ram_visible()) {
         musashi_fast_write(mem, addr, value, size);
         return;
     }

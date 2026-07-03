@@ -10,6 +10,9 @@ Subcommands:
                                         copy full ADF contents into the HDF
   iso2hdf <disc.iso> <img.hdf> [--dest /] [--part DH0]
                                         extract ISO (via 7z) and copy into the HDF
+  dir2hdf <host-dir> <img.hdf> [--dest /] [--part DH0]
+                                        copy a host directory tree into the HDF
+                                        (sanitized copy; source is not modified)
   write   <img.hdf> <host-path> [ami-path] [--part DH0]
                                         copy a host file/dir into the HDF
   read    <img.hdf> <ami-path> [host-path] [--part DH0]
@@ -135,6 +138,15 @@ def cmd_iso2hdf(iso, img, dest="/", part="DH0"):
         print(f"copied {n} top-level entries from {iso} to {img}:{dest}")
 
 
+def cmd_dir2hdf(srcdir, img, dest="/", part="DH0"):
+    with tempfile.TemporaryDirectory() as tmp:
+        work = os.path.join(tmp, "tree")
+        shutil.copytree(srcdir, work, symlinks=False)
+        sanitize_for_ffs(work)
+        n = copy_tree_into(img, work, dest, part)
+        print(f"copied {n} top-level entries from {srcdir} to {img}:{dest}")
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -165,6 +177,10 @@ def main():
         p = opt("--part", "DH0")
         d = opt("--dest", "/")
         cmd_iso2hdf(rest[0], rest[1], d, p)
+    elif cmd == "dir2hdf":
+        p = opt("--part", "DH0")
+        d = opt("--dest", "/")
+        cmd_dir2hdf(rest[0], rest[1], d, p)
     elif cmd == "write":
         p = opt("--part", "DH0")
         img = rest[0]

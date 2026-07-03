@@ -344,6 +344,19 @@ static uint32_t ac_size_to_bytes(uint8_t code)
     }
 }
 
+static int s_fast_ram_registered = 0;
+
+int bellatrix_zorro2_fast_ram_registered(void)
+{
+    return s_fast_ram_registered;
+}
+
+int bellatrix_zorro2_fast_ram_configured(void)
+{
+    return s_fast_ram_registered &&
+           bellatrix_zorro2_board_configured("bellatrix.fastram");
+}
+
 void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes)
 {
     uint8_t sz  = bytes_to_ac_size(size_bytes);
@@ -365,4 +378,5 @@ void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes)
     s_fast_ram_board_desc.window_size = ac_size_to_bytes(sz);
 
     bellatrix_zorro2_register_board(&s_fast_ram_board_desc);
+    s_fast_ram_registered = 1;
 }

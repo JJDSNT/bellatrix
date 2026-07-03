@@ -15,6 +15,7 @@
 
 #include "musashi_backend.h"
 #include "screenshot.h"
+#include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
 
 #include "machine/machine.h"
@@ -1039,6 +1040,15 @@ int main(int argc, char **argv)
         }
     } else {
         bellatrix_machine_eject_df0();
+    }
+
+    /* Announce the 8MB Zorro II fast RAM via autoconfig so the OS adds it
+     * to the memory list.  The Musashi backend already backs the
+     * 0x200000-0x9FFFFF window; HARNESS_FASTRAM=0 disables the board. */
+    const char *fastram_env = getenv("HARNESS_FASTRAM");
+    if (!(fastram_env && fastram_env[0] == '0')) {
+        bellatrix_zorro2_enable_fast_ram(8u * 1024u * 1024u);
+        printf("[HARNESS] Fast RAM: 8MB Zorro II board registered\n");
     }
 
     /* Register the CD-ROM board only when it has media, unless explicitly

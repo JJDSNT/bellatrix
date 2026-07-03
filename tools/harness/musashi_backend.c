@@ -18,6 +18,7 @@
 #include "musashi_backend.h"
 #include "cpu/cpu_bridge.h"
 #include "machine/machine.h"
+#include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/memory/memory.h"
 #include "rigel/rigel_cia.h"
 
@@ -2607,6 +2608,16 @@ static uint32_t harness_read(uint32_t addr, int size)
         return ret;
     }
 
+    /* Zorro II fast RAM: respond only after autoconfig assigned the board
+     * a base, so early memory probes do not find RAM before AddMemList. */
+    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END &&
+        bellatrix_zorro2_fast_ram_configured()) {
+        const BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
+        if (size == 1) return bellatrix_fast_read8(fmem, addr);
+        if (size == 2) return bellatrix_fast_read16(fmem, addr);
+        return bellatrix_fast_read32(fmem, addr);
+    }
+
     if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
                                 addr,
                                 (unsigned int)size)) {
@@ -2690,6 +2701,16 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
             printf("[1892-WATCH] pc=%08x write addr=%06x size=%d val=%08x → [1892]=%08x\n",
                    (unsigned)pc, (unsigned)addr, size, (unsigned)value, (unsigned)b92);
         }
+        return;
+    }
+
+    /* Zorro II fast RAM (see harness_read) */
+    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END &&
+        bellatrix_zorro2_fast_ram_configured()) {
+        BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
+        if (size == 1)      bellatrix_fast_write8(fmem, addr, (uint8_t)value);
+        else if (size == 2) bellatrix_fast_write16(fmem, addr, (uint16_t)value);
+        else                bellatrix_fast_write32(fmem, addr, value);
         return;
     }
 

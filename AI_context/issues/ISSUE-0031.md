@@ -65,3 +65,19 @@ KICKSTART=src/roms/aros.rom HDF=aros.hdf HARNESS_CPU=68020 FRAMES=1500 ./run.sh 
 - Patch **0014-musashi-fpu-test-condition-mask**: predicados >=0x20
   passam a mascarar para 5 bits com warning em vez de exit(1) do host
   (o abort silencioso do 68040 era esse exit(1) via fatalerror).
+
+# Progresso 2 (2026-07-03, fast RAM)
+
+- Harness ganhou **8MB de Zorro II fast RAM** via autoconfig (default ON,
+  `HARNESS_FASTRAM=0` desliga). Registrado em tools/harness/main.c;
+  backing no próprio backend (tools/harness/musashi_backend.c).
+- Bug encontrado e corrigido: a janela de RAM respondia antes do
+  autoconfig → exec duplicava a faixa na memlist ("Sanity check on memory
+  list failed", "MemHeader 0x00200000 (0xFFFFFFFF)"). Regra consolidada em
+  AI_context/consolidated/memory_model.md.
+- `dir2hdf` adicionado ao tools/hdf (árvore de diretório → HDF, sanitização
+  em cópia). ArosOne-68K (494MB) → arosone.hdf 700MB.
+- ArosOne boota no 68040 com fast RAM sem erros de memória, carrega a
+  stack USB da distro, mas desktop não aparece — suspeita: distro
+  configurada para RTG (WinUAE usa uaegfx + 512MB VRAM); forçar screenmode
+  PAL nativo é o próximo experimento.
