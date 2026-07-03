@@ -58,6 +58,22 @@ resolução > PAL, com screenshot pelo pipeline existente
   - **Harness**: aí sim seria preciso emular a API do card escolhido
     (VRAM + registradores/mailbox), pois não há VC4.
 
+# Fontes localizadas (2026-07-03)
+
+- **Driver guest com source**: `external/aros/arch/m68k-amiga/hidd/p96gfx/`
+  — o "uaegfx" do AROS m68k. `p96gfx_card.c` mostra DOIS backends:
+  1. `CardBase` = library `.card` P96 real (caminho do Emu68/VC4);
+  2. `p96romvector` = traps uaegfx do UAE (host-side = picasso96.cpp do
+     WinUAE, que NÃO está em referencias/winuae; gfxboard.cpp/
+     framebufferboards.cpp copiados lá são emulação de placas físicas —
+     útil como referência, mas é o outro caminho).
+- **Plano preferido**: escrever um `bellatrix.card` m68k (temos toolchain
+  docker: lide.rom/ODFS) falando com janela VRAM+registradores simples.
+  Harness: framebuffer→SDL. Hardware: mesmo card→VC4 (como o Emu68).
+  Um driver guest, dois backends.
+- ArosOne não traz uaegfx em binário (Devs/Monitors = Compositor+SAGA);
+  o p96gfx vem na ROM do AROS m68k — basta o FindCard achar uma placa.
+
 # Notas
 
 - Não distorcer o modelo do chipset: RTG é um board de expansão, não
