@@ -173,7 +173,6 @@ MUSASHI_PATCHES=(
     "$PATCHES/0013-musashi-fsave-an-addressing-mode.patch"
     "$PATCHES/0014-musashi-fpu-test-condition-mask.patch"
     "$PATCHES/0015-musashi-fline-trap-diagnostic.patch"
-    "$PATCHES/0016-musashi-040fpu0-gate-diagnostic.patch"
     "$PATCHES/0017-musashi-fpu-missing-opmodes.patch"
     "$PATCHES/0018-musashi-widen-fpu-cpu-gate.patch"
 )

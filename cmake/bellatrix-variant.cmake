@@ -154,6 +154,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/miniuart_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pl011_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/vc_mailbox.c
+    ${CMAKE_SOURCE_DIR}/../src/host/raspi3/hdmi_audio.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/console_log.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_debug.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_ipl.c
@@ -209,10 +210,17 @@ list(APPEND BELLATRIX_INCLUDE_DIRS
 option(BELLATRIX_ENABLE_BTSTACK "Enable BTStack support in Bellatrix" OFF)
 option(BELLATRIX_ENABLE_USBSTACK "Enable CherryUSB host stack scaffold in Bellatrix" OFF)
 option(BELLATRIX_ENABLE_USB_MSC "Enable CherryUSB USB mass-storage class in Bellatrix" ON)
+# ISSUE-0011: direct-register HDMI audio touches MMIO (MAI/HDMI/Clock
+# Manager) that QEMU's raspi3b machine does not model -- an unhandled
+# access there hangs boot before Kickstart even runs. Off by default until
+# validated on real Pi 3B hardware; only real firmware images meant to test
+# HDMI audio should turn this on.
+option(BELLATRIX_ENABLE_HDMI_AUDIO "Enable direct-register HDMI audio output (real Pi hardware only, not QEMU)" OFF)
 add_compile_definitions(
     BELLATRIX_ENABLE_BTSTACK=$<BOOL:${BELLATRIX_ENABLE_BTSTACK}>
     BELLATRIX_ENABLE_USBSTACK=$<BOOL:${BELLATRIX_ENABLE_USBSTACK}>
     BELLATRIX_ENABLE_USB_MSC=$<BOOL:${BELLATRIX_ENABLE_USB_MSC}>
+    BELLATRIX_ENABLE_HDMI_AUDIO=$<BOOL:${BELLATRIX_ENABLE_HDMI_AUDIO}>
 )
 if(BELLATRIX_ENABLE_BTSTACK)
     set(BELLATRIX_BTSTACK_PATCHRAM_SOURCE "" CACHE STRING "Path to generated BCM PatchRAM C source for Bellatrix BTStack")

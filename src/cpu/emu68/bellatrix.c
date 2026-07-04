@@ -20,6 +20,7 @@
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
+#include "host/raspi3/hdmi_audio.h"
 #include "io/serial/uart_host.h"
 #include "mmu.h"
 #include "A64.h"
@@ -621,6 +622,10 @@ void bellatrix_init(void)
 
 #if BELLATRIX_ENABLE_BTSTACK
     bellatrix_init_bluetooth(&g_runtime, m);
+#endif
+
+#if BELLATRIX_ENABLE_HDMI_AUDIO
+    hdmi_audio_init();
 #endif
 
 #ifdef BELLATRIX_ENABLE_MULTICORE

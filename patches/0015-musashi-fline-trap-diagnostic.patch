@@ -1,20 +1,30 @@
 diff --git a/m68kcpu.h b/m68kcpu.h
-index a743cdb..906dd23 100644
+index a743cdb..666990f 100644
 --- a/m68kcpu.h
 +++ b/m68kcpu.h
-@@ -41,6 +41,11 @@ extern "C" {
+@@ -41,6 +41,21 @@ extern "C" {
  
  #include <assert.h>
  #include <limits.h>
-+#include <stdio.h>	/* Bellatrix: printf() for the [F-LINE-TRAP] diagnostic
-+			 * below — must be unconditional (not just under
-+			 * M68K_LOG_ENABLE) or strict cross-compilers (e.g.
-+			 * aarch64-linux-gnu) reject the later real prototype
-+			 * as conflicting with an implicit int printf(). */
++#include <stdio.h>
++
++/* Bellatrix: kprintf() for the [F-LINE-TRAP] diagnostic below. Bare-metal
++ * firmware has no libc printf() (only kprintf() to the serial console), so
++ * this is forward-declared here rather than pulling in a Bellatrix header,
++ * matching the same pattern used across src/host/raspi3/*.c. The harness
++ * (Linux host) has no kprintf() symbol at all -- src/host/posix/support.h
++ * maps it to printf() via macro there, but musashi is a standalone library
++ * with its own include path, so alias it directly instead of depending on
++ * that header being reachable. */
++#if defined(BELLATRIX_HARNESS)
++#define kprintf printf
++#else
++int kprintf(const char *fmt, ...);
++#endif
  
  #include <setjmp.h>
  
-@@ -1994,6 +1999,21 @@ static inline void m68ki_exception_1111(void)
+@@ -1994,6 +2009,21 @@ static inline void m68ki_exception_1111(void)
  {
  	uint sr;
  
@@ -26,7 +36,7 @@ index a743cdb..906dd23 100644
 +		static int s_hits = 0;
 +		if (s_hits < 30) {
 +			s_hits++;
-+			printf("[F-LINE-TRAP] pc=%08x ir=%04x opcode_bytes=%04x %04x\n",
++			kprintf("[F-LINE-TRAP] pc=%08x ir=%04x opcode_bytes=%04x %04x\n",
 +			        (unsigned)ADDRESS_68K(REG_PPC), (unsigned)REG_IR,
 +			        (unsigned)m68k_read_immediate_16(ADDRESS_68K(REG_PPC)),
 +			        (unsigned)m68k_read_immediate_16(ADDRESS_68K(REG_PPC) + 2));

@@ -56,6 +56,10 @@ target_compile_options(musashi PRIVATE
     -w
 )
 
+target_compile_definitions(musashi PRIVATE
+    BELLATRIX_HARNESS=1
+)
+
 # ---------------------------------------------------------------------------
 # lide.rom — build from source via Docker, embed as C array
 # ---------------------------------------------------------------------------

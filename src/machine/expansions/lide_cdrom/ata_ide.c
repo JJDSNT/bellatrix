@@ -5,15 +5,20 @@
 
 /* Per-command trace logging: enable with HARNESS_CD_TRACE=1.
  * Off by default — during sustained CD I/O this logging is heavy enough
- * to throttle the emulator when stdout is a terminal. */
+ * to throttle the emulator when stdout is a terminal. Bare-metal firmware
+ * has no getenv()/env vars, so this is harness-only; always off on metal. */
 static int lide_cd_trace_enabled(void)
 {
+#if defined(BELLATRIX_HARNESS)
     static int enabled = -1;
     if (enabled < 0) {
         const char *env = getenv("HARNESS_CD_TRACE");
         enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
     }
     return enabled;
+#else
+    return 0;
+#endif
 }
 #define CD_TRACE(...) do { if (lide_cd_trace_enabled()) kprintf(__VA_ARGS__); } while (0)
 

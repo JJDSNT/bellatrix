@@ -41,6 +41,10 @@ Common options (env vars):
                       (default: off)
   BELLATRIX_USB_MSC=1 Enable CherryUSB USB mass-storage class when USB stack is
                       enabled (default: on)
+  BELLATRIX_HDMI_AUDIO=1
+                      Enable direct-register HDMI audio output (default: off).
+                      Real Pi 3B hardware only -- QEMU's raspi3b machine does
+                      not model this MMIO and will hang on boot if enabled.
   BELLATRIX_QEMU_USB_KBD=1
                       In qemu mode, attach a virtual USB keyboard device
                       (default: on when BELLATRIX_USBSTACK=1)
@@ -277,6 +281,9 @@ load_launcher_selection() {
                 ;;
             BELLATRIX_USBSTACK)
                 BELLATRIX_USBSTACK="$value"
+                ;;
+            BELLATRIX_HDMI_AUDIO)
+                BELLATRIX_HDMI_AUDIO="$value"
                 ;;
             BELLATRIX_USB_MSC)
                 BELLATRIX_USB_MSC="$value"
@@ -565,6 +572,7 @@ case "$BUILD_KIND" in
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_USB_MSC="${BELLATRIX_USB_MSC:-1}"
+        export BELLATRIX_HDMI_AUDIO="${BELLATRIX_HDMI_AUDIO:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
         export BELLATRIX_PROFILE="${BELLATRIX_PROFILE:-0}"
         export BELLATRIX_CHIPSET_BACKEND="${BELLATRIX_CHIPSET_BACKEND:-rigel}"

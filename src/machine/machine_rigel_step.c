@@ -21,6 +21,7 @@
 #include "rigel/rigel_irq.h"
 #include "rigel/rigel_serial.h"
 #include "host/raspi3/console_log.h"
+#include "host/raspi3/hdmi_audio.h"
 
 #ifdef BELLATRIX_HARNESS
 #include <stdio.h>
@@ -413,6 +414,19 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
     if (r.events & RIGEL_EVENT_HBLANK)
         bellatrix_machine_on_audio_sample_ready();
     bellatrix_audio_output_tick((uint32_t)cycles);
+
+#if !defined(BELLATRIX_HARNESS) && BELLATRIX_ENABLE_HDMI_AUDIO
+    {
+        AudioSample s;
+        static unsigned subframe = 0; /* persists across calls */
+        while (hdmi_audio_writable() && bellatrix_audio_output_pop(&s)) {
+            hdmi_audio_write_sample(s.left, subframe++);
+            hdmi_audio_write_sample(s.right, subframe++);
+            if (subframe >= 384)
+                subframe = 0;
+        }
+    }
+#endif
 
 #ifdef BELLATRIX_HARNESS
     if (perf) {

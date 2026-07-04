@@ -9,15 +9,20 @@
 
 /* Per-command trace logging: enable with HARNESS_CD_TRACE=1.
  * Off by default — during sustained CD I/O this logging is heavy enough
- * to throttle the emulator when stdout is a terminal. */
+ * to throttle the emulator when stdout is a terminal. Bare-metal firmware
+ * has no getenv()/env vars, so this is harness-only; always off on metal. */
 static int atapi_cd_trace_enabled(void)
 {
+#if defined(BELLATRIX_HARNESS)
     static int enabled = -1;
     if (enabled < 0) {
         const char *env = getenv("HARNESS_CD_TRACE");
         enabled = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
     }
     return enabled;
+#else
+    return 0;
+#endif
 }
 #define CD_TRACE(...) do { if (atapi_cd_trace_enabled()) kprintf(__VA_ARGS__); } while (0)
 
@@ -64,7 +69,9 @@ static void patch_pvd_sysid(uint8_t *sector)
     /* Opt-in (HARNESS_CD_BOOTABLE=1): forging "AMIGA BOOT" makes the lide
      * mounter register the CD with bootPri=2, so it competes with the
      * floppy in the boot node list.  For the normal workflow — boot from
-     * ADF, CD mounted as a data volume — the ISO must stay non-bootable. */
+     * ADF, CD mounted as a data volume — the ISO must stay non-bootable.
+     * Harness-only: bare-metal firmware has no getenv()/env vars. */
+#if defined(BELLATRIX_HARNESS)
     static int enabled = -1;
     if (enabled < 0) {
         const char *env = getenv("HARNESS_CD_BOOTABLE");
@@ -72,6 +79,9 @@ static void patch_pvd_sysid(uint8_t *sector)
     }
     if (!enabled)
         return;
+#else
+    return;
+#endif
 
     /* Verify PVD: type byte = 0x01, standard identifier = "CD001" */
     if (sector[0] != 0x01)

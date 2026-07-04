@@ -113,8 +113,56 @@ Previous findings that still matter:
 4. Play a 48 kHz stereo tone over HDMI.
 5. Drain `bellatrix_audio_output_pop()` into HDMI and test Paula audio.
 6. Only after HDMI proof: add DMA/ring refill if polling is too expensive.
+   IRQ-driven drain (MAI FIFO threshold interrupt via the BCM2837 interrupt
+   controller, same style as the existing Bluetooth/PL011 IRQ paths) is an
+   alternative or companion to DMA here — not yet implemented, not yet
+   scheduled; register today only masks nothing (`MAI_CTL` has no IRQ-enable
+   bits set), so the driver is 100% polling from the chipset step loop.
 7. Then evaluate jack/PWM.
 8. Then evaluate Bluetooth A2DP.
+
+## Implementation status (2026-07-03)
+
+Steps 2–5 implemented: `src/host/raspi3/hdmi_audio.h`/`.c` (register-level
+MAI/HDMI driver, IEC958 framing, N/CTS via from-scratch continued-fraction
+rational approximation — independent reimplementation from BCM2835/2837
+register facts and the published IEC 60958-3/CEA-861 standards, not a port
+of Circle's GPL-3 `CHDMISoundBaseDevice`, since Bellatrix intends to be
+MIT). Wired: `hdmi_audio_init()` called from `src/cpu/emu68/bellatrix.c`
+(next to Bluetooth bring-up); drain loop in `src/machine/machine_rigel_step.c`
+under `#ifndef BELLATRIX_HARNESS`, pulling from
+`bellatrix_audio_output_pop()` whenever both the HDMI FIFO is writable and
+the queue is non-empty. Added to `cmake/bellatrix-variant.cmake`; confirmed
+absent from the harness build (harness is unaffected).
+
+Verified: `hdmi_audio.c` compiles cleanly for bare-metal
+(`BELLATRIX_CPU_BACKEND=musashi`). Final link currently fails only on the
+pre-existing, unrelated ISSUE-0035 (`getenv`/`strtoul` gap in
+`ata_ide.c`/`atapi_cdrom.c`/blitter code) — not a regression from this work.
+
+**Not yet verified**: actual sound over a physical HDMI sink. Requires
+flashing a real Pi 3B with an HDMI display/soundbar attached — needs the
+user to test on hardware; `kprintf` diagnostics are left in place at
+`hdmi_audio_init()` (HSM clock read, computed N/CTS) to aid that.
+
+## Regression found: QEMU boot hang (2026-07-03)
+
+Calling `hdmi_audio_init()` unconditionally from `bellatrix_init()` broke
+QEMU boot (`./run.sh qemu`) while the harness kept working — the harness
+never builds/calls this code at all, so it masked the problem. Root cause:
+QEMU's `raspi3b` machine model does not implement the HDMI/MAI/Clock
+Manager MMIO block (`ARM_HD_BASE`/`ARM_HDMI_BASE`/`CM_HSMCTL` etc.); an
+access to unmodeled peripheral MMIO there hangs the guest before Kickstart
+even runs.
+
+Fix: added `BELLATRIX_ENABLE_HDMI_AUDIO` CMake option (default **OFF**,
+same convention as `BELLATRIX_ENABLE_BTSTACK`/`_USBSTACK`) gating both the
+`hdmi_audio_init()` call in `bellatrix.c` and the drain loop in
+`machine_rigel_step.c`. Only real bare-metal images built specifically to
+test HDMI audio on physical Pi 3B hardware should turn this on
+(`-DBELLATRIX_ENABLE_HDMI_AUDIO=ON` via `scripts/build.sh`, needs a build.sh
+env-var passthrough added if not already wired — check before relying on
+it). QEMU and default builds are unaffected now.
 
 ## Files to revisit
 
@@ -125,4 +173,6 @@ Previous findings that still matter:
   output)
 - `src/audio/mixer.c` / `mixer.h` (HBLANK diagnostic/intermediate queue, not
   final sink PCM)
+- `src/host/raspi3/hdmi_audio.c` / `.h` (this session's polling-mode driver;
+  IRQ/DMA drain is the next evolution, see step 6 above)
 - ISSUE-0010 (depends on this only for the final target rate)

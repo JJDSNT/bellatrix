@@ -31,6 +31,7 @@ type launchResult struct {
 	profile        bool
 	osd            bool
 	launcher       bool
+	hdmiAudio      bool
 	cancelled      bool
 }
 
@@ -72,6 +73,7 @@ type model struct {
 	profile        bool
 	osd            bool
 	launcher       bool
+	hdmiAudio      bool
 
 	width     int
 	height    int
@@ -106,6 +108,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry, hdfs []Fi
 		perfLogsOff:    true,
 		osd:            true,
 		launcher:       true,
+		hdmiAudio:      false,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -166,6 +169,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry, hdfs []Fi
 		profile:        fm.profile,
 		osd:            fm.osd,
 		launcher:       fm.launcher,
+		hdmiAudio:      fm.hdmiAudio,
 	}, nil
 }
 
@@ -421,6 +425,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.launcher = !m.launcher
 			return m, nil
 
+		case "h":
+			m.hdmiAudio = !m.hdmiAudio
+			return m, nil
+
 		case "enter":
 			m.quitting = true
 			return m, tea.Quit
@@ -591,6 +599,13 @@ func (m model) renderPanel() string {
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("USB MSC:"), usbMSCBadge))
 	b.WriteString("\n")
 
+	hdmiAudioBadge := offBadgeStyle.Render("OFF")
+	if m.hdmiAudio {
+		hdmiAudioBadge = onBadgeStyle.Render("ON")
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("HDMI audio (real Pi only, not QEMU):"), hdmiAudioBadge))
+	b.WriteString("\n")
+
 	usbPointerBadge := offBadgeStyle.Render(strings.ToUpper(m.usbPointer))
 	if m.usbstack {
 		usbPointerBadge = onBadgeStyle.Render(strings.ToUpper(m.usbPointer))
@@ -673,7 +688,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Display • B Debug • M Multicore • A Perf mute • T BTStack • U USB • X MSC • P Pointer • E Boards • R Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • I Profile • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Display • B Debug • M Multicore • A Perf mute • T BTStack • U USB • X MSC • P Pointer • E Boards • R Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • H HDMI audio • I Profile • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
