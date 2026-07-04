@@ -15,7 +15,21 @@ long bellatrix_usb_strtol(const char *nptr, char **endptr, int base);
 #define strtol bellatrix_usb_strtol
 
 #define CONFIG_USB_DCACHE_ENABLE
-#define CONFIG_USB_ALIGN_SIZE 32
+/* ISSUE-0036: must match the Cortex-A53 D-cache line size (64 bytes), not
+ * 32. USB_NOCACHE_RAM_SECTION is a no-op below (these buffers are regular
+ * cached .bss, not an actually-uncached region) -- CherryUSB compensates
+ * with explicit usb_dcache_clean()/usb_dcache_invalidate() calls around
+ * every transfer instead. Those calls operate at cache-line granularity;
+ * with only 32-byte alignment, a buffer's first/last 32 bytes can share a
+ * 64-byte cache line with a completely unrelated adjacent global.
+ * usb_dcache_invalidate() (used on every IN transfer, e.g. the very first
+ * GET_DESCRIPTOR read in usbh_enumerate()) discards a cache line without
+ * writing it back -- if that line also holds not-yet-flushed data from an
+ * unrelated variable, that data is silently dropped. Confirmed on hardware:
+ * mini-UART console output corrupts starting exactly at the first USB IN
+ * control transfer. 64-byte alignment guarantees each buffer starts on its
+ * own cache line, closing that false-sharing window. */
+#define CONFIG_USB_ALIGN_SIZE 64
 #define USB_NOCACHE_RAM_SECTION
 
 #define CONFIG_USBHOST_MAX_BUS               1

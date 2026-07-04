@@ -33,6 +33,7 @@
 #include "usbh_hub.h"
 #include "usb_dwc2_reg.h"
 #include "usb_dwc2_param.h"
+#include "host/raspi3/console_log.h"
 #include "mmu.h"
 #include <stddef.h>
 
@@ -1110,8 +1111,30 @@ int usb_hc_init(struct usbh_bus *bus)
         usbh_hub_thread_wakeup(&bus->hcd.roothub);
     }
 
-    dwc2_wr32(bus, DWC2_GLB_OFF(GAHBCFG),
-              dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) | USB_OTG_GAHBCFG_GINT);
+    /* ISSUE-0036: mini-UART corruption right around here was non-deterministic
+     * and went away whenever diagnostic kprintf/mailbox calls happened to be
+     * scattered through this exact spot (removed since -- see git history),
+     * which points at bus contention between the DWC2's heavy back-to-back
+     * MMIO/DMA setup and the AUX mini-UART peripheral (both share the same
+     * internal peripheral bus) rather than a UART-side software bug. The
+     * diag calls were accidentally pacing this code; replace that with a
+     * deliberate short settle delay instead of relying on print side effects. */
+    usb_osal_msleep(5);
+
+    /* ISSUE-0036: re-reverted. Enabling GAHBCFG.GINT was NOT the fix for the
+     * mini-UART corruption (that was the CONFIG_USB_ALIGN_SIZE cache-line
+     * false-sharing bug in usb_config.h) -- confirmed on hardware that with
+     * GINT enabled, every control transfer times out waiting on the
+     * completion semaphore (HAINT/HCINT never see a completion the polling
+     * loop can observe), because Bellatrix drives CherryUSB cooperatively
+     * from usb_host_step()/usb_osal_sem_take() with no real ARM GIC vector
+     * servicing the DWC2 IRQ line. Enabling GINT changes the hardware's
+     * completion/ack semantics to expect that real interrupt service, which
+     * never happens here. Keep it masked; the poll path services
+     * GINTSTS/GINTMSK/HCINT directly instead. */
+    kprintf("[USB] DWC2 GAHBCFG.GINT: %s (GAHBCFG=0x%08x)\n",
+            (dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)) & USB_OTG_GAHBCFG_GINT) ? "enabled" : "masked/skipped",
+            (unsigned int)dwc2_rd32(bus, DWC2_GLB_OFF(GAHBCFG)));
 
     return ret;
 }
@@ -1229,7 +1252,10 @@ int usbh_roothub_control(struct usbh_bus *bus, struct usb_setup_packet *setup, u
                         dwc2_drivebus(bus, 1);
                         break;
                     case HUB_PORT_FEATURE_RESET:
-                        return usbh_reset_port(bus, port);
+                    {
+                        int ret = usbh_reset_port(bus, port);
+                        return ret;
+                    }
                     default:
                         return -USB_ERR_NOTSUPP;
                 }

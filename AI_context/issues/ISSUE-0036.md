@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0036
 title: "Regressão bare-metal: console serial (mini-UART) silencioso/lixo na Pi 3B física"
-status: done
+status: resolved
 priority: high
 type: bug
 owner: agent
@@ -50,6 +50,407 @@ Fix final:
 
 Validado pelo usuário em Pi 3B física: console limpo após o ponto onde antes
 corrompia. Instrumentação diagnóstica foi removida do código final.
+
+## Reaberto: corrupção ainda aparece durante init USB
+
+Teste posterior com USB ligado mostrou que a saída volta a corromper durante
+`core_io_init()`/CherryUSB:
+
+```
+[USB] DWC2 low-level init: bus=0 reg_base=0x00000000f2980000
+<corrupção>
+...
+[LAUNCHER] user chose to boot without disk
+```
+
+Como a variante sem USB foi suficiente para isolar o bug anterior da bridge
+Paula, agora a instrumentação voltou focada no caminho USB:
+
+- `bellatrix_console_log_diag(tag)` centraliza dump de `core`, `baud`, `lsr`
+  e `cntl` da mini-UART.
+- Marcadores adicionados:
+  `before-core-io`, `usb-host-before-init`, `usb-ll-before-power`,
+  `usb-ll-after-power`, `usb-ll-after-lowlevel`, `usb-host-after-init`,
+  `usb-host-after-pump`, `after-core-io`, `after-core-io-reclock`.
+
+Novo teste isolou o último marcador limpo em:
+
+```
+[MU:usb-ll-after-lowlevel] core=400000000 baud=433 lsr=00000000 cntl=00000003
+<corrupção>
+```
+
+Isso indica que a mini-UART ainda está configurada corretamente ao sair do
+`usb_hc_low_level_init()`, e a corrupção começa dentro do restante de
+`usbh_initialize()`/`usb_hc_init()` antes de `usb-host-after-init`.
+
+Segunda camada de instrumentação adicionada em
+`src/io/usb/usb_hc_bellatrix.c`, que é o backend DWC2 ativo da Bellatrix
+(não o `external/cherryusb/port/dwc2/usb_hc_dwc2.c` genérico), cobrindo:
+
+- retorno do low-level (`dwc2-after-ll-return`);
+- leitura de parâmetros e criação de semáforos;
+- escrita de `GCCFG`;
+- `dwc2_core_init()`/reset;
+- `dwc2_set_mode()`;
+- `PCGCCTL`, `HCFG`/`HFIR`;
+- clear de interrupts;
+- programação e flush de FIFOs;
+- enable de DMA;
+- `dwc2_drivebus()`, sleep de 200 ms e enable de interrupt global.
+
+Teste seguinte mostrou:
+
+```
+[MU:dwc2-after-drivebus-sleep] core=400000000 baud=433 lsr=00000060 cntl=00000003
+[MU:dwc2-after-gint] core=400000000 baud=433 lsr=00000000 cntl=00000003
+<corrupção>
+```
+
+Conclusão operacional: divisor/controle da mini-UART continuam corretos, mas
+a corrupção começa imediatamente ao habilitar `GAHBCFG.GINT`. Como a Bellatrix
+já chama `USBH_IRQHandler()` por polling em `usb_host_step()` e durante waits
+de semáforo, a próxima build deixa `GINTMSK`/status ativos mas não seta
+`GAHBCFG.GINT`, substituindo o marcador final por `dwc2-skip-gint`.
+
+Teste com `GINT` omitido ainda corrompeu logo após:
+
+```
+[MU:dwc2-after-drivebus-sleep] ...
+[MU:dwc2-skip-gint] ...
+<corrupção>
+```
+
+Nova hipótese: o init do controlador retorna limpo, mas o primeiro evento de
+root hub semeado pelo `HPRT` conectado dispara enumeração/transferência de
+controle e a saída corrompe nesse caminho. Instrumentação adicional em
+`external/cherryusb/class/hub/usbh_hub.c` marca `hub-before/after-hc-init`,
+`hub-before/after-mq-recv`, `hub-before/after-events` e
+`hub-before/after-portstatus`.
+
+Teste mostrou que `hub-after-portstatus` ainda sai limpo. Próxima camada:
+marcar `hub-before/after-clear`, início do debounce, cada `GET_STATUS` do
+debounce, `CLEAR_FEATURE` dentro do debounce e o sleep de 25 ms. Também foram
+adicionados marcadores curtos em `usbh_roothub_control()`:
+`rh-control-enter`, `rh-port-status`, `rh-port-clear`, `rh-port-set` e
+`rh-control-exit`.
+
+Teste seguinte avançou até o reset da root port: debounce e status continuam
+limpos; aparece `rh-port-set`, depois novo `rh-control-enter/rh-port-status`
+pós-reset e então corrupção. Próxima instrumentação desce para
+`usbh_reset_port()` (`rh-reset-*`) e para o lado do hub ao redor de
+`HUB_PORT_FEATURE_RESET`, sleep pós-reset e post-reset status
+(`hub-before/after-reset`, `hub-before/after-reset-sleep`,
+`hub-before/after-post-status`).
+
+## Continuação (sessão seguinte): corrupção isolada logo após `hub-after-post-status`
+
+Teste com toda a instrumentação acima (incluindo `rh-reset-*`) mostrou log limpo
+até `hub-after-post-status` — `core=400000000 baud=433 lsr=... cntl=00000003`
+consistente o tempo todo, nenhuma reconfiguração indevida da mini-UART.
+Corrupção aparece **imediatamente depois**, exatamente onde o próximo código
+(`external/cherryusb/class/hub/usbh_hub.c:757`) é um `USB_LOG_INFO(...)` — um
+`kprintf` normal (mesmo mecanismo, `CONFIG_USB_PRINTF` mapeado pra `kprintf` em
+`src/io/usb/usb_config.h:11`), só que uma linha bem mais longa/com mais
+argumentos que os marcadores `[MU:...]` curtos usados até aqui.
+
+Usuário lembrou que o teste de pular `GAHBCFG.GINT` (interrupção interna do
+controlador DWC2) já tinha sido feito e não resolveu (`dwc2-skip-gint`, seção
+acima) — não descarta interrupções do ARM (timer/PMU, já habilitadas nesse
+ponto do boot) como fator, só descarta a interrupção interna do DWC2
+especificamente.
+
+**Instrumentação adicionada**: `bellatrix_console_log_diag("hub-after-log-info")`
+logo depois do `USB_LOG_INFO(...)`, e `("hub-after-log-dbg")` depois do
+`USB_LOG_DBG(...)` seguinte (`usbh_hub.c:757-762`), pra confirmar se é
+especificamente essa chamada de log mais longa que corrompe, isolando do
+resto do fluxo de enumeração que vem depois.
+
+Build compila limpo (`BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=0
+BELLATRIX_USBSTACK=1`).
+
+**Revertido a pedido do usuário**: `src/io/usb/usb_hc_bellatrix.c` tinha um
+experimento anterior que deixava `GAHBCFG.GINT` (interrupção global do DWC2)
+desabilitada de propósito, com comentário dizendo que habilitá-la corrompia o
+log. O próprio histórico da issue mostra que esse experimento **não resolveu
+nada** (`dwc2-skip-gint` testado, corrupção continuou aparecendo mais adiante
+no fluxo) — usuário apontou corretamente que não havia motivo pra manter esse
+desvio do fluxo de init de referência do DWC2. Revertido: `GAHBCFG.GINT`
+volta a ser habilitada normalmente (`dwc2-after-gint` substitui
+`dwc2-skip-gint` como marcador).
+
+**Testado (ambos builds, GINT habilitado ou pulado): mesmo resultado
+exato.** `hub-after-log-info` e `hub-after-log-dbg` saem **limpos** nos dois
+casos — descarta de vez o `USB_LOG_INFO`/`USB_LOG_DBG` como causa, e
+descarta `GAHBCFG.GINT` como fator (habilitar ou não dá o mesmo resultado).
+Corrupção começa depois de `hub-after-log-dbg`, dentro do fluxo real de
+conexão do dispositivo (`usbh_hub.c:794` em diante: alocação de hubport,
+`usb_osal_mutex_create()`, e principalmente `usbh_enumerate()` — que faz as
+primeiras transferências de controle USB de verdade via DMA do DWC2).
+
+**Instrumentação adicionada**:
+- `usbh_hub.c`: `hub-after-mutex-create`, `hub-before-enumerate` (antes de
+  chamar `usbh_enumerate()`), `hub-after-enumerate` (depois).
+- `external/cherryusb/core/usbh_core.c` (precisou adicionar
+  `#include "host/raspi3/console_log.h"`, arquivo nunca tinha usado
+  `bellatrix_console_log_diag` antes): `enum-before-ctrl0`/`enum-after-ctrl0`
+  ao redor da primeiríssima `usbh_control_transfer()` dentro de
+  `usbh_enumerate()` (`usbh_core.c:412`) — o primeiro GET_DESCRIPTOR de 8
+  bytes, a primeira transferência de controle real (DMA) que o driver faz
+  com o dispositivo.
+
+Build compila limpo (`BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=0
+BELLATRIX_USBSTACK=1`).
+
+## Pesquisa na internet + causa raiz forte encontrada: cache-line false-sharing no buffer de DMA do USB
+
+Pesquisa (web search) sobre DMA/cache em Raspberry Pi bare-metal confirmou um padrão conhecido:
+"DMA (VideoCore/periféricos) não enxerga o L1/L2 do ARM — é preciso alocar memória não-cacheada ou
+invalidar/limpar o cache explicitamente ao redor da transferência". Isso levou a reler com atenção
+`src/io/usb/usb_config.h`.
+
+**Achado**: `CONFIG_USB_ALIGN_SIZE` estava em **32**, mas a linha de cache da Cortex-A53 (Pi 3B) é de
+**64 bytes**. Além disso, `USB_NOCACHE_RAM_SECTION` (que deveria colocar os buffers de DMA do USB numa
+região realmente não-cacheada) está definida como **vazia** — os buffers (`ep0_request_buffer`,
+`g_setup_buffer`, etc., em `external/cherryusb/core/usbh_core.c`) são `.bss` normal, cacheado, só
+alinhado a 32 bytes. O CherryUSB compensa com `usb_dcache_clean()`/`usb_dcache_invalidate()` explícitos
+ao redor de cada transferência (`src/io/usb/usb_hc_bellatrix.c:1403-1423`) — mas essas operações agem
+em granularidade de linha de cache inteira. Com alinhamento de só 32 bytes (metade da linha real), os
+primeiros/últimos 32 bytes de um buffer podem compartilhar uma linha de cache de 64 bytes com uma
+variável global completamente não relacionada. `usb_dcache_invalidate()` (chamada em toda transferência
+IN — exatamente o caso do primeiro `GET_DESCRIPTOR` em `usbh_enumerate()`, onde a corrupção começa)
+**descarta** uma linha de cache sem escrever de volta — se essa linha também tiver dados "sujos" (ainda
+não gravados na RAM) de uma variável não relacionada, esses dados somem silenciosamente. Bate
+exatamente com "corrupção começa na primeira transferência de controle IN real via DMA".
+
+Fontes: [Bare metal OS, DMA reset problem](https://forums.raspberrypi.com/viewtopic.php?t=10276),
+[Memory barriers - Raspberry Pi Forums](https://forums.raspberrypi.com/viewtopic.php?t=234420),
+[Peripheral access precautions for correct memory ordering](https://raspberrypi.org/forums/viewtopic.php?t=181306).
+
+**Fix aplicado**: `CONFIG_USB_ALIGN_SIZE` de `32` para `64` (`src/io/usb/usb_config.h`), igualando o
+tamanho real da linha de cache da Cortex-A53. Isso garante que cada buffer de DMA do USB comece em sua
+própria linha de cache, fechando a janela de false-sharing com variáveis vizinhas não relacionadas.
+
+Build compila limpo. Se resolver, esse é o candidato mais forte e mais bem fundamentado até agora —
+explica precisamente o ponto de início da corrupção (primeira transferência DMA real) sem precisar de
+nenhuma outra teoria (timing, race de cores, baud, GINT).
+
+## Testado: CONFIRMADO — corrupção sumiu (mas GINT habilitado quebra o USB funcionalmente)
+
+Usuário testou e confirmou: **nenhuma corrupção no serial**, log completo e legível até o fim do boot
+do USB (`[BELA] rom_mapped=1`, reset vectors, etc.). O usuário notou que a correção veio de antes do
+fix de alinhamento de cache — mas o log mostra claramente `GAHBCFG=0x00000031` (bit0 = `GINT` setado,
+já que eu tinha revertido pra habilitado no passo anterior), então **as duas mudanças estavam
+presentes juntas** nesse teste. O alinhamento de cache (`CONFIG_USB_ALIGN_SIZE=64`) é o fix mais
+plausível pra corrupção (explica o mecanismo exato); o `GINT` habilitado não tem relação causal
+conhecida com o serial.
+
+**Efeito colateral descoberto**: com `GINT` habilitado, toda transferência de controle USB dá timeout
+de semáforo (`[USB] sem timeout: ... HAINT=0x00000000 HCINT0=0x00000000`) — o dispositivo nunca
+enumera (`ctrl xfer failed ret=-1`). Causa: a Bellatrix roda o CherryUSB via **polling** cooperativo
+(`usb_host_step()`/`usb_osal_sem_take()`), sem vetor de interrupção real do ARM GIC atendendo a IRQ do
+DWC2. Habilitar `GAHBCFG.GINT` muda a semântica de conclusão/ack esperada pelo hardware pra depender de
+atendimento real de interrupção — que nunca acontece nesse design — travando o polling.
+
+**Fix**: revertido `GAHBCFG.GINT` de volta pra desabilitado (`dwc2-skip-gint`) em
+`src/io/usb/usb_hc_bellatrix.c`, mantendo o fix de `CONFIG_USB_ALIGN_SIZE=64`.
+
+**Testado: ainda falha** (mesmo com `GINT` desabilitado de novo) — `ctrl xfer failed ret=-1`,
+`HAINT=0x00000000`/`HCINT0=0x00000000` nunca mudam, mesmo padrão de antes. Usuário perguntou
+corretamente como "só mensagens de log" poderiam quebrar isso, e confirmou que o **HEAD** (antes de
+toda essa instrumentação de diagnóstico) enumerava USB com sucesso.
+
+## Causa encontrada: a própria instrumentação de diagnóstico atrapalhava a enumeração
+
+`bellatrix_console_log_diag()` chama `vc_get_core_clock_hz()` — uma transação **real de mailbox VC** —
+toda vez que é invocada. Havia mais de 60 chamadas espalhadas pelo caminho de enumeração USB
+(`rh-reset-*`, `hub-*`, `enum-*`, `dwc2-*`), incluindo dentro de sequências de reset sensíveis a tempo
+(reset de porta, debounce). Cada uma soma latência real (round-trip de mailbox) no meio de operações
+que têm janelas de tempo esperadas pelo protocolo/hardware USB — plausivelmente o suficiente pra
+quebrar a enumeração, mesmo sem estar dentro do loop de polling do semáforo em si.
+
+**Fix**: removidas todas as ~60 chamadas de `bellatrix_console_log_diag(...)` adicionadas durante essa
+investigação, em `src/io/usb/usb_host.c`, `usb_glue_dwc2_bellatrix.c`, `usb_hc_bellatrix.c`,
+`src/cpu/emu68/bellatrix.c`, `external/cherryusb/core/usbh_core.c` e
+`external/cherryusb/class/hub/usbh_hub.c`. A função `bellatrix_console_log_diag()` continua definida
+em `console_log.c`/`.h` pra uso futuro se necessário, só não é mais chamada em lugar nenhum.
+
+Build compila limpo (`BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=0 BELLATRIX_USBSTACK=1`).
+
+**Testado: GRANDE PROGRESSO.** USB funciona completamente — teclado e mouse detectados, MSC pronto,
+FAT32 montado, launcher encontrou 26 mídias bootáveis, usuário conseguiu interagir e escolher "boot
+sem disco", chegou até `[F-LINE-TRAP]` (M68K rodando). Ainda existe um bloco de corrupção **transitório**
+(parece se recuperar sozinho) logo após `"[USB] DWC2 low-level init..."`, antes de
+`"[BELA] Pau de Cego: painted..."`.
+
+## Bloco de corrupção residual (cosmético, não bloqueia funcionalidade)
+
+Localizado: logo depois de `usb_hc_low_level_init()`, `usb_hc_init()`
+(`src/io/usb/usb_hc_bellatrix.c:933-939`) faz 6 chamadas de `USB_LOG_INFO` em sequência, imprimindo
+registradores do controlador DWC2 (CID, GSNPSID, GHWCFG1-4) — um burst de texto rápido. Nenhum
+`bellatrix_console_log_diag()`/mailbox envolvido dessa vez (removidos na rodada anterior).
+
+Usuário questionou se a corrupção realmente se recupera (não tinha certeza). Adicionados só **2**
+marcadores dessa vez (lição da rodada anterior: poucos, não dezenas) —
+`hcinit-before-hwparams-print` e `hcinit-after-hwparams-print` — ao redor exatamente desse bloco de 6
+prints, pra confirmar com dado real em vez de suposição.
+
+Build compila limpo.
+
+**Testado: USB confirmado funcionando** de novo. Usuário pediu duas melhorias no log: (1) uma linha
+clara dizendo se `GAHBCFG.GINT` foi habilitado ou não, pra rastrear isso em testes futuros, e (2) um
+marcador de teste bem visível logo depois do trecho que costuma corromper, pra confirmar recuperação.
+
+**Adicionado**:
+- `kprintf("[USB] DWC2 GAHBCFG.GINT: %s (GAHBCFG=0x%08x)\n", ...)` no fim de `usb_hc_init()` — lê o
+  bit real de `GAHBCFG` (não assume, reporta o estado de fato).
+- Duas linhas `"[USB] TEST-MARKER-AFTER-HWPARAMS-PRINT: ..."` logo depois do burst de 6 prints de
+  hwparams, fáceis de identificar visualmente no log.
+
+Build compila limpo (`BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=0 BELLATRIX_USBSTACK=1`).
+
+**Testado**: os marcadores `hcinit-before/after-hwparams-print` e a linha do `GINT` saem **limpos** —
+a corrupção não é o burst de 6 prints de hwparams. Ela começa **depois** da linha do `GINT` (ou seja,
+depois que `usb_hc_init()` retorna), dentro de `bellatrix_usb_pump_events()`
+(`src/io/usb/usb_host.c:28`) — que chama `usbh_hub_poll()` + `usbh_bellatrix_poll()`
+(`USBH_IRQHandler`) em loop, disparando o fluxo real de reset/conexão da root hub.
+
+**Segunda janela de corrupção encontrada**: o usuário notou que existe uma corrupção **separada**,
+bem no meio da linha `"[LAUNCHER] USB: 28 files, 26 bootable me[dia]"` (cortada no meio da palavra) —
+ou seja, não é um evento único; acontece em pelo menos dois pontos distintos do boot. Confirmado que
+não é do próprio launcher (`launcher_run()` só roda bem depois, essa linha é de dentro do próprio scan
+de arquivos do launcher que já tinha começado).
+
+**Instrumentação adicionada**: `bellatrix_console_log_diag("pump-pass-N")` (N=0..4+) logo após cada
+iteração do loop em `bellatrix_usb_pump_events()`, e `"host-init-after-pump4"` logo após a chamada
+completa retornar em `usb_host_init()`.
+
+Build compila limpo. **Testado**: revelou um bug autoinfligido sério — `bellatrix_usb_pump_events()`
+não roda só uma vez no boot, é chamada continuamente durante a operação normal (via
+`usb_host_step()`). O marcador `pump-pass-N` que adicionei ficou preso ali, imprimindo pra sempre a
+cada passo do loop principal — inundando o ring buffer mais rápido do que ele consegue drenar,
+produzindo fragmentos truncados e repetidos sem fim (`[MU:pump-pass-0[MU:pump-pa[MU:pump-pas...`,
+depois `[HID->AMIGA]` também truncado, à medida que o teclado gerava eventos reais).
+
+**Fix**: removido o diagnóstico de dentro de `bellatrix_usb_pump_events()` (função quente, chamada
+repetidamente). Mantidos os diagnósticos que só rodam uma vez no boot (`hcinit-before/after-hwparams`,
+linha do `GINT`, `host-init-after-pump4`).
+
+**Confirmação importante**: depois de `"Pau de Cego"`, os marcadores `pump-pass-0/1` saíram **limpos
+por ~30 iterações consecutivas** antes da inundação começar — prova que a mini-UART aguenta bem o
+regime estável de operação (não é um problema de capacidade/baud no steady-state).
+
+A primeira janela de corrupção (entre a linha do `GINT` e `"Pau de Cego"`) **continua sem explicação**
+— não mudou com esse fix.
+
+**Limpeza**: usuário apontou que `hcinit-before/after-hwparams-print` e as duas linhas
+`TEST-MARKER-AFTER-HWPARAMS-PRINT` já cumpriram seu papel (confirmaram que o burst de 6 prints de
+hwparams não é a causa) e não têm mais utilidade — removidas de `usb_hc_init()`
+(`src/io/usb/usb_hc_bellatrix.c`).
+
+Build compila limpo. **Testado**: confirma que os marcadores obsoletos sumiram. A primeira janela de
+corrupção continua, mas em posição ligeiramente diferente a cada teste (uma vez logo após o
+`GAHBCFG.GINT`, outra vez um pouco depois, no meio dos eventos `[HID->AMIGA]`) — **não-determinística**.
+
+## Observação do usuário: se fosse burst, a proteção de backpressure deveria bastar
+
+Ponto correto e importante: já temos proteção contra overflow (checagem de LSR bit 5 antes de
+escrever, retorna `false` se o FIFO estiver cheio). Se a causa fosse só volume/burst, essa proteção já
+deveria evitar corrupção — o fato de continuar acontecendo, de forma não-determinística, aponta pra
+uma **race condition sensível a tempo**, não um problema de volume.
+
+**Hipótese**: interrupções de PMU/Timer (confirmadas habilitadas: "Enabling PMU and Timer interrupts
+on core 0") podem preemptar exatamente entre a checagem do LSR e a escrita em `AUX_MU_IO` — a checagem
+só é válida no instante em que foi feita; se uma IRQ interrompe nesse meio-tempo (mesmo que a ISR não
+toque na UART), o atraso sozinho pode ser suficiente pra a escrita acontecer num momento em que o
+registrador de deslocamento não está mais realmente livre, corrompendo o enquadramento de bits até a
+linha resincronizar num bit de start seguinte.
+
+**Fix aplicado**: `miniuart_backend_write_byte()` (`src/host/raspi3/miniuart_backend.c`) agora mascara
+IRQs (`msr daifset/daifclr, #2`) ao redor do par checagem+escrita, tornando-o atômico em relação a
+interrupções — mesmo padrão já usado em `src/io/bluetooth/bt_hal_raspi3.c` pras seções críticas dele.
+
+Build compila limpo (`BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=0 BELLATRIX_USBSTACK=1`).
+
+**Testado: mascarar IRQ não resolveu** — mesma corrupção não-determinística, dessa vez pior (nunca se
+recupera, log do launcher nem aparece). Usuário corrigiu (com razão) minha tentativa de desistir e
+declarar "causa elétrica não corrigível" — lembrou que já tinha avançado bastante antes (arquitetura
+de console nativo na mini-UART desde `setup_serial()`, já presente no código atual) e que ainda nem
+tínhamos testado com BT habilitado nessa fase.
+
+## Pista nova: os próprios diagnósticos (por acidente) evitavam a corrupção
+
+Percebi, revendo o histórico: quando a instrumentação extensa (`bellatrix_console_log_diag`,
+removida nas últimas rodadas) estava presente exatamente nesse trecho (`usbh_hub_events`/reset/
+enumerate), o log saía limpo em TODOS os pontos testados — só corrompia sem instrumentação nenhuma.
+Isso sugere que os diagnósticos, sem querer, davam um tempo de acomodação que o hardware precisa —
+provavelmente contenção de barramento entre o DWC2 (muito acesso MMIO/DMA em sequência rápida) e a
+mini-UART (mesmo barramento interno de periféricos), não um bug de software na UART em si.
+
+**Fix testado**: `usb_osal_msleep(5)` logo depois de `usbh_hub_thread_wakeup()` em `usb_hc_init()`
+(`src/io/usb/usb_hc_bellatrix.c`) — um delay curto e deliberado no lugar exato onde a instrumentação
+"acidentalmente" ajudava, em vez de depender de efeito colateral de print.
+
+**Testado: progresso real.** Tudo depois de `"Pau de Cego"` saiu perfeitamente limpo — inclusive com
+uso real (ADF carregada via launcher, teclado/mouse, `[RIGEL] DF0 ADF inserted`). Só sobrou um único
+bloco de corrupção, sempre no mesmo lugar exato (entre a linha do `GINT` e `"Pau de Cego"`), que não
+mudou de tamanho com o delay de 5ms. Usuário concordou em considerar isso avanço suficiente por ora, e
+trouxe uma observação importante: a corrupção na tela coincide com o launcher aparecendo, mas as
+próprias linhas de log do launcher só aparecem no serial bem depois (quando a ADF já foi carregada e o
+M68K começa a rodar).
+
+## Causa provável encontrada: modo direto/síncrono do kprintf durante toda a inicialização do USB
+
+Isso bate com uma explicação melhor: `console_log_set_deferred()` (troca o `kprintf` de escrita
+direta/bloqueante pra ring buffer + drain posterior) só era chamado bem tarde em `bellatrix_init()`
+(dentro do bloco da bridge serial da Paula) — **bem depois** de `core_io_init()` (linha 437, onde o
+USB/DWC2 é inicializado, linha 618 pra comparação). Ou seja: durante TODA a inicialização do USB, o
+console ainda estava em modo direto — cada `kprintf` bloqueia e escreve byte a byte, síncrono, direto
+na mini-UART, exatamente durante a janela de atividade pesada de MMIO/DMA do DWC2. Uma vez que o modo
+buffer entra em ação (bem mais tarde), tudo que é impresso fica na fila e só é drenado depois, na fase
+calma do loop de step do chipset — explicando por que tudo aparece limpo "de uma vez" e por que as
+linhas do launcher só aparecem no log bem depois de gerado de verdade.
+
+**Fix aplicado**: `console_log_set_deferred()` movido pra logo **antes** de `core_io_init()`
+(`src/cpu/emu68/bellatrix.c`), em vez de bem depois. Agora o modo direto só cobre o trecho mínimo entre
+`setup_serial()`/`bellatrix_console_log_init_early()` e esse ponto — todo o resto (incluindo USB) já
+roda em modo buffer, protegido da janela de risco.
+
+Build compila limpo (`BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=0 BELLATRIX_USBSTACK=1`).
+
+## RESOLVIDO: log 100% limpo, do primeiro `[BOOT]` até o M68K rodando
+
+Testado no hardware: **zero corrupção**, do início do boot até depois do M68K começar a executar —
+incluindo uso real completo (ADF `megademoA.adf` carregada via launcher a partir de um pendrive USB,
+teclado/mouse via HID, `[RIGEL] DF0 ADF inserted`). Único ponto notado: a sincronia entre o que aparece
+na tela (launcher) e o que aparece no log serial não é 1:1 em tempo real — esperado, já que o log
+fica bufferizado no ring até o loop de step do chipset começar a drenar; cosmético, não afeta nada.
+
+**Causa raiz final, resumida**: dois problemas reais e independentes, cada um corrigido:
+1. **USB não enumerava** (`ctrl xfer failed`): `CONFIG_USB_ALIGN_SIZE` em 32 em vez de 64 (linha de
+   cache real da Cortex-A53), com `USB_NOCACHE_RAM_SECTION` vazio — buffers de DMA do USB
+   compartilhavam linha de cache com variáveis não relacionadas; `usb_dcache_invalidate()` descartava
+   dados "sujos" dessas variáveis. Fix: `CONFIG_USB_ALIGN_SIZE=64` (`src/io/usb/usb_config.h`).
+2. **Console corrompia durante a inicialização do USB**: `console_log_set_deferred()` (troca do
+   `kprintf` de escrita direta/bloqueante pra ring buffer) só era chamado bem depois de
+   `core_io_init()` — toda a inicialização pesada do USB/DWC2 (MMIO/DMA em sequência rápida) rodava
+   com o console ainda em modo direto/síncrono, byte a byte, na mesma janela de atividade de
+   hardware. Fix: mover `console_log_set_deferred()` pra antes de `core_io_init()`
+   (`src/cpu/emu68/bellatrix.c`).
+
+Outros fixes reais e independentes, descobertos e corrigidos ao longo da investigação, todos mantidos:
+TLSF hardening + alinhamento (`patches/0019-emu68-tlsf-hardening.patch`), baud 115200 consistente em
+vez de 9600 (`console_log.c` + `bellatrix.c`), timing de `console_log_init()`/console nativo desde
+`setup_serial()` (arquitetura sem handoff PL011→mini-UART), backpressure real no FIFO da mini-UART
+(`miniuart_backend_write_byte`/`console_log_drain`), reversão de `GAHBCFG.GINT` (Bellatrix usa
+polling, não interrupção real), e mascaramento de IRQ ao redor da escrita da mini-UART (defensivo,
+mantido mesmo não tendo sido a causa raiz final).
+
+**Pendente antes de fechar de vez**: revisar se os diagnósticos residuais (`host-init-after-pump4` em
+`usb_host.c`, o `usb_osal_msleep(5)` em `usb_hc_bellatrix.c` — pode não ser mais necessário com o fix
+do `console_log_set_deferred()`, mas é inofensivo e só roda uma vez no boot) devem ser removidos ou
+mantidos; testar com `BELLATRIX_BTSTACK=1` pra garantir que o caminho do Bluetooth (ainda não
+retestado nesta rodada final) continua bom; e commitar tudo.
 
 # ATUALIZAÇÃO (04/07): refatoração em andamento — mini-UART como console nativo desde `setup_serial()`
 

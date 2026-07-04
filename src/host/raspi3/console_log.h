@@ -13,6 +13,7 @@
 /* Called by Emu68's setup_serial() for Bellatrix before the first kprintf. */
 void bellatrix_console_log_init_early(uint32_t core_hz);
 void bellatrix_console_log_reclock(uint32_t core_hz);
+void bellatrix_console_log_diag(const char *tag);
 
 /* Switch kprintf from direct mini-UART writes to the opportunistic ring used
  * when Paula shares the physical mini-UART. Leave direct mode enabled when

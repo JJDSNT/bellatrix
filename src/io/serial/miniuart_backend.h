@@ -22,5 +22,7 @@ bool miniuart_backend_read_byte(MiniUartBackend *m, uint8_t *byte_out);
 bool miniuart_backend_write_byte(MiniUartBackend *m, uint8_t byte);
 
 uint32_t miniuart_backend_read_lsr(void);
+uint32_t miniuart_backend_read_baud(void);
+uint32_t miniuart_backend_read_cntl(void);
 
 #endif

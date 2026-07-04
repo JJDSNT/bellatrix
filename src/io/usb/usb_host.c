@@ -1,5 +1,6 @@
 #include "io/usb/usb_host.h"
 
+#include "host/raspi3/console_log.h"
 #include "support.h"
 
 #if BELLATRIX_ENABLE_USBSTACK
@@ -26,6 +27,11 @@ static void usbh_bellatrix_poll(uint8_t busid)
 
 static void bellatrix_usb_pump_events(unsigned int passes)
 {
+    /* ISSUE-0036: this function runs continuously from usb_host_step() during
+     * normal operation, not just once at boot -- a per-pass diag print here
+     * floods the mini-UART forever (confirmed on hardware: ring buffer
+     * overwritten faster than it drains, producing endless truncated
+     * fragments). Keep this function print-free. */
     while (passes-- > 0u) {
         usb_osal_timer_poll();
         usbh_hub_poll(&g_usbhost_bus[BELLATRIX_USB_BUS_ID]);
@@ -128,6 +134,7 @@ bool usb_host_init(USBHost *host)
     if (usbh_initialize(BELLATRIX_USB_BUS_ID, BELLATRIX_USB_DWC2_REG_BASE, bellatrix_usb_event) == 0) {
         host->controller_ready = true;
         bellatrix_usb_pump_events(4u);
+        bellatrix_console_log_diag("host-init-after-pump4");
         BELLATRIX_USB_LOGF("[USB] CherryUSB DWC2 host initialized at %p\n",
                            (void *)BELLATRIX_USB_DWC2_REG_BASE);
         bellatrix_usb_log_hprt(host, "post-init");

@@ -431,6 +431,17 @@ void bellatrix_init(void)
 #endif
     memset(&g_runtime, 0, sizeof(g_runtime));
     g_runtime.machine = bellatrix_machine_get();
+    /* ISSUE-0036: switch kprintf from direct/blocking mode to the ring
+     * buffer BEFORE core_io_init() (which brings up USB/DWC2) rather than
+     * after it (previously done much later, alongside Paula's own serial
+     * bridge open). USB init hammers the DWC2 controller with heavy
+     * back-to-back MMIO/DMA -- confirmed on hardware that direct-mode
+     * kprintf calls issued during that exact window corrupt the mini-UART
+     * output (probably peripheral-bus contention), non-deterministically,
+     * while everything printed once buffered/deferred (and drained later,
+     * once the chipset step loop is calmly running) comes out clean. */
+    console_log_set_deferred();
+
     /* core_io_init (not a bare usb_host_init) — it sets io.running, without
      * which core_io_step() is a silent no-op and USB dies after the launcher
      * (PAL_Runtime_Poll → bellatrix_runtime_io_step → early return). */

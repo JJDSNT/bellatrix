@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "support.h"
+#include "host/raspi3/console_log.h"
 #include "mmu.h"
 
 /*

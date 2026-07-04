@@ -78,6 +78,16 @@ uint32_t miniuart_backend_read_lsr(void)
     return mu_rd32(AUX_MU_LSR_ADDR);
 }
 
+uint32_t miniuart_backend_read_baud(void)
+{
+    return mu_rd32(AUX_MU_BAUD_ADDR);
+}
+
+uint32_t miniuart_backend_read_cntl(void)
+{
+    return mu_rd32(AUX_MU_CNTL_ADDR);
+}
+
 void miniuart_backend_close(MiniUartBackend *m)
 {
     if (!m || !m->open) return;
@@ -100,13 +110,33 @@ bool miniuart_backend_read_byte(MiniUartBackend *m, uint8_t *byte_out)
 
 bool miniuart_backend_write_byte(MiniUartBackend *m, uint8_t byte)
 {
+    bool ok;
+
     if (!m || !m->open) return false;
+
+    /* ISSUE-0036: corruption at this UART was non-deterministic even with
+     * the LSR backpressure check in place below -- inconsistent with a
+     * simple overflow (that would be reproducible under the same burst).
+     * PMU/timer IRQs are enabled on this core; if one preempts between the
+     * LSR read and the AUX_MU_IO write, the byte can land while the shift
+     * register isn't actually free (the check is only valid for the
+     * instant it was taken), corrupting bit framing until the line
+     * resyncs on a later start bit. Mask IRQs around the check+write pair
+     * so it's atomic with respect to interrupts (same pattern already used
+     * in src/io/bluetooth/bt_hal_raspi3.c for its own critical sections). */
+    asm volatile("msr daifset, #2" ::: "memory");
+
     /* LSR bit 5 = TX FIFO has space. Return false instead of spinning so
      * shared users can retry without stalling the machine step loop. */
-    if (!(mu_rd32(AUX_MU_LSR_ADDR) & 0x20u))
-        return false;
-    mu_wr32(AUX_MU_IO_ADDR, byte);
-    return true;
+    if (!(mu_rd32(AUX_MU_LSR_ADDR) & 0x20u)) {
+        ok = false;
+    } else {
+        mu_wr32(AUX_MU_IO_ADDR, byte);
+        ok = true;
+    }
+
+    asm volatile("msr daifclr, #2" ::: "memory");
+    return ok;
 }
 
 #else  /* stubs — compiled in harness and non-raspi3 builds */
@@ -132,6 +162,16 @@ bool miniuart_backend_set_baud_clk(MiniUartBackend *m, uint32_t baud, uint32_t c
 }
 
 uint32_t miniuart_backend_read_lsr(void)
+{
+    return 0;
+}
+
+uint32_t miniuart_backend_read_baud(void)
+{
+    return 0;
+}
+
+uint32_t miniuart_backend_read_cntl(void)
 {
     return 0;
 }
