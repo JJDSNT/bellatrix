@@ -82,3 +82,54 @@ index 8e8bd73..212c8a6 100644
  
      __atomic_clear(&print_lock, __ATOMIC_RELEASE);
  }
+@@ -444,8 +483,17 @@ void setup_serial()
+ 
+ #else
+ 
++#ifdef BELLATRIX
++void bellatrix_console_log_init_early(uint32_t core_hz);
++#define BELLATRIX_MINIUART_CORE_HZ 400000000u
++#endif
++
+ void setup_serial()
+ {
++#ifdef BELLATRIX
++    bellatrix_console_log_init_early(BELLATRIX_MINIUART_CORE_HZ);
++    serial_up = 1;
++#else
+     unsigned int        uartvar;
+     unsigned const int uartbaud = 115200;
+     unsigned int uartclock;
+@@ -485,6 +533,7 @@ void setup_serial()
+     for (uartvar = 0; uartvar < 150; uartvar++) asm volatile ("nop");
+ 
+     serial_up = 1;
++#endif
+ }
+ 
+ #endif
+diff --git a/src/raspi/start_rpi64.c b/src/raspi/start_rpi64.c
+index 37d0c9e..0000000 100644
+--- a/src/raspi/start_rpi64.c
++++ b/src/raspi/start_rpi64.c
+@@ -30,6 +30,10 @@ extern uint64_t mmu_user_L1[512];
+ extern uint64_t mmu_user_L2[4*512];
+ 
+ void M68K_StartEmu(void *addr);
++#ifdef BELLATRIX
++void bellatrix_console_log_reclock(uint32_t core_hz);
++#define BELLATRIX_MINIUART_CORE_HZ 400000000u
++#endif
+ 
+ uint16_t *framebuffer;
+ uint32_t pitch;
+@@ -307,6 +311,9 @@ void platform_post_init()
+     }
+     kprintf("[BOOT] ARM Clock at %d MHz\n", get_clock_rate(3) / 1000000);  
+     kprintf("[BOOT] CORE Clock at %d MHz\n", get_clock_rate(4) / 1000000);
++#ifdef BELLATRIX
++    bellatrix_console_log_reclock(BELLATRIX_MINIUART_CORE_HZ);
++#endif
+ 
+     get_vc_memory(&base_vcmem, &size_vcmem);
+     kprintf("[BOOT] VC4 memory: %p-%p\n", (intptr_t)base_vcmem, (intptr_t)base_vcmem + size_vcmem - 1);

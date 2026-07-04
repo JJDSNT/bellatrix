@@ -138,13 +138,18 @@ const char *uart_host_pty_name(const UARTHost *host)
 
 bool uart_host_open_miniuart(UARTHost *host, uint32_t baud)
 {
+    return uart_host_open_miniuart_clk(host, baud, 250000000u);
+}
+
+bool uart_host_open_miniuart_clk(UARTHost *host, uint32_t baud, uint32_t clk_hz)
+{
     if (!host) {
         return false;
     }
 
     uart_host_shutdown(host);
 
-    if (!miniuart_backend_open(&host->mini_uart, baud)) {
+    if (!miniuart_backend_open_clk(&host->mini_uart, baud, clk_hz)) {
         host->backend_type = UART_HOST_BACKEND_NONE;
         host->enabled = false;
         return false;

@@ -21,6 +21,7 @@
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "host/raspi3/hdmi_audio.h"
+#include "host/raspi3/console_log.h"
 #include "io/serial/uart_host.h"
 #include "mmu.h"
 #include "A64.h"
@@ -434,6 +435,7 @@ void bellatrix_init(void)
      * which core_io_step() is a silent no-op and USB dies after the launcher
      * (PAL_Runtime_Poll → bellatrix_runtime_io_step → early return). */
     core_io_init(&g_runtime.io, g_runtime.machine);
+    bellatrix_console_log_reclock(400000000u);
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
@@ -601,7 +603,9 @@ void bellatrix_init(void)
         kprintf("[SERIAL] BTStack owns on-board UART path; Paula host serial bridge disabled\n");
     }
 #else
-    else if (uart_host_open_miniuart(&m->uart_host, 9600))
+    /* Must match bellatrix_console_log_init_early(): both paths touch the
+     * same physical AUX mini-UART, and the last open wins the baud register. */
+    else if (uart_host_open_miniuart_clk(&m->uart_host, 115200, 400000000u))
     {
 #if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK);
@@ -609,8 +613,9 @@ void bellatrix_init(void)
         uart_host_set_null_modem_mode(&m->uart_host, NULL_MODEM_LOOPBACK_ONESHOT);
 #endif
         uint32_t lsr = miniuart_backend_read_lsr();
-        kprintf("[SERIAL] mini-UART open at 9600 baud  LSR=0x%08x TX_ready=%s\n",
+        kprintf("[SERIAL] mini-UART open at 115200 baud  LSR=0x%08x TX_ready=%s\n",
                 lsr, (lsr & 0x20u) ? "yes" : "no (QEMU AUX UART may be unresponsive)");
+        console_log_set_deferred();
 #if defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 1)
         kprintf("[SERIAL] internal serial loopback enabled\n");
 #elif defined(BELLATRIX_UART_LOOPBACK_MODE) && (BELLATRIX_UART_LOOPBACK_MODE == 2)

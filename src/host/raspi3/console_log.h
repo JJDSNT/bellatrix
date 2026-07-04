@@ -1,17 +1,23 @@
 #ifndef BELLATRIX_HOST_RASPI3_CONSOLE_LOG_H
 #define BELLATRIX_HOST_RASPI3_CONSOLE_LOG_H
 
+#include <stdint.h>
+
 /*
- * kprintf shares the mini-UART with Paula's emulated Amiga serial port —
- * PL011 belongs to Bluetooth, in every build. Paula's TX drain always has
- * priority (see machine_step_host_serial_rigel() in machine_rigel_step.c);
- * kprintf only fills the idle gaps via a non-blocking ring buffer. See
- * AI_context/issue_logging_miniuart.md.
+ * kprintf owns the mini-UART from Emu68 setup_serial() onward; PL011 belongs
+ * to Bluetooth in every build. Before Paula's host serial bridge opens,
+ * kprintf writes directly to mini-UART. Once Paula shares the wire, Paula's
+ * TX drain has priority and kprintf falls back to an opportunistic ring.
  */
 
-/* Called once, right after setup_serial() in emu68/src/aarch64/start.c,
- * before the first kprintf. */
-void console_log_init(void);
+/* Called by Emu68's setup_serial() for Bellatrix before the first kprintf. */
+void bellatrix_console_log_init_early(uint32_t core_hz);
+void bellatrix_console_log_reclock(uint32_t core_hz);
+
+/* Switch kprintf from direct mini-UART writes to the opportunistic ring used
+ * when Paula shares the physical mini-UART. Leave direct mode enabled when
+ * no Paula hardware bridge owns this UART. */
+void console_log_set_deferred(void);
 
 /* Called once per quantum, immediately after Paula's TX FIFO is drained to
  * hardware (machine_step_host_serial_rigel() in machine_rigel_step.c) —

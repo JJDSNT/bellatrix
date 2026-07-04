@@ -1,6 +1,5 @@
 #include "host/raspi3/console_log.h"
 
-#include "host/raspi3/vc_mailbox.h"
 #include "host/raspi3/pl011_backend.h"
 #include "io/serial/miniuart_backend.h"
 #include "support.h"
@@ -18,6 +17,7 @@ static volatile uint8_t  s_ring[CONSOLE_LOG_RING_SIZE];
 static volatile uint32_t s_ring_head;    /* producer: console_log_putc()  */
 static volatile uint32_t s_ring_tail;    /* consumer: console_log_drain() */
 static volatile uint32_t s_ring_dropped;
+static volatile uint32_t s_direct_mode;
 
 static void ring_push(uint8_t byte)
 {
@@ -33,6 +33,21 @@ static void ring_push(uint8_t byte)
 
 static void console_log_putc(char chr)
 {
+    if (__atomic_load_n(&s_direct_mode, __ATOMIC_ACQUIRE)) {
+        if (chr == '\n') {
+            int spin = 1000000;
+            while (!miniuart_backend_write_byte(&s_console_miniuart, (uint8_t)'\r') &&
+                   --spin > 0) {
+            }
+        }
+
+        int spin = 1000000;
+        while (!miniuart_backend_write_byte(&s_console_miniuart, (uint8_t)chr) &&
+               --spin > 0) {
+        }
+        return;
+    }
+
     if (chr == '\n')
         ring_push((uint8_t)'\r');
     ring_push((uint8_t)chr);
@@ -45,31 +60,42 @@ void console_log_drain(void)
     if (!miniuart_backend_is_open(&s_console_miniuart))
         return;
 
-    /* miniuart_backend_write_byte() is intentionally non-blocking for the
-     * Bellatrix step cadence.  Do not gate this on LSR TX-ready: QEMU's AUX
-     * UART status bit is not reliable, and a false zero would leave the log
-     * ring permanently undrained.  Cap each pass so logs stay opportunistic. */
+    /* miniuart_backend_write_byte() now reports FIFO-full (false) instead of
+     * overrunning the 8-byte AUX TX FIFO -- stop this pass on the first
+     * failure and retry the same byte next call, rather than advancing the
+     * tail and dropping/corrupting it. Cap each pass so logs stay
+     * opportunistic. */
     while (s_ring_tail != s_ring_head && drained < CONSOLE_LOG_DRAIN_MAX) {
-        miniuart_backend_write_byte(&s_console_miniuart,
-                                    s_ring[s_ring_tail]);
+        if (!miniuart_backend_write_byte(&s_console_miniuart,
+                                          s_ring[s_ring_tail]))
+            break;
         s_ring_tail = (s_ring_tail + 1u) % CONSOLE_LOG_RING_SIZE;
         drained++;
     }
 }
 
-void console_log_init(void)
+void console_log_set_deferred(void)
 {
-    uint32_t core_hz = vc_get_core_clock_hz();
+    __atomic_store_n(&s_direct_mode, 0u, __ATOMIC_RELEASE);
+}
+
+void bellatrix_console_log_init_early(uint32_t core_hz)
+{
     if (core_hz == 0u)
         core_hz = 250000000u;
 
     pl011_backend_route_header_to_miniuart();
 
-    /* 9600: matches Paula's existing host-side baud (uart_host_open_miniuart()
-     * in bellatrix.c) — both consumers share one physical wire, so an
-     * open() call from either side must target the same nominal rate. */
-    if (miniuart_backend_open_clk(&s_console_miniuart, 9600u, core_hz))
+    if (miniuart_backend_open_clk(&s_console_miniuart, 115200u, core_hz)) {
+        __atomic_store_n(&s_direct_mode, 1u, __ATOMIC_RELEASE);
         kprintf_set_putc_override(console_log_putc);
-    else
-        kprintf_set_enabled(0);
+        kprintf_set_enabled(1);
+    }
+}
+
+void bellatrix_console_log_reclock(uint32_t core_hz)
+{
+    if (core_hz == 0u)
+        return;
+    miniuart_backend_set_baud_clk(&s_console_miniuart, 115200u, core_hz);
 }

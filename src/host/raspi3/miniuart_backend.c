@@ -13,9 +13,9 @@
  * peripheral alias Emu68 uses itself, not the raw 0x3f21xxxx physical range.
  *
  * On QEMU raspi3b the second -serial argument maps to this peripheral.
- * On real hardware GPIO 14/15 must not be re-muxed to PL011 (ALT0) before
- * calling miniuart_backend_open(); Emu68's kprintf path owns PL011, so
- * mini-UART uses ALT5 on the same pins — QEMU ignores GPIO mux.
+ * On real hardware GPIO 14/15 must be muxed to ALT5 before opening the
+ * mini-UART. Bellatrix does this from Emu68's setup_serial() path so there
+ * is no PL011-to-mini-UART handoff later in boot; QEMU ignores GPIO mux.
  */
 
 #include <stdint.h>
@@ -60,6 +60,14 @@ bool miniuart_backend_open_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_h
     return true;
 }
 
+bool miniuart_backend_set_baud_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_hz)
+{
+    if (!m || !m->open || !baud || !clk_hz) return false;
+    mu_wr32(AUX_MU_BAUD_ADDR, clk_hz / (8u * baud) - 1u);
+    m->baud = baud;
+    return true;
+}
+
 bool miniuart_backend_open(MiniUartBackend *m, uint32_t baud)
 {
     return miniuart_backend_open_clk(m, baud, SYS_CLK_HZ);
@@ -93,9 +101,10 @@ bool miniuart_backend_read_byte(MiniUartBackend *m, uint8_t *byte_out)
 bool miniuart_backend_write_byte(MiniUartBackend *m, uint8_t byte)
 {
     if (!m || !m->open) return false;
-    /* Write unconditionally — QEMU may not emulate LSR TX-ready reliably.
-     * On real hardware the TX FIFO is deep enough that this is safe at the
-     * rates we call this function (one byte per machine_step_components). */
+    /* LSR bit 5 = TX FIFO has space. Return false instead of spinning so
+     * shared users can retry without stalling the machine step loop. */
+    if (!(mu_rd32(AUX_MU_LSR_ADDR) & 0x20u))
+        return false;
     mu_wr32(AUX_MU_IO_ADDR, byte);
     return true;
 }
@@ -113,6 +122,12 @@ bool miniuart_backend_open_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_h
 {
     (void)baud; (void)clk_hz;
     if (m) m->open = false;
+    return false;
+}
+
+bool miniuart_backend_set_baud_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_hz)
+{
+    (void)m; (void)baud; (void)clk_hz;
     return false;
 }
 

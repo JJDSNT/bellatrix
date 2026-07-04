@@ -158,6 +158,7 @@ EMU68_PATCHES=(
     "$PATCHES/0008-bellatrix-console-redirect.patch"
     "$PATCHES/0009-bellatrix-boot-config.patch"
     "$PATCHES/0010-bellatrix-z2ram-fixes.patch"
+    "$PATCHES/0019-emu68-tlsf-hardening.patch"
 )
 
 CHERRYUSB_PATCHES=(

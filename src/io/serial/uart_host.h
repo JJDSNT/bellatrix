@@ -31,6 +31,7 @@ bool uart_host_open_pty(UARTHost *host);
 const char *uart_host_pty_name(const UARTHost *host);
 
 bool uart_host_open_miniuart(UARTHost *host, uint32_t baud);
+bool uart_host_open_miniuart_clk(UARTHost *host, uint32_t baud, uint32_t clk_hz);
 
 void uart_host_set_null_modem_mode(UARTHost *host, NullModemMode mode);
 

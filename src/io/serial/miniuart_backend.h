@@ -13,6 +13,7 @@ bool miniuart_backend_open(MiniUartBackend *m, uint32_t baud);
 /* The baud divisor tracks the VPU core clock; pass the real rate (mailbox
  * GET_CLOCK_RATE) when it may differ from the 250 MHz default. */
 bool miniuart_backend_open_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_hz);
+bool miniuart_backend_set_baud_clk(MiniUartBackend *m, uint32_t baud, uint32_t clk_hz);
 void miniuart_backend_close(MiniUartBackend *m);
 
 bool miniuart_backend_is_open(const MiniUartBackend *m);

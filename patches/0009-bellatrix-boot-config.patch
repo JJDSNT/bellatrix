@@ -1,15 +1,24 @@
 diff --git a/scripts/config.txt b/scripts/config.txt
-index efe0551..ba3c6d7 100644
+index efe0551..3dbe71d 100644
 --- a/scripts/config.txt
 +++ b/scripts/config.txt
-@@ -7,6 +7,10 @@ disable_splash=1
+@@ -7,11 +7,19 @@ disable_splash=1
  arm_64bit=1
  avoid_warnings=1
  
 +# Pin core_freq so the mini-UART baud stays stable — when Bluetooth owns
 +# the PL011, the Bellatrix console moves to the mini-UART on GPIO 14/15.
 +enable_uart=1
++core_freq=400
 +
  # Limit GPU memory a little, force 1080p video mode
  gpu_mem=32
  hdmi_group=2
+ hdmi_mode=82
+ 
++# TEMP: hdmi_drive=2 removed for serial-silence diagnostic (2026-07-04) --
++# see AI_context/issues/ISSUE-0011.md. Re-add once confirmed unrelated.
++
+ 
+ # Select some m68k code to run...
+ #initramfs dhrystone
