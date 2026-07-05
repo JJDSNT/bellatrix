@@ -1,6 +1,5 @@
 #include "host/raspi3/console_log.h"
 
-#include "host/raspi3/vc_mailbox.h"
 #include "host/raspi3/pl011_backend.h"
 #include "io/serial/miniuart_backend.h"
 #include "support.h"
@@ -99,14 +98,4 @@ void bellatrix_console_log_reclock(uint32_t core_hz)
     if (core_hz == 0u)
         return;
     miniuart_backend_set_baud_clk(&s_console_miniuart, 115200u, core_hz);
-}
-
-void bellatrix_console_log_diag(const char *tag)
-{
-    kprintf("[MU:%s] core=%u baud=%u lsr=%08x cntl=%08x\n",
-            tag ? tag : "?",
-            (unsigned)vc_get_core_clock_hz(),
-            (unsigned)miniuart_backend_read_baud(),
-            (unsigned)miniuart_backend_read_lsr(),
-            (unsigned)miniuart_backend_read_cntl());
 }

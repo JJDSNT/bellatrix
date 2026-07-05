@@ -78,16 +78,6 @@ uint32_t miniuart_backend_read_lsr(void)
     return mu_rd32(AUX_MU_LSR_ADDR);
 }
 
-uint32_t miniuart_backend_read_baud(void)
-{
-    return mu_rd32(AUX_MU_BAUD_ADDR);
-}
-
-uint32_t miniuart_backend_read_cntl(void)
-{
-    return mu_rd32(AUX_MU_CNTL_ADDR);
-}
-
 void miniuart_backend_close(MiniUartBackend *m)
 {
     if (!m || !m->open) return;
@@ -162,16 +152,6 @@ bool miniuart_backend_set_baud_clk(MiniUartBackend *m, uint32_t baud, uint32_t c
 }
 
 uint32_t miniuart_backend_read_lsr(void)
-{
-    return 0;
-}
-
-uint32_t miniuart_backend_read_baud(void)
-{
-    return 0;
-}
-
-uint32_t miniuart_backend_read_cntl(void)
 {
     return 0;
 }

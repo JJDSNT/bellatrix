@@ -1111,14 +1111,10 @@ int usb_hc_init(struct usbh_bus *bus)
         usbh_hub_thread_wakeup(&bus->hcd.roothub);
     }
 
-    /* ISSUE-0036: mini-UART corruption right around here was non-deterministic
-     * and went away whenever diagnostic kprintf/mailbox calls happened to be
-     * scattered through this exact spot (removed since -- see git history),
-     * which points at bus contention between the DWC2's heavy back-to-back
-     * MMIO/DMA setup and the AUX mini-UART peripheral (both share the same
-     * internal peripheral bus) rather than a UART-side software bug. The
-     * diag calls were accidentally pacing this code; replace that with a
-     * deliberate short settle delay instead of relying on print side effects. */
+    /* ISSUE-0036: observed to reduce mini-UART log corruption during the
+     * heavy USB init window on Pi 3B, but not confirmed as a root-cause fix.
+     * Keep it as a conservative settle point until log transport is redesigned
+     * around a single deferred console pump. */
     usb_osal_msleep(5);
 
     /* ISSUE-0036: re-reverted. Enabling GAHBCFG.GINT was NOT the fix for the

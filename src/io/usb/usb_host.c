@@ -1,6 +1,5 @@
 #include "io/usb/usb_host.h"
 
-#include "host/raspi3/console_log.h"
 #include "support.h"
 
 #if BELLATRIX_ENABLE_USBSTACK
@@ -134,7 +133,6 @@ bool usb_host_init(USBHost *host)
     if (usbh_initialize(BELLATRIX_USB_BUS_ID, BELLATRIX_USB_DWC2_REG_BASE, bellatrix_usb_event) == 0) {
         host->controller_ready = true;
         bellatrix_usb_pump_events(4u);
-        bellatrix_console_log_diag("host-init-after-pump4");
         BELLATRIX_USB_LOGF("[USB] CherryUSB DWC2 host initialized at %p\n",
                            (void *)BELLATRIX_USB_DWC2_REG_BASE);
         bellatrix_usb_log_hprt(host, "post-init");
