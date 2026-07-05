@@ -107,6 +107,170 @@ static uint32_t machine_video_skip_interval(void)
 }
 #endif
 
+static uint32_t machine_dirty_line_count(const rigel_frame_t *frame)
+{
+    uint32_t count = 0;
+    unsigned i;
+
+    if (!frame)
+        return 0;
+
+    for (i = 0; i < 5u; ++i) {
+        uint64_t v = frame->delta.dirty_lines[i];
+        while (v) {
+            count += (uint32_t)(v & 1u);
+            v >>= 1;
+        }
+    }
+
+    return count;
+}
+
+typedef struct MachineFrameStats {
+    uint32_t bg;
+    uint32_t hash;
+    uint32_t samples;
+    uint32_t non_bg;
+} MachineFrameStats;
+
+static MachineFrameStats machine_frame_stats_sample(const rigel_frame_t *frame)
+{
+    MachineFrameStats stats = {0, 2166136261u, 0, 0};
+    uint32_t step_x;
+    uint32_t step_y;
+    uint32_t y;
+    const uint32_t *pixels;
+
+    if (!frame || !frame->pixels || frame->width == 0u || frame->height == 0u)
+        return stats;
+
+    pixels = (const uint32_t *)frame->pixels;
+    stats.bg = pixels[0];
+    step_x = (frame->width  + 31u) / 32u;
+    step_y = (frame->height + 31u) / 32u;
+    if (step_x == 0u) step_x = 1u;
+    if (step_y == 0u) step_y = 1u;
+
+    for (y = 0u; y < frame->height; y += step_y) {
+        const uint32_t *row =
+            (const uint32_t *)((const uint8_t *)frame->pixels + y * frame->pitch);
+        uint32_t x;
+        for (x = 0u; x < frame->width; x += step_x) {
+            uint32_t px = row[x];
+            stats.hash ^= px;
+            stats.hash *= 16777619u;
+            stats.samples++;
+            if (px != stats.bg)
+                stats.non_bg++;
+        }
+    }
+
+    return stats;
+}
+
+#ifndef BELLATRIX_HARNESS
+static void machine_trace_baremetal_video_frame(const rigel_frame_t *frame)
+{
+    static uint32_t trace_count;
+    static uint16_t last_bplcon0;
+    static uint16_t last_dmacon;
+    static uint16_t last_diwstrt;
+    static uint16_t last_diwstop;
+    static uint16_t last_ddfstrt;
+    static uint16_t last_ddfstop;
+    static uint16_t last_color00;
+    static uint8_t last_valid;
+    uint32_t f;
+    uint32_t sample0 = 0;
+    uint32_t sample_mid = 0;
+    uint16_t bplcon0;
+    uint16_t dmacon;
+    uint16_t diwstrt;
+    uint16_t diwstop;
+    uint16_t ddfstrt;
+    uint16_t ddfstop;
+    uint16_t color00;
+    uint8_t state_changed;
+    MachineFrameStats stats;
+
+    if (!frame)
+        return;
+
+    f = (uint32_t)frame->frame_count;
+    bplcon0 = rigel_custom_read16(g_rigel, RIGEL_REG_BPLCON0);
+    dmacon = rigel_custom_read16(g_rigel, RIGEL_REG_DMACON);
+    diwstrt = rigel_custom_read16(g_rigel, RIGEL_REG_DIWSTRT);
+    diwstop = rigel_custom_read16(g_rigel, RIGEL_REG_DIWSTOP);
+    ddfstrt = rigel_custom_read16(g_rigel, RIGEL_REG_DDFSTRT);
+    ddfstop = rigel_custom_read16(g_rigel, RIGEL_REG_DDFSTOP);
+    color00 = rigel_custom_read16(g_rigel, RIGEL_REG_COLOR00);
+
+    state_changed = !last_valid ||
+                    bplcon0 != last_bplcon0 ||
+                    dmacon != last_dmacon ||
+                    diwstrt != last_diwstrt ||
+                    diwstop != last_diwstop ||
+                    ddfstrt != last_ddfstrt ||
+                    ddfstop != last_ddfstop ||
+                    color00 != last_color00;
+
+    if (trace_count >= 16u && !state_changed && (f & 0xffu) != 0u)
+        return;
+
+    last_bplcon0 = bplcon0;
+    last_dmacon = dmacon;
+    last_diwstrt = diwstrt;
+    last_diwstop = diwstop;
+    last_ddfstrt = ddfstrt;
+    last_ddfstop = ddfstop;
+    last_color00 = color00;
+    last_valid = 1u;
+
+    if (frame->pixels && frame->width && frame->height) {
+        const uint32_t *row0 = (const uint32_t *)frame->pixels;
+        const uint32_t *row_mid =
+            (const uint32_t *)((const uint8_t *)frame->pixels +
+                               (frame->height / 2u) * frame->pitch);
+        sample0 = row0[0];
+        sample_mid = row_mid[frame->width / 2u];
+    }
+    stats = machine_frame_stats_sample(frame);
+
+    kprintf("[VIDEO-BM] frame=%u src=%ux%u pitch=%u fmt=%u flags=0x%02x "
+            "dirty=%u full=%u fb=%ux%u pitch=%u zero_copy=%u "
+            "bplcon0=%04x depth=%u dmacon=%04x bplen=%u diw=%04x/%04x ddf=%04x/%04x "
+            "color00=%04x px=%08x/%08x sig=%08x nonbg=%u/%u\n",
+            (unsigned)f,
+            (unsigned)frame->width,
+            (unsigned)frame->height,
+            (unsigned)frame->pitch,
+            (unsigned)frame->format,
+            (unsigned)frame->flags,
+            (unsigned)machine_dirty_line_count(frame),
+            frame->delta.full_redraw ? 1u : 0u,
+            (unsigned)fb_width,
+            (unsigned)fb_height,
+            (unsigned)pitch,
+            g_rigel_zero_copy_video ? 1u : 0u,
+            (unsigned)bplcon0,
+            (unsigned)((bplcon0 >> 12) & 7u),
+            (unsigned)dmacon,
+            (dmacon & RIGEL_DMACON_BPLEN) ? 1u : 0u,
+            (unsigned)diwstrt,
+            (unsigned)diwstop,
+            (unsigned)ddfstrt,
+            (unsigned)ddfstop,
+            (unsigned)color00,
+            (unsigned)sample0,
+            (unsigned)sample_mid,
+            (unsigned)stats.hash,
+            (unsigned)stats.non_bg,
+            (unsigned)stats.samples);
+
+    trace_count++;
+}
+#endif
+
 void machine_present_frame_from_rigel(void)
 {
     rigel_frame_t frame;
@@ -142,6 +306,10 @@ void machine_present_frame_from_rigel(void)
 
     if (!g_rigel || !framebuffer || !pitch || !rigel_get_frame(g_rigel, &frame))
         return;
+
+#ifndef BELLATRIX_HARNESS
+    machine_trace_baremetal_video_frame(&frame);
+#endif
 
     /* When DIWSTRT/DIWSTOP are both 0 (cleared at reset), display_window_update
      * produces width=1, height=1 pointing to the VBLANK region.  Skip the PAL
@@ -197,11 +365,38 @@ void machine_present_frame_from_rigel(void)
     dst_y0 = (fb_height > height) ? (fb_height - height) / 2u : 0u;
 
     {
+        static uint32_t last_fb_width;
+        static uint32_t last_fb_height;
+        static uint32_t last_dst_x0;
+        static uint32_t last_dst_y0;
+        static uint32_t last_width;
+        static uint32_t last_height;
+        static uint16_t last_bg;
+        static uint8_t initialized;
         uint16_t bg = machine_rgb8888_to_le565(src[0]);
-        for (y = 0; y < fb_height; ++y) {
-            uint16_t *drow = framebuffer + y * stride;
-            for (x = 0; x < fb_width; ++x)
-                drow[x] = bg;
+
+        if (!initialized ||
+            fb_width != last_fb_width ||
+            fb_height != last_fb_height ||
+            dst_x0 != last_dst_x0 ||
+            dst_y0 != last_dst_y0 ||
+            width != last_width ||
+            height != last_height ||
+            bg != last_bg) {
+            for (y = 0; y < fb_height; ++y) {
+                uint16_t *drow = framebuffer + y * stride;
+                for (x = 0; x < fb_width; ++x)
+                    drow[x] = bg;
+            }
+
+            last_fb_width = fb_width;
+            last_fb_height = fb_height;
+            last_dst_x0 = dst_x0;
+            last_dst_y0 = dst_y0;
+            last_width = width;
+            last_height = height;
+            last_bg = bg;
+            initialized = 1u;
         }
     }
 

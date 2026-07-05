@@ -6,10 +6,12 @@
 #include "machine/machine_rigel_internal.h"
 
 #include "machine/memory/chip_ram.h"
+#include "machine/memory/fast_ram.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/bus/zorro3/zorro3.h"
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/expansion.h"
+#include "machine/memory/slow_ram.h"
 
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
@@ -19,6 +21,12 @@
 #include "rigel/rigel_custom.h"
 #include "core/rigel_context.h"   /* CIA-A sdr_full probe (keyboard log) */
 #include "rigel/rigel_irq.h"
+
+#if defined(BELLATRIX_HARNESS) || \
+    (defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU)
+#include "m68k.h"
+#define MACHINE_HAS_MUSASHI_REGS 1
+#endif
 
 #ifdef BELLATRIX_HARNESS
 #include <stdlib.h>
@@ -70,6 +78,24 @@ static inline bool is_superbuster_addr(uint32_t addr)
 {
     return superbuster_owns(addr);
 }
+
+#ifdef MACHINE_HAS_MUSASHI_REGS
+static uint32_t machine_trace_read32_no_side_effect(uint32_t addr)
+{
+    BellatrixMemory *mem = &g_machine.memory;
+
+    addr &= 0x00ffffffu;
+    if (addr < BELLATRIX_CHIP_RAM_SIZE)
+        return bellatrix_chip_read32(mem, addr);
+    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END)
+        return bellatrix_fast_read32(mem, addr);
+    if (slow_ram_contains(mem, addr, 4u))
+        return slow_ram_read32(mem, addr);
+    if (addr >= BELLATRIX_ROM_BASE && addr <= BELLATRIX_ROM_END)
+        return bellatrix_mem_read32(mem, addr);
+    return 0xffffffffu;
+}
+#endif
 
 /* ---------------------------------------------------------------------------
  * Chip-RAM callbacks (passed to rigel_create via config.chip_ram)
@@ -261,6 +287,55 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
                 (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
     }
 
+    if (reg == RIGEL_REG_DMACON || reg == RIGEL_REG_BPLCON0) {
+        static unsigned video_cpu_write_count;
+        uint16_t before = rigel_custom_read16(g_rigel, reg);
+        if (video_cpu_write_count < 256u) {
+            kprintf("[VIDEO-W-CPU] reg=%03x before=%04x write=%04x size=%u "
+                    "pc=%08x cyc=%llu\n",
+                    (unsigned)reg,
+                    (unsigned)before,
+                    (unsigned)word,
+                    (unsigned)size,
+                    (unsigned)bellatrix_debug_cpu_pc(),
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+            video_cpu_write_count++;
+        }
+
+#ifdef MACHINE_HAS_MUSASHI_REGS
+        if (reg == RIGEL_REG_DMACON) {
+            uint32_t pc = bellatrix_debug_cpu_pc();
+            if (pc >= 0x00fe8500u && pc <= 0x00fe8680u) {
+                static unsigned boot_dmacon_count;
+                if (boot_dmacon_count < 128u) {
+                    uint32_t a2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A2) & 0x00ffffffu;
+                    uint32_t a4 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A4) & 0x00ffffffu;
+                    uint32_t a5 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A5) & 0x00ffffffu;
+                    uint32_t a6 = (uint32_t)m68k_get_reg(NULL, M68K_REG_A6) & 0x00ffffffu;
+                    uint32_t d2 = (uint32_t)m68k_get_reg(NULL, M68K_REG_D2);
+                    uint32_t a5_04 = machine_trace_read32_no_side_effect(a5 + 0x04u);
+                    uint32_t a5_4c = machine_trace_read32_no_side_effect(a5 + 0x4cu);
+                    kprintf("[VIDEO-BOOT-DMA] pc=%08x write=%04x before=%04x "
+                            "a2=%06x a4=%06x a5=%06x a6=%06x d2=%08x "
+                            "a5_04=%08x a5_4c=%08x cyc=%llu\n",
+                            (unsigned)pc,
+                            (unsigned)word,
+                            (unsigned)before,
+                            (unsigned)a2,
+                            (unsigned)a4,
+                            (unsigned)a5,
+                            (unsigned)a6,
+                            (unsigned)d2,
+                            (unsigned)a5_04,
+                            (unsigned)a5_4c,
+                            (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+                    boot_dmacon_count++;
+                }
+            }
+        }
+#endif
+    }
+
     if (machine_rigel_blitter_trace_enabled() &&
         (reg == 0x040u || reg == 0x042u || reg == 0x044u || reg == 0x046u ||
          reg == 0x048u || reg == 0x04au || reg == 0x04cu || reg == 0x04eu ||
@@ -276,6 +351,45 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
                 (unsigned)word,
                 (unsigned)size,
                 (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+    }
+
+    if (reg == RIGEL_REG_COP1LCH || reg == RIGEL_REG_COP1LCL ||
+        reg == RIGEL_REG_COP2LCH || reg == RIGEL_REG_COP2LCL ||
+        reg == RIGEL_REG_COPJMP1 || reg == RIGEL_REG_COPJMP2) {
+        static unsigned video_copptr_write_count;
+        uint32_t cop1_before =
+            (((uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP1LCH) << 16) |
+             (uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP1LCL)) & 0x00fffffeu;
+        uint32_t cop2_before =
+            (((uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP2LCH) << 16) |
+             (uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP2LCL)) & 0x00fffffeu;
+
+        rigel_custom_write16(g_rigel, reg, word);
+
+        if (video_copptr_write_count < 128u) {
+            uint32_t cop1_after =
+                (((uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP1LCH) << 16) |
+                 (uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP1LCL)) & 0x00fffffeu;
+            uint32_t cop2_after =
+                (((uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP2LCH) << 16) |
+                 (uint32_t)rigel_custom_read16(g_rigel, RIGEL_REG_COP2LCL)) & 0x00fffffeu;
+            if (cop1_after != cop1_before || cop2_after != cop2_before ||
+                reg == RIGEL_REG_COPJMP1 || reg == RIGEL_REG_COPJMP2) {
+                kprintf("[VIDEO-COPPTR-CPU] reg=%03x write=%04x size=%u pc=%08x "
+                        "cop1=%06x->%06x cop2=%06x->%06x cyc=%llu\n",
+                        (unsigned)reg,
+                        (unsigned)word,
+                        (unsigned)size,
+                        (unsigned)bellatrix_debug_cpu_pc(),
+                        (unsigned)cop1_before,
+                        (unsigned)cop1_after,
+                        (unsigned)cop2_before,
+                        (unsigned)cop2_after,
+                        (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+                video_copptr_write_count++;
+            }
+        }
+        return;
     }
 
     if (reg == 0x09au || reg == 0x09cu) {
@@ -324,6 +438,28 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
                     (unsigned)reg, (unsigned)(value & 0xffu));
         if (reg == 0x0u)
             machine_rigel_trace_floppy("ciaa-pra-r", bellatrix_debug_cpu_pc(), reg, (uint8_t)value);
+        if (reg == 0x0u) {
+            static unsigned chng_log_count;
+            static uint8_t last_chng = 0xffu;
+            uint8_t chng = (uint8_t)((value >> 2) & 1u);
+            if (chng != last_chng && chng_log_count < 400u) {
+                const FloppyDrive *df0 = &g_rigel->chipset.floppy[0];
+                kprintf("[CHNG-R] pra=%02x chng=%u->%u pc=%08x prb=%02x "
+                        "idcnt=%u chgd=%u mtr=%u rdy=%u cyc=%llu\n",
+                        (unsigned)(value & 0xffu),
+                        (unsigned)(last_chng & 1u),
+                        (unsigned)chng,
+                        (unsigned)bellatrix_debug_cpu_pc(),
+                        (unsigned)g_rigel->chipset.cia[1].prb,
+                        (unsigned)df0->id_count,
+                        (unsigned)df0->disk_changed,
+                        (unsigned)df0->motor,
+                        (unsigned)df0->ready,
+                        (unsigned long long)rigel_get_time(g_rigel));
+                chng_log_count++;
+            }
+            last_chng = chng;
+        }
         /* Keyboard-path diagnostics: log SDR reads only when a keyboard
          * byte was actually pending — DiagROM polls SDR continuously and
          * unconditional logging drowns the signal. */
@@ -402,6 +538,22 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
         rigel_cia_write(g_rigel, 1u, reg, (uint8_t)value);
         if (reg == 0x1u || reg == 0x3u)
             machine_rigel_trace_floppy("ciab-w", bellatrix_debug_cpu_pc(), reg, (uint8_t)value);
+        if (reg == 0x1u) {
+            static unsigned prb_log_count;
+            static uint8_t last_msel = 0xffu;
+            uint8_t msel = (uint8_t)(value & 0x88u); /* /MTR | /SEL0 */
+            if (msel != last_msel && prb_log_count < 400u) {
+                kprintf("[PRB-W] prb=%02x mtr=%u sel0=%u pc=%08x idcnt=%u cyc=%llu\n",
+                        (unsigned)(value & 0xffu),
+                        (unsigned)(!(value & 0x80u)),
+                        (unsigned)(!(value & 0x08u)),
+                        (unsigned)bellatrix_debug_cpu_pc(),
+                        (unsigned)g_rigel->chipset.floppy[0].id_count,
+                        (unsigned long long)rigel_get_time(g_rigel));
+                prb_log_count++;
+            }
+            last_msel = msel;
+        }
     } else if (is_rtc_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 2) & 0x0Fu);
         rigel_rtc_write_reg(g_rigel, reg, (uint8_t)(value & 0x0Fu));

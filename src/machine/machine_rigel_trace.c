@@ -70,6 +70,26 @@ void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
     static int generic_event_trace = -1;
 
     (void)opaque;
+    if (event != NULL && event->id == RIGEL_LOG_EVENT_COPPER_WRITE &&
+        event->field_count >= 7u &&
+        (event->fields[0] == RIGEL_REG_DMACON ||
+         event->fields[0] == RIGEL_REG_BPLCON0)) {
+        static unsigned video_copper_write_count;
+        if (video_copper_write_count < 512u) {
+            uint64_t frame = ((uint64_t)event->fields[6] << 32) |
+                             (uint64_t)event->fields[5];
+            kprintf("[VIDEO-W-COPPER] reg=%03x write=%04x cop_pc=%06x "
+                    "beam=%03u,%03u frame=%llu cyc=%llu\n",
+                    (unsigned)event->fields[0],
+                    (unsigned)event->fields[1],
+                    (unsigned)event->fields[2],
+                    (unsigned)event->fields[3],
+                    (unsigned)event->fields[4],
+                    (unsigned long long)frame,
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            video_copper_write_count++;
+        }
+    }
     if (!g_rtrace.enabled || event == NULL)
         return;
 

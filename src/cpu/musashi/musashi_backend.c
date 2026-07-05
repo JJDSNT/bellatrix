@@ -8,6 +8,14 @@
 
 #include "m68k.h"
 
+#ifndef BELLATRIX_MUSASHI_CPU_MODEL
+#define BELLATRIX_MUSASHI_CPU_MODEL M68K_CPU_TYPE_68040
+#endif
+
+#ifndef BELLATRIX_MUSASHI_LOW_RAM_SIZE
+#define BELLATRIX_MUSASHI_LOW_RAM_SIZE BELLATRIX_CHIP_RAM_SIZE
+#endif
+
 static uint32_t musashi_rom_read_at(const BellatrixMemory *mem,
                                     uint32_t offset,
                                     unsigned int size)
@@ -131,7 +139,9 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
                ((uint32_t)p[2] << 8)  | (uint32_t)p[3];
     }
 
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (mem->chip_ram &&
+        addr < BELLATRIX_MUSASHI_LOW_RAM_SIZE &&
+        size <= (BELLATRIX_MUSASHI_LOW_RAM_SIZE - addr)) {
         return musashi_chip_read(mem, addr, size);
     }
 
@@ -164,7 +174,9 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
         return;
     }
 
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (mem->chip_ram &&
+        addr < BELLATRIX_MUSASHI_LOW_RAM_SIZE &&
+        size <= (BELLATRIX_MUSASHI_LOW_RAM_SIZE - addr)) {
         musashi_chip_write(mem, addr, value, size);
         return;
     }
@@ -258,12 +270,30 @@ static CpuBackend g_musashi_backend = {
     .run = musashi_run,
 };
 
+const char *bellatrix_musashi_cpu_model(void)
+{
+    switch (BELLATRIX_MUSASHI_CPU_MODEL) {
+    case M68K_CPU_TYPE_68000:
+        return "68000";
+    case M68K_CPU_TYPE_68010:
+        return "68010";
+    case M68K_CPU_TYPE_68EC020:
+        return "68ec020";
+    case M68K_CPU_TYPE_68020:
+        return "68020";
+    case M68K_CPU_TYPE_68030:
+        return "68030";
+    case M68K_CPU_TYPE_68040:
+        return "68040";
+    default:
+        return "unknown";
+    }
+}
+
 void bellatrix_musashi_backend_init(void)
 {
-    /* Default is 68040 with FPU — see ISSUE-0034. Requires
-     * M68K_EMULATE_040 on in musashi_baremetal_config.h. */
     m68k_init();
-    m68k_set_cpu_type(M68K_CPU_TYPE_68040);
+    m68k_set_cpu_type(BELLATRIX_MUSASHI_CPU_MODEL);
 }
 
 CpuBackend *bellatrix_musashi_backend_get(void)

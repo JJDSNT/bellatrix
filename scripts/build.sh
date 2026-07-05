@@ -92,6 +92,7 @@ hide_modified_files() {
 }
 
 CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
+MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-${HARNESS_CPU:-68040}}"
 
 case "$CPU_BACKEND" in
     emu68|"")
@@ -100,6 +101,15 @@ case "$CPU_BACKEND" in
         MUSASHI_CPU_FLAG="OFF"
         ;;
     musashi)
+        case "$MUSASHI_CPU" in
+            68000|68010|68ec020|68020|68030|68040)
+                ;;
+            *)
+                echo "ERROR: invalid BELLATRIX_MUSASHI_CPU: $MUSASHI_CPU"
+                echo "Valid values: 68000, 68010, 68ec020, 68020, 68030, 68040"
+                exit 1
+                ;;
+        esac
         BUILD="$EMU68/build-bellatrix-rigel-musashi"
         INSTALL="$EMU68/install-bellatrix-rigel-musashi"
         MUSASHI_CPU_FLAG="ON"
@@ -139,6 +149,9 @@ OSD_ENABLED="${BELLATRIX_OSD:-1}"
 LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
 
 echo "[BUILD] cpu backend: $CPU_BACKEND"
+if [ "$CPU_BACKEND" = "musashi" ]; then
+    echo "[BUILD] musashi cpu model: $MUSASHI_CPU"
+fi
 echo "[BUILD] chipset backend: rigel"
 
 MULTICORE_FLAG="OFF"
@@ -278,6 +291,7 @@ cmake "$EMU68" \
     -DCMAKE_CXX_FLAGS="$EXTRA_DEFINES" \
     -DBELLATRIX_ENABLE_EMU68_BOARDS="$EMU68_BOARDS_ENABLED" \
     -DBELLATRIX_USE_MUSASHI_CPU="$MUSASHI_CPU_FLAG" \
+    -DBELLATRIX_MUSASHI_CPU="$MUSASHI_CPU" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \
     -DBELLATRIX_ENABLE_USBSTACK="$USBSTACK_ENABLED" \
     -DBELLATRIX_ENABLE_USB_MSC="$USB_MSC_ENABLED" \

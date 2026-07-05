@@ -210,14 +210,14 @@ func nextEmu68BoardsMode(current string) string {
 
 func nextCPUBackend(current string) string {
 	switch current {
-	case "musashi":
+	case "musashi-68000":
 		return "musashi-68020"
 	case "musashi-68020":
 		return "musashi-68040"
 	case "musashi-68040":
 		return "emu68"
 	default:
-		return "musashi"
+		return "musashi-68000"
 	}
 }
 
@@ -226,6 +226,9 @@ func isMusashiCPUBackend(cpuBackend string) bool {
 }
 
 func harnessCPUForBackend(cpuBackend string) string {
+	if cpuBackend == "musashi-68000" {
+		return "68000"
+	}
 	if cpuBackend == "musashi-68020" {
 		return "68020"
 	}
@@ -628,12 +631,12 @@ func (m model) renderPanel() string {
 	b.WriteString("\n")
 
 	cpuBackendBadge := offBadgeStyle.Render("EMU68")
-	if m.cpuBackend == "musashi-68020" {
+	if m.cpuBackend == "musashi-68000" {
+		cpuBackendBadge = onBadgeStyle.Render("MUSASHI 68000")
+	} else if m.cpuBackend == "musashi-68020" {
 		cpuBackendBadge = onBadgeStyle.Render("MUSASHI 68020")
 	} else if m.cpuBackend == "musashi-68040" {
 		cpuBackendBadge = onBadgeStyle.Render("MUSASHI 68040")
-	} else if m.cpuBackend == "musashi" {
-		cpuBackendBadge = onBadgeStyle.Render("MUSASHI")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("CPU backend:"), cpuBackendBadge))
 	b.WriteString("\n")
@@ -730,8 +733,13 @@ func (m model) qemuCommand() string {
 		profileEnv = " BELLATRIX_PROFILE=1"
 	}
 
+	cpuEnv := ""
+	if cpu := harnessCPUForBackend(m.cpuBackend); cpu != "" {
+		cpuEnv = fmt.Sprintf(" HARNESS_CPU=%s", cpu)
+	}
+
 	base := fmt.Sprintf(
-		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_USB_MSC=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s %s -display %s -append "%s"%s`,
+		`BELLATRIX_MULTICORE_BUILD=%s BELLATRIX_BTSTACK=%s BELLATRIX_USBSTACK=%s BELLATRIX_USB_MSC=%s BELLATRIX_EMU68_BOARDS_MODE=%s%s%s%s%s BELLATRIX_OSD=%s BELLATRIX_LAUNCHER=%s%s qemu-system-aarch64 -M raspi3b -kernel %s -dtb %s %s -display %s -append "%s"%s`,
 		boolEnv(m.multicoreBuild),
 		boolEnv(m.btstack),
 		boolEnv(m.usbstack),
@@ -740,6 +748,7 @@ func (m model) qemuCommand() string {
 		traceEnv,
 		perfLogsEnv,
 		profileEnv,
+		cpuEnv,
 		boolEnv(m.osd),
 		boolEnv(m.launcher),
 		serialEnv,

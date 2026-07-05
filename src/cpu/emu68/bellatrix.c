@@ -700,7 +700,8 @@ void bellatrix_init(void)
     }
 
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
-    kprintf("[BELA] CPU backend: musashi\n");
+    kprintf("[BELA] CPU backend: musashi (%s)\n",
+            bellatrix_musashi_cpu_model());
 #else
     kprintf("[BELA] CPU backend: emu68\n");
 #endif

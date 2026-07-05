@@ -4,3 +4,4 @@
 
 void bellatrix_musashi_backend_init(void);
 CpuBackend *bellatrix_musashi_backend_get(void);
+const char *bellatrix_musashi_cpu_model(void);
