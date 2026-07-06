@@ -47,6 +47,7 @@ struct BellatrixMachine;
 #define RTG_REG_PAL_INDEX     0x28u
 #define RTG_REG_PAL_DATA      0x2Cu  /* 0x00RRGGBB, autoincrements index */
 #define RTG_REG_VBLANK        0x30u  /* RO frame counter                 */
+#define RTG_REG_DEBUG         0x34u  /* WO guest breadcrumb, host logs   */
 
 #define RTG_ID_MAGIC   0x42525447u   /* 'BRTG' */
 #define RTG_SPEC_VERSION 1u

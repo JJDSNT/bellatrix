@@ -43,6 +43,13 @@ static int is_ram_ptr(BellatrixMachine *m, uint32_t a)
     if (bellatrix_chip_addr_contains(a)) {
         return 1;
     }
+#if defined(BELLATRIX_HARNESS)
+    /* AROS relocates ExecBase and most OS structures into Z2 fast RAM. */
+    if (m->memory.fast_ram &&
+        a >= BELLATRIX_FAST_RAM_BASE && a <= BELLATRIX_FAST_RAM_END) {
+        return 1;
+    }
+#endif
     return bellatrix_slow_contains(&m->memory, a, 1u);
 }
 

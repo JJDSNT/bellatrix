@@ -64,6 +64,15 @@ static uint32_t rtg_reg_read(uint32_t reg)
 
 static void rtg_reg_write(uint32_t reg, uint32_t value)
 {
+    {
+        static uint32_t s_seen_mask;
+        uint32_t bit = 1u << ((reg >> 2) & 31u);
+        if (!(s_seen_mask & bit)) {
+            s_seen_mask |= bit;
+            kprintf("[RTG] first write reg=%02x value=%08x\n",
+                    (unsigned)reg, (unsigned)value);
+        }
+    }
     switch (reg) {
         case RTG_REG_ENABLE:
             if (value != s_rtg.enable)
@@ -82,6 +91,9 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
         case RTG_REG_PAL_DATA:
             s_rtg.palette[s_rtg.pal_index] = value & 0x00FFFFFFu;
             s_rtg.pal_index = (s_rtg.pal_index + 1u) & 0xFFu;
+            break;
+        case RTG_REG_DEBUG:
+            kprintf("[RTG-DBG] %08x\n", (unsigned)value);
             break;
         default: break;
     }

@@ -48,6 +48,22 @@ static HarnessHdf g_hdf;
 static int harness_hdf_read(void *ctx, uint32_t lba, uint32_t count, uint8_t *buf)
 {
     HarnessHdf *h = (HarnessHdf *)ctx;
+    static unsigned s_read_log;
+    static unsigned s_reads_total;
+    static uint32_t s_max_lba;
+    s_reads_total++;
+    if (lba > s_max_lba) s_max_lba = lba;
+    /* Log the RDB scan sparsely, every partition-area access while budget
+     * lasts, and a periodic summary of total traffic. */
+    if ((lba >= 2560u && s_read_log < 64u) ||
+        (s_read_log < 8u)) {
+        s_read_log++;
+        printf("[HDF-R] lba=%u count=%u total=%u\n",
+               (unsigned)lba, (unsigned)count, s_reads_total);
+    }
+    if ((s_reads_total & 0x3ffu) == 0u)
+        printf("[HDF-R] summary total=%u max_lba=%u\n",
+               s_reads_total, (unsigned)s_max_lba);
     if (fseeko(h->fp, (off_t)lba * 512, SEEK_SET) != 0) return -1;
     return fread(buf, 512, count, h->fp) == count ? 0 : -1;
 }
@@ -1428,7 +1444,16 @@ int main(int argc, char **argv)
 
             harness_maybe_screenshot(frame_count);
 
-            if (frame_count == 3000) {
+            {
+            /* HARNESS_OS_DEBUG_DUMP=<frame> selects the dump frame
+             * (values <= 1 keep the legacy frame 3000). */
+            static long dump_frame = -1;
+            if (dump_frame < 0) {
+                const char *df = getenv("HARNESS_OS_DEBUG_DUMP");
+                dump_frame = 3000;
+                if (df && atol(df) > 1) dump_frame = atol(df);
+            }
+            if (frame_count == dump_frame) {
                 const uint8_t *cr = m->memory.chip_ram;
                 uint32_t eb = ((uint32_t)cr[4] << 24) | ((uint32_t)cr[5] << 16) |
                               ((uint32_t)cr[6] << 8) | (uint32_t)cr[7];
@@ -1471,6 +1496,7 @@ int main(int argc, char **argv)
                         }
                     }
                 }
+            }
             }
         }
 

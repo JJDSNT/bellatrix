@@ -43,6 +43,7 @@
 #define RTG_REG_PAL_INDEX     0x28
 #define RTG_REG_PAL_DATA      0x2C
 #define RTG_REG_VBLANK        0x30
+#define RTG_REG_DEBUG         0x34
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -121,6 +122,7 @@ static int FindCard(__REGA0(struct BoardInfo *bi), __REGA6(struct BellatrixCardB
     bi->MemoryBase   = base->cb_VRAM;
     bi->MemorySize   = base->cb_VRAMSize;
     bi->RegisterBase = (APTR)cd->cd_BoardAddr;
+    reg_write(base, RTG_REG_DEBUG, 0xCAFD0001);
     return 1;
 }
 
@@ -275,6 +277,7 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
     int i;
     (void)ToolTypes;
 
+    reg_write(base, RTG_REG_DEBUG, 0xCAFD0003);
     bi->CardBase = (struct CardBase *)base;
     bi->ExecBase = base->cb_SysBase;
     bi->BoardName = (char *)"Bellatrix RTG";
@@ -329,8 +332,14 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
 static const char card_name[] = CARD_NAME;
 static const char card_idstring[] = CARD_NAME " " "1.0 (2026-07-03)";
 
-struct BellatrixCardBase *card_init(__REGA0(struct BellatrixCardBase *base),
-                                    __REGA1(BPTR seglist),
+/* exec's InitResident/MakeLibrary autoinit calls this with the freshly
+ * made library in D0, segList in A0 and SysBase in A6 (see AROS
+ * rom/exec/initresident.c AROS_UFC3). It was previously declared as
+ * A0/A1/A6, so "base" received the segList (0 via the CardLoader), the
+ * fields were scribbled at low memory and the returned NULL made exec
+ * discard the library — bellatrix.card never reached the LibList. */
+struct BellatrixCardBase *card_init(__REGD0(struct BellatrixCardBase *base),
+                                    __REGA0(BPTR seglist),
                                     __REGA6(struct ExecBase *sysbase))
 {
     (void)seglist;

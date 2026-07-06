@@ -160,3 +160,69 @@ fixo em main.c não bateu com o timing de boot do RTG; ajustar o frame
 ou adicionar um gatilho por condição) ou breakpoint no LVO
 `_LVOInitResident`/`_LVOOpenLibrary` para "bellatrix.card". Regressão
 verificada: wb20.hdf sem HARNESS_RTG continua bootando normalmente.
+
+# Sessao 2026-07-06 — ArosOne-Lite.hdf (aros.rom, 68040): cadeia RTG completa ate InitCard
+
+Alvo: bootar `src/disks/ArosOne-Lite.hdf` (RDB + particao UDH0 SFS\0 com driver SFS
+embutido em FSHD/LSEG) no harness com aros.rom e 68040.
+
+## Fatos estabelecidos (com evidencia)
+
+- **FPU nao e mais o blocker no harness**: zero `[F-LINE-TRAP]` em runs de ate 21000
+  frames (o crash "Line 1111 Emulator" da foto new_aros_hdf68040+rtg.jpg e do caminho
+  bare-metal/anterior a ISSUE-0034; no harness 68040+FPU nao reproduz).
+- **O HDF boota fundo**: SFS monta (2 handlers UDH0 + SFS DosList handler), startup-sequence
+  roda (AddUSBClasses, ConClip, RexxMast), **Wanderer sobe** (2 processos), Decorator roda.
+  Instrumentacao [HDF-R] confirma leituras profundas na particao (lba 225k-257k).
+- **Blocker real de display**: distro e RTG-only; a Denise mostra cinza. Aos 19500 frames:
+  todas as tasks em WAIT, TaskReady vazio, IntuitionBase sem NENHUMA tela.
+
+## Bug real corrigido: card_init com registradores errados
+
+`card_init` declarava `__REGA0(base), __REGA1(seglist)`. A convencao do
+InitResident/MakeLibrary AUTOINIT (AROS rom/exec/initresident.c, AROS_UFC3) e
+**D0=library, A0=segList, A6=SysBase**. Consequencia: base recebia o segList (0 via
+CardLoader), os campos da lib eram escritos na pagina zero e o retorno NULL fazia o exec
+descartar a library — bellatrix.card nunca entrava na LibList (o "pendente" da fase 2).
+Fix: `__REGD0(base), __REGA0(seglist)`.
+
+## Infra de diagnostico adicionada (reutilizavel)
+
+- `RTG_REG_DEBUG` (0x34): registrador write-only; host loga `[RTG-DBG] <valor>`.
+  cardldr.S marca estagios (B0000001 init, ..02+seg reloc ok, ..03+rt romtag achado,
+  ..04 InitResident voltou, EE/EF falhas); card.c marca CAFD0001 (FindCard ok) e
+  CAFD0003 (InitCard entrou).
+- Host loga primeiro write de cada registrador RTG (`[RTG] first write reg=..`).
+- `[HDF-R]` no harness: reads do HDF (RDB esparso + acessos a particao + sumario).
+- `HARNESS_OS_DEBUG_DUMP=<frame>` agora aceita o frame do dump (antes fixo em 3000).
+- `is_ram_ptr` do os_debug aceita fast RAM (AROS realoca ExecBase p/ 0x200000+; antes o
+  dump abortava com "ExecBase invalid").
+
+## Cadeia confirmada funcionando (breadcrumbs, ArosOne-Lite, 8000 frames)
+
+```
+DiagArea probed -> CardLoader Init (B0000001) -> reloc ok (seg 0x29729c)
+-> romtag @0x297660 -> InitResident volta (B0000004)
+-> "bellatrix.card" NA LibList (dump) -> p96gfx FindCard: REG_ID probed,
+   retorna 1 (CAFD0001) -> InitCard roda (CAFD0003)
+```
+
+## Blocker atual (proxima sessao)
+
+`SetSwitch`/`SetGC`/`SetPanning` nunca sao chamados => nenhum OpenScreen chega ao driver
+RTG; aos 19500 frames o sistema inteiro dorme em Wait (Wanderer espera bit 4; Intuition
+espera 0x10000). Hipoteses, em ordem:
+
+1. **Mode matching**: prefs de screenmode do ArosOne (perfil WinUAE/uaegfx) pedem um
+   modeid que o p96gfx (tabela rtgmodes[] interna) nao casa; OpenScreen falha e o
+   Wanderer fica em retry/espera silenciosa. Verificacao: instrumentar OpenScreen/
+   BestModeID via LVO breakpoint host-side, ou editar prefs no HDF (bloqueado por SFS —
+   ver ISSUE-0028).
+2. **VBL interrupt do board**: p96gfx pode depender de bi->SetInterrupt + interrupt real
+   do card para o refresh/arbitro de modos; nosso board nao gera interrupts (SetInterrupt
+   e no-op). Se for isso: gerar INT2/INT6 por frame quando ENABLE=1 (rigel/paula ja tem
+   INTREQ acessivel pelo machine layer).
+3. p96gfx registra o monitor mas o AROS escolhe amigavideo como default e o ArosOne
+   (RTG-only) nao abre nada — checar MonitorList/hidd via os_debug (extensao facil).
+
+Nota 68040: rodado com `--cpu 68040` (FPU da ISSUE-0034). Sem F-line em nenhum run.

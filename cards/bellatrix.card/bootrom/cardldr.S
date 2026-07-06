@@ -65,19 +65,32 @@ Romtag
 BoardBase:   dc.l 0
 
 *******  Init: relocate the card from ROM and init its romtag  *******
+* REG_DEBUG breadcrumbs (host logs [RTG-DBG]):
+*   $B0000001 Init entered        $B0000002 relocate ok (next: seg addr)
+*   $B00000EE relocate failed     $B0000003 romtag found (next: rt addr)
+*   $B00000EF romtag not found    $B0000004 InitResident returned
+REG_DEBUG equ $34
 Init:   movem.l d2-d7/a2-a6,-(sp)
-        move.l  BoardBase(pc),a0
+        move.l  BoardBase(pc),a2
+        move.l  #$B0000001,REG_DEBUG(a2)
+        move.l  a2,a0
         add.l   #CARDOFFSET,a0     ; card hunk lives at board+CARDOFFSET
         moveq.l #0,d0              ; offset 0: read as plain memory
         bsr     _relocate
         tst.l   d0
-        beq.s   .fail
+        bne.s   .ok
+        move.l  #$B00000EE,REG_DEBUG(a2)
+        bra.s   .fail
+.ok     move.l  #$B0000002,REG_DEBUG(a2)
+        move.l  d0,REG_DEBUG(a2)
         bsr     InitRT
+        move.l  #$B0000004,REG_DEBUG(a2)
 .fail   movem.l (sp)+,d2-d7/a2-a6
         moveq.l #1,d0              ; keep the loader resident copy
         rts
 
 *******  InitRT: find romtag inside relocated segment, InitResident  *
+* in: d0 = relocated segment, a2 = BoardBase (kept for breadcrumbs)
 InitRT
         movem.l d2/d3/a1,-(sp)
         move.l  #$1000,d3          ; search first 4096 words
@@ -88,10 +101,13 @@ InitRT
         beq.s   .found
 .not_rt addq.l  #2,a1
         dbra    d3,.findrt
+        move.l  #$B00000EF,REG_DEBUG(a2)
         movem.l (sp)+,d2/d3/a1
         moveq.l #-1,d0
         rts
-.found  moveq.l #0,d1
+.found  move.l  #$B0000003,REG_DEBUG(a2)
+        move.l  a1,REG_DEBUG(a2)
+        moveq.l #0,d1
         jsr     _LVOInitResident(a6)
         movem.l (sp)+,d2/d3/a1
         moveq.l #0,d0
