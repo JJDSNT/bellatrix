@@ -58,7 +58,15 @@ set(RIGEL_BUILD_HARNESS OFF CACHE BOOL "Build Rigel Musashi harness" FORCE)
 set(RIGEL_ENABLE_STDIO_LOG OFF CACHE BOOL "Use stderr for Rigel logs" FORCE)
 set(RIGEL_ENABLE_STDLIB_ENV OFF CACHE BOOL "Use getenv() for Rigel trace knobs" FORCE)
 add_subdirectory(${CMAKE_SOURCE_DIR}/../external/rigel ${CMAKE_BINARY_DIR}/rigel-build EXCLUDE_FROM_ALL)
-target_compile_options(rigel PRIVATE -mbig-endian -fno-stack-protector)
+# The rigel target is created BEFORE Emu68's global
+# add_compile_options(-ffixed-x12 -ffixed-q28..q31), so it does NOT inherit
+# the pinned-register set. Rigel code runs inside the Emu68 MainLoop/JIT
+# context (chipset advance from the progress hook), where x12 caches the
+# translation-unit entry point and v28-v31 hold live JIT state: without
+# these flags any rigel function may clobber them and crash the LastPC==PC
+# fast dispatch (ISSUE-0038 — AROS checksum-loop halt into wfe).
+target_compile_options(rigel PRIVATE -mbig-endian -fno-stack-protector
+    -ffixed-x12 -ffixed-q31 -ffixed-q30 -ffixed-q29 -ffixed-q28)
 add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=1)
 set(BELLATRIX_MACHINE_SOURCE
     ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel.c

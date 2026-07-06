@@ -16,6 +16,7 @@
 #include "machine/machine.h"
 #include "rigel/rigel_custom.h"
 #include "rigel/rigel_cia.h"
+#include "rigel/rigel_irq.h"
 #include "rigel/rigel_mmio.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "debug/cpu_pc.h"
@@ -215,6 +216,45 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
     }
 
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    {
+        static uint32_t s_last_vec6c = 0xdeadbeefu;
+        static uint32_t s_pc_ring[8];
+        static uint32_t s_pc_ring_idx;
+        BellatrixMachine *mwatch = bellatrix_machine_get();
+        if (mwatch && mwatch->memory.chip_ram) {
+            uint32_t v = bellatrix_chip_read32(&mwatch->memory, 0x6cu);
+            if (v != s_last_vec6c) {
+                unsigned r;
+                kprintf("[VEC6C-CHANGE] %08x->%08x pc=%08x insn=%llu cck=%llu\n",
+                        (unsigned)s_last_vec6c, (unsigned)v, (unsigned)pc,
+                        (unsigned long long)insn_count,
+                        (unsigned long long)mwatch->tick_count);
+                kprintf("[VEC6C-RING]");
+                for (r = 0; r < 8u; r++)
+                    kprintf(" %08x",
+                            (unsigned)s_pc_ring[(s_pc_ring_idx + r) & 7u]);
+                kprintf("\n");
+                s_last_vec6c = v;
+            }
+        }
+        s_pc_ring[s_pc_ring_idx & 7u] = pc;
+        s_pc_ring_idx++;
+    }
+    {
+        static uint32_t s_sample_count;
+        if ((++s_sample_count & 0x0fffu) == 0u) {
+            RigelContext *rctx = bellatrix_machine_rigel_ctx();
+            kprintf("[EMU68-SAMPLE] pc=%08x insn=%llu intena=%04x intreq=%04x "
+                    "ipl=%u int32=%08x cck=%llu\n",
+                    (unsigned)pc,
+                    (unsigned long long)insn_count,
+                    (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_INTENAR) : 0u),
+                    (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_INTREQR) : 0u),
+                    (unsigned)(rctx ? rigel_get_ipl(rctx) : 0u),
+                    (unsigned)(__m68k_state ? __m68k_state->INT32 : 0u),
+                    (unsigned long long)(bellatrix_machine_get() ? bellatrix_machine_get()->tick_count : 0u));
+        }
+    }
     if (pc == s_last_pc) {
         if (++s_same_pc_reports == 512u || s_same_pc_reports == 4096u ||
             s_same_pc_reports == 32768u || s_same_pc_reports == 262144u) {
@@ -311,7 +351,32 @@ static void apply_overlay_map(int overlay_enabled)
      * caused store-buffer coherency failures for programs testing $000400. */
     mmu_map(0x000000, 0x000000, BELLATRIX_ROM_SIZE,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+
+#if defined(BELLATRIX_TRACE_VECPAGE) && BELLATRIX_TRACE_VECPAGE
+    /* Diagnostic (opt-in): fault-drive the vector page so every access to
+     * 0x000-0xFFF reaches bellatrix_bus_access and low-memory corruption
+     * writers are caught with their exact PC ([VEC-W]). ~15x boot slowdown
+     * under QEMU/TCG — enable only for targeted hunts. */
+    mmu_map(0x000000, 0x000000, 0x1000,
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+#endif
 }
+
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+/* Deferred variant of the vector-page trap: armed at a precise moment (e.g.
+ * first level-3 delivery) so only the interesting window pays the fault
+ * overhead. Called from the ExecutionLoop trace block. */
+void bellatrix_trace_arm_vecpage(void)
+{
+    static int armed;
+    if (armed)
+        return;
+    armed = 1;
+    mmu_map(0x000000, 0x000000, 0x1000,
+            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+    kprintf("[VECPAGE-ARMED]\n");
+}
+#endif
 
 static void set_overlay(int new_overlay)
 {
@@ -519,20 +584,37 @@ void bellatrix_init(void)
         }
     }
 
-    /* Chip RAM: configured visible window.
-     * Legacy non-boards path extends the mapped region to 2MB so that
-     * 0x100000-0x1FFFFF is accessible to the CPU as "Slow RAM" (not DMA-accessible). This
-     * matches the original Bellatrix approach and gives the OS more room,
-     * which is why the boot progressed further.  Z2 fast RAM at 0x200000+
-     * does not overlap with this range. */
-#if BELLATRIX_ENABLE_EMU68_BOARDS
+    /* Chip RAM: map exactly the real chip RAM size. 0x100000-0x1FFFFF must
+     * NOT be presented to the CPU as anonymous low RAM: the chipset/DMA side
+     * only treats BELLATRIX_CHIP_RAM_SIZE as chip RAM, so a wider CPU window
+     * makes Kickstart size chip as 2MB and place the supervisor stack and
+     * exec structures in memory the chipset cannot see (runaway boot,
+     * ISSUE-0037 — same divergence removed from the Musashi backend).
+     * Accesses to 0x100000-0x1FFFFF fall through to the fault handler and
+     * read as open bus, matching the harness memory map. */
     mmu_map(0x000000, 0x000000, BELLATRIX_CHIP_RAM_SIZE,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-#else
-    mmu_map(0x000000, 0x000000, 0x00200000u,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-    kprintf("[BELA] legacy non-boards MMU: chip+slow RAM 0x000000-0x1FFFFF (2MB)\n");
-#endif
+
+    /* 0x100000-0x1FFFFF: chip RAM MIRROR, as on real hardware — OCS/ECS
+     * Agnus ignores A20 for chip cycles, so the whole 2MB window decodes
+     * into the fitted chip RAM. This matters concretely:
+     *  - AROS ROMs take the reset SSP from the ROM header (0x11144EF9 →
+     *    0x114EF9 on a 24-bit bus): with a mirror the early supervisor
+     *    stack lands in real chip RAM (physically 0x014EF9), coherent with
+     *    DMA. With open bus here instead, the first push kills the boot.
+     *  - Kickstart's RAM sizing detects the wrap and correctly reports 1MB
+     *    (anonymous non-mirrored RAM here made it size chip as 2MB and put
+     *    exec structures where the chipset cannot see them, ISSUE-0037).
+     * Emu68's generic 1:1 map would otherwise back this range with raw
+     * DRAM, so the alias must be mapped explicitly. */
+    if (BELLATRIX_CHIP_RAM_SIZE < 0x00200000u) {
+        uintptr_t mirror_virt = BELLATRIX_CHIP_RAM_SIZE;
+        while (mirror_virt < 0x00200000u) {
+            mmu_map(0x000000, mirror_virt, BELLATRIX_CHIP_RAM_SIZE,
+                    MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
+            mirror_virt += BELLATRIX_CHIP_RAM_SIZE;
+        }
+    }
 
     /* Install the low-memory window according to the initial OVL state. */
     apply_overlay_map(1);
@@ -825,6 +907,30 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
             kprintf("[PC-TRAP] pc=%08x addr=%06x %s size=%d val=%08x\n",
                     (unsigned)real_pc, (unsigned)addr,
                     dir == BUS_READ ? "R" : "W", size, (unsigned)value);
+        }
+
+        if (dir == BUS_WRITE && addr < 0x100u)
+        {
+            kprintf("[VEC-W] addr=%06x val=%08x size=%d pc=%08x\n",
+                    (unsigned)addr, (unsigned)value, size,
+                    (unsigned)real_pc);
+        }
+
+        /* SetIntVector guts (KS13 fc11ca-fc120e): by the Disable() write at
+         * fc11d2, A0 = ExecBase+0x54+12*vecnum. Dump the registers as of the
+         * last MainLoop context spill to identify bogus args (ISSUE-0038). */
+        if (dir == BUS_WRITE && addr == 0xDFF09Au &&
+            real_pc >= 0xfc11c0u && real_pc <= 0xfc1210u && __m68k_state)
+        {
+            kprintf("[SETINTVEC] pc=%08x d0=%08x d1=%08x a0=%08x a1=%08x "
+                    "a6=%08x usp=%08x\n",
+                    (unsigned)real_pc,
+                    (unsigned)BE32(__m68k_state->D[0].u32),
+                    (unsigned)BE32(__m68k_state->D[1].u32),
+                    (unsigned)BE32(__m68k_state->A[0].u32),
+                    (unsigned)BE32(__m68k_state->A[1].u32),
+                    (unsigned)BE32(__m68k_state->A[6].u32),
+                    (unsigned)BE32(__m68k_state->USP.u32));
         }
     }
 #endif

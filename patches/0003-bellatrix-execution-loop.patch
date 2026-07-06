@@ -1,8 +1,18 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
-index 732a176..894f83c 100644
+index 732a176..a7612fe 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -138,8 +138,8 @@ void MainLoop()
+@@ -1,6 +1,9 @@
+ #include <M68k.h>
+ #include <support.h>
+ #include <config.h>
++#ifdef BELLATRIX
++#include "cpu/emu68/bellatrix.h"
++#endif
+ #ifdef PISTORM
+ #ifndef PISTORM32
+ #define PS_PROTOCOL_IMPL
+@@ -138,11 +141,67 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -13,7 +23,66 @@ index 732a176..894f83c 100644
          LastPC = getLastPC();
          ctx = getCTX();
  
-@@ -152,6 +152,13 @@ void MainLoop()
++#ifdef BELLATRIX
++        /* Advance the Bellatrix chipset on every pass through the loop, not
++         * only on MMIO faults. Without this, guest phases that touch no
++         * unmapped address (RAM-only loops, Wait/STOP idling) freeze chipset
++         * time: no VBL, no CIA, no IPL — hard deadlock (ISSUE-0002 liveness).
++         * Uses the same absolute-v30 accumulator as the vectors.c fault hook,
++         * so the two report paths never double-count.
++         *
++         * The report path is ordinary-ABI C: it clobbers the pinned M68K
++         * registers (x13-x17 are caller-saved) and the JIT SIMD state
++         * (v28-v31 hold INSN_COUNT/CACR/FP flags and are not callee-saved).
++         * Wrap the call in a full context spill/reload, exactly like the
++         * translation-miss path below does around M68K_GetTranslationUnit. */
++        /* The spill/reload is too expensive to pay on every unit dispatch,
++         * so gate it: report once at least 64 instructions retired since the
++         * last report (~512 M68K cycles, about two scanlines of IRQ latency
++         * — the vectors.c fault hook still syncs precisely before MMIO), or
++         * after 64 dispatches without progress (translation misses; a
++         * re-dispatched STOP retires instructions each pass, so idle time
++         * keeps flowing through the delta path). */
++        {
++#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
++            /* Trace builds: fine-grained reports so host-side low-memory
++             * watchers can bracket a writer to within a few instructions. */
++            enum { BELA_REPORT_DELTA = 8 };
++#else
++            enum { BELA_REPORT_DELTA = 64 };
++#endif
++            static uint64_t bela_insn_prev;
++            static uint32_t bela_spins;
++            uint64_t _v30_now, _pc_now, _x12_save;
++            asm volatile("mov %0, v30.d[0]" : "=r"(_v30_now));
++            if ((_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
++                ++bela_spins >= 64u) {
++                bela_insn_prev = _v30_now;
++                bela_spins = 0u;
++                asm volatile("mov %0, x18" : "=r"(_pc_now));
++                /* x12 caches the current translation-unit entry for the
++                 * LastPC==PC fast dispatch. M68K_Save/LoadContext do NOT
++                 * cover it, and -ffixed-x12 does not stop GCC from using
++                 * x12 as prologue/epilogue scratch for large stack frames
++                 * (rigel's compose_line does exactly that — ISSUE-0038:
++                 * AROS checksum loop jumped to x12=0x1200 == frame pitch).
++                 * Save/restore it explicitly, and re-zero v28, which the
++                 * JIT assumes holds zero and is only cleared at MainLoop
++                 * entry. */
++                asm volatile("mov %0, x12" : "=r"(_x12_save));
++                M68K_SaveContext(ctx);
++                bellatrix_emu68_report_jit_progress(_v30_now, (uint32_t)_pc_now);
++                M68K_LoadContext(getCTX());
++                asm volatile("mov x12, %0" :: "r"(_x12_save));
++                asm volatile("mov v28.d[0], xzr");
++            }
++        }
++#endif
++
+         /* If (unlikely) there was interrupt pending, check if it needs to be processed */
+         if (unlikely(ctx->INT32 != 0))
+         {
+@@ -152,6 +211,13 @@ void MainLoop()
              uint32_t vbr;
  
              /* Find out requested IPL level based on ARM state and real IPL line */
@@ -27,7 +96,7 @@ index 732a176..894f83c 100644
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +176,7 @@ void MainLoop()
+@@ -169,7 +235,7 @@ void MainLoop()
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
@@ -36,7 +105,7 @@ index 732a176..894f83c 100644
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +197,10 @@ void MainLoop()
+@@ -190,9 +256,10 @@ void MainLoop()
                      {
                          level = ipl_level;
                      }
@@ -48,7 +117,7 @@ index 732a176..894f83c 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +244,52 @@ void MainLoop()
+@@ -236,6 +303,64 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
@@ -61,13 +130,21 @@ index 732a176..894f83c 100644
 +
 +#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
 +                    {
++                        /* kprintf is ordinary-ABI C: it clobbers x14-x17,
++                         * which hold live M68K D0-D3 here. Printing without a
++                         * full context spill corrupted the interrupted task's
++                         * registers (GfxBase in D2/D3 → vector-table trample,
++                         * boot reboot-loop — ISSUE-0038). Spill/reload around
++                         * the print exactly like the MainLoop report hook. */
 +                        uint32_t _old_pc  = (uint32_t)_x18_save;
 +                        uint32_t _old_sp  = (uint32_t)sp;
 +                        uint32_t _vec_addr = ctx->VBR + (uint32_t)vector;
 +                        uint32_t _vec_val  = 0;
 +                        asm volatile("ldr %w0, [%1, %2]" : "=r"(_vec_val) : "r"(ctx->VBR), "r"(vector));
++                        M68K_SaveContext(ctx);
 +                        kprintf("[EXC-REQ] kind=irq lvl=%d vec=%04x old_pc=%08x old_sr=%04x old_sp=%08x vec_addr=%08x vec_val=%08x\n",
 +                                level, (unsigned)vector, _old_pc, (unsigned)SRcopy, _old_sp, _vec_addr, _vec_val);
++                        M68K_LoadContext(getCTX());
 +                        asm volatile("mov x18, %0" :: "r"(_x18_save)); /* restore after kprintf */
 +                    }
 +#endif
@@ -89,10 +166,14 @@ index 732a176..894f83c 100644
 +
 +#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
 +                    {
++                        /* Same spill/reload requirement as the [EXC-REQ]
++                         * print above — kprintf clobbers live M68K D0-D3. */
 +                        uint64_t _x18_new;
 +                        asm volatile("mov %0, x18" : "=r"(_x18_new));
++                        M68K_SaveContext(ctx);
 +                        kprintf("[EXC-PC] old_pc=%08x new_pc=%08x sr=%04x sp=%08x\n",
 +                                (uint32_t)_x18_save, (uint32_t)_x18_new, (unsigned)SR, (uint32_t)sp);
++                        M68K_LoadContext(getCTX());
 +                        asm volatile("mov x18, %0" :: "r"(_x18_new)); /* restore after kprintf */
 +                    }
 +#endif
@@ -101,7 +182,7 @@ index 732a176..894f83c 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +302,8 @@ void MainLoop()
+@@ -248,7 +373,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */

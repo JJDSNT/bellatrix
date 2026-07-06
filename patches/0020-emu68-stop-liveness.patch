@@ -1,0 +1,51 @@
+diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
+index 4ed0d5f..1fc2b84 100644
+--- a/src/M68k_LINE4.c
++++ b/src/M68k_LINE4.c
+@@ -1535,6 +1535,38 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
+     *ptr++ = b(2);
+     *ptr++ = mov_simd_to_reg(sp, 31, TS_S, 2);  // Load ISP
+ 
++#ifdef BELLATRIX
++    /* Bellatrix: chipset time is CPU-driven — the MainLoop BELLATRIX block
++     * advances the chipset between units. Sleeping on wfi here would
++     * deadlock: no ARM interrupt source is armed, so IPL could never rise.
++     * Instead, end the unit without advancing PC while INT is clear; the
++     * STOP unit is re-dispatched each MainLoop pass (which advances chipset
++     * time) until Bellatrix raises INT.IPL. Then consume the STOP and let
++     * MainLoop deliver the interrupt — same observable semantics as the
++     * PiStorm wfe loop, minus the sleep. */
++    {
++        uint8_t tmpreg = RA_AllocARMRegister(&ptr);
++        uint8_t ctx = RA_GetCTX(&ptr);
++
++        *ptr++ = ldr_offset(ctx, tmpreg, __builtin_offsetof(struct M68KState, INT));
++        *ptr++ = cbnz(tmpreg, 5);
++        /* INT clear: account this STOP pass as 8 retired instructions (64
++         * M68K cycles) so the JIT insn counter (v30) — and with it Bellatrix
++         * chipset time — keeps flowing at a useful rate while the guest
++         * idles: on real STOP hardware idle time is wall-clock, so any
++         * reasonable rate is semantically fine, but 1 insn/pass made a QEMU
++         * TCG idle frame take minutes. The unit ends with PC still at the
++         * STOP. (Same v0-scratch pattern as the translator epilogue.) */
++        *ptr++ = mov_immed_u16(tmpreg, 8, 0);
++        *ptr++ = fmov_from_reg(0, tmpreg);
++        *ptr++ = vadd_2d(30, 30, 0);
++        *ptr++ = b(2);
++        /* INT pending: consume the STOP and let MainLoop dispatch. */
++        *ptr++ = add_immed(REG_PC, REG_PC, 4);
++
++        RA_FreeARMRegister(&ptr, tmpreg);
++    }
++#else
+     /* Now do what stop does - wait for interrupt */
+     *ptr++ = add_immed(REG_PC, REG_PC, 4);
+ 
+@@ -1568,6 +1600,7 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
+ 
+     RA_FreeARMRegister(&ptr, tmpreg);
+ #endif
++#endif /* BELLATRIX */
+ 
+     *tmpptr = b(ptr - tmpptr);
+ 
