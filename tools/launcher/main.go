@@ -86,15 +86,15 @@ func main() {
 	/* --------------------------------------------------------------------- */
 
 	output := fmt.Sprintf(
-		"EMU_PROFILE=%s\nHARNESS_CPU=%s\nKICKSTART=%s\nDISPLAY_MODE=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nHDF=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_MSC=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_PERF_LOGS_OFF=%s\nBELLATRIX_PROFILE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\nBELLATRIX_HDMI_AUDIO=%s\n",
+		"EMU_PROFILE=%s\nHARNESS_CPU=%s\nKICKSTART=%s\nBOOTARGS=%s\nADF=%s\nISO=%s\nHDF=%s\nBELLATRIX_RTG=%s\nBELLATRIX_MULTICORE_BUILD=%s\nBELLATRIX_LOGS=%s\nBELLATRIX_BTSTACK=%s\nBELLATRIX_USBSTACK=%s\nBELLATRIX_USB_MSC=%s\nBELLATRIX_USB_POINTER=%s\nBELLATRIX_EMU68_BOARDS_MODE=%s\nBELLATRIX_PERF_LOGS_OFF=%s\nBELLATRIX_PROFILE=%s\nBELLATRIX_Z2_RAM_SIZE=%s\nBELLATRIX_SERIAL=%s\nBELLATRIX_OSD=%s\nBELLATRIX_LAUNCHER=%s\nBELLATRIX_HDMI_AUDIO=%s\n",
 		result.emuProfile,
 		result.harnessCPU,
 		result.kickstart,
-		result.displayMode,
 		result.bootArgs,
 		result.adf,
 		result.iso,
 		result.hdf,
+		boolEnv(result.rtg),
 		boolEnv(result.multicoreBuild),
 		boolEnv(result.traceLogs),
 		boolEnv(result.btstack),

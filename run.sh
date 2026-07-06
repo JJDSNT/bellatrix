@@ -41,6 +41,8 @@ Common options (env vars):
                       (default: off)
   BELLATRIX_USB_MSC=1 Enable CherryUSB USB mass-storage class when USB stack is
                       enabled (default: on)
+  BELLATRIX_RTG=1   Enable the Bellatrix RTG board where supported
+                      (default: off)
   BELLATRIX_HDMI_AUDIO=1
                       Enable direct-register HDMI audio output (default: off).
                       Real Pi 3B hardware only -- QEMU's raspi3b machine does
@@ -76,11 +78,11 @@ Common options (env vars):
 QEMU options (env vars):
   EMU_PROFILE=<name>  Runtime profile: bellatrix or emu68 (default: bellatrix)
   KICKSTART=<file>    Pass a Kickstart ROM as initrd (optional)
-  DISPLAY_MODE=<mode> QEMU display mode: gtk or none (default: gtk)
   BOOTARGS=<string>   Emu68 boot arguments (default: "enable_cache")
                       Key options: enable_cache (required for KS/bare-metal),
                       debug (JIT block stats), disassemble (M68k+ARM side-by-side)
-  NO_TUI=1            Skip launcher TUI even if KICKSTART/DISPLAY_MODE are unset
+  DISPLAY_MODE=<mode> QEMU display mode override: gtk or none (default: gtk)
+  NO_TUI=1            Skip launcher TUI even if KICKSTART is unset
 
 Harness options (env vars):
   KICKSTART=<file>    ROM to run (required, or selected via TUI)
@@ -142,7 +144,6 @@ Examples:
   KICKSTART=src/roms/KS13.rom ADF=disks/Workbench13.adf ./run.sh harness
   EMU_PROFILE=emu68 ./run.sh qemu
   EMU_PROFILE=bellatrix KICKSTART=src/roms/KS13.rom ./run.sh qemu
-  DISPLAY_MODE=none ./run.sh qemu
   KICKSTART=src/roms/KS13.rom BOOTARGS="enable_cache debug" ./run.sh qemu
   KICKSTART=src/roms/KS13.rom BOOTARGS="enable_cache disassemble" ./run.sh qemu
   ./run.sh raspi /media/user/BOOT
@@ -288,6 +289,10 @@ load_launcher_selection() {
             BELLATRIX_USB_MSC)
                 BELLATRIX_USB_MSC="$value"
                 ;;
+            BELLATRIX_RTG)
+                BELLATRIX_RTG="$value"
+                HARNESS_RTG="$value"
+                ;;
             BELLATRIX_USB_POINTER)
                 BELLATRIX_USB_POINTER="$value"
                 ;;
@@ -421,6 +426,7 @@ if [ "$MODE" = "harness" ]; then
     fi
 
     TRACE_LOGS="${BELLATRIX_LOGS:-${BELLATRIX_TRACE_LOGS:-${BELLATRIX_TRACE:-${BELLATRIX_RIGEL_TRACE:-0}}}}"
+    export HARNESS_RTG="${HARNESS_RTG:-${BELLATRIX_RTG:-0}}"
     export BELLATRIX_LOGS="$TRACE_LOGS"
     export BELLATRIX_TRACE_LOGS="$TRACE_LOGS"
     export BELLATRIX_TRACE="$TRACE_LOGS"
@@ -493,6 +499,7 @@ if [ "$MODE" = "harness-serial" ]; then
     fi
 
     TRACE_LOGS="${BELLATRIX_LOGS:-${BELLATRIX_TRACE_LOGS:-${BELLATRIX_TRACE:-${BELLATRIX_RIGEL_TRACE:-0}}}}"
+    export HARNESS_RTG="${HARNESS_RTG:-${BELLATRIX_RTG:-0}}"
     export BELLATRIX_LOGS="$TRACE_LOGS"
     export BELLATRIX_TRACE_LOGS="$TRACE_LOGS"
     export BELLATRIX_TRACE="$TRACE_LOGS"
@@ -546,7 +553,7 @@ set_profile_paths "$EMU_PROFILE"
 
 case "$MODE" in
     qemu)
-        if [ "${NO_TUI:-0}" != "1" ] && { [ -z "${KICKSTART:-}" ] || [ -z "${DISPLAY_MODE:-}" ]; }; then
+        if [ "${NO_TUI:-0}" != "1" ] && [ -z "${KICKSTART:-}" ]; then
             load_launcher_selection
             EMU_PROFILE="${EMU_PROFILE:-bellatrix}"
             set_profile_paths "$EMU_PROFILE"
@@ -572,6 +579,7 @@ case "$BUILD_KIND" in
         export BELLATRIX_BTSTACK="${BELLATRIX_BTSTACK:-0}"
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_USB_MSC="${BELLATRIX_USB_MSC:-1}"
+        export BELLATRIX_RTG="${BELLATRIX_RTG:-0}"
         export BELLATRIX_HDMI_AUDIO="${BELLATRIX_HDMI_AUDIO:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
         export BELLATRIX_PROFILE="${BELLATRIX_PROFILE:-0}"
@@ -724,6 +732,7 @@ case "$MODE" in
             echo "[RUN] CPU backend profile: ${BELLATRIX_CPU_BACKEND_PROFILE:-emu68}"
         fi
         echo "[RUN] Chipset backend: ${BELLATRIX_CHIPSET_BACKEND:-rigel}"
+        echo "[RUN] RTG: ${BELLATRIX_RTG:-0}"
         echo "[RUN] Emu68 boards mode: ${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
         echo "[RUN] Boot args: $FINAL_BOOTARGS"
 
