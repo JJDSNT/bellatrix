@@ -133,6 +133,8 @@ void bellatrix_machine_mouse_motion(unsigned port, int dx, int dy);
 void bellatrix_machine_joystick_button(unsigned port, unsigned button, int pressed);
 void bellatrix_machine_joystick_direction(unsigned port, unsigned direction, int pressed);
 
+int  bellatrix_machine_insert_df_adf(unsigned drive, const uint8_t *adf,
+                                     uint32_t adf_size);
 int  bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size);
 void bellatrix_machine_eject_df0(void);
 
@@ -143,6 +145,10 @@ void bellatrix_machine_eject_df0(void);
 int  bellatrix_machine_insert_iso(const void *data, size_t size);
 int  bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx,
                                      uint32_t sector_count);
+int  bellatrix_machine_attach_hdf_fn(int (*read_fn)(void *ctx, uint32_t lba,
+                                                    uint32_t count,
+                                                    uint8_t *buf),
+                                     void *ctx, uint32_t sector_count);
 void bellatrix_machine_eject_iso(void);
 
 /* ------------------------------------------------------------------------- */

@@ -1,5 +1,5 @@
 // src/launcher/launcher.h
-// Pre-emulation ADF selector UI.
+// Pre-emulation media selector UI.
 // Renders on the VC4 framebuffer; input from USB HID keyboard.
 // Compiled only when BELLATRIX_LAUNCHER is defined.
 
@@ -8,9 +8,9 @@
 #include <stdbool.h>
 
 // Run the launcher.
-// Scans a USB pen drive for .ADF/.ISO files, shows a selection UI, and
-// inserts the chosen file as DF0 or CD-ROM.  Falls back to QEMU loader
-// images when no USB drive is present (development use).
+// Scans a USB pen drive for .ISO/.HDF/.ADF files, shows a selection UI, and
+// attaches the chosen media as CD-ROM, hard disk and/or DF0-DF3.  Falls back
+// to QEMU loader images when no USB drive is present (development use).
 //
 // Returns true if a disk was inserted; false if the user skipped (ESC)
 // or no media was found.

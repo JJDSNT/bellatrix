@@ -13,6 +13,7 @@
 #define LAUNCHER_KEY_DOWN    0x51u
 #define LAUNCHER_KEY_ENTER   0x28u
 #define LAUNCHER_KEY_ESC     0x29u
+#define LAUNCHER_KEY_SPACE   0x2Cu
 #define LAUNCHER_KEY_KPENTER 0x58u
 #define LAUNCHER_KEY_DEL     0x4Cu  /* HID Delete (forward delete) */
 #define LAUNCHER_KEY_BKSP    0x2Au  /* HID Backspace */

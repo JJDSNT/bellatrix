@@ -471,14 +471,22 @@ void bellatrix_machine_joystick_direction(unsigned port, unsigned direction, int
     machine_sync_controller_ports_rigel(&g_machine);
 }
 
-int bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size)
+int bellatrix_machine_insert_df_adf(unsigned drive, const uint8_t *adf,
+                                    uint32_t adf_size)
 {
     if (!g_rigel || !adf || adf_size == 0u)
         return 0;
-    if (rigel_floppy_insert(g_rigel, RIGEL_FLOPPY_DRIVE_DF0, adf, adf_size) != RIGEL_STATUS_OK)
+    if (drive > 3u)
         return 0;
-    kprintf("[RIGEL] DF0 ADF inserted size=%u\n", (unsigned)adf_size);
+    if (rigel_floppy_insert(g_rigel, (rigel_floppy_drive_id_t)drive, adf, adf_size) != RIGEL_STATUS_OK)
+        return 0;
+    kprintf("[RIGEL] DF%u ADF inserted size=%u\n", drive, (unsigned)adf_size);
     return 1;
+}
+
+int bellatrix_machine_insert_df0_adf(const uint8_t *adf, uint32_t adf_size)
+{
+    return bellatrix_machine_insert_df_adf(0u, adf, adf_size);
 }
 
 void bellatrix_machine_eject_df0(void)
@@ -501,6 +509,16 @@ int bellatrix_machine_attach_iso_fn(iso_read_fn fn, void *ctx, uint32_t sector_c
     BellatrixMachine *m = bellatrix_machine_get();
     lide_cdrom_register(m);
     return lide_cdrom_attach_iso_fn(m, fn, ctx, sector_count);
+}
+
+int bellatrix_machine_attach_hdf_fn(int (*read_fn)(void *ctx, uint32_t lba,
+                                                   uint32_t count,
+                                                   uint8_t *buf),
+                                    void *ctx, uint32_t sector_count)
+{
+    BellatrixMachine *m = bellatrix_machine_get();
+    lide_cdrom_register(m);
+    return lide_hd_attach(m, read_fn, NULL, ctx, sector_count);
 }
 
 void bellatrix_machine_eject_iso(void)
