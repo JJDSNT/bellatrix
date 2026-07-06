@@ -89,6 +89,14 @@ static void bellatrix_usb_hid_emit_usage(uint8_t usage, bool pressed)
     }
 #endif
 
+    if (usage == HID_KBD_USAGE_F11 || usage == HID_KBD_USAGE_F12) {
+        unsigned button = (usage == HID_KBD_USAGE_F11) ? 0u : 1u;
+        kprintf("[HID->MOUSE] usage=0x%02x %s button=%u\n",
+                (unsigned)usage, pressed ? "down" : "up", button);
+        bellatrix_machine_mouse_button(0u, button, pressed ? 1 : 0);
+        return;
+    }
+
     if (bellatrix_usb_hid_usage_to_amiga_raw(usage, &rawkey)) {
         kprintf("[HID->AMIGA] usage=0x%02x %s rawkey=0x%02x\n",
                 (unsigned)usage, pressed ? "down" : "up", (unsigned)rawkey);
