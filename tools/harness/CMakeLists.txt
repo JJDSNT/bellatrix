@@ -408,6 +408,30 @@ set_tests_properties(bellatrix_harness_no_autoconfig PROPERTIES
     TIMEOUT 5
 )
 
+# ROM boot display regression tests: each ROM must reach its boot screen
+# (display programmed + non-flat frame) with no media inserted.
+# Skipped (exit 77) when the ROM file is not present.
+foreach(rom_boot
+        "ks13;KS13.rom;300"
+        "ks20;KS20.rom;600"
+        "ks31;KS31.rom;600"
+        "aros;aros.rom;800")
+    list(GET rom_boot 0 rb_name)
+    list(GET rom_boot 1 rb_rom)
+    list(GET rom_boot 2 rb_frame)
+    add_test(NAME bellatrix_rom_boot_${rb_name}
+             COMMAND /bin/bash
+                     ${ROOT}/tests/integration/harness_rom_boot.sh
+                     ${CMAKE_BINARY_DIR}/harness
+                     ${ROOT}/src/roms/${rb_rom}
+                     ${rb_frame})
+    set_tests_properties(bellatrix_rom_boot_${rb_name} PROPERTIES
+        ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+        TIMEOUT 300
+        SKIP_RETURN_CODE 77
+    )
+endforeach()
+
 add_library(lide_cdrom MODULE
     ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
