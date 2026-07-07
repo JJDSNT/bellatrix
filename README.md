@@ -5,12 +5,13 @@ Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68
 Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
-Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — boots Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Six areas still in progress:
+Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — boots Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Seven areas still in progress:
 
 - **Emu68 JIT integration** — bus API and quantum window stabilization ongoing; Musashi builds are the recommended path for now.
 - **Multicore** — Core 0 (host), Core 1 (CPU), Core 2 (chipset), Core 3 (IO) split defined but cross-core synchronization not fully resolved.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
+- **RTG support** — `bellatrix.rtg` and the P96 `bellatrix.card` path are in progress; DiagArea/CardLoader residency is confirmed, but p96gfx discovery, live RTG output, and the VC4 bare-metal backend still need validation/completion.
 - **Bluetooth HID** — device scan works; pairing and connection not yet functional.
 - **HDMI audio** — not yet implemented; video output only.
 
