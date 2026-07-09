@@ -54,6 +54,12 @@ typedef struct
     uint64_t backlog_samples;
     uint64_t backlog_cck_total;
     uint64_t empty_host_steps;
+    uint64_t critical_mmio_reads;
+    uint64_t critical_mmio_writes;
+    uint64_t critical_mmio_samples;
+    uint64_t critical_mmio_backlog_total;
+    uint64_t critical_mmio_backlog_max;
+    uint64_t critical_mmio_caught_up;
 } BellatrixMulticoreStats;
 
 /* -------------------------------------------------------------------------
@@ -146,6 +152,9 @@ void bprof_multicore_chipset_step(uint32_t cck_step,
                                   uint64_t target_cck);
 void bprof_multicore_empty_host_step(uint64_t chipset_cck,
                                      uint64_t target_cck);
+void bprof_multicore_critical_mmio(uint32_t addr, int is_write,
+                                   uint64_t chipset_cck,
+                                   uint64_t target_cck);
 void bellatrix_profile_dump(void);
 void bellatrix_profile_reset(void);
 

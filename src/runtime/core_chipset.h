@@ -30,4 +30,8 @@ void core_chipset_reset(RuntimeCoreChipset *core);
 void core_chipset_lock_acquire(void);
 void core_chipset_lock_release(void);
 
+/* Snapshot of the CPU-published target and Core 2 drained chipset time.
+ * Returns false when the separate chipset core is not active/available. */
+bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck);
+
 #endif

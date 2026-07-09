@@ -65,6 +65,27 @@ void core_chipset_lock_release(void)
 #endif
 }
 
+bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    RuntimeCoreChipset *core = s_core;
+
+    if (!core || !core->running)
+        return false;
+
+    if (chipset_cck)
+        *chipset_cck = s_chipset_cck;
+    if (target_cck)
+        *target_cck = atomic_load_explicit(&s_cpu_cck_target,
+                                           memory_order_acquire);
+    return true;
+#else
+    (void)chipset_cck;
+    (void)target_cck;
+    return false;
+#endif
+}
+
 bool core_chipset_init(RuntimeCoreChipset *core,
                        RigelContext *rigel,
                        BellatrixMachine *machine)

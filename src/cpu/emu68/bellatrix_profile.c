@@ -132,6 +132,27 @@ void bprof_multicore_empty_host_step(uint64_t chipset_cck,
     bprof_multicore_record_backlog(chipset_cck, target_cck);
 }
 
+void bprof_multicore_critical_mmio(uint32_t addr, int is_write,
+                                   uint64_t chipset_cck,
+                                   uint64_t target_cck)
+{
+    uint64_t backlog = target_cck > chipset_cck ? target_cck - chipset_cck : 0u;
+
+    (void)addr;
+
+    if (is_write)
+        g_bprof.multicore.critical_mmio_writes++;
+    else
+        g_bprof.multicore.critical_mmio_reads++;
+
+    g_bprof.multicore.critical_mmio_samples++;
+    g_bprof.multicore.critical_mmio_backlog_total += backlog;
+    if (backlog > g_bprof.multicore.critical_mmio_backlog_max)
+        g_bprof.multicore.critical_mmio_backlog_max = backlog;
+    if (backlog == 0u)
+        g_bprof.multicore.critical_mmio_caught_up++;
+}
+
 /* -------------------------------------------------------------------------
  * Reset — zero everything, re-init mins to UINT64_MAX
  * ---------------------------------------------------------------------- */
@@ -344,6 +365,19 @@ void bellatrix_profile_dump(void)
                 (unsigned long long)p->multicore.chipset_cck_max,
                 (unsigned long long)avg_backlog,
                 (unsigned long long)p->multicore.backlog_cck_max);
+        {
+            uint64_t crit_avg = p->multicore.critical_mmio_samples
+                              ? p->multicore.critical_mmio_backlog_total /
+                                p->multicore.critical_mmio_samples
+                              : 0;
+            kprintf("[BPROF]   critical_mmio r=%llu w=%llu samples=%llu caught_up=%llu backlog_avg=%llu backlog_max=%llu\n",
+                    (unsigned long long)p->multicore.critical_mmio_reads,
+                    (unsigned long long)p->multicore.critical_mmio_writes,
+                    (unsigned long long)p->multicore.critical_mmio_samples,
+                    (unsigned long long)p->multicore.critical_mmio_caught_up,
+                    (unsigned long long)crit_avg,
+                    (unsigned long long)p->multicore.critical_mmio_backlog_max);
+        }
     }
 
     kprintf("[BPROF] --- Bridge dispatch reference (no fault overhead) ---\n");

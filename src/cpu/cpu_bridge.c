@@ -8,6 +8,7 @@
 #include "machine/memory/memory.h"
 #include "runtime/cpu_progress.h"
 #include "runtime/core_chipset.h"
+#include "host/pal.h"
 #include <stdint.h>
 
 /* Critical custom-chip registers where "CPU wrote it but chipset saw it
@@ -38,6 +39,79 @@ static void cpu_bridge_log_critical_write(uint32_t addr, uint32_t value)
  * build links core_chipset.c, whose strong definitions override these. */
 __attribute__((weak)) void core_chipset_lock_acquire(void) {}
 __attribute__((weak)) void core_chipset_lock_release(void) {}
+__attribute__((weak)) bool core_chipset_get_progress(uint64_t *chipset_cck,
+                                                     uint64_t *target_cck)
+{
+    (void)chipset_cck;
+    (void)target_cck;
+    return false;
+}
+
+#if BELLATRIX_PROFILE_ENABLED
+static int cpu_bridge_is_critical_mmio(uint32_t addr, unsigned int size,
+                                       int is_write)
+{
+    uint32_t normalized;
+    uint32_t reg;
+
+    if (size != 1u && size != 2u && size != 4u)
+        return 0;
+
+    normalized = bellatrix_bridge_normalize_addr(addr);
+
+    if (normalized >= 0x00BFD000u && normalized <= 0x00BFEFFFu)
+        return 1;
+
+    if (normalized < 0x00DFF000u || normalized > 0x00DFF1FFu)
+        return 0;
+
+    reg = normalized & 0x1ffu;
+    if (is_write) {
+        switch (reg) {
+        case 0x058u: /* BLTSIZE */
+        case 0x088u: /* COPJMP1 */
+        case 0x08au: /* COPJMP2 */
+        case 0x096u: /* DMACON */
+        case 0x09au: /* INTENA */
+        case 0x09cu: /* INTREQ */
+        case 0x092u: /* DDFSTRT */
+        case 0x094u: /* DDFSTOP */
+            return 1;
+        default:
+            return 0;
+        }
+    }
+
+    switch (reg) {
+    case 0x002u: /* DMACONR */
+    case 0x004u: /* VPOSR */
+    case 0x006u: /* VHPOSR */
+    case 0x010u: /* ADKCONR */
+    case 0x016u: /* INTENAR */
+    case 0x01cu: /* INTREQR */
+    case 0x01au: /* DSKBYTR */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void cpu_bridge_profile_critical_mmio(uint32_t addr, unsigned int size,
+                                             int is_write)
+{
+    uint64_t chipset_cck = 0;
+    uint64_t target_cck = 0;
+
+    if (!PAL_Core_IsMulticoreEnabled())
+        return;
+    if (!cpu_bridge_is_critical_mmio(addr, size, is_write))
+        return;
+    if (!core_chipset_get_progress(&chipset_cck, &target_cck))
+        return;
+
+    bprof_multicore_critical_mmio(addr, is_write, chipset_cck, target_cck);
+}
+#endif
 
 /* Zorro III / 32-bit space (addr > 0x00FFFFFF, e.g. autoconfig at
  * 0xFF000000 — EZ3_EXPANSIONBASE) is not implemented (ISSUE-0032). This
@@ -90,6 +164,9 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
     if (addr_is_unimplemented_z3(addr))
         return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
 
+#if BELLATRIX_PROFILE_ENABLED
+    cpu_bridge_profile_critical_mmio(addr, size, 0);
+#endif
     core_chipset_lock_acquire();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
         result = bellatrix_machine_read(addr, size);
@@ -112,6 +189,9 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
 
 #if defined(BELLATRIX_CORE_LOG)
     cpu_bridge_log_critical_write(addr, value);
+#endif
+#if BELLATRIX_PROFILE_ENABLED
+    cpu_bridge_profile_critical_mmio(addr, size, 1);
 #endif
     core_chipset_lock_acquire();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))

@@ -129,6 +129,63 @@ performance implications:
 call that should be revisited once there's real data (see below) — don't
 commit to either shape without evidence the gap matters in practice.
 
+## 2026-07-09: Musashi multicore profiling instrumentation started
+
+Branch `wip/multicore-runtime` starts with the conservative path recommended
+above: validate and measure the existing Musashi multicore runtime before
+changing synchronization semantics.
+
+Implemented instrumentation:
+
+* `core_chipset_get_progress()` exposes a snapshot of Core 2's drained CCK and
+  Core 1's published target CCK.
+* `cpu_bridge.c` samples critical MMIO accesses under `BELLATRIX_PROFILE` before
+  dispatch/lock, using the allow-list from this issue:
+  `DMACON`, `INTENA/INTREQ`, `COPJMP1/2`, `BLTSIZE`, `DDFSTRT/DDFSTOP`,
+  CIA, and critical reads including `DMACONR`, `INTENAR`, `INTREQR`,
+  `VHPOSR`, `DSKBYTR`.
+* `BellatrixMulticoreStats` now reports critical-MMIO read/write counts,
+  sample count, caught-up count, average backlog, and max backlog.
+
+Validation so far:
+
+```bash
+BELLATRIX_CPU_BACKEND=musashi \
+BELLATRIX_MULTICORE_BUILD=1 \
+BELLATRIX_PROFILE=1 \
+BELLATRIX_HDMI_AUDIO=0 \
+BELLATRIX_USBSTACK=1 \
+BELLATRIX_BTSTACK=0 \
+BELLATRIX_LAUNCHER=0 \
+bash scripts/build.sh
+```
+
+Build passed and generated
+`emu68/install-bellatrix-rigel-musashi/Emu68.img`.
+
+QEMU rough sanity:
+
+```bash
+qemu-system-aarch64 -M raspi3b -accel tcg,tb-size=64 \
+  -kernel emu68/install-bellatrix-rigel-musashi/Emu68.img \
+  -dtb emu68/install-bellatrix-rigel-musashi/bcm2710-rpi-3-b.dtb \
+  -serial null -serial stdio -display none \
+  -append enable_cache -initrd src/roms/aros.rom
+```
+
+Observed boot reached:
+
+```text
+[BELA] Initialized (multicore enabled: Core1=CPU Core2=Chipset Core3=IO)
+[BELA] CPU backend: musashi (68040)
+[BELA] MMIO profiling: ENABLED (BELLATRIX_PROFILE=1)
+```
+
+The short QEMU run timed out by design after initialization. Treat this only as
+a bootstrap sanity check, not proof of functional multicore timing. The next
+useful run is a longer QEMU or real-Pi run that triggers `BPROF` dump/reset via
+`0xDFFF04`.
+
 ## Next steps (evaluation, not implementation)
 
 Before writing any arbiter/scheduler code:
