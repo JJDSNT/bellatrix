@@ -90,8 +90,8 @@ nao ao tree upstream do Emu68.
 
 ## Patch Emu68 Necessario
 
-`patches/0021-emu68-public-bus-dispatch.patch` e o unico patch novo do Emu68 para
-esta fase. Ele altera `emu68/src/aarch64/vectors.c` para:
+`patches/0021-emu68-public-bus-dispatch.patch` e o patch novo de bus publico
+desta fase. Ele altera `emu68/src/aarch64/vectors.c` para:
 
 - incluir `cpu/emu68/emu68_api.h`;
 - chamar `emu68_api_dispatch_bus_access(...)` no path de fault/MMIO;
@@ -99,6 +99,12 @@ esta fase. Ele altera `emu68/src/aarch64/vectors.c` para:
   suportar aquele acesso.
 
 Isso preserva o live path existente e reduz risco.
+
+`patches/0003-bellatrix-execution-loop.patch` tambem participa da API agora:
+alem do progresso Bellatrix existente, o bloco de progresso do `MainLoop()`
+chama `emu68_api_dispatch_quantum_progress(...)`. Sem janela ativa isso e
+no-op; com uma janela armada por `emu68_run_cycles()`, o loop retorna quando o
+orcamento expira ou quando `emu68_request_stop()` e observado.
 
 ## Estado Real da API
 
@@ -122,16 +128,21 @@ Funcional nesta fase:
 - `emu68_get_state()` / `emu68_set_state()`
 - `emu68_invalidate_code_range()` / `emu68_invalidate_all_code()`
 - eventos basicos para stop, invalidate e sync-required
+- `emu68_run_cycles()` como janela cooperativa sobre o `MainLoop()` vivo,
+  quando `__m68k_state` ja foi inicializado
+- `emu68_step()` como janela minima de 8 ciclos estimados
 
-Ainda nao funcional como contrato real:
+Ainda nao funcional como contrato real completo:
 
-- `emu68_run_cycles()`
-- `emu68_step()`
 - HLE callbacks
 - multi-instancia real
+- bootstrap publico independente de `M68K_StartEmu()` / estado global
+- uso do backend Emu68 inteiro pelo loop generico `CpuBackend`
 
-Motivo: o Emu68 atual ainda roda pelo `MainLoop()` continuo global. A execucao
-por janela exige uma etapa separada no loop/JIT, nao apenas um header publico.
+Motivo: o Emu68 atual ainda nasce pelo `M68K_StartEmu()` global e o boot normal
+continua entrando no `MainLoop()` continuo. A janela cooperativa e livewired no
+loop real, mas ainda nao substitui o bootstrap global nem transforma o Emu68 em
+uma biblioteca multi-instancia.
 
 ## Relacao com `wip/emu68-liveness`
 
@@ -155,6 +166,7 @@ Validado com:
 rtk timeout 120s bash scripts/build.sh
 rtk timeout 180s env BELLATRIX_LAUNCHER=0 bash scripts/build.sh
 rtk timeout 120s bash scripts/setup.sh --verify
+rtk timeout 180s env BELLATRIX_CPU_BACKEND=emu68 BELLATRIX_HDMI_AUDIO=1 BELLATRIX_USBSTACK=1 BELLATRIX_BTSTACK=0 BELLATRIX_LAUNCHER=0 bash scripts/build.sh
 ```
 
 Resultado: `emu68/install-bellatrix-rigel/Emu68.img` gerado com sucesso.

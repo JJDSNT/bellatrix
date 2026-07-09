@@ -156,6 +156,8 @@ void emu68_invalidate_all_code(emu68_t *cpu);
 int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
                                   unsigned int size, int is_write,
                                   emu68_space_t space);
+int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
+                                        uint32_t pc);
 
 #ifdef __cplusplus
 }

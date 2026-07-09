@@ -7,6 +7,7 @@
 #include <string.h>
 
 extern struct M68KState *__m68k_state;
+extern void MainLoop(void);
 
 struct emu68 {
     emu68_config_t config;
@@ -19,6 +20,14 @@ struct emu68 {
     emu68_stats_t stats;
     bool in_use;
     bool stop_requested;
+    bool run_active;
+    uint32_t run_budget_cycles;
+    uint64_t run_cycles;
+    uint64_t run_start_insn_count;
+    uint64_t run_last_insn_count;
+    emu68_stop_reason_t run_stop_reason;
+    uint32_t run_stop_pc;
+    uint32_t run_stop_detail;
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
     bool logged_first_read;
     bool logged_first_write;
@@ -49,6 +58,49 @@ static void emit_event(emu68_t *cpu, const emu68_event_t *event)
 {
     if (cpu && cpu->event_fn)
         cpu->event_fn(cpu->event_user, event);
+}
+
+static uint32_t emu68_api_estimate_cycles(emu68_t *cpu,
+                                          uint64_t retired_instructions)
+{
+    uint64_t delta;
+
+    if (!cpu)
+        return 0;
+
+    if (cpu->run_last_insn_count == 0u ||
+        retired_instructions <= cpu->run_last_insn_count) {
+        cpu->run_last_insn_count = retired_instructions;
+        return 8u;
+    }
+
+    delta = retired_instructions - cpu->run_last_insn_count;
+    cpu->run_last_insn_count = retired_instructions;
+    if (delta > (UINT32_MAX / 8u))
+        return UINT32_MAX;
+
+    return (uint32_t)delta * 8u;
+}
+
+static emu68_run_result_t make_run_result(emu68_t *cpu)
+{
+    emu68_run_result_t result;
+
+    memset(&result, 0, sizeof(result));
+    if (!cpu) {
+        result.reason = EMU68_STOP_UNSUPPORTED;
+        result.detail = (uint32_t)EMU68_ERR_INVALID_ARG;
+        return result;
+    }
+
+    result.reason = cpu->run_stop_reason;
+    result.cycles_run = cpu->run_cycles;
+    result.pc = cpu->run_stop_pc;
+    result.detail = cpu->run_stop_detail;
+    if (!result.pc && __m68k_state)
+        result.pc = BE32(__m68k_state->PC);
+
+    return result;
 }
 
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
@@ -130,6 +182,14 @@ void emu68_reset(emu68_t *cpu)
         return;
 
     cpu->stop_requested = false;
+    cpu->run_active = false;
+    cpu->run_cycles = 0;
+    cpu->run_budget_cycles = 0;
+    cpu->run_start_insn_count = 0;
+    cpu->run_last_insn_count = 0;
+    cpu->run_stop_reason = EMU68_STOP_CYCLES_EXHAUSTED;
+    cpu->run_stop_pc = 0;
+    cpu->run_stop_detail = 0;
 
     if (!__m68k_state)
         return;
@@ -167,27 +227,40 @@ void emu68_set_irq_level(emu68_t *cpu, int level)
 
 emu68_run_result_t emu68_run_cycles(emu68_t *cpu, uint32_t max_cycles)
 {
-    emu68_run_result_t result;
-
     if (!cpu)
         return unsupported_result(cpu, EMU68_ERR_INVALID_ARG);
+    if (cpu != &g_emu68_api || !cpu->in_use)
+        return unsupported_result(cpu, EMU68_ERR_INVALID_ARG);
+    if (!__m68k_state)
+        return unsupported_result(cpu, EMU68_ERR_UNSUPPORTED);
+    if (cpu->run_active)
+        return unsupported_result(cpu, EMU68_ERR_BUSY);
 
-    memset(&result, 0, sizeof(result));
-    if (__m68k_state)
-        result.pc = BE32(__m68k_state->PC);
+    cpu->run_budget_cycles = max_cycles;
+    cpu->run_cycles = 0;
+    cpu->run_start_insn_count = 0;
+    cpu->run_last_insn_count = 0;
+    cpu->run_stop_reason = EMU68_STOP_CYCLES_EXHAUSTED;
+    cpu->run_stop_pc = BE32(__m68k_state->PC);
+    cpu->run_stop_detail = 0;
+
+    if (max_cycles == 0u)
+        return make_run_result(cpu);
 
     if (cpu->stop_requested) {
-        result.reason = EMU68_STOP_HOST_REQUEST;
-        return result;
+        cpu->run_stop_reason = EMU68_STOP_HOST_REQUEST;
+        return make_run_result(cpu);
     }
 
-    (void)max_cycles;
-    return unsupported_result(cpu, EMU68_ERR_UNSUPPORTED);
+    cpu->run_active = true;
+    MainLoop();
+
+    return make_run_result(cpu);
 }
 
 emu68_run_result_t emu68_step(emu68_t *cpu)
 {
-    return emu68_run_cycles(cpu, 1u);
+    return emu68_run_cycles(cpu, 8u);
 }
 
 void emu68_request_stop(emu68_t *cpu)
@@ -205,6 +278,37 @@ void emu68_request_stop(emu68_t *cpu)
     if (__m68k_state)
         event.pc = BE32(__m68k_state->PC);
     emit_event(cpu, &event);
+}
+
+int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
+                                        uint32_t pc)
+{
+    emu68_t *cpu = &g_emu68_api;
+    uint32_t cycles;
+
+    if (!cpu->in_use || !cpu->run_active)
+        return 0;
+
+    if (cpu->run_start_insn_count == 0u)
+        cpu->run_start_insn_count = retired_instructions;
+
+    cycles = emu68_api_estimate_cycles(cpu, retired_instructions);
+    cpu->run_cycles += cycles;
+    cpu->run_stop_pc = pc;
+
+    if (cpu->stop_requested) {
+        cpu->run_stop_reason = EMU68_STOP_HOST_REQUEST;
+        cpu->run_active = false;
+        return 1;
+    }
+
+    if (cpu->run_cycles >= (uint64_t)cpu->run_budget_cycles) {
+        cpu->run_stop_reason = EMU68_STOP_CYCLES_EXHAUSTED;
+        cpu->run_active = false;
+        return 1;
+    }
+
+    return 0;
 }
 
 void emu68_get_state(emu68_t *cpu, emu68_state_t *out)
