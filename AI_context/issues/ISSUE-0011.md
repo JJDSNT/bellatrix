@@ -239,7 +239,7 @@ Implemented the IRQ-free DMA+DREQ feed in `src/host/raspi3/hdmi_audio.c`
   stored via `CPU_TO_LE32`; `arm_flush_cache` after each fill. Uses Emu68
   `support.h`/`mmu.h` (`arm_flush_cache`, `mmu_virt2phys`), same as the USB glue.
 
-Real-HW result: **the DMA path works — audio reaches the speaker.** Two findings:
+Real-HW result: **the DMA path works — audio reaches the speaker.** Findings:
 
 1. **Clock-domain starvation (real Paula feed).** [HDMI-AUD] diag: underrun grows
    ~50k/report vs consumed ~2k/report → ~96% of the hardware's real-time 48 kHz
@@ -249,29 +249,35 @@ Real-HW result: **the DMA path works — audio reaches the speaker.** Two findin
    correct HDMI audio is gated on a full-speed (JIT) emulator, not Musashi. Not
    fixable by resampling (the audio itself is generated slowly).
 
-2. **NEW — format/framing bug exposed only by broadband audio.** Added a
-   `HDMI_DMA_TEST_TONE` debug mode that fills the DMA ring at the hardware rate,
-   bypassing the emulator queue (so no starvation): a synthesized **sine C-major
-   scale plays fine**, but a **real embedded PCM clip comes out as pure hiss**.
-   Same DMA path, same `mai_word` format, only the content differs → the DMA
-   transport is correct but the **MAI sample / IEC958 sub-frame word format is
-   subtly wrong**: a narrow-band tone survives (dominant frequency passes despite
-   framing errors), broadband audio scatters into noise. Root-cause hypothesis:
-   we keep the **firmware's** MAI/packet config (AUDIO_PACKET_CONFIG, MAI_CONFIG,
-   channel map, CRP) and only do a minimal MAI enable, but feed the *raw* sample
-   word format (`sample<<16>>4 & ~0xF`) that the reference `Sample_HDMI_DMA_Audio_03`
-   proved — and that reference did its OWN full MAI setup, not the firmware's. So
-   the firmware's MAI mode likely expects a different FIFO word format (e.g. full
-   IEC958 sub-frames with validity/parity/channel-status/preamble bits, which our
-   words leave zero). NEXT: reconcile the MAI mode vs word format — either build
-   the full sub-frame in software, or replicate the reference's full MAI setup and
-   verify the raw format against it. This is the one remaining blocker for clean
-   HDMI audio (independent of the realtime/starvation issue above).
+2. **Broadband/PCM hiss root-caused: `HDMI_MAI_CONFIG`.** Debug sequence:
+   - `HDMI_DMA_TEST_MODE=SINE` produced clean tones.
+   - `HDMI_DMA_TEST_MODE=CHIRP` produced the expected sweeping "UFO" sound,
+     proving DMA/DREQ/ring/cache/MAI FIFO transport were alive.
+   - A real PCM clip (`SevillaAlbeniz.wav`) still produced white noise even after
+     regenerating `hdmi_clip.h` from the WAV with a proper RIFF parser, testing
+     mono/attenuated output, trying 720p60/CTS matching, and finally embedding the
+     WAV with `.incbin` to mimic the reference exactly.
+   - Forcing the **entire** Pi Zero reference HDMI packet setup made the sink
+     silent because the Pi 3B firmware-negotiated packet/channel state differs:
+     firmware PRE shows `CHMAP=00fac688`, `APCFG=21000403`,
+     `RAMPKT_CFG=00010015`.
+   - The working fix is the hybrid state: keep firmware `CHMAP/APCFG/RAMPKT_CFG`,
+     but override only `HDMI_MAI_CONFIG` to the reference value
+     `(1<<27)|(1<<26)|(1<<1)|(1<<0) == 0x0c000003`.
+   - Keep `mai_word()` in the proven raw format (`sample<<16>>4 & ~0xf`,
+     sample bits `[27:12]`). The alternative `sample<<16` slot test was not the
+     answer.
 
-`mai_word`/format, `MAI_FMT`, `AUDIO_PACKET_CONFIG`, and the reference's full
-prepare sequence are the things to reconcile. Debug scaffolding (`HDMI_DMA_TEST_TONE`,
-sine scale) left in place, default OFF; the 1.2 MB generated `hdmi_clip.h` PCM asset
-is NOT committed (regenerate from a WAV via ffmpeg when needed).
+3. **Production mode restored.** After validating the clip path, `HDMI_DMA_TEST_MODE`
+   was returned to `QUEUE` (`0`) so the DMA ring drains Bellatrix's Paula output
+   queue again. The debug ring was expanded from 2 halves to 8 segments
+   (`HDMI_DMA_SEGMENTS=8`) and diagnostics now log `seg` plus `s0..s7` refill
+   counters; balanced counters confirm normal ring health.
+
+Merge note for `wip/emu68-public-api`: that branch also touches HDMI/audio build
+plumbing. When merging it into `main`, preserve the working HDMI audio invariant:
+firmware packet/channel state stays untouched, but `HDMI_MAI_CONFIG` must be
+forced to `0x0c000003`; production default must remain `HDMI_DMA_TEST_MODE=0`.
 
 ## Files to revisit
 

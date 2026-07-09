@@ -1,4 +1,5 @@
 #include "host/raspi3/hdmi_audio.h"
+#include "host/raspi3/vc_mailbox.h"
 
 #include "audio/output.h"
 
@@ -101,6 +102,10 @@ static inline uint32_t hdmi_rd32(uintptr_t a)             { return *(volatile ui
 #define HDMI_AUDIO_PACKET_CONFIG_EN (1u << 31)
 #define HDMI_CRP_CFG_EXTERNAL_CTS_EN (1u << 24)
 #define HDMI_RAM_PACKET_CONFIG_EN (1u << 16) /* infoframe slot 1 enable bit */
+#define HDMI_RAM_PACKET_AUDIO_EN (1u << 4)
+
+#define HDMI_RAM_PACKET_WORD(slot, word) \
+    (HDMI_RAM_PACKET_START + ((((uintptr_t)(slot)) * 9u + (uintptr_t)(word)) * 4u))
 
 /* --- Legacy BCM DMA controller (peripheral +0x7000), driven IRQ-free to feed
  * the MAI FIFO continuously from a double-buffered ring. This controller is
@@ -128,10 +133,19 @@ static inline uint32_t hdmi_rd32(uintptr_t a)             { return *(volatile ui
 #define MAI_DATA_BUS       (HD_BUS_BASE + 0x20u) /* MAI FIFO, DMA destination */
 #define DMA_BUS_UNCACHED   0xC0000000u           /* Pi3 uncached VC alias of RAM */
 
+/* DMA-side cushion. Each segment is 512 stereo frames (~10.7 ms @48k); the ring
+ * is HDMI_DMA_SEGMENTS of them. Was 2 (~21 ms) — far short of the harness SDL
+ * ring (~683 ms), which is why jitter chopped the bare-metal output; 8 gives
+ * ~85 ms, paired with the output.c queue priming for a real startup cushion.
+ * Compile-time knob (deeper = more jitter immunity, more latency). */
+#ifndef HDMI_DMA_SEGMENTS
+#define HDMI_DMA_SEGMENTS 8u
+#endif
+
 enum {
     IEC958_SUBFRAMES_PER_BLOCK = 384,
-    HDMI_DMA_HALF_WORDS = 1024,          /* 512 stereo frames/half (~10.7 ms @48k) */
-    HDMI_DMA_HALVES     = 2,
+    HDMI_DMA_HALF_WORDS = 1024,          /* 512 stereo frames/segment (~10.7 ms @48k) */
+    HDMI_DMA_HALVES     = HDMI_DMA_SEGMENTS,
     HDMI_DMA_WORDS      = HDMI_DMA_HALF_WORDS * HDMI_DMA_HALVES,
 };
 
@@ -149,7 +163,7 @@ static bool      s_dma_running;
 static int32_t   s_dma_peak;      /* peak |sample| since last diagnostic */
 static uint32_t  s_dma_dbg_calls;
 static uint32_t  s_dma_fills;         /* total half-refills since last diagnostic */
-static uint32_t  s_dma_fill_half[2];  /* per-half refill counts since last diagnostic */
+static uint32_t  s_dma_fill_half[HDMI_DMA_HALVES]; /* per-segment refill counts */
 
 static bool s_hdmi_ready = false;
 
@@ -195,13 +209,21 @@ static uint32_t dma_bus(const volatile void *p)
 
 /* One 16-bit sample → MAI FIFO word: sample in bits [27:12], low nibble cleared
  * (the MAI block adds IEC958 channel status/parity/preamble in hardware). */
+#ifndef HDMI_MAI_WORD_MODE
+#define HDMI_MAI_WORD_MODE 0
+#endif
+
 static uint32_t mai_word(int16_t s)
 {
+#if HDMI_MAI_WORD_MODE == 1
+    return ((uint32_t)(uint16_t)s) << 16;
+#else
     uint32_t d = (uint32_t)(uint16_t)s;
     d <<= 16;
     d >>= 4;
     d &= ~0xFu;
     return d;
+#endif
 }
 
 /*
@@ -373,7 +395,7 @@ static void hdmi_dma_fill_half(unsigned half)
     arm_flush_cache((uintptr_t)dst, (unsigned)HDMI_DMA_HALF_WORDS * 4u);
 
     s_dma_fills++;
-    s_dma_fill_half[half & 1u]++;
+    s_dma_fill_half[half]++;
 }
 
 static void hdmi_dma_setup(void)
@@ -441,28 +463,42 @@ bool hdmi_audio_init(void)
      * actual pixel/HSM clock. */
     hsm_hz = hdmi_read_hsm_clock_hz(); /* diagnostic only */
 
-    /* Defer to the firmware. With hdmi_drive=2 the VideoCore firmware already
-     * brings up the entire HDMI audio path: MAI_CONFIG channel enables, the
-     * channel map, AUDIO_PACKET_CONFIG, CRP with automatic CTS, the audio
-     * infoframe in RAM-packet slot 4, and the MAI FIFO thresholds. The real-HW
-     * PRE/POST dumps proved our previous setup was CLOBBERING that working config
-     * (it zeroed MAI_CONFIG's L/R enables, overwrote the channel map, changed the
-     * CRP mode and thresholds). We now write none of it and only feed samples into
-     * the MAI data FIFO — but on the first HW test that alone stayed silent: the
-     * firmware leaves the MAI engine idle (MAI_CTL=0x420). So we additionally do a
-     * minimal MAI-engine bring-up, touching ONLY the HD-block MAI registers
-     * (reset/flush, sample-rate, format, thresholds, enable) with the proven Pi
-     * Zero W reference values, and still leave the HDMI-block packet/infoframe
-     * config (APCFG/CRP/CTS/channel map/MAI_CONFIG/RAM packet) entirely to the
-     * firmware. */
-    hdmi_wr32(MAI_CTL, (1u << 9));                                 /* FLUSH */
-    hdmi_wr32(MAI_CTL, (1u<<0)|(1u<<1)|(1u<<2)|(1u<<15)|(1u<<9));  /* RST|OF|UF|DLATE|FLUSH */
-    hdmi_wr32(MAI_SMP, 0x0DCD21F3u);                              /* sample-rate constant (48 kHz) */
+    /* Keep the HDMI-block packet/channel setup from the firmware. On this Pi 3B
+     * boot it comes up as CHMAP=00fac688/APCFG=21000403/RAMPKT_CFG=00010015;
+     * forcing the Pi Zero reference values (CHMAP=8/APCFG=21000003) made the
+     * sink go fully silent. Only bring up the HD-block MAI engine here and feed
+     * raw samples in bits [27:12], matching the proven FIFO word format. */
+    hdmi_wr32(MAI_CTL, (1u << 9));                                /* FLUSH */
+    hdmi_wr32(MAI_CTL, (1u<<0)|(1u<<1)|(1u<<2)|(1u<<15)|(1u<<9)); /* RST|OF|UF|DLATE|FLUSH */
+    hdmi_wr32(MAI_SMP, 0x0DCD21F3u);                             /* 48 kHz */
+    hdmi_wr32(MAI_CTL, (1u<<3)|(2u<<4)|(1u<<12)|(1u<<13));       /* MAI enable, 2 channels */
     hdmi_wr32(MAI_FMT, 0x00020900u);                             /* 2 channels, 48 kHz */
-    hdmi_wr32(MAI_THR, 0x08080608u);                             /* MAI FIFO thresholds */
-    hdmi_wr32(MAI_CTL, (1u<<3)|(2u<<4)|(1u<<12)|(1u<<13));        /* MAI enable, 2 channels */
+    hdmi_wr32(MAI_THR, 0x08080608u);                             /* HDMI DREQ thresholds */
+    hdmi_wr32(HDMI_MAI_CONFIG, (1u<<27)|(1u<<26)|(1u<<1)|(1u<<0));
 
-    kprintf("hdmi_audio: init ok (firmware config + minimal MAI enable; hsm=%u Hz)\n",
+    /* HDMI audio clock recovery (N/CTS). The reference uses N=6144 for 48 kHz.
+     * CTS is mode-specific: CTS = f_pixel * N / (128 * fs) = f_pixel / 1000.
+     * Query the firmware for the real pixel clock and fall back to the 1080p60
+     * mode forced by Bellatrix's config.txt. */
+    {
+        /* CTS = f_pixel × N / (128 × fs) = f_pixel / 1000 (N=6144, fs=48 kHz).
+         * Ask the firmware for the REAL pixel/TMDS clock (Emu68 sets the
+         * framebuffer, but config.txt forces the HDMI mode, and only the firmware
+         * knows the exact clock it programmed — e.g. 148.5 MHz vs 138.5 MHz CVT-RB
+         * for 1080p). Fall back to 1080p60 (148.5 MHz) if the query fails. */
+        uint32_t px_hz = vc_get_pixel_clock_hz();
+        uint32_t cts;
+        if (px_hz == 0u)
+            px_hz = 148500000u;
+        cts = px_hz / 1000u;
+        hdmi_wr32(HDMI_CRP_CFG, 6144u | HDMI_CRP_CFG_EXTERNAL_CTS_EN);
+        hdmi_wr32(HDMI_AUDIO_CTS0, cts);
+        hdmi_wr32(HDMI_AUDIO_CTS1, cts);
+        kprintf("hdmi_audio: pixel_clock=%u Hz -> N=6144 CTS=%u (0x%x)\n",
+                (unsigned)px_hz, (unsigned)cts, (unsigned)cts);
+    }
+
+    kprintf("hdmi_audio: init ok (firmware packet config + MAI enable + N=6144 CRP; hsm=%u Hz)\n",
             (unsigned)hsm_hz);
     /* Post-setup register snapshot — lets a single real-Pi boot capture the
      * ground-truth MAI/HDMI state needed to finish tuning the bit-level values
@@ -502,20 +538,26 @@ void hdmi_audio_dma_poll(void)
     cur_half = (unsigned)((off / ((unsigned)HDMI_DMA_HALF_WORDS * 4u))
                           % (unsigned)HDMI_DMA_HALVES);
 
-    if (cur_half != s_dma_prev_half) {
+    /* Refill every segment the DMA has finished since the last poll (catch up if
+     * it passed more than one — cheap insurance now that the ring has 8). */
+    while (s_dma_prev_half != cur_half) {
         hdmi_dma_fill_half(s_dma_prev_half);
-        s_dma_prev_half = cur_half;
+        s_dma_prev_half = (s_dma_prev_half + 1u) % (unsigned)HDMI_DMA_HALVES;
     }
 
     if (++s_dma_dbg_calls >= 131072u) {
         BellatrixAudioOutputStats st = bellatrix_audio_output_stats();
-        kprintf("[HDMI-AUD] dma_src=%08x buf=%08x off=%05x half=%u CS=%08x "
-                "fills=%u (h0=%u h1=%u) produced=%llu consumed=%llu "
+        kprintf("[HDMI-AUD] dma_src=%08x buf=%08x off=%05x seg=%u CS=%08x "
+                "fills=%u (s0=%u s1=%u s2=%u s3=%u s4=%u s5=%u s6=%u s7=%u) "
+                "produced=%llu consumed=%llu "
                 "underrun=%llu qcount=%u peak=%d\n",
                 (unsigned)cur, (unsigned)s_dma_buf_bus, (unsigned)off, cur_half,
                 (unsigned)hdmi_rd32(DMA_CS(HDMI_DMA_CH)),
                 (unsigned)s_dma_fills,
                 (unsigned)s_dma_fill_half[0], (unsigned)s_dma_fill_half[1],
+                (unsigned)s_dma_fill_half[2], (unsigned)s_dma_fill_half[3],
+                (unsigned)s_dma_fill_half[4], (unsigned)s_dma_fill_half[5],
+                (unsigned)s_dma_fill_half[6], (unsigned)s_dma_fill_half[7],
                 (unsigned long long)st.produced_samples,
                 (unsigned long long)st.consumed_samples,
                 (unsigned long long)st.underrun_samples,
@@ -524,8 +566,8 @@ void hdmi_audio_dma_poll(void)
         s_dma_dbg_calls = 0;
         s_dma_peak = 0;
         s_dma_fills = 0;
-        s_dma_fill_half[0] = 0;
-        s_dma_fill_half[1] = 0;
+        for (unsigned i = 0; i < (unsigned)HDMI_DMA_HALVES; i++)
+            s_dma_fill_half[i] = 0;
     }
 }
 
