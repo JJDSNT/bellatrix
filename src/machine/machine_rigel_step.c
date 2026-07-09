@@ -611,16 +611,10 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
     bellatrix_audio_output_tick((uint32_t)cycles);
 
 #if !defined(BELLATRIX_HARNESS) && BELLATRIX_ENABLE_HDMI_AUDIO
-    {
-        AudioSample s;
-        static unsigned subframe = 0; /* persists across calls */
-        while (hdmi_audio_writable() && bellatrix_audio_output_pop(&s)) {
-            hdmi_audio_write_sample(s.left, subframe++);
-            hdmi_audio_write_sample(s.right, subframe++);
-            if (subframe >= 384)
-                subframe = 0;
-        }
-    }
+    /* Refill the IRQ-free HDMI-audio DMA ring from the output queue. The DMA,
+     * paced by the HDMI DREQ, feeds the MAI FIFO continuously; here we only top
+     * up whichever buffer half it just finished. Diagnostics live inside. */
+    hdmi_audio_dma_poll();
 #endif
 
 #ifdef BELLATRIX_HARNESS
