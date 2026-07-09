@@ -47,10 +47,16 @@ typedef struct {
 static RigelTrace g_rtrace;
 static int g_rigel_cia_trace   = -1;
 static int g_rigel_floppy_trace = -1;
+static int g_rigel_video_trace  = -1;
 
 bool machine_rigel_rtrace_enabled(void)
 {
     return g_rtrace.enabled;
+}
+
+int machine_rigel_trace_verbose_enabled(void)
+{
+    return g_rtrace.enabled && g_rtrace.verbose;
 }
 
 void machine_rigel_log(const char *msg, void *opaque)
@@ -70,7 +76,8 @@ void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
     static int generic_event_trace = -1;
 
     (void)opaque;
-    if (event != NULL && event->id == RIGEL_LOG_EVENT_COPPER_WRITE &&
+    if (machine_rigel_video_trace_enabled() &&
+        event != NULL && event->id == RIGEL_LOG_EVENT_COPPER_WRITE &&
         event->field_count >= 7u &&
         (event->fields[0] == RIGEL_REG_DMACON ||
          event->fields[0] == RIGEL_REG_BPLCON0)) {
@@ -102,46 +109,46 @@ void machine_rigel_log_event(const rigel_log_event_t *event, void *opaque)
 #endif
     }
 
-    /* AUD0-3 timing trace — all 4 channels. See
-     * AI_context/issue_paula_audio_timing_and_simd.md. CCK-stamped via
-     * rigel_get_time(), read live at the moment the event fires (more
-     * precise than r->time, which only reflects the end of a step batch). */
-    switch (event->id) {
-    case RIGEL_LOG_EVENT_AUDIO_PER_WRITE:
-        kprintf("[RIGEL-AUDIO-PER] ch=%u value=%04x audper=%u cyc=%llu\n",
-                (unsigned)event->fields[0], (unsigned)event->fields[1],
-                (unsigned)event->fields[2],
-                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
-        return;
-    case RIGEL_LOG_EVENT_AUDIO_PERIOD:
-        kprintf("[RIGEL-AUDIO-TICK] ch=%u audper=%u cyc=%llu\n",
-                (unsigned)event->fields[0], (unsigned)event->fields[1],
-                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
-        return;
-    case RIGEL_LOG_EVENT_AUDIO_IRQ:
-        kprintf("[RIGEL-AUDIO-IRQ] ch=%u intreq_bit=%04x cyc=%llu\n",
-                (unsigned)event->fields[0], (unsigned)event->fields[1],
-                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
-        return;
-    case RIGEL_LOG_EVENT_AUDIO_RELOAD:
-        kprintf("[RIGEL-AUDIO-RELOAD] ch=%u audlc=%06x audlen=%u cyc=%llu\n",
-                (unsigned)event->fields[0], (unsigned)event->fields[1],
-                (unsigned)event->fields[2],
-                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
-        return;
-    case RIGEL_LOG_EVENT_AUDIO_FETCH:
-        kprintf("[RIGEL-AUDIO-FETCH] ch=%u addr=%06x word=%04x remaining=%u cyc=%llu\n",
-                (unsigned)event->fields[0], (unsigned)event->fields[1],
-                (unsigned)event->fields[2], (unsigned)event->fields[3],
-                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
-        return;
-    case RIGEL_LOG_EVENT_AUDIO_DAT_WRITE:
-        kprintf("[RIGEL-AUDIO-DAT] ch=%u value=%04x cyc=%llu\n",
-                (unsigned)event->fields[0], (unsigned)event->fields[1],
-                (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
-        return;
-    default:
-        break;
+    if (machine_rigel_trace_verbose_enabled()) {
+        /* AUD0-3 timing trace — all 4 channels. See
+         * AI_context/issue_paula_audio_timing_and_simd.md. */
+        switch (event->id) {
+        case RIGEL_LOG_EVENT_AUDIO_PER_WRITE:
+            kprintf("[RIGEL-AUDIO-PER] ch=%u value=%04x audper=%u cyc=%llu\n",
+                    (unsigned)event->fields[0], (unsigned)event->fields[1],
+                    (unsigned)event->fields[2],
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            return;
+        case RIGEL_LOG_EVENT_AUDIO_PERIOD:
+            kprintf("[RIGEL-AUDIO-TICK] ch=%u audper=%u cyc=%llu\n",
+                    (unsigned)event->fields[0], (unsigned)event->fields[1],
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            return;
+        case RIGEL_LOG_EVENT_AUDIO_IRQ:
+            kprintf("[RIGEL-AUDIO-IRQ] ch=%u intreq_bit=%04x cyc=%llu\n",
+                    (unsigned)event->fields[0], (unsigned)event->fields[1],
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            return;
+        case RIGEL_LOG_EVENT_AUDIO_RELOAD:
+            kprintf("[RIGEL-AUDIO-RELOAD] ch=%u audlc=%06x audlen=%u cyc=%llu\n",
+                    (unsigned)event->fields[0], (unsigned)event->fields[1],
+                    (unsigned)event->fields[2],
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            return;
+        case RIGEL_LOG_EVENT_AUDIO_FETCH:
+            kprintf("[RIGEL-AUDIO-FETCH] ch=%u addr=%06x word=%04x remaining=%u cyc=%llu\n",
+                    (unsigned)event->fields[0], (unsigned)event->fields[1],
+                    (unsigned)event->fields[2], (unsigned)event->fields[3],
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            return;
+        case RIGEL_LOG_EVENT_AUDIO_DAT_WRITE:
+            kprintf("[RIGEL-AUDIO-DAT] ch=%u value=%04x cyc=%llu\n",
+                    (unsigned)event->fields[0], (unsigned)event->fields[1],
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0));
+            return;
+        default:
+            break;
+        }
     }
 
     if (!generic_event_trace)
@@ -258,6 +265,22 @@ int machine_rigel_blitter_trace_enabled(void)
 #endif
 }
 
+int machine_rigel_video_trace_enabled(void)
+{
+    if (g_rigel_video_trace >= 0)
+        return g_rigel_video_trace || g_rtrace.verbose;
+
+#ifdef BELLATRIX_HARNESS
+    {
+        const char *env = getenv("BELLATRIX_RIGEL_VIDEO_TRACE");
+        g_rigel_video_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+#else
+    g_rigel_video_trace = 0;
+#endif
+    return g_rigel_video_trace || g_rtrace.verbose;
+}
+
 void machine_rigel_trace_init(void)
 {
     /* Compile-time opt-in: -DBELLATRIX_RIGEL_TRACE_BUILD=1 enables the trace
@@ -286,6 +309,7 @@ void machine_rigel_trace_init(void)
     g_rtrace.last_frame_width = 0;
     g_rtrace.last_frame_height = 0;
     g_rtrace.frame_count  = 0;
+    g_rigel_video_trace   = -1;
 }
 
 void bellatrix_machine_rigel_trace_enable(bool enabled)
@@ -385,7 +409,34 @@ static void machine_rigel_maybe_dump_frame(const rigel_frame_t *frame)
             dump_path,
             (unsigned)frame->width,
             (unsigned)frame->height);
+
+    /* Optional chip RAM snapshot at the same frame, for offline bitplane /
+     * copper-list analysis (big-endian byte order, same as the M68K view). */
+    {
+        const char *chipram_path = getenv("BELLATRIX_RIGEL_DUMP_CHIPRAM");
+        if (chipram_path && *chipram_path) {
+            FILE *cf = fopen(chipram_path, "wb");
+            if (cf) {
+                for (uint32_t a = 0; a < BELLATRIX_CHIP_RAM_SIZE; a += 2u) {
+                    uint16_t w = rigel_chip_ram_read16(&g_machine, a);
+                    fputc((int)((w >> 8) & 0xffu), cf);
+                    fputc((int)(w & 0xffu), cf);
+                }
+                fclose(cf);
+                kprintf("[RIGEL-DUMP] chipram frame=%llu wrote %s size=%u\n",
+                        (unsigned long long)g_rtrace.frame_count,
+                        chipram_path,
+                        (unsigned)BELLATRIX_CHIP_RAM_SIZE);
+            }
+        }
+    }
     if (dump_palette && g_rigel) {
+        kprintf("[RIGEL-DUMP-COP] cop1lc=%04x%04x cop2lc=%04x%04x dmacon=%04x\n",
+                rigel_custom_read16(g_rigel, 0x080u),
+                rigel_custom_read16(g_rigel, 0x082u),
+                rigel_custom_read16(g_rigel, 0x084u),
+                rigel_custom_read16(g_rigel, 0x086u),
+                rigel_custom_read16(g_rigel, 0x096u));
         kprintf("[RIGEL-DUMP-REGS] bplcon0=%04x bplcon1=%04x bplcon2=%04x "
                 "diw=%04x/%04x ddf=%04x/%04x mod=%04x/%04x\n",
                 rigel_custom_read16(g_rigel, RIGEL_REG_BPLCON0),
@@ -430,11 +481,23 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
     uint16_t dmacon;
     uint16_t bplcon0;
 
-    if (!g_rtrace.enabled || !g_rigel)
+    if (!r || !g_rigel)
         return;
 
-    /* Track DMACON and BPLCON0 changes — unlimited (full boot coverage) */
-    {
+    if (!g_rtrace.enabled) {
+#ifdef BELLATRIX_HARNESS
+        if (r->events & RIGEL_EVENT_FRAME_READY) {
+            rigel_frame_t frame;
+            g_rtrace.frame_count++;
+            if (rigel_get_frame(g_rigel, &frame))
+                machine_rigel_maybe_dump_frame(&frame);
+        }
+#endif
+        return;
+    }
+
+    /* Track noisy video-register changes only on explicit video/verbose trace. */
+    if (machine_rigel_video_trace_enabled()) {
         dmacon  = rigel_custom_read16(g_rigel, 0x096u);
         bplcon0 = rigel_custom_read16(g_rigel, 0x100u);
         if (dmacon != g_rtrace.last_dmacon) {
@@ -481,7 +544,7 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
         }
     }
 
-    if (r->events & RIGEL_EVENT_IRQ_CHANGED) {
+    if (g_rtrace.verbose && (r->events & RIGEL_EVENT_IRQ_CHANGED)) {
         ipl    = rigel_get_ipl(g_rigel);
         intreq = rigel_get_intreq(g_rigel);
         intena = rigel_get_intena(g_rigel);
@@ -519,9 +582,10 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                     (unsigned)g_rtrace.last_ipl,
                     (unsigned)g_rtrace.last_intreq,
                     (unsigned long long)r->time);
-            if (frame.width != g_rtrace.last_frame_width ||
+            if (machine_rigel_video_trace_enabled() &&
+                    (frame.width != g_rtrace.last_frame_width ||
                     frame.height != g_rtrace.last_frame_height ||
-                    (g_rtrace.frame_count % 50u) == 0u) {
+                    (g_rtrace.frame_count % 50u) == 0u)) {
                 uint16_t dm = rigel_custom_read16(g_rigel, 0x096u);
                 uint16_t bp = rigel_custom_read16(g_rigel, 0x100u);
                 uint16_t bplcon1 = rigel_custom_read16(g_rigel, 0x102u);
@@ -552,7 +616,7 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                 g_rtrace.last_frame_width = frame.width;
                 g_rtrace.last_frame_height = frame.height;
             }
-            if (g_rtrace.frame_count <= 5u) {
+            if (machine_rigel_video_trace_enabled() && g_rtrace.frame_count <= 5u) {
                 uint16_t bplcon0 = rigel_custom_read16(g_rigel, 0x100u);
                 uint16_t dmacon  = rigel_custom_read16(g_rigel, 0x096u);
                 uint16_t diwstrt = rigel_custom_read16(g_rigel, 0x08eu);
@@ -619,7 +683,8 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                         (unsigned)dirty);
             }
             /* Every 50 frames log a chipset summary until bitplanes appear */
-            if (g_rtrace.frame_count > 5u &&
+            if (machine_rigel_video_trace_enabled() &&
+                    g_rtrace.frame_count > 5u &&
                     (g_rtrace.frame_count % 50u) == 0u) {
                 uint16_t dm = rigel_custom_read16(g_rigel, 0x096u);
                 uint16_t bp = rigel_custom_read16(g_rigel, 0x100u);
@@ -678,7 +743,8 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
                         (unsigned)bpl1startnz, (unsigned)bpl2startnz,
                         (unsigned)c0, (unsigned)c1);
             }
-            if (g_rtrace.frame_count <= 5u && frame.pixels &&
+            if (machine_rigel_video_trace_enabled() &&
+                    g_rtrace.frame_count <= 5u && frame.pixels &&
                     frame.width > 0u && frame.height > 0u) {
                 uint32_t cx = frame.width  / 2u;
                 uint32_t cy = frame.height / 2u;
@@ -741,7 +807,7 @@ void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
     if (ipl > 7u)
         ipl = 7u;
 
-    if (g_rtrace.enabled && ipl != m->current_ipl) {
+    if (machine_rigel_trace_verbose_enabled() && ipl != m->current_ipl) {
         uint32_t pc = bellatrix_debug_cpu_pc();
         uint32_t vec_off;
         uint32_t chip_val;

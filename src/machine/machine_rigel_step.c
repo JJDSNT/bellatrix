@@ -308,7 +308,8 @@ void machine_present_frame_from_rigel(void)
         return;
 
 #ifndef BELLATRIX_HARNESS
-    machine_trace_baremetal_video_frame(&frame);
+    if (machine_rigel_video_trace_enabled())
+        machine_trace_baremetal_video_frame(&frame);
 #endif
 
     /* When DIWSTRT/DIWSTOP are both 0 (cleared at reset), display_window_update
@@ -611,16 +612,10 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
     bellatrix_audio_output_tick((uint32_t)cycles);
 
 #if !defined(BELLATRIX_HARNESS) && BELLATRIX_ENABLE_HDMI_AUDIO
-    {
-        AudioSample s;
-        static unsigned subframe = 0; /* persists across calls */
-        while (hdmi_audio_writable() && bellatrix_audio_output_pop(&s)) {
-            hdmi_audio_write_sample(s.left, subframe++);
-            hdmi_audio_write_sample(s.right, subframe++);
-            if (subframe >= 384)
-                subframe = 0;
-        }
-    }
+    /* Refill the IRQ-free HDMI-audio DMA ring from the output queue. The DMA,
+     * paced by the HDMI DREQ, feeds the MAI FIFO continuously; here we only top
+     * up whichever buffer half it just finished. Diagnostics live inside. */
+    hdmi_audio_dma_poll();
 #endif
 
 #ifdef BELLATRIX_HARNESS
@@ -727,7 +722,7 @@ void bellatrix_machine_on_frame_ready(void)
     machine_mouse_frame_tick();
     machine_present_frame_from_rigel();
 
-    if (machine_rigel_rtrace_enabled())
+    if (machine_rigel_trace_verbose_enabled())
         kprintf("[RIGEL-AUDIO-QUEUE] count=%u dropped=%llu\n",
                 (unsigned)audio_mixer_count(&g_machine.audio_queue),
                 (unsigned long long)audio_mixer_dropped(&g_machine.audio_queue));
