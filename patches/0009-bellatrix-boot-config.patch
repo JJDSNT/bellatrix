@@ -1,8 +1,8 @@
 diff --git a/scripts/config.txt b/scripts/config.txt
-index efe0551..3dbe71d 100644
+index efe0551..9b72ff5 100644
 --- a/scripts/config.txt
 +++ b/scripts/config.txt
-@@ -7,11 +7,19 @@ disable_splash=1
+@@ -7,11 +7,24 @@ disable_splash=1
  arm_64bit=1
  avoid_warnings=1
  
@@ -16,8 +16,13 @@ index efe0551..3dbe71d 100644
  hdmi_group=2
  hdmi_mode=82
  
-+# TEMP: hdmi_drive=2 removed for serial-silence diagnostic (2026-07-04) --
-+# see AI_context/issues/ISSUE-0011.md. Re-add once confirmed unrelated.
++# HDMI audio (ISSUE-0011) needs the firmware in HDMI mode (not DVI) with audio
++# packets enabled. hdmi_drive=2 forces that; the stream/resample hints mirror the
++# working Pi Zero W reference (external/RaspberryPI). Re-added 2026-07-09 after the
++# 2026-07-04 serial-silence diagnostic — if serial goes quiet again, suspect this.
++hdmi_drive=2
++hdmi_stream_channels=1
++no_hdmi_resample=1
 +
  
  # Select some m68k code to run...

@@ -34,3 +34,6 @@
 [submodule "external/VideoCore.card"]
 	path = external/VideoCore.card
 	url = https://github.com/michalsc/VideoCore.card
+[submodule "external/RaspberryPI"]
+	path = external/RaspberryPI
+	url = https://github.com/kumaashi/RaspberryPI

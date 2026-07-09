@@ -164,6 +164,115 @@ test HDMI audio on physical Pi 3B hardware should turn this on
 env-var passthrough added if not already wired — check before relying on
 it). QEMU and default builds are unaffected now.
 
+## Cross-check vs kumaashi reference + real-HW result (2026-07-09)
+
+Added `external/RaspberryPI` (kumaashi, git submodule) as a hardware-fact
+reference. The **Pi Zero W (BCM2835)** samples are the correct match for the
+Pi 3B (BCM2837) — same VideoCore4 HDMI/MAI block; the `RPI4/` samples are a
+different HDMI controller and were ignored. No LICENSE in that repo → used only
+as a register/hardware-fact reference (clean-room, same stance as the existing
+Circle-avoidance), never a code port.
+
+**Confirmed-working reference:** `RPIZEROW/Sample_HDMI_DMA_Audio_03` (plays
+`SevillaAlbeniz.wav` via DMA+DREQ; YouTube demo `Fy4gApu8K_s`; user confirmed it
+works). Identical register sequence to `Sample_HDMI_DMA_Audio_Streaming_01`.
+
+Fixes applied this session to `src/host/raspi3/hdmi_audio.c`:
+- HDMI_BASE audio register offsets corrected: AUDIO_PACKET_CONFIG 0x09c, CRP_CFG
+  0x0a8, CTS_0 0x0ac, CTS_1 0x0b0 (were 0xBC/0xC0/0xC4/0xC8; 0xC0 collided with
+  HDMI_SCHEDULER_CONTROL). MAI block (HD_BASE) offsets were already correct.
+- CTS_0 and CTS_1 now both get the full 20-bit CTS (were split low/high). N no
+  longer overwritten by the CTS math. Removed the wrong-offset TX_PHY poke
+  (firmware owns the PHY via Emu68 init_display mailbox). Added a post-init
+  register dump (MAI_CTL/MAI_FMT/APCFG/RAMPKT_CFG/RAMPKT_STS) for HW capture.
+- `config.txt` via **patch 0009**: re-added `hdmi_drive=2` (+ `hdmi_stream_channels=1`,
+  `no_hdmi_resample=1`) — was removed 2026-07-04 for a serial-silence diagnostic;
+  without it the firmware stays in DVI mode and carries no audio.
+
+**Real-HW result (2026-07-09): still NO sound.** Only relevant serial line:
+`hdmi_audio: HSM clock read as 0 Hz, cannot derive N/CTS` → `hdmi_audio_init()`
+**bails out before configuring anything** (returns false, s_hdmi_ready stays 0).
+This blocker sits *upstream* of all the register-value bugs below.
+
+Root cause of the bail: `hdmi_read_hsm_clock_hz()` reads CM_HSMCTL/CM_HSMDIV
+(CM_BASE 0x101000 + 0xB0/0xB4) and gets 0 (int_div==0). **This whole HSM-clock
+derivation is our own invention (Linux vc4 style). The proven kumaashi reference
+never reads the CM/HSM clock at all** — it hardcodes N=6144, CTS_0=CTS_1=0x1220A,
+MAI_SMP=0x0DCD21F3. Recommended fix: drop the hard-fail and hardcode N/CTS/SMP
+like the reference (48 kHz), removing the CM dependency entirely.
+
+Remaining register-VALUE divergences vs the proven `_03` sequence (only matter
+once init stops bailing):
+- MAI_FMT: proven 0x20900 (2ch/48k) — ours 0
+- MAI_CONFIG: proven (1<<27)|(1<<26)|(1<<1)|(1<<0) — ours 0
+- MAI_CHANNEL_MAP: proven 0x8 — ours 0x10
+- MAI_THR: proven 0x08080608 — ours 0x1010
+- AUDIO_PACKET_CONFIG: proven (1<<29)|(1<<24)|(1<<1)|(1<<0) — ours (1<<31) (wrong;
+  there is no bit-31 "enable" — enable is the L/R channel bits)
+- MAI_CTL (prepare): proven bit3|(ch<<4)|bit12|bit13 — ours a different layout
+- Audio infoframe: proven → RAM packet slots 4 & 5 (words 0x000A0184, 0x00000170),
+  enabled via RAM_PACKET_CONFIG bit16 + bit4 — ours → slot 0, never enabled
+- Sample word format: proven raw `(u16 sample)<<16>>4 & ~0xF` (bits[27:12]), HW
+  does the IEC958 framing — ours builds full IEC958 subframes in software
+- FIFO feed: proven DMA+DREQ (DMA_PERMAP_HDMI, dest bus addr HD_BUS_BASE
+  0x7E808000) — ours CPU polling from the chipset step loop (kumaashi never
+  demonstrated a polling feed working; that path is unproven)
+
+Open decision (deferred): after init proceeds, align the register values, then
+choose the output path — keep polling (smaller, unproven) vs port the proven
+DMA+DREQ path (bigger: BCM DMA engine, cache-coherent buffers, bus addresses,
+refill IRQ = step 6 above). See memory `bellatrix-hdmi-audio-findings`.
+
+## DMA feed implemented + real-HW results (2026-07-09, part 2)
+
+Implemented the IRQ-free DMA+DREQ feed in `src/host/raspi3/hdmi_audio.c`
+(replaces the polling MAI_DATA writes; `hdmi_audio_dma_poll()` called from
+`machine_rigel_step.c`):
+- Legacy BCM DMA controller (peripheral +0x7000), **channel 5** — confirmed the
+  controller is unused by Emu68 (only DWC2's own USB DMA) and Bellatrix (EMMC is
+  PIO), so a full channel is free; **no interrupts** (self-relinking 2-CB ring, we
+  poll DMA_SOURCE_AD and refill the half the DMA just left). This sidesteps the
+  Emu68-owns-Pi-setup concern entirely.
+- Double buffer, dest = MAI FIFO bus addr 0x7E808020, src = `0xC0000000 | phys`
+  (Pi3 uncached VC alias), PERMAP=17 (HDMI) + DEST_DREQ. Build is
+  **elf64-bigaarch64**, so all DMA-read RAM (control blocks + sample words) is
+  stored via `CPU_TO_LE32`; `arm_flush_cache` after each fill. Uses Emu68
+  `support.h`/`mmu.h` (`arm_flush_cache`, `mmu_virt2phys`), same as the USB glue.
+
+Real-HW result: **the DMA path works — audio reaches the speaker.** Two findings:
+
+1. **Clock-domain starvation (real Paula feed).** [HDMI-AUD] diag: underrun grows
+   ~50k/report vs consumed ~2k/report → ~96% of the hardware's real-time 48 kHz
+   demand is filled with silence. The MAI consumes at real-time 48 kHz; the Amiga
+   under **Musashi (interpreter) runs ~1/25 real-time**, so production can't keep
+   up → hiss. Fundamental: a fixed-rate real DAC needs ~real-time production;
+   correct HDMI audio is gated on a full-speed (JIT) emulator, not Musashi. Not
+   fixable by resampling (the audio itself is generated slowly).
+
+2. **NEW — format/framing bug exposed only by broadband audio.** Added a
+   `HDMI_DMA_TEST_TONE` debug mode that fills the DMA ring at the hardware rate,
+   bypassing the emulator queue (so no starvation): a synthesized **sine C-major
+   scale plays fine**, but a **real embedded PCM clip comes out as pure hiss**.
+   Same DMA path, same `mai_word` format, only the content differs → the DMA
+   transport is correct but the **MAI sample / IEC958 sub-frame word format is
+   subtly wrong**: a narrow-band tone survives (dominant frequency passes despite
+   framing errors), broadband audio scatters into noise. Root-cause hypothesis:
+   we keep the **firmware's** MAI/packet config (AUDIO_PACKET_CONFIG, MAI_CONFIG,
+   channel map, CRP) and only do a minimal MAI enable, but feed the *raw* sample
+   word format (`sample<<16>>4 & ~0xF`) that the reference `Sample_HDMI_DMA_Audio_03`
+   proved — and that reference did its OWN full MAI setup, not the firmware's. So
+   the firmware's MAI mode likely expects a different FIFO word format (e.g. full
+   IEC958 sub-frames with validity/parity/channel-status/preamble bits, which our
+   words leave zero). NEXT: reconcile the MAI mode vs word format — either build
+   the full sub-frame in software, or replicate the reference's full MAI setup and
+   verify the raw format against it. This is the one remaining blocker for clean
+   HDMI audio (independent of the realtime/starvation issue above).
+
+`mai_word`/format, `MAI_FMT`, `AUDIO_PACKET_CONFIG`, and the reference's full
+prepare sequence are the things to reconcile. Debug scaffolding (`HDMI_DMA_TEST_TONE`,
+sine scale) left in place, default OFF; the 1.2 MB generated `hdmi_clip.h` PCM asset
+is NOT committed (regenerate from a WAV via ffmpeg when needed).
+
 ## Files to revisit
 
 - `src/host/raspi3/vc_mailbox.c` (existing mailbox plumbing — what the

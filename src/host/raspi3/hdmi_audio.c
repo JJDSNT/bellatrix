@@ -2,6 +2,9 @@
 
 #include "audio/output.h"
 
+#include "support.h" /* arm_flush_cache (Emu68) */
+#include "mmu.h"     /* mmu_virt2phys (Emu68) */
+
 #include <stdint.h>
 
 /*
@@ -18,7 +21,7 @@
  * peripheral alias (never the raw 0x3f20xxxx physical window).
  */
 
-int kprintf(const char *fmt, ...);
+/* kprintf is declared by Emu68's support.h (included above). */
 
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 static inline void     hdmi_wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = __builtin_bswap32(v); }
@@ -26,6 +29,16 @@ static inline uint32_t hdmi_rd32(uintptr_t a)             { return __builtin_bsw
 #else
 static inline void     hdmi_wr32(uintptr_t a, uint32_t v) { *(volatile uint32_t *)a = v; }
 static inline uint32_t hdmi_rd32(uintptr_t a)             { return *(volatile uint32_t *)a; }
+#endif
+
+/* Values placed in RAM structures that the BCM DMA controller reads (control
+ * blocks, sample words) must be little-endian regardless of the (big-endian)
+ * CPU, since the DMA does not byte-swap. Register accesses go through
+ * hdmi_wr32/rd32 which already handle the peripheral's little-endianness. */
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define CPU_TO_LE32(x) __builtin_bswap32((uint32_t)(x))
+#else
+#define CPU_TO_LE32(x) ((uint32_t)(x))
 #endif
 
 #define ARM_PERI_VIRT_BASE 0xF2000000UL
@@ -69,87 +82,74 @@ static inline uint32_t hdmi_rd32(uintptr_t a)             { return *(volatile ui
 
 /* HDMI audio/infoframe/CRP registers, HDMI_BASE-relative (RASPPI<=3
  * layout — hardware facts from the BCM2835/2837 peripheral map). */
-#define HDMI_AUDIO_PACKET_CONFIG (ARM_HDMI_BASE + 0x0BCUL)
-#define HDMI_CRP_CFG             (ARM_HDMI_BASE + 0x0C0UL)
-#define HDMI_AUDIO_CTS0          (ARM_HDMI_BASE + 0x0C4UL)
-#define HDMI_AUDIO_CTS1          (ARM_HDMI_BASE + 0x0C8UL)
+/* Offsets confirmed against the BCM2835/2837 VideoCore4 HDMI block (Pi Zero W
+ * .. Pi 3B, RASPPI<=3). Cross-checked with the mainline Linux vc4_hdmi_regs.h
+ * and the kumaashi Pi Zero W bring-up (external/RaspberryPI); both agree on
+ * this contiguous 0x09c..0x0b0 audio region — the previous 0x0BC.. values were
+ * shifted and, notably, 0x0C0 collided with HDMI_SCHEDULER_CONTROL. */
 #define HDMI_MAI_CHANNEL_MAP     (ARM_HDMI_BASE + 0x090UL)
 #define HDMI_MAI_CONFIG          (ARM_HDMI_BASE + 0x094UL)
+#define HDMI_MAI_FORMAT          (ARM_HDMI_BASE + 0x098UL)
+#define HDMI_AUDIO_PACKET_CONFIG (ARM_HDMI_BASE + 0x09CUL)
 #define HDMI_RAM_PACKET_CONFIG   (ARM_HDMI_BASE + 0x0A0UL)
 #define HDMI_RAM_PACKET_STATUS   (ARM_HDMI_BASE + 0x0A4UL)
-#define HDMI_TX_PHY_CTL0         (ARM_HDMI_BASE + 0x2F0UL)
+#define HDMI_CRP_CFG             (ARM_HDMI_BASE + 0x0A8UL)
+#define HDMI_AUDIO_CTS0          (ARM_HDMI_BASE + 0x0ACUL)
+#define HDMI_AUDIO_CTS1          (ARM_HDMI_BASE + 0x0B0UL)
 #define HDMI_RAM_PACKET_START    (ARM_HDMI_BASE + 0x400UL) /* packet slot 1, audio infoframe */
 
 #define HDMI_AUDIO_PACKET_CONFIG_EN (1u << 31)
 #define HDMI_CRP_CFG_EXTERNAL_CTS_EN (1u << 24)
 #define HDMI_RAM_PACKET_CONFIG_EN (1u << 16) /* infoframe slot 1 enable bit */
 
+/* --- Legacy BCM DMA controller (peripheral +0x7000), driven IRQ-free to feed
+ * the MAI FIFO continuously from a double-buffered ring. This controller is
+ * unused by Emu68 (only DWC2's own USB DMA) and by the rest of Bellatrix, so a
+ * full channel is free. CPU-polled feeding of MAI_DATA produced a discontinuous
+ * IEC958 stream that the sink muted; the DMA's HDMI DREQ paces the FIFO steadily
+ * (matches the proven Pi Zero W reference Sample_HDMI_DMA_Audio_03). */
+#define ARM_DMA_BASE       (ARM_PERI_VIRT_BASE + 0x007000UL)
+#define HDMI_DMA_CH        5u  /* full (non-lite) channel, not used by firmware */
+#define DMA_CS(ch)         (ARM_DMA_BASE + 0x000UL + 0x100UL * (ch))
+#define DMA_CONBLK_AD(ch)  (ARM_DMA_BASE + 0x004UL + 0x100UL * (ch))
+#define DMA_SOURCE_AD(ch)  (ARM_DMA_BASE + 0x00CUL + 0x100UL * (ch))
+#define DMA_ENABLE_REG     (ARM_DMA_BASE + 0xFF0UL)
+
+#define DMA_CS_RESET       (1u << 31)
+#define DMA_CS_WAIT_OUTW   (1u << 28)
+#define DMA_CS_ACTIVE      (1u << 0)
+
+#define DMA_TI_PERMAP_HDMI (17u << 16) /* DREQ peripheral 17 = HDMI */
+#define DMA_TI_SRC_INC     (1u << 8)
+#define DMA_TI_DEST_DREQ   (1u << 6)
+#define DMA_TI_BURST2      (2u << 12)
+
+#define HD_BUS_BASE        0x7E808000u          /* HD block, VC bus view */
+#define MAI_DATA_BUS       (HD_BUS_BASE + 0x20u) /* MAI FIFO, DMA destination */
+#define DMA_BUS_UNCACHED   0xC0000000u           /* Pi3 uncached VC alias of RAM */
+
 enum {
-    IEC958_FRAMES_PER_BLOCK    = 192,
     IEC958_SUBFRAMES_PER_BLOCK = 384,
-    IEC958_B_PREAMBLE          = 0x0F,
+    HDMI_DMA_HALF_WORDS = 1024,          /* 512 stereo frames/half (~10.7 ms @48k) */
+    HDMI_DMA_HALVES     = 2,
+    HDMI_DMA_WORDS      = HDMI_DMA_HALF_WORDS * HDMI_DMA_HALVES,
 };
 
-/* IEC 60958-3 channel status, fixed for 48 kHz consumer PCM stereo (fields
- * defined by the published standard, not by any particular implementation):
- * byte0: consumer format(0)/PCM linear(bit1=0)/no copyright(bit2=1... using
- *        0b100 = not-copyright-asserted bit set, mode=0, PCM)
- * byte1: category = general mode (0)
- * byte2: source/channel number = 0 (ignore)
- * byte3: sampling frequency code = 2 (48000 Hz per IEC 60958-3 table)
- * byte4: word length = 0b1011 (24-bit, max length 24) | orig freq code 13<<4 */
-static const uint8_t s_iec958_status_48k[5] = {
-    0x04u,
-    0x00u,
-    0x00u,
-    0x02u,
-    (uint8_t)(0x0Bu | (13u << 4)),
-};
+/* BCM DMA control block: 8 words, must be 32-byte aligned. Read by the DMA
+ * engine straight from RAM, so all fields are stored little-endian. */
+typedef struct HdmiDmaCB {
+    uint32_t ti, src, dst, len, stride, next, debug, reserved;
+} __attribute__((aligned(32))) HdmiDmaCB;
+
+static uint32_t  s_dma_buf[HDMI_DMA_WORDS] __attribute__((aligned(32)));
+static HdmiDmaCB s_dma_cb[HDMI_DMA_HALVES] __attribute__((aligned(32)));
+static uint32_t  s_dma_buf_bus;   /* native bus addr of s_dma_buf[0] (for poll math) */
+static unsigned  s_dma_prev_half;
+static bool      s_dma_running;
+static int32_t   s_dma_peak;      /* peak |sample| since last diagnostic */
+static uint32_t  s_dma_dbg_calls;
 
 static bool s_hdmi_ready = false;
-
-/* Classic continued-fraction rational approximation (Euclidean algorithm +
- * convergents) of num/den bounded by max_num/max_den. Public, well known
- * numerical method — not derived from any specific codebase. */
-static void rational_best_approximation(uint64_t num, uint64_t den,
-                                         uint64_t max_num, uint64_t max_den,
-                                         uint32_t *out_num, uint32_t *out_den)
-{
-    uint64_t p0 = 0, q0 = 1, p1 = 1, q1 = 0;
-    uint64_t n = num, d = den;
-
-    if (den == 0u) {
-        *out_num = 0;
-        *out_den = 1;
-        return;
-    }
-
-    while (d != 0u) {
-        uint64_t a = n / d;
-        uint64_t t;
-
-        uint64_t p2 = a * p1 + p0;
-        uint64_t q2 = a * q1 + q0;
-
-        if (p2 > max_num || q2 > max_den)
-            break;
-
-        p0 = p1; q0 = q1;
-        p1 = p2; q1 = q2;
-
-        t = n - a * d;
-        n = d;
-        d = t;
-    }
-
-    if (q1 == 0u) {
-        *out_num = 1;
-        *out_den = 1;
-    } else {
-        *out_num = (uint32_t)p1;
-        *out_den = (uint32_t)q1;
-    }
-}
 
 /* Reads the HSM (HDMI State Machine) clock rate programmed by the
  * VideoCore firmware into the Clock Manager. We only read here — the
@@ -185,48 +185,170 @@ static bool hdmi_display_audio_supported(void)
     return (hdmi_rd32(HDMI_RAM_PACKET_CONFIG) & HDMI_RAM_PACKET_CONFIG_EN) != 0u;
 }
 
-static void hdmi_program_channel_status_and_infoframe(void)
+/* Native VC bus address (uncached alias) of a RAM object, for the DMA engine. */
+static uint32_t dma_bus(const volatile void *p)
 {
-    /* CEA-861 audio infoframe, fixed for stereo Linear PCM, 2 channels,
-     * sample size/rate "refer to stream" (0) — header fields are defined
-     * by the published CEA-861 standard, not by any implementation. */
-    static const uint8_t infoframe[10] = {
-        0x84u, 0x01u, 0x0Au, /* type=0x84 (Audio), version=1, length=10 */
-        0x00u,               /* checksum placeholder, patched below */
-        0x01u,               /* CT=1 (PCM), CC=1 (2 channels) */
-        0x00u,               /* sample size/rate: refer to stream header */
-        0x00u,               /* format-specific */
-        0x00u, 0x00u, 0x00u  /* speaker allocation + reserved */
+    return DMA_BUS_UNCACHED | (uint32_t)mmu_virt2phys((uintptr_t)p);
+}
+
+/* One 16-bit sample → MAI FIFO word: sample in bits [27:12], low nibble cleared
+ * (the MAI block adds IEC958 channel status/parity/preamble in hardware). */
+static uint32_t mai_word(int16_t s)
+{
+    uint32_t d = (uint32_t)(uint16_t)s;
+    d <<= 16;
+    d >>= 4;
+    d &= ~0xFu;
+    return d;
+}
+
+/* Debug: when set, fill the DMA ring with a self-generated melody (a clean sine
+ * C-major scale up and down) at the hardware 48 kHz rate instead of the emulator's
+ * output queue. A recognizable, clean scale confirms the DMA/MAI/HDMI output path
+ * is correct in isolation, separating it from the emulator's (sub-real-time under
+ * Musashi) sample production rate. Set to 0 for the real Paula audio feed. */
+#define HDMI_DMA_TEST_TONE 0
+/* Within test-tone mode: 1 = play an embedded PCM clip (a generated hdmi_clip.h,
+ * not committed — see ISSUE-0011), 0 = play the synthesized sine C-major scale.
+ * DIAGNOSTIC NOTE: with the current firmware-deferred MAI setup, the sine scale
+ * plays but a real broadband PCM clip comes out as hiss — the DMA transport is
+ * fine but the MAI sample/IEC958 word format is wrong (a pure tone masks it). */
+#define HDMI_DMA_CLIP      0
+
+#if HDMI_DMA_TEST_TONE && HDMI_DMA_CLIP
+#include "host/raspi3/hdmi_clip.h"
+#endif
+
+#if HDMI_DMA_TEST_TONE && !HDMI_DMA_CLIP
+/* One-period 64-entry sine LUT (±16000), built from a 17-entry quadrant so no
+ * floating point is needed at build or run time. */
+static int16_t s_sine64[64];
+static bool    s_sine_ready;
+
+static void hdmi_gen_sine(void)
+{
+    static const int16_t q[17] = {
+        0, 1568, 3121, 4645, 6123, 7542, 8889, 10150, 11314,
+        12368, 13304, 14111, 14782, 15311, 15693, 15923, 16000
     };
-    uint32_t sum = 0;
-    uint8_t checksum;
-    uint32_t i;
-    uint8_t frame[12] = {0};
+    unsigned i;
+    for (i = 0; i <= 16u; i++) s_sine64[i] = q[i];
+    for (i = 17u; i < 32u; i++) s_sine64[i] = q[32u - i];
+    for (i = 32u; i <= 48u; i++) s_sine64[i] = (int16_t)-q[i - 32u];
+    for (i = 49u; i < 64u; i++) s_sine64[i] = (int16_t)-q[64u - i];
+    s_sine_ready = true;
+}
 
-    for (i = 0; i < 10; i++)
-        frame[i] = infoframe[i];
+/* C-major scale, up then down (Hz). ~0.28 s per note → ~3.9 s loop. */
+static const uint16_t s_scale_hz[14] = {
+    262, 294, 330, 349, 392, 440, 494, 523, 494, 440, 392, 349, 330, 294
+};
+#endif
 
-    for (i = 0; i < 10; i++)
-        sum += frame[i];
-    checksum = (uint8_t)(0x100u - (sum & 0xFFu));
-    frame[3] = checksum;
+/* Refill one buffer half from the output queue (silence on underrun), storing
+ * words little-endian for the DMA, then clean the D-cache so the DMA (reading via
+ * the uncached alias) sees the fresh data. */
+static void hdmi_dma_fill_half(unsigned half)
+{
+    uint32_t *dst = &s_dma_buf[half * (unsigned)HDMI_DMA_HALF_WORDS];
+    unsigned w;
 
-    for (i = 0; i < 12; i += 4) {
-        uint32_t word = (uint32_t)frame[i]
-            | ((uint32_t)frame[i + 1] << 8)
-            | ((uint32_t)frame[i + 2] << 16)
-            | ((uint32_t)frame[i + 3] << 24);
-        hdmi_wr32(HDMI_RAM_PACKET_START + i, word);
+#if HDMI_DMA_TEST_TONE && HDMI_DMA_CLIP
+    static uint32_t pos; /* int16 index into s_clip (interleaved L,R), looping */
+    for (w = 0; w < (unsigned)HDMI_DMA_HALF_WORDS; w += 2u) {
+        int16_t l = s_clip[pos];
+        int16_t r = s_clip[pos + 1u];
+        int32_t a = l < 0 ? -(int32_t)l : (int32_t)l;
+        pos += 2u;
+        if (pos + 1u >= (uint32_t)HDMI_CLIP_SAMPLES)
+            pos = 0u;
+        if (a > s_dma_peak) s_dma_peak = a;
+        dst[w + 0] = CPU_TO_LE32(mai_word(l));
+        dst[w + 1] = CPU_TO_LE32(mai_word(r));
+    }
+#elif HDMI_DMA_TEST_TONE
+    static uint32_t phase;      /* 16.16 index into the 64-entry sine LUT */
+    static uint32_t note_inc;   /* phase step for the current note */
+    static uint32_t note_samp;  /* samples elapsed in the current note */
+    static unsigned note_idx;
+
+    if (!s_sine_ready)
+        hdmi_gen_sine();
+
+    for (w = 0; w < (unsigned)HDMI_DMA_HALF_WORDS; w += 2u) {
+        int16_t v;
+        if (note_samp == 0u) {
+            /* phase step = freq * 64 (LUT size) * 65536 (16.16) / 48000 */
+            note_inc = (uint32_t)(((uint64_t)s_scale_hz[note_idx] * 64ull * 65536ull) / 48000ull);
+            phase = 0u; /* start each note at a zero crossing (no click) */
+        }
+        v = s_sine64[(phase >> 16) & 63u];
+        phase += note_inc;
+        if (++note_samp >= 13440u) { /* ~0.28 s at 48 kHz */
+            note_samp = 0u;
+            note_idx = (note_idx + 1u) % 14u;
+        }
+        if (v > s_dma_peak) s_dma_peak = v;
+        dst[w + 0] = CPU_TO_LE32(mai_word(v));
+        dst[w + 1] = CPU_TO_LE32(mai_word(v));
+    }
+#else
+    AudioSample s;
+    for (w = 0; w < (unsigned)HDMI_DMA_HALF_WORDS; w += 2u) {
+        if (bellatrix_audio_output_pop(&s)) {
+            int32_t al = s.left  < 0 ? -(int32_t)s.left  : (int32_t)s.left;
+            int32_t ar = s.right < 0 ? -(int32_t)s.right : (int32_t)s.right;
+            if (al > s_dma_peak) s_dma_peak = al;
+            if (ar > s_dma_peak) s_dma_peak = ar;
+            dst[w + 0] = CPU_TO_LE32(mai_word(s.left));
+            dst[w + 1] = CPU_TO_LE32(mai_word(s.right));
+        } else {
+            dst[w + 0] = 0u;
+            dst[w + 1] = 0u;
+        }
+    }
+#endif
+
+    arm_flush_cache((uintptr_t)dst, (unsigned)HDMI_DMA_HALF_WORDS * 4u);
+}
+
+static void hdmi_dma_setup(void)
+{
+    unsigned i;
+
+    for (i = 0; i < (unsigned)HDMI_DMA_WORDS; i++)
+        s_dma_buf[i] = 0u;
+
+    s_dma_buf_bus = dma_bus(&s_dma_buf[0]);
+
+    for (i = 0; i < (unsigned)HDMI_DMA_HALVES; i++) {
+        s_dma_cb[i].ti  = CPU_TO_LE32(DMA_TI_PERMAP_HDMI | DMA_TI_DEST_DREQ
+                                      | DMA_TI_SRC_INC | DMA_TI_BURST2);
+        s_dma_cb[i].src = CPU_TO_LE32(dma_bus(&s_dma_buf[i * (unsigned)HDMI_DMA_HALF_WORDS]));
+        s_dma_cb[i].dst = CPU_TO_LE32(MAI_DATA_BUS);
+        s_dma_cb[i].len = CPU_TO_LE32((unsigned)HDMI_DMA_HALF_WORDS * 4u);
+        s_dma_cb[i].stride = 0u;
+        s_dma_cb[i].next = CPU_TO_LE32(dma_bus(&s_dma_cb[(i + 1u) % (unsigned)HDMI_DMA_HALVES]));
+        s_dma_cb[i].debug = 0u;
+        s_dma_cb[i].reserved = 0u;
     }
 
-    hdmi_wr32(HDMI_RAM_PACKET_CONFIG,
-              hdmi_rd32(HDMI_RAM_PACKET_CONFIG) | HDMI_RAM_PACKET_CONFIG_EN);
+    arm_flush_cache((uintptr_t)s_dma_buf, sizeof(s_dma_buf));
+    arm_flush_cache((uintptr_t)s_dma_cb, sizeof(s_dma_cb));
+
+    hdmi_wr32(DMA_ENABLE_REG, hdmi_rd32(DMA_ENABLE_REG) | (1u << HDMI_DMA_CH));
+    hdmi_wr32(DMA_CS(HDMI_DMA_CH), DMA_CS_RESET);
+    hdmi_wr32(DMA_CONBLK_AD(HDMI_DMA_CH), dma_bus(&s_dma_cb[0]));
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    hdmi_wr32(DMA_CS(HDMI_DMA_CH), DMA_CS_WAIT_OUTW | DMA_CS_ACTIVE);
+
+    s_dma_prev_half = 0u;
+    s_dma_running = true;
 }
 
 bool hdmi_audio_init(void)
 {
     uint32_t hsm_hz;
-    uint32_t n, cts;
 
     s_hdmi_ready = false;
 
@@ -235,54 +357,106 @@ bool hdmi_audio_init(void)
         return false;
     }
 
-    hsm_hz = hdmi_read_hsm_clock_hz();
-    if (hsm_hz == 0u) {
-        kprintf("hdmi_audio: HSM clock read as 0 Hz, cannot derive N/CTS\n");
-        return false;
-    }
+    /* Snapshot BEFORE we touch anything. With hdmi_drive=2 the VideoCore firmware
+     * already configures the HDMI audio path (APCFG, CRP/CTS, audio infoframe in a
+     * RAM-packet slot). This PRE dump reveals that pristine state so we can tell
+     * which of our writes are redundant or actively clobbering the firmware. */
+    kprintf("hdmi_audio: PRE  MAI_CTL=%08x FMT=%08x CFG=%08x CHMAP=%08x APCFG=%08x "
+            "CRP=%08x CTS0=%08x CTS1=%08x RAMPKT_CFG=%08x THR=%08x\n",
+            (unsigned)hdmi_rd32(MAI_CTL), (unsigned)hdmi_rd32(MAI_FMT),
+            (unsigned)hdmi_rd32(HDMI_MAI_CONFIG), (unsigned)hdmi_rd32(HDMI_MAI_CHANNEL_MAP),
+            (unsigned)hdmi_rd32(HDMI_AUDIO_PACKET_CONFIG), (unsigned)hdmi_rd32(HDMI_CRP_CFG),
+            (unsigned)hdmi_rd32(HDMI_AUDIO_CTS0), (unsigned)hdmi_rd32(HDMI_AUDIO_CTS1),
+            (unsigned)hdmi_rd32(HDMI_RAM_PACKET_CONFIG), (unsigned)hdmi_rd32(MAI_THR));
 
-    /* N/CTS audio clock recovery packet, per HDMI spec's recommended N for
-     * 48 kHz (128 * fs / 1000 rounded, matches the standard's N table) and
-     * CTS derived as the best rational approximation of
-     * (hsm_hz * N) / (128 * fs) bounded to 20-bit fields. */
-    n = 6144u; /* HDMI spec table value for 48 kHz */
-    rational_best_approximation((uint64_t)hsm_hz * n,
-                                 (uint64_t)128u * BELLATRIX_AUDIO_OUTPUT_RATE_HZ,
-                                 0xFFFFFu, 0xFFFFFu, &n, &cts);
-    if (n == 0u)
-        n = 6144u;
-    if (cts == 0u)
-        cts = 1u;
+    /* HSM clock read is kept for diagnostics only — it must NOT gate init.
+     * On this firmware/CM configuration it reads back 0, and the proven Pi Zero W
+     * reference (external/RaspberryPI Sample_HDMI_DMA_Audio_03) never reads it:
+     * it hardcodes N/CTS/SMP and relies on the block's external CTS measurement
+     * (EXTERNAL_CTS_EN), which makes a fixed CTS seed valid regardless of the
+     * actual pixel/HSM clock. */
+    hsm_hz = hdmi_read_hsm_clock_hz(); /* diagnostic only */
 
-    hdmi_wr32(HDMI_CRP_CFG, HDMI_CRP_CFG_EXTERNAL_CTS_EN | (n & 0x3FFFFu));
-    hdmi_wr32(HDMI_AUDIO_CTS0, cts & 0xFFFFFu);
-    hdmi_wr32(HDMI_AUDIO_CTS1, (cts >> 16) & 0xFFu);
+    /* Defer to the firmware. With hdmi_drive=2 the VideoCore firmware already
+     * brings up the entire HDMI audio path: MAI_CONFIG channel enables, the
+     * channel map, AUDIO_PACKET_CONFIG, CRP with automatic CTS, the audio
+     * infoframe in RAM-packet slot 4, and the MAI FIFO thresholds. The real-HW
+     * PRE/POST dumps proved our previous setup was CLOBBERING that working config
+     * (it zeroed MAI_CONFIG's L/R enables, overwrote the channel map, changed the
+     * CRP mode and thresholds). We now write none of it and only feed samples into
+     * the MAI data FIFO — but on the first HW test that alone stayed silent: the
+     * firmware leaves the MAI engine idle (MAI_CTL=0x420). So we additionally do a
+     * minimal MAI-engine bring-up, touching ONLY the HD-block MAI registers
+     * (reset/flush, sample-rate, format, thresholds, enable) with the proven Pi
+     * Zero W reference values, and still leave the HDMI-block packet/infoframe
+     * config (APCFG/CRP/CTS/channel map/MAI_CONFIG/RAM packet) entirely to the
+     * firmware. */
+    hdmi_wr32(MAI_CTL, (1u << 9));                                 /* FLUSH */
+    hdmi_wr32(MAI_CTL, (1u<<0)|(1u<<1)|(1u<<2)|(1u<<15)|(1u<<9));  /* RST|OF|UF|DLATE|FLUSH */
+    hdmi_wr32(MAI_SMP, 0x0DCD21F3u);                              /* sample-rate constant (48 kHz) */
+    hdmi_wr32(MAI_FMT, 0x00020900u);                             /* 2 channels, 48 kHz */
+    hdmi_wr32(MAI_THR, 0x08080608u);                             /* MAI FIFO thresholds */
+    hdmi_wr32(MAI_CTL, (1u<<3)|(2u<<4)|(1u<<12)|(1u<<13));        /* MAI enable, 2 channels */
 
-    hdmi_wr32(HDMI_MAI_CHANNEL_MAP, 0x00000010u); /* L=slot0, R=slot1, MAI default map */
-    hdmi_wr32(HDMI_MAI_CONFIG, 0x00000000u);
+    kprintf("hdmi_audio: init ok (firmware config + minimal MAI enable; hsm=%u Hz)\n",
+            (unsigned)hsm_hz);
+    /* Post-setup register snapshot — lets a single real-Pi boot capture the
+     * ground-truth MAI/HDMI state needed to finish tuning the bit-level values
+     * (MAI_CTL layout, AUDIO_PACKET_CONFIG, RAM packet enable) against hardware. */
+    kprintf("hdmi_audio: POST MAI_CTL=%08x FMT=%08x CFG=%08x CHMAP=%08x APCFG=%08x "
+            "CRP=%08x CTS0=%08x CTS1=%08x RAMPKT_CFG=%08x THR=%08x\n",
+            (unsigned)hdmi_rd32(MAI_CTL), (unsigned)hdmi_rd32(MAI_FMT),
+            (unsigned)hdmi_rd32(HDMI_MAI_CONFIG), (unsigned)hdmi_rd32(HDMI_MAI_CHANNEL_MAP),
+            (unsigned)hdmi_rd32(HDMI_AUDIO_PACKET_CONFIG), (unsigned)hdmi_rd32(HDMI_CRP_CFG),
+            (unsigned)hdmi_rd32(HDMI_AUDIO_CTS0), (unsigned)hdmi_rd32(HDMI_AUDIO_CTS1),
+            (unsigned)hdmi_rd32(HDMI_RAM_PACKET_CONFIG), (unsigned)hdmi_rd32(MAI_THR));
 
-    hdmi_program_channel_status_and_infoframe();
-
-    hdmi_wr32(MAI_CTL, MAI_CTL_RESET);
-    hdmi_wr32(MAI_CTL, MAI_CTL_FLUSH);
-
-    hdmi_wr32(MAI_THR, (0x10u << 8) | 0x10u); /* mid-FIFO thresholds, polling mode */
-    hdmi_wr32(MAI_FMT, 0u); /* raw stereo PCM samples, no companding */
-
-    hdmi_wr32(MAI_CTL,
-              MAI_CTL_ENABLE | MAI_CTL_WHOLSMP | MAI_CTL_CHALIGN_SET
-              | (2u << MAI_CTL_CHNUM_SHIFT));
-
-    hdmi_wr32(HDMI_TX_PHY_CTL0, hdmi_rd32(HDMI_TX_PHY_CTL0) | 1u);
-
-    hdmi_wr32(HDMI_AUDIO_PACKET_CONFIG,
-              hdmi_rd32(HDMI_AUDIO_PACKET_CONFIG) | HDMI_AUDIO_PACKET_CONFIG_EN);
-
-    kprintf("hdmi_audio: init ok (hsm=%u Hz, N=%u, CTS=%u)\n",
-            (unsigned)hsm_hz, (unsigned)n, (unsigned)cts);
+    /* Start the IRQ-free DMA ring that feeds the MAI FIFO from the output queue. */
+    hdmi_dma_setup();
+    kprintf("hdmi_audio: dma ch%u started, CS=%08x CONBLK=%08x\n",
+            (unsigned)HDMI_DMA_CH,
+            (unsigned)hdmi_rd32(DMA_CS(HDMI_DMA_CH)),
+            (unsigned)hdmi_rd32(DMA_CONBLK_AD(HDMI_DMA_CH)));
 
     s_hdmi_ready = true;
     return true;
+}
+
+/* Poll-driven DMA ring refill — called every chipset step from
+ * machine_rigel_step.c. No interrupts: we watch which half the DMA is reading
+ * (its source address) and refill the half it just finished. */
+void hdmi_audio_dma_poll(void)
+{
+    uint32_t cur, off;
+    unsigned cur_half;
+
+    if (!s_dma_running)
+        return;
+
+    cur = hdmi_rd32(DMA_SOURCE_AD(HDMI_DMA_CH));
+    off = cur - s_dma_buf_bus;
+    cur_half = (unsigned)((off / ((unsigned)HDMI_DMA_HALF_WORDS * 4u))
+                          % (unsigned)HDMI_DMA_HALVES);
+
+    if (cur_half != s_dma_prev_half) {
+        hdmi_dma_fill_half(s_dma_prev_half);
+        s_dma_prev_half = cur_half;
+    }
+
+    if (++s_dma_dbg_calls >= 131072u) {
+        BellatrixAudioOutputStats st = bellatrix_audio_output_stats();
+        kprintf("[HDMI-AUD] dma_src=%08x half=%u CS=%08x produced=%llu consumed=%llu "
+                "underrun=%llu qcount=%u peak=%d\n",
+                (unsigned)cur, cur_half,
+                (unsigned)hdmi_rd32(DMA_CS(HDMI_DMA_CH)),
+                (unsigned long long)st.produced_samples,
+                (unsigned long long)st.consumed_samples,
+                (unsigned long long)st.underrun_samples,
+                (unsigned)bellatrix_audio_output_count(),
+                (int)s_dma_peak);
+        s_dma_dbg_calls = 0;
+        s_dma_peak = 0;
+    }
 }
 
 bool hdmi_audio_writable(void)
@@ -295,31 +469,23 @@ bool hdmi_audio_writable(void)
 
 void hdmi_audio_write_sample(int16_t sample16, unsigned subframe_in_block)
 {
-    unsigned frame_in_block = subframe_in_block / 2u;
-    unsigned status_bit_index = frame_in_block; /* 0..191, status covers 0..39 then reads as 0 */
-    uint32_t subframe;
-    int32_t sample24 = (int32_t)sample16 << 8;
+    uint32_t data;
 
-    subframe = ((uint32_t)sample24 & 0xFFFFFFu) << 4;
-
-    if (status_bit_index < 40u) {
-        unsigned byte_idx = status_bit_index / 8u;
-        unsigned bit_idx = status_bit_index % 8u;
-        if (byte_idx < sizeof(s_iec958_status_48k)
-            && (s_iec958_status_48k[byte_idx] & (1u << bit_idx)))
-            subframe |= (1u << 30);
-    }
-
-    if (subframe_in_block == 0u)
-        subframe |= IEC958_B_PREAMBLE;
-
-    if (__builtin_parity(subframe & 0x7FFFFFFFu))
-        subframe |= (1u << 31);
+    (void)subframe_in_block; /* HW does IEC958 framing; no software block counting */
 
     if (!s_hdmi_ready)
         return;
 
-    hdmi_wr32(MAI_DATA, subframe);
+    /* MAI FIFO word format (proven Pi Zero W reference Sample_HDMI_DMA_Audio_03):
+     * the 16-bit sample sits in bits [27:12] with the low nibble cleared; the MAI
+     * block adds the IEC958 channel status, parity and preamble in hardware. One
+     * FIFO word per channel sample — the caller writes left then right. */
+    data = (uint32_t)(uint16_t)sample16;
+    data <<= 16;
+    data >>= 4;
+    data &= ~0xFu;
+
+    hdmi_wr32(MAI_DATA, data);
 }
 
 void hdmi_audio_test_tone_tick(void)
@@ -348,11 +514,8 @@ void hdmi_audio_test_tone_tick(void)
 
 void hdmi_audio_stop(void)
 {
-    if (!s_hdmi_ready)
-        return;
-
-    hdmi_wr32(MAI_CTL, MAI_CTL_RESET);
-    hdmi_wr32(HDMI_AUDIO_PACKET_CONFIG,
-              hdmi_rd32(HDMI_AUDIO_PACKET_CONFIG) & ~HDMI_AUDIO_PACKET_CONFIG_EN);
+    /* We no longer own the HDMI audio configuration (the firmware does), so stop
+     * simply means "stop feeding the FIFO" — do not tear down the firmware's
+     * setup. */
     s_hdmi_ready = false;
 }

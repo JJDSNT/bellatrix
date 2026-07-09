@@ -31,6 +31,13 @@ bool hdmi_audio_writable(void);
  * channel (left then right), so the B-preamble lands on subframe 0. */
 void hdmi_audio_write_sample(int16_t sample16, unsigned subframe_in_block);
 
+/* IRQ-free DMA feed: hdmi_audio_init() starts a double-buffered DMA ring that
+ * streams the output queue into the MAI FIFO paced by the HDMI DREQ. Call this
+ * every chipset step to refill the ring (no interrupts involved). Supersedes the
+ * hdmi_audio_writable()/hdmi_audio_write_sample() polling feed, which produced a
+ * discontinuous stream the sink muted. */
+void hdmi_audio_dma_poll(void);
+
 /* Generates a simple sine tone directly, bypassing audio/output.c's Paula
  * queue entirely — for validating the hardware path in isolation (ISSUE-0011
  * bring-up step 2), before Paula's real audio is wired in (step 5). */
