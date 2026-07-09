@@ -2,13 +2,19 @@
 
 ## Contexto do Problema
 
-O projeto Bellatrix precisa integrar-se ao Emu68 (JIT M68K→AArch64) sem modificar o core do JIT. A integração usa um mecanismo de patches mínimos que adicionam um hook de bus e registram a variante `bellatrix` no CMake.
+O projeto Bellatrix precisa integrar-se ao Emu68 (JIT M68K->AArch64) sem manter
+alteracoes diretas no submodulo. A integracao usa patches pequenos no Emu68 e
+mantem a maior parte da cola em `src/` + `cmake/`.
 
 ## Decisões Arquiteturais
 
-- **Patches mínimos sobre Emu68** — dois arquivos modificados: `CMakeLists.txt` (registrar variant) e `vectors.c` + `start.c` (hook de bus e init).
-- **`emu68/` como git submodule** — READ-ONLY upstream. Patches via `git format-patch`.
-- **Estrutura de fontes em `src/`** — completamente externa ao Emu68, incluída via CMake include_directories.
+- **Patches mínimos sobre Emu68** — o submodulo `emu68/` nao e fonte de verdade
+  para alteracoes Bellatrix; toda alteracao nele deve existir em `patches/`.
+- **`cmake/` como fronteira de integracao** — `cmake/bellatrix-variant.cmake`
+  lista fontes, includes, options e defines Bellatrix sem precisar editar o
+  patch base do Emu68 a cada nova fonte.
+- **Estrutura de fontes em `src/`** — cola Bellatrix/Emu68 vive fora do Emu68 e
+  entra no firmware via `cmake/bellatrix-variant.cmake`.
 - **`btrace`** — sistema de logging JSON Lines via UART para captura e análise de acessos de bus.
 - **`external/musashi`** — submodule para harness de desenvolvimento/teste em Linux (sem bare-metal).
 
@@ -96,6 +102,18 @@ bellatrix/
 ### `0004-bellatrix-cherryusb-dwc2-host.patch`
 - Patches no CherryUSB: endianness LE, hub descriptor parsing, polling mode, DWC2 MMIO LE accessors
 
+### `0021-emu68-public-bus-dispatch.patch`
+- `vectors.c`: inclui `cpu/emu68/emu68_api.h`
+- `vectors.c`: chama `emu68_api_dispatch_bus_access(...)` no path de fault/MMIO
+- fallback preservado para `bellatrix_bus_access(...)` quando a API publica nao
+  estiver inicializada ou nao atender o acesso
+
+O contrato e o adapter da API ficam fora do submodulo:
+
+- `src/cpu/emu68/emu68_api.h`
+- `src/cpu/emu68/emu68_api_adapter.c`
+- registrados em `cmake/bellatrix-variant.cmake`
+
 ## Build Commands
 
 ```bash
@@ -175,4 +193,6 @@ constantes centrais, nunca hardcode de `0x1FFFFF` ou `0x200000`.
 - `emu68/src/aarch64/vectors.c` ↔ `patches/0002-...`
 - `emu68/src/aarch64/start.c` ↔ `patches/0002-...`
 - `emu68/src/ExecutionLoop.c` ↔ `patches/0003-...`
+- `emu68/src/aarch64/vectors.c` ↔ `patches/0021-...`
+- `src/cpu/emu68/emu68_api*` ↔ `cmake/bellatrix-variant.cmake`
 - `external/cherryusb/` ↔ `patches/0004-...`

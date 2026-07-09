@@ -162,7 +162,7 @@ static unsigned  s_dma_prev_half;
 static bool      s_dma_running;
 static int32_t   s_dma_peak;      /* peak |sample| since last diagnostic */
 static uint32_t  s_dma_dbg_calls;
-static uint32_t  s_dma_fills;         /* total half-refills since last diagnostic */
+static uint32_t  s_dma_fills;         /* total segment refills since last diagnostic */
 static uint32_t  s_dma_fill_half[HDMI_DMA_HALVES]; /* per-segment refill counts */
 
 static bool s_hdmi_ready = false;

@@ -1,5 +1,5 @@
 diff --git a/src/aarch64/start.c b/src/aarch64/start.c
-index f2060ad..82ce5ad 100644
+index f2060ad..0f93353 100644
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
 @@ -28,6 +28,10 @@
@@ -120,7 +120,29 @@ index f2060ad..82ce5ad 100644
      M68K_StartEmu(0, NULL);
  
  #endif
-@@ -2080,7 +2142,7 @@ void M68K_StartEmu(void *addr, void *fdt)
+@@ -2052,13 +2101,21 @@ void  __attribute__((used)) stub_ExecutionLoop()
+ }
+ 
+ struct M68KState *__m68k_state;
++#ifdef BELLATRIX
++static struct M68KState bellatrix_m68k_state;
++#endif
+ void MainLoop();
+ 
+ void M68K_StartEmu(void *addr, void *fdt)
+ {
+     void (*arm_code)();
+     struct M68KTranslationUnit * unit = (void*)0;
++#ifdef BELLATRIX
++    struct M68KState *__m68k_ptr = &bellatrix_m68k_state;
++#define __m68k (*__m68k_ptr)
++#else
+     struct M68KState __m68k;
++#endif
+     uint64_t t1=0, t2=0;
+     uint32_t m68k_pc;
+     uint64_t cnt1 = 0, cnt2 = 0;
+@@ -2080,7 +2137,7 @@ void M68K_StartEmu(void *addr, void *fdt)
  
  #ifdef PISTORM
      (void)fdt;
@@ -129,7 +151,7 @@ index f2060ad..82ce5ad 100644
      asm volatile("mov %0, #0":"=r"(addr));
  
      __m68k.ISP.u32 = BE32(*((uint32_t*)addr));
-@@ -2097,10 +2159,32 @@ void M68K_StartEmu(void *addr, void *fdt)
+@@ -2097,10 +2154,32 @@ void M68K_StartEmu(void *addr, void *fdt)
      __m68k.JIT_CONTROL |= (EMU68_MAX_LOOP_COUNT & JCCB_LOOP_COUNT_MASK) << JCCB_LOOP_COUNT;
      __m68k.JIT_CONTROL2 = chip_slowdown ? JC2F_CHIP_SLOWDOWN : 0;
      __m68k.JIT_CONTROL2 |= dbf_slowdown ? JC2F_DBF_SLOWDOWN : 0;
@@ -163,8 +185,24 @@ index f2060ad..82ce5ad 100644
  #else
      __m68k.D[0].u32 = BE32((uint32_t)pitch);
      __m68k.D[1].u32 = BE32((uint32_t)fb_width);
-@@ -2233,4 +2317,3 @@ asm volatile(
+@@ -2199,6 +2278,11 @@ asm volatile(
+     /* Save the context to TPIDRRO_EL0, it will be fetched in main loop */
+     asm volatile("msr TPIDRRO_EL0, %0"::"r"(&__m68k));
+ 
++#ifdef BELLATRIX
++    if (bellatrix_cpu_backend_owns_execution_loop())
++        return;
++#endif
++
+     /* Start M68k now */
+     MainLoop();
+ 
+@@ -2232,5 +2316,7 @@ asm volatile(
+         kprintf("[JIT] Number of m68k JIT blocks executed: %lld\n", tmp);
      }
          //kprintf("[BOOT] reg 0xf3000034 = %08x\n", LE32(*(volatile uint32_t *)0xf3000034));
++#ifdef BELLATRIX
++#undef __m68k
++#endif
  }
 -

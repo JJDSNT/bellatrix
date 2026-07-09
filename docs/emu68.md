@@ -48,3 +48,27 @@ Toda alteração no Emu68 precisa responder:
 ````
 
 A direção correta é: **mínimo patch no Emu68, máximo encapsulamento no Bellatrix**.
+
+## API pública Bellatrix/Emu68
+
+A API pública inicial deve seguir a mesma regra:
+
+- contrato e adapter vivem em `src/cpu/emu68/`;
+- inclusão no firmware acontece por `cmake/bellatrix-variant.cmake`;
+- o submódulo `emu68/` só é alterado via `patches/`;
+- patches no Emu68 devem ser limitados aos pontos onde o core precisa chamar a
+  camada externa.
+
+Estado atual:
+
+- `src/cpu/emu68/emu68_api.h` define o contrato público inicial;
+- `src/cpu/emu68/emu68_api_adapter.c` implementa um singleton sobre o runtime
+  global atual do Emu68;
+- `patches/0021-emu68-public-bus-dispatch.patch` faz `vectors.c` chamar o
+  dispatcher de bus público com fallback para `bellatrix_bus_access()`.
+
+Ainda não existe execução por janela real no Emu68. Enquanto o JIT continuar
+controlado por `MainLoop()`, `emu68_run_cycles()` e `emu68_step()` devem ser
+tratados como API reservada/unsupported.
+
+Documento detalhado: `docs/emu68_public_api.md`.

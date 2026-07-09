@@ -11,6 +11,7 @@
 #include "launcher/launcher.h"
 #endif
 #include <stdatomic.h>
+#include <limits.h>
 #include "cpu/cpu_backend.h"
 #include "cpu/musashi/musashi_backend.h"
 #include "machine/machine.h"
@@ -26,6 +27,7 @@
 #include "io/serial/uart_host.h"
 #include "mmu.h"
 #include "A64.h"
+#include "cpu/emu68/emu68_api.h"
 #include "support.h"
 #include "M68k.h"
 
@@ -38,6 +40,8 @@ uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc = 0;
 
 extern struct M68KState *__m68k_state;
+extern void M68K_StartEmu(void *addr, void *fdt);
+static emu68_t *s_emu68_api;
 
 /* ---------------------------------------------------------------------------
  * Emu68 CpuBackend — wires machine's two CPU callbacks to Emu68 internals
@@ -57,13 +61,193 @@ static void emu68_set_ipl(void *ctx, int level)
     PAL_IPL_Set((uint8_t)level);
 }
 
+static void emu68_backend_reset(void *ctx)
+{
+    (void)ctx;
+
+    M68K_StartEmu(0, NULL);
+    emu68_reset(s_emu68_api);
+}
+
+static int emu68_backend_run(void *ctx, uint32_t cycles)
+{
+    emu68_run_result_t result;
+
+    (void)ctx;
+
+    if (!s_emu68_api || cycles == 0u)
+        return 0;
+
+    result = emu68_run_cycles(s_emu68_api, cycles);
+    if (result.reason == EMU68_STOP_UNSUPPORTED ||
+        result.reason == EMU68_STOP_EXCEPTION ||
+        result.reason == EMU68_STOP_HALTED) {
+        return 0;
+    }
+
+    if (result.cycles_run > (uint64_t)INT32_MAX)
+        return INT32_MAX;
+
+    return (int)result.cycles_run;
+}
+
 static CpuBackend g_emu68_backend __attribute__((unused)) = {
     .ctx = NULL,
     .get_pc = emu68_get_pc,
     .set_ipl = emu68_set_ipl,
-    .reset = NULL,
-    .run = NULL,
+    .reset = emu68_backend_reset,
+    .run = emu68_backend_run,
+    .progress_in_run = 1,
 };
+
+static int bellatrix_emu68_api_access_needs_sync(uint32_t addr, unsigned int size,
+                                                 int is_write)
+{
+    uint32_t normalized;
+    uint32_t reg;
+
+    if (!is_write)
+        return 0;
+
+    if (size != 1u && size != 2u && size != 4u)
+        return 0;
+
+    normalized = bellatrix_bridge_normalize_addr(addr);
+
+    if (normalized >= 0x00BFD000u && normalized <= 0x00BFEFFFu)
+        return 1;
+
+    if (normalized < 0x00DFF000u || normalized > 0x00DFF1FFu)
+        return 0;
+
+    reg = normalized & 0x1ffu;
+    switch (reg) {
+    case 0x058u: /* BLTSIZE */
+    case 0x088u: /* COPJMP1 */
+    case 0x08au: /* COPJMP2 */
+    case 0x096u: /* DMACON */
+    case 0x09au: /* INTENA */
+    case 0x09cu: /* INTREQ */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static emu68_bus_read_t bellatrix_emu68_api_read8(void *user, uint32_t addr,
+                                                  emu68_space_t space)
+{
+    emu68_bus_read_t result = { EMU68_BUS_OK, 0 };
+    (void)user;
+    (void)space;
+    result.value = bellatrix_bus_access(addr, 0, 1, BUS_READ);
+    return result;
+}
+
+static emu68_bus_read_t bellatrix_emu68_api_read16(void *user, uint32_t addr,
+                                                   emu68_space_t space)
+{
+    emu68_bus_read_t result = { EMU68_BUS_OK, 0 };
+    (void)user;
+    (void)space;
+    result.value = bellatrix_bus_access(addr, 0, 2, BUS_READ);
+    return result;
+}
+
+static emu68_bus_read_t bellatrix_emu68_api_read32(void *user, uint32_t addr,
+                                                   emu68_space_t space)
+{
+    emu68_bus_read_t result = { EMU68_BUS_OK, 0 };
+    (void)user;
+    (void)space;
+    result.value = bellatrix_bus_access(addr, 0, 4, BUS_READ);
+    return result;
+}
+
+static emu68_bus_write_t bellatrix_emu68_api_write8(void *user, uint32_t addr,
+                                                    uint8_t value,
+                                                    emu68_space_t space)
+{
+    emu68_bus_write_t result = { EMU68_BUS_OK };
+    (void)user;
+    (void)space;
+    bellatrix_bus_access(addr, value, 1, BUS_WRITE);
+    if (bellatrix_emu68_api_access_needs_sync(addr, 1u, 1))
+        result.status = EMU68_BUS_SYNC_REQUIRED;
+    return result;
+}
+
+static emu68_bus_write_t bellatrix_emu68_api_write16(void *user, uint32_t addr,
+                                                     uint16_t value,
+                                                     emu68_space_t space)
+{
+    emu68_bus_write_t result = { EMU68_BUS_OK };
+    (void)user;
+    (void)space;
+    bellatrix_bus_access(addr, value, 2, BUS_WRITE);
+    if (bellatrix_emu68_api_access_needs_sync(addr, 2u, 1))
+        result.status = EMU68_BUS_SYNC_REQUIRED;
+    return result;
+}
+
+static emu68_bus_write_t bellatrix_emu68_api_write32(void *user, uint32_t addr,
+                                                     uint32_t value,
+                                                     emu68_space_t space)
+{
+    emu68_bus_write_t result = { EMU68_BUS_OK };
+    (void)user;
+    (void)space;
+    bellatrix_bus_access(addr, value, 4, BUS_WRITE);
+    if (bellatrix_emu68_api_access_needs_sync(addr, 4u, 1))
+        result.status = EMU68_BUS_SYNC_REQUIRED;
+    return result;
+}
+
+static void bellatrix_emu68_api_init(void)
+{
+    static const emu68_bus_ops_t bus_ops = {
+        .read8 = bellatrix_emu68_api_read8,
+        .read16 = bellatrix_emu68_api_read16,
+        .read32 = bellatrix_emu68_api_read32,
+        .write8 = bellatrix_emu68_api_write8,
+        .write16 = bellatrix_emu68_api_write16,
+        .write32 = bellatrix_emu68_api_write32,
+    };
+    emu68_config_t config;
+
+    memset(&config, 0, sizeof(config));
+
+    s_emu68_api = emu68_create(&config);
+    if (!s_emu68_api) {
+        kprintf("[EMU68-API] create failed; vectors path will use legacy fallback\n");
+        return;
+    }
+
+    if (emu68_set_bus(s_emu68_api, &bus_ops, NULL) != EMU68_OK)
+        kprintf("[EMU68-API] bus registration failed; vectors path will use legacy fallback\n");
+    else
+        kprintf("[EMU68-API] v%u bus registered\n",
+                (unsigned)emu68_api_version());
+}
+
+static void bellatrix_emu68_api_dump_stats(void)
+{
+    emu68_stats_t s;
+
+    memset(&s, 0, sizeof(s));
+    emu68_get_stats(s_emu68_api, &s);
+
+    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu err=%llu "
+            "unhandled=%llu bad_size=%llu stop=%llu inv=%llu\n",
+            (unsigned long long)s.bus_read_count,
+            (unsigned long long)s.bus_write_count,
+            (unsigned long long)s.bus_sync_required_count,
+            (unsigned long long)s.bus_error_count,
+            (unsigned long long)s.bus_unhandled_count,
+            (unsigned long long)s.unsupported_size_count,
+            (unsigned long long)s.stop_request_count,
+            (unsigned long long)s.invalidate_count);
+}
 
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
 static CpuBackend *bellatrix_selected_cpu_backend(void)
@@ -112,7 +296,11 @@ void bellatrix_run_selected_cpu_backend(void)
         uint32_t ran = cpu_backend_run(backend, 454u);
         uint32_t cycles = ran > 0u ? ran : 454u;
 
-        if (PAL_Core_IsMulticoreEnabled()) {
+        if (backend->progress_in_run) {
+            /* Emu68 reports CPU progress from inside MainLoop via
+             * bellatrix_emu68_report_jit_progress(); do not publish or step
+             * the chipset again here. */
+        } else if (PAL_Core_IsMulticoreEnabled()) {
             /* Multicore: Core 2 (chipset) and Core 3 (IO) run independently;
              * publish cross-core like the Emu68 JIT path does instead of
              * stepping Rigel synchronously on this (CPU) core. */
@@ -314,6 +502,7 @@ void bellatrix_runtime_mmio_barrier(void)
 static int s_overlay = 1;
 
 #define BTRACE_CONTROL_ADDR 0xDFFF00u
+#define EMU68_API_CONTROL_ADDR 0xDFFF08u
 #define ROM_OVERLAY_BASE    0x00E00000u
 
 static inline int cia_reg(uint32_t addr)
@@ -471,6 +660,7 @@ void bellatrix_init(void)
     PAL_Debug_Init(115200);
     bellatrix_emu68_boards_reset();
     cpu_backend = bellatrix_selected_cpu_backend();
+    bellatrix_emu68_api_init();
 
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
     bellatrix_musashi_backend_init();
@@ -939,6 +1129,18 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
     if (addr == BTRACE_CONTROL_ADDR && dir == BUS_WRITE)
     {
         bellatrix_machine_btrace_set_filter((uint16_t)value);
+        return 0;
+    }
+    if (addr == EMU68_API_CONTROL_ADDR && dir == BUS_WRITE)
+    {
+        if (value == 0x01u)
+            bellatrix_emu68_api_dump_stats();
+        if (value == 0x02u)
+            emu68_reset_stats(s_emu68_api);
+        if (value == 0x03u) {
+            bellatrix_emu68_api_dump_stats();
+            emu68_reset_stats(s_emu68_api);
+        }
         return 0;
     }
 #if BELLATRIX_PROFILE_ENABLED

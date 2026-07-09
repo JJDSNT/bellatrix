@@ -1,18 +1,19 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
-index 732a176..a7612fe 100644
+index 732a176..9f55465 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,10 @@
  #include <M68k.h>
  #include <support.h>
  #include <config.h>
 +#ifdef BELLATRIX
 +#include "cpu/emu68/bellatrix.h"
++#include "cpu/emu68/emu68_api.h"
 +#endif
  #ifdef PISTORM
  #ifndef PISTORM32
  #define PS_PROTOCOL_IMPL
-@@ -138,11 +141,67 @@ void MainLoop()
+@@ -138,11 +142,70 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -75,6 +76,9 @@ index 732a176..a7612fe 100644
 +                M68K_LoadContext(getCTX());
 +                asm volatile("mov x12, %0" :: "r"(_x12_save));
 +                asm volatile("mov v28.d[0], xzr");
++                if (emu68_api_dispatch_quantum_progress(_v30_now,
++                                                        (uint32_t)_pc_now))
++                    return;
 +            }
 +        }
 +#endif
@@ -82,7 +86,7 @@ index 732a176..a7612fe 100644
          /* If (unlikely) there was interrupt pending, check if it needs to be processed */
          if (unlikely(ctx->INT32 != 0))
          {
-@@ -152,6 +211,13 @@ void MainLoop()
+@@ -152,6 +215,13 @@ void MainLoop()
              uint32_t vbr;
  
              /* Find out requested IPL level based on ARM state and real IPL line */
@@ -96,7 +100,7 @@ index 732a176..a7612fe 100644
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +235,7 @@ void MainLoop()
+@@ -169,7 +239,7 @@ void MainLoop()
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
@@ -105,7 +109,7 @@ index 732a176..a7612fe 100644
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +256,10 @@ void MainLoop()
+@@ -190,9 +260,10 @@ void MainLoop()
                      {
                          level = ipl_level;
                      }
@@ -117,7 +121,7 @@ index 732a176..a7612fe 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +303,64 @@ void MainLoop()
+@@ -236,6 +307,64 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
@@ -182,7 +186,7 @@ index 732a176..a7612fe 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +373,8 @@ void MainLoop()
+@@ -248,7 +377,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */
