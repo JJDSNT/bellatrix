@@ -19,9 +19,14 @@ struct emu68 {
     emu68_stats_t stats;
     bool in_use;
     bool stop_requested;
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
     bool logged_first_read;
     bool logged_first_write;
     bool logged_first_sync;
+#endif
+#if defined(BELLATRIX_EMU68_API_AUTODUMP) && BELLATRIX_EMU68_API_AUTODUMP
+    bool dumped_first_sync_stats;
+#endif
 };
 
 static emu68_t g_emu68_api;
@@ -46,6 +51,7 @@ static void emit_event(emu68_t *cpu, const emu68_event_t *event)
         cpu->event_fn(cpu->event_user, event);
 }
 
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
 static uint32_t current_pc(void)
 {
     if (!__m68k_state)
@@ -53,6 +59,7 @@ static uint32_t current_pc(void)
 
     return BE32(__m68k_state->PC);
 }
+#endif
 
 uint32_t emu68_api_version(void)
 {
@@ -336,21 +343,39 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
         }
 
         cpu->stats.bus_write_count++;
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
         if (!cpu->logged_first_write) {
             cpu->logged_first_write = true;
             kprintf("[EMU68-API] first bus write addr=%08x size=%u value=%08x pc=%08x\n",
                     (unsigned)addr, (unsigned)size, (unsigned)*value,
                     (unsigned)current_pc());
         }
+#endif
         if (result.status == EMU68_BUS_SYNC_REQUIRED) {
             emu68_event_t event;
             cpu->stats.bus_sync_required_count++;
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
             if (!cpu->logged_first_sync) {
                 cpu->logged_first_sync = true;
                 kprintf("[EMU68-API] first sync-required addr=%08x size=%u value=%08x pc=%08x\n",
                         (unsigned)addr, (unsigned)size, (unsigned)*value,
                         (unsigned)current_pc());
             }
+#endif
+#if defined(BELLATRIX_EMU68_API_AUTODUMP) && BELLATRIX_EMU68_API_AUTODUMP
+            if (!cpu->dumped_first_sync_stats) {
+                cpu->dumped_first_sync_stats = true;
+                kprintf("[EMU68-API] first-sync stats bus_r=%llu bus_w=%llu sync=%llu err=%llu unhandled=%llu bad_size=%llu stop=%llu inv=%llu\n",
+                        (unsigned long long)cpu->stats.bus_read_count,
+                        (unsigned long long)cpu->stats.bus_write_count,
+                        (unsigned long long)cpu->stats.bus_sync_required_count,
+                        (unsigned long long)cpu->stats.bus_error_count,
+                        (unsigned long long)cpu->stats.bus_unhandled_count,
+                        (unsigned long long)cpu->stats.unsupported_size_count,
+                        (unsigned long long)cpu->stats.stop_request_count,
+                        (unsigned long long)cpu->stats.invalidate_count);
+            }
+#endif
             memset(&event, 0, sizeof(event));
             event.type = EMU68_EVENT_SYNC_REQUIRED;
             event.addr = addr;
@@ -392,12 +417,14 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
         }
 
         cpu->stats.bus_read_count++;
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
         if (!cpu->logged_first_read) {
             cpu->logged_first_read = true;
             kprintf("[EMU68-API] first bus read addr=%08x size=%u value=%08x pc=%08x\n",
                     (unsigned)addr, (unsigned)size, (unsigned)result.value,
                     (unsigned)current_pc());
         }
+#endif
         if (result.status == EMU68_BUS_ERROR) {
             cpu->stats.bus_error_count++;
             return 0;

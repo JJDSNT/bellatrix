@@ -268,6 +268,16 @@ if [ "${BELLATRIX_TRACE_BUILD:-0}" = "1" ]; then
     echo "[BUILD] Bellatrix trace: enabled unconditionally (bare-metal)"
 fi
 
+if [ "${BELLATRIX_EMU68_API_TRACE:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_API_TRACE=1"
+    echo "[BUILD] Emu68 API trace: enabled"
+fi
+
+if [ "${BELLATRIX_EMU68_API_AUTODUMP:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_API_AUTODUMP=1"
+    echo "[BUILD] Emu68 API auto stats dump: enabled"
+fi
+
 PROFILE_FLAG="OFF"
 if [ "${BELLATRIX_PROFILE:-0}" = "1" ]; then
     PROFILE_FLAG="ON"

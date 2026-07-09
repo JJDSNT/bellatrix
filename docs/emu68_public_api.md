@@ -151,6 +151,16 @@ Tracked counters:
 These counters are intended for diagnostics and API validation. They should not
 be used as timing or compatibility semantics.
 
+Optional build-time trace:
+
+- set `BELLATRIX_EMU68_API_TRACE=1` when running `scripts/build.sh` to print the
+  first bus read, first bus write, and first sync-required access observed by
+  the public dispatcher.
+- set `BELLATRIX_EMU68_API_AUTODUMP=1` to print one stats line at the first
+  sync-required access. This is useful in QEMU when there is no convenient guest
+  tool to write the diagnostic control address.
+- default builds keep these first-occurrence logs disabled.
+
 Bellatrix exposes a temporary diagnostic control address:
 
 - write `0x01` to `0xDFFF08`: dump API stats
@@ -223,6 +233,10 @@ Validated on 2026-07-09:
 
 - `scripts/build.sh` succeeds with the default launcher-enabled image.
 - `BELLATRIX_LAUNCHER=0 scripts/build.sh` succeeds for non-interactive QEMU.
+- `BELLATRIX_LAUNCHER=0 BELLATRIX_EMU68_API_TRACE=1 scripts/build.sh` succeeds
+  for dispatcher tracing.
+- `BELLATRIX_LAUNCHER=0 BELLATRIX_EMU68_API_AUTODUMP=1 scripts/build.sh`
+  succeeds for first-sync stats validation.
 - `scripts/setup.sh --verify` succeeds and includes
   `0021-emu68-public-bus-dispatch.patch`.
 - A short QEMU run with `BELLATRIX_LAUNCHER=0` reaches Bellatrix init, prints
@@ -240,6 +254,11 @@ Validated on 2026-07-09:
 
 The same run reaches AROS serial output, including resident module listing,
 `ROMInfo: 1MiB ROM detected`, and Z2 Fast RAM autoconfig.
+- A QEMU run built with `BELLATRIX_EMU68_API_AUTODUMP=1` confirms the stats path:
+
+```text
+[EMU68-API] first-sync stats bus_r=1 bus_w=2 sync=1 err=0 unhandled=0 bad_size=0 stop=0 inv=0
+```
 
 The QEMU run is intentionally treated as a boot sanity check because Emu68 under
 QEMU TCG is slow. The dispatcher path is confirmed by the first-occurrence API

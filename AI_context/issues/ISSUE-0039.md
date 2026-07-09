@@ -57,8 +57,11 @@ Introduzir uma API pequena e honesta para:
 - `src/cpu/emu68/bellatrix.c` registra callbacks de bus na API.
 - Boot imprime `[EMU68-API] v1 bus registered` quando a API cria o singleton e
   registra os callbacks.
-- Adapter imprime uma unica vez os primeiros acessos via dispatcher publico:
-  primeiro read, primeiro write e primeiro `sync-required`.
+- Com `BELLATRIX_EMU68_API_TRACE=1`, adapter imprime uma unica vez os primeiros
+  acessos via dispatcher publico: primeiro read, primeiro write e primeiro
+  `sync-required`.
+- Com `BELLATRIX_EMU68_API_AUTODUMP=1`, adapter imprime uma linha de stats no
+  primeiro `sync-required`, sem depender de ferramenta guest.
 - Writes criticos custom/CIA retornam `EMU68_BUS_SYNC_REQUIRED`.
 - Adicionadas estatisticas leves (`emu68_stats_t`) para reads/writes/sync/error/
   unhandled/unsupported/invalidate/stop.
@@ -71,7 +74,8 @@ Introduzir uma API pequena e honesta para:
 
 # O que falta fazer
 
-- Usar o controle `0xDFFF08` em uma execucao real para confirmar contadores.
+- Usar o controle `0xDFFF08` em uma execucao real para confirmar dump/reset via
+  guest.
 - Validar invalidação com self-modifying code/overlay/ROM patch.
 - Projetar `run_cycles()` real.
 - Fazer `EMU68_BUS_SYNC_REQUIRED` parar uma janela quando `run_cycles()` existir.
@@ -96,7 +100,8 @@ Introduzir uma API pequena e honesta para:
 - [x] Stats podem ser dumpados/resetados por controle explicito.
 - [x] QEMU sem launcher chega ao JIT com a API registrada no boot.
 - [x] QEMU com `src/roms/aros.rom` confirma read/write/sync pelo dispatcher.
-- [ ] Diagnostico confirma dump de contadores por `0xDFFF08` em uma execucao real.
+- [x] Diagnostico confirma autodump de contadores no primeiro `sync-required`.
+- [ ] Diagnostico confirma dump/reset por `0xDFFF08` em uma execucao real.
 - [ ] Invalidação validada contra caso real de codigo mutavel.
 
 # Observações
@@ -118,3 +123,11 @@ Esta issue foca a API publica incremental.
   `[EMU68-API] first bus write`, `[EMU68-API] first bus read` e
   `[EMU68-API] first sync-required`; AROS chegou ao serial de resident modules,
   ROMInfo 1MiB e autoconfig Z2 Fast RAM.
+- 2026-07-09: logs de primeira ocorrencia movidos para trace opt-in via
+  `BELLATRIX_EMU68_API_TRACE=1`; builds normais seguem silenciosos exceto pelo
+  log de registro da API e dumps explicitos.
+- 2026-07-09: adicionado autodump opt-in via `BELLATRIX_EMU68_API_AUTODUMP=1`
+  para validar contadores no primeiro `sync-required` sem ferramenta guest.
+- 2026-07-09: QEMU/AROS com autodump observou
+  `[EMU68-API] first-sync stats bus_r=1 bus_w=2 sync=1 err=0 unhandled=0
+  bad_size=0 stop=0 inv=0`.

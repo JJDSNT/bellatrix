@@ -108,6 +108,11 @@ Funcional nesta fase:
 - singleton `emu68_create()` / `emu68_destroy()`
 - `emu68_set_bus()`
 - log de boot `[EMU68-API] v1 bus registered` quando o bus publico e registrado
+- trace opt-in `BELLATRIX_EMU68_API_TRACE=1` para imprimir primeira leitura,
+  primeira escrita e primeiro `sync-required` via dispatcher publico
+- autodump opt-in `BELLATRIX_EMU68_API_AUTODUMP=1` para imprimir uma linha de
+  stats no primeiro `sync-required`, util em QEMU quando nao ha ferramenta guest
+  para escrever em `0xDFFF08`
 - callbacks de bus 8/16/32 via fault path de `vectors.c`
 - `EMU68_BUS_SYNC_REQUIRED` para writes criticos de custom/CIA, ainda como
   sinal/evento sem parar execucao
@@ -185,6 +190,22 @@ Esses logs confirmam que:
 - o fault path passa pelo dispatcher publico para write;
 - o fault path passa pelo dispatcher publico para read;
 - o sinal `EMU68_BUS_SYNC_REQUIRED` esta sendo produzido em acesso CIA.
+
+Esses logs de primeira ocorrencia dependem de build com
+`BELLATRIX_EMU68_API_TRACE=1`; builds normais mantem apenas os contadores e o
+controle `0xDFFF08`.
+
+Para validar stats sem guest tool, usar build com
+`BELLATRIX_EMU68_API_AUTODUMP=1`. Isso imprime uma linha
+`[EMU68-API] first-sync stats ...` no primeiro acesso que retornar
+`EMU68_BUS_SYNC_REQUIRED`. O controle explicito `0xDFFF08` continua sendo o
+caminho guest-facing para dump/reset.
+
+Validado em QEMU/AROS:
+
+```text
+[EMU68-API] first-sync stats bus_r=1 bus_w=2 sync=1 err=0 unhandled=0 bad_size=0 stop=0 inv=0
+```
 
 O mesmo run chegou ao serial do AROS com lista de resident modules,
 `ROMInfo: 1MiB ROM detected` e autoconfig da Z2 Fast RAM. O timeout cortou a
