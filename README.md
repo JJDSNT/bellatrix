@@ -13,7 +13,10 @@ Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
 - **RTG support** — `bellatrix.rtg` and the P96 `bellatrix.card` path are in progress; DiagArea/CardLoader residency is confirmed, but p96gfx discovery, live RTG output, and the VC4 bare-metal backend still need validation/completion.
 - **Bluetooth HID** — device scan works; pairing and connection not yet functional.
-- **HDMI audio** — not yet implemented; video output only.
+- **HDMI audio** — the bare-metal HDMI output path is believed to be working:
+  the DMA test clip/WAV plays on real Pi hardware. The remaining work is to
+  get Amiga/Paula emulation fast enough on hardware to validate real Amiga
+  audio through that path.
 
 ---
 
