@@ -58,8 +58,9 @@ apply_patch_if_needed() {
     fi
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
-        if grep -Fq 'bellatrix_bridge_cpu_progress(bela_delta' src/ExecutionLoop.c &&
-           grep -Fq 'cpu/cpu_bridge.h' src/ExecutionLoop.c; then
+        if grep -Fq 'bellatrix_emu68_report_jit_progress(_v30_now' src/ExecutionLoop.c &&
+           grep -Fq 'emu68_api_dispatch_quantum_progress(_v30_now' src/ExecutionLoop.c &&
+           grep -Fq 'cpu/emu68/emu68_api.h' src/ExecutionLoop.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
         fi
@@ -69,6 +70,25 @@ apply_patch_if_needed() {
         if grep -Fq 'set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm32lite" "bellatrix")' CMakeLists.txt &&
            grep -Fq 'elseif(${VARIANT} STREQUAL "bellatrix")' CMakeLists.txt; then
             echo "Patch already applied (built-in Bellatrix variant detected): $name"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0007-bellatrix-boot-sequence.patch" ]; then
+        if grep -Fq 'bellatrix_core1_entry();' src/aarch64/start.c &&
+           grep -Fq 'bellatrix_launch_cpu_and_park(' src/aarch64/start.c &&
+           grep -Fq 'static struct M68KState bellatrix_m68k_state;' src/aarch64/start.c &&
+           grep -Fq 'bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c; then
+            echo "Patch already applied (built-in boot sequence detected): $name"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0021-emu68-public-bus-dispatch.patch" ]; then
+        if grep -Fq 'BELLATRIX_HAVE_EMU68_API' src/aarch64/vectors.c &&
+           grep -Fq 'emu68_api_dispatch_bus_access((uint32_t)far' src/aarch64/vectors.c &&
+           grep -Fq 'EMU68_SPACE_DATA' src/aarch64/vectors.c; then
+            echo "Patch already applied (built-in public bus dispatch detected): $name"
             return 0
         fi
     fi
@@ -226,8 +246,28 @@ check_emu68_patch_applied() {
     fi
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
-        if grep -Fq 'bellatrix_bridge_cpu_progress(bela_delta' src/ExecutionLoop.c &&
-           grep -Fq 'cpu/cpu_bridge.h' src/ExecutionLoop.c; then
+        if grep -Fq 'bellatrix_emu68_report_jit_progress(_v30_now' src/ExecutionLoop.c &&
+           grep -Fq 'emu68_api_dispatch_quantum_progress(_v30_now' src/ExecutionLoop.c &&
+           grep -Fq 'cpu/emu68/emu68_api.h' src/ExecutionLoop.c; then
+            echo "  OK  $name  [content match; context drifted — regenerate patch]"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0007-bellatrix-boot-sequence.patch" ]; then
+        if grep -Fq 'bellatrix_core1_entry();' src/aarch64/start.c &&
+           grep -Fq 'bellatrix_launch_cpu_and_park(' src/aarch64/start.c &&
+           grep -Fq 'static struct M68KState bellatrix_m68k_state;' src/aarch64/start.c &&
+           grep -Fq 'bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c; then
+            echo "  OK  $name  [content match; context drifted — regenerate patch]"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0021-emu68-public-bus-dispatch.patch" ]; then
+        if grep -Fq 'BELLATRIX_HAVE_EMU68_API' src/aarch64/vectors.c &&
+           grep -Fq 'emu68_api_dispatch_bus_access((uint32_t)far' src/aarch64/vectors.c &&
+           grep -Fq 'EMU68_SPACE_DATA' src/aarch64/vectors.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
         fi
