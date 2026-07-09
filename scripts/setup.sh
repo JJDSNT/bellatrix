@@ -78,7 +78,8 @@ apply_patch_if_needed() {
         if grep -Fq 'bellatrix_core1_entry();' src/aarch64/start.c &&
            grep -Fq 'bellatrix_launch_cpu_and_park(' src/aarch64/start.c &&
            grep -Fq 'static struct M68KState bellatrix_m68k_state;' src/aarch64/start.c &&
-           grep -Fq 'bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c; then
+           grep -Fq 'if (bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c &&
+           grep -Fq '        return;' src/aarch64/start.c; then
             echo "Patch already applied (built-in boot sequence detected): $name"
             return 0
         fi
@@ -258,7 +259,8 @@ check_emu68_patch_applied() {
         if grep -Fq 'bellatrix_core1_entry();' src/aarch64/start.c &&
            grep -Fq 'bellatrix_launch_cpu_and_park(' src/aarch64/start.c &&
            grep -Fq 'static struct M68KState bellatrix_m68k_state;' src/aarch64/start.c &&
-           grep -Fq 'bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c; then
+           grep -Fq 'if (bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c &&
+           grep -Fq '        return;' src/aarch64/start.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
         fi
