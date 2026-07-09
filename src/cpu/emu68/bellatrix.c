@@ -11,6 +11,7 @@
 #include "launcher/launcher.h"
 #endif
 #include <stdatomic.h>
+#include <limits.h>
 #include "cpu/cpu_backend.h"
 #include "cpu/musashi/musashi_backend.h"
 #include "machine/machine.h"
@@ -39,6 +40,8 @@ uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc = 0;
 
 extern struct M68KState *__m68k_state;
+extern void M68K_StartEmu(void *addr, void *fdt);
+static emu68_t *s_emu68_api;
 
 /* ---------------------------------------------------------------------------
  * Emu68 CpuBackend — wires machine's two CPU callbacks to Emu68 internals
@@ -58,15 +61,44 @@ static void emu68_set_ipl(void *ctx, int level)
     PAL_IPL_Set((uint8_t)level);
 }
 
+static void emu68_backend_reset(void *ctx)
+{
+    (void)ctx;
+
+    M68K_StartEmu(0, NULL);
+    emu68_reset(s_emu68_api);
+}
+
+static int emu68_backend_run(void *ctx, uint32_t cycles)
+{
+    emu68_run_result_t result;
+
+    (void)ctx;
+
+    if (!s_emu68_api || cycles == 0u)
+        return 0;
+
+    result = emu68_run_cycles(s_emu68_api, cycles);
+    if (result.reason == EMU68_STOP_UNSUPPORTED ||
+        result.reason == EMU68_STOP_EXCEPTION ||
+        result.reason == EMU68_STOP_HALTED) {
+        return 0;
+    }
+
+    if (result.cycles_run > (uint64_t)INT32_MAX)
+        return INT32_MAX;
+
+    return (int)result.cycles_run;
+}
+
 static CpuBackend g_emu68_backend __attribute__((unused)) = {
     .ctx = NULL,
     .get_pc = emu68_get_pc,
     .set_ipl = emu68_set_ipl,
-    .reset = NULL,
-    .run = NULL,
+    .reset = emu68_backend_reset,
+    .run = emu68_backend_run,
+    .progress_in_run = 1,
 };
-
-static emu68_t *s_emu68_api;
 
 static int bellatrix_emu68_api_access_needs_sync(uint32_t addr, unsigned int size,
                                                  int is_write)
@@ -264,7 +296,11 @@ void bellatrix_run_selected_cpu_backend(void)
         uint32_t ran = cpu_backend_run(backend, 454u);
         uint32_t cycles = ran > 0u ? ran : 454u;
 
-        if (PAL_Core_IsMulticoreEnabled()) {
+        if (backend->progress_in_run) {
+            /* Emu68 reports CPU progress from inside MainLoop via
+             * bellatrix_emu68_report_jit_progress(); do not publish or step
+             * the chipset again here. */
+        } else if (PAL_Core_IsMulticoreEnabled()) {
             /* Multicore: Core 2 (chipset) and Core 3 (IO) run independently;
              * publish cross-core like the Emu68 JIT path does instead of
              * stepping Rigel synchronously on this (CPU) core. */

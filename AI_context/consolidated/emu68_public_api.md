@@ -131,18 +131,21 @@ Funcional nesta fase:
 - `emu68_run_cycles()` como janela cooperativa sobre o `MainLoop()` vivo,
   quando `__m68k_state` ja foi inicializado
 - `emu68_step()` como janela minima de 8 ciclos estimados
+- backend Emu68 conectado ao loop generico `CpuBackend`: `reset()` inicializa
+  o contexto via `M68K_StartEmu()` e `run()` chama `emu68_run_cycles()`
+- caminho Bellatrix em `M68K_StartEmu()` usa contexto M68K estatico e retorna
+  antes do `MainLoop()` quando `CpuBackend` e dono da execucao
 
 Ainda nao funcional como contrato real completo:
 
 - HLE callbacks
 - multi-instancia real
 - bootstrap publico independente de `M68K_StartEmu()` / estado global
-- uso do backend Emu68 inteiro pelo loop generico `CpuBackend`
 
 Motivo: o Emu68 atual ainda nasce pelo `M68K_StartEmu()` global e o boot normal
-continua entrando no `MainLoop()` continuo. A janela cooperativa e livewired no
-loop real, mas ainda nao substitui o bootstrap global nem transforma o Emu68 em
-uma biblioteca multi-instancia.
+continua dependendo de estado global do Emu68. A janela cooperativa agora e
+dirigida pelo `CpuBackend`, mas ainda nao transforma o Emu68 em uma biblioteca
+multi-instancia.
 
 ## Relacao com `wip/emu68-liveness`
 
