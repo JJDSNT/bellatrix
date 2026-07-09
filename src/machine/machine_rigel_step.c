@@ -308,7 +308,8 @@ void machine_present_frame_from_rigel(void)
         return;
 
 #ifndef BELLATRIX_HARNESS
-    machine_trace_baremetal_video_frame(&frame);
+    if (machine_rigel_video_trace_enabled())
+        machine_trace_baremetal_video_frame(&frame);
 #endif
 
     /* When DIWSTRT/DIWSTOP are both 0 (cleared at reset), display_window_update
@@ -721,7 +722,7 @@ void bellatrix_machine_on_frame_ready(void)
     machine_mouse_frame_tick();
     machine_present_frame_from_rigel();
 
-    if (machine_rigel_rtrace_enabled())
+    if (machine_rigel_trace_verbose_enabled())
         kprintf("[RIGEL-AUDIO-QUEUE] count=%u dropped=%llu\n",
                 (unsigned)audio_mixer_count(&g_machine.audio_queue),
                 (unsigned long long)audio_mixer_dropped(&g_machine.audio_queue));

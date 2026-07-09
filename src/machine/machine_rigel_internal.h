@@ -54,6 +54,8 @@ int  machine_rigel_floppy_trace_enabled(void);
 void machine_rigel_trace_floppy(const char *reason, uint32_t pc,
                                 uint8_t reg, uint8_t value);
 int  machine_rigel_blitter_trace_enabled(void);
+int  machine_rigel_video_trace_enabled(void);
+int  machine_rigel_trace_verbose_enabled(void);
 bool machine_rigel_rtrace_enabled(void);   /* returns g_rtrace.enabled */
 
 /* --- machine_rigel_trace.c (IPL publish lives here, uses g_rtrace) --- */
