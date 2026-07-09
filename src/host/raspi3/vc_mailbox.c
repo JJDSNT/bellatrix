@@ -12,6 +12,7 @@
 #define VC_FIRMWARE_PROPERTY_END 0u
 #define VC_FIRMWARE_GET_CLOCK_RATE 0x00030002u
 #define VC_CLOCK_ID_CORE 4u
+#define VC_CLOCK_ID_PIXEL 9u
 #define ARM_PERI_VIRT_BASE 0xF2000000u
 #define VC_MBOX_READ_ADDR   (ARM_PERI_VIRT_BASE + 0xB880u)
 #define VC_MBOX_STATUS_ADDR (ARM_PERI_VIRT_BASE + 0xB898u)
@@ -60,14 +61,14 @@ void vc_mbox_send(uint32_t channel, uint32_t data)
     wr32le(VC_MBOX_WRITE_ADDR, value);
 }
 
-uint32_t vc_get_core_clock_hz(void)
+static uint32_t vc_get_clock_hz(uint32_t clock_id)
 {
     vc_property_buffer[0] = LE32(sizeof(vc_property_buffer));
     vc_property_buffer[1] = LE32(VC_FIRMWARE_STATUS_REQUEST);
     vc_property_buffer[2] = LE32(VC_FIRMWARE_GET_CLOCK_RATE);
     vc_property_buffer[3] = LE32(8);
     vc_property_buffer[4] = 0;
-    vc_property_buffer[5] = LE32(VC_CLOCK_ID_CORE);
+    vc_property_buffer[5] = LE32(clock_id);
     vc_property_buffer[6] = 0;
     vc_property_buffer[7] = LE32(VC_FIRMWARE_PROPERTY_END);
 
@@ -82,4 +83,16 @@ uint32_t vc_get_core_clock_hz(void)
         return 0;
     }
     return LE32(vc_property_buffer[6]);
+}
+
+uint32_t vc_get_core_clock_hz(void)
+{
+    return vc_get_clock_hz(VC_CLOCK_ID_CORE);
+}
+
+/* HDMI pixel (TMDS) clock — needed to compute the audio CTS for clock
+ * regeneration. Returns 0 if the firmware doesn't report it. */
+uint32_t vc_get_pixel_clock_hz(void)
+{
+    return vc_get_clock_hz(VC_CLOCK_ID_PIXEL);
 }
