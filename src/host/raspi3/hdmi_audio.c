@@ -148,6 +148,8 @@ static unsigned  s_dma_prev_half;
 static bool      s_dma_running;
 static int32_t   s_dma_peak;      /* peak |sample| since last diagnostic */
 static uint32_t  s_dma_dbg_calls;
+static uint32_t  s_dma_fills;         /* total half-refills since last diagnostic */
+static uint32_t  s_dma_fill_half[2];  /* per-half refill counts since last diagnostic */
 
 static bool s_hdmi_ready = false;
 
@@ -202,26 +204,41 @@ static uint32_t mai_word(int16_t s)
     return d;
 }
 
-/* Debug: when set, fill the DMA ring with a self-generated melody (a clean sine
- * C-major scale up and down) at the hardware 48 kHz rate instead of the emulator's
- * output queue. A recognizable, clean scale confirms the DMA/MAI/HDMI output path
- * is correct in isolation, separating it from the emulator's (sub-real-time under
- * Musashi) sample production rate. Set to 0 for the real Paula audio feed. */
-#define HDMI_DMA_TEST_TONE 0
-/* Within test-tone mode: 1 = play an embedded PCM clip (a generated hdmi_clip.h,
- * not committed — see ISSUE-0011), 0 = play the synthesized sine C-major scale.
- * DIAGNOSTIC NOTE: with the current firmware-deferred MAI setup, the sine scale
- * plays but a real broadband PCM clip comes out as hiss — the DMA transport is
- * fine but the MAI sample/IEC958 word format is wrong (a pure tone masks it). */
-#define HDMI_DMA_CLIP      0
+/*
+ * Debug test-signal modes for the DMA ring (HDMI_DMA_TEST_MODE). All non-zero
+ * modes synthesize/replay at the hardware 48 kHz rate, bypassing the emulator
+ * output queue, so they isolate the DMA/MAI/HDMI output path from the
+ * emulator's (sub-real-time under Musashi) sample-production rate.
+ *
+ *   0 QUEUE  production — feed the real Paula output queue (default)
+ *   1 SINE   clean C-major scale up/down (narrow-band probe)
+ *   2 CLIP   replay the embedded hdmi_clip.h PCM (broadband real audio)
+ *   3 CHIRP  sine swept 200 Hz..6 kHz, sawtooth (broadband, code-generated)
+ *
+ * Discriminator (2026-07-09): the SINE plays cleanly but the CLIP comes out as
+ * hiss. Since both use the identical mai_word()/DMA path and differ only in
+ * sample values, a bit-level word-format bug is unlikely — that fingerprint
+ * (narrow-band survives, broadband smears) points at IEC958 clock recovery
+ * (CTS/N) or a bad clip. CHIRP is a code-generated broadband signal that tells
+ * the two apart: if CHIRP also hisses the fault is the output path (CTS/clock);
+ * if CHIRP sweeps audibly the embedded clip was the culprit, not the path.
+ */
+#define HDMI_DMA_TEST_MODE 0
 
-#if HDMI_DMA_TEST_TONE && HDMI_DMA_CLIP
+#define HDMI_DMA_MODE_QUEUE 0
+#define HDMI_DMA_MODE_SINE  1
+#define HDMI_DMA_MODE_CLIP  2
+#define HDMI_DMA_MODE_CHIRP 3
+
+#if HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_CLIP
 #include "host/raspi3/hdmi_clip.h"
 #endif
 
-#if HDMI_DMA_TEST_TONE && !HDMI_DMA_CLIP
+#if HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_SINE || \
+    HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_CHIRP
 /* One-period 64-entry sine LUT (±16000), built from a 17-entry quadrant so no
- * floating point is needed at build or run time. */
+ * floating point is needed at build or run time. Shared by the SINE scale and
+ * the CHIRP sweep. */
 static int16_t s_sine64[64];
 static bool    s_sine_ready;
 
@@ -238,7 +255,9 @@ static void hdmi_gen_sine(void)
     for (i = 49u; i < 64u; i++) s_sine64[i] = (int16_t)-q[64u - i];
     s_sine_ready = true;
 }
+#endif
 
+#if HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_SINE
 /* C-major scale, up then down (Hz). ~0.28 s per note → ~3.9 s loop. */
 static const uint16_t s_scale_hz[14] = {
     262, 294, 330, 349, 392, 440, 494, 523, 494, 440, 392, 349, 330, 294
@@ -253,7 +272,7 @@ static void hdmi_dma_fill_half(unsigned half)
     uint32_t *dst = &s_dma_buf[half * (unsigned)HDMI_DMA_HALF_WORDS];
     unsigned w;
 
-#if HDMI_DMA_TEST_TONE && HDMI_DMA_CLIP
+#if HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_CLIP
     static uint32_t pos; /* int16 index into s_clip (interleaved L,R), looping */
     for (w = 0; w < (unsigned)HDMI_DMA_HALF_WORDS; w += 2u) {
         int16_t l = s_clip[pos];
@@ -266,7 +285,7 @@ static void hdmi_dma_fill_half(unsigned half)
         dst[w + 0] = CPU_TO_LE32(mai_word(l));
         dst[w + 1] = CPU_TO_LE32(mai_word(r));
     }
-#elif HDMI_DMA_TEST_TONE
+#elif HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_SINE
     static uint32_t phase;      /* 16.16 index into the 64-entry sine LUT */
     static uint32_t note_inc;   /* phase step for the current note */
     static uint32_t note_samp;  /* samples elapsed in the current note */
@@ -292,24 +311,69 @@ static void hdmi_dma_fill_half(unsigned half)
         dst[w + 0] = CPU_TO_LE32(mai_word(v));
         dst[w + 1] = CPU_TO_LE32(mai_word(v));
     }
+#elif HDMI_DMA_TEST_MODE == HDMI_DMA_MODE_CHIRP
+    static uint32_t phase_l; /* 16.16 index into the 64-entry sine LUT, L */
+    static uint32_t phase_r; /* ...and R (swept the opposite way) */
+    static uint32_t sweep;   /* sample counter, one full ramp per second */
+
+    if (!s_sine_ready)
+        hdmi_gen_sine();
+
+    for (w = 0; w < (unsigned)HDMI_DMA_HALF_WORDS; w += 2u) {
+        /* Stereo linear sweep over 1 s (sawtooth): L rises 200 Hz → 6 kHz while
+         * R falls 6 kHz → 200 Hz. Broadband AND decorrelated between channels,
+         * so it probes three failure modes at once: a clean path renders two
+         * crossing "whoops"; an IEC958 clock/CTS fault smears both to hiss; an
+         * L/R FIFO-alignment slip (silent on a mono tone) shows as channel
+         * swap/crackle. */
+        uint32_t p  = sweep % 48000u;
+        uint32_t d  = (uint32_t)(((uint64_t)(6000u - 200u) * p) / 48000u);
+        uint32_t fl = 200u + d;         /* L: 200 → 6000 */
+        uint32_t fr = 6000u - d;        /* R: 6000 → 200 */
+        uint32_t incl = (uint32_t)(((uint64_t)fl * 64ull * 65536ull) / 48000ull);
+        uint32_t incr = (uint32_t)(((uint64_t)fr * 64ull * 65536ull) / 48000ull);
+        int16_t vl = s_sine64[(phase_l >> 16) & 63u];
+        int16_t vr = s_sine64[(phase_r >> 16) & 63u];
+        int32_t a  = vl < 0 ? -(int32_t)vl : (int32_t)vl;
+        phase_l += incl;
+        phase_r += incr;
+        sweep++;
+        if (a > s_dma_peak) s_dma_peak = a;
+        dst[w + 0] = CPU_TO_LE32(mai_word(vl));
+        dst[w + 1] = CPU_TO_LE32(mai_word(vr));
+    }
 #else
     AudioSample s;
+    static int16_t last_l, last_r; /* held across calls for graceful underrun */
     for (w = 0; w < (unsigned)HDMI_DMA_HALF_WORDS; w += 2u) {
         if (bellatrix_audio_output_pop(&s)) {
             int32_t al = s.left  < 0 ? -(int32_t)s.left  : (int32_t)s.left;
             int32_t ar = s.right < 0 ? -(int32_t)s.right : (int32_t)s.right;
             if (al > s_dma_peak) s_dma_peak = al;
             if (ar > s_dma_peak) s_dma_peak = ar;
+            last_l = s.left;
+            last_r = s.right;
             dst[w + 0] = CPU_TO_LE32(mai_word(s.left));
             dst[w + 1] = CPU_TO_LE32(mai_word(s.right));
         } else {
-            dst[w + 0] = 0u;
-            dst[w + 1] = 0u;
+            /* Underrun: exponentially decay the last sample toward zero rather
+             * than slamming to silence. A hard 0 is a discontinuity (click); a
+             * ~1.5 %/sample fade is inaudible, avoids a stuck DC offset, and
+             * self-heals the instant production resumes. (Fills the gap for
+             * brief jitter; sustained sub-real-time production still fades to
+             * silence — that is the speed axis, not this sync layer.) */
+            last_l = (int16_t)(last_l - (last_l >> 6));
+            last_r = (int16_t)(last_r - (last_r >> 6));
+            dst[w + 0] = CPU_TO_LE32(mai_word(last_l));
+            dst[w + 1] = CPU_TO_LE32(mai_word(last_r));
         }
     }
 #endif
 
     arm_flush_cache((uintptr_t)dst, (unsigned)HDMI_DMA_HALF_WORDS * 4u);
+
+    s_dma_fills++;
+    s_dma_fill_half[half & 1u]++;
 }
 
 static void hdmi_dma_setup(void)
@@ -445,10 +509,13 @@ void hdmi_audio_dma_poll(void)
 
     if (++s_dma_dbg_calls >= 131072u) {
         BellatrixAudioOutputStats st = bellatrix_audio_output_stats();
-        kprintf("[HDMI-AUD] dma_src=%08x half=%u CS=%08x produced=%llu consumed=%llu "
+        kprintf("[HDMI-AUD] dma_src=%08x buf=%08x off=%05x half=%u CS=%08x "
+                "fills=%u (h0=%u h1=%u) produced=%llu consumed=%llu "
                 "underrun=%llu qcount=%u peak=%d\n",
-                (unsigned)cur, cur_half,
+                (unsigned)cur, (unsigned)s_dma_buf_bus, (unsigned)off, cur_half,
                 (unsigned)hdmi_rd32(DMA_CS(HDMI_DMA_CH)),
+                (unsigned)s_dma_fills,
+                (unsigned)s_dma_fill_half[0], (unsigned)s_dma_fill_half[1],
                 (unsigned long long)st.produced_samples,
                 (unsigned long long)st.consumed_samples,
                 (unsigned long long)st.underrun_samples,
@@ -456,6 +523,9 @@ void hdmi_audio_dma_poll(void)
                 (int)s_dma_peak);
         s_dma_dbg_calls = 0;
         s_dma_peak = 0;
+        s_dma_fills = 0;
+        s_dma_fill_half[0] = 0;
+        s_dma_fill_half[1] = 0;
     }
 }
 
