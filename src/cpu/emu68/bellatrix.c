@@ -72,6 +72,10 @@ static void emu68_backend_reset(void *ctx)
 static int emu68_backend_run(void *ctx, uint32_t cycles)
 {
     emu68_run_result_t result;
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+    static int logged_sync_stop;
+    static int logged_first_return;
+#endif
 
     (void)ctx;
 
@@ -79,6 +83,20 @@ static int emu68_backend_run(void *ctx, uint32_t cycles)
         return 0;
 
     result = emu68_run_cycles(s_emu68_api, cycles);
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+    if (!logged_first_return) {
+        logged_first_return = 1;
+        kprintf("[EMU68-API] first run return reason=%u pc=%08x detail=%08x cycles=%llu\n",
+                (unsigned)result.reason, (unsigned)result.pc,
+                (unsigned)result.detail, (unsigned long long)result.cycles_run);
+    }
+    if (result.reason == EMU68_STOP_SYNC_REQUIRED && !logged_sync_stop) {
+        logged_sync_stop = 1;
+        kprintf("[EMU68-API] first sync stop pc=%08x addr=%08x cycles=%llu\n",
+                (unsigned)result.pc, (unsigned)result.detail,
+                (unsigned long long)result.cycles_run);
+    }
+#endif
     if (result.reason == EMU68_STOP_UNSUPPORTED ||
         result.reason == EMU68_STOP_EXCEPTION ||
         result.reason == EMU68_STOP_HALTED) {
@@ -237,11 +255,12 @@ static void bellatrix_emu68_api_dump_stats(void)
     memset(&s, 0, sizeof(s));
     emu68_get_stats(s_emu68_api, &s);
 
-    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu err=%llu "
+    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu err=%llu "
             "unhandled=%llu bad_size=%llu stop=%llu inv=%llu\n",
             (unsigned long long)s.bus_read_count,
             (unsigned long long)s.bus_write_count,
             (unsigned long long)s.bus_sync_required_count,
+            (unsigned long long)s.run_sync_stop_count,
             (unsigned long long)s.bus_error_count,
             (unsigned long long)s.bus_unhandled_count,
             (unsigned long long)s.unsupported_size_count,

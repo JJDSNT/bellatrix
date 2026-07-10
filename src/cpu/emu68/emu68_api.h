@@ -93,6 +93,7 @@ typedef struct {
     uint64_t bus_read_count;
     uint64_t bus_write_count;
     uint64_t bus_sync_required_count;
+    uint64_t run_sync_stop_count;
     uint64_t bus_error_count;
     uint64_t bus_unhandled_count;
     uint64_t unsupported_size_count;

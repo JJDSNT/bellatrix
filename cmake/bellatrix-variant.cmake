@@ -14,6 +14,7 @@ endif()
 
 set(BELLATRIX_INCLUDE_DIRS "")
 set(BELLATRIX_SOURCES "")
+enable_language(ASM)
 
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
@@ -145,6 +146,7 @@ endif()
 
 list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_api_adapter.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/mainloop_window.S
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c

@@ -8,6 +8,9 @@
 
 extern struct M68KState *__m68k_state;
 extern void MainLoop(void);
+#ifdef BELLATRIX
+extern void MainLoopWindow(void);
+#endif
 
 struct emu68 {
     emu68_config_t config;
@@ -238,6 +241,9 @@ void emu68_set_irq_level(emu68_t *cpu, int level)
 
 emu68_run_result_t emu68_run_cycles(emu68_t *cpu, uint32_t max_cycles)
 {
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+    static int logged_first_run;
+#endif
     if (!cpu)
         return unsupported_result(cpu, EMU68_ERR_INVALID_ARG);
     if (cpu != &g_emu68_api || !cpu->in_use)
@@ -264,7 +270,18 @@ emu68_run_result_t emu68_run_cycles(emu68_t *cpu, uint32_t max_cycles)
     }
 
     cpu->run_active = true;
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+    if (!logged_first_run) {
+        logged_first_run = 1;
+        kprintf("[EMU68-API] first run window budget=%u pc=%08x\n",
+                (unsigned)max_cycles, (unsigned)cpu->run_stop_pc);
+    }
+#endif
+#ifdef BELLATRIX
+    MainLoopWindow();
+#else
     MainLoop();
+#endif
 
     return make_run_result(cpu);
 }
@@ -309,6 +326,7 @@ int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
 
     if (cpu->sync_pending) {
         cpu->sync_pending = false;
+        cpu->stats.run_sync_stop_count++;
         cpu->run_stop_reason = EMU68_STOP_SYNC_REQUIRED;
         cpu->run_stop_detail = cpu->sync_addr;
         cpu->run_active = false;
@@ -483,7 +501,7 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
         if (result.status == EMU68_BUS_SYNC_REQUIRED) {
             emu68_event_t event;
             cpu->stats.bus_sync_required_count++;
-            if (cpu->run_active) {
+            if (cpu->run_active && !cpu->sync_pending) {
                 cpu->sync_pending = true;
                 cpu->sync_addr = addr;
             }
@@ -568,7 +586,7 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
         if (result.status == EMU68_BUS_SYNC_REQUIRED) {
             emu68_event_t event;
             cpu->stats.bus_sync_required_count++;
-            if (cpu->run_active) {
+            if (cpu->run_active && !cpu->sync_pending) {
                 cpu->sync_pending = true;
                 cpu->sync_addr = addr;
             }

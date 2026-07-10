@@ -48,8 +48,8 @@ Fazer um acesso de bus que retorna `EMU68_BUS_SYNC_REQUIRED` encerrar a janela a
 
 - [x] Build Emu68 passa.
 - [x] `scripts/setup.sh --verify` passa.
-- [ ] Write critico retorna `EMU68_STOP_SYNC_REQUIRED` na janela ativa.
-- [ ] A janela seguinte continua a partir do PC correto.
+- [x] Write critico retorna `EMU68_STOP_SYNC_REQUIRED` na janela ativa.
+- [x] A janela seguinte continua a partir do PC correto.
 - [ ] Boot KS13/ADF e AROS nao regridem.
 - [ ] Multicore Core 1/Core 2 respeita o mesmo boundary.
 
@@ -62,3 +62,11 @@ Fazer um acesso de bus que retorna `EMU68_BUS_SYNC_REQUIRED` encerrar a janela a
   entrou no JIT e trocou overlay sem reset/crash imediato. Nao chegou a hand screen no
   limite TCG; boot por disco permanece pendente de uma execucao mais longa e comparacao
   com o baseline anterior.
+- 2026-07-10: a primeira tentativa revelou que `MainLoop()` corrompia o retorno C:
+  upstream o tratava como non-returning e usava x19-x29/q8-q15 para estado guest. O
+  wrapper Bellatrix-owned `mainloop_window.S` passou a preservar o banco callee-saved
+  host ao redor de cada janela.
+- 2026-07-10: DiagROM com trace provou retorno limpo: `reason=1`
+  (`EMU68_STOP_SYNC_REQUIRED`), PC valido, 8 ciclos estimados, seguido de progresso
+  normal pelos testes de ROM, overlay e chip RAM. Multiplos pedidos antes do boundary
+  preservam o primeiro endereco como causa em `detail`.

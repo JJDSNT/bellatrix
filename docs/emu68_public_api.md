@@ -145,6 +145,7 @@ Tracked counters:
 - bus reads
 - bus writes
 - sync-required bus results
+- run windows stopped at a sync boundary
 - bus errors
 - unhandled dispatches
 - unsupported access sizes
@@ -175,21 +176,19 @@ and is not an Amiga hardware register.
 
 ## Execution Windows
 
-`emu68_run_cycles()` and `emu68_step()` currently return unsupported.
-
-The reason is structural: Emu68 execution is still owned by the continuous
-`MainLoop()` JIT path. A real implementation needs a separate change to make the
-loop return to the host on cycle budget, sync boundary, stop request, exception,
-or halt.
+`emu68_run_cycles()` drives a cooperative window over the real `MainLoop()` and
+returns on cycle-budget exhaustion, host stop request, or a sync boundary.
+`emu68_step()` uses the same mechanism with the minimum estimated budget. Cycle
+accounting is still based on retired instructions (`v30 * 8`) and therefore is a
+scheduling estimate rather than cycle-exact 68K timing.
 
 ## IRQ
 
-`emu68_set_irq_level()` updates the current Emu68 interrupt level through
-`__m68k_state`.
-
-This is enough for the current Bellatrix runtime, but a future API pass should
-clarify whether IRQ injection belongs to the public adapter or remains owned by
-the existing `CpuBackend` abstraction.
+`emu68_set_irq_level()` publishes the persistent guest IPL through
+`M68KState.INT.IPL`. In the Bellatrix variant it explicitly leaves `INT.ARM`
+clear: no physical ARM IRQ is required. `INT.ARM` belongs to the PiStorm model,
+where an external physical line is translated to Amiga level 6. Host-device
+IRQs remain outside the Emu68 JIT core.
 
 ## State
 
@@ -225,9 +224,8 @@ This remains phase 2.
 
 1. Keep the current bus dispatch API and validate it does not regress boot.
 2. Decide whether `CpuBackend` should consume `emu68_t` directly.
-3. Add real execution window support in the Emu68 loop.
-4. Make `EMU68_BUS_SYNC_REQUIRED` terminate a run window once windowed execution
-   exists.
+3. Improve execution-window timing beyond the current retired-instruction estimate.
+4. Validate sync boundaries and virtual IPL under multicore contention.
 5. Wire HLE callbacks only after the lifecycle/run contract is stable.
 
 ## Validation Notes
