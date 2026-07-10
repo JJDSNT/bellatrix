@@ -6,7 +6,7 @@ priority: high
 type: bug
 owner: agent
 created_at: 2026-07-05
-updated_at: 2026-07-05
+updated_at: 2026-07-10
 tags:
   - emu68
   - jit
@@ -22,6 +22,49 @@ related_files:
   - src/cpu/emu68/bellatrix.c
   - src/cpu/cpu_bridge.c
 ---
+
+# RETOMADA DO BRANCH (2026-07-10)
+
+O branch `wip/emu68-liveness` foi atualizado para o `main` em `ea4b474`. O antigo
+commit WIP `10e3051` nao foi reaplicado porque seu conteudo ja havia sido incorporado e
+superado por `0e113d2` e pelos commits posteriores da API publica e do multicore.
+Uma referencia de seguranca preserva o estado antigo em
+`backup/emu68-liveness-pre-main-20260710`.
+
+O checkout aplicado de `emu68` ainda contem os hooks modernos esperados: preservacao
+explicita de x12, re-zero de v28, `bellatrix_emu68_report_jit_progress()` e despacho de
+quantum pela API publica. Alteracoes locais preexistentes nos submodulos foram mantidas;
+por isso qualquer validacao deve primeiro garantir que cada submodulo esta no commit
+esperado pelo superprojeto e distinguir patches Bellatrix de outros WIPs locais.
+
+## Plano de retomada
+
+1. **Normalizar e verificar o ambiente Emu68**: reaplicar/verificar os patches pelo
+   `scripts/setup.sh`, confirmar os commits dos submodulos e produzir um build QEMU
+   minimo com launcher ativo (necessario para selecionar ROM/ADF), sem USB/Bluetooth.
+2. **Revalidar os baselines baratos**: DiagROM ate conclusao e KS13 sem disco ate a
+   hand/insert-disk screen, sem TRACE invasivo. Registrar serial, frame e PC final.
+3. **Revalidar boot por disco**: KS13 + ADF conhecido, confirmando VBL/CIA/trackdisk e
+   progresso alem do strap. Comparar com Musashi single-core somente nos pontos de
+   divergencia, nao como requisito de desempenho.
+4. **Retestar AROS**: exigir pelo menos as 35 InitResidents ate `trackdisk.device`, que e
+   o baseline ja observado em QEMU; depois medir progresso adicional com um limite de
+   tempo reproduzivel.
+5. **Auditar liveness/IRQ apenas se houver regressao**: correlacionar v30, quantum,
+   `INT.IPL`, SR e INTREQ nos boundaries do JIT/STOP. Evitar `kprintf` dentro do
+   MainLoop sem spill/reload completo do contexto pinado.
+6. **Validar no Raspberry Pi real**: confirmar KS13+ADF e AROS, onde o JIT pode ser
+   avaliado sem a penalidade extrema do TCG.
+7. **Encerrar a issue**: remover ou reduzir a instrumentacao TRACE-gated depois da
+   validacao em hardware e documentar a matriz final de ROM/disco/backend.
+
+## Criterio de conclusao
+
+- DiagROM completa no Emu68;
+- KS13 alcanca hand screen e boota um ADF conhecido sem perda de VBL/IRQ;
+- AROS alcanca ao menos `trackdisk.device` de forma repetivel;
+- nenhuma corrupcao de registradores pinados ou vetor 0x6C com traces seguros;
+- validacao equivalente no Pi real, seguida da limpeza da instrumentacao temporaria.
 
 # RESOLUCAO FINAL (2026-07-06)
 
