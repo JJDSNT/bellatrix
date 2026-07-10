@@ -13,6 +13,7 @@
 #include "machine/memory/chip_ram.h"
 #include "host/pal.h"
 #include "runtime/core_chipset.h"
+#include "runtime/core_io.h"
 #include "support.h"
 
 #include "rigel/rigel.h"
@@ -460,21 +461,32 @@ void machine_step_host_serial_rigel(void)
     uint8_t byte = 0;
 
     if (g_rigel && g_machine.uart_host.enabled) {
-        while (rigel_serial_tx_available(g_rigel) &&
-               rigel_serial_pop_tx_byte(g_rigel, &byte))
-        {
-            if (!uart_host_send_byte(&g_machine.uart_host, byte))
-                break;
-        }
+        if (PAL_Core_IsMulticoreEnabled()) {
+            /* Core 2 owns Rigel: move bytes only through SPSC queues. Core 3
+             * owns the physical UART and never accesses g_rigel. */
+            while (rigel_serial_tx_available(g_rigel) &&
+                   rigel_serial_pop_tx_byte(g_rigel, &byte))
+                (void)core_io_serial_enqueue_tx(byte);
 
-        while (uart_host_receive_byte(&g_machine.uart_host, &byte))
-            rigel_serial_receive_byte(g_rigel, byte);
+            while (core_io_serial_dequeue_rx(&byte))
+                rigel_serial_receive_byte(g_rigel, byte);
+        } else {
+            while (rigel_serial_tx_available(g_rigel) &&
+                   rigel_serial_pop_tx_byte(g_rigel, &byte))
+            {
+                if (!uart_host_send_byte(&g_machine.uart_host, byte))
+                    break;
+            }
+
+            while (uart_host_receive_byte(&g_machine.uart_host, &byte))
+                rigel_serial_receive_byte(g_rigel, byte);
+        }
     }
 
-    /* kprintf's log ring only drains here, strictly after Paula's TX FIFO
-     * above — Paula's bytes always reach the mini-UART first. See
-     * AI_context/issue_logging_miniuart.md. */
-    console_log_drain();
+    /* Single-core fallback owns physical IO locally. In multicore, only Core 3
+     * drains the console after servicing Paula's queue. */
+    if (!PAL_Core_IsMulticoreEnabled())
+        console_log_drain();
 }
 
 /* ---------------------------------------------------------------------------

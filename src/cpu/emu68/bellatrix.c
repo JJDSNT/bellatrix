@@ -358,9 +358,8 @@ static void bellatrix_core0_supervise(void)
     for (;;) {
         /* Pace the heartbeat with a fixed spin. Core 0 has no other work in
          * this build; a real timer/deadline replaces this in a later phase.
-         * Kept coarse (~seconds/beat) because kprintf on the shared mini-UART
-         * is not serialised across cores — a fast heartbeat garbles the log by
-         * interleaving with Core 1's output. */
+         * Kept coarse (~seconds/beat) because the physical mini-UART is slow;
+         * runtime output is queued and drained by Core 3. */
         for (volatile uint32_t d = 0u; d < 400000000u; d++)
             asm volatile("nop");
 
@@ -372,17 +371,26 @@ static void bellatrix_core0_supervise(void)
             ? __atomic_load_n(&machine->frame_counter, __ATOMIC_ACQUIRE)
             : 0u;
         uint32_t pc = backend ? cpu_backend_get_pc(backend) : 0u;
+        CoreIOSerialStats serial_stats;
+        core_io_serial_get_stats(&serial_stats);
         (void)core_chipset_get_progress(&chipset_cck, &target_cck);
 
         kprintf("[CORE0-SUP] beat=%u cpu_target=%llu(+%llu) "
-                "chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x\n",
+                "chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x "
+                "uart_tx=%u/%u drop=%u uart_rx=%u/%u drop=%u\n",
                 (unsigned)beat,
                 (unsigned long long)target_cck,
                 (unsigned long long)(target_cck - last_target),
                 (unsigned long long)chipset_cck,
                 (unsigned long long)(chipset_cck - last_chipset),
                 (long long)((int64_t)target_cck - (int64_t)chipset_cck),
-                (unsigned long long)frames, (unsigned)pc);
+                (unsigned long long)frames, (unsigned)pc,
+                (unsigned)serial_stats.tx_depth,
+                (unsigned)serial_stats.tx_max_depth,
+                (unsigned)serial_stats.tx_dropped,
+                (unsigned)serial_stats.rx_depth,
+                (unsigned)serial_stats.rx_max_depth,
+                (unsigned)serial_stats.rx_dropped);
 
         last_target = target_cck;
         last_chipset = chipset_cck;

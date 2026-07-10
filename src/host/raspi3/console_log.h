@@ -4,10 +4,10 @@
 #include <stdint.h>
 
 /*
- * kprintf owns the mini-UART from Emu68 setup_serial() onward; PL011 belongs
- * to Bluetooth in every build. Before Paula's host serial bridge opens,
- * kprintf writes directly to mini-UART. Once Paula shares the wire, Paula's
- * TX drain has priority and kprintf falls back to an opportunistic ring.
+ * Core 0 owns the mini-UART during early boot; Core 3 owns it after runtime
+ * launch. PL011 belongs to Bluetooth in every build. Runtime kprintf producers
+ * enqueue without touching the UART; Core 3 gives Paula TX priority and drains
+ * console output opportunistically.
  */
 
 /* Called by Emu68's setup_serial() for Bellatrix before the first kprintf. */
@@ -19,9 +19,8 @@ void bellatrix_console_log_reclock(uint32_t core_hz);
  * no Paula hardware bridge owns this UART. */
 void console_log_set_deferred(void);
 
-/* Called once per quantum, immediately after Paula's TX FIFO is drained to
- * hardware (machine_step_host_serial_rigel() in machine_rigel_step.c) —
- * never before, so Paula's bytes always reach the wire first. */
+/* Called by Core 3 after the Paula TX queue has drained, or by the local
+ * fallback in single-core builds. */
 void console_log_drain(void);
 
 #endif

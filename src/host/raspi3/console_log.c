@@ -12,43 +12,63 @@ void kprintf_set_putc_override(void (*fn)(char chr));
 
 static MiniUartBackend s_console_miniuart;
 
-#define CONSOLE_LOG_RING_SIZE 4096u
+#define CONSOLE_LOG_RING_SIZE 2048u
+#define CONSOLE_LOG_RING_MASK (CONSOLE_LOG_RING_SIZE - 1u)
 #define CONSOLE_LOG_DRAIN_MAX 256u
-static volatile uint8_t  s_ring[CONSOLE_LOG_RING_SIZE];
-static _Atomic uint32_t s_ring_head;    /* producer: console_log_putc()  */
-static _Atomic uint32_t s_ring_tail;    /* consumer: console_log_drain() */
-static _Atomic uint32_t s_ring_dropped;
+
+typedef struct ConsoleCoreRing {
+    _Alignas(64) _Atomic uint32_t head;
+    _Alignas(64) _Atomic uint32_t tail;
+    _Alignas(64) uint8_t data[CONSOLE_LOG_RING_SIZE];
+    _Atomic uint32_t dropped_lines;
+} ConsoleCoreRing;
+
+static ConsoleCoreRing s_rings[4];
 static volatile uint32_t s_direct_mode;
 
-static void ring_push(uint8_t byte)
+static bool ring_push_line(unsigned core, const char *line, uint32_t length)
 {
-    uint32_t head = atomic_load_explicit(&s_ring_head, memory_order_relaxed);
-    uint32_t next = (head + 1u) % CONSOLE_LOG_RING_SIZE;
-    uint32_t tail = atomic_load_explicit(&s_ring_tail, memory_order_acquire);
+    ConsoleCoreRing *ring = &s_rings[core & 3u];
+    uint32_t head = atomic_load_explicit(&ring->head, memory_order_relaxed);
+    uint32_t tail = atomic_load_explicit(&ring->tail, memory_order_acquire);
+    uint32_t used = (head - tail) & CONSOLE_LOG_RING_MASK;
+    uint32_t available = CONSOLE_LOG_RING_MASK - used;
+    uint32_t needed = length;
 
-    if (next == tail) {
-        atomic_fetch_add_explicit(&s_ring_dropped, 1u, memory_order_relaxed);
-        return;
+    for (uint32_t i = 0u; i < length; i++) {
+        if ((uint8_t)line[i] == (uint8_t)'\n')
+            needed++;
     }
 
-    /* Publish head only after the payload is visible.  `volatile` alone did
-     * not provide this ordering on AArch64, so the Core 2 consumer could read
-     * stale bytes left from a previous ring revolution and replay whole old
-     * log blocks. */
-    s_ring[head] = byte;
-    atomic_store_explicit(&s_ring_head, next, memory_order_release);
+    if (needed > available) {
+        atomic_fetch_add_explicit(&ring->dropped_lines, 1u,
+                                  memory_order_relaxed);
+        return false;
+    }
+
+    for (uint32_t i = 0u; i < length; i++) {
+        uint8_t byte = (uint8_t)line[i];
+        if (byte == (uint8_t)'\n') {
+            ring->data[head] = (uint8_t)'\r';
+            head = (head + 1u) & CONSOLE_LOG_RING_MASK;
+        }
+        ring->data[head] = byte;
+        head = (head + 1u) & CONSOLE_LOG_RING_MASK;
+    }
+
+    /* Publish once after the complete line/chunk is visible. */
+    atomic_store_explicit(&ring->head, head, memory_order_release);
+    return true;
 }
 
 /* Multicore-friendly sink: kprintf calls putc one char at a time, so when
  * several cores log concurrently their characters interleave and garble the
  * output (and ring_push()'s head RMW races). Buffer each core's current line
- * separately and flush the whole line under a lock, so lines stay intact and
- * only one core pushes to the ring at a time. Line granularity (newline is the
- * boundary) avoids having to hook kprintf's call boundary. */
+ * separately and publish it to that core's SPSC ring. No producer contends on
+ * a global lock; Core 3 preserves line boundaries while draining. */
 #define CONSOLE_LOG_LINE_MAX 256u
 static char     s_line[4][CONSOLE_LOG_LINE_MAX];
 static uint32_t s_line_len[4];
-static volatile unsigned char s_sink_lock;
 
 static inline unsigned console_this_core(void)
 {
@@ -80,30 +100,25 @@ static void console_log_putc(char chr)
      * the whole thing atomically on newline (or when the buffer fills). */
     unsigned core = console_this_core();
 
-    if (s_line_len[core] < CONSOLE_LOG_LINE_MAX)
-        s_line[core][s_line_len[core]++] = chr;
-
-    if (chr != '\n' && s_line_len[core] < CONSOLE_LOG_LINE_MAX)
+    /* Reserve one byte for the newline. Overlong lines are truncated rather
+     * than published as interleavable chunks. */
+    if (chr != '\n') {
+        if (s_line_len[core] < CONSOLE_LOG_LINE_MAX - 1u)
+            s_line[core][s_line_len[core]++] = chr;
         return;
-
-    while (__atomic_test_and_set(&s_sink_lock, __ATOMIC_ACQUIRE))
-        __asm__ volatile("yield");
-
-    for (uint32_t i = 0u; i < s_line_len[core]; i++) {
-        uint8_t c = (uint8_t)s_line[core][i];
-        if (c == (uint8_t)'\n')
-            ring_push((uint8_t)'\r');
-        ring_push(c);
     }
-    s_line_len[core] = 0u;
 
-    __atomic_clear(&s_sink_lock, __ATOMIC_RELEASE);
+    s_line[core][s_line_len[core]++] = chr;
+
+    (void)ring_push_line(core, s_line[core], s_line_len[core]);
+    s_line_len[core] = 0u;
 }
 
 void console_log_drain(void)
 {
+    static unsigned active_core = 4u;
+    static unsigned next_core;
     uint32_t drained = 0u;
-    uint32_t tail;
 
     if (!miniuart_backend_is_open(&s_console_miniuart))
         return;
@@ -113,15 +128,47 @@ void console_log_drain(void)
      * failure and retry the same byte next call, rather than advancing the
      * tail and dropping/corrupting it. Cap each pass so logs stay
      * opportunistic. */
-    tail = atomic_load_explicit(&s_ring_tail, memory_order_relaxed);
-    while (tail != atomic_load_explicit(&s_ring_head, memory_order_acquire) &&
-           drained < CONSOLE_LOG_DRAIN_MAX) {
-        if (!miniuart_backend_write_byte(&s_console_miniuart,
-                                          s_ring[tail]))
+    while (drained < CONSOLE_LOG_DRAIN_MAX) {
+        if (active_core >= 4u) {
+            unsigned scanned;
+            for (scanned = 0u; scanned < 4u; scanned++) {
+                unsigned core = (next_core + scanned) & 3u;
+                ConsoleCoreRing *ring = &s_rings[core];
+                uint32_t tail = atomic_load_explicit(&ring->tail,
+                                                     memory_order_relaxed);
+                uint32_t head = atomic_load_explicit(&ring->head,
+                                                     memory_order_acquire);
+                if (tail != head) {
+                    active_core = core;
+                    break;
+                }
+            }
+            if (active_core >= 4u)
+                break;
+        }
+
+        ConsoleCoreRing *ring = &s_rings[active_core];
+        uint32_t tail = atomic_load_explicit(&ring->tail, memory_order_relaxed);
+        uint32_t head = atomic_load_explicit(&ring->head, memory_order_acquire);
+
+        if (tail == head) {
+            /* Complete lines are published atomically. */
+            active_core = 4u;
+            continue;
+        }
+
+        uint8_t byte = ring->data[tail];
+        if (!miniuart_backend_write_byte(&s_console_miniuart, byte))
             break;
-        tail = (tail + 1u) % CONSOLE_LOG_RING_SIZE;
-        atomic_store_explicit(&s_ring_tail, tail, memory_order_release);
+
+        tail = (tail + 1u) & CONSOLE_LOG_RING_MASK;
+        atomic_store_explicit(&ring->tail, tail, memory_order_release);
         drained++;
+
+        if (byte == (uint8_t)'\n') {
+            next_core = (active_core + 1u) & 3u;
+            active_core = 4u;
+        }
     }
 }
 
