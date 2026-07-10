@@ -146,6 +146,7 @@ Tracked counters:
 - bus writes
 - sync-required bus results
 - run windows stopped at a sync boundary
+- virtual IPL publications and level transitions
 - bus errors
 - unhandled dispatches
 - unsupported access sizes

@@ -217,9 +217,9 @@ void emu68_reset(emu68_t *cpu)
 
 void emu68_set_irq_level(emu68_t *cpu, int level)
 {
-    (void)cpu;
+    uint8_t old_level;
 
-    if (!__m68k_state)
+    if (!cpu || cpu != &g_emu68_api || !cpu->in_use || !__m68k_state)
         return;
 
     if (level < 0)
@@ -227,12 +227,20 @@ void emu68_set_irq_level(emu68_t *cpu, int level)
     if (level > 7)
         level = 7;
 
+    old_level = __m68k_state->INT.IPL;
     __m68k_state->INT.IPL = (uint8_t)level;
+    cpu->stats.irq_level_set_count++;
+    if (old_level != (uint8_t)level)
+        cpu->stats.irq_level_change_count++;
 #ifdef BELLATRIX
     /* Rigel publishes the guest's persistent IPL in software; no physical ARM
      * IRQ is involved. INT.ARM is the PiStorm external line translated to
      * Amiga level 6, so asserting it would mix two interrupt domains. */
     __m68k_state->INT.ARM = 0;
+    asm volatile("dmb ish" ::: "memory");
+    /* This is an event wakeup, not a physical IRQ. It also covers a future
+     * scheduler parking the JIT core in WFE. */
+    asm volatile("dsb sy\n\tsev" ::: "memory");
 #else
     if (level)
         __m68k_state->INT.ARM = 1;

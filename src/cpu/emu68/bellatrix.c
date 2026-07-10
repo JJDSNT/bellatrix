@@ -58,7 +58,7 @@ static uint32_t emu68_get_pc(void *ctx)
 static void emu68_set_ipl(void *ctx, int level)
 {
     (void)ctx;
-    PAL_IPL_Set((uint8_t)level);
+    emu68_set_irq_level(s_emu68_api, level);
 }
 
 static void emu68_backend_reset(void *ctx)
@@ -256,7 +256,7 @@ static void bellatrix_emu68_api_dump_stats(void)
     emu68_get_stats(s_emu68_api, &s);
 
     kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu err=%llu "
-            "unhandled=%llu bad_size=%llu stop=%llu inv=%llu\n",
+            "unhandled=%llu bad_size=%llu stop=%llu inv=%llu irq_set=%llu irq_chg=%llu\n",
             (unsigned long long)s.bus_read_count,
             (unsigned long long)s.bus_write_count,
             (unsigned long long)s.bus_sync_required_count,
@@ -265,7 +265,9 @@ static void bellatrix_emu68_api_dump_stats(void)
             (unsigned long long)s.bus_unhandled_count,
             (unsigned long long)s.unsupported_size_count,
             (unsigned long long)s.stop_request_count,
-            (unsigned long long)s.invalidate_count);
+            (unsigned long long)s.invalidate_count,
+            (unsigned long long)s.irq_level_set_count,
+            (unsigned long long)s.irq_level_change_count);
 }
 
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU

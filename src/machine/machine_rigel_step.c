@@ -15,6 +15,9 @@
 #include "runtime/core_chipset.h"
 #include "runtime/core_io.h"
 #include "support.h"
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+#include "M68k.h"
+#endif
 
 #include "rigel/rigel.h"
 #include "rigel/rigel_audio.h"
@@ -734,6 +737,18 @@ void bellatrix_machine_on_frame_ready(void)
     g_machine.frame_counter++;
     machine_mouse_frame_tick();
     machine_present_frame_from_rigel();
+
+#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+    if ((g_machine.frame_counter % 100u) == 0u) {
+        extern struct M68KState *__m68k_state;
+        uint32_t pc = __m68k_state ? BE32(__m68k_state->PC) : 0u;
+        uint8_t guest_ipl = __m68k_state ? __m68k_state->INT.IPL : 0u;
+        uint8_t physical_arm = __m68k_state ? __m68k_state->INT.ARM : 0u;
+        kprintf("[EMU68-LIVE] frame=%u pc=%08x guest_ipl=%u arm_irq=%u\n",
+                (unsigned)g_machine.frame_counter, (unsigned)pc,
+                (unsigned)guest_ipl, (unsigned)physical_arm);
+    }
+#endif
 
     if (machine_rigel_trace_verbose_enabled())
         kprintf("[RIGEL-AUDIO-QUEUE] count=%u dropped=%llu\n",
