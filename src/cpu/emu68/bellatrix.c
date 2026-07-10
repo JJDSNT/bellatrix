@@ -293,6 +293,9 @@ void bellatrix_run_selected_cpu_backend(void)
     cpu_backend_reset(backend);
 
     for (;;) {
+        if (PAL_Core_IsMulticoreEnabled())
+            cpu_backend_set_ipl(backend, (int)core_chipset_get_pending_ipl());
+
         uint32_t ran = cpu_backend_run(backend, 454u);
         uint32_t cycles = ran > 0u ? ran : 454u;
 
@@ -363,16 +366,23 @@ static void bellatrix_core0_supervise(void)
 
         uint64_t chipset_cck = 0u;
         uint64_t target_cck = 0u;
+        BellatrixMachine *machine = bellatrix_machine_get();
+        CpuBackend *backend = bellatrix_selected_cpu_backend();
+        uint64_t frames = machine
+            ? __atomic_load_n(&machine->frame_counter, __ATOMIC_ACQUIRE)
+            : 0u;
+        uint32_t pc = backend ? cpu_backend_get_pc(backend) : 0u;
         (void)core_chipset_get_progress(&chipset_cck, &target_cck);
 
         kprintf("[CORE0-SUP] beat=%u cpu_target=%llu(+%llu) "
-                "chipset=%llu(+%llu) backlog=%lld\n",
+                "chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x\n",
                 (unsigned)beat,
                 (unsigned long long)target_cck,
                 (unsigned long long)(target_cck - last_target),
                 (unsigned long long)chipset_cck,
                 (unsigned long long)(chipset_cck - last_chipset),
-                (long long)((int64_t)target_cck - (int64_t)chipset_cck));
+                (long long)((int64_t)target_cck - (int64_t)chipset_cck),
+                (unsigned long long)frames, (unsigned)pc);
 
         last_target = target_cck;
         last_chipset = chipset_cck;
@@ -699,8 +709,25 @@ void bellatrix_init(void)
 {
     extern struct M68KState *__m68k_state;
     CpuBackend *cpu_backend;
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    static _Atomic uint32_t s_init_entry_count;
+    uint64_t init_mpidr;
+    uintptr_t init_lr;
+    uintptr_t init_sp;
+#endif
 
     PAL_Debug_Init(115200);
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    asm volatile("mrs %0, MPIDR_EL1" : "=r"(init_mpidr));
+    asm volatile("mov %0, x30" : "=r"(init_lr));
+    asm volatile("mov %0, sp" : "=r"(init_sp));
+    kprintf("[BELA-INIT-ENTRY] count=%u core=%u lr=%016llx sp=%016llx\n",
+            (unsigned)(atomic_fetch_add_explicit(&s_init_entry_count, 1u,
+                                                 memory_order_relaxed) + 1u),
+            (unsigned)(init_mpidr & 0xffu),
+            (unsigned long long)init_lr,
+            (unsigned long long)init_sp);
+#endif
     bellatrix_emu68_boards_reset();
     cpu_backend = bellatrix_selected_cpu_backend();
     bellatrix_emu68_api_init();

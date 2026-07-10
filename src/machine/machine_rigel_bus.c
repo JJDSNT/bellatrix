@@ -12,6 +12,7 @@
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/expansion.h"
 #include "machine/memory/slow_ram.h"
+#include "cpu/emu68/bellatrix.h"
 
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
@@ -27,6 +28,11 @@
 #include "m68k.h"
 #define MACHINE_HAS_MUSASHI_REGS 1
 #endif
+
+/* The bare-metal integration provides the strong host/MMU overlay update.
+ * The harness owns overlay mapping in its local backend and does not link
+ * bellatrix.c. */
+__attribute__((weak)) void bellatrix_sync_overlay_from_ciaa(void) {}
 
 #ifdef BELLATRIX_HARNESS
 #include <stdlib.h>
@@ -217,6 +223,17 @@ static uint32_t machine_custom_read(uint32_t addr, unsigned int size)
         value = (uint32_t)word;
 
     pc = bellatrix_debug_cpu_pc();
+#if defined(BELLATRIX_FLOPPY_BOOT_PROBE) && BELLATRIX_FLOPPY_BOOT_PROBE
+    if (reg == RIGEL_REG_DSKBYTR || reg == RIGEL_REG_DSKDATR) {
+        static unsigned disk_read_count;
+        if (disk_read_count < 64u) {
+            kprintf("[DF0-R] reg=%03x val=%04x pc=%08x cyc=%llu\n",
+                    (unsigned)reg, (unsigned)word, (unsigned)pc,
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+            disk_read_count++;
+        }
+    }
+#endif
     if (machine_rigel_trace_verbose_enabled() &&
         (reg == RIGEL_REG_VPOSR || reg == RIGEL_REG_VHPOSR) &&
         (pc >= 0x00fc5e00u && pc <= 0x00fc5fffu)) {
@@ -265,6 +282,23 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
     } else {
         word = (uint16_t)value;
     }
+
+    /* Narrow boot probe shared by the single- and multicore bare-metal paths.
+     * Keep it finite: this is meant to identify the first DF0 divergence
+     * without enabling the much noisier per-access Rigel trace. */
+#if defined(BELLATRIX_FLOPPY_BOOT_PROBE) && BELLATRIX_FLOPPY_BOOT_PROBE
+    if (reg == 0x020u || reg == 0x022u || reg == RIGEL_REG_DSKLEN ||
+        reg == RIGEL_REG_DMACON) {
+        static unsigned disk_write_count;
+        if (disk_write_count < 96u) {
+            kprintf("[DF0-W] reg=%03x val=%04x pc=%08x cyc=%llu\n",
+                    (unsigned)reg, (unsigned)word,
+                    (unsigned)bellatrix_debug_cpu_pc(),
+                    (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+            disk_write_count++;
+        }
+    }
+#endif
 
     if (machine_rigel_video_trace_enabled() &&
             (reg == 0x080u || reg == 0x082u || reg == 0x084u ||
@@ -530,6 +564,8 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 0u, reg, (uint8_t)value);
+        if (reg == 0x00u)
+            bellatrix_sync_overlay_from_ciaa();
         if (reg == 0x0Eu)
             machine_keyboard_on_cia_cra_write((uint8_t)value);
     } else if (is_cia_b_addr(addr)) {
@@ -539,6 +575,21 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
         rigel_cia_write(g_rigel, 1u, reg, (uint8_t)value);
+#if defined(BELLATRIX_FLOPPY_BOOT_PROBE) && BELLATRIX_FLOPPY_BOOT_PROBE
+        if (reg == 0x1u) {
+            static unsigned disk_prb_count;
+            static uint8_t last_disk_lines = 0xffu;
+            uint8_t disk_lines = (uint8_t)value & 0xfbu;
+            if (disk_lines != last_disk_lines && disk_prb_count < 64u) {
+                kprintf("[DF0-PRB] val=%02x pc=%08x cyc=%llu\n",
+                        (unsigned)((uint8_t)value),
+                        (unsigned)bellatrix_debug_cpu_pc(),
+                        (unsigned long long)(g_rigel ? rigel_get_time(g_rigel) : 0u));
+                disk_prb_count++;
+            }
+            last_disk_lines = disk_lines;
+        }
+#endif
         if (reg == 0x1u || reg == 0x3u)
             machine_rigel_trace_floppy("ciab-w", bellatrix_debug_cpu_pc(), reg, (uint8_t)value);
         if (reg == 0x1u) {
@@ -606,14 +657,15 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
 {
     BellatrixMachine *m = &g_machine;
 
-    /* One bus cycle elapsed; flush partial quantum so register reads
-     * (VPOS, INTREQ, DMA owner) reflect the current Rigel state. */
-    {
+    /* The synchronous path owns Rigel locally and flushes before a bus
+     * access.  In multicore, Core 2 is the sole Rigel stepper; the CPU bridge
+     * performs the required rendezvous before entering here. */
+    if (!PAL_Core_IsMulticoreEnabled()) {
         uint64_t scaled = (uint64_t)s_cpu_cck_rem + 1u;
         s_cpu_approx += scaled / 2u;
         s_cpu_cck_rem = (uint32_t)(scaled & 1u);
+        machine_flush_for_bus(m);
     }
-    machine_flush_for_bus(m);
 
     if (size == 4u) {
         uint32_t hi = machine_dispatch_read(m, addr, 2u);
@@ -628,14 +680,14 @@ void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
 {
     BellatrixMachine *m = &g_machine;
 
-    /* One bus cycle elapsed; flush so Rigel sees the write at the right
-     * time and the post-write IPL reflects the updated register. */
-    {
+    /* See bellatrix_machine_read(): never step Rigel from the CPU core in a
+     * multicore build. */
+    if (!PAL_Core_IsMulticoreEnabled()) {
         uint64_t scaled = (uint64_t)s_cpu_cck_rem + 1u;
         s_cpu_approx += scaled / 2u;
         s_cpu_cck_rem = (uint32_t)(scaled & 1u);
+        machine_flush_for_bus(m);
     }
-    machine_flush_for_bus(m);
 
     if (size == 4u) {
         machine_dispatch_write(m, addr, value >> 16, 2u);

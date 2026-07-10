@@ -29,9 +29,6 @@
 #include "debug/core_log.h"
 #include "host/pal.h"
 
-/* Rigel step granularity in CCK cycles. */
-#define CHIPSET_QUANTUM 128u
-
 /* Max CCK the CPU (Core 1) may run ahead of the chipset (Core 2) before it
  * blocks and lets Core 2 catch up. Without this bound the target diverges
  * without limit (observed: chipset >400M CCK behind), making the emulated
@@ -45,6 +42,7 @@ static _Atomic uint64_t s_cpu_cck_target = 0;
 /* Advanced by Core 2 (chipset); read cross-core by Core 1 (backpressure) and
  * Core 0 (supervisor), so it must be atomic. */
 static _Atomic uint64_t s_chipset_cck = 0;
+static _Atomic uint8_t s_pending_ipl = 0;
 
 /* Remainder for M68K→CCK conversion (local to Core 1 call site). */
 static uint32_t s_m68k_rem = 0;
@@ -95,6 +93,42 @@ bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck)
 #endif
 }
 
+uint8_t core_chipset_get_pending_ipl(void)
+{
+    return atomic_load_explicit(&s_pending_ipl, memory_order_acquire);
+}
+
+void core_chipset_set_pending_ipl(uint8_t ipl)
+{
+    atomic_store_explicit(&s_pending_ipl, (uint8_t)(ipl & 7u),
+                          memory_order_release);
+}
+
+/* MMIO-critical barrier. The CPU (Core 1) may run up to CHIPSET_MAX_BACKLOG_CCK
+ * ahead of the chipset (Core 2); before a critical register access it must let
+ * Core 2 catch up so it reads/writes fresh state. Mirrors the single-core
+ * path's "flush partial cycles on bus access" (machine_rigel_step.c). Core 2
+ * SEVs after each host_step, waking this WFE. */
+void core_chipset_wait_caught_up(void)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    RuntimeCoreChipset *core = s_core;
+    if (!core || !core->running)
+        return;
+
+    for (;;) {
+        uint64_t target = atomic_load_explicit(&s_cpu_cck_target,
+                                               memory_order_relaxed);
+        uint64_t chip   = atomic_load_explicit(&s_chipset_cck,
+                                               memory_order_acquire);
+        if (chip >= target)
+            return;
+        PAL_Runtime_WakeupChipset();   /* nudge Core 2 to drain */
+        asm volatile("wfe" ::: "memory");
+    }
+#endif
+}
+
 bool core_chipset_init(RuntimeCoreChipset *core,
                        RigelContext *rigel,
                        BellatrixMachine *machine)
@@ -111,6 +145,7 @@ bool core_chipset_init(RuntimeCoreChipset *core,
 
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
+    atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     s_m68k_rem    = 0;
 
     CORE2_LOG("chipset init (Rigel)");
@@ -131,6 +166,7 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     core->local_cycles = 0;
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
+    atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     s_m68k_rem    = 0;
     CORE2_LOG("chipset reset");
 }
@@ -218,26 +254,56 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
 
     while (chip < target) {
         uint64_t remaining = target - chip;
-        uint32_t step = (remaining > CHIPSET_QUANTUM) ? CHIPSET_QUANTUM
-                                                      : (uint32_t)remaining;
+        rigel_cycle_t rigel_now = rigel_get_time(core->rigel);
+        rigel_cycle_t until = rigel_now + (rigel_cycle_t)remaining;
+        rigel_cycle_t next;
+
+        /* Match the synchronous scheduler: never step across a Rigel event or
+         * temporal bus transition.  The CPU-published target remains the hard
+         * upper bound, so Core 2 cannot run into emulated time the CPU has not
+         * made available yet. */
+        next = rigel_get_next_deadline(core->rigel);
+        if (next > rigel_now && next < until)
+            until = next;
+
+        next = rigel_get_next_bus_change(core->rigel);
+        if (next > rigel_now && next < until)
+            until = next;
+
+        /* Defensive fallback for a malformed/stale deadline.  remaining is
+         * non-zero here, so this always makes forward progress. */
+        if (until <= rigel_now)
+            until = rigel_now + 1u;
 
 #if BELLATRIX_PROFILE_ENABLED
         uint64_t t0 = bprof_now();
 #endif
-        rigel_step_result_t r = rigel_step(core->rigel, step);
+        /* The CPU bridge takes the same lock for every forwarded bus access.
+         * Core 2 must participate too; otherwise the lock protects CPU callers
+         * from each other but not from concurrent Rigel mutation here. */
+        core_chipset_lock_acquire();
+        rigel_step_result_t r = rigel_step_until(core->rigel, until);
+        core_chipset_lock_release();
 #if BELLATRIX_PROFILE_ENABLED
         bprof_record(&g_bprof.chipset_step_time, bprof_now() - t0);
 #endif
-        chip               += step;
-        core->local_cycles += step;
+        uint64_t advanced = (uint64_t)(r.time - rigel_now);
+        chip               += advanced;
+        core->local_cycles += advanced;
         core->machine->tick_count = (uint64_t)r.time;
 #if BELLATRIX_PROFILE_ENABLED
-        bprof_multicore_chipset_step(step, chip, target);
+        bprof_multicore_chipset_step((uint32_t)advanced, chip, target);
 #endif
 
-        if (r.events & RIGEL_EVENT_IRQ_CHANGED)
-            bellatrix_machine_on_ipl_changed(
-                (uint8_t)rigel_get_ipl(core->rigel));
+        /* rigel_step_until() should reach `until`; avoid an infinite Core 2
+         * loop if a future Rigel implementation returns without advancing. */
+        if (advanced == 0u)
+            break;
+
+        if (r.events & RIGEL_EVENT_IRQ_CHANGED) {
+            uint8_t ipl = (uint8_t)rigel_get_ipl(core->rigel);
+            core_chipset_set_pending_ipl(ipl);
+        }
 
         if (r.events & RIGEL_EVENT_FRAME_READY)
             bellatrix_machine_on_frame_ready();

@@ -263,6 +263,11 @@ if [ "${BELLATRIX_RIGEL_TRACE_BUILD:-0}" = "1" ]; then
     echo "[BUILD] Rigel trace: enabled unconditionally (bare-metal)"
 fi
 
+if [ "${BELLATRIX_FLOPPY_BOOT_PROBE:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_FLOPPY_BOOT_PROBE=1"
+    echo "[BUILD] DF0 boot probe: enabled"
+fi
+
 if [ "${BELLATRIX_TRACE_BUILD:-0}" = "1" ]; then
     EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_TRACE_BUILD=1"
     echo "[BUILD] Bellatrix trace: enabled unconditionally (bare-metal)"

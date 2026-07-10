@@ -39,6 +39,9 @@ static void cpu_bridge_log_critical_write(uint32_t addr, uint32_t value)
  * build links core_chipset.c, whose strong definitions override these. */
 __attribute__((weak)) void core_chipset_lock_acquire(void) {}
 __attribute__((weak)) void core_chipset_lock_release(void) {}
+__attribute__((weak)) void core_chipset_wait_caught_up(void) {}
+__attribute__((weak)) uint8_t core_chipset_get_pending_ipl(void) { return 0u; }
+__attribute__((weak)) void core_chipset_set_pending_ipl(uint8_t ipl) { (void)ipl; }
 __attribute__((weak)) bool core_chipset_get_progress(uint64_t *chipset_cck,
                                                      uint64_t *target_cck)
 {
@@ -47,7 +50,7 @@ __attribute__((weak)) bool core_chipset_get_progress(uint64_t *chipset_cck,
     return false;
 }
 
-#if BELLATRIX_PROFILE_ENABLED
+#if BELLATRIX_PROFILE_ENABLED || defined(BELLATRIX_ENABLE_MULTICORE)
 static int cpu_bridge_is_critical_mmio(uint32_t addr, unsigned int size,
                                        int is_write)
 {
@@ -95,7 +98,9 @@ static int cpu_bridge_is_critical_mmio(uint32_t addr, unsigned int size,
         return 0;
     }
 }
+#endif /* PROFILE || MULTICORE */
 
+#if BELLATRIX_PROFILE_ENABLED
 static void cpu_bridge_profile_critical_mmio(uint32_t addr, unsigned int size,
                                              int is_write)
 {
@@ -167,6 +172,11 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
 #if BELLATRIX_PROFILE_ENABLED
     cpu_bridge_profile_critical_mmio(addr, size, 0);
 #endif
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    /* Critical read must see fresh chipset state: let Core 2 catch up first. */
+    if (cpu_bridge_is_critical_mmio(addr, size, 0))
+        core_chipset_wait_caught_up();
+#endif
     core_chipset_lock_acquire();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
         result = bellatrix_machine_read(addr, size);
@@ -192,6 +202,12 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
 #endif
 #if BELLATRIX_PROFILE_ENABLED
     cpu_bridge_profile_critical_mmio(addr, size, 1);
+#endif
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    /* Critical write must land at the CPU's time: let Core 2 catch up first so
+     * it applies at the right beam position, not up to a backlog window late. */
+    if (cpu_bridge_is_critical_mmio(addr, size, 1))
+        core_chipset_wait_caught_up();
 #endif
     core_chipset_lock_acquire();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))

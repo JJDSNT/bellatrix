@@ -36,10 +36,8 @@ static uint32_t musashi_rom_read_at(const BellatrixMemory *mem,
 
 static int musashi_overlay_enabled(void)
 {
-    struct RigelContext *ctx = bellatrix_machine_rigel_ctx();
-    if (!ctx) return 1;
-    if (!(rigel_cia_read(ctx, 0u, 0x2u) & 0x01u)) return 1;
-    return (rigel_cia_read(ctx, 0u, 0x0u) & 0x01u) ? 1 : 0;
+    BellatrixMachine *m = bellatrix_machine_get();
+    return m ? bellatrix_memory_overlay_enabled(&m->memory) : 1;
 }
 
 /* When the fast RAM autoconfig board is registered, the RAM window must

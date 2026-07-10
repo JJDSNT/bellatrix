@@ -12,6 +12,7 @@
 #include "audio/output.h"
 #include "machine/memory/chip_ram.h"
 #include "host/pal.h"
+#include "runtime/core_chipset.h"
 #include "support.h"
 
 #include "rigel/rigel.h"
@@ -754,8 +755,12 @@ void bellatrix_machine_post_chipset_step(void)
 
 void bellatrix_machine_sync_ipl(void)
 {
-    if (g_rigel)
-        machine_publish_ipl(&g_machine, rigel_get_ipl(g_rigel));
+    if (g_rigel) {
+        uint8_t ipl = (uint8_t)rigel_get_ipl(g_rigel);
+        if (PAL_Core_IsMulticoreEnabled())
+            core_chipset_set_pending_ipl(ipl);
+        machine_publish_ipl(&g_machine, ipl);
+    }
 }
 
 uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles)

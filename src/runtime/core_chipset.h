@@ -34,4 +34,15 @@ void core_chipset_lock_release(void);
  * Returns false when the separate chipset core is not active/available. */
 bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck);
 
+/* Latest IPL published by the chipset core.  The CPU core consumes this at a
+ * backend boundary; Core 2 must never mutate Musashi/Emu68 CPU state itself. */
+uint8_t core_chipset_get_pending_ipl(void);
+void core_chipset_set_pending_ipl(uint8_t ipl);
+
+/* MMIO-critical barrier: block the calling (CPU) core until the chipset core
+ * has advanced to the CPU's published time, so a critical register access sees
+ * fresh chipset state instead of state up to CHIPSET_MAX_BACKLOG_CCK stale.
+ * No-op when multicore is disabled or the chipset core is not running. */
+void core_chipset_wait_caught_up(void);
+
 #endif
