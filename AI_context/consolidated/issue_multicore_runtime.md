@@ -153,10 +153,19 @@ uma lacuna funcional aberta, não resolvida por este relabeling de cores.
 ### Scheduler por deadline (lacuna da proposta original)
 O scheduler ainda é um acumulador de ciclos com quantum fixo
 (`CHIPSET_QUANTUM=128`), não um `T = min(próximo evento...)` deadline-oriented.
+**Decisão e plano registrados** em `issue_core0_arbiter_scheduler.md`: árbitro no
+Core 0 (hoje parado), rendezvous de epoch substitui o lock por acesso, pré-requisito
+= `emu68_run_until` + `rigel_next_event_tick`.
 
 ### RuntimeMailbox / Event Queue
 `src/runtime/event.c/h` e `src/runtime/mailbox.c/h` existem mas não estão
 integrados — sincronização hoje é só atomics + lock + WFE/SEV.
+
+### Interrupções ARM de periférico não são roteadas (por decisão)
+USB/HDMI/Bluetooth são servidos por **polling** no Core 3, nunca por IRQ ARM na
+vector table do Emu68 — que é hardcoded para o modelo PiStorm (`ARM IRQ ≡ Amiga
+INT6→IPL6`). Ver `issue_emu68_pistorm_interrupt_contract.md` para o contrato
+portátil e por que um "gateway de IRQ no Core 0" foi rejeitado.
 
 ## Arquivos Relevantes
 - `src/cpu/emu68/bellatrix.c` — `bellatrix_launch_cpu_and_park`,

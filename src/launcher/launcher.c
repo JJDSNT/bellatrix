@@ -544,12 +544,19 @@ static void pump_usb(void)
 
 // Wait for a key press, pumping USB each iteration.
 // Times out after ~6 seconds so a headless setup still proceeds.
+// Bounded "press any key, else continue" gate used only on the no-media path.
+// Budget kept short so headless QEMU runs (no keyboard attached) fall through to
+// boot-without-disk in well under a second instead of spinning for tens of
+// seconds. The no-media outcome is still logged ("no media found on USB drive"),
+// so a USB stack that failed to enumerate stays visible in the serial log —
+// which is how the hang originally surfaced the intermittent USB failure — but
+// without holding the boot hostage to a timeout.
 static void wait_ack(void)
 {
-    for (uint32_t i = 0u; i < 5000u; i++) {
+    for (uint32_t i = 0u; i < 120u; i++) {
         pump_usb();
         if (launcher_input_pop() != 0u) return;
-        for (volatile uint32_t d = 0u; d < 1000000u; d++) asm volatile("nop");
+        for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
     }
 }
 

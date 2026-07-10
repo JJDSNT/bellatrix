@@ -336,6 +336,50 @@ BellatrixRuntime g_runtime;
  * work of its own because the CPU<->chipset protocol already lives inside
  * the CPU's MMIO fault path and the chipset's step function.
  * ------------------------------------------------------------------------- */
+/* Core 0 supervisor — replaces the idle wfe park in multicore builds.
+ *
+ * Debug scaffold and first increment of the Core-0 arbiter: instead of sleeping
+ * forever after launching Core 1, Core 0 periodically reports whether the CPU
+ * (Core 1) is publishing cycles (cpu_target) and the chipset (Core 2) is
+ * draining them (chipset), so a silent-but-running boot can be told apart from a
+ * stalled/deadlocked one. It does not schedule anything yet — see
+ * AI_context/consolidated/issue_core0_arbiter_scheduler.md. */
+static void bellatrix_core0_supervise(void)
+{
+    extern bool core_chipset_get_progress(uint64_t *chipset_cck,
+                                          uint64_t *target_cck);
+    uint64_t last_target = 0u;
+    uint64_t last_chipset = 0u;
+    uint32_t beat = 0u;
+
+    for (;;) {
+        /* Pace the heartbeat with a fixed spin. Core 0 has no other work in
+         * this build; a real timer/deadline replaces this in a later phase.
+         * Kept coarse (~seconds/beat) because kprintf on the shared mini-UART
+         * is not serialised across cores — a fast heartbeat garbles the log by
+         * interleaving with Core 1's output. */
+        for (volatile uint32_t d = 0u; d < 400000000u; d++)
+            asm volatile("nop");
+
+        uint64_t chipset_cck = 0u;
+        uint64_t target_cck = 0u;
+        (void)core_chipset_get_progress(&chipset_cck, &target_cck);
+
+        kprintf("[CORE0-SUP] beat=%u cpu_target=%llu(+%llu) "
+                "chipset=%llu(+%llu) backlog=%lld\n",
+                (unsigned)beat,
+                (unsigned long long)target_cck,
+                (unsigned long long)(target_cck - last_target),
+                (unsigned long long)chipset_cck,
+                (unsigned long long)(chipset_cck - last_chipset),
+                (long long)((int64_t)target_cck - (int64_t)chipset_cck));
+
+        last_target = target_cck;
+        last_chipset = chipset_cck;
+        beat++;
+    }
+}
+
 void bellatrix_launch_cpu_and_park(void (*entry)(void))
 {
     if (!entry)
@@ -348,8 +392,7 @@ void bellatrix_launch_cpu_and_park(void (*entry)(void))
 
     PAL_Core_LaunchCpu(entry);
 
-    for (;;)
-        asm volatile("wfe");
+    bellatrix_core0_supervise();   /* never returns */
 }
 
 /* ---------------------------------------------------------------------------
@@ -966,7 +1009,7 @@ void bellatrix_init(void)
 
     kprintf("[BELA] build: " __DATE__ " " __TIME__ "\n");
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[BELA] Initialized (multicore enabled: Core1=CPU Core2=Chipset Core3=IO)\n");
+        kprintf("[BELA] Initialized (multicore enabled: Core0=Supervisor Core1=CPU Core2=Chipset Core3=IO)\n");
     } else {
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }

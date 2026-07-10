@@ -32,11 +32,19 @@
 /* Rigel step granularity in CCK cycles. */
 #define CHIPSET_QUANTUM 128u
 
+/* Max CCK the CPU (Core 1) may run ahead of the chipset (Core 2) before it
+ * blocks and lets Core 2 catch up. Without this bound the target diverges
+ * without limit (observed: chipset >400M CCK behind), making the emulated
+ * machine's sense of time meaningless. ~36 scanlines; tunable. First
+ * correctness increment of the Core-0 arbiter (issue_core0_arbiter_scheduler.md). */
+#define CHIPSET_MAX_BACKLOG_CCK 8192u
+
 /* Published by Core 1 (CPU); consumed by Core 2 (chipset). */
 static _Atomic uint64_t s_cpu_cck_target = 0;
 
-/* Local to Core 2 — never written by Core 1. */
-static uint64_t s_chipset_cck = 0;
+/* Advanced by Core 2 (chipset); read cross-core by Core 1 (backpressure) and
+ * Core 0 (supervisor), so it must be atomic. */
+static _Atomic uint64_t s_chipset_cck = 0;
 
 /* Remainder for M68K→CCK conversion (local to Core 1 call site). */
 static uint32_t s_m68k_rem = 0;
@@ -74,7 +82,8 @@ bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck)
         return false;
 
     if (chipset_cck)
-        *chipset_cck = s_chipset_cck;
+        *chipset_cck = atomic_load_explicit(&s_chipset_cck,
+                                            memory_order_acquire);
     if (target_cck)
         *target_cck = atomic_load_explicit(&s_cpu_cck_target,
                                            memory_order_acquire);
@@ -101,7 +110,7 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     s_core = core;
 
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
-    s_chipset_cck = 0;
+    atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     s_m68k_rem    = 0;
 
     CORE2_LOG("chipset init (Rigel)");
@@ -121,7 +130,7 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     if (!core) return;
     core->local_cycles = 0;
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
-    s_chipset_cck = 0;
+    atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     s_m68k_rem    = 0;
     CORE2_LOG("chipset reset");
 }
@@ -159,6 +168,23 @@ void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
                                         memory_order_release);
 #endif
         PAL_Runtime_WakeupChipset();        /* sev — wake Core 2 */
+
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+        /* Backpressure: block until Core 2 drains the backlog below the bound,
+         * so the CPU (Core 1) cannot run unbounded ahead of the chipset
+         * (Core 2). Core 2 SEVs after each host_step, waking this WFE. */
+        for (;;) {
+            uint64_t tgt  = atomic_load_explicit(&s_cpu_cck_target,
+                                                 memory_order_relaxed);
+            uint64_t chip = atomic_load_explicit(&s_chipset_cck,
+                                                 memory_order_acquire);
+            if ((tgt - chip) <= CHIPSET_MAX_BACKLOG_CCK)
+                break;
+            if (!s_core || !s_core->running)
+                break;
+            asm volatile("wfe" ::: "memory");
+        }
+#endif
     }
 #if BELLATRIX_PROFILE_ENABLED
     bprof_multicore_publish(m68k_cycles, cck, target);
@@ -180,17 +206,18 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         return;
 
     uint64_t target = atomic_load_explicit(&s_cpu_cck_target, memory_order_acquire);
+    uint64_t chip   = atomic_load_explicit(&s_chipset_cck, memory_order_relaxed);
 
-    if (s_chipset_cck >= target) {
+    if (chip >= target) {
 #if BELLATRIX_PROFILE_ENABLED
-        bprof_multicore_empty_host_step(s_chipset_cck, target);
+        bprof_multicore_empty_host_step(chip, target);
 #endif
         bellatrix_machine_post_chipset_step();
         return;
     }
 
-    while (s_chipset_cck < target) {
-        uint64_t remaining = target - s_chipset_cck;
+    while (chip < target) {
+        uint64_t remaining = target - chip;
         uint32_t step = (remaining > CHIPSET_QUANTUM) ? CHIPSET_QUANTUM
                                                       : (uint32_t)remaining;
 
@@ -201,11 +228,11 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
 #if BELLATRIX_PROFILE_ENABLED
         bprof_record(&g_bprof.chipset_step_time, bprof_now() - t0);
 #endif
-        s_chipset_cck      += step;
+        chip               += step;
         core->local_cycles += step;
         core->machine->tick_count = (uint64_t)r.time;
 #if BELLATRIX_PROFILE_ENABLED
-        bprof_multicore_chipset_step(step, s_chipset_cck, target);
+        bprof_multicore_chipset_step(step, chip, target);
 #endif
 
         if (r.events & RIGEL_EVENT_IRQ_CHANGED)
@@ -218,6 +245,12 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         if (r.events & RIGEL_EVENT_HBLANK)
             bellatrix_machine_on_audio_sample_ready();
     }
+
+    /* Publish progress and wake Core 1 if it is blocked on backpressure. */
+    atomic_store_explicit(&s_chipset_cck, chip, memory_order_release);
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    asm volatile("dsb ishst\n\tsev" ::: "memory");
+#endif
 
     bellatrix_machine_post_chipset_step();
 }
