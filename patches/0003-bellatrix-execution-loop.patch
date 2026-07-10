@@ -56,7 +56,8 @@ index 732a176..9f55465 100644
 +            static uint32_t bela_spins;
 +            uint64_t _v30_now, _pc_now, _x12_save;
 +            asm volatile("mov %0, v30.d[0]" : "=r"(_v30_now));
-+            if ((_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
++            if (emu68_api_sync_pending() ||
++                (_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
 +                ++bela_spins >= 64u) {
 +                bela_insn_prev = _v30_now;
 +                bela_spins = 0u;

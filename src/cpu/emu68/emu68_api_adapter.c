@@ -28,6 +28,8 @@ struct emu68 {
     emu68_stop_reason_t run_stop_reason;
     uint32_t run_stop_pc;
     uint32_t run_stop_detail;
+    bool sync_pending;
+    uint32_t sync_addr;
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
     bool logged_first_read;
     bool logged_first_write;
@@ -190,6 +192,8 @@ void emu68_reset(emu68_t *cpu)
     cpu->run_stop_reason = EMU68_STOP_CYCLES_EXHAUSTED;
     cpu->run_stop_pc = 0;
     cpu->run_stop_detail = 0;
+    cpu->sync_pending = false;
+    cpu->sync_addr = 0;
 
     if (!__m68k_state)
         return;
@@ -303,6 +307,14 @@ int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
     cpu->run_cycles += cycles;
     cpu->run_stop_pc = pc;
 
+    if (cpu->sync_pending) {
+        cpu->sync_pending = false;
+        cpu->run_stop_reason = EMU68_STOP_SYNC_REQUIRED;
+        cpu->run_stop_detail = cpu->sync_addr;
+        cpu->run_active = false;
+        return 1;
+    }
+
     if (cpu->stop_requested) {
         cpu->run_stop_reason = EMU68_STOP_HOST_REQUEST;
         cpu->run_active = false;
@@ -316,6 +328,12 @@ int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
     }
 
     return 0;
+}
+
+int emu68_api_sync_pending(void)
+{
+    return g_emu68_api.in_use && g_emu68_api.run_active &&
+           g_emu68_api.sync_pending;
 }
 
 void emu68_get_state(emu68_t *cpu, emu68_state_t *out)
@@ -465,6 +483,10 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
         if (result.status == EMU68_BUS_SYNC_REQUIRED) {
             emu68_event_t event;
             cpu->stats.bus_sync_required_count++;
+            if (cpu->run_active) {
+                cpu->sync_pending = true;
+                cpu->sync_addr = addr;
+            }
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
             if (!cpu->logged_first_sync) {
                 cpu->logged_first_sync = true;
@@ -546,6 +568,10 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
         if (result.status == EMU68_BUS_SYNC_REQUIRED) {
             emu68_event_t event;
             cpu->stats.bus_sync_required_count++;
+            if (cpu->run_active) {
+                cpu->sync_pending = true;
+                cpu->sync_addr = addr;
+            }
             memset(&event, 0, sizeof(event));
             event.type = EMU68_EVENT_SYNC_REQUIRED;
             event.addr = addr;

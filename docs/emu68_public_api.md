@@ -113,8 +113,11 @@ Return status:
   requested.
 - `EMU68_BUS_ERROR`: access was not handled; the caller may use fallback.
 
-In phase 1, `EMU68_BUS_SYNC_REQUIRED` emits an event but does not stop execution,
-because there is no real `run_cycles()` window yet.
+Outside an active run window, `EMU68_BUS_SYNC_REQUIRED` emits an event and updates
+statistics. During `emu68_run_cycles()`, it also arms a pending boundary. The first
+safe `MainLoop` dispatch after the fault bypasses the normal progress gate and returns
+`EMU68_STOP_SYNC_REQUIRED`; `detail` contains the bus address. The implementation does
+not unwind through the fault handler and therefore preserves the JIT's pinned context.
 
 Bellatrix currently returns `EMU68_BUS_SYNC_REQUIRED` for writes to selected
 critical custom registers and CIA windows:

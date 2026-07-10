@@ -158,6 +158,7 @@ int emu68_api_dispatch_bus_access(uint32_t addr, uint32_t *value,
                                   emu68_space_t space);
 int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
                                         uint32_t pc);
+int emu68_api_sync_pending(void);
 
 #ifdef __cplusplus
 }
