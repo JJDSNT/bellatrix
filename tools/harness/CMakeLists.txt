@@ -380,14 +380,14 @@ add_test(NAME bellatrix_harness_boot_adf
                  ${ROOT}/tests/integration/harness_boot_adf.sh
                  ${CMAKE_BINARY_DIR}/harness
                  ${ROOT}/src/roms/KS31.rom
-                 ${ROOT}/src/disks/wb31.adf)
+                 ${ROOT}/src/disks/workbench31.adf)
 
 add_test(NAME bellatrix_harness_no_autoconfig
          COMMAND /bin/bash
                  ${ROOT}/tests/integration/harness_no_autoconfig.sh
                  ${CMAKE_BINARY_DIR}/harness
                  ${ROOT}/src/roms/KS31.rom
-                 ${ROOT}/src/disks/wb31.adf)
+                 ${ROOT}/src/disks/workbench31.adf)
 
 set_tests_properties(bellatrix_unit_memory PROPERTIES
     ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
