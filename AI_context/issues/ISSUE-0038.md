@@ -58,12 +58,48 @@ esperado pelo superprojeto e distinguir patches Bellatrix de outros WIPs locais.
 7. **Encerrar a issue**: remover ou reduzir a instrumentacao TRACE-gated depois da
    validacao em hardware e documentar a matriz final de ROM/disco/backend.
 
+## Frente explicita: API publica Emu68
+
+A liveness deve ser provada atraves do contrato publico de `ISSUE-0039`, nao por novos
+atalhos para globais internos. A sequencia de trabalho e:
+
+1. fazer `EMU68_BUS_SYNC_REQUIRED` encerrar a janela cooperativa como barreira real;
+2. definir ownership/lifecycle de `create/reset/run/request_stop` e retirar gradualmente
+   o bootstrap implicito por `M68K_StartEmu()`;
+3. definir ranges e efeitos do bus externo (custom, CIA, autoconfig, overlay/ROM);
+4. validar invalidacao JIT com codigo mutavel e mudancas de overlay;
+5. provar `run_cycles()` e as barreiras no modelo multicore Core 1/Core 2.
+
+## Frente explicita: contrato IRQ/IPL
+
+O Emu68 **nao precisa de IRQ ARM fisica no Bellatrix** para receber interrupcoes do
+Amiga. A linha guest e um nivel IPL persistente calculado pelo Rigel e publicado por
+software em `M68KState.INT.IPL`; `INT32` torna a mudanca observavel e o MainLoop decide a
+entrega comparando o nivel com a mascara do SR. `INT.ARM` e a traducao PiStorm de uma
+linha fisica externa para nivel 6 e deve permanecer zero no variant Bellatrix.
+
+IRQs fisicas de USB, Bluetooth e audio sao interrupcoes **do host**, nao IRQs Amiga.
+Elas ficam fora do Emu68: hoje sao atendidas por polling no Core 3; futuramente podem
+chegar ao arbitro/Core 0 se medicao justificar, mas nunca devem entrar no handler
+PiStorm que hardcoda IPL 6 nem interromper o core que mantem registradores M68K pinados.
+
+A validacao desta frente deve cobrir:
+
+- niveis 1..7 e clear para zero via `emu68_set_irq_level()`;
+- `INT.ARM == 0` no Bellatrix e ausencia de dependencia de IRQ/FIQ ARM;
+- IPL persistente enquanto INTREQ/INTENA permanecer ativo, inclusive durante STOP;
+- mascaramento pelo SR e entrega assim que o nivel superar a mascara;
+- acknowledge/clear sem pulso perdido entre Core 2 e os boundaries do JIT;
+- nenhuma chamada C no MainLoop/delivery sem preservar x12, x13-x17 e v28.
+
 ## Criterio de conclusao
 
 - DiagROM completa no Emu68;
 - KS13 alcanca hand screen e boota um ADF conhecido sem perda de VBL/IRQ;
 - AROS alcanca ao menos `trackdisk.device` de forma repetivel;
 - nenhuma corrupcao de registradores pinados ou vetor 0x6C com traces seguros;
+- API publica encerra janela em `SYNC_REQUIRED` e tem lifecycle/ownership documentado;
+- IRQ guest funciona apenas pela linha IPL virtual, sem IRQ ARM fisica no core do JIT;
 - validacao equivalente no Pi real, seguida da limpeza da instrumentacao temporaria.
 
 # RESOLUCAO FINAL (2026-07-06)

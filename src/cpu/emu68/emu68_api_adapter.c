@@ -221,8 +221,15 @@ void emu68_set_irq_level(emu68_t *cpu, int level)
         level = 7;
 
     __m68k_state->INT.IPL = (uint8_t)level;
+#ifdef BELLATRIX
+    /* Rigel publishes the guest's persistent IPL in software; no physical ARM
+     * IRQ is involved. INT.ARM is the PiStorm external line translated to
+     * Amiga level 6, so asserting it would mix two interrupt domains. */
+    __m68k_state->INT.ARM = 0;
+#else
     if (level)
         __m68k_state->INT.ARM = 1;
+#endif
 }
 
 emu68_run_result_t emu68_run_cycles(emu68_t *cpu, uint32_t max_cycles)

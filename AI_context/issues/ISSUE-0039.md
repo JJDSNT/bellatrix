@@ -6,7 +6,7 @@ priority: high
 type: feature
 owner: agent
 created_at: 2026-07-09
-updated_at: 2026-07-09
+updated_at: 2026-07-10
 tags:
   - emu68
   - api
@@ -86,6 +86,11 @@ Introduzir uma API pequena e honesta para:
 
 # O que falta fazer
 
+- Formalizar e testar o contrato de IRQ: no Bellatrix, `emu68_set_irq_level()` publica
+  somente o nivel virtual em `M68KState.INT.IPL`; `INT.ARM` e PiStorm-only e deve ficar
+  zero. Nao ha requisito de IRQ ARM fisica para IRQs guest. IRQs de device do host ficam
+  fora do core/JIT Emu68 (polling no Core 3 hoje, arbitro/Core 0 no futuro se necessario).
+
 - Fazer `EMU68_BUS_SYNC_REQUIRED` encerrar a janela ativa de `emu68_run_cycles()`
   como barreira real, nao apenas evento/contador. Writes como `DMACON`, `INTENA`,
   `INTREQ`, `COPJMP`, `BLTSIZE` e CIA devem cortar a janela para Rigel observar
@@ -139,6 +144,7 @@ Introduzir uma API pequena e honesta para:
 - [ ] Hardware real validado.
 - [ ] Diagnostico confirma dump/reset por `0xDFFF08` em uma execucao real.
 - [ ] Invalidação validada contra caso real de codigo mutavel.
+- [ ] IPL 1..7/clear validado sem `INT.ARM` ou IRQ ARM fisica no Bellatrix.
 
 # Observações
 
