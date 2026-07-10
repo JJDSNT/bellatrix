@@ -4,6 +4,7 @@
 #include "io/serial/miniuart_backend.h"
 #include "support.h"
 
+#include <stdatomic.h>
 #include <stdint.h>
 
 /* Added to Emu68's support_rpi.c by patches/0008-bellatrix-console-redirect.patch. */
@@ -14,21 +15,28 @@ static MiniUartBackend s_console_miniuart;
 #define CONSOLE_LOG_RING_SIZE 4096u
 #define CONSOLE_LOG_DRAIN_MAX 256u
 static volatile uint8_t  s_ring[CONSOLE_LOG_RING_SIZE];
-static volatile uint32_t s_ring_head;    /* producer: console_log_putc()  */
-static volatile uint32_t s_ring_tail;    /* consumer: console_log_drain() */
-static volatile uint32_t s_ring_dropped;
+static _Atomic uint32_t s_ring_head;    /* producer: console_log_putc()  */
+static _Atomic uint32_t s_ring_tail;    /* consumer: console_log_drain() */
+static _Atomic uint32_t s_ring_dropped;
 static volatile uint32_t s_direct_mode;
 
 static void ring_push(uint8_t byte)
 {
-    uint32_t head = s_ring_head;
+    uint32_t head = atomic_load_explicit(&s_ring_head, memory_order_relaxed);
     uint32_t next = (head + 1u) % CONSOLE_LOG_RING_SIZE;
-    if (next == s_ring_tail) {
-        s_ring_dropped++;
+    uint32_t tail = atomic_load_explicit(&s_ring_tail, memory_order_acquire);
+
+    if (next == tail) {
+        atomic_fetch_add_explicit(&s_ring_dropped, 1u, memory_order_relaxed);
         return;
     }
+
+    /* Publish head only after the payload is visible.  `volatile` alone did
+     * not provide this ordering on AArch64, so the Core 2 consumer could read
+     * stale bytes left from a previous ring revolution and replay whole old
+     * log blocks. */
     s_ring[head] = byte;
-    s_ring_head = next;
+    atomic_store_explicit(&s_ring_head, next, memory_order_release);
 }
 
 /* Multicore-friendly sink: kprintf calls putc one char at a time, so when
@@ -95,6 +103,7 @@ static void console_log_putc(char chr)
 void console_log_drain(void)
 {
     uint32_t drained = 0u;
+    uint32_t tail;
 
     if (!miniuart_backend_is_open(&s_console_miniuart))
         return;
@@ -104,11 +113,14 @@ void console_log_drain(void)
      * failure and retry the same byte next call, rather than advancing the
      * tail and dropping/corrupting it. Cap each pass so logs stay
      * opportunistic. */
-    while (s_ring_tail != s_ring_head && drained < CONSOLE_LOG_DRAIN_MAX) {
+    tail = atomic_load_explicit(&s_ring_tail, memory_order_relaxed);
+    while (tail != atomic_load_explicit(&s_ring_head, memory_order_acquire) &&
+           drained < CONSOLE_LOG_DRAIN_MAX) {
         if (!miniuart_backend_write_byte(&s_console_miniuart,
-                                          s_ring[s_ring_tail]))
+                                          s_ring[tail]))
             break;
-        s_ring_tail = (s_ring_tail + 1u) % CONSOLE_LOG_RING_SIZE;
+        tail = (tail + 1u) % CONSOLE_LOG_RING_SIZE;
+        atomic_store_explicit(&s_ring_tail, tail, memory_order_release);
         drained++;
     }
 }
