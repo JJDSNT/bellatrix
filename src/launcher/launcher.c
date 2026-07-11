@@ -17,6 +17,7 @@
 #include "launcher/launcher_input.h"
 #include "storage/fat/fat32.h"
 #include "storage/iso/iso_image.h"
+#include "host/pal.h"
 #if BELLATRIX_ENABLE_USBSTACK
 #include "io/usb/usb_msc_bellatrix.h"
 #endif
@@ -56,6 +57,20 @@ extern uint16_t *framebuffer;
 extern uint32_t  pitch;
 extern uint32_t  fb_width;
 extern uint32_t  fb_height;
+
+// Wall-clock milliseconds elapsed since a PAL counter snapshot. The launcher
+// runs pre-boot on Core 0 and drives USB itself, but the console is deferred
+// (its serial output order does NOT reflect real event order), so enumeration
+// is bounded and logged by real elapsed time rather than by nop-spin counts.
+// Uses the always-available PAL time API — not hal_time_ms(), which only links
+// with BTStack.
+static uint32_t launcher_ms_since(uint64_t t0_ticks)
+{
+    uint64_t freq = PAL_Time_GetFrequency();
+    if (freq == 0u)
+        return 0u;
+    return (uint32_t)(((PAL_Time_ReadCounter() - t0_ticks) * 1000u) / freq);
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1098,11 +1113,14 @@ bool launcher_run(void)
     launcher_input_init();
     launcher_input_set_active(true);
 
-    // Pump USB to give the keyboard and MSC device time to enumerate
+    // Phase: kick USB enumeration. Bounded wall-clock pump (not a nop-spin,
+    // whose duration drifts with the ARM/core clock) to give the hub and HID
+    // devices a head start before the media scan below.
     draw_message("Initialising...", COL_TITLE_BG);
-    for (uint32_t i = 0u; i < 50u; i++) {
-        pump_usb();
-        for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
+    {
+        uint64_t t_kick = PAL_Time_ReadCounter();
+        while (launcher_ms_since(t_kick) < 300u)
+            pump_usb();
     }
 
 #if BELLATRIX_ENABLE_BTSTACK
@@ -1130,15 +1148,21 @@ bool launcher_run(void)
 #if BELLATRIX_ENABLE_USBSTACK
     static char s_names[MAX_FILES][FAT32_NAME_MAX];
 
-    // Wait for USB MSC to enumerate (up to ~1 s additional)
+    // Phase: wait for the USB mass-storage LUN to finish enumerating before
+    // scanning for media. Deterministic wall-clock budget (was a fixed nop-spin
+    // that expired before slow hubs/throttled controllers finished — the drive
+    // then reported ready only AFTER this check, which the deferred console
+    // hid by reordering "[USB-MSC] drive ready" ahead of "no media found").
     draw_message("Scanning USB drive...", COL_TITLE_BG);
-    for (uint32_t i = 0u; i < 200u; i++) {
+    uint64_t t_enum = PAL_Time_ReadCounter();
+    bool msc_ready = false;
+    while (!(msc_ready = usb_msc_is_ready()) && launcher_ms_since(t_enum) < 5000u)
         pump_usb();
-        for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
-        if (usb_msc_is_ready()) break;
-    }
+    kprintf("[LAUNCHER] USB MSC %s after %u ms\n",
+            msc_ready ? "ready" : "NOT ready (5s timeout)",
+            (unsigned)launcher_ms_since(t_enum));
 
-    if (usb_msc_is_ready() && fat32_init_usb(&s_fat32)) {
+    if (msc_ready && fat32_init_usb(&s_fat32)) {
         uint32_t n_files = fat32_list(&s_fat32, s_names, MAX_FILES);
 
         for (uint32_t i = 0u; i < n_files && count < MAX_FILES; i++) {

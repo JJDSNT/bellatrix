@@ -269,8 +269,8 @@ void PAL_Runtime_Poll(void)
     const uint64_t now = pal_read_cntpct();
     bellatrix_runtime_host_step(now, s_rt.host_counter_freq);
 
-    // Single-core has no Core 3 loop, so physical IO (USB/BT) must be
-    // serviced here. Throttle to ~1ms: usb_host_step pumps the whole
+    // Single-core has no independent Core 0 supervisor, so physical IO must
+    // be serviced here. Throttle to ~1ms: usb_host_step pumps the whole
     // CherryUSB event chain and is far too heavy for every MMIO access.
     if (!PAL_Core_IsMulticoreEnabled()) {
         static uint64_t io_last;
@@ -329,7 +329,7 @@ static void chipset_core_loop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Core 3 — IO (CIA / serial / disk) main loop
+// Dormant Core 3 worker. Reserved for a future explicit RTG/AHI/IO migration.
 // ---------------------------------------------------------------------------
 static void chipset_io_loop(void)
 {
@@ -379,7 +379,8 @@ void bellatrix_core2_entry(void)
 
 void bellatrix_core3_entry(void)
 {
-    /* Core 3 — IO (CIA / serial / disk). Parks until PAL_Core_LaunchIO(). */
+    /* Core 3 is reserved and parks unless a future PAL_Core_LaunchIO() user
+     * explicitly assigns the dormant worker. */
     while (!s_io_entry)
         pal_wfe();
 

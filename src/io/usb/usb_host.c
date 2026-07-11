@@ -12,12 +12,104 @@ void usb_osal_timer_poll(void);
 #define BELLATRIX_USB_BUS_ID 0u
 #define BELLATRIX_USB_DWC2_REG_BASE 0xF2980000UL
 #define BELLATRIX_USB_HPRT_ADDR (BELLATRIX_USB_DWC2_REG_BASE + USB_OTG_HOST_PORT_BASE)
+#define BELLATRIX_USB_OWNER_NONE UINT32_MAX
+
+static USBHost *g_bellatrix_usb_host;
 
 #ifdef BELLATRIX_USB_LOG
 #define BELLATRIX_USB_LOGF(...) kprintf(__VA_ARGS__)
 #else
 #define BELLATRIX_USB_LOGF(...) do { } while (0)
 #endif
+
+static uint32_t bellatrix_usb_current_core(void)
+{
+#if defined(__aarch64__)
+    uint64_t mpidr;
+    __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(mpidr));
+    return (uint32_t)(mpidr & 3u);
+#else
+    return 0u;
+#endif
+}
+
+static bool bellatrix_usb_owner_enter(USBHost *host, const char *operation)
+{
+    uint32_t core = bellatrix_usb_current_core();
+    uint32_t expected = 0u;
+
+    if (__atomic_load_n(&host->owner_active, __ATOMIC_ACQUIRE) == core + 1u) {
+        __atomic_add_fetch(&host->owner_depth[core], 1u, __ATOMIC_RELAXED);
+        return true;
+    }
+
+    if (!__atomic_compare_exchange_n(&host->owner_active, &expected, core + 1u,
+                                     false, __ATOMIC_ACQUIRE,
+                                     __ATOMIC_RELAXED)) {
+        uint32_t active_core = expected - 1u;
+        uint32_t violations = __atomic_add_fetch(&host->ownership_violations, 1u,
+                                                 __ATOMIC_RELAXED);
+        if (violations == 1u) {
+            kprintf("[USB-OWNER] CONTENTION requester=core%u active=core%u op=%s; serializing\n",
+                    (unsigned)core, (unsigned)active_core, operation);
+        }
+
+        do {
+            expected = 0u;
+#if defined(__aarch64__)
+            __asm__ volatile("yield");
+#endif
+        } while (!__atomic_compare_exchange_n(&host->owner_active, &expected,
+                                               core + 1u, false,
+                                               __ATOMIC_ACQUIRE,
+                                               __ATOMIC_RELAXED));
+    }
+
+    __atomic_store_n(&host->owner_depth[core], 1u, __ATOMIC_RELAXED);
+    uint32_t previous = __atomic_exchange_n(&host->last_owner_core, core,
+                                            __ATOMIC_RELAXED);
+    __atomic_fetch_add(&host->calls_by_core[core], 1u, __ATOMIC_RELAXED);
+#ifndef BELLATRIX_USB_LOG
+    (void)previous;
+#endif
+    if (previous != core) {
+        if (previous == BELLATRIX_USB_OWNER_NONE) {
+            BELLATRIX_USB_LOGF("[USB-OWNER] core=%u op=%s previous=none\n",
+                               (unsigned)core, operation);
+        } else {
+            BELLATRIX_USB_LOGF("[USB-OWNER] core=%u op=%s previous=core%u\n",
+                               (unsigned)core, operation, (unsigned)previous);
+        }
+    }
+    return true;
+}
+
+static void bellatrix_usb_owner_leave(USBHost *host)
+{
+    uint32_t core = bellatrix_usb_current_core();
+    uint32_t depth = __atomic_load_n(&host->owner_depth[core], __ATOMIC_RELAXED);
+
+    if (depth > 1u) {
+        __atomic_store_n(&host->owner_depth[core], depth - 1u, __ATOMIC_RELAXED);
+        return;
+    }
+
+    __atomic_store_n(&host->owner_depth[core], 0u, __ATOMIC_RELAXED);
+    __atomic_store_n(&host->owner_active, 0u, __ATOMIC_RELEASE);
+}
+
+bool usb_host_stack_enter(const char *operation)
+{
+    USBHost *host = __atomic_load_n(&g_bellatrix_usb_host, __ATOMIC_ACQUIRE);
+    return host && bellatrix_usb_owner_enter(host, operation);
+}
+
+void usb_host_stack_leave(void)
+{
+    USBHost *host = __atomic_load_n(&g_bellatrix_usb_host, __ATOMIC_ACQUIRE);
+    if (host)
+        bellatrix_usb_owner_leave(host);
+}
 
 static void usbh_bellatrix_poll(uint8_t busid)
 {
@@ -122,6 +214,19 @@ bool usb_host_init(USBHost *host)
         return false;
     }
 
+    host->owner_active = 0u;
+    host->last_owner_core = BELLATRIX_USB_OWNER_NONE;
+    host->ownership_violations = 0u;
+    for (unsigned int i = 0u; i < 4u; ++i)
+        host->calls_by_core[i] = 0u;
+    for (unsigned int i = 0u; i < 4u; ++i)
+        host->owner_depth[i] = 0u;
+    __atomic_store_n(&g_bellatrix_usb_host, host, __ATOMIC_RELEASE);
+
+    if (!bellatrix_usb_owner_enter(host, "init")) {
+        return false;
+    }
+
     host->enabled = true;
     host->initialized = true;
     host->stack_linked = true;
@@ -140,12 +245,17 @@ bool usb_host_init(USBHost *host)
         kprintf("[USB] CherryUSB DWC2 host initialization failed\n");
     }
 
+    bellatrix_usb_owner_leave(host);
     return true;
 }
 
 void usb_host_step(USBHost *host)
 {
     if (!host || !host->enabled || !host->initialized) {
+        return;
+    }
+
+    if (!bellatrix_usb_owner_enter(host, "step")) {
         return;
     }
 
@@ -157,11 +267,17 @@ void usb_host_step(USBHost *host)
             bellatrix_usb_log_hprt(host, "poll");
         }
     }
+
+    bellatrix_usb_owner_leave(host);
 }
 
 void usb_host_shutdown(USBHost *host)
 {
     if (!host || !host->initialized) {
+        return;
+    }
+
+    if (!bellatrix_usb_owner_enter(host, "shutdown")) {
         return;
     }
 
@@ -178,6 +294,14 @@ void usb_host_shutdown(USBHost *host)
     host->controller_ready = false;
     host->last_hprt = 0;
     host->last_hprt_valid = false;
+    BELLATRIX_USB_LOGF("[USB-OWNER] calls core0=%u core1=%u core2=%u core3=%u violations=%u\n",
+                       (unsigned)host->calls_by_core[0],
+                       (unsigned)host->calls_by_core[1],
+                       (unsigned)host->calls_by_core[2],
+                       (unsigned)host->calls_by_core[3],
+                       (unsigned)host->ownership_violations);
+    __atomic_store_n(&g_bellatrix_usb_host, NULL, __ATOMIC_RELEASE);
+    bellatrix_usb_owner_leave(host);
 }
 
 #else
@@ -195,6 +319,13 @@ bool usb_host_init(USBHost *host)
     host->poll_count = 0;
     host->last_hprt = 0;
     host->last_hprt_valid = false;
+    host->owner_active = 0u;
+    host->last_owner_core = UINT32_MAX;
+    host->ownership_violations = 0u;
+    for (unsigned int i = 0u; i < 4u; ++i)
+        host->calls_by_core[i] = 0u;
+    for (unsigned int i = 0u; i < 4u; ++i)
+        host->owner_depth[i] = 0u;
     return true;
 }
 
@@ -206,6 +337,16 @@ void usb_host_step(USBHost *host)
 void usb_host_shutdown(USBHost *host)
 {
     (void)host;
+}
+
+bool usb_host_stack_enter(const char *operation)
+{
+    (void)operation;
+    return false;
+}
+
+void usb_host_stack_leave(void)
+{
 }
 
 #endif

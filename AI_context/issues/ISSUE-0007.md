@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0007
 title: "Multicore runtime — Core 0 arbiter, MMIO critical barrier, deadline scheduling"
-status: doing
+status: backlog
 priority: high
 type: feature
 owner: agent
@@ -26,6 +26,22 @@ related_files:
 # Issue: Multicore runtime — Core 0 arbiter, MMIO critical barrier, deadline scheduling
 
 ## Relação com outras issues
+
+`ISSUE-0045` define a arquitetura de I/O físico/IRQ que alimentará este árbitro.
+Core 0 ordena eventos e completions, mas Core 3 permanece owner dos devices e é
+o destino preferencial de suas IRQs. O texto consolidado
+`issue_core0_arbiter_scheduler.md` contém a emenda que substitui a ideia antiga
+de Core 0 como top-half universal.
+
+## 2026-07-11 — campanha pausada e experimentos revertidos
+
+Os perfis identificaram custo alto no loop do Rigel, mas as otimizações foram
+validadas apenas em multicore KS13/Battle e outras cargas deixaram de funcionar.
+Por decisão do usuário, fast path, mudança de cadência Denise, cache DMACON,
+coalescência de slots e profiling interno do submódulo foram removidos. O
+scheduler anterior foi restaurado. Esta issue fica subordinada ao tracker de
+estabilização `ISSUE-0046`; os números permanecem como evidência histórica, não
+como autorização para retomar otimização.
 
 Emu68 (ISSUE-0002), IRQ/temporal window (ISSUE-0004, 0006) e esta issue são faces
 da mesma frente: o modelo correto de como CPU/JIT, chipset e IO se sincronizam no
@@ -186,7 +202,134 @@ a bootstrap sanity check, not proof of functional multicore timing. The next
 useful run is a longer QEMU or real-Pi run that triggers `BPROF` dump/reset via
 `0xDFFF04`.
 
+## 2026-07-10: campanha Battle + HDMI — instrumentação de throughput
+
+O Pi 3B voltou a executar launcher + KS13/Battle em multicore após ISSUE-0044,
+mas com FPS baixo demais para validar áudio. O teste não usa MSC e roda sem USB
+logs, portanto a frente de I/O permanente (`ISSUE-0045`) foi congelada: ela deve
+melhorar ownership/latência, mas não explica nem corrige este déficit de
+throughput.
+
+Instrumentação nova, agregada e silenciosa durante a janela de medição:
+
+- `backpressure_wait`: tempo que Core 1 bloqueia acima do backlog permitido;
+- `critical_catchup_wait`: espera por Core 2 antes de MMIO crítico;
+- `cpu_lock_wait` e `chipset_lock_wait`: contenção vista por cada lado;
+- `audio48k`: samples esperados pelo relógio real, produzidos, consumidos,
+  dropped, underrun e profundidade final;
+- FPS, CCK e backlog já existentes permanecem no mesmo snapshot.
+
+O auto-dump recorrente a cada 100 mil MMIO foi desativado porque serial no hot
+path contaminava o workload. Core 0 agora emite exatamente um report após a
+terceira janela do supervisor; a coleta anterior é silenciosa.
+
+Build de campanha validado com Musashi, multicore, profile, launcher, USB sem
+logs e HDMI áudio. Imagem:
+`emu68/install-bellatrix-rigel-musashi/Emu68.img`.
+
+Foram preservadas duas variantes para comparação A/B no mesmo Battle:
+
+- `Emu68-profile-audio-on.img` — HDMI áudio habilitado;
+- `Emu68-profile-audio-off.img` — HDMI áudio desabilitado.
+
+Protocolo: usar cada arquivo como `Emu68.img`, selecionar o mesmo ADF, deixar o
+Battle executar sem interação até aparecer
+`[BPROF] automatic one-shot snapshot follows`, e capturar até a linha final de
+separadores do report. Informar também o FPS visual/OSD de cada variante.
+
+Interpretação planejada:
+
+- backpressure dominante: custo do Rigel/protocolo de publicação;
+- catch-up/lock dominante: rendezvous e janelas do árbitro primeiro;
+- `chipset_step` dominante sem lock: profiling interno do Rigel;
+- produção perto de 100% com consumo ruim: pipeline HDMI/poll;
+- produção acompanhando FPS abaixo de realtime: áudio é vítima do throughput.
+
+### Primeiro resultado no Pi 3B (áudio-on, antes do jogo)
+
+Snapshot em 13,973 s / 77 frames: **5,51 FPS**. O diagnóstico de throughput é
+conclusivo mesmo antes do Battle começar:
+
+- Core 1 passou 12,804 s (≈91,6% da janela) em `backpressure_wait`;
+- Rigel avançou 5.478.238 CCK, ≈392 kCCK/s contra ≈7,09 MHz de realtime;
+- 97.827 steps com média de apenas 55 CCK;
+- `chipset_step` médio 95,9 us; agregado ≈9,38 s de trabalho no Core 2;
+- lock do Core 1 somou 830 ms; catch-up crítico 47 ms; lock do Core 2 7 ms.
+
+Conclusão: backpressure é o sintoma; o limitante imediato é throughput/fragmentação
+do Rigel no Core 2. O lock/catch-up não é o eixo dominante desta amostra, e a
+arquitetura nova de I/O não recuperaria a ordem de grandeza faltante.
+
+O report também mostrou `audio produced=0`. Isso não se deve ao jogo ainda estar
+silencioso: o produtor de 48 kHz enfileira inclusive silêncio. Foi encontrada
+uma assimetria funcional — o scheduler multicore não chamava
+`bellatrix_audio_output_tick()` nem `hdmi_audio_dma_poll()` após avançar Rigel.
+Adicionado `bellatrix_machine_on_chipset_advanced(cck)` ao caminho Core 2, em
+paridade com `machine_quantum_step()` single-core. A imagem áudio-on foi
+recompilada e substituída; próximo run deve mostrar produção proporcional aos
+CCK emulados (provavelmente ~5–6% de realtime enquanto o FPS não for corrigido).
+
+### Segundo resultado no Pi 3B (frame 305)
+
+Em 65,088 s: 305 frames, **4,68 FPS**, 21.634.543 CCK (≈332 kCCK/s).
+
+- backpressure: 52,742 s (≈81% da janela);
+- critical catch-up: 5,567 s;
+- CPU lock wait: 5,454 s;
+- chipset lock wait: 145 ms;
+- 1.149.078 Rigel steps, média de apenas 18 CCK;
+- `chipset_step` médio 39,2 us, agregado ≈45,1 s no Core 2;
+- áudio esperado 3.124.225, produzido 146.967 (4%), consumido 146.946,
+  2.729.470 underruns.
+
+O áudio agora está corretamente conectado e confirma ser vítima do throughput:
+a razão PCM/realtime acompanha o FPS/realtime. O próximo snapshot foi movido
+para frame 700. Foram adicionados contadores do limitador externo de cada step
+(`target`, `deadline`, `bus`) e distribuição `<=1/<=8/<=32 CCK`, para distinguir
+fragmentação causada pelo protocolo CPU→Core2 da causada pelos deadlines/bus do
+Rigel.
+
 ## Next steps (evaluation, not implementation)
+
+### Terceiro resultado no Pi 3B (frame 710, gameplay)
+
+Em 222,968 s: 710 frames, **3,18 FPS**, 50.324.861 CCK (≈226 kCCK/s).
+
+- 13.092.140 steps, média de 3 CCK;
+- limitador target: 31.813; deadline: **13.056.073**; bus: 4.255;
+- 9.318.517 steps de até 1 CCK; 12.721.288 de até 8 CCK;
+- backpressure 184,808 s; catch-up 30,496 s; CPU lock 4,789 s;
+- áudio produzido/consumido 3% de realtime, 9.506.965 underruns.
+
+Causa da fragmentação identificada: 99,7% dos cortes vêm do deadline externo.
+O Rigel já percorre esses mesmos slots dentro de `rigel_chipset_step`; o Core 2
+estava fazendo double scheduling. Implementado fast path experimental com
+`BELLATRIX_MULTICORE_EXTERNAL_DEADLINE_SPLIT=0`: Core 2 avança diretamente ao
+target publicado pela CPU, mantendo catch-up de MMIO crítico. O modo antigo
+permanece disponível por macro para rollback diagnóstico.
+
+Imagem de validação: `Emu68-profile-fastpath-audio-on.img`. Critérios imediatos:
+boot/gameplay sem regressão visual/IRQ, aumento forte de `avg_step_cck`,
+`step_limits` concentrado em target, redução de backpressure e aumento conjunto
+de FPS/razão `audio48k`.
+
+### Fast path validado + domínio dominante
+
+Fast path chegou ao gameplay sem mudança funcional observável. Com profiling:
+4,53 FPS, 52.736 steps (média 964 CCK). O breakdown interno mediu Agnus
+119.833 ms (**99%**), Paula 54 ms e CIA 48 ms. Release sem profiling permaneceu
+em ~4 FPS pelo OSD, confirmando que instrumentação não explica o déficit.
+
+Próxima imagem `Emu68-rigel-slot-profile-audio-on.img` amostra 1/1024 CCK e
+separa o hot loop Agnus em preparação/arbitragem, dispatch do slot, beam,
+Denise/compositor e tail de linha. A amostragem evita timestamps por CCK.
+
+Resultado da amostragem no frame 704: prepare 25%, dispatch 15%, beam 7%,
+**Denise 47%**, tail 3%. A inspeção confirmou que o compositor é line-based:
+fora da mudança de `vpos/frame`, a chamada por CCK apenas repete sincronização
+de beam e cópia de debug. Implementado `RIGEL_DENISE_STEP_EVERY_CCK=0` para
+chamar Denise somente em `beam->hpos == 0`; modo legado permanece por macro.
+Imagem de validação: `Emu68-denise-line-profile-audio-on.img`.
 
 Before writing any arbiter/scheduler code:
 

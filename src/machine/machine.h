@@ -105,6 +105,9 @@ uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles);
 void bellatrix_machine_on_frame_ready(void);
 void bellatrix_machine_on_ipl_changed(uint8_t ipl);
 void bellatrix_machine_on_audio_sample_ready(void);
+/* Host-facing work that must accompany every actual Rigel advance in both
+ * schedulers: 48 kHz PCM production and physical HDMI DMA refill. */
+void bellatrix_machine_on_chipset_advanced(uint32_t cck_cycles);
 void bellatrix_machine_post_chipset_step(void);
 
 struct RigelContext *bellatrix_machine_rigel_ctx(void);

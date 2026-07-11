@@ -39,6 +39,22 @@
  * overrides this when linked. */
 __attribute__((weak)) void console_log_drain(void) {}
 
+/* The POSIX harness does not link the bare-metal Core-3 runtime. Multicore is
+ * always disabled there, but these references still exist in the compiled
+ * function body. Strong core_io.c definitions override the fallbacks in the
+ * Raspberry Pi image. */
+__attribute__((weak)) bool core_io_serial_enqueue_tx(uint8_t byte)
+{
+    (void)byte;
+    return false;
+}
+
+__attribute__((weak)) bool core_io_serial_dequeue_rx(uint8_t *byte_out)
+{
+    (void)byte_out;
+    return false;
+}
+
 /* ---------------------------------------------------------------------------
  * Step accumulators — defined here; exported via internal header for bus.c
  * ------------------------------------------------------------------------- */
@@ -771,6 +787,15 @@ void bellatrix_machine_on_audio_sample_ready(void)
     audio_mixer_push(&g_machine.audio_queue,
                      bellatrix_machine_audio_left(),
                      bellatrix_machine_audio_right());
+}
+
+void bellatrix_machine_on_chipset_advanced(uint32_t cck_cycles)
+{
+    bellatrix_audio_output_tick(cck_cycles);
+
+#if !defined(BELLATRIX_HARNESS) && BELLATRIX_ENABLE_HDMI_AUDIO
+    hdmi_audio_dma_poll();
+#endif
 }
 
 void bellatrix_machine_post_chipset_step(void)

@@ -41,9 +41,8 @@ bool bellatrix_runtime_init(
     rt->running = true;
 
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[RUNTIME] init OK: Core0=CPU Core1=CHIPSET(Rigel) Core3=IO\n");
+        kprintf("[RUNTIME] init OK: Core0=SUP+IO Core1=CPU Core2=CHIPSET Core3=RESERVED\n");
         PAL_Core_LaunchChipset(NULL);
-        PAL_Core_LaunchIO();
     } else {
         kprintf("[RUNTIME] init OK: single-core mode\n");
     }

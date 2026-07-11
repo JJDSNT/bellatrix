@@ -1,4 +1,5 @@
 #include "io/usb/usb_msc_bellatrix.h"
+#include "io/usb/usb_host.h"
 #include "support.h"
 
 #if BELLATRIX_ENABLE_USBSTACK && BELLATRIX_ENABLE_USB_MSC
@@ -16,7 +17,13 @@ bool usb_msc_is_ready(void)
 static bool usb_msc_read_block(void *ctx, uint32_t lba, uint8_t *buf)
 {
     struct usbh_msc *msc = (struct usbh_msc *)ctx;
+    if (!usb_host_stack_enter("msc-read10")) {
+        kprintf("[USB-MSC] read10 lba=%u rejected: USB host unavailable\n",
+                (unsigned)lba);
+        return false;
+    }
     int ret = usbh_msc_scsi_read10(msc, lba, (const uint8_t *)buf, 1u);
+    usb_host_stack_leave();
     if (ret != 0) {
         kprintf("[USB-MSC] read10 lba=%u failed: %d\n", (unsigned)lba, ret);
         return false;

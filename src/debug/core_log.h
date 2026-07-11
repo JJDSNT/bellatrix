@@ -6,11 +6,10 @@
  * docs/runtime_core_testing.md.
  *
  * Tags:
- *   [CORE0-HOST]    Core 0 — Machine/boot/scheduler arbiter (light; parks
- *                   once the CPU and chipset cores are launched)
+ *   [CORE0-HOST]    Core 0 — Machine/boot/supervisor and physical IO
  *   [CORE1-CPU]     Core 1 — CPU backend (Emu68 JIT or Musashi)
  *   [CORE2-CHIPSET] Core 2 — Rigel: Agnus, Denise, Paula, CIA (single-thread)
- *   [CORE3-IO]      Core 3 — physical IO: USB, Bluetooth, host UART
+ *   [CORE3-IO]      Core 3 — reserved (future RTG/AHI worker)
  *   [XCORE-<tag>]  Cross-core event propagation (use a descriptive tag)
  *
  * Usage:

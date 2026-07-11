@@ -1,10 +1,10 @@
 // src/runtime/core_io.c
 //
-// Core 3 — Physical peripherals domain.
+// Core 0 — supervisor and physical peripherals domain.
 //
 // Owns: USB host stack, Bluetooth host stack, physical UART and console drain.
 // Core 2 remains the sole owner of Rigel/Paula and exchanges serial bytes with
-// this core through two SPSC queues.
+// Core 0 through two SPSC queues. Core 3 is reserved for future RTG/AHI.
 
 #include "runtime/core_io.h"
 #include "runtime/runtime.h"
@@ -126,7 +126,7 @@ static bool core_io_step_serial(RuntimeCoreIO *core)
         return true;
 
     /* Paula has strict priority over console logs. Peek first so FIFO-full
-     * leaves the byte queued for the next Core 3 pass. */
+     * leaves the byte queued for the next Core 0 pass. */
     while (serial_queue_peek(&s_serial_tx, &byte)) {
         if (!uart_host_send_byte(&core->machine->uart_host, byte)) {
             tx_empty = false;
@@ -156,7 +156,7 @@ bool core_io_init(RuntimeCoreIO *core, BellatrixMachine *machine)
     memset(&s_serial_rx, 0, sizeof(s_serial_rx));
     usb_host_init(&core->usb_host);
 
-    CORE3_LOG("init");
+    CORE0_LOG("io init");
     return true;
 }
 
@@ -170,7 +170,7 @@ void core_io_shutdown(RuntimeCoreIO *core)
     bt_host_shutdown(&g_runtime.bluetooth);
     usb_host_shutdown(&core->usb_host);
 
-    CORE3_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
+    CORE0_LOG("io shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->running = false;
 }
 
@@ -180,7 +180,7 @@ bool core_io_open_debug_serial(RuntimeCoreIO *core)
     return false;
 }
 
-/* Called by Core 3 via bellatrix_runtime_io_step() in pal_core.c. */
+/* Called by Core 0's supervisor via bellatrix_runtime_io_step(). */
 void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
 {
     if (!core || !core->running) {
@@ -191,16 +191,19 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles)
 
     extern BellatrixRuntime g_runtime;
     bt_host_step(&g_runtime.bluetooth);
-    usb_host_step(&core->usb_host);
+    /* The launcher uses an explicit pump; suppress the regular supervisor
+     * pump until that phase ends (ISSUE-0044). */
+    if (!__atomic_load_n(&core->launcher_owns_usb, __ATOMIC_ACQUIRE))
+        usb_host_step(&core->usb_host);
 
-    /* Physical mini-UART belongs to Core 3 at runtime. Service Paula first;
+    /* Physical mini-UART belongs to Core 0 at runtime. Service Paula first;
      * logs are lowest priority and only drain when no Paula byte is waiting. */
     if (core_io_step_serial(core))
         console_log_drain();
 }
 
 /* Strong definition — overrides the weak stub in pal_core.c. Called from
- * Core 3's loop (multicore) or the PAL_Runtime_Poll throttle (single-core). */
+ * Core 0's supervisor (multicore) or PAL_Runtime_Poll (single-core). */
 void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
     (void)now;

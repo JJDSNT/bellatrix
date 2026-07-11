@@ -1,5 +1,9 @@
 # Issue: Árbitro/Scheduler temporal no Core 0
 
+> Atualização 2026-07-11: topologia ativa = Core 0 supervisor + owner de I/O,
+> Core 1 CPU, Core 2 Rigel e Core 3 reservado para RTG/AHI. Referências abaixo
+> a Core 3 como owner de I/O descrevem o desenho anterior.
+
 ## Status: decisão de arquitetura + plano (aberto, 2026-07-10)
 
 Preenche a lacuna referenciada há tempo por `[[issue_multicore_runtime]]`
@@ -29,10 +33,10 @@ Relacionado: `[[issue_multicore_runtime]]`, `[[emu68_public_api]]`,
 3. **Não arrisca boot provado.** JIT no Core 1 funciona em hardware (Workbench,
    Happy Hand). Devolvê-lo ao Core 0 mexeria em `bellatrix_launch_cpu_and_park` /
    fluxo de lançamento — churn com risco de regressão.
-4. **Dissolve o descasamento de IRQ.** No BCM2837 a IRQ agregada de periférico
-   aterrissa por padrão no Core 0. Com o árbitro ali, o top-half de device (áudio!)
-   cai no core de coordenação — que enfileira e alimenta o Rigel. Nunca quisemos
-   device IRQ no core do JIT (perturba o ABI pinado x13–x29). Ver
+4. **Isola o JIT das IRQs da plataforma.** Nunca quisemos device IRQ no core do
+   JIT, pois isso perturba o ABI pinado x13–x29. O árbitro no Core 0 recebe
+   eventos normalizados e os ordena na timeline, enquanto o Core 3 possui os
+   devices e é o destino preferencial das IRQs físicas. Ver a emenda abaixo e
    `[[issue_emu68_pistorm_interrupt_contract]]`.
 
 ### A consequência que resolve a tensão de fundo
@@ -66,10 +70,31 @@ Os gargalos atuais são sintomas de **não haver dono da timeline**:
 
 | Core | Papel | Muda? |
 |------|-------|-------|
-| 0 | **Árbitro / dono da timeline** — epochs, deadlines, pacing, completions, top-half de device IRQ (futuro) | sim: deixa de estacionar |
+| 0 | **Árbitro / dono da timeline** — epochs, deadlines, pacing e ordenação de completions/eventos externos | sim: deixa de estacionar |
 | 1 | CPU — Emu68 JIT / Musashi, worker escalonado por `run_until` | placement inalterado |
 | 2 | Rigel/chipset, worker executado até deadline | inalterado |
-| 3 | I/O físico pesado (USB, BT), completions | inalterado |
+| 3 | **Owner do I/O físico** — USB/DWC2, BT/UART, HDMI/DMA, IRQs físicas e completions | evolui de polling para serviço orientado a eventos/IRQ |
+
+### Emenda de arquitetura (2026-07-10): afinidade de IRQ não pertence ao árbitro
+
+O roteamento atual de IRQ ARM ao Core 0 é herança do contrato PiStorm do Emu68,
+não uma restrição nem uma decisão do Bellatrix. Quando o Emu68 estiver operando
+como backend escalonável sem possuir as exceções da plataforma, o Bellatrix deve
+programar explicitamente sua própria topologia.
+
+Regra decidida: **IRQ física vai, preferencialmente, ao core que possui o
+periférico; evento emulado passa pelo árbitro**. Portanto USB/DWC2, UART/BT e
+HDMI/DMA devem ter afinidade com o Core 3 quando o BCM2837 permitir. O Core 0
+recebe apenas seu timer de scheduling, sinais de supervisão e notificações
+inter-core coalescidas. Se uma fonte não puder ser roteada ao Core 3, o Core 0
+pode atuar como gateway técnico mínimo (ack/mask + pending bit + wakeup), sem
+executar a stack ou adquirir ownership do device.
+
+São conceitos independentes: afinidade da exceção ARM, ownership do driver,
+wakeup inter-core e IPL observado pela CPU 68k. O Core 3 normaliza eventos e
+publica filas/completions para o Core 0; o árbitro atribui ordem/timestamp e
+decide a fronteira emulada segura; Core 2 injeta no Rigel; Core 1 observa apenas
+o IPL emulado. Tracker de execução: `ISSUE-0045`.
 
 ## Pré-requisito não-negociável
 
@@ -118,9 +143,10 @@ em deadlines, trocar o ping-pong de `s_chipset_access_lock` por rendezvous de ep
 hospeda a política de áudio realtime, sequencia completions por
 `earliest_visible_tick`.
 
-**Fase 6 (futuro, guiado por medição) — device IRQ para áudio** no Core 0, se a
-Fase 0/5 mostrarem que jitter de polling importa *depois* de a velocidade estar
-resolvida. Não antes.
+**Fase 6 (futuro, guiado por medição) — device IRQ para I/O físico** com owner no
+Core 3, se a Fase 0/5 mostrar que jitter de polling importa *depois* de a
+velocidade estar resolvida. Core 0 recebe somente notificações/completions já
+normalizadas, salvo fallback inevitável de roteamento. Não antes.
 
 ## Progresso (2026-07-10)
 

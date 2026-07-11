@@ -18,6 +18,10 @@ typedef struct RuntimeCoreIO {
 
     bool running;
 
+    /* Set while the launcher uses its explicit USB pump. The Core 0 supervisor
+     * skips its regular pump until this clears, preserving one logical owner. */
+    volatile uint32_t launcher_owns_usb;
+
     uint64_t local_cycles;
 } RuntimeCoreIO;
 
@@ -37,9 +41,9 @@ void core_io_step(RuntimeCoreIO *core, uint32_t cycles);
 
 bool core_io_open_debug_serial(RuntimeCoreIO *core);
 
-/* Cross-core serial bridge.  Core 2 owns Paula and produces TX bytes; Core 3
+/* Cross-core serial bridge. Core 2 owns Paula and produces TX bytes; Core 0
  * alone touches the physical UART. RX travels in the opposite direction so
- * Core 3 never needs to access the Rigel context. All operations are
+ * Core 0 never needs to access the Rigel context. All operations are
  * non-blocking; overflow is counted explicitly. */
 bool core_io_serial_enqueue_tx(uint8_t byte);
 bool core_io_serial_dequeue_rx(uint8_t *byte_out);

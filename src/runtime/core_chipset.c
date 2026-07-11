@@ -291,6 +291,7 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         chip               += advanced;
         core->local_cycles += advanced;
         core->machine->tick_count = (uint64_t)r.time;
+        bellatrix_machine_on_chipset_advanced((uint32_t)advanced);
 #if BELLATRIX_PROFILE_ENABLED
         bprof_multicore_chipset_step((uint32_t)advanced, chip, target);
 #endif

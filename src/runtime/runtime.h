@@ -41,4 +41,8 @@ void bellatrix_runtime_run(
 void bellatrix_runtime_stop(
     BellatrixRuntime *rt);
 
+/* Platform service point. Multicore calls this from the Core 0 supervisor;
+ * single-core calls it cooperatively through PAL_Runtime_Poll(). */
+void bellatrix_runtime_io_step(uint64_t now, uint64_t freq);
+
 #endif
