@@ -39,6 +39,13 @@ uint32_t rom_mapped = 0;
 uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc = 0;
 
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+/* IRQ delivery observation ring, written by the MainLoop delivery block
+ * (plain stores, no calls). Entry: pushed PC (low 24 bits) | level << 28. */
+uint32_t g_bela_irq_deliver_count;
+uint32_t g_bela_irq_deliver_ring[8];
+#endif
+
 extern struct M68KState *__m68k_state;
 extern void M68K_StartEmu(void *addr, void *fdt);
 static emu68_t *s_emu68_api;

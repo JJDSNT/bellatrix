@@ -172,7 +172,13 @@ int machine_rigel_cia_trace_enabled(void)
         g_rigel_cia_trace = (env && env[0] != '\0' && env[0] != '0') ? 1 : 0;
     }
 #else
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    /* Bare-metal diagnosis builds: CIA accesses are rare in the stalled
+     * emu68 boot, so full CIA tracing is affordable (ISSUE-0038). */
+    g_rigel_cia_trace = 1;
+#else
     g_rigel_cia_trace = 0;
+#endif
 #endif
     return g_rigel_cia_trace;
 }
@@ -802,10 +808,22 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
     }
 }
 
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+/* Event-driven IPL rise counters. Sampled prints alias with the frame phase
+ * under deterministic TCG runs (ISSUE-0038 diagnosis); these count every
+ * publish transition regardless of when observers look. */
+uint32_t g_machine_ipl_rise_counts[8];
+#endif
+
 void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 {
     if (ipl > 7u)
         ipl = 7u;
+
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    if (ipl > m->current_ipl)
+        g_machine_ipl_rise_counts[ipl]++;
+#endif
 
     if (machine_rigel_trace_verbose_enabled() && ipl != m->current_ipl) {
         uint32_t pc = bellatrix_debug_cpu_pc();
