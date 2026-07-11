@@ -332,7 +332,8 @@ void bellatrix_run_selected_cpu_backend(void)
              * bellatrix_emu68_report_jit_progress(); do not publish or step
              * the chipset again here. */
         } else if (PAL_Core_IsMulticoreEnabled()) {
-            /* Multicore: Core 2 (chipset) and Core 3 (IO) run independently;
+            /* Multicore: Core 2 advances the chipset independently; Core 0
+             * owns physical IO from its supervisor loop.
              * publish cross-core like the Emu68 JIT path does instead of
              * stepping Rigel synchronously on this (CPU) core. */
             bellatrix_bridge_publish_cpu_cycles(cycles);
@@ -381,15 +382,27 @@ static void bellatrix_core0_supervise(void)
                                           uint64_t *target_cck);
     uint64_t last_target = 0u;
     uint64_t last_chipset = 0u;
+    const uint64_t freq = PAL_Time_GetFrequency();
+    const uint64_t io_interval = freq / 1000u ? freq / 1000u : 1u;
+    const uint64_t heartbeat_interval = freq * 2u;
+    uint64_t last_io = PAL_Time_ReadCounter();
+    uint64_t last_heartbeat = last_io;
     uint32_t beat = 0u;
 
     for (;;) {
-        /* Pace the heartbeat with a fixed spin. Core 0 has no other work in
-         * this build; a real timer/deadline replaces this in a later phase.
-         * Kept coarse (~seconds/beat) because the physical mini-UART is slow;
-         * runtime output is queued and drained by Core 3. */
-        for (volatile uint32_t d = 0u; d < 400000000u; d++)
-            asm volatile("nop");
+        uint64_t now = PAL_Time_ReadCounter();
+
+        /* Keep physical IO bounded and poll at roughly 1 kHz. */
+        if (now - last_io >= io_interval) {
+            last_io = now;
+            bellatrix_runtime_io_step(now, freq);
+        }
+
+        if (now - last_heartbeat < heartbeat_interval) {
+            asm volatile("yield");
+            continue;
+        }
+        last_heartbeat = now;
 
         uint64_t chipset_cck = 0u;
         uint64_t target_cck = 0u;
@@ -400,7 +413,9 @@ static void bellatrix_core0_supervise(void)
             : 0u;
         uint32_t pc = backend ? cpu_backend_get_pc(backend) : 0u;
         CoreIOSerialStats serial_stats;
+        CoreIOReactorStats io_stats;
         core_io_serial_get_stats(&serial_stats);
+        core_io_reactor_get_stats(&g_runtime.io, &io_stats);
         (void)core_chipset_get_progress(&chipset_cck, &target_cck);
 
         kprintf("[CORE0-SUP] beat=%u cpu_target=%llu(+%llu) "
@@ -419,6 +434,22 @@ static void bellatrix_core0_supervise(void)
                 (unsigned)serial_stats.rx_depth,
                 (unsigned)serial_stats.rx_max_depth,
                 (unsigned)serial_stats.rx_dropped);
+
+        uint64_t io_avg_ticks = io_stats.dispatch_calls
+            ? io_stats.total_ticks / io_stats.dispatch_calls : 0u;
+        kprintf("[CORE0-IO] calls=%llu pending=%02x budget_miss=%u "
+                "avg=%lluus max=%lluus late_max=%lluus "
+                "usb=%lluus bt=%lluus serial=%lluus console=%lluus\n",
+                (unsigned long long)io_stats.dispatch_calls,
+                (unsigned)io_stats.pending_events,
+                (unsigned)io_stats.over_budget,
+                (unsigned long long)(io_avg_ticks * 1000000u / freq),
+                (unsigned long long)(io_stats.max_ticks * 1000000u / freq),
+                (unsigned long long)(io_stats.max_late_ticks * 1000000u / freq),
+                (unsigned long long)(io_stats.usb_max_ticks * 1000000u / freq),
+                (unsigned long long)(io_stats.bluetooth_max_ticks * 1000000u / freq),
+                (unsigned long long)(io_stats.serial_max_ticks * 1000000u / freq),
+                (unsigned long long)(io_stats.console_max_ticks * 1000000u / freq));
 
         last_target = target_cck;
         last_chipset = chipset_cck;
@@ -572,7 +603,7 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
  * Strong overrides: per-core chipset advance steps.
  *
  * bellatrix_runtime_host_step  — Core 1, full chipset.
- * bellatrix_runtime_io_step    — Core 3, physical IO.
+ * bellatrix_runtime_io_step    — Core 0, physical IO.
  * ------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
@@ -809,6 +840,14 @@ void bellatrix_init(void)
     core_io_init(&g_runtime.io, g_runtime.machine);
     bellatrix_console_log_reclock(400000000u);
 
+    /* Phase marker, flushed synchronously on Core 0 (Core 3 — the normal drainer
+     * — is not launched yet, so there is no cross-core drain race, and USB init
+     * has just finished so the bus is idle). If this is the LAST line seen on
+     * real hardware, the stall is inside core_io_init()/usb_host_init(), not
+     * later; the deferred console would otherwise hide exactly where it stops. */
+    kprintf("[PHASE] host services up — entering launcher phase\n");
+    console_log_drain();
+
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
 
@@ -1025,8 +1064,12 @@ void bellatrix_init(void)
 #ifdef BELLATRIX_ENABLE_MULTICORE
     /* Enable secondary chipset cores only after host-side services are ready. */
     PAL_Core_SetMulticoreEnabled(1);
-    PAL_Core_LaunchChipset(NULL);   /* Core 1 — chipset */
-    PAL_Core_LaunchIO();            /* Core 3 — physical IO */
+    /* Core 0 owns physical IO in launcher and runtime. Core 3 remains parked
+     * for future RTG/AHI work. The launcher cooperatively calls the same Host
+     * Reactor used later by the supervisor.
+     *  - Core 2 (chipset) is deferred until after the launcher + chipset init
+     *    (see below): with no M68K running yet it has no work during the
+     *    launcher, and letting it run there raced shared state on real hardware. */
 #else
     /*
      * Keep Bellatrix in single-core mode so Emu68's normal bootstrap/JIT flow
@@ -1049,6 +1092,24 @@ void bellatrix_init(void)
     launcher_run();
 #endif
 
+    /* Preserve launcher costs separately: enumeration/MSC may legitimately
+     * block before CPU/chipset launch and must not contaminate runtime maxima. */
+    {
+        CoreIOReactorStats launcher_io;
+        uint64_t freq = PAL_Time_GetFrequency();
+        core_io_reactor_get_stats(&g_runtime.io, &launcher_io);
+        kprintf("[CORE0-IO-LAUNCHER] calls=%llu budget_miss=%u max=%lluus "
+                "late_max=%lluus usb=%lluus\n",
+                (unsigned long long)launcher_io.dispatch_calls,
+                (unsigned)launcher_io.over_budget,
+                (unsigned long long)(launcher_io.max_ticks * 1000000u / freq),
+                (unsigned long long)(launcher_io.max_late_ticks * 1000000u / freq),
+                (unsigned long long)(launcher_io.usb_max_ticks * 1000000u / freq));
+        core_io_reactor_reset_stats(&g_runtime.io);
+    }
+
+    /* Launcher done; the same reactor continues from the supervisor loop. */
+
 #if BELLATRIX_ENABLE_BTSTACK
     /* bt_pairs is populated by launcher_run() (reads BTPAIRS.TXT from SD).
      * Connect to saved HID devices now that the list is available.
@@ -1070,9 +1131,17 @@ void bellatrix_init(void)
                       bellatrix_machine_rigel_ctx(),
                       g_runtime.machine);
 
+#ifdef BELLATRIX_ENABLE_MULTICORE
+    /* Runtime phase begins: the launcher is done and the chipset context is
+     * initialised, so bring up Core 2 (chipset) now. Deferring it to here (from
+     * before the launcher) keeps the launcher phase free of a second core
+     * touching shared state (ISSUE-0042/0044). */
+    PAL_Core_LaunchChipset(NULL);   /* Core 2 — chipset */
+#endif
+
     kprintf("[BELA] build: " __DATE__ " " __TIME__ "\n");
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[BELA] Initialized (multicore enabled: Core0=Supervisor Core1=CPU Core2=Chipset Core3=IO)\n");
+        kprintf("[BELA] Initialized (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)\n");
     } else {
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }
@@ -1094,7 +1163,16 @@ void bellatrix_init(void)
 #ifdef BELLATRIX_LAUNCHER
 void bellatrix_launcher_pump_usb(void)
 {
-    usb_host_step(&g_runtime.io.usb_host);
+    /* Compatibility service point for launcher.c. It no longer drives USB
+     * directly: launcher and runtime share the sole Core 0 Host Reactor. */
+    static uint64_t last_tick;
+    uint64_t now = PAL_Time_ReadCounter();
+    uint64_t freq = PAL_Time_GetFrequency();
+    uint64_t interval = freq / 1000u ? freq / 1000u : 1u;
+    if (!last_tick || now - last_tick >= interval) {
+        last_tick = now;
+        bellatrix_runtime_io_step(now, freq);
+    }
 }
 
 /* BT pump + readiness for the launcher's scan/pairing screen.  Defined even

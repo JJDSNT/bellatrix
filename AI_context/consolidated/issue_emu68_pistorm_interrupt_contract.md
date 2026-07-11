@@ -1,5 +1,9 @@
 # Issue: Contrato de interrupção Emu68 (PiStorm-cêntrico) vs Bellatrix multicore
 
+> Decisão 2026-07-11: IRQs físicas e I/O pertencem ao Core 0 supervisor;
+> Core 1 observa apenas IPL 68k emulado, Core 2 possui Rigel e Core 3 fica
+> reservado. IRQ ARM continua sem passar pelos vectors PiStorm/INT6.
+
 ## Status: decisão de arquitetura registrada (2026-07-10)
 
 Documenta por que o Bellatrix **nunca** roteia interrupções ARM de periférico
@@ -111,22 +115,31 @@ gateway de IRQ que punham primeiro é opcional e provavelmente desnecessário.
   tudo em polling. A única intuição aproveitável ali era ownership explícito de
   vetores, já coberto pela decisão acima.
 
-## Polling não é o estado final — é subordinado ao árbitro
+## Polling não é o estado final — Emu68 deixa de possuir as IRQs da plataforma
 
 Correção de tom: polling foi o bootstrap correto (evita a colisão INT6), mas **não**
 é a decisão permanente. A monopólio do subsistema de exceção/IRQ pelo Emu68 nos
 custa em dois lugares: (1) o fault + lock por acesso no barramento (performance),
 (2) forçar todo I/O a polling e o IPL a injeção por software.
 
-A resolução não é um "gateway de IRQ" nem manter polling para sempre — é subordinar
-o Emu68 a um **árbitro** dono da máquina (`[[issue_core0_arbiter_scheduler]]`). Nesse
-modelo, device IRQ (áudio em especial) aterrissa no Core 0 = árbitro (top-half), não
-no core do JIT — e passa a ser uma fase guiada por medição, não uma reescrita.
+A resolução não é manter polling para sempre — é subordinar o Emu68 a um
+**árbitro** dono da máquina (`[[issue_core0_arbiter_scheduler]]`) e instalar um
+subsistema de exceções da plataforma pertencente ao Bellatrix. O roteamento de
+IRQ ao Core 0 observado hoje é uma decisão PiStorm do Emu68, não um compromisso
+futuro do Bellatrix.
+
+Na topologia alvo, o Core 3 possui o I/O físico e recebe diretamente suas IRQs
+sempre que o hardware permitir. O Core 0 é árbitro de causalidade e tempo, não
+top-half universal de drivers: recebe do Core 3 eventos/completions normalizados
+por filas e wakeups coalescidos. Somente uma limitação real de afinidade pode
+justificar Core 0 como gateway mínimo; mesmo nesse fallback, CherryUSB/DWC2,
+UART/BT e HDMI/DMA continuam executando exclusivamente no Core 3.
 
 Sobre áudio: pela memória do projeto o gargalo é **velocidade-de-emulação vs
 realtime**, não o mecanismo de entrega (`[[issue_paula_audio_timing]]`). IRQ tira
-jitter; não cura déficit de velocidade. Por isso device IRQ para áudio é Fase 6 do
-plano do árbitro — depois de a velocidade (fault+lock) ser atacada, não antes.
+jitter; não cura déficit de velocidade. Por isso device IRQ para áudio continua
+posterior à estabilização do backend/árbitro, mas sua afinidade alvo é o Core 3,
+owner do hardware, e não o Core 0.
 
 ## Arquivos relevantes
 

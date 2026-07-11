@@ -145,15 +145,20 @@ Each runtime domain should have isolated validation tests.
 
 ---
 
-# 8. Core 3 — IO Tests
+# 8. Core 0 — Host Reactor Tests
 
 ## Responsibilities
 
-Core 3 owns:
+Core 0 owns:
 
 * USB host (CherryUSB) — HID + MSC
 * Bluetooth host (BTStack) — HID
 * physical peripheral IO
+
+Required checks include sole-driver ownership, launcher/runtime use of the same
+service point, zero runtime budget misses under normal HID load, and separate
+launcher/runtime metrics. `[CORE0-IO-LAUNCHER]` may report synchronous boot
+stalls; `[CORE0-IO]` must remain within the runtime budget.
 
 ---
 
@@ -312,7 +317,7 @@ Denise receives bitplane data at right beam position
 
 The old four-core model (Core0=CPU, Core1=GFX, Core2=Paula, Core3=IO/CIA) has
 been superseded. All chipset state is now owned by Core 2 via Rigel
-(Core 0=Machine/Host, Core 1=CPU, Core 2=Rigel, Core 3=IO — see `multicore.md`).
+(Core 0=Host Reactor, Core 1=CPU, Core 2=Rigel, Core 3=Acceleration/Reserved).
 
 ---
 
@@ -471,7 +476,7 @@ CPU accepts interrupt
 ## Flow
 
 ```text id="2ozx0v"
-Core 3 IO (USB floppy / peripheral lines)
+Core 0 Host Reactor (USB storage / peripheral events)
     ↓
 Core 2 (Rigel): Paula disk → DMA arbitration (Agnus)
 ```
@@ -547,10 +552,10 @@ Per-core runtime logs are strongly recommended.
 
 | Domain     | Tag             |
 | ---------- | --------------- |
-| Core 0     | [CORE0-HOST]    |
+| Core 0     | [CORE0-HOST], [CORE0-IO] |
 | Core 1     | [CORE1-CPU]     |
 | Core 2     | [CORE2-CHIPSET] |
-| Core 3     | [CORE3-IO]      |
+| Core 3     | reserved; no recurring runtime tag |
 | Cross-core | [XCORE-*]       |
 
 ---

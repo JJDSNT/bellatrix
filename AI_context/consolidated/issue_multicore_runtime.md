@@ -1,12 +1,11 @@
 # Issue: Multicore Runtime — RPi3 Bare-Metal
 
-## Status: CLOSED (2026-06-26)
+## Status: ACTIVE BASELINE (updated 2026-07-11)
 
-Arquitetura Core0=Machine/Core1=CPU/Core2=Rigel/Core3=IO implementada e
-estável. Workbench e Happy Hand em hardware confirmam protocolo CPU↔chipset,
-locks e publicação de ciclos operacionais. Lacunas residuais (MMIO catch-up
-barrier, deadline scheduling) rastreadas em `issue_core0_arbiter_scheduler_evaluation.md`
-e `issue_temporal_window_truncation.md`.
+Arquitetura ativa: Core0=Host Reactor, Core1=CPU, Core2=Rigel e Core3 reservado.
+Musashi multicore, launcher, USB HID e HDMI foram validados em Raspberry Pi 3B.
+O snapshot antigo Core3=IO abaixo é histórico; a descrição canônica atual está
+em `docs/host_reactor.md` e `ISSUE-0045`.
 
 ## Contexto
 
@@ -22,13 +21,13 @@ e `project_refactoring_sprint12.md` para o histórico da migração Rigel, e
 
 | Core | Domínio | Loop | Implementação |
 |------|---------|------|--------------|
-| 0 | Machine/Host — boot, `bellatrix_init()`, depois estaciona em `wfe` | — | `emu68/src/aarch64/start.c`, `bellatrix_launch_cpu_and_park()` em `src/cpu/emu68/bellatrix.c` |
+| 0 | Control Plane — boot, supervisor e Host Reactor/I/O físico | `bellatrix_core0_supervise()` → `bellatrix_runtime_io_step()` | `src/cpu/emu68/bellatrix.c`, `src/runtime/core_io.c` |
 | 1 | CPU — Emu68 JIT (`M68K_StartEmu`/`MainLoop`) ou Musashi | `bellatrix_run_selected_cpu_backend()` / `MainLoop()` | `src/cpu/emu68/bellatrix.c`, `emu68/src/ExecutionLoop.c` |
 | 2 | Chipset (Rigel) — Agnus+Denise+Paula+CIA via `rigel_step()` | `chipset_core_loop()` → `bellatrix_runtime_host_step()` | `src/runtime/core_chipset.c` |
-| 3 | IO físico — USB host + Bluetooth | `chipset_io_loop()` → `bellatrix_runtime_io_step()` | `src/runtime/core_io.c` |
+| 3 | Acceleration Plane — reservado/estacionado | — | futuro RTG/AHI job worker |
 
 Core 0 nunca executa CPU nem chipset: depois de `bellatrix_init()` lançar
-Core 1/2/3, ele só estaciona (`while(1) wfe`). Em single-core
+Core 1/2, ele supervisiona e atende o Host Reactor a ~1 kHz. Em single-core
 (`BELLATRIX_ENABLE_MULTICORE` off), nenhum core secundário é lançado — o
 backend de CPU roda inline no boot core exatamente como antes desta mudança,
 e o chipset avança de forma síncrona via `bellatrix_machine_advance()`.
@@ -58,13 +57,14 @@ bellatrix_runtime_host_step():                    // src/runtime/core_chipset.c
     on RIGEL_EVENT_FRAME_READY   → bellatrix_machine_on_frame_ready()
 ```
 
-### Core 3 (IO)
+### Core 0 (Host Reactor)
 ```c
 bellatrix_runtime_io_step():                       // src/runtime/core_io.c
   bt_host_step(&g_runtime.bluetooth)
   usb_host_step(&core->usb_host)
 ```
-Não depende do contador de ciclos da CPU — só faz polling de hardware físico.
+Não depende do contador de ciclos da CPU. Launcher e runtime usam o mesmo
+service point; Core 3 não é lançado.
 
 ## Sincronização
 
@@ -87,7 +87,7 @@ não há core de chipset concorrente).
 `CHIPSET_QUANTUM=128` CCK).
 
 ### WFE/SEV
-- Core 0/2/3 dormem em WFE quando idle (Core 0 dorme para sempre depois do boot)
+- Core 2 dorme em WFE quando idle; Core 0 dirige supervisão e Host Reactor
 - Core 1 emite SEV ao publicar ciclos (`bellatrix_runtime_publish_cpu_cycles`)
 - Cada core emite SEV ao liberar o lock de acesso ao chipset
 
@@ -117,9 +117,9 @@ chama `entry()` direto no boot core (nunca retorna); multicore chama
 
 `PAL_Core_LaunchCpu()`     → `s_cpu_entry = entry; dsb+sev`      (Core 1)
 `PAL_Core_LaunchChipset()` → `s_chipset_entry = chipset_core_loop; dsb+sev` (Core 2)
-`PAL_Core_LaunchIO()`      → `s_io_entry = chipset_io_loop; dsb+sev`        (Core 3)
+`PAL_Core_LaunchIO()` permanece dormente para uma migração futura; não é chamado.
 
-`PAL_Core_LaunchChipset()`/`LaunchIO()` chamados de dentro de
+`PAL_Core_LaunchChipset()` chamado de dentro de
 `bellatrix_init()` quando `BELLATRIX_ENABLE_MULTICORE` está definido;
 `PAL_Core_LaunchCpu()` chamado depois, da cauda de `boot()` em start.c.
 
@@ -162,7 +162,7 @@ Core 0 (hoje parado), rendezvous de epoch substitui o lock por acesso, pré-requ
 integrados — sincronização hoje é só atomics + lock + WFE/SEV.
 
 ### Interrupções ARM de periférico não são roteadas (por decisão)
-USB/HDMI/Bluetooth são servidos por **polling** no Core 3, nunca por IRQ ARM na
+USB/Bluetooth/UART são servidos pelo Host Reactor no Core 0, nunca por IRQ ARM na
 vector table do Emu68 — que é hardcoded para o modelo PiStorm (`ARM IRQ ≡ Amiga
 INT6→IPL6`). Ver `issue_emu68_pistorm_interrupt_contract.md` para o contrato
 portátil e por que um "gateway de IRQ no Core 0" foi rejeitado.
@@ -176,6 +176,6 @@ portátil e por que um "gateway de IRQ no Core 0" foi rejeitado.
   `bellatrix_core1/2/3_entry`, `chipset_core_loop`, `chipset_io_loop`
 - `src/host/posix/pal_posix.c` — stubs single-core
 - `src/runtime/core_chipset.h/.c` — Core 2: Rigel step + lock de acesso
-- `src/runtime/core_io.h/.c` — Core 3: USB + Bluetooth
+- `src/runtime/core_io.h/.c` — Core 0: Host Reactor, USB/BT/UART/console
 - `emu68/src/aarch64/start.c` — `secondary_boot()` BELLATRIX block,
   `bellatrix_emu68_cpu_entry()` wrapper, cauda de `boot()`

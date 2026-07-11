@@ -1,5 +1,29 @@
 # Issue: USB Host — CherryUSB + DWC2 na BCM2837
 
+> Decisão 2026-07-11: Core 0 é o owner permanente de DWC2/CherryUSB; Core 3
+> permanece reservado. Launcher e runtime são fases do mesmo owner. O desenho
+> Core 3 descrito abaixo é histórico e pode orientar uma extração futura.
+
+## Estado canônico após ISSUE-0045 (2026-07-11)
+
+O crash launcher/runtime revelou uma fronteira maior que o bug pontual: a mesma
+instância CherryUSB/DWC2 era bombeada por Core 0 e Core 3. O gate transitório
+`launcher_owns_usb` foi removido depois do cutover. A arquitetura implementada
+é **um serviço permanente, um owner, múltiplos clientes**.
+
+- Multicore: Core 0 possui DWC2, CherryUSB, HID, lifecycle e block I/O USB.
+- Single-core: a mesma API progride cooperativamente no executor único.
+- Launcher e supervisor atravessam o mesmo `bellatrix_runtime_io_step()`.
+- Launcher e máquina mudam o contexto de despacho, não o owner do USB.
+- IRQ DWC2 futura termina no Core 0; poll e IRQ
+  ou gateway mínimo são mecanismos de ativação e não alteram ownership.
+- `launcher_input` atual não é cross-core; a migração exige SPSC real.
+- MSC permanece síncrono. Stalls de ~625 ms foram medidos no launcher; acesso
+  runtime será o gatilho para request/completion ou worker no Core 3.
+
+O trabalho completo está em `AI_context/issues/ISSUE-0045.md` e a arquitetura
+pública em `docs/host_reactor.md`.
+
 ## Contexto
 
 Bellatrix usa CherryUSB como USB host stack, com backend DWC2 nativo
@@ -10,7 +34,7 @@ Bellatrix usa CherryUSB como USB host stack, com backend DWC2 nativo
 
 ### Stack
 ```
-BellatrixMachine (Core 3)
+Bellatrix Host Reactor (Core 0)
   → core_io_step → usb_hc_bellatrix (DWC2 polling)
      → CherryUSB host core (usbh_core.c)
         → Hub driver (usbh_hub.c) — detecta e enumera

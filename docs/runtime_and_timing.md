@@ -180,13 +180,15 @@ Machine/runtime coordinate propagation only.
 
 # 6. Current Multicore Runtime
 
-## Core 0 — Machine / Host
+## Core 0 — Control Plane / Host Reactor
 
 Responsibilities:
 
 * boot (`bellatrix_init()`)
-* launching the CPU (Core 1), chipset (Core 2), and IO (Core 3) cores
-* parks in a light `wfe` loop afterward — no recurring work of its own
+* launching the CPU (Core 1) and chipset (Core 2)
+* physical host-I/O ownership and event dispatch
+* supervisor heartbeat and future event/deadline arbitration
+* Core 3 remains parked until an acceleration workload is justified
 
 ---
 
@@ -214,13 +216,16 @@ Responsibilities:
 
 ---
 
-## Core 3 — IO Runtime
+## Core 3 — Acceleration Runtime (reserved)
 
 Responsibilities:
 
-* USB host (CherryUSB) — HID + MSC
-* Bluetooth host (BTStack) — HID
-* physical peripheral IO
+* initially no recurring work
+* future RTG conversion/blit jobs
+* future AHI mixing/resampling jobs
+* other measured, bounded asynchronous compute jobs
+
+Physical I/O remains owned by Core 0. See `host_reactor.md`.
 
 ---
 
@@ -233,7 +238,7 @@ ticks
   ↓
 Core 2 (Rigel) evolves full chipset:
   CIA timers / Agnus raster+DMA / Paula IRQ / Denise scanout
-Core 3 (IO) evolves USB + Bluetooth
+Core 0 Host Reactor evolves USB + Bluetooth + physical serial/console
   ↓
 IPL derived (Paula → Rigel → bus)
   ↓

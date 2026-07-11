@@ -1,5 +1,9 @@
 # Issue: Árbitro/Scheduler temporal no Core 0
 
+> Atualização 2026-07-11: topologia ativa = Core 0 supervisor + owner de I/O,
+> Core 1 CPU, Core 2 Rigel e Core 3 reservado para RTG/AHI. Referências abaixo
+> a Core 3 como owner de I/O descrevem o desenho anterior.
+
 ## Status: decisão de arquitetura + plano (aberto, 2026-07-10)
 
 Preenche a lacuna referenciada há tempo por `[[issue_multicore_runtime]]`
@@ -18,10 +22,9 @@ Relacionado: `[[issue_multicore_runtime]]`, `[[emu68_public_api]]`,
 
 ### Por quê (A sobre B)
 
-1. **Já é o papel reservado.** `docs/future_roadmap.md:445` nomeia Core 0 como
-   "Machine/Host — arbiter"; `docs/runtime_and_timing.md:189` diz que ele hoje só
-   "parks in a light wfe loop afterward — no recurring work of its own". O core do
-   árbitro existe e está **desperdiçado dormindo**.
+1. **É o papel implementado.** Core 0 nasce como BSP, inicializa a plataforma e
+   agora continua como Host Reactor/supervisor. O futuro arbiter temporal evolui
+   nesse plano de controle sem transferência de ownership.
 2. **Zero handoff de posse.** Core 0 é o BSP: boota, inicializa, lança os
    secundários (`PAL_Core_LaunchCpu/Chipset/IO`). Virar árbitro é transição natural
    de "init" → "dono da timeline". A inversão passaria a posse-da-máquina de Core 0
@@ -29,10 +32,9 @@ Relacionado: `[[issue_multicore_runtime]]`, `[[emu68_public_api]]`,
 3. **Não arrisca boot provado.** JIT no Core 1 funciona em hardware (Workbench,
    Happy Hand). Devolvê-lo ao Core 0 mexeria em `bellatrix_launch_cpu_and_park` /
    fluxo de lançamento — churn com risco de regressão.
-4. **Dissolve o descasamento de IRQ.** No BCM2837 a IRQ agregada de periférico
-   aterrissa por padrão no Core 0. Com o árbitro ali, o top-half de device (áudio!)
-   cai no core de coordenação — que enfileira e alimenta o Rigel. Nunca quisemos
-   device IRQ no core do JIT (perturba o ABI pinado x13–x29). Ver
+4. **Isola o JIT das IRQs da plataforma.** Nunca quisemos device IRQ no core do
+   JIT, pois isso perturba o ABI pinado x13–x29. O Host Reactor no Core 0 possui
+   os devices e futuramente suas IRQs; Core 1 observa somente IPL emulado. Ver
    `[[issue_emu68_pistorm_interrupt_contract]]`.
 
 ### A consequência que resolve a tensão de fundo
@@ -66,10 +68,27 @@ Os gargalos atuais são sintomas de **não haver dono da timeline**:
 
 | Core | Papel | Muda? |
 |------|-------|-------|
-| 0 | **Árbitro / dono da timeline** — epochs, deadlines, pacing, completions, top-half de device IRQ (futuro) | sim: deixa de estacionar |
+| 0 | **Host Reactor / control plane** — supervisor, I/O físico, futuro arbiter temporal | implementado parcialmente |
 | 1 | CPU — Emu68 JIT / Musashi, worker escalonado por `run_until` | placement inalterado |
 | 2 | Rigel/chipset, worker executado até deadline | inalterado |
-| 3 | I/O físico pesado (USB, BT), completions | inalterado |
+| 3 | **Acceleration plane reservado** — futuro RTG/AHI ou jobs pesados medidos | estacionado |
+
+### Emenda de arquitetura (2026-07-11): IRQ física pertence ao Host Reactor
+
+O roteamento atual de IRQ ARM ao Core 0 é herança do contrato PiStorm do Emu68,
+não uma restrição nem uma decisão do Bellatrix. Quando o Emu68 estiver operando
+como backend escalonável sem possuir as exceções da plataforma, o Bellatrix deve
+programar explicitamente sua própria topologia.
+
+Regra decidida: **IRQ física vai ao core que possui o periférico; evento emulado
+passa pela fronteira da máquina**. Como Core 0 possui DWC2/USB, UART e BT, suas
+IRQs futuras terminam nele, marcam o pending bitmap e retornam; stacks continuam
+fora do handler. Core 3 não recebe IRQ apenas por ser um worker disponível.
+
+São conceitos independentes: afinidade da exceção ARM, ownership do driver,
+wakeup inter-core e IPL observado pela CPU 68k. Core 0 normaliza eventos e
+atribui ordem/timestamp; Core 2 injeta no Rigel; Core 1 observa apenas o IPL
+emulado. Tracker de execução: `ISSUE-0045`.
 
 ## Pré-requisito não-negociável
 
@@ -118,9 +137,10 @@ em deadlines, trocar o ping-pong de `s_chipset_access_lock` por rendezvous de ep
 hospeda a política de áudio realtime, sequencia completions por
 `earliest_visible_tick`.
 
-**Fase 6 (futuro, guiado por medição) — device IRQ para áudio** no Core 0, se a
-Fase 0/5 mostrarem que jitter de polling importa *depois* de a velocidade estar
-resolvida. Não antes.
+**Fase 6 (futuro, guiado por medição) — device IRQ para I/O físico** com owner no
+Core 3, se a Fase 0/5 mostrar que jitter de polling importa *depois* de a
+velocidade estar resolvida. Core 0 recebe somente notificações/completions já
+normalizadas, salvo fallback inevitável de roteamento. Não antes.
 
 ## Progresso (2026-07-10)
 
