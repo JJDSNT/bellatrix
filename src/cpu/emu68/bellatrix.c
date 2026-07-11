@@ -275,9 +275,11 @@ static void bellatrix_emu68_api_dump_stats(void)
     memset(&s, 0, sizeof(s));
     emu68_get_stats(s_emu68_api, &s);
 
-    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu "
+    kprintf("[EMU68-API] runs=%llu exhausted=%llu bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu "
             "stopped=%llu wake=%llu err=%llu "
             "unhandled=%llu bad_size=%llu stop=%llu inv=%llu irq_set=%llu irq_chg=%llu\n",
+            (unsigned long long)s.run_call_count,
+            (unsigned long long)s.run_cycles_exhausted_count,
             (unsigned long long)s.bus_read_count,
             (unsigned long long)s.bus_write_count,
             (unsigned long long)s.bus_sync_required_count,
@@ -537,6 +539,39 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
             bellatrix_bridge_publish_cpu_cycles(cycles);
         else
             bellatrix_singlecore_advance_cpu_cycles(cycles);
+    }
+
+    /* Safe liveness checkpoints: this function is called only while MainLoop
+     * has spilled the pinned guest context. Keep diagnostics out of the live
+     * JIT/IRQ delivery path. */
+    {
+        static unsigned checkpoint_index;
+        static const uint32_t checkpoints[] = { 100u, 500u, 1000u };
+        BellatrixMachine *machine = bellatrix_machine_get();
+        uint64_t frame = machine ? machine->frame_counter : 0u;
+        if (checkpoint_index < (sizeof(checkpoints) / sizeof(checkpoints[0])) &&
+            frame >= checkpoints[checkpoint_index]) {
+            emu68_stats_t stats;
+            uint16_t sr = __m68k_state ? BE16(__m68k_state->SR) : 0u;
+            uint32_t saved_pc = __m68k_state ? BE32(__m68k_state->PC) : 0u;
+            memset(&stats, 0, sizeof(stats));
+            emu68_get_stats(s_emu68_api, &stats);
+            kprintf("[EMU68-LIVE] frame=%llu pc=%08x saved_pc=%08x sr=%04x "
+                    "stopped=%u int32=%08x ipl=%u insn=%llu runs=%llu "
+                    "exhausted=%llu stopret=%llu wake=%llu syncstop=%llu\n",
+                    (unsigned long long)frame, (unsigned)pc,
+                    (unsigned)saved_pc, (unsigned)sr,
+                    (unsigned)(__m68k_state ? __m68k_state->STOPPED : 0u),
+                    (unsigned)(__m68k_state ? __m68k_state->INT32 : 0u),
+                    (unsigned)(__m68k_state ? __m68k_state->INT.IPL : 0u),
+                    (unsigned long long)insn_count,
+                    (unsigned long long)stats.run_call_count,
+                    (unsigned long long)stats.run_cycles_exhausted_count,
+                    (unsigned long long)stats.stopped_return_count,
+                    (unsigned long long)stats.stopped_wake_count,
+                    (unsigned long long)stats.run_sync_stop_count);
+            checkpoint_index++;
+        }
     }
 
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD

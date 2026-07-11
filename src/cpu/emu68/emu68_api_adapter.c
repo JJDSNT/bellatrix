@@ -264,6 +264,8 @@ emu68_run_result_t emu68_run_cycles(emu68_t *cpu, uint32_t max_cycles)
     if (cpu->run_active)
         return unsupported_result(cpu, EMU68_ERR_BUSY);
 
+    cpu->stats.run_call_count++;
+
     cpu->run_budget_cycles = max_cycles;
     cpu->run_cycles = 0;
     cpu->run_start_insn_count = 0;
@@ -372,6 +374,7 @@ int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
 
     if (cpu->run_cycles >= (uint64_t)cpu->run_budget_cycles) {
         cpu->run_stop_reason = EMU68_STOP_CYCLES_EXHAUSTED;
+        cpu->stats.run_cycles_exhausted_count++;
         cpu->run_active = false;
         return 1;
     }

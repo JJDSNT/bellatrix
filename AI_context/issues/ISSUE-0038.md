@@ -73,6 +73,14 @@ contador de instruções retiradas.
 Regra de validação fornecida pelo usuário: AROS deve ser observado por cerca de
 1.000 frames; janelas curtas não servem para julgar boot screen/progresso.
 
+Segundo teste no Pi: execução ficou substancialmente mais rápida após publicar
+idle cycles, confirmando a correção, mas ainda para em `InitResident "mmu"`.
+Arqueologia: `0e113d2` atingia 35 residents/`trackdisk.device` com MainLoop
+contínuo; a regressão coincide com a adoção efetiva de `run_cycles()` em
+`d267036`. Adicionados checkpoints seguros nos frames 100/500/1000 com PC, SR,
+STOPPED, IPL e contadores de razão de retorno. Nenhum print entra no contexto
+vivo do JIT.
+
 O branch `wip/emu68-liveness` foi atualizado para o `main` em `ea4b474`. O antigo
 commit WIP `10e3051` nao foi reaplicado porque seu conteudo ja havia sido incorporado e
 superado por `0e113d2` e pelos commits posteriores da API publica e do multicore.

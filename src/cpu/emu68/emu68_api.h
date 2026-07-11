@@ -90,6 +90,8 @@ typedef struct {
 } emu68_state_t;
 
 typedef struct {
+    uint64_t run_call_count;
+    uint64_t run_cycles_exhausted_count;
     uint64_t bus_read_count;
     uint64_t bus_write_count;
     uint64_t bus_sync_required_count;
