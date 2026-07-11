@@ -62,6 +62,17 @@ Validação inicial: Emu68 single-core compila; AROS em QEMU passa reset/overlay
 e chega a `FNOP/FSAVE` sem crash imediato em 180 s. TCG é lento demais para
 atingir boot screen nessa janela; próximo gate é Pi real.
 
+Primeiro teste no Pi ainda parou em `InitResident "mmu"`, reproduzindo o estado
+histórico pré-`0e113d2`. A comparação encontrou uma falha na integração inicial
+do novo protocolo: `emu68_backend_run()` retornava o budget de idle, mas o loop
+genérico ignora esse retorno para timing quando `progress_in_run=1`. Logo Rigel
+não avançava durante STOP. Corrigido no boundary Emu68: STOPPED publica
+explicitamente os ciclos ociosos via bridge single/multicore, sem incrementar o
+contador de instruções retiradas.
+
+Regra de validação fornecida pelo usuário: AROS deve ser observado por cerca de
+1.000 frames; janelas curtas não servem para julgar boot screen/progresso.
+
 O branch `wip/emu68-liveness` foi atualizado para o `main` em `ea4b474`. O antigo
 commit WIP `10e3051` nao foi reaplicado porque seu conteudo ja havia sido incorporado e
 superado por `0e113d2` e pelos commits posteriores da API publica e do multicore.

@@ -50,6 +50,11 @@ extern struct M68KState *__m68k_state;
 extern void M68K_StartEmu(void *addr, void *fdt);
 static emu68_t *s_emu68_api;
 
+/* Emu68 normally reports retired work from inside MainLoop. STOP has no
+ * retired instructions, so its idle window must be published explicitly by
+ * the embedding boundary. */
+static void bellatrix_emu68_publish_idle_cycles(uint32_t cycles);
+
 /* ---------------------------------------------------------------------------
  * Emu68 CpuBackend — wires machine's two CPU callbacks to Emu68 internals
  * ------------------------------------------------------------------------- */
@@ -113,8 +118,10 @@ static int emu68_backend_run(void *ctx, uint32_t cycles)
     /* STOP consumes no instructions while idle, but machine time must keep
      * advancing until Rigel raises an unmasked guest IPL. Account the caller's
      * requested window as idle time; do not fabricate retired JIT instructions. */
-    if (result.reason == EMU68_STOP_STOPPED)
+    if (result.reason == EMU68_STOP_STOPPED) {
+        bellatrix_emu68_publish_idle_cycles(cycles);
         return (int)cycles;
+    }
 
     if (result.cycles_run > (uint64_t)INT32_MAX)
         return INT32_MAX;
@@ -604,6 +611,19 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
         s_same_pc_reports = 0u;
     }
 #endif
+
+    bellatrix_runtime_poll_from_emu68();
+}
+
+static void bellatrix_emu68_publish_idle_cycles(uint32_t cycles)
+{
+    if (!cycles)
+        return;
+
+    if (PAL_Core_IsMulticoreEnabled())
+        bellatrix_bridge_publish_cpu_cycles(cycles);
+    else
+        bellatrix_singlecore_advance_cpu_cycles(cycles);
 
     bellatrix_runtime_poll_from_emu68();
 }
