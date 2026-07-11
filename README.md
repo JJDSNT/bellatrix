@@ -17,14 +17,22 @@ Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img
   get Amiga/Paula emulation fast enough on hardware to validate real Amiga
   audio through that path.
 
-The Musashi multicore runtime is functional: Core 0 supervises, Core 1 runs the
-M68K CPU, Core 2 exclusively owns and advances Rigel, and Core 3 owns physical
-I/O and the runtime mini-UART. CPU/chipset backpressure, critical-MMIO
+The Musashi multicore runtime is functional: Core 0 is the Host Reactor and
+owns supervision plus physical I/O, Core 1 runs the M68K CPU, Core 2
+exclusively owns and advances Rigel, and Core 3 is parked for future RTG/AHI
+acceleration jobs. Launcher and runtime share one USB/CherryUSB owner and
+service path. CPU/chipset backpressure, critical-MMIO
 rendezvous, atomic IPL publication, deadline scheduling, and non-blocking
 cross-core serial queues are implemented. Remaining multicore work is hardware
 validation under combined I/O load and performance tuning rather than a missing
 runtime architecture component. The Emu68/JIT multicore path remains
 experimental together with the wider Emu68 integration.
+
+The Host Reactor currently polls at approximately 1 kHz. On a Raspberry Pi 3B
+its measured runtime cost is about 7 us average and 26 us maximum per dispatch,
+with no missed 1 ms budgets in the validated workload. See
+[`docs/host_reactor.md`](docs/host_reactor.md) for ownership, IRQ direction,
+single-core behavior and current synchronous-MSC limitations.
 
 ---
 
@@ -105,7 +113,7 @@ emu68/              Emu68 submodule — M68K JIT (READ-ONLY)
 external/           rigel, btstack, cherryusb, musashi, aros (submodules)
 src/
   machine/          BellatrixMachine — integration and bus protocol
-  runtime/          multicore runtime (CPU / Chipset / IO cores)
+  runtime/          Host Reactor and CPU/chipset multicore runtime
   cpu/              bus entry point — bridges Emu68 to Bellatrix
   io/               Bluetooth (BTStack) and USB (CherryUSB) HID
   launcher/         bare-metal ADF/ISO selector UI

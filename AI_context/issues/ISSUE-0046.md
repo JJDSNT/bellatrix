@@ -75,7 +75,7 @@ launcher, USB e HDMI compilaram. Permanece pendente a validação no Pi.
 - [ ] Bare-metal Emu68 single-core compila e boota carga conhecida.
 - [ ] Bare-metal Emu68 multicore compila; execução só após backend estável.
 - [ ] Pi: smoke single-core com KS13 e carga histórica.
-- [ ] Pi: smoke multicore com launcher + KS13.
+- [x] Pi: smoke multicore com launcher + KS13.
 - [ ] Documentar conjunto mínimo de ROM/ADF e resultados esperados.
 - [ ] Automatizar a matriz num comando de CI local sem lançar GUI/QEMU.
 

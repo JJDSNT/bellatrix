@@ -278,6 +278,19 @@ RTCService
 
 # 12. Future Runtime Layers
 
+The active multicore topology provides these planes:
+
+```text
+Core 0 = Control Plane / Host Reactor
+Core 1 = CPU Plane
+Core 2 = Chipset Plane
+Core 3 = Acceleration Plane
+```
+
+Core 3 is assigned by measured jobs rather than by the broad category "I/O".
+RTG conversion and AHI mixing/resampling are likely candidates; physical device
+ownership, IRQ acknowledgement and completion ordering remain on Core 0.
+
 ## Layer 1 — Compatibility Runtime
 
 Responsibilities:

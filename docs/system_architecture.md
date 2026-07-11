@@ -72,10 +72,10 @@ The machine is composed of:
 ```text id="w2jlwm"
 BellatrixMachine
  ├── Runtime
- │    ├── Core 0 — Machine/Host (boot; parks after launching Core 1-3)
- │    ├── Core 1 — CPU Runtime (Emu68 JIT or Musashi)
- │    ├── Core 2 — Chipset Runtime (Rigel: CIA+Agnus+Paula+Denise)
- │    └── Core 3 — IO Runtime (USB + Bluetooth)
+ │    ├── Core 0 — Control Plane / Host Reactor (supervisor + physical IO)
+│    ├── Core 1 — CPU Runtime (Emu68 JIT or Musashi)
+│    ├── Core 2 — Chipset Runtime (Rigel: CIA+Agnus+Paula+Denise)
+ │    └── Core 3 — Acceleration Plane (parked; future RTG/AHI jobs)
  │
  ├── CPU
  │    └── Emu68 backend
@@ -249,13 +249,18 @@ Denise consumes visual timeline state.
 
 # 7. Runtime Organization
 
-## Core 0 — Machine / Host
+## Core 0 — Control Plane / Host Reactor
 
 Responsibilities:
 
 * boot (`bellatrix_init()`)
-* launching Core 1/2/3
-* parks in a light `wfe` loop once launched — no recurring work
+* launching Core 1 and Core 2; Core 3 remains parked
+* sole ownership of USB, Bluetooth, physical UART and console drain
+* 1 kHz event/poll dispatch and runtime supervision
+* future physical IRQ acknowledgement and pending-event publication
+
+Launcher and runtime call the same Host Reactor service path. Core 0 never
+routes physical ARM device IRQs into the Emu68 PiStorm INT6 path.
 
 ---
 
@@ -283,13 +288,14 @@ Responsibilities:
 
 ---
 
-## Core 3 — IO Runtime
+## Core 3 — Acceleration Runtime (reserved)
 
 Responsibilities:
 
-* USB host (CherryUSB) — HID + MSC
-* Bluetooth host (BTStack) — HID
-* physical peripheral IO
+* parked in the current baseline
+* future RTG conversion/compositing jobs
+* future AHI mixing/resampling jobs
+* no physical-device ownership by default
 
 ---
 

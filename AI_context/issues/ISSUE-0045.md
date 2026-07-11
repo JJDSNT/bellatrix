@@ -212,6 +212,71 @@ Validação local concluída:
 - Musashi 68040 multicore + launcher + USB + HDMI compilou;
 - a imagem instalada ao final é a variante multicore.
 
+### 2026-07-11 — Fase 2a: fundação do Host Reactor
+
+Sem alterar o backend funcional de polling, `core_io` passou a possuir:
+
+- bitmap atômico de eventos USB, Bluetooth, serial e console;
+- `core_io_notify()`, fronteira que poderá ser usada por IRQs futuras;
+- dispatch centralizado no Core 0, preservando a ordem BT→USB→serial→console;
+- deadline atual de 1 ms tratado como budget observável, ainda não preemptivo;
+- métricas de calls, custo médio/máximo, atraso máximo, violações do
+  budget e custo máximo individual por serviço;
+- linha `[CORE0-IO]` emitida junto ao heartbeat do supervisor.
+
+O polling marca os mesmos bits que futuramente serão marcados pelos handlers.
+Ele não emite `SEV` desnecessário; notificações cross-core reais, como TX de
+Paula, continuam acordando o sistema. Nenhum driver é interrompido ao exceder o
+budget nesta fase: o objetivo é medir antes de definir granularidade.
+
+Aceite no Pi: launcher/runtime inalterados e captura de pelo menos cinco linhas
+`[CORE0-IO]`, incluindo gameplay e atividade HID.
+
+Resultado no Pi:
+
+```text
+calls=24000 pending=00 budget_miss=0 avg=7us max=25us late_max=0us
+usb=20us bt=0us serial=2us console=7us
+```
+
+O pior dispatch consumiu 2,5% do budget de 1 ms; USB foi o maior serviço com
+20 us. Não houve atraso de cadência nem violação. Isso autoriza unificar o
+ponto de serviço sem introduzir budget preemptivo ainda.
+
+### 2026-07-11 — Fase 2b: pump único atravessa launcher e runtime
+
+O símbolo de compatibilidade `bellatrix_launcher_pump_usb()` permanece porque o
+launcher é cooperativo, mas deixou de chamar `usb_host_step()` diretamente. Ele
+agora chama `bellatrix_runtime_io_step()` com o contador da plataforma. O mesmo
+Host Reactor possui USB, BT, serial e console antes e depois do boot 68k.
+
+`launcher_owns_usb` e seu gating foram removidos: não existe mais handoff nem
+segundo executor lógico. Durante o launcher o reactor é dirigido
+cooperativamente; depois dele, pelo supervisor. A primeira linha `[CORE0-IO]`
+após o launcher passa a incluir as medidas acumuladas daquela fase, inclusive
+atrasos causados por operações síncronas de armazenamento.
+
+Primeiro resultado com as fases ainda acumuladas:
+
+```text
+calls=6576370 budget_miss=2 avg=2us max=624926us
+late_max=1647627us usb=624920us
+```
+
+Os heartbeats seguintes acrescentaram 2.000 calls cada e não aumentaram nenhum
+máximo ou miss: os dois stalls pertencem ao launcher, não ao runtime. A causa é
+uma operação USB/MSC síncrona de até 625 ms e uma lacuna de 1,65 s entre pumps,
+compatíveis com enumeração/leitura durante boot. Os 6,5 milhões de calls mostram
+que o loop do launcher invocava o service point sem throttle.
+
+Correção de instrumentação/política:
+
+- pump cooperativo do launcher limitado a ~1 kHz;
+- resumo separado `[CORE0-IO-LAUNCHER]` ao fim da fase;
+- estatísticas zeradas antes de CPU/chipset, tornando `[CORE0-IO]` runtime puro;
+- stalls síncronos continuam permitidos no launcher, quando os workers da
+  máquina ainda não foram lançados; no runtime eles continuam sendo violação.
+
 ### 2026-07-10 — prioridade transferida para throughput multicore
 
 O usuário confirmou em Pi 3B que o gate + guard restauraram launcher e runtime
