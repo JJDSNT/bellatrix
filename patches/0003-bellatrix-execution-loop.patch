@@ -13,7 +13,7 @@ index 732a176..9f55465 100644
  #ifdef PISTORM
  #ifndef PISTORM32
  #define PS_PROTOCOL_IMPL
-@@ -138,11 +142,70 @@ void MainLoop()
+@@ -138,11 +142,73 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -55,8 +55,9 @@ index 732a176..9f55465 100644
 +            static uint64_t bela_insn_prev;
 +            static uint32_t bela_spins;
 +            uint64_t _v30_now, _pc_now, _x12_save;
++            int _return_to_host;
 +            asm volatile("mov %0, v30.d[0]" : "=r"(_v30_now));
-+            if (emu68_api_sync_pending() ||
++            if (ctx->STOPPED || emu68_api_sync_pending() ||
 +                (_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
 +                ++bela_spins >= 64u) {
 +                bela_insn_prev = _v30_now;
@@ -74,11 +75,12 @@ index 732a176..9f55465 100644
 +                asm volatile("mov %0, x12" : "=r"(_x12_save));
 +                M68K_SaveContext(ctx);
 +                bellatrix_emu68_report_jit_progress(_v30_now, (uint32_t)_pc_now);
++                _return_to_host = emu68_api_dispatch_quantum_progress(
++                    _v30_now, (uint32_t)_pc_now);
 +                M68K_LoadContext(getCTX());
 +                asm volatile("mov x12, %0" :: "r"(_x12_save));
 +                asm volatile("mov v28.d[0], xzr");
-+                if (emu68_api_dispatch_quantum_progress(_v30_now,
-+                                                        (uint32_t)_pc_now))
++                if (_return_to_host)
 +                    return;
 +            }
 +        }

@@ -110,6 +110,12 @@ static int emu68_backend_run(void *ctx, uint32_t cycles)
         return 0;
     }
 
+    /* STOP consumes no instructions while idle, but machine time must keep
+     * advancing until Rigel raises an unmasked guest IPL. Account the caller's
+     * requested window as idle time; do not fabricate retired JIT instructions. */
+    if (result.reason == EMU68_STOP_STOPPED)
+        return (int)cycles;
+
     if (result.cycles_run > (uint64_t)INT32_MAX)
         return INT32_MAX;
 
@@ -262,12 +268,15 @@ static void bellatrix_emu68_api_dump_stats(void)
     memset(&s, 0, sizeof(s));
     emu68_get_stats(s_emu68_api, &s);
 
-    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu err=%llu "
+    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu "
+            "stopped=%llu wake=%llu err=%llu "
             "unhandled=%llu bad_size=%llu stop=%llu inv=%llu irq_set=%llu irq_chg=%llu\n",
             (unsigned long long)s.bus_read_count,
             (unsigned long long)s.bus_write_count,
             (unsigned long long)s.bus_sync_required_count,
             (unsigned long long)s.run_sync_stop_count,
+            (unsigned long long)s.stopped_return_count,
+            (unsigned long long)s.stopped_wake_count,
             (unsigned long long)s.bus_error_count,
             (unsigned long long)s.bus_unhandled_count,
             (unsigned long long)s.unsupported_size_count,

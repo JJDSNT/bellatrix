@@ -211,6 +211,9 @@ void emu68_reset(emu68_t *cpu)
 #endif
     __m68k_state->SR = BE16(SR_S | SR_IPL);
     __m68k_state->INT32 = 0;
+#ifdef BELLATRIX
+    __m68k_state->STOPPED = 0u;
+#endif
     __m68k_state->CACR |= BE32(CACR_IE);
     cache_invalidate_all(ICACHE);
 }
@@ -331,6 +334,26 @@ int emu68_api_dispatch_quantum_progress(uint64_t retired_instructions,
     cycles = emu68_api_estimate_cycles(cpu, retired_instructions);
     cpu->run_cycles += cycles;
     cpu->run_stop_pc = pc;
+
+#ifdef BELLATRIX
+    if (__m68k_state && __m68k_state->STOPPED) {
+        uint16_t sr = BE16(__m68k_state->SR);
+        unsigned int mask = (unsigned int)((sr & SR_IPL) >> SRB_IPL);
+        unsigned int level = (unsigned int)__m68k_state->INT.IPL;
+
+        if (level > mask) {
+            /* STOP was already retired and PC already names the next
+             * instruction. Clear the state and let MainLoop deliver IPL. */
+            __m68k_state->STOPPED = 0u;
+            cpu->stats.stopped_wake_count++;
+        } else {
+            cpu->run_stop_reason = EMU68_STOP_STOPPED;
+            cpu->stats.stopped_return_count++;
+            cpu->run_active = false;
+            return 1;
+        }
+    }
+#endif
 
     if (cpu->sync_pending) {
         cpu->sync_pending = false;

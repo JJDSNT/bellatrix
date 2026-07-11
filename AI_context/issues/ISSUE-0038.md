@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0038
 title: "Emu68 JIT: regressao de liveness do chipset + corrupcao do vetor 0x6C no boot KS13"
-status: open
+status: doing
 priority: high
 type: bug
 owner: agent
 created_at: 2026-07-05
-updated_at: 2026-07-10
+updated_at: 2026-07-11
 tags:
   - emu68
   - jit
@@ -24,6 +24,43 @@ related_files:
 ---
 
 # RETOMADA DO BRANCH (2026-07-10)
+
+## 2026-07-11 — STOP deixa de ser inferido por opcode
+
+A retomada encontrou um workaround não aceitável no checkout do Emu68:
+
+- `EMIT_STOP` mantinha PC sobre o STOP, reexecutava a unit e somava oito
+  instruções artificiais por passagem para fazer o chipset andar;
+- o delivery de IRQ lia `*PC` e, se encontrasse `0x4e72`, avançava PC antes de
+  montar o frame de exceção.
+
+Isso acoplava dispatcher de interrupção a opcode/endereco de ROM e tornava a
+semântica dependente da corrida entre o report hook e a unit STOP.
+
+Substituído por protocolo embutível explícito:
+
+1. STOP atualiza SR, avança PC uma vez, marca `M68KState.STOPPED` e encerra a
+   janela;
+2. API retorna `EMU68_STOP_STOPPED` enquanto IPL guest não supera a máscara SR;
+3. scheduler Bellatrix contabiliza a janela solicitada como tempo ocioso, sem
+   fabricar instruções JIT retiradas;
+4. IPL persistente acima da máscara limpa STOPPED e usa o delivery normal, com
+   PC pós-STOP já correto;
+5. removida toda inspeção de opcode no `ExecutionLoop`.
+
+Foi corrigida também uma violação ABI adjacente:
+`emu68_api_dispatch_quantum_progress()` era chamado depois de
+`M68K_LoadContext()`, podendo clobberar registradores 68k recém-restaurados.
+Agora todas as chamadas C ocorrem com contexto salvo; somente depois a máquina
+de registradores é restaurada.
+
+API elevada para v2 e adicionadas métricas `stopped_return_count` e
+`stopped_wake_count`. Patches 0003/0020 foram atualizados e passam verificação
+de aplicação reversa sobre o checkout.
+
+Validação inicial: Emu68 single-core compila; AROS em QEMU passa reset/overlay
+e chega a `FNOP/FSAVE` sem crash imediato em 180 s. TCG é lento demais para
+atingir boot screen nessa janela; próximo gate é Pi real.
 
 O branch `wip/emu68-liveness` foi atualizado para o `main` em `ea4b474`. O antigo
 commit WIP `10e3051` nao foi reaplicado porque seu conteudo ja havia sido incorporado e
