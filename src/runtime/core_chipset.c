@@ -25,6 +25,8 @@
 
 #include "rigel/rigel.h"
 #include "rigel/rigel_irq.h"
+#include "rigel/rigel_mmio.h"
+#include "rigel/rigel_custom.h"
 #include "machine/machine.h"
 #include "debug/core_log.h"
 #include "host/pal.h"
@@ -55,6 +57,18 @@ static uint32_t s_pending_cck = 0;
  * Core 0 (supervisor), so it must be atomic. */
 static _Atomic uint64_t s_chipset_cck = 0;
 static _Atomic uint8_t s_pending_ipl = 0;
+
+/* Hot read-only registers, published by the Rigel owner and served lock-free
+ * to Core 1 poll loops (blit-busy, interrupt waits) without the critical-MMIO
+ * rendezvous. Same pattern as s_pending_ipl; conceptually the PiStorm
+ * housekeeper, which pushes hot bus state to the CPU instead of letting the
+ * CPU fetch it. Refreshed on every Core 2 drain iteration and, for
+ * read-own-write consistency, right after critical CPU writes (both under
+ * the chipset access lock). VPOSR/VHPOSR stay on the slow path: they change
+ * every CCK, so a snapshot would be stale by construction. */
+static _Atomic uint16_t s_pub_dmaconr = 0;
+static _Atomic uint16_t s_pub_intenar = 0;
+static _Atomic uint16_t s_pub_intreqr = 0;
 
 /* Remainder for M68K→CCK conversion (local to Core 1 call site). */
 static uint32_t s_m68k_rem = 0;
@@ -116,6 +130,56 @@ void core_chipset_set_pending_ipl(uint8_t ipl)
 {
     atomic_store_explicit(&s_pending_ipl, (uint8_t)(ipl & 7u),
                           memory_order_release);
+}
+
+/* Caller must hold the chipset access lock (or be the only Rigel user). */
+void core_chipset_publish_hot_regs(void)
+{
+    RuntimeCoreChipset *core = s_core;
+
+    if (!core || !core->rigel)
+        return;
+
+    atomic_store_explicit(&s_pub_dmaconr,
+                          rigel_custom_read16(core->rigel, 0x002u /* DMACONR */),
+                          memory_order_release);
+    atomic_store_explicit(&s_pub_intenar,
+                          rigel_custom_read16(core->rigel, RIGEL_REG_INTENAR),
+                          memory_order_release);
+    atomic_store_explicit(&s_pub_intreqr,
+                          rigel_custom_read16(core->rigel, RIGEL_REG_INTREQR),
+                          memory_order_release);
+}
+
+/* Lock-free fast path for hot-register reads on Core 1. Returns false when
+ * the register is not published or multicore is not active, sending the
+ * caller down the regular rendezvous+lock path. */
+bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    RuntimeCoreChipset *core = s_core;
+
+    if (!core || !core->running || !value)
+        return false;
+
+    switch (normalized_addr) {
+    case 0x00DFF002u:   /* DMACONR */
+        *value = atomic_load_explicit(&s_pub_dmaconr, memory_order_acquire);
+        return true;
+    case 0x00DFF01Cu:   /* INTENAR */
+        *value = atomic_load_explicit(&s_pub_intenar, memory_order_acquire);
+        return true;
+    case 0x00DFF01Eu:   /* INTREQR */
+        *value = atomic_load_explicit(&s_pub_intreqr, memory_order_acquire);
+        return true;
+    default:
+        return false;
+    }
+#else
+    (void)normalized_addr;
+    (void)value;
+    return false;
+#endif
 }
 
 /* MMIO-critical barrier. The CPU (Core 1) may run up to CHIPSET_MAX_BACKLOG_CCK
@@ -327,6 +391,7 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
          * from each other but not from concurrent Rigel mutation here. */
         core_chipset_lock_acquire();
         rigel_step_result_t r = rigel_step_until(core->rigel, until);
+        core_chipset_publish_hot_regs();
         core_chipset_lock_release();
 #if BELLATRIX_PROFILE_ENABLED
         bprof_record(&g_bprof.chipset_step_time, bprof_now() - t0);

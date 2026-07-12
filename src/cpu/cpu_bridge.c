@@ -40,6 +40,14 @@ static void cpu_bridge_log_critical_write(uint32_t addr, uint32_t value)
 __attribute__((weak)) void core_chipset_lock_acquire(void) {}
 __attribute__((weak)) void core_chipset_lock_release(void) {}
 __attribute__((weak)) void core_chipset_wait_caught_up(void) {}
+__attribute__((weak)) void core_chipset_publish_hot_regs(void) {}
+__attribute__((weak)) bool core_chipset_read_hot_reg(uint32_t normalized_addr,
+                                                     uint32_t *value)
+{
+    (void)normalized_addr;
+    (void)value;
+    return false;
+}
 __attribute__((weak)) uint8_t core_chipset_get_pending_ipl(void) { return 0u; }
 __attribute__((weak)) void core_chipset_set_pending_ipl(uint8_t ipl) { (void)ipl; }
 __attribute__((weak)) bool core_chipset_get_progress(uint64_t *chipset_cck,
@@ -90,9 +98,10 @@ static int cpu_bridge_is_critical_mmio(uint32_t addr, unsigned int size,
     case 0x004u: /* VPOSR */
     case 0x006u: /* VHPOSR */
     case 0x010u: /* ADKCONR */
-    case 0x016u: /* INTENAR */
-    case 0x01cu: /* INTREQR */
+    case 0x016u: /* POTINP */
     case 0x01au: /* DSKBYTR */
+    case 0x01cu: /* INTENAR */
+    case 0x01eu: /* INTREQR — was missing: reads never rendezvoused */
         return 1;
     default:
         return 0;
@@ -169,6 +178,14 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
     if (addr_is_unimplemented_z3(addr))
         return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
 
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    /* Hot poll registers are served from the Core 2 published snapshot with
+     * no rendezvous and no lock (PiStorm-housekeeper pattern; ISSUE-0048). */
+    if (size == 2u &&
+        core_chipset_read_hot_reg(bellatrix_bridge_normalize_addr(addr),
+                                  &result))
+        return result;
+#endif
 #if BELLATRIX_PROFILE_ENABLED
     cpu_bridge_profile_critical_mmio(addr, size, 0);
 #endif
@@ -214,6 +231,13 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
         bellatrix_machine_write(addr, value, size);
     else
         bellatrix_machine_write(bellatrix_bridge_normalize_addr(addr), value, size);
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    /* Read-own-write consistency for the hot-register snapshot: a critical
+     * write (INTENA/INTREQ/DMACON, ...) must be visible to the very next
+     * lock-free hot read, not only after Core 2's next drain iteration. */
+    if (cpu_bridge_is_critical_mmio(addr, size, 1))
+        core_chipset_publish_hot_regs();
+#endif
     core_chipset_lock_release();
 #if BELLATRIX_PROFILE_ENABLED
     bprof_record(&g_bprof.bridge_ref_write, bprof_now() - _t);

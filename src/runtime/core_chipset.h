@@ -45,4 +45,11 @@ void core_chipset_set_pending_ipl(uint8_t ipl);
  * No-op when multicore is disabled or the chipset core is not running. */
 void core_chipset_wait_caught_up(void);
 
+/* Hot read-only registers (DMACONR/INTENAR/INTREQR) published by the Rigel
+ * owner and served lock-free to CPU poll loops. publish must be called with
+ * the chipset access lock held; read returns false when unavailable so the
+ * caller falls back to the rendezvous+lock path. */
+void core_chipset_publish_hot_regs(void);
+bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value);
+
 #endif
