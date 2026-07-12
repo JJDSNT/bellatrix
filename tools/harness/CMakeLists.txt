@@ -393,6 +393,41 @@ target_include_directories(bellatrix_unit_posted_writes PRIVATE ${SRC})
 target_compile_options(bellatrix_unit_posted_writes PRIVATE -Wall -Wextra)
 add_test(NAME bellatrix_unit_posted_writes COMMAND bellatrix_unit_posted_writes)
 
+# Real-thread SPSC stress under ThreadSanitizer (ISSUE-0049 Fase 2): proves
+# the acquire/release pairs of the cross-core queues, not just their logic.
+add_executable(bellatrix_tsan_posted_writes
+    ${ROOT}/tests/unit/test_posted_writes_threads.c
+    ${SRC}/runtime/posted_writes.c
+)
+target_include_directories(bellatrix_tsan_posted_writes PRIVATE ${SRC})
+target_compile_options(bellatrix_tsan_posted_writes PRIVATE
+    -Wall -Wextra -g -fsanitize=thread)
+target_link_options(bellatrix_tsan_posted_writes PRIVATE -fsanitize=thread)
+target_link_libraries(bellatrix_tsan_posted_writes PRIVATE pthread)
+# setarch -R disables ASLR: TSAN aborts with "unexpected memory mapping"
+# under the high-entropy layout of recent kernels (vm.mmap_rnd_bits=32).
+add_test(NAME bellatrix_tsan_posted_writes
+         COMMAND setarch ${CMAKE_HOST_SYSTEM_PROCESSOR} -R
+                 $<TARGET_FILE:bellatrix_tsan_posted_writes>)
+set_tests_properties(bellatrix_tsan_posted_writes PROPERTIES TIMEOUT 120)
+
+add_executable(bellatrix_tsan_audio_queue
+    ${ROOT}/tests/unit/test_audio_queue_threads.c
+    ${SRC}/audio/output.c
+)
+target_include_directories(bellatrix_tsan_audio_queue PRIVATE
+    ${SRC}
+    ${ROOT}/external/rigel/include
+)
+target_compile_options(bellatrix_tsan_audio_queue PRIVATE
+    -Wall -Wextra -g -fsanitize=thread)
+target_link_options(bellatrix_tsan_audio_queue PRIVATE -fsanitize=thread)
+target_link_libraries(bellatrix_tsan_audio_queue PRIVATE pthread)
+add_test(NAME bellatrix_tsan_audio_queue
+         COMMAND setarch ${CMAKE_HOST_SYSTEM_PROCESSOR} -R
+                 $<TARGET_FILE:bellatrix_tsan_audio_queue>)
+set_tests_properties(bellatrix_tsan_audio_queue PROPERTIES TIMEOUT 120)
+
 
 add_test(NAME bellatrix_harness_smoke
          COMMAND /bin/bash
