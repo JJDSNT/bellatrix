@@ -435,7 +435,8 @@ static void pal_sdl_enable_relative_mouse(void)
  * samples are dropped — latency stays bounded and the emulator never blocks
  * on audio. */
 
-#define PAL_AUDIO_SAMPLE_RATE   48000
+#define PAL_AUDIO_DIRECT_RATE   44100
+#define PAL_AUDIO_UNIFIED_RATE  48000
 #define PAL_AUDIO_BUF_FRAMES    1024
 #define PAL_AUDIO_RING_FRAMES   32768   /* ~743 ms */
 #define PAL_AUDIO_CUSHION_FRAMES 8192   /* ~186 ms before (re)starting */
@@ -446,6 +447,7 @@ static int s_audio_priming = 1;
 static int16_t s_audio_ring[PAL_AUDIO_RING_FRAMES * 2];
 static uint32_t s_audio_ring_rd = 0;   /* frame index, free-running */
 static uint32_t s_audio_ring_wr = 0;   /* frame index, free-running */
+static int s_audio_sample_rate = PAL_AUDIO_DIRECT_RATE;
 
 static void pal_audio_sdl_cb(void *userdata, Uint8 *stream, int len)
 {
@@ -483,8 +485,14 @@ static void pal_audio_sdl_cb(void *userdata, Uint8 *stream, int len)
 static void pal_audio_sdl_init(void)
 {
     SDL_AudioSpec desired;
+    const char *unified = getenv("HARNESS_AUDIO_UNIFIED");
+
+    s_audio_sample_rate =
+        (unified && unified[0] != '\0' && unified[0] != '0')
+            ? PAL_AUDIO_UNIFIED_RATE
+            : PAL_AUDIO_DIRECT_RATE;
     SDL_zero(desired);
-    desired.freq     = PAL_AUDIO_SAMPLE_RATE;
+    desired.freq     = s_audio_sample_rate;
     desired.format   = AUDIO_S16SYS;
     desired.channels = 2;
     desired.samples  = PAL_AUDIO_BUF_FRAMES;
@@ -499,7 +507,7 @@ static void pal_audio_sdl_init(void)
     /* Stays paused until the guest produces a non-silent sample, so a
      * machine that never plays audio never opens an output stream. */
     SDL_PauseAudioDevice(s_audio_dev, 1);
-    fprintf(stderr, "[PAL] audio: %d Hz stereo S16\n", PAL_AUDIO_SAMPLE_RATE);
+    fprintf(stderr, "[PAL] audio: %d Hz stereo S16\n", s_audio_sample_rate);
 }
 
 int pal_audio_writable(void)

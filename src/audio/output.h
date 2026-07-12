@@ -23,6 +23,7 @@ typedef struct BellatrixAudioOutputStats {
 
 void bellatrix_audio_output_init(void);
 void bellatrix_audio_output_reset(void);
+void bellatrix_audio_output_set_enabled(int enabled);
 
 /* Advance the fixed-rate PCM producer by `cck_cycles` Rigel/Amiga clock
  * cycles. The CCK-to-output-rate conversion uses the current Rigel clock

@@ -1196,12 +1196,21 @@ int main(int argc, char **argv)
      * Main loop
      * ------------------------------------------------------------------------- */
 
-    const int QUANTUM = 454;
+    uint32_t cpu_quantum_max = 454u;
+    {
+        const char *env = getenv("HARNESS_CPU_QUANTUM");
+        if (env && env[0] != '\0') {
+            unsigned long parsed = strtoul(env, NULL, 0);
+            if (parsed > 0u && parsed <= 1000000u)
+                cpu_quantum_max = (uint32_t)parsed;
+        }
+    }
+    printf("[HARNESS] CPU timeslice ceiling: %u cycles\n",
+           (unsigned)cpu_quantum_max);
 
-    /* Audio sample rate conversion: one S16 stereo sample every
-     * M68K_HZ / AUDIO_RATE cycles. AUDIO_RATE matches the SDL device and the
-     * shared output.c queue (48 kHz) so all A/B modes feed one sink rate. */
-    static const uint64_t AUDIO_RATE = 48000;
+    /* Historical harness reference: direct snapshots at 44.1 kHz into the SDL
+     * jitter buffer. Unified mode uses output.c and a 48 kHz SDL sink instead. */
+    static const uint64_t AUDIO_RATE = 44100;
     /* CPU/chipset clock from the machine's Rigel config (PAL 7.09 MHz vs NTSC
      * 7.16 MHz) rather than hardcoded — mirrors output.c and stays correct per
      * video standard. rigel_get_clock_hz() falls back to the PAL default if the
@@ -1217,6 +1226,7 @@ int main(int argc, char **argv)
      * Compare legacy vs unified+DRC0 vs unified+DRC1 in one build. */
     int audio_unified = PAL_Diag_GetEnvBool("HARNESS_AUDIO_UNIFIED");
     int audio_drc     = PAL_Diag_GetEnvInt("HARNESS_AUDIO_DRC", 1);
+    bellatrix_audio_output_set_enabled(audio_unified);
     bellatrix_audio_output_set_drc(audio_drc);
     printf("[HARNESS] audio path: %s (drc=%d)\n",
            audio_unified ? "unified/output.c-queue" : "legacy/direct-accumulator",
@@ -1303,7 +1313,7 @@ int main(int argc, char **argv)
                                             &mouse_serial_trigger);
         harness_pump_serial_rx(m);
 
-        uint32_t quantum = bellatrix_machine_recommended_cpu_quantum((uint32_t)QUANTUM);
+        uint32_t quantum = bellatrix_machine_recommended_cpu_quantum(cpu_quantum_max);
 
         /* Loop profiling (HARNESS_LOOP_PROF=1): per-second breakdown of where
          * wall time goes when the interactive loop degrades (fps < realtime). */

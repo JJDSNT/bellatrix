@@ -41,6 +41,7 @@ typedef struct BellatrixAudioOutput {
 } BellatrixAudioOutput;
 
 static BellatrixAudioOutput s_audio_output;
+static int s_output_enabled = 1;
 
 /* Priming depth in stereo frames (config, persists across reset). Default 0 =
  * OFF: priming only helps near real-time; under sub-real-time emulation the queue
@@ -95,6 +96,12 @@ void bellatrix_audio_output_reset(void)
     memset(&s_audio_output, 0, sizeof(s_audio_output));
 }
 
+void bellatrix_audio_output_set_enabled(int enabled)
+{
+    s_output_enabled = enabled ? 1 : 0;
+    bellatrix_audio_output_reset();
+}
+
 /* Runtime DRC enable (default on = committed behavior). The harness A/B toggles
  * it via bellatrix_audio_output_set_drc() to isolate whether the DRC or the
  * queue hop is what degrades quality vs the direct-accumulator reference. */
@@ -132,10 +139,21 @@ void bellatrix_audio_output_tick(uint32_t cck_cycles)
 {
     struct RigelContext *rigel = bellatrix_machine_rigel_ctx();
     uint32_t clock_hz = rigel ? (uint32_t)rigel_get_clock_hz(rigel) : 0u;
-    uint32_t out_rate = bellatrix_audio_output_rate();
+    uint32_t out_rate;
+
+    if (!s_output_enabled)
+        return;
+
+    out_rate = bellatrix_audio_output_rate();
 
     if (clock_hz == 0u)
         clock_hz = BELLATRIX_AUDIO_DEFAULT_CLOCK_HZ;
+
+    /* cck_cycles is in the chipset color-clock domain, while Rigel exposes
+     * the approximately 7 MHz CPU clock. There are two CPU clocks per CCK. */
+    clock_hz /= 2u;
+    if (clock_hz == 0u)
+        clock_hz = 1u;
 
     s_audio_output.sample_acc += (uint64_t)cck_cycles * (uint64_t)out_rate;
 
