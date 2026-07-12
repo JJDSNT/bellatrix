@@ -64,6 +64,16 @@ uint64_t      s_cpu_approx;  /* accumulated approximate Rigel CCKs      */
 uint32_t      s_cpu_cck_rem; /* odd CPU-cycle remainder for /2 scaling  */
 rigel_cycle_t s_quantum;     /* cycles to next Rigel event (the budget) */
 
+typedef enum MachineStepReason {
+    MACHINE_STEP_MAX = 0,
+    MACHINE_STEP_DEADLINE,
+    MACHINE_STEP_BUS_CHANGE,
+    MACHINE_STEP_MMIO_FLUSH,
+    MACHINE_STEP_REASON_COUNT
+} MachineStepReason;
+
+static MachineStepReason s_quantum_reason = MACHINE_STEP_MAX;
+
 /* ---------------------------------------------------------------------------
  * Video helpers
  * ------------------------------------------------------------------------- */
@@ -102,6 +112,8 @@ typedef struct HarnessPerfTrace {
     uint64_t present_ticks;
     uint64_t present_calls;
     uint64_t present_skips;
+    uint64_t reason_calls[MACHINE_STEP_REASON_COUNT];
+    uint64_t size_buckets[6]; /* 1, 2-4, 5-8, 9-32, 33-128, >128 */
 } HarnessPerfTrace;
 
 static HarnessPerfTrace s_perf_trace;
@@ -581,11 +593,19 @@ rigel_cycle_t machine_next_quantum(void)
     rigel_cycle_t q    = RIGEL_MAX_QUANTUM;
     rigel_cycle_t next;
 
+    s_quantum_reason = MACHINE_STEP_MAX;
+
     next = rigel_get_next_deadline(g_rigel);
-    if (next > now && (next - now) < q) q = next - now;
+    if (next > now && (next - now) < q) {
+        q = next - now;
+        s_quantum_reason = MACHINE_STEP_DEADLINE;
+    }
 
     next = rigel_get_next_bus_change(g_rigel);
-    if (next > now && (next - now) < q) q = next - now;
+    if (next > now && (next - now) < q) {
+        q = next - now;
+        s_quantum_reason = MACHINE_STEP_BUS_CHANGE;
+    }
 
     if (q == 0u)
         return RIGEL_MIN_QUANTUM;
@@ -594,7 +614,9 @@ rigel_cycle_t machine_next_quantum(void)
 }
 
 /* Execute one quantum step and update machine state. Returns event flags. */
-static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle_t cycles)
+static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m,
+                                                rigel_cycle_t cycles,
+                                                MachineStepReason reason)
 {
     rigel_step_result_t r;
 #ifdef BELLATRIX_HARNESS
@@ -663,6 +685,20 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
 
         s_perf_trace.step_calls++;
         s_perf_trace.step_cck += cycles;
+        if ((unsigned)reason < MACHINE_STEP_REASON_COUNT)
+            s_perf_trace.reason_calls[reason]++;
+        if (cycles <= 1u)
+            s_perf_trace.size_buckets[0]++;
+        else if (cycles <= 4u)
+            s_perf_trace.size_buckets[1]++;
+        else if (cycles <= 8u)
+            s_perf_trace.size_buckets[2]++;
+        else if (cycles <= 32u)
+            s_perf_trace.size_buckets[3]++;
+        else if (cycles <= 128u)
+            s_perf_trace.size_buckets[4]++;
+        else
+            s_perf_trace.size_buckets[5]++;
         s_perf_trace.rigel_ticks += t1 - t0;
         s_perf_trace.post_ticks += t2 - t1;
 
@@ -673,14 +709,27 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
             fprintf(stderr,
                     "[HARNESS-PERF] steps=%llu cck=%llu"
                     " rigel_ms=%.2f post_ms=%.2f present_ms=%.2f"
-                    " present=%llu skip=%llu\n",
+                    " present=%llu skip=%llu"
+                    " reason=max:%llu deadline:%llu bus:%llu mmio:%llu"
+                    " size=1:%llu 2-4:%llu 5-8:%llu 9-32:%llu"
+                    " 33-128:%llu >128:%llu\n",
                     (unsigned long long)s_perf_trace.step_calls,
                     (unsigned long long)s_perf_trace.step_cck,
                     (double)s_perf_trace.rigel_ticks * scale,
                     (double)s_perf_trace.post_ticks * scale,
                     (double)s_perf_trace.present_ticks * scale,
                     (unsigned long long)s_perf_trace.present_calls,
-                    (unsigned long long)s_perf_trace.present_skips);
+                    (unsigned long long)s_perf_trace.present_skips,
+                    (unsigned long long)s_perf_trace.reason_calls[MACHINE_STEP_MAX],
+                    (unsigned long long)s_perf_trace.reason_calls[MACHINE_STEP_DEADLINE],
+                    (unsigned long long)s_perf_trace.reason_calls[MACHINE_STEP_BUS_CHANGE],
+                    (unsigned long long)s_perf_trace.reason_calls[MACHINE_STEP_MMIO_FLUSH],
+                    (unsigned long long)s_perf_trace.size_buckets[0],
+                    (unsigned long long)s_perf_trace.size_buckets[1],
+                    (unsigned long long)s_perf_trace.size_buckets[2],
+                    (unsigned long long)s_perf_trace.size_buckets[3],
+                    (unsigned long long)s_perf_trace.size_buckets[4],
+                    (unsigned long long)s_perf_trace.size_buckets[5]);
             s_perf_trace.last_print = now;
             s_perf_trace.step_calls = 0;
             s_perf_trace.step_cck = 0;
@@ -689,6 +738,10 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m, rigel_cycle
             s_perf_trace.present_ticks = 0;
             s_perf_trace.present_calls = 0;
             s_perf_trace.present_skips = 0;
+            memset(s_perf_trace.reason_calls, 0,
+                   sizeof(s_perf_trace.reason_calls));
+            memset(s_perf_trace.size_buckets, 0,
+                   sizeof(s_perf_trace.size_buckets));
         }
     }
 #endif
@@ -717,7 +770,8 @@ void machine_step_components(BellatrixMachine *m, uint32_t approx)
 
     while (s_cpu_approx >= s_quantum) {
         s_cpu_approx -= s_quantum;
-        rigel_event_flags_t ev = machine_quantum_step(m, s_quantum);
+        rigel_event_flags_t ev = machine_quantum_step(m, s_quantum,
+                                                      s_quantum_reason);
         /* Recompute deadline only when quantum consumed or events fired. */
         if (ev || s_cpu_approx >= s_quantum)
             s_quantum = machine_next_quantum();
@@ -737,7 +791,8 @@ void machine_flush_for_bus(BellatrixMachine *m)
     if (s_quantum > 0u && partial > s_quantum)
         partial = s_quantum;
 
-    rigel_event_flags_t ev = machine_quantum_step(m, partial);
+    rigel_event_flags_t ev = machine_quantum_step(m, partial,
+                                                  MACHINE_STEP_MMIO_FLUSH);
     s_cpu_approx = (s_cpu_approx >= partial) ? s_cpu_approx - partial : 0u;
 
     /* Recompute deadline only if we hit the quantum boundary or events fired. */
