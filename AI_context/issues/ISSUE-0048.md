@@ -232,6 +232,39 @@ Correções candidatas (ordem de custo/benefício):
 Validação pendente no Pi real: repetir o mesmo A/B com PROFILE=1 e comparar
 as contagens (elas devem bater; os tempos vão divergir).
 
+### Ciclo de correções aplicado (2026-07-12)
+
+Três correções em `core_chipset.c`, A/B individual no mesmo workload/ponto
+de CCK (~27,4 M):
+
+```text
+multicore original:            ~138,5 s de parede
++ agregação 227 CCK (fix 3):    145,5 s  (REGRIDE — revertida p/ MIN=1)
+fixes 1+2 (sem agregação):      132,4 s  (-4,4% vs original)
+single-core:                   ~126,2 s  (gap multicore: 9% -> ~5%)
+```
+
+Mantidas (commitadas):
+1. progresso `s_chipset_cck` publicado por iteração do drain (store +
+   dsb ishst + sev antes do tratamento de eventos);
+2. publish do alvo em chunks <= 8192 CCK com backpressure entre chunks.
+
+Resultado estrutural: 0 beats congelados (eram 2), backlog máximo
+16.383 CCK (era 2.230.452 — a violação de 272x sumiu; 2x8192 é o esperado
+com um chunk em voo), caught_up estável em ~11,7 k.
+
+Revertida (mecanismo mantido com `CHIPSET_PUBLISH_MIN_CCK=1`):
+3. agregação de publishes pequenos. Com ciclos retidos, todo rendezvous de
+   MMIO crítico precisou de flush + espera real (caught_up 11 k -> 783 k):
+   cada uma das 778 k leituras de VHPOSR pagou uma viagem cross-core. Só
+   reavaliar depois que leituras de beam não exigirem rendezvous.
+
+Próxima correção candidata (não implementada): API no Rigel para consultar
+posição de beam em função do tempo (`vpos/hpos = f(t)`), permitindo servir
+VPOSR/VHPOSR sem rendezvous nem lock — elimina 75% do MMIO crítico. Exige
+cuidado com LOF/interlace/PAL-NTSC. No Pi real o custo da viagem SEV/WFE é
+ordens de magnitude menor que no TCG; medir lá antes de investir.
+
 Colateral: o trace `[HARNESS-PERF]` (commit 10a0bc6/2d678db) quebrava o build
 bare-metal (`-Werror=unused-parameter` em `reason`); corrigido nesta sessão.
 
