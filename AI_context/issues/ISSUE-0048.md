@@ -294,6 +294,67 @@ Importáveis para o Bellatrix, do mais barato ao estrutural:
 Colateral: o trace `[HARNESS-PERF]` (commit 10a0bc6/2d678db) quebrava o build
 bare-metal (`-Werror=unused-parameter` em `reason`); corrigido nesta sessão.
 
+### Itens 1-2 do PiStorm implementados (2026-07-12)
+
+**Snapshot de registradores quentes** (commit 3d94d6b): DMACONR/INTENAR/
+INTREQR publicados atomicamente pelo dono do Rigel a cada iteração de drain
+e servidos lock-free a leituras de 16 bits, sem rendezvous. Refresh sob o
+lock após escritas críticas (read-own-write). Staleness limitada a uma
+iteração, cobrindo mudanças vindas do copper. Aproveitou-se para corrigir a
+classificação crítica do cpu_bridge: 0x016 é POTINP (rotulado INTENAR),
+0x01C é INTENAR (rotulado INTREQR) e INTREQR (0x01E) faltava — leituras de
+INTREQR nunca rendezvousavam.
+
+**Fila de escritas postadas com timestamp**: escritas custom não-críticas
+são enfileiradas (SPSC 256) com o tempo emulado da CPU e aplicadas pelo
+Core 2 exatamente no stamp (corta o `until` no próximo stamp pendente) —
+sem lock nem rendezvous no lado da CPU, e com timing MELHOR que o apply
+inline antigo (que aplicava no tempo defasado do chipset). Ordem
+preservada: leituras e escritas críticas drenam a fila sob o lock;
+`wait_caught_up` implica fila consumida (stamps nunca excedem o target).
+CIA e registradores críticos permanecem síncronos.
+
+Validação QEMU (KS1.3 + megademoA): boot/demo íntegros, zero congelamentos,
+backlog limitado, `disp_write` 2,2x mais barato (11.960 -> 5.345 cy),
+fragmentação de steps +2%. Parede no mesmo ponto (~27,4 M CCK): 126,9-146,8 s
+em duas rodadas do MESMO binário — lição: a variância do TCG entre rodadas é
+de até ~10 s (~7%), então comparação de parede no QEMU exige múltiplas
+rodadas; os CONTADORES são estáveis e são a métrica confiável. A melhor
+rodada empatou com o single-core (126,2 s).
+
+### Spec: chipset self-paced (item 4 do PiStorm, direção estrutural)
+
+Hoje o Core 1 dirige o tempo do chipset (`s_cpu_cck_target`). A proposta
+inverte: o Core 2 avança o Rigel contra o relógio de parede —
+`target(t) = 3.546.895 CCK/s * (t - t0)` via CNTPCT — e a CPU sincroniza
+apenas nos pontos de contato, como no PiStorm/hardware real:
+
+- IPL continua empurrada (padrão atual `pending_ipl`);
+- leituras MMIO leem o estado corrente do Rigel ("agora" do chipset);
+- escritas MMIO aplicadas "agora" ou postadas (fila do item 2, com stamp
+  passando a ser o tempo corrente do chipset, não o da CPU).
+
+A noção de "tempo de CPU" sai do contrato: o software 68k observa um
+chipset que corre em tempo real, exatamente como no PiStorm.
+
+Consequências e mitigações:
+- CPU mais rápida que realtime: nada a segura (igual PiStorm; jogos
+  bem-comportados sincronizam por VBL/beam — busy-loops calibrados por CPU
+  aceleram, comportamento aceito no produto PiStorm real).
+- CPU mais lenta que realtime (Musashi em carga pesada): o chipset não
+  espera; equivale a um 68000 fraco em cena pesada. Jogos que assumem
+  "CPU completa X por frame" degradam diferente do slowdown clássico.
+  Mitigação: modo híbrido com clamp
+  `target = min(realtime_target, cpu_published + CHIPSET_MAX_BACKLOG_CCK)`
+  — o self-paced degrada para o modelo atual quando a CPU não acompanha.
+- Determinismo: harness e testes de regressão mantêm o modo dirigido atual
+  (selecionável); self-paced é modo de produto bare-metal.
+
+Pré-requisitos: itens 1-2 do PiStorm validados; beam f(t) torna leituras de
+VPOSR baratas nesse mundo. Convergência: no desenho do
+`issue_core0_arbiter_scheduler.md`, o Core 0 vira o dono do relógio
+(epochs = janelas de tempo de parede), Core 2 executa epochs, Core 1 livre.
+
 # Hipóteses priorizadas
 
 1. Fragmentação externa/interna: deadlines, bus changes e MMIO flush geram
