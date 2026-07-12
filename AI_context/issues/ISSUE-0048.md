@@ -265,6 +265,32 @@ VPOSR/VHPOSR sem rendezvous nem lock — elimina 75% do MMIO crítico. Exige
 cuidado com LOF/interlace/PAL-NTSC. No Pi real o custo da viagem SEV/WFE é
 ordens de magnitude menor que no TCG; medir lá antes de investir.
 
+### Lições conceituais do protocolo PiStorm (emu68/src/pistorm, 2026-07-12)
+
+O PiStorm real resolve o mesmo par CPU-rápida/chipset-com-tempo-próprio sem
+nenhum rendezvous de tempo global: escritas são POSTADAS num ring SPSC
+drenado pelo Core 3 (JIT nunca espera escrita de memória; só chipset-reg
+espera drain), leituras bloqueiam apenas atrás da fila (`wb_waitfree`),
+IPL é amostrada a 2,4 MHz por um housekeeper no Core 2 via timer event
+stream e escrita direto no estado do JIT, e a única espera cirúrgica é
+BLITWAIT: polling de BBUSY apenas em escrita na faixa do blitter.
+
+Importáveis para o Bellatrix, do mais barato ao estrutural:
+1. blitter-busy publicado atomicamente pelo Core 2 (padrão pending_ipl);
+   leitura de DMACONR responde do estado publicado sem lock/rendezvous —
+   mata a classe "espera de blit" do polling dos jogos;
+2. fila de escritas postadas COM timestamp de tempo de CPU, aplicadas pelo
+   Core 2 quando o Rigel alcança o stamp — mais fiel que hoje e remove
+   lock+rendezvous de todo o caminho de escrita; leitura-após-escrita
+   espera a fila drenar até o stamp;
+3. event stream (CNTKCTL_EL1) para acordar loops ociosos em taxa fixa em
+   vez de SEV por evento (ataca os ~10M empty_host_steps);
+4. estrutural: chipset self-paced (Core 2 avança o Rigel contra o relógio
+   de parede/realtime) com CPU sincronizando só nos pontos de contato —
+   o PiStorm é o precedente de que software Amiga real funciona assim;
+   ressalva: o chipset do PiStorm é hardware sempre-correto, o Rigel
+   emulado ainda precisa do determinismo que o alvo publicado dá.
+
 Colateral: o trace `[HARNESS-PERF]` (commit 10a0bc6/2d678db) quebrava o build
 bare-metal (`-Werror=unused-parameter` em `reason`); corrigido nesta sessão.
 
