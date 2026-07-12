@@ -52,6 +52,27 @@ Bluetooth → USB → Paula/physical serial bridge → console
 The 1 ms interval is an observable budget, not yet a preemptive boundary.
 Drivers that exceed it complete normally and increment `budget_miss`.
 
+### Concurrency semantics
+
+The pending bitmap is a level-triggered request to inspect a service, not an
+event counter. Producers set bits with a release `fetch_or`; Core 0 takes the
+current work set with an acquire `exchange(..., 0)`. A source that still has
+observable work after its bounded service must re-arm its bit. Periodic polling
+also re-arms the poll set, so an event arriving around the exchange is observed
+either in the current dispatch or the next one. Queues remain the source of
+truth for payloads; the bitmap is only a wake/service hint.
+
+The current fixed service order is deliberately simple. Before adding fairness
+policy, instrumentation should expose per-service `service_runs`, `requeues`
+and maximum pending age. Staying inside the aggregate budget is not sufficient
+if a continuously active service can starve a later one.
+
+Timing terminology is strict:
+
+- activation period: approximately 1 ms;
+- execution budget: an observable target measured by `budget_miss`;
+- hard deadline: none; the reactor cannot currently preempt a driver.
+
 ## Measured baseline
 
 Raspberry Pi 3B runtime after launcher:
@@ -94,6 +115,25 @@ expensive, asynchronous jobs such as RTG conversion or AHI mixing/resampling.
 Control, completion ordering and physical device ownership remain on Core 0.
 No service moves to Core 3 without measurements and an explicit queue/job
 contract.
+
+The first Core 3 user must define an SPSC request/completion protocol with a
+monotonic sequence number and explicit input/output ownership. Core 3 computes
+a result but never publishes physical or emulated visible state directly. Core
+0 commits host-visible results; Core 2 commits chipset-visible results. This
+keeps acceleration separate from device and machine ownership.
+
+## Audio boundary
+
+Paula time and physical HDMI consumption are different clocks. Core 2 remains
+responsible for producing samples according to emulated time. The intended
+physical boundary is an SPSC audio ring consumed under Core 0 ownership, where
+DMA/HDMI progression, underrun accounting and buffer scheduling can eventually
+live. Expensive mixing or resampling may become a Core 3 job only when measured:
+
+```text
+Core 2 (Paula production) → SPSC ring → Core 0 (physical HDMI)
+                                   ↘ Core 3 (optional DSP job) ↗
+```
 
 ## Current limitations
 

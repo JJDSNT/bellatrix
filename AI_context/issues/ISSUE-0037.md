@@ -495,3 +495,28 @@ que deveria ir para a tela Amiga existe e com que conteudo?"
    `[VIDEO-BM]`/`[VIDEO-W-CPU]`/`[VIDEO-BOOT-DMA]`/`[VIDEO-COPPTR-CPU]` (machine_rigel_bus.c,
    machine_rigel_step.c, machine_rigel_trace.c), `[CHNG-R]`/`[PRB-W]` (machine_rigel_bus.c) e
    o evento COPPER_WRITE em external/rigel/copper_exec.c.
+
+## Protocolo futuro de medicao do presenter (rascunho consolidado)
+
+Nao atribuir baixo FPS a zero-copy, VSync ou buffer ownership sem primeiro
+confirmar o caminho ativo. No bare metal atual, zero-copy so e selecionado para
+framebuffers de ate `1024x312`; o framebuffer observado de `1920x1080` usa
+`zero_copy=0`. Alem disso, `PAL_Video_Flip()` no Raspberry apenas atualiza o OSD
+e nao espera VSync nem executa page flip. Portanto a hipotese de Core 2 esperando
+o scanout nao descreve esse baseline, e o profile anterior apontou Agnus como o
+dominio dominante do Rigel.
+
+Se a apresentacao voltar a ser suspeita, comparar modos controlados e medir
+separadamente:
+
+1. avanco normal do Rigel sem apresentar o frame;
+2. apresentacao/flip sem composicao de pixels;
+3. render em buffer privado cacheavel seguido de copia linear;
+4. zero-copy multi-buffer somente depois de existir scanout/page flip
+   assincrono real;
+5. `render_ns`, `copy_ns`, `cache_clean_ns`, `submit_ns` e qualquer
+   `acquire_wait_ns` real.
+
+Uma melhora sem apresentacao acusa o presenter; uma melhora sem drawing acusa
+Denise/composicao; ambos isolados rapidos acusam sincronizacao. Dirty-line copy
+e buffers adicionais so devem virar implementacao apos essa separacao medida.

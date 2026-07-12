@@ -137,10 +137,11 @@ em deadlines, trocar o ping-pong de `s_chipset_access_lock` por rendezvous de ep
 hospeda a política de áudio realtime, sequencia completions por
 `earliest_visible_tick`.
 
-**Fase 6 (futuro, guiado por medição) — device IRQ para I/O físico** com owner no
-Core 3, se a Fase 0/5 mostrar que jitter de polling importa *depois* de a
-velocidade estar resolvida. Core 0 recebe somente notificações/completions já
-normalizadas, salvo fallback inevitável de roteamento. Não antes.
+**Fase 6 (futuro, guiado por medição) — device IRQ para I/O físico.** A IRQ
+termina no core que possui o periférico: para DWC2/USB, Bluetooth e UART, Core 0.
+O handler reconhece a fonte, marca o pending bitmap e retorna; o Host Reactor
+executa o stack fora da exceção. Core 3 permanece worker de computação e não
+recebe IRQ física apenas por estar disponível.
 
 ## Progresso (2026-07-10)
 
