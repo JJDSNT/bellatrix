@@ -242,7 +242,15 @@ void core_chipset_drain_host_completions(void)
     uint32_t frames = atomic_exchange_explicit(&s_pending_frames, 0u,
                                                 memory_order_acq_rel);
 
-    while (frames-- != 0u)
+    /* Rigel keeps only the newest composed frame, so when the drain is
+     * behind, presenting each backlog entry is N-1 redundant framebuffer
+     * copies of the same pixels. Keep per-frame accounting (counter, mouse
+     * tick) for every emulated frame, but present just once. */
+    while (frames > 1u) {
+        bellatrix_machine_on_frame_skipped();
+        frames--;
+    }
+    if (frames != 0u)
         bellatrix_machine_on_frame_ready();
     bellatrix_machine_host_audio_poll();
 }
@@ -817,11 +825,24 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         rigel_step_result_t r = rigel_step_until(core->rigel, until);
         core_chipset_apply_posted_writes((uint64_t)r.time);
         core_chipset_publish_hot_regs();
+
+        uint64_t advanced = (uint64_t)(r.time - rigel_now);
+        uint8_t ipl_snapshot = 0u;
+        bool ipl_changed = (r.events & RIGEL_EVENT_IRQ_CHANGED) != 0u;
+
+        /* Audio production and the IPL read consume live Rigel state
+         * (Paula); keep them inside the lock so CPU-side MMIO to the same
+         * registers cannot interleave mid-sample. Cross-core publication
+         * of the results happens after release, on atomics. */
+        if (r.events & RIGEL_EVENT_HBLANK)
+            bellatrix_machine_on_audio_sample_ready();
+        bellatrix_machine_on_chipset_advanced((uint32_t)advanced);
+        if (ipl_changed)
+            ipl_snapshot = (uint8_t)rigel_get_ipl(core->rigel);
         core_chipset_lock_release();
 #if BELLATRIX_PROFILE_ENABLED
         bprof_record(&g_bprof.chipset_step_time, bprof_now() - t0);
 #endif
-        uint64_t advanced = (uint64_t)(r.time - rigel_now);
         chip               += advanced;
         core->local_cycles += advanced;
         core->machine->tick_count = (uint64_t)r.time;
@@ -836,7 +857,6 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         asm volatile("dsb ishst\n\tsev" ::: "memory");
 #endif
 
-        bellatrix_machine_on_chipset_advanced((uint32_t)advanced);
 #if BELLATRIX_PROFILE_ENABLED
         bprof_multicore_chipset_step((uint32_t)advanced, chip, target);
 #endif
@@ -846,17 +866,12 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         if (advanced == 0u)
             break;
 
-        if (r.events & RIGEL_EVENT_IRQ_CHANGED) {
-            uint8_t ipl = (uint8_t)rigel_get_ipl(core->rigel);
-            core_chipset_set_pending_ipl(ipl);
-        }
+        if (ipl_changed)
+            core_chipset_set_pending_ipl(ipl_snapshot);
 
         if (r.events & RIGEL_EVENT_FRAME_READY)
             atomic_fetch_add_explicit(&s_pending_frames, 1u,
                                       memory_order_release);
-
-        if (r.events & RIGEL_EVENT_HBLANK)
-            bellatrix_machine_on_audio_sample_ready();
     }
 
     /* Publish progress and wake Core 1 if it is blocked on backpressure. */

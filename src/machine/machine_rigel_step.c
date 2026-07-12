@@ -338,8 +338,25 @@ void machine_present_frame_from_rigel(void)
         return;
     }
 
-    if (!g_rigel || !framebuffer || !pitch || !rigel_get_frame(g_rigel, &frame))
+    if (!g_rigel || !framebuffer || !pitch)
         return;
+
+    /* The presenter runs on Core 0 while the Rigel owner steps: fetch the
+     * frame descriptor under the chipset lock so width/height/pitch/pixels
+     * are mutually coherent (a torn mix could walk past the buffer in the
+     * copy below). The pixel copy itself stays outside the lock: racing
+     * the next frame's composition can only tear the image, never the
+     * memory bounds, and holding the lock for a full-frame copy would
+     * stall the chipset for hundreds of microseconds per frame. */
+    {
+        bool frame_ok;
+
+        core_chipset_lock_acquire();
+        frame_ok = rigel_get_frame(g_rigel, &frame);
+        core_chipset_lock_release();
+        if (!frame_ok)
+            return;
+    }
 
 #ifndef BELLATRIX_HARNESS
     if (machine_rigel_video_trace_enabled())
@@ -560,6 +577,10 @@ void machine_sync_controller_ports_rigel(BellatrixMachine *m)
     if (!m || !g_rigel)
         return;
 
+    /* Callers run on the IO/presenter core (USB HID events, mouse frame
+     * tick) while the Rigel owner steps concurrently — same access contract
+     * as CPU-side MMIO, so take the chipset lock. No-op in single-core. */
+    core_chipset_lock_acquire();
     for (port = 0u; port < 2u; ++port) {
         const BellatrixControllerPortState *state = &m->controller_ports.port[port];
         rigel_input_set_joydat(g_rigel, port, controller_port_joydat(state));
@@ -567,6 +588,7 @@ void machine_sync_controller_ports_rigel(BellatrixMachine *m)
         rigel_input_set_pot_button_x(g_rigel, port, state->button2 ? true : false);
         rigel_input_set_pot_button_y(g_rigel, port, state->button3 ? true : false);
     }
+    core_chipset_lock_release();
 }
 
 /* ---------------------------------------------------------------------------
@@ -811,6 +833,12 @@ void bellatrix_machine_advance(uint32_t ticks)
     machine_step_components(&g_machine, ticks);
 }
 
+void bellatrix_machine_on_frame_skipped(void)
+{
+    g_machine.frame_counter++;
+    machine_mouse_frame_tick();
+}
+
 void bellatrix_machine_on_frame_ready(void)
 {
     g_machine.frame_counter++;
@@ -945,9 +973,15 @@ void bellatrix_machine_host_audio_poll(void)
 
 void bellatrix_machine_post_chipset_step(void)
 {
+    /* Runs on the Rigel owner core but OUTSIDE its stepping lock section,
+     * concurrently with CPU-side MMIO that holds the lock — and all three
+     * helpers mutate Rigel state (serial registers, CIA SDR). Same access
+     * contract as everyone else: take the lock. No-op in single-core. */
+    core_chipset_lock_acquire();
     machine_step_host_serial_rigel();
     machine_drain_serial_fallback_rigel();
     machine_keyboard_drain_rigel();
+    core_chipset_lock_release();
 }
 
 void bellatrix_machine_sync_ipl(void)

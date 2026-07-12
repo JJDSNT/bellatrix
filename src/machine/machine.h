@@ -103,6 +103,9 @@ uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles);
 
 /* Hooks called by the chipset core (Core 1) after each Rigel step. */
 void bellatrix_machine_on_frame_ready(void);
+/* Per-frame accounting (counter, mouse tick) without presenting — used by
+ * the Core 0 drain to collapse a backlog into a single presentation. */
+void bellatrix_machine_on_frame_skipped(void);
 void bellatrix_machine_on_ipl_changed(uint8_t ipl);
 void bellatrix_machine_on_audio_sample_ready(void);
 /* Host-facing work that must accompany every actual Rigel advance in both
