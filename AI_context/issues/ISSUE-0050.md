@@ -125,6 +125,25 @@ bloqueios sem criar um escopo paralelo.
   permanece no Core 2 por design (é função do tempo emulado e do estado da
   Paula); apenas o lado host consome no Core 0.
 
+- 2026-07-13: PRIMEIRO GATE NO PI 3 REAL (Musashi 68040 multicore, hybrid,
+  KS1.3): 5-8 fps. Protocolo saudável (fila postada full_waits=0 depth<=9,
+  IO Core 0 a 7us, event stream ativo), mas dois furos expostos e corrigidos
+  (52d2fa2): (1) cpu_target chegou ao init da timeline inflado em 4,3e9 CCK
+  de free-run pré-runtime -> clamp do hybrid morto e drift sem limite; agora
+  o init rebaseia e loga o delta descartado (origem do free-run ainda a
+  caçar — provável fase launcher/ISSUE-0045). (2) nada limitava o horizon
+  quando o CHIPSET é o lado lento — que é o regime real do Pi; horizon agora
+  segue min(chipset,cpu)+backlog com a regra de liberação de 250 ms.
+- 2026-07-13: CONCLUSÃO ESTRUTURAL do Pi: Core 2 sustenta ~0,38 M CCK/s
+  (~2,6 us/CCK no A53 com -O3 já ligado) = ~9% do realtime — o gargalo dos
+  fps é o custo por CCK do Rigel no A53, não o protocolo. Vale para ambos os
+  backends (Emu68 dará fps similar; previsão falsificável). Próximo passo da
+  Fase 7: profiling do Rigel por domínio no Pi (Agnus vs composição Denise)
+  antes de qualquer otimização; candidatos: hot loop do slot scheduler,
+  mtune=cortex-a53 (build usa a72), frameskip de composição.
+- 2026-07-13: builds Pi SEM BTStack (BT em desenvolvimento prende o launcher
+  na tela de scan com USB morto; regra registrada) e com USB+PROFILE.
+
 # Bloqueios
 
 Nenhum.
