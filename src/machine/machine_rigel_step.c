@@ -20,6 +20,7 @@
 #endif
 
 #include "rigel/rigel.h"
+#include "core/rigel_context.h"   /* CIA_State watcher (ISSUE-0038 diagnosis) */
 #include "rigel/rigel_audio.h"
 #include "rigel/rigel_custom.h"
 #include "rigel/rigel_input.h"
@@ -480,6 +481,9 @@ void machine_step_host_serial_rigel(void)
     uint8_t byte = 0;
 
     if (g_rigel && g_machine.uart_host.enabled) {
+#ifndef BELLATRIX_HARNESS
+        /* The harness has no IO core: core_io.c is not part of its build,
+         * and PAL_Core_IsMulticoreEnabled() is always false there. */
         if (PAL_Core_IsMulticoreEnabled()) {
             /* Core 2 owns Rigel: move bytes only through SPSC queues. Core 3
              * owns the physical UART and never accesses g_rigel. */
@@ -489,7 +493,9 @@ void machine_step_host_serial_rigel(void)
 
             while (core_io_serial_dequeue_rx(&byte))
                 rigel_serial_receive_byte(g_rigel, byte);
-        } else {
+        } else
+#endif
+        {
             while (rigel_serial_tx_available(g_rigel) &&
                    rigel_serial_pop_tx_byte(g_rigel, &byte))
             {
@@ -763,6 +769,85 @@ void bellatrix_machine_on_frame_ready(void)
         kprintf("[EMU68-LIVE] frame=%u pc=%08x guest_ipl=%u arm_irq=%u\n",
                 (unsigned)g_machine.frame_counter, (unsigned)pc,
                 (unsigned)guest_ipl, (unsigned)physical_arm);
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+        {
+            extern uint32_t g_machine_cia_w_counts[2][16];
+            extern uint32_t g_machine_cia_r_counts[2][16];
+            extern uint8_t g_machine_cia_last_icr_w[2];
+            kprintf("[EMU68-CIACNT] frame=%u "
+                    "a_w_icr=%u(%02x) a_w_cr=%u/%u a_w_t=%u a_r_icr=%u "
+                    "b_w_icr=%u(%02x) b_w_cr=%u/%u b_w_t=%u b_r_icr=%u\n",
+                    (unsigned)g_machine.frame_counter,
+                    (unsigned)g_machine_cia_w_counts[0][13],
+                    (unsigned)g_machine_cia_last_icr_w[0],
+                    (unsigned)g_machine_cia_w_counts[0][14],
+                    (unsigned)g_machine_cia_w_counts[0][15],
+                    (unsigned)(g_machine_cia_w_counts[0][4] +
+                               g_machine_cia_w_counts[0][5] +
+                               g_machine_cia_w_counts[0][6] +
+                               g_machine_cia_w_counts[0][7]),
+                    (unsigned)g_machine_cia_r_counts[0][13],
+                    (unsigned)g_machine_cia_w_counts[1][13],
+                    (unsigned)g_machine_cia_last_icr_w[1],
+                    (unsigned)g_machine_cia_w_counts[1][14],
+                    (unsigned)g_machine_cia_w_counts[1][15],
+                    (unsigned)(g_machine_cia_w_counts[1][4] +
+                               g_machine_cia_w_counts[1][5] +
+                               g_machine_cia_w_counts[1][6] +
+                               g_machine_cia_w_counts[1][7]),
+                    (unsigned)g_machine_cia_r_counts[1][13]);
+        }
+        {
+            extern uint32_t g_bela_irq_deliver_count;
+            extern uint32_t g_bela_irq_deliver_ring[8];
+            unsigned r;
+            kprintf("[EMU68-DELIV] frame=%u count=%u ring=",
+                    (unsigned)g_machine.frame_counter,
+                    (unsigned)g_bela_irq_deliver_count);
+            for (r = 0u; r < 8u; r++)
+                kprintf(" %08x", (unsigned)g_bela_irq_deliver_ring[r]);
+            kprintf("\n");
+        }
+        {
+            const FloppyDrive *df0 = &g_rigel->chipset.floppy[0];
+            kprintf("[EMU68-DF0] frame=%u conn=%u cyl=%u motor=%u rdy=%u "
+                    "chgd=%u idcnt=%u ins=%u\n",
+                    (unsigned)g_machine.frame_counter,
+                    (unsigned)df0->connected, (unsigned)df0->cylinder,
+                    (unsigned)df0->motor, (unsigned)df0->ready,
+                    (unsigned)df0->disk_changed, (unsigned)df0->id_count,
+                    (unsigned)df0->disk_inserted);
+        }
+        {
+            const CIA_State *ca = &g_rigel->chipset.cia[0];
+            const CIA_State *cb = &g_rigel->chipset.cia[1];
+            kprintf("[EMU68-CIAST] frame=%u "
+                    "A: icr=%02x/%02x cra=%02x crb=%02x ta=%04x/%04x tb=%04x/%04x irq=%u | "
+                    "B: icr=%02x/%02x cra=%02x crb=%02x irq=%u\n",
+                    (unsigned)g_machine.frame_counter,
+                    (unsigned)ca->icr_data, (unsigned)ca->icr_mask,
+                    (unsigned)ca->cra, (unsigned)ca->crb,
+                    (unsigned)ca->ta_counter, (unsigned)ca->ta_latch,
+                    (unsigned)ca->tb_counter, (unsigned)ca->tb_latch,
+                    (unsigned)ca->irq_asserted,
+                    (unsigned)cb->icr_data, (unsigned)cb->icr_mask,
+                    (unsigned)cb->cra, (unsigned)cb->crb,
+                    (unsigned)cb->irq_asserted);
+        }
+        {
+            extern uint32_t g_machine_ipl_rise_counts[8];
+            kprintf("[EMU68-IPLCNT] frame=%u rise1=%u rise2=%u rise3=%u "
+                    "rise4=%u rise5=%u rise6=%u rise7=%u\n",
+                    (unsigned)g_machine.frame_counter,
+                    (unsigned)g_machine_ipl_rise_counts[1],
+                    (unsigned)g_machine_ipl_rise_counts[2],
+                    (unsigned)g_machine_ipl_rise_counts[3],
+                    (unsigned)g_machine_ipl_rise_counts[4],
+                    (unsigned)g_machine_ipl_rise_counts[5],
+                    (unsigned)g_machine_ipl_rise_counts[6],
+                    (unsigned)g_machine_ipl_rise_counts[7]);
+        }
+#endif
     }
 #endif
 

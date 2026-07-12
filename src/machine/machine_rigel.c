@@ -249,6 +249,16 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
         kprintf("[RIGEL] zero-copy RGB565 video target %ux%u pitch=%u\n",
                 (unsigned)fb_width, (unsigned)fb_height, (unsigned)pitch);
 
+    /* Present an empty DF0 with correct mechanical state from cycle 0.
+     * rigel_create() leaves CIA-A ext_pra at reset default (all lines high);
+     * the /CHNG change latch of the connected empty drive is only reflected
+     * after a floppy/CIA line sync, which otherwise first happens at the
+     * guest's first CIA-B PRB write. The harness always ejected explicitly;
+     * bare-metal must match, or early Kickstart PRA reads see "disk present"
+     * (ISSUE-0038). A later ADF insert from the launcher overrides this. */
+    if (g_rigel)
+        bellatrix_machine_eject_df0();
+
     machine_sync_controller_ports_rigel(m);
 
     m->tick_count = 0;

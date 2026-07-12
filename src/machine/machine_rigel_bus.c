@@ -42,6 +42,15 @@ __attribute__((weak)) void bellatrix_sync_overlay_from_ciaa(void) {}
  * Address predicates
  * ------------------------------------------------------------------------- */
 
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+/* Event-driven CIA access counters (ISSUE-0038 diagnosis): sampled prints
+ * alias with frame phase under deterministic runs, so count every access. */
+uint32_t g_machine_cia_w_counts[2][16];
+uint32_t g_machine_cia_r_counts[2][16];
+uint8_t g_machine_cia_last_icr_w[2];
+uint32_t g_machine_intreq_vertb_clear_count;
+#endif
+
 static inline bool is_custom_addr(uint32_t addr)
 {
     return (addr >= 0x00dff000u && addr <= 0x00dfffffu);
@@ -283,6 +292,15 @@ static void machine_custom_write(uint32_t addr, uint32_t value, unsigned int siz
         word = (uint16_t)value;
     }
 
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+    /* Count guest INTREQ writes that clear VERTB — discriminates "guest VBL
+     * ISR runs and acks" from "something else drains VERTB" (ISSUE-0038). */
+    if (reg == 0x09cu && !(word & 0x8000u) && (word & 0x0020u)) {
+        extern uint32_t g_machine_intreq_vertb_clear_count;
+        g_machine_intreq_vertb_clear_count++;
+    }
+#endif
+
     /* Narrow boot probe shared by the single- and multicore bare-metal paths.
      * Keep it finite: this is meant to identify the first DF0 divergence
      * without enabling the much noisier per-access Rigel trace. */
@@ -468,6 +486,9 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
         uint8_t sdr_pending = (reg == 0x0Cu)
             ? g_rigel->chipset.cia[0].sdr_full : 0u;
         value = rigel_cia_read(g_rigel, 0u, reg);
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+        g_machine_cia_r_counts[0][reg & 0x0Fu]++;
+#endif
         if (machine_rigel_cia_trace_enabled())
             kprintf("[RIGEL-CIAA-R] pc=%08x addr=%06x reg=%u val=%02x\n",
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
@@ -506,6 +527,9 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
     } else if (is_cia_b_addr(addr)) {
         uint8_t reg = (uint8_t)((addr >> 8) & 0x0Fu);
         value = rigel_cia_read(g_rigel, 1u, reg);
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+        g_machine_cia_r_counts[1][reg & 0x0Fu]++;
+#endif
         if (machine_rigel_cia_trace_enabled())
             kprintf("[RIGEL-CIAB-R] pc=%08x addr=%06x reg=%u val=%02x\n",
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
@@ -563,6 +587,11 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
             kprintf("[RIGEL-CIAA-W] pc=%08x addr=%06x reg=%u val=%02x\n",
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+        g_machine_cia_w_counts[0][reg & 0x0Fu]++;
+        if (reg == 0x0Du)
+            g_machine_cia_last_icr_w[0] = (uint8_t)value;
+#endif
         rigel_cia_write(g_rigel, 0u, reg, (uint8_t)value);
         if (reg == 0x00u)
             bellatrix_sync_overlay_from_ciaa();
@@ -574,6 +603,11 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
             kprintf("[RIGEL-CIAB-W] pc=%08x addr=%06x reg=%u val=%02x\n",
                     (unsigned)bellatrix_debug_cpu_pc(), (unsigned)(addr & 0x00ffffffu),
                     (unsigned)reg, (unsigned)(value & 0xffu));
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+        g_machine_cia_w_counts[1][reg & 0x0Fu]++;
+        if (reg == 0x0Du)
+            g_machine_cia_last_icr_w[1] = (uint8_t)value;
+#endif
         rigel_cia_write(g_rigel, 1u, reg, (uint8_t)value);
 #if defined(BELLATRIX_FLOPPY_BOOT_PROBE) && BELLATRIX_FLOPPY_BOOT_PROBE
         if (reg == 0x1u) {

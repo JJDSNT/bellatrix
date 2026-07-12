@@ -39,9 +39,21 @@ uint32_t rom_mapped = 0;
 uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc = 0;
 
+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
+/* IRQ delivery observation ring, written by the MainLoop delivery block
+ * (plain stores, no calls). Entry: pushed PC (low 24 bits) | level << 28. */
+uint32_t g_bela_irq_deliver_count;
+uint32_t g_bela_irq_deliver_ring[8];
+#endif
+
 extern struct M68KState *__m68k_state;
 extern void M68K_StartEmu(void *addr, void *fdt);
 static emu68_t *s_emu68_api;
+
+/* Emu68 normally reports retired work from inside MainLoop. STOP has no
+ * retired instructions, so its idle window must be published explicitly by
+ * the embedding boundary. */
+static void bellatrix_emu68_publish_idle_cycles(uint32_t cycles);
 
 /* ---------------------------------------------------------------------------
  * Emu68 CpuBackend — wires machine's two CPU callbacks to Emu68 internals
@@ -101,6 +113,14 @@ static int emu68_backend_run(void *ctx, uint32_t cycles)
         result.reason == EMU68_STOP_EXCEPTION ||
         result.reason == EMU68_STOP_HALTED) {
         return 0;
+    }
+
+    /* STOP consumes no instructions while idle, but machine time must keep
+     * advancing until Rigel raises an unmasked guest IPL. Account the caller's
+     * requested window as idle time; do not fabricate retired JIT instructions. */
+    if (result.reason == EMU68_STOP_STOPPED) {
+        bellatrix_emu68_publish_idle_cycles(cycles);
+        return (int)cycles;
     }
 
     if (result.cycles_run > (uint64_t)INT32_MAX)
@@ -255,12 +275,17 @@ static void bellatrix_emu68_api_dump_stats(void)
     memset(&s, 0, sizeof(s));
     emu68_get_stats(s_emu68_api, &s);
 
-    kprintf("[EMU68-API] bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu err=%llu "
+    kprintf("[EMU68-API] runs=%llu exhausted=%llu bus_r=%llu bus_w=%llu sync=%llu sync_stop=%llu "
+            "stopped=%llu wake=%llu err=%llu "
             "unhandled=%llu bad_size=%llu stop=%llu inv=%llu irq_set=%llu irq_chg=%llu\n",
+            (unsigned long long)s.run_call_count,
+            (unsigned long long)s.run_cycles_exhausted_count,
             (unsigned long long)s.bus_read_count,
             (unsigned long long)s.bus_write_count,
             (unsigned long long)s.bus_sync_required_count,
             (unsigned long long)s.run_sync_stop_count,
+            (unsigned long long)s.stopped_return_count,
+            (unsigned long long)s.stopped_wake_count,
             (unsigned long long)s.bus_error_count,
             (unsigned long long)s.bus_unhandled_count,
             (unsigned long long)s.unsupported_size_count,
@@ -516,6 +541,41 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
             bellatrix_singlecore_advance_cpu_cycles(cycles);
     }
 
+    /* Safe liveness checkpoints: this function is called only while MainLoop
+     * has spilled the pinned guest context. Keep diagnostics out of the live
+     * JIT/IRQ delivery path. */
+    {
+        static unsigned checkpoint_index;
+        static const uint32_t checkpoints[] = {
+            100u, 500u, 1000u, 1500u, 2000u
+        };
+        BellatrixMachine *machine = bellatrix_machine_get();
+        uint64_t frame = machine ? machine->frame_counter : 0u;
+        if (checkpoint_index < (sizeof(checkpoints) / sizeof(checkpoints[0])) &&
+            frame >= checkpoints[checkpoint_index]) {
+            emu68_stats_t stats;
+            uint16_t sr = __m68k_state ? BE16(__m68k_state->SR) : 0u;
+            uint32_t saved_pc = __m68k_state ? BE32(__m68k_state->PC) : 0u;
+            memset(&stats, 0, sizeof(stats));
+            emu68_get_stats(s_emu68_api, &stats);
+            kprintf("[EMU68-LIVE] frame=%llu pc=%08x saved_pc=%08x sr=%04x "
+                    "stopped=%u int32=%08x ipl=%u insn=%llu runs=%llu "
+                    "exhausted=%llu stopret=%llu wake=%llu syncstop=%llu\n",
+                    (unsigned long long)frame, (unsigned)pc,
+                    (unsigned)saved_pc, (unsigned)sr,
+                    (unsigned)(__m68k_state ? __m68k_state->STOPPED : 0u),
+                    (unsigned)(__m68k_state ? __m68k_state->INT32 : 0u),
+                    (unsigned)(__m68k_state ? __m68k_state->INT.IPL : 0u),
+                    (unsigned long long)insn_count,
+                    (unsigned long long)stats.run_call_count,
+                    (unsigned long long)stats.run_cycles_exhausted_count,
+                    (unsigned long long)stats.stopped_return_count,
+                    (unsigned long long)stats.stopped_wake_count,
+                    (unsigned long long)stats.run_sync_stop_count);
+            checkpoint_index++;
+        }
+    }
+
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
     {
         static uint32_t s_last_vec6c = 0xdeadbeefu;
@@ -588,6 +648,19 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
         s_same_pc_reports = 0u;
     }
 #endif
+
+    bellatrix_runtime_poll_from_emu68();
+}
+
+static void bellatrix_emu68_publish_idle_cycles(uint32_t cycles)
+{
+    if (!cycles)
+        return;
+
+    if (PAL_Core_IsMulticoreEnabled())
+        bellatrix_bridge_publish_cpu_cycles(cycles);
+    else
+        bellatrix_singlecore_advance_cpu_cycles(cycles);
 
     bellatrix_runtime_poll_from_emu68();
 }

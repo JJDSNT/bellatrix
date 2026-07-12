@@ -5,9 +5,18 @@ Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68
 Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
-Four kernel images are released as GitHub Release assets: `bellatrix_musashi.img`, `bellatrix_musashi_multicore.img`, `bellatrix_emu68.img`, and `bellatrix_emu68_multicore.img`, each with a `.sha256` checksum. The Musashi builds are the stable ones — boots Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Six areas remain in progress:
+Six kernel variants are released as GitHub Release assets: Musashi 68000,
+Musashi 68040, and Emu68, each in single-core and multicore form. Their names
+are `bellatrix_musashi_68000.img`, `bellatrix_musashi_68040.img`,
+`bellatrix_emu68.img`, plus the corresponding `_multicore.img` files. Every
+image includes a `.sha256` checksum. The Musashi builds are the stable ones —
+Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Six
+areas remain in progress:
 
-- **Emu68 JIT integration** — bus API and quantum window stabilization ongoing; Musashi builds are the recommended path for now.
+- **Emu68 JIT integration** — the public bus API, cooperative quantum windows,
+  virtual IPL delivery, and explicit STOP state now reach the AROS boot screen
+  on a real Pi. Broader workload validation and performance stabilization are
+  still in progress; Musashi 68040 remains the recommended path for now.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
 - **RTG support** — `bellatrix.rtg` and the P96 `bellatrix.card` path are in progress; DiagArea/CardLoader residency is confirmed, but p96gfx discovery, live RTG output, and the VC4 bare-metal backend still need validation/completion.
@@ -43,7 +52,7 @@ The released `.img` files are Raspberry Pi kernel images, not complete SD card i
 Example `config.txt`:
 
 ```ini
-kernel=bellatrix_musashi.img
+kernel=bellatrix_musashi_68040.img
 initramfs kick.rom
 arm_64bit=1
 enable_uart=1
@@ -51,7 +60,9 @@ enable_uart=1
 
 Copy your Kickstart ROM to the same boot partition and make the `initramfs` line point to that file. For example, with `initramfs kick.rom`, the file must be named `kick.rom` on the SD boot partition. Use a legally obtained Kickstart ROM.
 
-The Musashi images are currently the recommended hardware builds. The Emu68 JIT images are published for testing the JIT integration path.
+The Musashi 68040 images are currently the recommended hardware builds. The
+Emu68 JIT images are published for testing the JIT integration path; AROS has
+been validated through its boot screen, but the backend remains experimental.
 
 ### AROS ROM
 

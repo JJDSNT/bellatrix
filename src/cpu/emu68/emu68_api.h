@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define EMU68_API_VERSION 1u
+#define EMU68_API_VERSION 2u
 
 typedef struct emu68 emu68_t;
 
@@ -90,10 +90,14 @@ typedef struct {
 } emu68_state_t;
 
 typedef struct {
+    uint64_t run_call_count;
+    uint64_t run_cycles_exhausted_count;
     uint64_t bus_read_count;
     uint64_t bus_write_count;
     uint64_t bus_sync_required_count;
     uint64_t run_sync_stop_count;
+    uint64_t stopped_return_count;
+    uint64_t stopped_wake_count;
     uint64_t irq_level_set_count;
     uint64_t irq_level_change_count;
     uint64_t bus_error_count;
