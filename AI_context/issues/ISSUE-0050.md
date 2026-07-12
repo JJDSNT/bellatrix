@@ -242,6 +242,28 @@ bloqueios sem criar um escopo paralelo.
   227 adotado (uma scanline de agregação; ~10× menos stores cross-core;
   atraso máximo de target ≤64 µs emulados).
 
+- 2026-07-13: SEGUNDO GATE NO PI 3 (megademoA, hybrid via bootargs, ambos
+  os backends, PROFILE): **`throttled=00050005` em ~95% dos beats — o Pi
+  está com UNDERVOLTAGE e THROTTLING ATIVO o run inteiro** (bit0 UV agora,
+  bit2 throttle agora, sticky 16/18). Boot mostra 600→1200 MHz, mas sob
+  throttle o firmware derruba o ARM de volta sem mudar o GET_CLOCK_RATE
+  (reporta o pedido); `vc_get_arm_clock_hz` migrado para
+  GET_CLOCK_RATE_MEASURED (0x30047) para o próximo run mostrar o clock
+  REAL. Ação: trocar fonte/cabo antes de qualquer conclusão de custo.
+  Demais achados do gate: (1) avg_step=235-237 — granularidade SAUDÁVEL
+  (scanline) com megademo; o 79 do 1º gate era do workload de boot KS1.3,
+  hipótese de custo-fixo-por-chamada enfraquecida p/ demo; (2) previsão
+  falsificável CONFIRMADA: Emu68 e Musashi idênticos (~5,7 fps; chipset ~
+  380-400 K CCK/s = 11% realtime) — chipset-bound, backend irrelevante;
+  (3) core2_busy=82-83% — 17% de idle a investigar (pacing do horizon a
+  1 kHz + empty steps ~380 K/s); (4) sem inflação pré-runtime (beat 0 =
+  3,3 M) — o backlog de 1,22e9 é free-run em-run do hybrid em fases de CPU
+  pura (Fase 6); fila postada saudável (full_waits=2, depth_max=256
+  tocado); (5) `throttled=ffffffff` em 1-2 beats = falha transitória de
+  mailbox, inofensiva. EXPECTATIVA com fonte boa: ~2× (11-13 fps) se o
+  throttle estava a 600 MHz — coincidiria com a lembrança de >10 fps.
+
 # Bloqueios
 
-Nenhum.
+Hardware: fonte/cabo do Pi 3 com undervoltage (throttling ativo) — trocar
+antes do próximo gate de performance.

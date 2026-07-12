@@ -11,6 +11,7 @@
 #define VC_FIRMWARE_STATUS_SUCCESS 0x80000000u
 #define VC_FIRMWARE_PROPERTY_END 0u
 #define VC_FIRMWARE_GET_CLOCK_RATE 0x00030002u
+#define VC_FIRMWARE_GET_CLOCK_RATE_MEASURED 0x00030047u
 #define VC_FIRMWARE_GET_THROTTLED 0x00030046u
 #define VC_CLOCK_ID_ARM 3u
 #define VC_CLOCK_ID_CORE 4u
@@ -63,11 +64,11 @@ void vc_mbox_send(uint32_t channel, uint32_t data)
     wr32le(VC_MBOX_WRITE_ADDR, value);
 }
 
-static uint32_t vc_get_clock_hz(uint32_t clock_id)
+static uint32_t vc_get_clock_hz_tag(uint32_t tag, uint32_t clock_id)
 {
     vc_property_buffer[0] = LE32(sizeof(vc_property_buffer));
     vc_property_buffer[1] = LE32(VC_FIRMWARE_STATUS_REQUEST);
-    vc_property_buffer[2] = LE32(VC_FIRMWARE_GET_CLOCK_RATE);
+    vc_property_buffer[2] = LE32(tag);
     vc_property_buffer[3] = LE32(8);
     vc_property_buffer[4] = 0;
     vc_property_buffer[5] = LE32(clock_id);
@@ -87,6 +88,11 @@ static uint32_t vc_get_clock_hz(uint32_t clock_id)
     return LE32(vc_property_buffer[6]);
 }
 
+static uint32_t vc_get_clock_hz(uint32_t clock_id)
+{
+    return vc_get_clock_hz_tag(VC_FIRMWARE_GET_CLOCK_RATE, clock_id);
+}
+
 uint32_t vc_get_core_clock_hz(void)
 {
     return vc_get_clock_hz(VC_CLOCK_ID_CORE);
@@ -94,7 +100,15 @@ uint32_t vc_get_core_clock_hz(void)
 
 uint32_t vc_get_arm_clock_hz(void)
 {
-    return vc_get_clock_hz(VC_CLOCK_ID_ARM);
+    /* MEASURED returns the rate the PLL is actually running, which is what
+     * matters under throttling: GET_CLOCK_RATE keeps reporting the requested
+     * 1200 MHz while the firmware silently runs the ARM at 600. Fall back to
+     * the requested rate on firmware that lacks the measured tag. */
+    uint32_t hz = vc_get_clock_hz_tag(VC_FIRMWARE_GET_CLOCK_RATE_MEASURED,
+                                      VC_CLOCK_ID_ARM);
+    if (hz == 0u)
+        hz = vc_get_clock_hz(VC_CLOCK_ID_ARM);
+    return hz;
 }
 
 uint32_t vc_get_throttled(void)
