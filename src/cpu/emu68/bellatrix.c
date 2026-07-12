@@ -546,7 +546,9 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
      * JIT/IRQ delivery path. */
     {
         static unsigned checkpoint_index;
-        static const uint32_t checkpoints[] = { 100u, 500u, 1000u };
+        static const uint32_t checkpoints[] = {
+            100u, 500u, 1000u, 1500u, 2000u
+        };
         BellatrixMachine *machine = bellatrix_machine_get();
         uint64_t frame = machine ? machine->frame_counter : 0u;
         if (checkpoint_index < (sizeof(checkpoints) / sizeof(checkpoints[0])) &&

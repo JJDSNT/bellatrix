@@ -81,6 +81,90 @@ contínuo; a regressão coincide com a adoção efetiva de `run_cycles()` em
 STOPPED, IPL e contadores de razão de retorno. Nenhum print entra no contexto
 vivo do JIT.
 
+### Arqueologia detalhada da regressão AROS/MMU
+
+Linha temporal reconstruída pelo histórico Git e AI context:
+
+| Revisão | Modelo | Evidência AROS |
+|---|---|---|
+| `40adee1` | progresso somente em fault MMIO | loops RAM/Wait/STOP congelavam chipset |
+| `0e113d2` | MainLoop contínuo + hook de progresso restaurado, contexto pinado protegido | 35 InitResidents até `trackdisk.device` em QEMU |
+| `936b96d` / `1c0392e` | API pública e embrião de janela cooperativa | API ainda em introdução |
+| `d267036` | `CpuBackend.run` passa a dirigir Emu68 por `emu68_run_cycles()` | principal fronteira suspeita da regressão para `mmu` |
+| `bd9724a`..`b3b02bf` | sync stops, preservação ABI e IPL virtual | arquitetura melhora, mas AROS não foi novamente provado além de `mmu` |
+| `1e3b361` | STOP explícito, sem inspeção de opcode | remove workaround, primeiro teste ainda em `mmu` |
+| `172b89e` | idle cycles de STOP publicados ao Rigel | grande ganho de velocidade no Pi, mesma parada em `mmu` |
+
+O estado `InitResident (100 01 "mmu")` já constava antes dos fixes de
+`0e113d2`; portanto a string não prova que `mmu.resource` seja a causa. Ela é o
+último marcador serial antes da divergência e pode representar liveness, perda
+de contexto entre janelas, exceção/IRQ ou loop posterior sem novas mensagens.
+
+Diferenças arquiteturais sob teste entre o baseline bom e o atual:
+
+1. MainLoop agora retorna periodicamente através de `MainLoopWindow`;
+2. contexto guest é salvo/restaurado em toda fronteira C;
+3. v30/INSN_COUNT atravessa múltiplas janelas;
+4. `SYNC_REQUIRED`, budget, host stop e STOPPED podem encerrar uma janela;
+5. IPL pode surgir enquanto a CPU está fora do MainLoop;
+6. idle time é publicado pelo scheduler em vez de instruções STOP artificiais.
+
+Estratégia de diagnóstico decidida:
+
+- QEMU headless é a primeira fonte para checkpoints determinísticos;
+- AROS deve ser observado por aproximadamente 1.000 frames, não por timeout
+  curto arbitrário;
+- checkpoints 100/500/1000 registram PC vivo/salvo, SR, STOPPED, INT32/IPL,
+  INSN_COUNT e contadores de `run_cycles`;
+- Pi confirma performance/comportamento somente depois de localizar a fronteira;
+- proibidos checks por ROM, endereço de PC ou opcode no dispatcher.
+
+### 2026-07-11 — `mmu` não é o bloqueio
+
+O teste longo no Pi corrigiu a interpretação anterior. O checkpoint do frame
+1000 foi emitido imediatamente depois de:
+
+```text
+[EXEC] InitCode: calling InitResident (100 01 "mmu")
+[EMU68-LIVE] frame=1000 pc=00fe8c38 sr=0010 stopped=0
+             int32=00000300 ipl=3 ... syncstop=1252
+```
+
+Esse era um estado transitório na fronteira da janela, com IPL3 pendente, e não
+um PC congelado dentro do resident. A execução seguinte entregou a interrupção e
+o AROS continuou por toda a segunda cadeia de residents: `task.resource`, HIDDs,
+`trackdisk.device`, `intuition.library`, handlers de boot e finalmente
+`dosboot.resource`.
+
+Conclusões:
+
+- o protocolo STOP explícito não está ativo nesse trecho (`stopret=0`, `wake=0`);
+- a IRQ pendente no snapshot não foi perdida;
+- o resident `mmu` retorna mesmo sem a placa Z3 de suporte 68040;
+- `emu68/src/boards/68040.c` fornece uma ROM Z3 com `68040.library`; não define o
+  modelo de CPU guest e não pode ser usado no modo legacy sem suporte Z3;
+- o AROS identifica o 040 por probing de instruções/CACR em `cpu_detect.S`;
+- o Emu68 implementa os registradores de controle 040, mas deliberadamente limpa
+  o bit E ao escrever TCR (`do not allow turning on MMU`). Isso é compatibilidade
+  de interface sem tradução MMU guest ativa. O argumento oficial `nommu` continua
+  útil como diagnóstico, mas deixou de ser necessário para explicar este boot;
+- todos os marcos históricos comparados (`0e113d2`, `d267036` e HEAD) usam o mesmo
+  commit upstream do submódulo Emu68, `305f686`/v1.0.7. Não há evidência de branch
+  upstream inadequada.
+
+O próximo bloqueio observável deve ser definido depois de `dosboot.resource` e
+avaliado além de 1000 frames. Não voltar a atribuir uma parada à última string
+`InitResident` sem confirmar estabilidade de PC/contadores em múltiplas janelas.
+Os checkpoints seguros foram estendidos para 1500 e 2000 frames para observar
+essa fase sem instrumentar o contexto vivo do JIT.
+
+**Resultado no Pi:** após `dosboot.resource`, o AROS exibiu o boot screen. O
+objetivo de liveness desta retomada foi atingido com o protocolo STOP explícito,
+execução cooperativa por janelas e IPL virtual; não foi necessário habilitar
+boards mode, fornecer a placa Z3 `68040.library`, usar `nommu` ou introduzir
+qualquer exceção por PC/opcode. A demora até o resultado era progresso real do
+guest, não deadlock no resident `mmu`.
+
 O branch `wip/emu68-liveness` foi atualizado para o `main` em `ea4b474`. O antigo
 commit WIP `10e3051` nao foi reaplicado porque seu conteudo ja havia sido incorporado e
 superado por `0e113d2` e pelos commits posteriores da API publica e do multicore.
