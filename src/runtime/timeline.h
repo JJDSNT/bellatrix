@@ -41,6 +41,7 @@ void runtime_timeline_set_paused(RuntimeTimeline *timeline,
                                  uint64_t rigel_cck);
 uint64_t runtime_timeline_update(RuntimeTimeline *timeline,
                                  uint64_t host_counter,
-                                 uint64_t cpu_published_cck);
+                                 uint64_t cpu_published_cck,
+                                 uint64_t chipset_cck);
 
 #endif

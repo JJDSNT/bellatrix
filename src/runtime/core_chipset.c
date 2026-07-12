@@ -133,6 +133,24 @@ void core_chipset_timeline_init(uint64_t host_counter,
                                 RuntimeTimelineMode mode)
 {
     uint64_t chip = atomic_load_explicit(&s_chipset_cck, memory_order_acquire);
+    uint64_t cpu  = atomic_load_explicit(&s_cpu_cck_target,
+                                         memory_order_acquire);
+
+    /* Cycles published before the timeline exists (boot/launcher free-run,
+     * observed 4.3e9 CCK on Pi 3) are not emulated machine time. Left in
+     * place they poison every consumer: the hybrid clamp (cpu+backlog)
+     * lands billions ahead of realtime and never engages, backlog metrics
+     * become meaningless, and drift grows unbounded. Rebase the CPU
+     * counter to the chipset's position; the discarded delta is logged so
+     * the pre-runtime free-run can be hunted at its source. Racing a
+     * concurrent publish here can lose at most that publish's quantum. */
+    if (cpu != chip) {
+        kprintf("[CORE0] timeline init: rebasing cpu_target %llu -> %llu"
+                " (discarding %llu pre-runtime CCK)\n",
+                (unsigned long long)cpu, (unsigned long long)chip,
+                (unsigned long long)(cpu > chip ? cpu - chip : 0u));
+        atomic_store_explicit(&s_cpu_cck_target, chip, memory_order_release);
+    }
 
     runtime_timeline_init(&s_timeline, host_frequency,
                           CHIPSET_PAL_CCK_PER_SECOND,
@@ -176,7 +194,9 @@ uint64_t core_chipset_timeline_update(uint64_t host_counter)
         runtime_timeline_set_mode(&s_timeline, core_chipset_timeline_mode(),
                                   host_counter, chip);
     }
-    uint64_t horizon = runtime_timeline_update(&s_timeline, host_counter, cpu);
+    uint64_t horizon = runtime_timeline_update(
+        &s_timeline, host_counter, cpu,
+        atomic_load_explicit(&s_chipset_cck, memory_order_acquire));
 
     atomic_store_explicit(&s_chipset_horizon, horizon, memory_order_release);
     return horizon;

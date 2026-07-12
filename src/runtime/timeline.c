@@ -79,7 +79,8 @@ void runtime_timeline_set_paused(RuntimeTimeline *timeline,
 
 uint64_t runtime_timeline_update(RuntimeTimeline *timeline,
                                  uint64_t host_counter,
-                                 uint64_t cpu_published_cck)
+                                 uint64_t cpu_published_cck,
+                                 uint64_t chipset_cck)
 {
     uint64_t target;
 
@@ -104,20 +105,30 @@ uint64_t runtime_timeline_update(RuntimeTimeline *timeline,
         timeline->clamp_active = false;
     } else {
         bool was_clamped = timeline->clamp_active;
+        uint64_t follow;
+        uint64_t clamp;
+
+        /* The horizon is permission the executors must be able to honor.
+         * It follows the wall clock but never runs more than the backlog
+         * bound ahead of the CHIPSET (both modes — an unbounded horizon
+         * debt would replay as a fast-forward burst once load lightens)
+         * nor of the CPU (hybrid only). Realtime is best-effort: time the
+         * executors could not keep up with is slipped, never replayed. */
+        follow = chipset_cck;
+        if (timeline->mode == RUNTIME_TIMELINE_HYBRID &&
+            cpu_published_cck < follow)
+            follow = cpu_published_cck;
 
         target = timeline->base_cck +
                  timeline_elapsed_cck(timeline, host_counter);
         timeline->realtime_target_cck = target;
         timeline->clamp_active = false;
-        if (timeline->mode == RUNTIME_TIMELINE_HYBRID) {
-            uint64_t clamp = cpu_published_cck +
-                             timeline->max_cpu_backlog_cck;
-            if (clamp < cpu_published_cck) /* saturate overflow */
-                clamp = UINT64_MAX;
-            if (target > clamp) {
-                target = clamp;
-                timeline->clamp_active = true;
-            }
+        clamp = follow + timeline->max_cpu_backlog_cck;
+        if (clamp < follow) /* saturate overflow */
+            clamp = UINT64_MAX;
+        if (target > clamp) {
+            target = clamp;
+            timeline->clamp_active = true;
         }
 
         /* Clamp release policy: a small wall deficit accumulated while the
