@@ -85,6 +85,15 @@ apply_patch_if_needed() {
         fi
     fi
 
+    if [ "$name" = "0019-emu68-tlsf-hardening.patch" ]; then
+        if grep -Fq 'kprintf("[TLSF] ERROR! MERGE overflow:' src/tlsf.c &&
+           grep -Fq 'kprintf("[TLSF] ERROR! Double-free detected' src/tlsf.c &&
+           grep -Fq 'uintptr_t old_size = GET_SIZE(b);' src/tlsf.c; then
+            echo "Patch already applied (TLSF hardening detected): $name"
+            return 0
+        fi
+    fi
+
     if [ "$name" = "0021-emu68-public-bus-dispatch.patch" ]; then
         if grep -Fq 'BELLATRIX_HAVE_EMU68_API' src/aarch64/vectors.c &&
            grep -Fq 'emu68_api_dispatch_bus_access((uint32_t)far' src/aarch64/vectors.c &&
@@ -262,6 +271,15 @@ check_emu68_patch_applied() {
            grep -Fq 'if (bellatrix_cpu_backend_owns_execution_loop())' src/aarch64/start.c &&
            grep -Fq '        return;' src/aarch64/start.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0019-emu68-tlsf-hardening.patch" ]; then
+        if grep -Fq 'kprintf("[TLSF] ERROR! MERGE overflow:' src/tlsf.c &&
+           grep -Fq 'kprintf("[TLSF] ERROR! Double-free detected' src/tlsf.c &&
+           grep -Fq 'uintptr_t old_size = GET_SIZE(b);' src/tlsf.c; then
+            echo "  OK  $name  [content match; whitespace normalized in patch]"
             return 0
         fi
     fi
