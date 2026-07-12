@@ -700,13 +700,18 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m,
             s_perf_trace.last_print = now;
         } else if (now - s_perf_trace.last_print >= freq) {
             double scale = 1000.0 / (double)freq;
+            /* Host load average stamps each measurement with the machine's
+             * contention state; a loaded host invalidates absolute numbers
+             * (see ISSUE-0048: orphaned QEMUs masqueraded as a regression). */
+            double host_load = -1.0;
+            (void)getloadavg(&host_load, 1);
             fprintf(stderr,
                     "[HARNESS-PERF] steps=%llu cck=%llu"
                     " rigel_ms=%.2f post_ms=%.2f present_ms=%.2f"
                     " present=%llu skip=%llu"
                     " reason=max:%llu deadline:%llu bus:%llu mmio:%llu"
                     " size=1:%llu 2-4:%llu 5-8:%llu 9-32:%llu"
-                    " 33-128:%llu >128:%llu\n",
+                    " 33-128:%llu >128:%llu load=%.2f\n",
                     (unsigned long long)s_perf_trace.step_calls,
                     (unsigned long long)s_perf_trace.step_cck,
                     (double)s_perf_trace.rigel_ticks * scale,
@@ -723,7 +728,8 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m,
                     (unsigned long long)s_perf_trace.size_buckets[2],
                     (unsigned long long)s_perf_trace.size_buckets[3],
                     (unsigned long long)s_perf_trace.size_buckets[4],
-                    (unsigned long long)s_perf_trace.size_buckets[5]);
+                    (unsigned long long)s_perf_trace.size_buckets[5],
+                    host_load);
             s_perf_trace.last_print = now;
             s_perf_trace.step_calls = 0;
             s_perf_trace.step_cck = 0;

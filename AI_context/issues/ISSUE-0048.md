@@ -181,8 +181,8 @@ Conclusões:
   agora dominado por `mmio_flush` com passos de 5-8 CCK — próximo alvo da
   Fase 3.
 - Higiene obrigatória antes de qualquer benchmark: verificar `uptime`/load e
-  processos QEMU/harness residuais. Considerar imprimir o load average na
-  linha `[HARNESS-PERF]` para carimbar as condições do host.
+  processos QEMU/harness residuais. A linha `[HARNESS-PERF]` agora termina em
+  `load=<loadavg 1min>`, carimbando as condições do host em cada medição.
 
 # Hipóteses priorizadas
 
