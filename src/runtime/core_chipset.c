@@ -258,15 +258,13 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         rigel_cycle_t until = rigel_now + (rigel_cycle_t)remaining;
         rigel_cycle_t next;
 
-        /* Match the synchronous scheduler: never step across a Rigel event or
-         * temporal bus transition.  The CPU-published target remains the hard
-         * upper bound, so Core 2 cannot run into emulated time the CPU has not
-         * made available yet. */
-        next = rigel_get_next_deadline(core->rigel);
-        if (next > rigel_now && next < until)
-            until = next;
-
-        next = rigel_get_next_bus_change(core->rigel);
+        /* Match the synchronous scheduler: stop at host-observable Rigel
+         * events.  Internal DMA slots are processed by rigel_step_until().
+         * Bellatrix does not currently stall the CPU from rigel_bus_state_t,
+         * so cutting every temporal bus transition would add slot-by-slot
+         * rendezvous without consuming its arbitration result.  The
+         * CPU-published target remains the hard upper bound. */
+        next = rigel_get_next_observable_deadline(core->rigel);
         if (next > rigel_now && next < until)
             until = next;
 

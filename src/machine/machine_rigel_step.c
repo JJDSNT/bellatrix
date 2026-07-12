@@ -595,16 +595,10 @@ rigel_cycle_t machine_next_quantum(void)
 
     s_quantum_reason = MACHINE_STEP_MAX;
 
-    next = rigel_get_next_deadline(g_rigel);
+    next = rigel_get_next_observable_deadline(g_rigel);
     if (next > now && (next - now) < q) {
         q = next - now;
         s_quantum_reason = MACHINE_STEP_DEADLINE;
-    }
-
-    next = rigel_get_next_bus_change(g_rigel);
-    if (next > now && (next - now) < q) {
-        q = next - now;
-        s_quantum_reason = MACHINE_STEP_BUS_CHANGE;
     }
 
     if (q == 0u)
@@ -981,11 +975,7 @@ uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles)
 
     now = rigel_get_time(g_rigel);
 
-    next = rigel_get_next_deadline(g_rigel);
-    if (next > now && (next - now) < cck_quantum)
-        cck_quantum = next - now;
-
-    next = rigel_get_next_bus_change(g_rigel);
+    next = rigel_get_next_observable_deadline(g_rigel);
     if (next > now && (next - now) < cck_quantum)
         cck_quantum = next - now;
 
