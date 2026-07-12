@@ -21,4 +21,14 @@ uint32_t vc_get_core_clock_hz(void);
  * mailbox failure; callers fall back to the configured mode's clock. */
 uint32_t vc_get_pixel_clock_hz(void);
 
+/* Current ARM core clock in Hz. The firmware silently caps this to 600 MHz
+ * under undervoltage/thermal throttling, so performance numbers are
+ * meaningless without it. Returns 0 on mailbox failure. */
+uint32_t vc_get_arm_clock_hz(void);
+
+/* GET_THROTTLED flags: bit0 undervoltage now, bit1 ARM freq capped now,
+ * bit2 throttled now; bits 16-18 the same conditions since boot (sticky).
+ * Returns 0xFFFFFFFF on mailbox failure. */
+uint32_t vc_get_throttled(void);
+
 #endif

@@ -23,6 +23,7 @@
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "host/raspi3/hdmi_audio.h"
+#include "host/raspi3/vc_mailbox.h"
 #include "devicetree.h"
 #include "host/raspi3/console_log.h"
 #include "io/serial/uart_host.h"
@@ -449,6 +450,11 @@ static void bellatrix_core0_supervise(void)
                                           uint64_t *target_cck);
     uint64_t last_target = 0u;
     uint64_t last_chipset = 0u;
+#if BELLATRIX_PROFILE_ENABLED
+    uint64_t last_steps = 0u;
+    uint64_t last_step_cck = 0u;
+    uint64_t last_step_busy = 0u;
+#endif
     const uint64_t freq = PAL_Time_GetFrequency();
     const uint64_t io_interval = freq / 1000u ? freq / 1000u : 1u;
     const uint64_t heartbeat_interval = freq * 2u;
@@ -485,6 +491,9 @@ static void bellatrix_core0_supervise(void)
             asm volatile("yield");
             continue;
         }
+#if BELLATRIX_PROFILE_ENABLED
+        uint64_t beat_elapsed = now - last_heartbeat;
+#endif
         last_heartbeat = now;
 
         uint64_t chipset_cck = 0u;
@@ -531,6 +540,13 @@ static void bellatrix_core0_supervise(void)
                             (int64_t)chipset_cck),
                 timeline.clamp_active ? 1u : 0u,
                 (unsigned long long)timeline.generation);
+
+        /* Host silicon state: the firmware silently drops the ARM clock to
+         * 600 MHz under undervoltage/thermal throttling, which halves every
+         * performance number without any other visible symptom. */
+        kprintf("[CORE0-HW] arm_mhz=%u throttled=%08x\n",
+                (unsigned)(vc_get_arm_clock_hz() / 1000000u),
+                (unsigned)vc_get_throttled());
 #if BELLATRIX_PROFILE_ENABLED
         kprintf("[BPROF-BEAM] vposr_fast=%llu vposr_fallback=%llu "
                 "vhposr_fast=%llu vhposr_fallback=%llu snapshot_miss=%llu\n",
@@ -553,15 +569,37 @@ static void bellatrix_core0_supervise(void)
                     &g_bprof.multicore.posted_queue_full_waits, __ATOMIC_RELAXED),
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.posted_queue_depth_max, __ATOMIC_RELAXED));
+        /* Per-beat granularity and occupancy. avg_step is the decisive
+         * integration metric (CCK advanced per rigel_step_until call): a
+         * sub-scanline value means observable deadlines are slicing the
+         * drain and any per-call fixed cost inside Rigel is multiplied.
+         * core2_busy is wall time spent inside the locked step section. */
+        uint64_t steps_now = __atomic_load_n(
+            &g_bprof.multicore.chipset_steps, __ATOMIC_RELAXED);
+        uint64_t step_cck_now = __atomic_load_n(
+            &g_bprof.multicore.chipset_cck_total, __ATOMIC_RELAXED);
+        uint64_t step_busy_now = __atomic_load_n(
+            &g_bprof.chipset_step_time.cycles_total, __ATOMIC_RELAXED);
+        uint64_t d_steps = steps_now - last_steps;
+        uint64_t avg_step = d_steps
+            ? (step_cck_now - last_step_cck) / d_steps : 0u;
+        unsigned busy_pct = beat_elapsed
+            ? (unsigned)((step_busy_now - last_step_busy) * 100u / beat_elapsed)
+            : 0u;
+        last_steps = steps_now;
+        last_step_cck = step_cck_now;
+        last_step_busy = step_busy_now;
         kprintf("[BPROF-SCHED] event_hz=%u publish=%llu explicit_wakeups=%llu "
-                "chipset_steps=%llu empty_host_steps=%llu\n",
+                "chipset_steps=%llu avg_step=%llu core2_busy=%u%% "
+                "empty_host_steps=%llu\n",
                 (unsigned)PAL_Runtime_EventStreamHz(),
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.publish_calls, __ATOMIC_RELAXED),
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.wakeups, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.chipset_steps, __ATOMIC_RELAXED),
+                (unsigned long long)steps_now,
+                (unsigned long long)avg_step,
+                busy_pct,
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.empty_host_steps, __ATOMIC_RELAXED));
 #endif

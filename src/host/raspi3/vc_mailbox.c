@@ -11,6 +11,8 @@
 #define VC_FIRMWARE_STATUS_SUCCESS 0x80000000u
 #define VC_FIRMWARE_PROPERTY_END 0u
 #define VC_FIRMWARE_GET_CLOCK_RATE 0x00030002u
+#define VC_FIRMWARE_GET_THROTTLED 0x00030046u
+#define VC_CLOCK_ID_ARM 3u
 #define VC_CLOCK_ID_CORE 4u
 #define VC_CLOCK_ID_PIXEL 9u
 #define ARM_PERI_VIRT_BASE 0xF2000000u
@@ -88,6 +90,35 @@ static uint32_t vc_get_clock_hz(uint32_t clock_id)
 uint32_t vc_get_core_clock_hz(void)
 {
     return vc_get_clock_hz(VC_CLOCK_ID_CORE);
+}
+
+uint32_t vc_get_arm_clock_hz(void)
+{
+    return vc_get_clock_hz(VC_CLOCK_ID_ARM);
+}
+
+uint32_t vc_get_throttled(void)
+{
+    vc_property_buffer[0] = LE32(sizeof(vc_property_buffer));
+    vc_property_buffer[1] = LE32(VC_FIRMWARE_STATUS_REQUEST);
+    vc_property_buffer[2] = LE32(VC_FIRMWARE_GET_THROTTLED);
+    vc_property_buffer[3] = LE32(4);
+    vc_property_buffer[4] = 0;
+    vc_property_buffer[5] = 0;    /* mask 0: do not clear sticky bits */
+    vc_property_buffer[6] = 0;
+    vc_property_buffer[7] = LE32(VC_FIRMWARE_PROPERTY_END);
+
+    arm_flush_cache((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
+    vc_mbox_send(VC_MBOX_CH_PROP, (uint32_t)mmu_virt2phys((uintptr_t)vc_property_buffer));
+    if (!vc_mbox_recv(VC_MBOX_CH_PROP, NULL)) {
+        return 0xFFFFFFFFu;
+    }
+    arm_dcache_invalidate((uintptr_t)vc_property_buffer, sizeof(vc_property_buffer));
+
+    if (LE32(vc_property_buffer[1]) != VC_FIRMWARE_STATUS_SUCCESS) {
+        return 0xFFFFFFFFu;
+    }
+    return LE32(vc_property_buffer[5]);
 }
 
 /* HDMI pixel (TMDS) clock — needed to compute the audio CTS for clock
