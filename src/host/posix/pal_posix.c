@@ -153,6 +153,8 @@ void PAL_Runtime_ReportCpuProgress(uint32_t cycles) { (void)cycles; }
 uint32_t PAL_Runtime_GetPendingIPL(void) { return 0; }
 void PAL_Runtime_WakeupChipset(void) {}
 void PAL_Runtime_MmioBarrier(void) {}
+int PAL_Runtime_EventStreamActive(void) { return 0; }
+uint32_t PAL_Runtime_EventStreamHz(void) { return 0; }
 
 /* Harness single-core runtime publisher: advance chipset synchronously on the
  * caller's thread. */

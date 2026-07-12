@@ -26,7 +26,9 @@
 
 #include "pal.h"
 #include "host/osd.h"
+#include "runtime/core_chipset.h"
 #include "runtime/cpu_progress.h"
+#include "support.h"
 
 // ---------------------------------------------------------------------------
 // BCM2836 local interrupt controller (RPi3)
@@ -177,6 +179,43 @@ static inline void pal_dmb_ish(void)
     asm volatile("dmb ish" ::: "memory");
 }
 
+static _Atomic uint32_t s_event_stream_hz;
+static uint64_t s_event_stream_saved_cntkctl;
+
+/* Configure the architectural timer event stream on the calling PE. WFE is
+ * then released by the selected CNTPCT bit edge even when no producer sends
+ * SEV. This is the PiStorm housekeeper mechanism at a lower chipset cadence. */
+static uint32_t pal_event_stream_enable(uint32_t target_hz)
+{
+    uint64_t freq = pal_read_cntfrq();
+    uint64_t ctl;
+    uint32_t bit = 0u;
+    uint32_t actual;
+
+    if (target_hz == 0u || freq == 0u)
+        return 0u;
+    while (bit < 15u && freq / (1ull << (bit + 1u)) > target_hz)
+        bit++;
+    actual = (uint32_t)(freq / (1ull << (bit + 1u)));
+
+    asm volatile("mrs %0, CNTKCTL_EL1" : "=r"(ctl));
+    s_event_stream_saved_cntkctl = ctl;
+    ctl &= ~((uint64_t)0x0fu << 4u);
+    ctl |= (uint64_t)1u << 2u;       /* EVNTEN */
+    ctl |= (uint64_t)bit << 4u;      /* EVNTI */
+    ctl &= ~((uint64_t)1u << 3u);    /* EVNTDIR: low-to-high edge */
+    asm volatile("msr CNTKCTL_EL1, %0\n\tisb" :: "r"(ctl) : "memory");
+    atomic_store_explicit(&s_event_stream_hz, actual, memory_order_release);
+    return actual;
+}
+
+static void pal_event_stream_disable(void)
+{
+    atomic_store_explicit(&s_event_stream_hz, 0u, memory_order_release);
+    asm volatile("msr CNTKCTL_EL1, %0\n\tisb" ::
+                 "r"(s_event_stream_saved_cntkctl) : "memory");
+}
+
 // ---------------------------------------------------------------------------
 // Policy setters
 //
@@ -303,10 +342,14 @@ void PAL_Runtime_ReportCpuProgress(uint32_t cycles)
 // ---------------------------------------------------------------------------
 static void chipset_core_loop(void)
 {
+    uint32_t event_hz;
+
     while (!atomic_load_explicit(&s_rt.runtime_ready, memory_order_acquire))
         pal_wfe();
 
+    event_hz = pal_event_stream_enable(250000u);
     atomic_store_explicit(&s_rt.chipset_core_started, 1u, memory_order_release);
+    kprintf("[CORE2] timer event stream: %u Hz\n", (unsigned)event_hz);
 
     while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
         const uint64_t now = pal_read_cntpct();
@@ -326,6 +369,7 @@ static void chipset_core_loop(void)
     }
 
     atomic_store_explicit(&s_rt.chipset_core_started, 0u, memory_order_release);
+    pal_event_stream_disable();
 }
 
 // ---------------------------------------------------------------------------
@@ -408,12 +452,15 @@ void PAL_ChipsetTimer_Start(void)
 {
     pal_runtime_init_once();
     atomic_store_explicit(&s_rt.runtime_running, 1u, memory_order_release);
+    core_chipset_timeline_request_pause(false);
     pal_sev();
 }
 
 void PAL_ChipsetTimer_Stop(void)
 {
+    core_chipset_timeline_request_pause(true);
     atomic_store_explicit(&s_rt.runtime_running, 0u, memory_order_release);
+    pal_sev();
 }
 
 // ---------------------------------------------------------------------------
@@ -484,6 +531,16 @@ uint32_t PAL_Runtime_GetPendingIPL(void)
 void PAL_Runtime_WakeupChipset(void)
 {
     pal_sev();
+}
+
+int PAL_Runtime_EventStreamActive(void)
+{
+    return atomic_load_explicit(&s_event_stream_hz, memory_order_acquire) != 0u;
+}
+
+uint32_t PAL_Runtime_EventStreamHz(void)
+{
+    return atomic_load_explicit(&s_event_stream_hz, memory_order_acquire);
 }
 
 void PAL_Runtime_MmioBarrier(void)

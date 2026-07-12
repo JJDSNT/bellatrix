@@ -934,7 +934,10 @@ void bellatrix_machine_on_audio_sample_ready(void)
 void bellatrix_machine_on_chipset_advanced(uint32_t cck_cycles)
 {
     bellatrix_audio_output_tick(cck_cycles);
+}
 
+void bellatrix_machine_host_audio_poll(void)
+{
 #if !defined(BELLATRIX_HARNESS) && BELLATRIX_ENABLE_HDMI_AUDIO
     hdmi_audio_dma_poll();
 #endif

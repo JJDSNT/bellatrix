@@ -1,6 +1,7 @@
 // src/cpu/cpu_bridge.c
 
 #include "cpu/cpu_bridge.h"
+#include "cpu/mmio_policy.h"
 #include "cpu/emu68/bellatrix_profile.h"
 
 #include "debug/core_log.h"
@@ -72,50 +73,10 @@ __attribute__((weak)) bool core_chipset_get_progress(uint64_t *chipset_cck,
 static int cpu_bridge_is_critical_mmio(uint32_t addr, unsigned int size,
                                        int is_write)
 {
-    uint32_t normalized;
-    uint32_t reg;
-
-    if (size != 1u && size != 2u && size != 4u)
-        return 0;
-
-    normalized = bellatrix_bridge_normalize_addr(addr);
-
-    if (normalized >= 0x00BFD000u && normalized <= 0x00BFEFFFu)
-        return 1;
-
-    if (normalized < 0x00DFF000u || normalized > 0x00DFF1FFu)
-        return 0;
-
-    reg = normalized & 0x1ffu;
-    if (is_write) {
-        switch (reg) {
-        case 0x058u: /* BLTSIZE */
-        case 0x088u: /* COPJMP1 */
-        case 0x08au: /* COPJMP2 */
-        case 0x096u: /* DMACON */
-        case 0x09au: /* INTENA */
-        case 0x09cu: /* INTREQ */
-        case 0x092u: /* DDFSTRT */
-        case 0x094u: /* DDFSTOP */
-            return 1;
-        default:
-            return 0;
-        }
-    }
-
-    switch (reg) {
-    case 0x002u: /* DMACONR */
-    case 0x004u: /* VPOSR */
-    case 0x006u: /* VHPOSR */
-    case 0x010u: /* ADKCONR */
-    case 0x016u: /* POTINP */
-    case 0x01au: /* DSKBYTR */
-    case 0x01cu: /* INTENAR */
-    case 0x01eu: /* INTREQR — was missing: reads never rendezvoused */
-        return 1;
-    default:
-        return 0;
-    }
+    BellatrixMmioPolicy policy = bellatrix_mmio_policy(
+        bellatrix_bridge_normalize_addr(addr), size, is_write);
+    return policy == BELLATRIX_MMIO_SYNC ||
+           policy == BELLATRIX_MMIO_PUBLISHED;
 }
 #endif /* PROFILE || MULTICORE */
 
@@ -189,8 +150,9 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
         return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
 
 #if defined(BELLATRIX_ENABLE_MULTICORE)
-    /* Hot poll registers are served from the Core 2 published snapshot with
-     * no rendezvous and no lock (PiStorm-housekeeper pattern; ISSUE-0048). */
+    /* Hot poll registers are served from Core 2 published state with no
+     * rendezvous and no lock. Beam registers use f(cpu_time) over a geometry
+     * snapshot (PiStorm-housekeeper pattern; ISSUE-0049). */
     if (size == 2u &&
         core_chipset_read_hot_reg(bellatrix_bridge_normalize_addr(addr),
                                   &result))

@@ -18,6 +18,7 @@
 
 #include "runtime/core_chipset.h"
 #include "runtime/cpu_progress.h"
+#include "runtime/posted_writes.h"
 #include "cpu/emu68/bellatrix_profile.h"
 
 #include <stdatomic.h>
@@ -37,6 +38,8 @@
  * machine's sense of time meaningless. ~36 scanlines; tunable. First
  * correctness increment of the Core-0 arbiter (issue_core0_arbiter_scheduler.md). */
 #define CHIPSET_MAX_BACKLOG_CCK 8192u
+#define CHIPSET_MAX_DRAIN_BURST_CCK 8192u
+#define CHIPSET_PAL_CCK_PER_SECOND 3546895u
 
 /* Minimum CCK per cross-core publication. Emu68 reports progress per JIT
  * block (~23 CCK per transaction in the ISSUE-0048 QEMU A/B); aggregating
@@ -49,6 +52,18 @@
 
 /* Published by Core 1 (CPU); consumed by Core 2 (chipset). */
 static _Atomic uint64_t s_cpu_cck_target = 0;
+static _Atomic uint64_t s_chipset_horizon = 0;
+static _Atomic uint32_t s_timeline_mode = RUNTIME_TIMELINE_CPU_DRIVEN;
+static _Atomic bool s_timeline_rebase_requested = false;
+enum {
+    TIMELINE_PAUSE_NONE = 0u,
+    TIMELINE_PAUSE_REQUESTED = 1u,
+    TIMELINE_RESUME_REQUESTED = 2u,
+    TIMELINE_MODE_NONE = UINT32_MAX,
+};
+static _Atomic uint32_t s_timeline_pause_request = TIMELINE_PAUSE_NONE;
+static _Atomic uint32_t s_timeline_mode_request = TIMELINE_MODE_NONE;
+static RuntimeTimeline s_timeline; /* Core 0 owner */
 
 /* Aggregated CCK not yet added to s_cpu_cck_target. Core 1 local. */
 static uint32_t s_pending_cck = 0;
@@ -57,6 +72,7 @@ static uint32_t s_pending_cck = 0;
  * Core 0 (supervisor), so it must be atomic. */
 static _Atomic uint64_t s_chipset_cck = 0;
 static _Atomic uint8_t s_pending_ipl = 0;
+static _Atomic uint32_t s_pending_frames = 0;
 
 /* Hot read-only registers, published by the Rigel owner and served lock-free
  * to Core 1 poll loops (blit-busy, interrupt waits) without the critical-MMIO
@@ -65,10 +81,26 @@ static _Atomic uint8_t s_pending_ipl = 0;
  * CPU fetch it. Refreshed on every Core 2 drain iteration and, for
  * read-own-write consistency, right after critical CPU writes (both under
  * the chipset access lock). VPOSR/VHPOSR stay on the slow path: they change
- * every CCK, so a snapshot would be stale by construction. */
+ * every CCK, so they are derived from a published beam geometry snapshot at
+ * the CPU's logical time rather than copied as scalar register values. */
 static _Atomic uint16_t s_pub_dmaconr = 0;
 static _Atomic uint16_t s_pub_intenar = 0;
 static _Atomic uint16_t s_pub_intreqr = 0;
+
+/* Beam snapshot seqlock. Every payload field is atomic as C does not permit
+ * concurrent non-atomic reads even when a sequence counter detects tearing.
+ * The Rigel owner is the writer; Core 1 retries if publication overlaps. */
+static _Atomic uint32_t s_pub_beam_seq = 0;
+static _Atomic uint64_t s_pub_beam_time = 0;
+static _Atomic uint16_t s_pub_beam_vpos = 0;
+static _Atomic uint16_t s_pub_beam_hpos = 0;
+static _Atomic uint16_t s_pub_beam_line_clocks = 0;
+static _Atomic uint16_t s_pub_beam_frame_lines = 0;
+static _Atomic uint16_t s_pub_beam_vposr_high = 0;
+static _Atomic uint8_t s_pub_beam_lof = 0;
+static _Atomic uint8_t s_pub_beam_lol = 0;
+static _Atomic uint8_t s_pub_beam_lof_toggle = 0;
+static _Atomic uint8_t s_pub_beam_lol_toggle = 0;
 
 /* -----------------------------------------------------------------------
  * Posted-write queue (PiStorm wb_push/wb_task pattern, with timestamps).
@@ -84,26 +116,116 @@ static _Atomic uint16_t s_pub_intreqr = 0;
  *     has been consumed, since stamps never exceed the published target.
  * Single producer (Core 1); consumers (Core 2 at stamps, Core 1 forced
  * drain) always hold the chipset access lock while applying.
- * -------------------------------------------------------------------- */
-#define POSTED_WRITE_RING 256u
-
-typedef struct {
-    uint64_t stamp_cck;
-    uint32_t addr;
-    uint32_t value;
-    uint32_t size;
-} PostedWrite;
-
-static PostedWrite s_pw_ring[POSTED_WRITE_RING];
-static _Atomic uint32_t s_pw_head = 0;   /* producer (Core 1) */
-static _Atomic uint32_t s_pw_tail = 0;   /* consumers (lock-held) */
+ *
+ * The ring itself lives in runtime/posted_writes.[ch] (pure SPSC, host
+ * unit-tested); this file owns only the wait/fallback policy around it. */
+static PostedWriteQueue s_pw_queue;
 
 /* Remainder for M68K→CCK conversion (local to Core 1 call site). */
 static uint32_t s_m68k_rem = 0;
 
-static RuntimeCoreChipset *s_core = NULL;
+static _Atomic(RuntimeCoreChipset *) s_core = NULL;
 
 static void core_chipset_publish_flush(void);
+
+void core_chipset_timeline_init(uint64_t host_counter,
+                                uint64_t host_frequency,
+                                RuntimeTimelineMode mode)
+{
+    uint64_t chip = atomic_load_explicit(&s_chipset_cck, memory_order_acquire);
+
+    runtime_timeline_init(&s_timeline, host_frequency,
+                          CHIPSET_PAL_CCK_PER_SECOND,
+                          CHIPSET_MAX_BACKLOG_CCK, host_counter, chip);
+    runtime_timeline_set_mode(&s_timeline, mode, host_counter, chip);
+    atomic_store_explicit(&s_timeline_mode, (uint32_t)mode,
+                          memory_order_release);
+    atomic_store_explicit(&s_chipset_horizon, chip, memory_order_release);
+    PAL_Runtime_WakeupChipset();
+}
+
+uint64_t core_chipset_timeline_update(uint64_t host_counter)
+{
+    uint64_t cpu = atomic_load_explicit(&s_cpu_cck_target,
+                                        memory_order_acquire);
+    uint32_t requested_mode = atomic_exchange_explicit(
+        &s_timeline_mode_request, TIMELINE_MODE_NONE, memory_order_acq_rel);
+    uint32_t pause_request = atomic_exchange_explicit(
+        &s_timeline_pause_request, TIMELINE_PAUSE_NONE, memory_order_acq_rel);
+
+    if (requested_mode <= RUNTIME_TIMELINE_HYBRID) {
+        uint64_t chip = atomic_load_explicit(&s_chipset_cck,
+                                             memory_order_acquire);
+        runtime_timeline_set_mode(&s_timeline,
+                                  (RuntimeTimelineMode)requested_mode,
+                                  host_counter, chip);
+        atomic_store_explicit(&s_timeline_mode, requested_mode,
+                              memory_order_release);
+    }
+    if (pause_request != TIMELINE_PAUSE_NONE) {
+        uint64_t chip = atomic_load_explicit(&s_chipset_cck,
+                                             memory_order_acquire);
+        runtime_timeline_set_paused(
+            &s_timeline, pause_request == TIMELINE_PAUSE_REQUESTED,
+            host_counter, chip);
+    }
+    if (atomic_exchange_explicit(&s_timeline_rebase_requested, false,
+                                 memory_order_acq_rel)) {
+        uint64_t chip = atomic_load_explicit(&s_chipset_cck,
+                                             memory_order_acquire);
+        runtime_timeline_set_mode(&s_timeline, core_chipset_timeline_mode(),
+                                  host_counter, chip);
+    }
+    uint64_t horizon = runtime_timeline_update(&s_timeline, host_counter, cpu);
+
+    atomic_store_explicit(&s_chipset_horizon, horizon, memory_order_release);
+    return horizon;
+}
+
+void core_chipset_timeline_request_pause(bool paused)
+{
+    atomic_store_explicit(&s_timeline_pause_request,
+                          paused ? TIMELINE_PAUSE_REQUESTED
+                                 : TIMELINE_RESUME_REQUESTED,
+                          memory_order_release);
+    PAL_Runtime_WakeupChipset();
+}
+
+void core_chipset_timeline_request_mode(RuntimeTimelineMode mode)
+{
+    if (mode > RUNTIME_TIMELINE_HYBRID)
+        return;
+    atomic_store_explicit(&s_timeline_mode_request, (uint32_t)mode,
+                          memory_order_release);
+    PAL_Runtime_WakeupChipset();
+}
+
+RuntimeTimelineMode core_chipset_timeline_mode(void)
+{
+    return (RuntimeTimelineMode)atomic_load_explicit(&s_timeline_mode,
+                                                     memory_order_acquire);
+}
+
+uint64_t core_chipset_get_horizon(void)
+{
+    return atomic_load_explicit(&s_chipset_horizon, memory_order_acquire);
+}
+
+void core_chipset_get_timeline_snapshot(RuntimeTimeline *snapshot)
+{
+    if (snapshot != NULL)
+        *snapshot = s_timeline; /* Core 0 is the sole caller/owner. */
+}
+
+void core_chipset_drain_host_completions(void)
+{
+    uint32_t frames = atomic_exchange_explicit(&s_pending_frames, 0u,
+                                                memory_order_acq_rel);
+
+    while (frames-- != 0u)
+        bellatrix_machine_on_frame_ready();
+    bellatrix_machine_host_audio_poll();
+}
 
 /* Guards chipset state from concurrent CPU-side bus access. Held by the CPU
  * core (cpu_bridge.c) while dispatching MMIO; not needed by this core. */
@@ -130,9 +252,10 @@ void core_chipset_lock_release(void)
 bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
-    RuntimeCoreChipset *core = s_core;
+    RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                    memory_order_acquire);
 
-    if (!core || !core->running)
+    if (!core || !atomic_load_explicit(&core->running, memory_order_acquire))
         return false;
 
     if (chipset_cck)
@@ -163,7 +286,9 @@ void core_chipset_set_pending_ipl(uint8_t ipl)
 /* Caller must hold the chipset access lock (or be the only Rigel user). */
 void core_chipset_publish_hot_regs(void)
 {
-    RuntimeCoreChipset *core = s_core;
+    RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                    memory_order_acquire);
+    rigel_beam_geometry_t beam;
 
     if (!core || !core->rigel)
         return;
@@ -177,41 +302,111 @@ void core_chipset_publish_hot_regs(void)
     atomic_store_explicit(&s_pub_intreqr,
                           rigel_custom_read16(core->rigel, RIGEL_REG_INTREQR),
                           memory_order_release);
+
+    beam = rigel_get_beam_geometry(core->rigel);
+    atomic_fetch_add_explicit(&s_pub_beam_seq, 1u, memory_order_acq_rel);
+    atomic_store_explicit(&s_pub_beam_time, beam.time, memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_vpos, beam.vpos, memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_hpos, beam.hpos, memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_line_clocks, beam.line_clocks,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_frame_lines, beam.frame_lines,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_vposr_high, beam.vposr_high,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_lof, beam.lof, memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_lol, beam.lol, memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_lof_toggle, beam.lof_toggle,
+                          memory_order_relaxed);
+    atomic_store_explicit(&s_pub_beam_lol_toggle, beam.lol_toggle,
+                          memory_order_relaxed);
+    atomic_fetch_add_explicit(&s_pub_beam_seq, 1u, memory_order_release);
 }
 
-/* Post one non-critical custom write with the CPU's current emulated time.
- * Returns false when the queue is unavailable (multicore off, core not
- * running) so the caller falls back to the synchronous path. Core 1 only. */
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+/* Consumed only by the multicore hot-read fast path. */
+static bool core_chipset_read_beam_geometry(rigel_beam_geometry_t *beam)
+{
+    uint32_t before;
+    uint32_t after;
+
+    if (!beam)
+        return false;
+
+    for (;;) {
+        before = atomic_load_explicit(&s_pub_beam_seq, memory_order_acquire);
+        if (before & 1u)
+            continue;
+        beam->time = atomic_load_explicit(&s_pub_beam_time, memory_order_relaxed);
+        beam->vpos = atomic_load_explicit(&s_pub_beam_vpos, memory_order_relaxed);
+        beam->hpos = atomic_load_explicit(&s_pub_beam_hpos, memory_order_relaxed);
+        beam->line_clocks = atomic_load_explicit(&s_pub_beam_line_clocks,
+                                                 memory_order_relaxed);
+        beam->frame_lines = atomic_load_explicit(&s_pub_beam_frame_lines,
+                                                 memory_order_relaxed);
+        beam->vposr_high = atomic_load_explicit(&s_pub_beam_vposr_high,
+                                                memory_order_relaxed);
+        beam->lof = atomic_load_explicit(&s_pub_beam_lof, memory_order_relaxed);
+        beam->lol = atomic_load_explicit(&s_pub_beam_lol, memory_order_relaxed);
+        beam->lof_toggle = atomic_load_explicit(&s_pub_beam_lof_toggle,
+                                                memory_order_relaxed);
+        beam->lol_toggle = atomic_load_explicit(&s_pub_beam_lol_toggle,
+                                                memory_order_relaxed);
+        after = atomic_load_explicit(&s_pub_beam_seq, memory_order_acquire);
+        if (before == after)
+            break;
+    }
+
+    return before != 0u;
+}
+#endif /* BELLATRIX_ENABLE_MULTICORE */
+
+/* Post one non-critical custom write. CPU-driven mode preserves its logical
+ * timestamp; self-paced modes apply at chipset "now", matching hardware.
+ * Returns false when unavailable so the caller uses the sync path. */
 bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
-    RuntimeCoreChipset *core = s_core;
-    uint32_t head;
+    RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                    memory_order_acquire);
     uint64_t stamp;
+    PostedWrite write;
+    bool waited_for_space = false;
 
-    if (!core || !core->running)
+    if (!core || !atomic_load_explicit(&core->running, memory_order_acquire))
         return false;
 
-    head = atomic_load_explicit(&s_pw_head, memory_order_relaxed);
+    /* The CPU's emulated "now": everything it published plus the local
+     * aggregation. Never ahead of what Core 2 will eventually reach. */
+    if (core_chipset_timeline_mode() == RUNTIME_TIMELINE_CPU_DRIVEN) {
+        stamp = atomic_load_explicit(&s_cpu_cck_target, memory_order_relaxed) +
+                s_pending_cck;
+    } else {
+        stamp = atomic_load_explicit(&s_chipset_cck, memory_order_acquire);
+    }
 
-    /* Full: wait for consumers. Core 2 SEVs after each drain iteration. */
-    while (head - atomic_load_explicit(&s_pw_tail, memory_order_acquire)
-           >= POSTED_WRITE_RING) {
-        if (!core->running)
+    write = (PostedWrite){
+        .stamp_cck = stamp, .addr = addr, .value = value, .size = size,
+    };
+
+    /* Full: wait for consumers. Core 2 drains on every host step — including
+     * the caught-up and paused paths — and SEVs after each drain iteration.
+     * The wait policy lives here, not in the queue, so shutdown can always
+     * bail out to the caller's synchronous fallback. */
+    while (!posted_writes_try_push(&s_pw_queue, &write)) {
+        waited_for_space = true;
+        if (!atomic_load_explicit(&core->running, memory_order_acquire))
             return false;
         PAL_Runtime_WakeupChipset();
         asm volatile("wfe" ::: "memory");
     }
 
-    /* The CPU's emulated "now": everything it published plus the local
-     * aggregation. Never ahead of what Core 2 will eventually reach. */
-    stamp = atomic_load_explicit(&s_cpu_cck_target, memory_order_relaxed)
-          + s_pending_cck;
-
-    s_pw_ring[head & (POSTED_WRITE_RING - 1u)] = (PostedWrite){
-        .stamp_cck = stamp, .addr = addr, .value = value, .size = size,
-    };
-    atomic_store_explicit(&s_pw_head, head + 1u, memory_order_release);
+#if BELLATRIX_PROFILE_ENABLED
+    bprof_multicore_posted_queued(posted_writes_depth(&s_pw_queue),
+                                  waited_for_space);
+#else
+    (void)waited_for_space;
+#endif
     PAL_Runtime_WakeupChipset();
     return true;
 #else
@@ -220,22 +415,26 @@ bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size)
 #endif
 }
 
+static void core_chipset_apply_one_posted(void *ctx, const PostedWrite *w)
+{
+    (void)ctx;
+    bellatrix_machine_write(w->addr, w->value, w->size);
+}
+
 /* Apply queued writes with stamp <= limit (UINT64_MAX = drain everything).
  * Caller must hold the chipset access lock. */
 static void core_chipset_apply_posted_writes(uint64_t limit)
 {
-    uint32_t tail = atomic_load_explicit(&s_pw_tail, memory_order_relaxed);
-    uint32_t head = atomic_load_explicit(&s_pw_head, memory_order_acquire);
+    uint32_t applied = posted_writes_apply(&s_pw_queue, limit,
+                                           core_chipset_apply_one_posted,
+                                           NULL);
 
-    while (tail != head) {
-        const PostedWrite *w = &s_pw_ring[tail & (POSTED_WRITE_RING - 1u)];
-
-        if (w->stamp_cck > limit)
-            break;
-        bellatrix_machine_write(w->addr, w->value, w->size);
-        tail++;
-    }
-    atomic_store_explicit(&s_pw_tail, tail, memory_order_release);
+#if BELLATRIX_PROFILE_ENABLED
+    if (applied != 0u)
+        bprof_multicore_posted_applied(applied);
+#else
+    (void)applied;
+#endif
 }
 
 /* Forced drain before a CPU-side read or critical write (lock held). */
@@ -247,12 +446,7 @@ void core_chipset_drain_posted_writes(void)
 /* Earliest pending stamp, or UINT64_MAX when the queue is empty. Core 2. */
 static uint64_t core_chipset_next_posted_stamp(void)
 {
-    uint32_t tail = atomic_load_explicit(&s_pw_tail, memory_order_relaxed);
-    uint32_t head = atomic_load_explicit(&s_pw_head, memory_order_acquire);
-
-    if (tail == head)
-        return UINT64_MAX;
-    return s_pw_ring[tail & (POSTED_WRITE_RING - 1u)].stamp_cck;
+    return posted_writes_next_stamp(&s_pw_queue);
 }
 
 /* Lock-free fast path for hot-register reads on Core 1. Returns false when
@@ -261,9 +455,15 @@ static uint64_t core_chipset_next_posted_stamp(void)
 bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
-    RuntimeCoreChipset *core = s_core;
+    RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                    memory_order_acquire);
+    rigel_beam_geometry_t beam;
+    rigel_cycle_t cpu_time;
+    rigel_u16 vpos;
+    rigel_u16 hpos;
 
-    if (!core || !core->running || !value)
+    if (!core ||
+        !atomic_load_explicit(&core->running, memory_order_acquire) || !value)
         return false;
 
     switch (normalized_addr) {
@@ -275,6 +475,37 @@ bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value)
         return true;
     case 0x00DFF01Eu:   /* INTREQR */
         *value = atomic_load_explicit(&s_pub_intreqr, memory_order_acquire);
+        return true;
+    case 0x00DFF004u:   /* VPOSR */
+    case 0x00DFF006u:   /* VHPOSR */
+        if (!core_chipset_read_beam_geometry(&beam)) {
+#if BELLATRIX_PROFILE_ENABLED
+            bprof_multicore_beam_read(normalized_addr, 0, 0);
+#endif
+            return false;
+        }
+        if (core_chipset_timeline_mode() == RUNTIME_TIMELINE_CPU_DRIVEN) {
+            cpu_time = atomic_load_explicit(&s_cpu_cck_target,
+                                            memory_order_acquire) +
+                       s_pending_cck;
+        } else {
+            cpu_time = atomic_load_explicit(&s_chipset_cck,
+                                            memory_order_acquire);
+        }
+        if (!rigel_beam_position_at(&beam, cpu_time, &vpos, &hpos)) {
+#if BELLATRIX_PROFILE_ENABLED
+            bprof_multicore_beam_read(normalized_addr, 0, 1);
+#endif
+            return false;
+        }
+        if (normalized_addr == 0x00DFF004u)
+            *value = (uint32_t)(beam.vposr_high | ((vpos >> 8) & 0x7u));
+        else
+            *value = (uint32_t)(((vpos & 0xffu) << 8) |
+                                ((hpos >> 1) & 0xffu));
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_multicore_beam_read(normalized_addr, 1, 1);
+#endif
         return true;
     default:
         return false;
@@ -294,8 +525,11 @@ bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value)
 void core_chipset_wait_caught_up(void)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
-    RuntimeCoreChipset *core = s_core;
-    if (!core || !core->running)
+    RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                    memory_order_acquire);
+    if (!core || !atomic_load_explicit(&core->running, memory_order_acquire))
+        return;
+    if (core_chipset_timeline_mode() != RUNTIME_TIMELINE_CPU_DRIVEN)
         return;
 
     /* The rendezvous only means "chipset reached the CPU's time" if the
@@ -325,17 +559,28 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     memset(core, 0, sizeof(*core));
     core->rigel   = rigel;
     core->machine = machine;
-    core->running = true;
+    atomic_store_explicit(&core->running, true, memory_order_release);
 
-    s_core = core;
+    atomic_store_explicit(&s_core, core, memory_order_release);
 
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
+    atomic_store_explicit(&s_chipset_horizon, 0u, memory_order_release);
+    atomic_store_explicit(&s_timeline_mode, RUNTIME_TIMELINE_CPU_DRIVEN,
+                          memory_order_release);
+    atomic_store_explicit(&s_timeline_rebase_requested, false,
+                          memory_order_release);
+    atomic_store_explicit(&s_timeline_pause_request, TIMELINE_PAUSE_NONE,
+                          memory_order_release);
+    atomic_store_explicit(&s_timeline_mode_request, TIMELINE_MODE_NONE,
+                          memory_order_release);
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
+    atomic_store_explicit(&s_pending_frames, 0u, memory_order_release);
     s_m68k_rem    = 0;
     s_pending_cck = 0;
-    atomic_store_explicit(&s_pw_head, 0u, memory_order_release);
-    atomic_store_explicit(&s_pw_tail, 0u, memory_order_release);
+    posted_writes_reset(&s_pw_queue);
+    atomic_store_explicit(&s_pub_beam_seq, 0u, memory_order_release);
+    core_chipset_publish_hot_regs();
 
     CORE2_LOG("chipset init (Rigel)");
     return true;
@@ -344,8 +589,10 @@ bool core_chipset_init(RuntimeCoreChipset *core,
 void core_chipset_shutdown(RuntimeCoreChipset *core)
 {
     if (!core) return;
-    core->running = false;
-    s_core = NULL;
+    atomic_store_explicit(&core->running, false, memory_order_release);
+    atomic_store_explicit(&s_pub_beam_seq, 0u, memory_order_release);
+    PAL_Runtime_WakeupChipset(); /* release queue-full/backpressure waiters */
+    atomic_store_explicit(&s_core, NULL, memory_order_release);
     CORE2_LOG("chipset shutdown cck=%llu", (unsigned long long)core->local_cycles);
 }
 
@@ -354,12 +601,21 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     if (!core) return;
     core->local_cycles = 0;
     atomic_store_explicit(&s_cpu_cck_target, 0u, memory_order_release);
+    atomic_store_explicit(&s_chipset_horizon, 0u, memory_order_release);
+    atomic_store_explicit(&s_timeline_rebase_requested, true,
+                          memory_order_release);
+    atomic_store_explicit(&s_timeline_pause_request, TIMELINE_PAUSE_NONE,
+                          memory_order_release);
+    atomic_store_explicit(&s_timeline_mode_request, TIMELINE_MODE_NONE,
+                          memory_order_release);
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
+    atomic_store_explicit(&s_pending_frames, 0u, memory_order_release);
     s_m68k_rem    = 0;
     s_pending_cck = 0;
-    atomic_store_explicit(&s_pw_head, 0u, memory_order_release);
-    atomic_store_explicit(&s_pw_tail, 0u, memory_order_release);
+    posted_writes_reset(&s_pw_queue);
+    atomic_store_explicit(&s_pub_beam_seq, 0u, memory_order_release);
+    core_chipset_publish_hot_regs();
     CORE2_LOG("chipset reset");
 }
 
@@ -369,14 +625,19 @@ void core_chipset_reset(RuntimeCoreChipset *core)
 static void core_chipset_apply_backpressure(void)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
+    if (core_chipset_timeline_mode() != RUNTIME_TIMELINE_CPU_DRIVEN)
+        return;
     for (;;) {
         uint64_t tgt  = atomic_load_explicit(&s_cpu_cck_target,
                                              memory_order_relaxed);
         uint64_t chip = atomic_load_explicit(&s_chipset_cck,
                                              memory_order_acquire);
-        if ((tgt - chip) <= CHIPSET_MAX_BACKLOG_CCK)
+        if (tgt <= chip || (tgt - chip) <= CHIPSET_MAX_BACKLOG_CCK)
             break;
-        if (!s_core || !s_core->running)
+        RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                        memory_order_acquire);
+        if (!core ||
+            !atomic_load_explicit(&core->running, memory_order_acquire))
             break;
         asm volatile("wfe" ::: "memory");
     }
@@ -396,7 +657,16 @@ static void core_chipset_publish_target(uint32_t cck)
 
         atomic_fetch_add_explicit(&s_cpu_cck_target, chunk,
                                   memory_order_release);
-        PAL_Runtime_WakeupChipset();        /* sev — wake Core 2 */
+        if (core_chipset_timeline_mode() == RUNTIME_TIMELINE_CPU_DRIVEN) {
+            atomic_store_explicit(
+                &s_chipset_horizon,
+                atomic_load_explicit(&s_cpu_cck_target, memory_order_acquire),
+                memory_order_release);
+        }
+        /* The Core 2 timer event stream samples ordinary progress at a fixed
+         * cadence. Contacts and backpressure retain explicit SEV wakeups. */
+        if (!PAL_Runtime_EventStreamActive())
+            PAL_Runtime_WakeupChipset();
         cck -= chunk;
 
         core_chipset_apply_backpressure();
@@ -455,12 +725,21 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
     (void)now;
     (void)freq;
 
-    RuntimeCoreChipset *core = s_core;
-    if (!core || !core->rigel || !core->running)
+    RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
+                                                    memory_order_acquire);
+    if (!core || !core->rigel ||
+        !atomic_load_explicit(&core->running, memory_order_acquire))
         return;
 
-    uint64_t target = atomic_load_explicit(&s_cpu_cck_target, memory_order_acquire);
+    uint64_t target = atomic_load_explicit(&s_chipset_horizon,
+                                           memory_order_acquire);
     uint64_t chip   = atomic_load_explicit(&s_chipset_cck, memory_order_relaxed);
+
+    /* A horizon is permission, not an obligation to monopolize Core 2 until
+     * fully caught up. Bound one host-step burst, then return to WFE/contact
+     * handling; the event stream will schedule the next slice. */
+    if (target > chip && target - chip > CHIPSET_MAX_DRAIN_BURST_CCK)
+        target = chip + CHIPSET_MAX_DRAIN_BURST_CCK;
 
     if (chip >= target) {
         /* Caught up, but stamps <= target may still sit in the queue (the
@@ -553,7 +832,8 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         }
 
         if (r.events & RIGEL_EVENT_FRAME_READY)
-            bellatrix_machine_on_frame_ready();
+            atomic_fetch_add_explicit(&s_pending_frames, 1u,
+                                      memory_order_release);
 
         if (r.events & RIGEL_EVENT_HBLANK)
             bellatrix_machine_on_audio_sample_ready();

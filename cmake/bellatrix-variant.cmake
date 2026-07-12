@@ -23,6 +23,18 @@ option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
 option(BELLATRIX_ENABLE_MULTICORE "Enable multicore runtime (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)" OFF)
 option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO]" OFF)
 option(BELLATRIX_PROFILE "Enable MMIO profiling instrumentation (zero cost when OFF)" OFF)
+set(BELLATRIX_TIMELINE_MODE "cpu" CACHE STRING
+    "Timeline policy: cpu, realtime, or hybrid")
+set_property(CACHE BELLATRIX_TIMELINE_MODE PROPERTY STRINGS cpu realtime hybrid)
+if(BELLATRIX_TIMELINE_MODE STREQUAL "cpu")
+    add_compile_definitions(BELLATRIX_TIMELINE_DEFAULT=0)
+elseif(BELLATRIX_TIMELINE_MODE STREQUAL "realtime")
+    add_compile_definitions(BELLATRIX_TIMELINE_DEFAULT=1)
+elseif(BELLATRIX_TIMELINE_MODE STREQUAL "hybrid")
+    add_compile_definitions(BELLATRIX_TIMELINE_DEFAULT=2)
+else()
+    message(FATAL_ERROR "Invalid BELLATRIX_TIMELINE_MODE=${BELLATRIX_TIMELINE_MODE}")
+endif()
 add_compile_definitions(BELLATRIX BELLATRIX_ENABLE_MINIUART_BACKEND BELLATRIX_ENABLE_PL011_BACKEND)
 if(BELLATRIX_PROFILE)
     add_compile_definitions(BELLATRIX_PROFILE=1)
@@ -151,6 +163,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_bridge.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/mmio_policy.c
     ${BELLATRIX_MACHINE_SOURCE}
     ${CMAKE_SOURCE_DIR}/../src/machine/expansion.c
     # Bus fabric and CD-ROM expansion
@@ -192,6 +205,8 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/time.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/posix_time.c
     ${CMAKE_SOURCE_DIR}/../src/runtime/core_chipset.c
+    ${CMAKE_SOURCE_DIR}/../src/runtime/timeline.c
+    ${CMAKE_SOURCE_DIR}/../src/runtime/posted_writes.c
     # core_io.c provides the STRONG bellatrix_runtime_io_step (and
     # core_io_init/step).  Without it the weak no-op stub in pal_core.c
     # links instead and USB/BT silently stop after the launcher.

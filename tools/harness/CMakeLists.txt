@@ -368,6 +368,31 @@ target_compile_options(bellatrix_unit_memory PRIVATE
 add_test(NAME bellatrix_unit_memory
          COMMAND bellatrix_unit_memory)
 
+# Pure host-testable protocol modules (no PAL, no machine dependencies).
+add_executable(bellatrix_unit_timeline
+    ${ROOT}/tests/unit/test_timeline.c
+    ${SRC}/runtime/timeline.c
+)
+target_include_directories(bellatrix_unit_timeline PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_timeline PRIVATE -Wall -Wextra)
+add_test(NAME bellatrix_unit_timeline COMMAND bellatrix_unit_timeline)
+
+add_executable(bellatrix_unit_mmio_policy
+    ${ROOT}/tests/unit/test_mmio_policy.c
+    ${SRC}/cpu/mmio_policy.c
+)
+target_include_directories(bellatrix_unit_mmio_policy PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_mmio_policy PRIVATE -Wall -Wextra)
+add_test(NAME bellatrix_unit_mmio_policy COMMAND bellatrix_unit_mmio_policy)
+
+add_executable(bellatrix_unit_posted_writes
+    ${ROOT}/tests/unit/test_posted_writes.c
+    ${SRC}/runtime/posted_writes.c
+)
+target_include_directories(bellatrix_unit_posted_writes PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_posted_writes PRIVATE -Wall -Wextra)
+add_test(NAME bellatrix_unit_posted_writes COMMAND bellatrix_unit_posted_writes)
+
 
 add_test(NAME bellatrix_harness_smoke
          COMMAND /bin/bash

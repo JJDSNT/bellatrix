@@ -3,8 +3,10 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #include "machine/machine.h"
+#include "runtime/timeline.h"
 
 typedef struct RigelContext RigelContext;
 
@@ -12,7 +14,7 @@ typedef struct RuntimeCoreChipset {
     RigelContext     *rigel;
     BellatrixMachine *machine;
     uint64_t          local_cycles;
-    bool              running;
+    _Atomic bool      running;
 } RuntimeCoreChipset;
 
 bool core_chipset_init(RuntimeCoreChipset *core,
@@ -45,18 +47,32 @@ void core_chipset_set_pending_ipl(uint8_t ipl);
  * No-op when multicore is disabled or the chipset core is not running. */
 void core_chipset_wait_caught_up(void);
 
-/* Hot read-only registers (DMACONR/INTENAR/INTREQR) published by the Rigel
- * owner and served lock-free to CPU poll loops. publish must be called with
- * the chipset access lock held; read returns false when unavailable so the
- * caller falls back to the rendezvous+lock path. */
+/* Hot read-only registers published by the Rigel owner and served lock-free
+ * to CPU poll loops. DMACONR/INTENAR/INTREQR are scalar snapshots;
+ * VPOSR/VHPOSR are derived from a coherent beam snapshot at CPU logical time.
+ * publish must be called with the chipset access lock held; read returns false
+ * when unavailable/unsupported so the caller falls back to rendezvous+lock. */
 void core_chipset_publish_hot_regs(void);
 bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value);
 
-/* Posted-write queue: non-critical custom writes are stamped with the CPU's
- * emulated time and applied by the Rigel owner exactly when it reaches that
- * stamp. post returns false when unavailable (fall back to the sync path);
- * drain applies everything pending and requires the access lock held. */
+/* Posted-write queue: non-critical custom writes use CPU logical time in the
+ * deterministic mode and current chipset time in self-paced modes. post
+ * returns false when unavailable (fall back to sync); drain requires lock. */
 bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size);
 void core_chipset_drain_posted_writes(void);
+
+/* Core 0 timeline authority. CPU-driven remains the default; realtime and
+ * hybrid publish wall-clock-derived horizons consumed by Core 2. */
+void core_chipset_timeline_init(uint64_t host_counter, uint64_t host_frequency,
+                                RuntimeTimelineMode mode);
+uint64_t core_chipset_timeline_update(uint64_t host_counter);
+/* Cross-core lifecycle requests. The caller only publishes intent; Core 0
+ * applies it on its next supervisor tick and remains the sole timeline owner. */
+void core_chipset_timeline_request_pause(bool paused);
+void core_chipset_timeline_request_mode(RuntimeTimelineMode mode);
+RuntimeTimelineMode core_chipset_timeline_mode(void);
+uint64_t core_chipset_get_horizon(void);
+void core_chipset_get_timeline_snapshot(RuntimeTimeline *snapshot);
+void core_chipset_drain_host_completions(void);
 
 #endif

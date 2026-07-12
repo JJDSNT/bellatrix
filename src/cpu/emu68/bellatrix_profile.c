@@ -110,7 +110,7 @@ void bprof_multicore_publish(uint32_t m68k_cycles, uint32_t cck,
     g_bprof.multicore.publish_calls++;
     g_bprof.multicore.publish_m68k_cycles_total += m68k_cycles;
     g_bprof.multicore.publish_cck_total += cck;
-    if (cck > 0u)
+    if (cck > 0u && !PAL_Runtime_EventStreamActive())
         g_bprof.multicore.wakeups++;
     if (target_cck > g_bprof.multicore.target_cck_max)
         g_bprof.multicore.target_cck_max = target_cck;
@@ -151,6 +151,50 @@ void bprof_multicore_critical_mmio(uint32_t addr, int is_write,
         g_bprof.multicore.critical_mmio_backlog_max = backlog;
     if (backlog == 0u)
         g_bprof.multicore.critical_mmio_caught_up++;
+}
+
+void bprof_multicore_beam_read(uint32_t addr, int projected,
+                               int snapshot_available)
+{
+    uint32_t reg = addr & 0x1ffu;
+
+    if (reg == 0x004u) {
+        if (projected)
+            g_bprof.multicore.beam_vposr_fast++;
+        else
+            g_bprof.multicore.beam_vposr_fallback++;
+    } else if (reg == 0x006u) {
+        if (projected)
+            g_bprof.multicore.beam_vhposr_fast++;
+        else
+            g_bprof.multicore.beam_vhposr_fallback++;
+    }
+    if (!snapshot_available)
+        g_bprof.multicore.beam_snapshot_miss++;
+}
+
+void bprof_multicore_posted_queued(uint32_t depth, int waited_for_space)
+{
+    uint64_t old_max;
+
+    __atomic_fetch_add(&g_bprof.multicore.posted_writes, 1u, __ATOMIC_RELAXED);
+    if (waited_for_space) {
+        __atomic_fetch_add(&g_bprof.multicore.posted_queue_full_waits, 1u,
+                           __ATOMIC_RELAXED);
+    }
+    old_max = __atomic_load_n(&g_bprof.multicore.posted_queue_depth_max,
+                              __ATOMIC_RELAXED);
+    while (old_max < depth &&
+           !__atomic_compare_exchange_n(
+               &g_bprof.multicore.posted_queue_depth_max, &old_max, depth,
+               1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+    }
+}
+
+void bprof_multicore_posted_applied(uint32_t count)
+{
+    __atomic_fetch_add(&g_bprof.multicore.posted_writes_applied, count,
+                       __ATOMIC_RELAXED);
 }
 
 /* -------------------------------------------------------------------------
@@ -377,6 +421,17 @@ void bellatrix_profile_dump(void)
                     (unsigned long long)p->multicore.critical_mmio_caught_up,
                     (unsigned long long)crit_avg,
                     (unsigned long long)p->multicore.critical_mmio_backlog_max);
+            kprintf("[BPROF]   beam_fast vposr=%llu vhposr=%llu fallback_vposr=%llu fallback_vhposr=%llu snapshot_miss=%llu\n",
+                    (unsigned long long)p->multicore.beam_vposr_fast,
+                    (unsigned long long)p->multicore.beam_vhposr_fast,
+                    (unsigned long long)p->multicore.beam_vposr_fallback,
+                    (unsigned long long)p->multicore.beam_vhposr_fallback,
+                    (unsigned long long)p->multicore.beam_snapshot_miss);
+            kprintf("[BPROF]   posted queued=%llu applied=%llu full_waits=%llu depth_max=%llu\n",
+                    (unsigned long long)p->multicore.posted_writes,
+                    (unsigned long long)p->multicore.posted_writes_applied,
+                    (unsigned long long)p->multicore.posted_queue_full_waits,
+                    (unsigned long long)p->multicore.posted_queue_depth_max);
         }
     }
 

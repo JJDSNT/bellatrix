@@ -94,6 +94,8 @@ void PAL_Runtime_ReportCpuProgress(uint32_t cycles);
 uint32_t PAL_Runtime_GetPendingIPL(void);
 void PAL_Runtime_WakeupChipset(void);
 void PAL_Runtime_MmioBarrier(void);
+int PAL_Runtime_EventStreamActive(void);
+uint32_t PAL_Runtime_EventStreamHz(void);
 
 uint64_t PAL_Time_ReadCounter(void);
 uint64_t PAL_Time_GetFrequency(void);

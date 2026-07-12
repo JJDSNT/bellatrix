@@ -23,6 +23,7 @@
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "host/raspi3/hdmi_audio.h"
+#include "devicetree.h"
 #include "host/raspi3/console_log.h"
 #include "io/serial/uart_host.h"
 #include "mmu.h"
@@ -394,6 +395,41 @@ BellatrixRuntime g_runtime;
  * draining them (chipset), so a silent-but-running boot can be told apart from a
  * stalled/deadlocked one. It does not schedule anything yet — see
  * AI_context/consolidated/issue_core0_arbiter_scheduler.md. */
+/* Boot-time timeline selection: the build default (BELLATRIX_TIMELINE_MODE)
+ * can be overridden per boot with `timeline=cpu|realtime|hybrid` in the
+ * kernel bootargs (cmdline.txt on SD, BOOTARGS/-append in QEMU) — the Fase 0
+ * requirement of A/B without recompiling. Same /chosen pattern as Emu68's
+ * async_log. */
+static RuntimeTimelineMode bellatrix_timeline_boot_mode(RuntimeTimelineMode fallback)
+{
+    of_node_t *chosen = dt_find_node("/chosen");
+    of_property_t *prop;
+    const char *args;
+    const char *opt;
+
+    if (!chosen)
+        return fallback;
+    prop = dt_find_property(chosen, "bootargs");
+    if (!prop || !prop->op_value)
+        return fallback;
+
+    args = prop->op_value;
+    opt = strstr(args, "timeline=");
+    if (!opt)
+        return fallback;
+    opt += 9;
+
+    if (strncmp(opt, "cpu", 3) == 0)
+        return RUNTIME_TIMELINE_CPU_DRIVEN;
+    if (strncmp(opt, "realtime", 8) == 0)
+        return RUNTIME_TIMELINE_REALTIME;
+    if (strncmp(opt, "hybrid", 6) == 0)
+        return RUNTIME_TIMELINE_HYBRID;
+
+    kprintf("[CORE0] bootargs timeline= value not recognized; keeping build default\n");
+    return fallback;
+}
+
 static void bellatrix_core0_supervise(void)
 {
     extern bool core_chipset_get_progress(uint64_t *chipset_cck,
@@ -407,6 +443,21 @@ static void bellatrix_core0_supervise(void)
     uint64_t last_heartbeat = last_io;
     uint32_t beat = 0u;
 
+#ifndef BELLATRIX_TIMELINE_DEFAULT
+#define BELLATRIX_TIMELINE_DEFAULT 0
+#endif
+    RuntimeTimelineMode timeline_mode = bellatrix_timeline_boot_mode(
+        (RuntimeTimelineMode)BELLATRIX_TIMELINE_DEFAULT);
+
+    kprintf("[CORE0] timeline mode: %s%s\n",
+            timeline_mode == RUNTIME_TIMELINE_CPU_DRIVEN ? "cpu-driven" :
+            timeline_mode == RUNTIME_TIMELINE_REALTIME   ? "realtime" :
+                                                           "hybrid",
+            timeline_mode == (RuntimeTimelineMode)BELLATRIX_TIMELINE_DEFAULT
+                ? " (build default)" : " (bootargs override)");
+
+    core_chipset_timeline_init(last_io, freq, timeline_mode);
+
     for (;;) {
         uint64_t now = PAL_Time_ReadCounter();
 
@@ -414,6 +465,8 @@ static void bellatrix_core0_supervise(void)
         if (now - last_io >= io_interval) {
             last_io = now;
             bellatrix_runtime_io_step(now, freq);
+            (void)core_chipset_timeline_update(now);
+            core_chipset_drain_host_completions();
         }
 
         if (now - last_heartbeat < heartbeat_interval) {
@@ -424,6 +477,8 @@ static void bellatrix_core0_supervise(void)
 
         uint64_t chipset_cck = 0u;
         uint64_t target_cck = 0u;
+        uint64_t horizon_cck = core_chipset_get_horizon();
+        RuntimeTimeline timeline;
         BellatrixMachine *machine = bellatrix_machine_get();
         CpuBackend *backend = bellatrix_selected_cpu_backend();
         uint64_t frames = machine
@@ -435,13 +490,16 @@ static void bellatrix_core0_supervise(void)
         core_io_serial_get_stats(&serial_stats);
         core_io_reactor_get_stats(&g_runtime.io, &io_stats);
         (void)core_chipset_get_progress(&chipset_cck, &target_cck);
+        core_chipset_get_timeline_snapshot(&timeline);
 
-        kprintf("[CORE0-SUP] beat=%u cpu_target=%llu(+%llu) "
-                "chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x "
+        kprintf("[CORE0-SUP] beat=%u mode=%u cpu_target=%llu(+%llu) "
+                "horizon=%llu chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x "
                 "uart_tx=%u/%u drop=%u uart_rx=%u/%u drop=%u\n",
                 (unsigned)beat,
+                (unsigned)core_chipset_timeline_mode(),
                 (unsigned long long)target_cck,
                 (unsigned long long)(target_cck - last_target),
+                (unsigned long long)horizon_cck,
                 (unsigned long long)chipset_cck,
                 (unsigned long long)(chipset_cck - last_chipset),
                 (long long)((int64_t)target_cck - (int64_t)chipset_cck),
@@ -452,6 +510,49 @@ static void bellatrix_core0_supervise(void)
                 (unsigned)serial_stats.rx_depth,
                 (unsigned)serial_stats.rx_max_depth,
                 (unsigned)serial_stats.rx_dropped);
+        kprintf("[CORE0-TIME] realtime=%llu horizon=%llu rigel=%llu drift=%lld "
+                "clamp=%u generation=%llu\n",
+                (unsigned long long)timeline.realtime_target_cck,
+                (unsigned long long)timeline.horizon_cck,
+                (unsigned long long)chipset_cck,
+                (long long)((int64_t)timeline.horizon_cck -
+                            (int64_t)chipset_cck),
+                timeline.clamp_active ? 1u : 0u,
+                (unsigned long long)timeline.generation);
+#if BELLATRIX_PROFILE_ENABLED
+        kprintf("[BPROF-BEAM] vposr_fast=%llu vposr_fallback=%llu "
+                "vhposr_fast=%llu vhposr_fallback=%llu snapshot_miss=%llu\n",
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.beam_vposr_fast, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.beam_vposr_fallback, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.beam_vhposr_fast, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.beam_vhposr_fallback, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.beam_snapshot_miss, __ATOMIC_RELAXED));
+        kprintf("[BPROF-POST] queued=%llu applied=%llu full_waits=%llu depth_max=%llu\n",
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.posted_writes, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.posted_writes_applied, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.posted_queue_full_waits, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.posted_queue_depth_max, __ATOMIC_RELAXED));
+        kprintf("[BPROF-SCHED] event_hz=%u publish=%llu explicit_wakeups=%llu "
+                "chipset_steps=%llu empty_host_steps=%llu\n",
+                (unsigned)PAL_Runtime_EventStreamHz(),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.publish_calls, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.wakeups, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.chipset_steps, __ATOMIC_RELAXED),
+                (unsigned long long)__atomic_load_n(
+                    &g_bprof.multicore.empty_host_steps, __ATOMIC_RELAXED));
+#endif
 
         uint64_t io_avg_ticks = io_stats.dispatch_calls
             ? io_stats.total_ticks / io_stats.dispatch_calls : 0u;
