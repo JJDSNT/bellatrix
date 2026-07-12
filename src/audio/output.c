@@ -6,6 +6,7 @@
 
 #include "rigel/rigel_time.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 enum {
@@ -30,13 +31,17 @@ enum {
     BELLATRIX_AUDIO_DRC_MAX_ADJ  = 192u,    /* ±0.4 % of 48 kHz */
 };
 
+/* SPSC across cores since frame/HDMI completions moved to Core 0
+ * (ISSUE-0049 Fase 7): the producer (chipset owner, Core 2 in multicore)
+ * owns `tail`; the consumer (Core 0 HDMI DMA poll) owns `head`. Cursors are
+ * free-running and masked on use (QUEUE_SIZE is a power of two); depth is
+ * derived as tail - head. Stats fields are written by one side each. */
 typedef struct BellatrixAudioOutput {
     AudioSample samples[BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE];
-    uint32_t head;
-    uint32_t tail;
-    uint32_t count;
-    uint32_t primed;      /* 0 while building the cushion, 1 once playing */
-    uint64_t sample_acc;
+    _Atomic uint32_t head;   /* consumer cursor, free-running */
+    _Atomic uint32_t tail;   /* producer cursor, free-running */
+    _Atomic uint32_t primed; /* 0 while building the cushion, 1 once playing */
+    uint64_t sample_acc;     /* producer local */
     BellatrixAudioOutputStats stats;
 } BellatrixAudioOutput;
 
@@ -56,7 +61,7 @@ void bellatrix_audio_output_set_prime_frames(uint32_t frames)
         frames = BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE - 1u;
     s_prime_frames = frames;
     /* Force a re-prime so the new depth takes effect cleanly. */
-    s_audio_output.primed = 0u;
+    atomic_store_explicit(&s_audio_output.primed, 0u, memory_order_relaxed);
 }
 
 uint32_t bellatrix_audio_output_prime_frames(void)
@@ -66,23 +71,40 @@ uint32_t bellatrix_audio_output_prime_frames(void)
 
 int bellatrix_audio_output_is_primed(void)
 {
-    return (int)s_audio_output.primed;
+    return (int)atomic_load_explicit(&s_audio_output.primed,
+                                     memory_order_relaxed);
+}
+
+/* Producer-side depth view: own cursor relaxed, remote cursor acquired. */
+static uint32_t bellatrix_audio_output_depth(void)
+{
+    uint32_t tail = atomic_load_explicit(&s_audio_output.tail,
+                                         memory_order_relaxed);
+    uint32_t head = atomic_load_explicit(&s_audio_output.head,
+                                         memory_order_acquire);
+    return tail - head;
 }
 
 static void bellatrix_audio_output_push(int16_t left, int16_t right)
 {
-    if (s_audio_output.count >= BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE) {
-        s_audio_output.head =
-            (s_audio_output.head + 1u) % BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE;
-        s_audio_output.count--;
+    uint32_t tail = atomic_load_explicit(&s_audio_output.tail,
+                                         memory_order_relaxed);
+    AudioSample *slot;
+
+    /* Full: drop the NEW sample. The producer may not move the consumer's
+     * cursor (SPSC), and overrun only happens when production outruns the
+     * sink — DRC keeps the nominal case away from this edge. */
+    if (bellatrix_audio_output_depth() >= BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE) {
         s_audio_output.stats.dropped_samples++;
+        return;
     }
 
-    s_audio_output.samples[s_audio_output.tail].left = left;
-    s_audio_output.samples[s_audio_output.tail].right = right;
-    s_audio_output.tail =
-        (s_audio_output.tail + 1u) % BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE;
-    s_audio_output.count++;
+    slot = &s_audio_output.samples[tail &
+                                   (BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE - 1u)];
+    slot->left = left;
+    slot->right = right;
+    atomic_store_explicit(&s_audio_output.tail, tail + 1u,
+                          memory_order_release);
     s_audio_output.stats.produced_samples++;
 }
 
@@ -123,7 +145,8 @@ static uint32_t bellatrix_audio_output_rate(void)
     if (!s_drc_enabled)
         return BELLATRIX_AUDIO_OUTPUT_RATE_HZ;
 
-    delta = (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH - (int32_t)s_audio_output.count;
+    delta = (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH -
+            (int32_t)bellatrix_audio_output_depth();
     adj = ((int32_t)BELLATRIX_AUDIO_DRC_MAX_ADJ * delta)
           / (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH;
 
@@ -166,8 +189,16 @@ void bellatrix_audio_output_tick(uint32_t cck_cycles)
 
 bool bellatrix_audio_output_pop(AudioSample *sample_out)
 {
-    if (!sample_out || s_audio_output.count == 0u) {
-        s_audio_output.primed = 0u; /* drained → rebuild the cushion */
+    uint32_t head = atomic_load_explicit(&s_audio_output.head,
+                                         memory_order_relaxed);
+    uint32_t tail = atomic_load_explicit(&s_audio_output.tail,
+                                         memory_order_acquire);
+    uint32_t depth = tail - head;
+
+    if (!sample_out || depth == 0u) {
+        /* drained → rebuild the cushion */
+        atomic_store_explicit(&s_audio_output.primed, 0u,
+                              memory_order_relaxed);
         s_audio_output.stats.underrun_samples++;
         return false;
     }
@@ -175,25 +206,26 @@ bool bellatrix_audio_output_pop(AudioSample *sample_out)
     /* Priming: withhold output (report underrun so the consumer feeds silence)
      * until the queue has built a cushion of s_prime_frames. Once primed, play
      * until it drains empty (handled above), then re-prime. */
-    if (!s_audio_output.primed) {
-        if (s_prime_frames != 0u && s_audio_output.count < s_prime_frames) {
+    if (!atomic_load_explicit(&s_audio_output.primed, memory_order_relaxed)) {
+        if (s_prime_frames != 0u && depth < s_prime_frames) {
             s_audio_output.stats.underrun_samples++;
             return false;
         }
-        s_audio_output.primed = 1u;
+        atomic_store_explicit(&s_audio_output.primed, 1u,
+                              memory_order_relaxed);
     }
 
-    *sample_out = s_audio_output.samples[s_audio_output.head];
-    s_audio_output.head =
-        (s_audio_output.head + 1u) % BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE;
-    s_audio_output.count--;
+    *sample_out = s_audio_output.samples[head &
+                                        (BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE - 1u)];
+    atomic_store_explicit(&s_audio_output.head, head + 1u,
+                          memory_order_release);
     s_audio_output.stats.consumed_samples++;
     return true;
 }
 
 uint32_t bellatrix_audio_output_count(void)
 {
-    return s_audio_output.count;
+    return bellatrix_audio_output_depth();
 }
 
 BellatrixAudioOutputStats bellatrix_audio_output_stats(void)
