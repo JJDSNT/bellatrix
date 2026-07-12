@@ -36,8 +36,20 @@
  * correctness increment of the Core-0 arbiter (issue_core0_arbiter_scheduler.md). */
 #define CHIPSET_MAX_BACKLOG_CCK 8192u
 
+/* Minimum CCK per cross-core publication. Emu68 reports progress per JIT
+ * block (~23 CCK per transaction in the ISSUE-0048 QEMU A/B); aggregating
+ * was tried at 227 CCK and REGRESSED beam-poll workloads: with pending
+ * cycles held back, every critical-MMIO rendezvous had to flush and then
+ * actually wait for Core 2 (caught_up went 11k -> 783k), converting a
+ * usually-free check into a cross-core round trip per VHPOSR poll. Keep 1
+ * (publish immediately) until beam reads stop requiring a rendezvous. */
+#define CHIPSET_PUBLISH_MIN_CCK 1u
+
 /* Published by Core 1 (CPU); consumed by Core 2 (chipset). */
 static _Atomic uint64_t s_cpu_cck_target = 0;
+
+/* Aggregated CCK not yet added to s_cpu_cck_target. Core 1 local. */
+static uint32_t s_pending_cck = 0;
 
 /* Advanced by Core 2 (chipset); read cross-core by Core 1 (backpressure) and
  * Core 0 (supervisor), so it must be atomic. */
@@ -48,6 +60,8 @@ static _Atomic uint8_t s_pending_ipl = 0;
 static uint32_t s_m68k_rem = 0;
 
 static RuntimeCoreChipset *s_core = NULL;
+
+static void core_chipset_publish_flush(void);
 
 /* Guards chipset state from concurrent CPU-side bus access. Held by the CPU
  * core (cpu_bridge.c) while dispatching MMIO; not needed by this core. */
@@ -116,6 +130,10 @@ void core_chipset_wait_caught_up(void)
     if (!core || !core->running)
         return;
 
+    /* The rendezvous only means "chipset reached the CPU's time" if the
+     * target includes every cycle the CPU has run — flush the aggregation. */
+    core_chipset_publish_flush();
+
     for (;;) {
         uint64_t target = atomic_load_explicit(&s_cpu_cck_target,
                                                memory_order_relaxed);
@@ -147,6 +165,7 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     s_m68k_rem    = 0;
+    s_pending_cck = 0;
 
     CORE2_LOG("chipset init (Rigel)");
     return true;
@@ -168,12 +187,71 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     s_m68k_rem    = 0;
+    s_pending_cck = 0;
     CORE2_LOG("chipset reset");
+}
+
+/* Backpressure: block until Core 2 drains the backlog below the bound, so
+ * the CPU (Core 1) cannot run unbounded ahead of the chipset (Core 2).
+ * Core 2 SEVs after every drain iteration, waking this WFE. */
+static void core_chipset_apply_backpressure(void)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    for (;;) {
+        uint64_t tgt  = atomic_load_explicit(&s_cpu_cck_target,
+                                             memory_order_relaxed);
+        uint64_t chip = atomic_load_explicit(&s_chipset_cck,
+                                             memory_order_acquire);
+        if ((tgt - chip) <= CHIPSET_MAX_BACKLOG_CCK)
+            break;
+        if (!s_core || !s_core->running)
+            break;
+        asm volatile("wfe" ::: "memory");
+    }
+#endif
+}
+
+/* Add `cck` to the shared target in bounded chunks. A single oversized
+ * publication — JIT catch-up after a fault-free stretch, or an idle STOP
+ * window — previously pushed the target up to 272x past the backlog bound
+ * and froze both cores while Core 2 drained it blind (ISSUE-0048). */
+static void core_chipset_publish_target(uint32_t cck)
+{
+    while (cck > 0u) {
+        uint32_t chunk = cck > CHIPSET_MAX_BACKLOG_CCK
+                       ? CHIPSET_MAX_BACKLOG_CCK
+                       : cck;
+
+        atomic_fetch_add_explicit(&s_cpu_cck_target, chunk,
+                                  memory_order_release);
+        PAL_Runtime_WakeupChipset();        /* sev — wake Core 2 */
+        cck -= chunk;
+
+        core_chipset_apply_backpressure();
+    }
+}
+
+/* Flush the local aggregation into the shared target. Core 1 only. */
+static void core_chipset_publish_flush(void)
+{
+    uint32_t publish = s_pending_cck;
+
+    if (publish == 0u)
+        return;
+    s_pending_cck = 0u;
+
+    XCORE_LOG("CPU->CHIPSET", "cck=%u target=%llu",
+              (unsigned)publish,
+              (unsigned long long)(atomic_load_explicit(&s_cpu_cck_target,
+                                                        memory_order_relaxed)
+                                   + publish));
+    core_chipset_publish_target(publish);
 }
 
 /* ---------------------------------------------------------------------------
  * Called by Core 1 (CPU / JIT or Musashi) after each advance quantum.
- * Converts M68K cycles → CCK and signals Core 2.
+ * Converts M68K cycles → CCK, aggregates locally, and signals Core 2 once
+ * at least CHIPSET_PUBLISH_MIN_CCK accumulated.
  * ------------------------------------------------------------------------- */
 void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
 {
@@ -183,47 +261,15 @@ void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
     uint32_t total = s_m68k_rem + m68k_cycles;
     uint32_t cck   = total >> 1u;          /* M68K / 2 = CCK */
     s_m68k_rem     = total & 1u;
-#if BELLATRIX_PROFILE_ENABLED
-    uint64_t target = atomic_load_explicit(&s_cpu_cck_target,
-                                           memory_order_acquire);
-#endif
 
-    if (cck > 0u) {
-#if BELLATRIX_PROFILE_ENABLED || defined(BELLATRIX_CORE_LOG)
-        uint64_t old_target = atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
-                                                         memory_order_release);
-        uint64_t new_target = old_target + cck;
-#if BELLATRIX_PROFILE_ENABLED
-        target = new_target;
-#endif
-        XCORE_LOG("CPU->CHIPSET", "m68k=%u cck=%u target=%llu",
-                  (unsigned)m68k_cycles, (unsigned)cck,
-                  (unsigned long long)new_target);
-#else
-        (void)atomic_fetch_add_explicit(&s_cpu_cck_target, cck,
-                                        memory_order_release);
-#endif
-        PAL_Runtime_WakeupChipset();        /* sev — wake Core 2 */
+    s_pending_cck += cck;
+    if (s_pending_cck >= CHIPSET_PUBLISH_MIN_CCK)
+        core_chipset_publish_flush();
 
-#if defined(BELLATRIX_ENABLE_MULTICORE)
-        /* Backpressure: block until Core 2 drains the backlog below the bound,
-         * so the CPU (Core 1) cannot run unbounded ahead of the chipset
-         * (Core 2). Core 2 SEVs after each host_step, waking this WFE. */
-        for (;;) {
-            uint64_t tgt  = atomic_load_explicit(&s_cpu_cck_target,
-                                                 memory_order_relaxed);
-            uint64_t chip = atomic_load_explicit(&s_chipset_cck,
-                                                 memory_order_acquire);
-            if ((tgt - chip) <= CHIPSET_MAX_BACKLOG_CCK)
-                break;
-            if (!s_core || !s_core->running)
-                break;
-            asm volatile("wfe" ::: "memory");
-        }
-#endif
-    }
 #if BELLATRIX_PROFILE_ENABLED
-    bprof_multicore_publish(m68k_cycles, cck, target);
+    bprof_multicore_publish(m68k_cycles, cck,
+                            atomic_load_explicit(&s_cpu_cck_target,
+                                                 memory_order_acquire));
     bprof_record(&g_bprof.publish_time, bprof_now() - t0);
 #endif
 }
@@ -289,6 +335,17 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         chip               += advanced;
         core->local_cycles += advanced;
         core->machine->tick_count = (uint64_t)r.time;
+
+        /* Publish progress every iteration, not only after the full drain:
+         * Core 1's backpressure and critical-MMIO rendezvous otherwise wait
+         * blind for the whole burst while a long backlog drains, freezing
+         * the machine for seconds (ISSUE-0048). Store before event handling
+         * so a frame present does not delay the CPU's wakeup. */
+        atomic_store_explicit(&s_chipset_cck, chip, memory_order_release);
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+        asm volatile("dsb ishst\n\tsev" ::: "memory");
+#endif
+
         bellatrix_machine_on_chipset_advanced((uint32_t)advanced);
 #if BELLATRIX_PROFILE_ENABLED
         bprof_multicore_chipset_step((uint32_t)advanced, chip, target);
