@@ -74,6 +74,7 @@ type model struct {
 	osd            bool
 	launcher       bool
 	hdmiAudio      bool
+	timelineMode   string // "cpu", "realtime", "hybrid" → bootargs timeline=
 
 	width     int
 	height    int
@@ -108,6 +109,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry, hdfs []Fi
 		perfLogsOff:    true,
 		osd:            true,
 		launcher:       true,
+		timelineMode:   "cpu",
 		hdmiAudio:      false,
 	}
 
@@ -153,7 +155,7 @@ func runLauncher(roms []FileEntry, adfs []FileEntry, isos []FileEntry, hdfs []Fi
 		adf:            adf,
 		iso:            iso,
 		hdf:            hdf,
-		bootArgs:       buildBootArgs(fm.debugMode, fm.fpuEnabled),
+		bootArgs:       buildBootArgs(fm.debugMode, fm.fpuEnabled, fm.timelineMode),
 		rtg:            fm.rtg,
 		multicoreBuild: fm.multicoreBuild,
 		btstack:        fm.btstack,
@@ -261,7 +263,7 @@ func launcherProfileForCPUBackend(cpuBackend string) string {
 	return "bellatrix"
 }
 
-func buildBootArgs(debugMode string, fpuEnabled bool) string {
+func buildBootArgs(debugMode string, fpuEnabled bool, timelineMode string) string {
 	bootArgs := "enable_cache"
 	if !fpuEnabled {
 		bootArgs += " nofpu"
@@ -269,7 +271,23 @@ func buildBootArgs(debugMode string, fpuEnabled bool) string {
 	if debugMode != "" {
 		bootArgs += " " + debugMode
 	}
+	if timelineMode != "" {
+		// Runtime override of the build's BELLATRIX_TIMELINE_MODE default;
+		// parsed from /chosen bootargs by bellatrix_timeline_boot_mode().
+		bootArgs += " timeline=" + timelineMode
+	}
 	return bootArgs
+}
+
+func nextTimelineMode(current string) string {
+	switch current {
+	case "cpu":
+		return "realtime"
+	case "realtime":
+		return "hybrid"
+	default:
+		return "cpu"
+	}
 }
 
 func (m model) Init() tea.Cmd {
@@ -426,6 +444,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "h":
 			m.hdmiAudio = !m.hdmiAudio
+			return m, nil
+
+		case "t":
+			m.timelineMode = nextTimelineMode(m.timelineMode)
 			return m, nil
 
 		case "enter":
@@ -680,6 +702,13 @@ func (m model) renderPanel() string {
 		profileBadge = onBadgeStyle.Render("ON")
 	}
 	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("MMIO profiling:"), profileBadge))
+	b.WriteString("\n")
+
+	timelineBadge := offBadgeStyle.Render("CPU")
+	if m.timelineMode != "cpu" {
+		timelineBadge = onBadgeStyle.Render(strings.ToUpper(m.timelineMode))
+	}
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("Timeline:"), timelineBadge))
 	b.WriteString("\n\n")
 
 	b.WriteString(sectionTitleStyle.Render("QEMU command"))
@@ -687,7 +716,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Debug • R RTG • M Multicore • A Perf mute • B BTStack • U USB • X MSC • P Pointer • E Boards • L Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • H HDMI audio • I Profile • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Debug • R RTG • M Multicore • A Perf mute • B BTStack • U USB • X MSC • P Pointer • E Boards • L Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • H HDMI audio • I Profile • T Timeline • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }
@@ -697,7 +726,7 @@ func (m model) qemuCommand() string {
 	image := installDir + "/Emu68.img"
 	dtb := installDir + "/bcm2710-rpi-3-b.dtb"
 
-	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled)
+	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled, m.timelineMode)
 
 	serialEnv := ""
 	switch m.serialBackend {
