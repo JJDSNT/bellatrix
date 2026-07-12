@@ -55,10 +55,10 @@ bloqueios sem criar um escopo paralelo.
 - [x] Stress SPSC com pthreads reais sob TSAN no ctest.
 - [ ] Experimento de granularidade: drain sem cortes em deadlines observáveis
   (avg_step 79 → ~2000+) e medir fps no Pi antes de aceitar "custo por CCK".
-- [ ] A/B formal Fase 0 no QEMU: 3 rodadas × {single, multicore-cpu,
+- [x] A/B formal Fase 0 no QEMU: 3 rodadas × {single, multicore-cpu,
   multicore-hybrid} com PROFILE; tabela de contadores + variância na issue.
-- [ ] Reavaliar CHIPSET_PUBLISH_MIN_CCK 1→227 com o A/B montado (beam f(t)
-  inverteu a conta que fazia disso uma regressão).
+- [x] Reavaliar CHIPSET_PUBLISH_MIN_CCK 1→227 com o A/B montado (beam f(t)
+  inverteu a conta que fazia disso uma regressão) — ADOTADO 227.
 - [ ] Política de presenter: apresentar só o último frame pendente quando
   atrasado (hoje `while (frames--)` apresenta todos em sequência).
 - [ ] Pi: capturar `[BOOT] ARM Clock` desde o início e ler `[CORE0-HW]`
@@ -194,6 +194,46 @@ bloqueios sem criar um escopo paralelo.
   de muitos wraps. Armadilha de ambiente: TSAN aborta com "unexpected memory
   mapping" sob ASLR de kernels novos (vm.mmap_rnd_bits=32) — testes rodam
   via `setarch -R`. Suíte completa: 39/39 verdes.
+- 2026-07-13: política de presenter implementada — o drain do Core 0
+  apresenta apenas o frame pendente mais novo (Rigel só guarda o último
+  composto; re-apresentar N vezes eram N-1 cópias redundantes de
+  framebuffer). Contabilidade por frame emulado (counter, mouse tick)
+  preservada via `on_frame_skipped`.
+- 2026-07-13: A/B FORMAL Fase 0 no QEMU (TCG, host limpo verificado — 0
+  QEMU órfão, load 0.44 —, 3 rodadas × 60 s por config, KS13 + megademoA,
+  Emu68 backend, PROFILE):
+
+  | config | CCK em ~17-18 s | frames | CCK @ ~58 s | frames | avg_step |
+  |---|---|---|---|---|---|
+  | single | 4.639.280 (@17,0-20,3 s parede) | 65 | sem dump tardio | — | — |
+  | mc-cpu | 4.556.656-4.625.168 | 64-65 | 16,9-17,2 M | 238-243 | 174-175 |
+  | mc-hybrid | 4.570.416-4.601.480 | 64 | 17,4-17,6 M | 245-248 | 221-224 |
+
+  CONCLUSÕES: (1) PARIDADE single × multicore no mesmo ponto emulado —
+  todos atingem ~4,6 M CCK/65 frames em ~17-18 s; a "regressão multicore"
+  do início da ISSUE-0049 não existe mais no QEMU. (2) hybrid ≈ mc-cpu
+  (+1-2%, dentro do ruído). (3) VARIÂNCIA: contadores no mesmo beat <1%
+  entre rodadas; parede até ±10% (single r1 20,3 s vs r2/r3 17,0 s) —
+  confirma contadores como métrica canônica no TCG. (4) O single é
+  determinístico em CCK/frames entre rodadas; só a parede varia. (5)
+  avg_step no QEMU (KS13+demo) = 175-224 ≈ scanline — o 79 do Pi é anômalo
+  também nesta comparação, reforçando o experimento de granularidade.
+  Observação de semântica: em mc-cpu o CPU respeita o backlog (8,2-8,5 K);
+  em hybrid o CPU corre à frente sem limite (backlog ~200 M CCK no TCG,
+  onde o m68k JIT é ~12× realtime) — no Pi real isso não ocorre (CPU <
+  realtime), mas fica registrado como questão de spec da Fase 6.
+- 2026-07-13: item 4 — CHIPSET_PUBLISH_MIN_CCK 1→227 medido contra a
+  baseline: hybrid 18,1/18,5/18,9 M CCK e 255/261/266 frames vs
+  17,4/17,6/17,4 M e 245-248 (+6% consistente, 3/3 acima de toda a
+  baseline); cpu-driven em paridade no topo (17,4-17,7 M vs 17,2-17,5 M
+  intercalado). Rodadas baixas apareceram em AMBAS as imagens no teste
+  intercalado (baseline 15,2 M; 227 15,0/10,5 M) = ruído do host, que subiu
+  de load 0,44 (baseline) para ~1,9 — DISCIPLINA: registrar load antes de
+  cada bateria e comparar pelo topo/mediana dos contadores, nunca por
+  rodada isolada. A regressão histórica do 227 (caught_up 11k→783k por
+  VHPOSR) não voltou: beam f(t) removeu o rendezvous dos polls. DECISÃO:
+  227 adotado (uma scanline de agregação; ~10× menos stores cross-core;
+  atraso máximo de target ≤64 µs emulados).
 
 # Bloqueios
 

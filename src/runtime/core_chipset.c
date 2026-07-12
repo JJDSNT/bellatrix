@@ -43,12 +43,13 @@
 
 /* Minimum CCK per cross-core publication. Emu68 reports progress per JIT
  * block (~23 CCK per transaction in the ISSUE-0048 QEMU A/B); aggregating
- * was tried at 227 CCK and REGRESSED beam-poll workloads: with pending
- * cycles held back, every critical-MMIO rendezvous had to flush and then
- * actually wait for Core 2 (caught_up went 11k -> 783k), converting a
- * usually-free check into a cross-core round trip per VHPOSR poll. Keep 1
- * (publish immediately) until beam reads stop requiring a rendezvous. */
-#define CHIPSET_PUBLISH_MIN_CCK 1u
+ * at 227 CCK once REGRESSED beam-poll workloads because every VHPOSR poll
+ * was a critical-MMIO rendezvous that had to flush and wait for Core 2
+ * (caught_up went 11k -> 783k). With beam reads now served lock-free from
+ * the published snapshot (ISSUE-0049 beam f(t)), only rare critical
+ * triggers rendezvous, so one scanline of aggregation trades ~10x fewer
+ * cross-core stores for <=64 us of target lag. */
+#define CHIPSET_PUBLISH_MIN_CCK 227u
 
 /* Published by Core 1 (CPU); consumed by Core 2 (chipset). */
 static _Atomic uint64_t s_cpu_cck_target = 0;
