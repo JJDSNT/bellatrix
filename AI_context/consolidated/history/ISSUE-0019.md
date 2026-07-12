@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0019
 title: "Frame counters — common debug frame definition"
-status: backlog
+status: resolved
 priority: medium
 type: infra
 owner: unassigned
@@ -88,11 +88,11 @@ Bellatrix 46.1 fps hframe=2622 vframe=2619
 
 # Criterios de Aceite
 
-- [ ] Existe documentacao clara dizendo qual contador cada log/env var usa.
-- [ ] Dumps graficos usam nome ou documentacao explicita de `video_frame`.
-- [ ] Pelo menos um modo de trace imprime `harness_frame` e `video_frame` na
+- Histórico (migrado para ISSUE-0051/0052): Existe documentacao clara dizendo qual contador cada log/env var usa.
+- Histórico (migrado para ISSUE-0051/0052): Dumps graficos usam nome ou documentacao explicita de `video_frame`.
+- Histórico (migrado para ISSUE-0051/0052): Pelo menos um modo de trace imprime `harness_frame` e `video_frame` na
   mesma linha para correlacao.
-- [ ] Issues graficas passam a referenciar frames com origem qualificada quando
+- Histórico (migrado para ISSUE-0051/0052): Issues graficas passam a referenciar frames com origem qualificada quando
   houver risco de ambiguidade.
 
 # Referencias
@@ -105,3 +105,13 @@ Bellatrix 46.1 fps hframe=2622 vframe=2619
 # Log
 
 - 2026-06-27: issue criada para padronizar a definicao comum de frame de debug.
+- 2026-07-13: primeiro corte bare-metal: OSD deixou de chamar `flip_count` de
+  FPS genérico. Passa a mostrar `MFR` (machine/emulated frame corrente) e
+  `PPS` (chamadas de apresentação por segundo). `[CORE0-SUP] frames` permanece
+  machine-frame. Ainda faltam qualificar/correlacionar harness, video-frame e
+  trace-frame para cumprir os critérios completos desta issue.
+- 2026-07-13: após gates Battle/AROS, PPS foi removido do OSD: mesmo qualificado,
+  apresentação por segundo continuava convidando uma interpretação errada de
+  "velocidade". O overlay agora mostra `MFR` para correlação e `RT%` como razão
+  específica do relógio do chipset. Desempenho de sistema passa a usar
+  wall-time até milestones; jogos usam fidelidade temporal separada.

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0009
 title: "Harness: regressão histórica de performance e qualidade de áudio"
-status: doing
+status: superseded
 priority: high
 type: bug
 owner: agent

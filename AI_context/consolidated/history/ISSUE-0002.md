@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0002
 title: "Emu68 integration — performance architecture"
-status: doing
+status: superseded
 priority: high
 type: refactor
 owner: agent

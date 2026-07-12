@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0037
 title: "Bare-metal: saida de video Amiga fica preta/instavel depois do launcher"
-status: open
+status: resolved
 priority: high
 type: bug
 owner: agent

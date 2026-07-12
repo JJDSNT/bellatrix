@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0006
 title: "Temporal window truncation for critical MMIO writes"
-status: backlog
+status: superseded
 priority: medium
 type: feature
 owner: agent
@@ -182,6 +182,6 @@ cost using the existing quantum loop.
 
 ## Status
 
-- [ ] Not started
+- Histórico (não ativo): Not started
 - Prerequisite: ISSUE-0004 (done — Phase 0 complete)
 - Blocks: correct Copper/Blitter/audio DMA timing in Phase 4-5 of the project roadmap

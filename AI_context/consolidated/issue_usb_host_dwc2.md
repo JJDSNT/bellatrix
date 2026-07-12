@@ -21,7 +21,7 @@ instância CherryUSB/DWC2 era bombeada por Core 0 e Core 3. O gate transitório
 - MSC permanece síncrono. Stalls de ~625 ms foram medidos no launcher; acesso
   runtime será o gatilho para request/completion ou worker no Core 3.
 
-O trabalho completo está em `AI_context/issues/ISSUE-0045.md` e a arquitetura
+O trabalho completo está em `AI_context/consolidated/history/ISSUE-0045.md` e a arquitetura
 pública em `docs/host_reactor.md`.
 
 ## Contexto

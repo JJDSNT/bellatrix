@@ -17,6 +17,12 @@ typedef struct RuntimeCoreChipset {
     _Atomic bool      running;
 } RuntimeCoreChipset;
 
+typedef struct RuntimeFrameCompletionStats {
+    uint64_t produced;
+    uint64_t presented;
+    uint64_t coalesced;
+} RuntimeFrameCompletionStats;
+
 bool core_chipset_init(RuntimeCoreChipset *core,
                        RigelContext *rigel,
                        BellatrixMachine *machine);
@@ -74,5 +80,6 @@ RuntimeTimelineMode core_chipset_timeline_mode(void);
 uint64_t core_chipset_get_horizon(void);
 void core_chipset_get_timeline_snapshot(RuntimeTimeline *snapshot);
 void core_chipset_drain_host_completions(void);
+void core_chipset_get_frame_completion_stats(RuntimeFrameCompletionStats *stats);
 
 #endif

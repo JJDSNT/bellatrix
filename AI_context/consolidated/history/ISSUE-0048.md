@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0048
 title: "Performance end-to-end: recuperar realtime no harness e provar ganhos multicore/Emu68"
-status: doing
+status: superseded
 priority: critical
 type: performance
 owner: agent

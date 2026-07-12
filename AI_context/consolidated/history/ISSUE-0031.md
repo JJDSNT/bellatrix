@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0031
 title: "Harness Musashi sem FPU: crasha Line-F em 020/030/040 — bloqueia visual do ArosOne"
-status: open
+status: superseded
 priority: high
 type: bug
 owner: unassigned

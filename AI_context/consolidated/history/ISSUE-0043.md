@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0043
 title: "JIT/ExecutionLoop acoplado no caminho do build Musashi"
-status: backlog
+status: superseded
 priority: medium
 type: refactor
 owner: user
@@ -60,6 +60,6 @@ Nada ainda (backlog). Apenas observação registrada.
 
 # Critérios de aceite
 
-- [ ] Mapeamento do que do JIT é usado no caminho Musashi.
-- [ ] Logs de exceção não atribuídos ao JIT quando irrelevante.
-- [ ] Decisão documentada: desacoplar vs manter (com justificativa).
+- Histórico (não ativo): Mapeamento do que do JIT é usado no caminho Musashi.
+- Histórico (não ativo): Logs de exceção não atribuídos ao JIT quando irrelevante.
+- Histórico (não ativo): Decisão documentada: desacoplar vs manter (com justificativa).

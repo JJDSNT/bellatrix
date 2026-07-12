@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0050
 title: "Execution tracker for ISSUE-0049"
-status: doing
+status: superseded
 priority: high
 type: task
 owner: agent
@@ -16,6 +16,11 @@ tags: [pistorm, multicore, execution]
 Executar integralmente a ISSUE-0049. A especificação, fases, métricas e gates
 permanecem na issue-mãe; este arquivo registra ordem corrente, evidências e
 bloqueios sem criar um escopo paralelo.
+
+O objetivo operacional abrange também os contratos herdados de ISSUE-0002,
+0006, 0007, 0042, 0045, 0046, 0047 e 0048. ISSUE-0049 é a especificação da
+frente PiStorm/self-paced, não uma substituição do árbitro por epochs já
+planejado. A tabela de dependências normativa está na issue-mãe.
 
 # Estado global
 
@@ -37,9 +42,9 @@ bloqueios sem criar um escopo paralelo.
 - [x] Ampliar equivalência beam projetado/real.
 - [x] Instrumentar fast path/fallback VPOSR/VHPOSR.
 - [x] Rodar testes e build multicore profile.
-- [ ] Executar boot/perfil QEMU e registrar A/B.
-- [ ] Executar gate equivalente no Pi 3.
-- [ ] Continuar pela primeira pendência da fase seguinte na ISSUE-0049.
+- [x] Executar boot/perfil QEMU e registrar A/B.
+- [x] Executar gate equivalente no Pi 3.
+- [x] Continuar pela primeira pendência da fase seguinte na ISSUE-0049.
 - [x] Iniciar matriz de contatos MMIO e corrigir lacunas temporais/triggers.
 - [x] Implementar event stream PAL no Core 2 com fallback de plataforma.
 - [x] Implementar timeline CPU/realtime/híbrida e horizon atômico do Core 0.
@@ -53,23 +58,38 @@ bloqueios sem criar um escopo paralelo.
   fila cheia.
 - [x] Audit cross-core do caminho Core 0 (presenter, input, serial, áudio).
 - [x] Stress SPSC com pthreads reais sob TSAN no ctest.
-- [ ] Experimento de granularidade: drain sem cortes em deadlines observáveis
+- Histórico (não ativo): Experimento de granularidade: drain sem cortes em deadlines observáveis
   (avg_step 79 → ~2000+) e medir fps no Pi antes de aceitar "custo por CCK".
 - [x] A/B formal Fase 0 no QEMU: 3 rodadas × {single, multicore-cpu,
   multicore-hybrid} com PROFILE; tabela de contadores + variância na issue.
 - [x] Reavaliar CHIPSET_PUBLISH_MIN_CCK 1→227 com o A/B montado (beam f(t)
   inverteu a conta que fazia disso uma regressão) — ADOTADO 227.
-- [ ] Política de presenter: apresentar só o último frame pendente quando
+- [x] Política de presenter: apresentar só o último frame pendente quando
   atrasado (hoje `while (frames--)` apresenta todos em sequência).
-- [ ] Pi: capturar `[BOOT] ARM Clock` desde o início e ler `[CORE0-HW]`
+- [x] Pi: capturar `[BOOT] ARM Clock` desde o início e ler `[CORE0-HW]`
   durante o run antes de qualquer conclusão de performance.
-- [ ] Pi: medir a frequência ótima do event stream no A53 (250 kHz foi
+- Histórico (não ativo): Pi: medir a frequência ótima do event stream no A53 (250 kHz foi
   escolha arquitetural, não medida).
-- [ ] Fase 7: A/B de composição com 3 modos (render off / buffer privado
+- Histórico (não ativo): Pi: gate Fase 7a — validar o trio {pump ocioso a 1 kHz, mtune=a53,
+  OSD UV!}: esperado core2_busy subir de 82-83% e CCK/s > 760 K; conferir
+  serial/teclado funcionais (pump rate-limitado) e avg_step estável.
+- Histórico (não ativo): Fase 7: A/B de composição com 3 modos (render off / buffer privado
   sem apresentar / render+apresentação) para separar Agnus de Denise e de
   custo de framebuffer — complementa o experimento de granularidade.
-- [ ] Fase 8 (Pi): qualidade de áudio sob hybrid (Paula vs realtime) e
+- Histórico (não ativo): Fase 8 (Pi): qualidade de áudio sob hybrid (Paula vs realtime) e
   matriz completa KS1.3/WB/AROS/jogo, USB, rodada longa de drift.
+- Histórico (não ativo): Auditar pendências compatíveis da ISSUE-0007 sem reintroduzir CPU-worker,
+  rendezvous periódico ou throttle pelo Core 0; sincronizar só contatos reais.
+- Histórico (não ativo): Reconciliar lifecycle de ISSUE-0042: boot, launcher, runtime, pause,
+  reset, troca de modo e shutdown com fila/snapshots quiescentes.
+- Histórico (não ativo): Após fechar protocolo e gate temporal, abrir a campanha `rigel_perf.md`
+  como frente própria, com cada otimização isolada por flag e A/B completo.
+- Histórico (não ativo): Fechar ISSUE-0019 em todos os logs/traces: correlacionar machine,
+  video, harness e presentation frames sem usar `FPS` genérico.
+- Histórico (não ativo): Instrumentar milestones wall-time para AROS/WB/bootblock e separar
+  benchmark de responsividade CPU do gate temporal de jogos/Paula.
+- Histórico (não ativo): Adicionar gate explícito: nenhuma mudança de Core 0, bus ou Rigel pode
+  piorar o tempo até AROS/WB acelerado sem ganho de produto aceito pelo usuário.
 
 # Evidências
 
@@ -277,6 +297,139 @@ bloqueios sem criar um escopo paralelo.
   Musashi (ainda trivial vs 53 K queued); `arm_mhz=0` no 1º beat e
   `ffffffff` em ~3 beats = falhas transitórias de mailbox a investigar um
   dia (talvez concorrência com mailbox do HDMI no mesmo core).
+
+- 2026-07-13: Fase 7a implementada (trio barato antes do profiling): (1)
+  diagnóstico do idle de 17-18% do Core 2 — os ~500 K empty host_steps/s
+  chamavam `post_chipset_step` (lock + pump de serial/fallback/teclado) a
+  cada iteração ociosa; pumps precisam de ~1 kHz (serial Paula = 1 char/
+  ~300 µs a 31,25 kbaud), então o caminho vazio agora rate-limita a 1 kHz
+  pelo contador de host — bursts com avanço continuam pumpando na saída
+  como antes. (2) `-mtune=cortex-a53` no rigel (alvo separado que NÃO
+  herdava o `-mtune=cortex-a72` global do Emu68, pensado p/ Pi 4) e
+  override no Emu68.elf via `bellatrix-target.cmake` (flag posterior
+  vence). (3) OSD ganhou alerta `UV!` em vermelho ao lado do FPS quando
+  GET_THROTTLED reporta condição viva (bits 0-2); alimentado pelo
+  heartbeat a ~0,5 Hz via `osd_set_power_alert` — undervoltage nunca mais
+  passa despercebido com tela ligada.
+
+- 2026-07-13: novo gate Pi 3 informado pelo usuário, imagem
+  `build: Jul 12 2026 15:53:57`, Musashi 68040 multicore hybrid, PROFILE off.
+  Clock medido 1199-1200 MHz e `throttled=0` em todos os beats: alimentação
+  saudável. Em aproximadamente 36 s, Rigel avançou 23,59 M CCK e 333 frames,
+  cerca de 655 K CCK/s e 9,2 fps (18,5% do PAL realtime). `drift` ficou
+  limitado a 7,5-8,2 K e `clamp=1`, mas `cpu_target` cresceu até 11,09 bilhões
+  de CCK: o hybrid está efetivamente limitado por `chipset+8192`, enquanto a
+  CPU corre livre muito à frente. Áudio ruim é esperado com produção emulada
+  a ~18% de realtime e ainda não pode ser julgado como qualidade de Paula.
+  Host Reactor saudável no agregado (`avg=4us`, um miss; pico USB=3136us),
+  embora `late_max=31,648ms` mereça observação. Como a imagem é de 12/jul, este
+  gate NÃO valida as mudanças locais posteriores de pump 1 kHz, mtune A53,
+  alerta UV, presenter nem os fixes de fila abaixo.
+
+- 2026-07-13: o usuário observou OSD=10 apesar de transições visuais parecerem
+  mais rápidas. Auditoria confirmou a ISSUE-0019: `[CORE0-SUP] frames` mede
+  frames emulados, mas o OSD calculava `FPS` sobre `PAL_Video_Flip()`.
+  Qualificado no OSD: `MFR` agora mostra `machine_frame`; `PPS` mede
+  apresentações por segundo. No gate acima as duas taxas estavam próximas,
+  mas continuam métricas semanticamente diferentes e nenhuma substitui CCK/s.
+
+- 2026-07-13: imagem de gate atual construída para Pi 3: Musashi 68040,
+  multicore, hybrid, PROFILE, HDMI áudio, USB+MSC, launcher e OSD ativos; BT e
+  logs hot-path desativados. Heartbeat ganhou `[CORE0-AUDIO]` com expected,
+  produced, consumed, realtime%, underrun, dropped, depth e priming, permitindo
+  separar déficit do Rigel de falha do consumidor HDMI sem trace por sample.
+  Imagem `emu68/install-bellatrix-rigel-musashi/Emu68.img`, 3.067.936 bytes,
+  SHA-256 `7729af4ba66703bd7b81452eb10e30836f47d5371ed0bb7f07e8da00069bf70b`.
+  Builds e instalação passaram; 39/39 testes host/TSAN/Rigel verdes.
+
+- 2026-07-13: gate da imagem acima capturado em `musashi.txt`, Battle Squadron.
+  Imagem correta confirmada (`build 16:14:55`, PROFILE on, event stream 150 kHz).
+  Alimentação saudável após os primeiros reads transitórios (`arm_mhz=1200`,
+  throttled=0). Áudio conclusivo: por heartbeat o sink exige ~96 K samples,
+  Rigel produz 15,1-22,3 K (15-23%), HDMI consome praticamente o mesmo valor,
+  underrun cresce ~65-73 K, dropped=0 e depth permanece baixo (10-94). Logo o
+  consumidor HDMI/fila funciona; a distorção é starvation causado por emulação
+  sub-realtime, não perda no transporte. No trecho estável, Core 2 avança cerca
+  de 1,22 M CCK/beat (~0,61 M CCK/s, ~17% PAL) e ~8,5 frames emulados/s.
+  `core2_busy` melhorou de 82-83% para 85%, mas não fechou o gap; avg_step cai
+  de 222-349 no boot para 19-95 no workload, confirmando fragmentação fortemente
+  dependente da carga. Fila postada saudável: queued=applied, full_fallbacks=0,
+  depth_max=9. Beam projetado sem fallback/miss. Este gate fecha o diagnóstico
+  de áudio da Fase 7, mas NÃO o gate de qualidade/realtime.
+
+- 2026-07-13: observação visual do usuário refinou a semântica da Fase 6:
+  telas/transições parecem mais rápidas que Amiga real apesar de ~8,5 frames/s.
+  Isso é compatível com `cpu_target` bilhões de CCK à frente: a CPU atravessa
+  muitos estados guest entre dois frames lentos do Rigel, então cada imagem
+  apresentada já pode saltar muito adiante. Em uma máquina acelerada isso pode
+  ser comportamento desejado, mas com chipset/áudio sub-realtime a combinação
+  comprime causalidade e pode dessincronizar percepção visual/sonora; a policy
+  da Fase 6 precisa declarar qual regime é produto. Adicionada telemetria
+  `[CORE0-FRAME] produced/presented/coalesced` para separar salto de conteúdo
+  guest de descarte do presenter no próximo gate. Não assumir que VBL limita
+  todo software; boot e polling CPU-bound podem não aguardar frame.
+
+- 2026-07-13: gate seguinte (`build 16:23:15`) provou a causa dos saltos
+  visuais: em todos os beats `CORE0-FRAME produced == presented` e
+  `coalesced=0` (23→232 frames). O presenter não perde nem agrupa imagens.
+  Logo telas aparentemente mais rápidas resultam da CPU atravessar estados
+  guest muito à frente do relógio lento do Rigel. Durante o boot, cpu_target
+  chegou a 6,15 bilhões enquanto Rigel estava em 7,8 M; no trecho estável a
+  CPU ainda publica ~5,2 M CCK/beat contra ~1,22 M drenados. Áudio repete o
+  diagnóstico (17%, ~71 K underruns/beat, zero drops). Esta é evidência direta
+  para definir a policy CPU-rápida da Fase 6: aceleração pode ser produto, mas
+  não pode usar o contador livre da CPU como wall-time nem mascarar que
+  chipset/Paula ainda estão sub-realtime.
+
+- 2026-07-13: experimento de granularidade implementado atrás de
+  `BELLATRIX_COARSE_OBSERVABLE_DEADLINES` (default OFF). Quando ativo, somente
+  o corte externo por `rigel_get_next_observable_deadline()` é removido; horizon,
+  burst máximo, timestamps postados, lock e eventos internos do Rigel permanecem.
+  Baseline preservada como `Emu68-baseline-deadlines.img`. Imagem experimental
+  instalada em `emu68/install-bellatrix-rigel-musashi/Emu68.img`, build
+  16:32:30, SHA-256
+  `7b9074fd1749bb779c8c8cf556c110e2dbe34db580cc5c1b9708a748fe119043`;
+  banner explícito `EXPERIMENTAL coarse observable deadlines: ENABLED`.
+  39/39 testes verdes; gate Pi/Battle ainda pendente e deve observar boot,
+  vídeo, IRQ, áudio, avg_step e CCK/s antes de qualquer promoção.
+
+- 2026-07-13: AROS na baseline 16:23:15 confirmou que as métricas medem eixos
+  diferentes. O usuário percebe chegada ao OS muito mais rápida (resultado
+  desejável de CPU/Fast RAM aceleradas), enquanto Rigel ficou em ~18-25% do
+  realtime e áudio subproduzido. Frames produced=presented e coalesced=0:
+  apresentação não explica a responsividade. Decisão: abolir FPS/PPS como
+  medida de velocidade; OSD passa a mostrar `RT%` explicitamente como taxa do
+  chipset, e desempenho AROS será wall-time até milestones. Jogos recebem gate
+  separado de cadência/jogabilidade/áudio. CPU acelerada não deve ser
+  artificialmente throttled apenas para fazer uma métrica única parecer 100%.
+
+  Protocolo de benchmark daqui em diante: (a) SysInfo/AIBB = aceleração guest
+  relativa a EClock/CIA emulado; (b) wall-time até milestones = experiência
+  real; (c) ciclos 68k publicados por wall-time = MHz equivalente do modelo,
+  não MIPS; (d) CCK/Paula por wall-time = fidelidade independente do chipset.
+  SysInfo pode superestimar potência por wall-time quando o EClock emulado está
+  sub-realtime, mas continua válido para dizer o que o próprio guest observa.
+
+- 2026-07-13: otimização Bellatrix/bus aplicada: release do lock do chipset
+  deixa de executar `dsb sy; sev` incondicional em todo step. Um contador de
+  waiters preserva wake imediato quando outro core realmente dorme no lock;
+  releases incontendidos usam somente a store-release. Hipótese: reduzir
+  broadcasts e `empty_host_steps` sem alterar semântica. Precisa A/B no Pi.
+
+- 2026-07-13: par A/B justo reconstruído após OSD `RT%` e lock wake-on-waiter:
+  baseline `Emu68-ab-baseline.img` SHA-256
+  `75869dd801b81e264f4bc962783fa9083b8e1e407ece7cf156d69bee114a69dd`;
+  coarse instalado como `Emu68.img` SHA-256
+  `646faa85f4be6a7252dd2cf4901b8d0c7b08437e606ad00413ef9adce82b0722`.
+  Ambos têm 3.063.840 bytes e diferem somente na flag de deadline externo.
+
+- 2026-07-13: auditoria cruzada das issues incorporou ISSUE-0002/0006/0007,
+  0042/0045/0046/0047/0048 ao programa. Corrigidas duas violações descobertas:
+  (1) caminho Core-2 caught-up agora aplica fila somente até `chip`, nunca
+  `UINT64_MAX`, evitando write CPU-driven antes do timestamp; (2) fila cheia
+  não espera mais por Core 2 (que pode estar pausado), e cai imediatamente no
+  fallback síncrono lock+drain do bridge. Métrica renomeada de `full_waits`
+  para `full_fallbacks`, refletindo a política real sem deadlock.
 
 # Bloqueios
 

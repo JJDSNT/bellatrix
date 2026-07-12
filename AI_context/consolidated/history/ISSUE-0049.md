@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0049
 title: "PiStorm temporal protocol: beam snapshots and self-paced Rigel"
-status: doing
+status: superseded
 priority: high
 type: performance
 owner: agent
@@ -17,8 +17,16 @@ related_files:
   - external/rigel/include/rigel/rigel_beam.h
   - src/runtime/core_chipset.c
   - src/cpu/cpu_bridge.c
-  - AI_context/issues/ISSUE-0048.md
+  - AI_context/consolidated/history/ISSUE-0048.md
   - AI_context/consolidated/issue_core0_arbiter_scheduler.md
+  - AI_context/consolidated/history/ISSUE-0002.md
+  - AI_context/consolidated/history/ISSUE-0006.md
+  - AI_context/consolidated/history/ISSUE-0007.md
+  - AI_context/consolidated/history/ISSUE-0019.md
+  - AI_context/consolidated/history/ISSUE-0042.md
+  - AI_context/consolidated/history/ISSUE-0045.md
+  - AI_context/consolidated/history/ISSUE-0046.md
+  - AI_context/consolidated/history/ISSUE-0047.md
 ---
 
 # Objetivo
@@ -28,6 +36,30 @@ progride por sua própria referência de tempo e a CPU sincroniza somente nos
 pontos de contato que exigem coerência. O epoch do Core 0 é horizonte de
 pacing/clamp, não barreira lockstep entre CPU e chipset.
 
+## Escopo do programa temporal (não apenas desta issue)
+
+Esta issue implementa a frente PiStorm/self-paced e é a decisão temporal mais
+nova. Issues anteriores são contexto e fontes de requisitos compatíveis; não
+podem reintroduzir lockstep ou subordinar a CPU ao Core 0 quando conflitarem:
+
+| Fonte | Contrato consumido aqui |
+|---|---|
+| ISSUE-0002 | MMIO/progresso explícitos; `run_until` não é requisito presumido |
+| ISSUE-0006 | coerência nos contatos críticos, sem janela periódica global |
+| ISSUE-0007 + `issue_core0_arbiter_scheduler.md` | histórico do Core 0; plano de CPU-worker/epoch barrier foi superado pelo horizon PiStorm |
+| ISSUE-0019 | qualificação dos relógios de frame e métricas de apresentação |
+| ISSUE-0042 | fases boot/launcher/runtime e lifecycle verificável |
+| ISSUE-0045 | Host Reactor, ownership físico e eventos/completions ordenados |
+| ISSUE-0046 | matriz mínima obrigatória de regressão |
+| ISSUE-0047/0048 | profiling Rigel, realtime, presenter e áudio |
+| ISSUE-0050 | ordem operacional, medições e evidências correntes |
+
+Decisão vigente: Core 0 possui política, pacing do chipset e ordenação de
+completions, mas **não agenda nem throttla Core 1**. Não existe requisito de
+rendezvous periódico ou `emu68_run_until()` para completar self-paced. Um
+contato pode exigir saída/sincronização pontual; remover o lock global é uma
+otimização futura, não autorização para substituí-lo por barreira de epoch.
+
 # Arquitetura alvo
 
 - Core 0 possui relógio de parede, seleção de política e horizonte de epoch.
@@ -36,6 +68,8 @@ pacing/clamp, não barreira lockstep entre CPU e chipset.
   são publicados, e apenas contatos críticos exigem barreira.
 - Harness/testes preservam o modo CPU-driven determinístico.
 - Bare metal oferece self-paced e modo híbrido com clamp no progresso da CPU.
+- AROS/Workbench acelerados são resultado desejado: tempo até OS/desktop não
+  pode regredir para alinhar a CPU ao wall clock ou ao throughput atual do Rigel.
 
 # Itens PiStorm
 
@@ -50,6 +84,8 @@ pacing/clamp, não barreira lockstep entre CPU e chipset.
   CPU, como o chipset físico observado no protocolo PiStorm.
 - **Epoch/horizon:** limite de trabalho publicado pelo Core 0; não é encontro
   obrigatório entre Core 1 e Core 2.
+- **CPU acelerada:** Core 1 executa à máxima capacidade; Core 0 nunca publica
+  permissão periódica para a CPU nem a estaciona para "corrigir" RT%.
 - **Deadline Rigel:** subdivisão local do trabalho do Core 2 para preservar
   eventos observáveis; não é barreira global.
 - **Ponto de contato:** MMIO/IRQ/completion em que CPU e chipset precisam de
@@ -64,9 +100,11 @@ pacing/clamp, não barreira lockstep entre CPU e chipset.
 
 ## Fase 0 — Baseline, invariantes e observabilidade
 
-- [ ] Congelar workloads de referência: KS1.3 boot, Workbench 1.3, AROS e
+- Histórico (não ativo): Congelar workloads de referência: KS1.3 boot, Workbench 1.3, AROS e
   megademo/Battle Squadron usados na ISSUE-0048.
-- [ ] Registrar baseline single/multicore com `BELLATRIX_PROFILE=1`:
+- Histórico (não ativo): Congelar tempo wall até milestones AROS/WB como gate de não regressão da
+  aceleração já observada, separado do clock do chipset.
+- Histórico (não ativo): Registrar baseline single/multicore com `BELLATRIX_PROFILE=1`:
   CCK/s, `empty_host_steps`, MMIO por endereço, `caught_up`, tempo de espera,
   profundidade da fila postada, backlog CPU/chipset, frames e áudio produzido.
 - [x] Separar resultados QEMU/TCG de hardware; usar contadores como fonte
@@ -94,9 +132,9 @@ fonte de tempo.
   a geometria antes de leituras posteriores.
 - [x] Testar equivalência entre projeção e avanço real do Rigel em uma matriz
   maior de posições, múltiplos frames e mudanças PAL/NTSC.
-- [ ] Validar boot/demo multicore e medir redução de MMIO crítico.
-- [ ] Reavaliar `CHIPSET_PUBLISH_MIN_CCK` depois que VHPOSR não exigir flush.
-- [ ] Decidir suporte exato a LOF/LOL ou manter fallback documentado com base
+- [x] Validar boot/demo multicore e medir redução de MMIO crítico.
+- [x] Reavaliar `CHIPSET_PUBLISH_MIN_CCK` depois que VHPOSR não exigir flush.
+- Histórico (não ativo): Decidir suporte exato a LOF/LOL ou manter fallback documentado com base
   na frequência medida em workloads reais.
 
 Gate: nenhum desvio de VPOSR/VHPOSR, boot íntegro e queda mensurável das esperas.
@@ -109,12 +147,12 @@ Gate: nenhum desvio de VPOSR/VHPOSR, boot íntegro e queda mensurável das esper
   escritas anteriores relevantes; hot paths não podem furar essa ordem.
 - [x] Formalizar timestamps da fila nos três modos temporais; no self-paced,
   escrita é aplicada no "agora" do chipset, não no contador livre da CPU.
-- [ ] Definir política de fila cheia sem deadlock e contadores de pressão.
+- [x] Definir política de fila cheia sem deadlock e contadores de pressão.
 - [x] Garantir ordem entre writes postados, writes críticos, Copper e DMA.
 - [x] Republicar snapshots após qualquer write que altere o estado publicado.
-- [ ] Cobrir lifecycle: init, reset, pause, resume, shutdown e troca de modo
+- Histórico (não ativo): Cobrir lifecycle: init, reset, pause, resume, shutdown e troca de modo
   zeram/rebaseiam fila, snapshots, sequência e timestamps coerentemente.
-- [ ] Testar estresse SPSC e contatos concorrentes em host com sanitizers onde
+- [x] Testar estresse SPSC e contatos concorrentes em host com sanitizers onde
   possível, mais testes bare-metal direcionados.
 
 Gate: matriz de MMIO documentada e testes de ordenação sem depender do lock
@@ -125,12 +163,12 @@ global como garantia implícita.
 - [x] Confirmar suporte ARMv8/BCM2837 e frequência útil do event stream.
 - [x] Encapsular configuração de `CNTKCTL_EL1` no PAL; salvar/restaurar estado
   relevante e manter fallback quando indisponível.
-- [ ] Escolher frequência por medição, sem alterar a timeline emulada.
+- Histórico (não ativo): Escolher frequência por medição, sem alterar a timeline emulada.
 - [x] Trocar polling/SEV excessivo do loop ocioso do Core 2 por WFE acordado
   pelo event stream e por eventos cirúrgicos (MMIO, IPL, shutdown).
 - [x] Evitar tempestade de SEV entre Core 0/1/2; documentar quem acorda quem.
-- [ ] Medir `empty_host_steps`, wakeups/s, custo ARM e latência de contato.
-- [ ] Validar QEMU com fallback e Pi 3 real com event stream ativo.
+- Histórico (não ativo): Medir `empty_host_steps`, wakeups/s, custo ARM e latência de contato.
+- [x] Validar QEMU com fallback e Pi 3 real com event stream ativo.
 
 Gate: redução clara de `empty_host_steps` sem perda de IRQ, frame, áudio ou
 aumento relevante da latência de MMIO.
@@ -147,7 +185,7 @@ aumento relevante da latência de MMIO.
   CPU-driven, realtime e híbrida com clamp.
 - [x] Definir tamanho mínimo/máximo do horizon e limitar bursts sem criar
   rendezvous periódico.
-- [ ] Tratar boot, pause, launcher, reset e troca de modo com rebase explícito;
+- Histórico (não ativo): Tratar boot, pause, launcher, reset e troca de modo com rebase explícito;
   nunca tentar recuperar tempo de parede acumulado durante pausa.
 - [x] Expor métricas: realtime target, horizon, Rigel time, CPU published,
   clamp ativo, drift e número de rebases.
@@ -184,12 +222,12 @@ de contato, sem backlog ilimitado nem burst de recuperação.
 - [x] Escritas comuns são postadas no agora do chipset; críticas preservam
   ordem e efeito pontual sem reintroduzir lock por acesso em todo o barramento.
 - [x] IPL permanece push do Core 2 para o backend CPU e acorda STOP via SEV.
-- [ ] Definir comportamento quando CPU está muito rápida: VBL/beam limitam
+- Histórico (não ativo): Definir comportamento quando CPU está muito rápida: VBL/beam limitam
   software bem-comportado; não criar throttle implícito no Emu68.
-- [ ] Definir comportamento quando CPU está lenta e quando o clamp liga/desliga,
+- Histórico (não ativo): Definir comportamento quando CPU está lenta e quando o clamp liga/desliga,
   com histerese se a medição mostrar oscilação.
-- [ ] Validar Musashi 68000/68040 e Emu68 separadamente.
-- [ ] Só criar API de ciclo exato no Emu68 se um contato ainda exigir essa
+- Histórico (não ativo): Validar Musashi 68000/68040 e Emu68 separadamente.
+- Histórico (não ativo): Só criar API de ciclo exato no Emu68 se um contato ainda exigir essa
   informação; não é pré-requisito presumido do self-paced.
 
 Gate: nenhum rendezvous global por quantum; sincronização ocorre apenas nos
@@ -197,34 +235,49 @@ pontos de contato documentados.
 
 ## Fase 7 — Frames, áudio e completions sob autoridade do Core 0
 
-- [ ] Ordenar frame/audio/device completions pelo tempo emulado em que se
+- Histórico (não ativo): Ordenar frame/audio/device completions pelo tempo emulado em que se
   tornam visíveis.
-- [ ] Definir política de presenter quando adiantado/atrasado sem alterar o
+- [x] Definir política de presenter quando adiantado/atrasado sem alterar o
   relógio interno do Rigel.
-- [ ] Validar produção de Paula contra realtime antes de julgar qualidade.
+- [x] Validar produção de Paula contra realtime antes de julgar qualidade.
 - [x] Evitar que logging, presenter ou I/O físico bloqueiem o Core 2.
-- [ ] Integrar métricas do Host Reactor: orçamento, misses e latência máxima.
+- [x] Integrar métricas do Host Reactor: orçamento, misses e latência máxima.
 
 Gate: ~3.546.895 CCK/s e ~50 frames/s PAL sustentados no Pi 3, áudio sem
 underflow causado pelo scheduler e completions em ordem.
 
 ## Fase 8 — Validação, promoção e limpeza
 
-- [ ] Testes unitários de timeline, beam, fila, clamp e rebase.
-- [ ] Testes de integração single/multicore e CPU-driven/realtime/híbrido.
-- [ ] QEMU: 4/4 ROM boots, boot+demo prolongado, zero freeze e backlog limitado.
-- [ ] Pi 3: matriz KS1.3/WB1.3, AROS, demo/jogo, USB/BT quando aplicável.
-- [ ] Rodada prolongada para drift, áudio, temperatura e estabilidade.
-- [ ] A/B perfilado contra baseline da Fase 0; registrar regressões por domínio.
-- [ ] Manter feature flag e fallback até hardware cumprir todos os gates.
-- [ ] Atualizar documentação de arquitetura/runtime e consolidar ISSUE-0048.
-- [ ] Remover caminho/locks antigos apenas depois da promoção, com medição que
+- [x] Testes unitários de timeline, beam, fila, clamp e rebase.
+- Histórico (não ativo): Testes de integração single/multicore e CPU-driven/realtime/híbrido.
+- Histórico (não ativo): QEMU: 4/4 ROM boots, boot+demo prolongado, zero freeze e backlog limitado.
+- Histórico (não ativo): Pi 3: matriz KS1.3/WB1.3, AROS, demo/jogo, USB/BT quando aplicável.
+- Histórico (não ativo): Rodada prolongada para drift, áudio, temperatura e estabilidade.
+- Histórico (não ativo): A/B perfilado contra baseline da Fase 0; registrar regressões por domínio.
+- Histórico (não ativo): Manter feature flag e fallback até hardware cumprir todos os gates.
+- Histórico (não ativo): Atualizar documentação de arquitetura/runtime e consolidar ISSUE-0048.
+- Histórico (não ativo): Remover caminho/locks antigos apenas depois da promoção, com medição que
   prove que não são mais usados.
 
 Gate final: modo self-paced é padrão bare-metal somente após correção funcional,
 realtime sustentado e estabilidade no Pi 3; harness continua determinístico.
 
 # Métricas canônicas
+
+Não existe uma única "velocidade da máquina". Separar obrigatoriamente:
+
+- **desempenho do sistema/CPU:** wall-time até milestones reproduzíveis
+  (ROM init, bootblock, desktop AROS/WB) e throughput de workload CPU-bound;
+- **fidelidade do chipset:** `rigel_cck / wall_second` contra o clock PAL/NTSC,
+  VBL/beam e produção Paula; esta métrica não limita nem resume CPU acelerada;
+- **entrega visual:** produced/presented/coalesced e latência de freshness,
+  nunca FPS/PPS como proxy de desempenho geral;
+- **sincronismo:** ordem/latência entre contato CPU, evento Rigel, IPL,
+  frame e áudio.
+
+Um perfil acelerado pode e deve chegar ao AROS mais rápido que um Amiga stock,
+enquanto o chipset mantém sua cadência física. Jogos exigem gate separado de
+fidelidade/jogabilidade; não inferir um regime pelo outro.
 
 - `rigel_cck / wall_second`, frames/s e áudio produzido/s.
 - MMIO por classe/endereço; fast-path, fallback e waits evitados.

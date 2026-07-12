@@ -1,5 +1,8 @@
 # Multicore + Arbiter — backlog e separação de escopo
 
+> **DOCUMENTO HISTÓRICO — SUPERSEDED em 2026-07-12.** Este backlog não é uma
+> fila ativa. O único tracker operacional da frente é ISSUE-0052.
+
 ## Status: ativo (2026-07-10)
 
 Persiste o backlog de trabalho iniciado na sessão de 2026-07-10 (antes só num

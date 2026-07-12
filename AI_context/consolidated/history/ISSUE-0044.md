@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0044
 title: "Regressão de multicore após merge da liveness (crash QEMU / hang Pi)"
-status: review
+status: resolved
 priority: high
 type: bug
 owner: agent
@@ -94,5 +94,5 @@ QEMU (`-M raspi3b`, Musashi multicore, `-initrd KS13.rom`) + bisect isolado:
 
 - [x] Causa raiz identificada (bisect + repro determinístico + teste de mecanismo).
 - [x] Build Musashi multicore boota em QEMU sem exceção (M68K roda KS13, frames++).
-- [ ] Pi real passa da init de USB e chega ao launcher (pendente teste hardware).
+- Histórico (não ativo): Pi real passa da init de USB e chega ao launcher (pendente teste hardware).
 - [x] Sem regressão do single-core/JIT (só gate de USB no multicore).

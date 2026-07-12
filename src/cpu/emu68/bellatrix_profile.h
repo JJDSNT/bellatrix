@@ -67,7 +67,7 @@ typedef struct
     uint64_t beam_snapshot_miss;
     uint64_t posted_writes;
     uint64_t posted_writes_applied;
-    uint64_t posted_queue_full_waits;
+    uint64_t posted_queue_full_fallbacks;
     uint64_t posted_queue_depth_max;
 } BellatrixMulticoreStats;
 
@@ -166,7 +166,8 @@ void bprof_multicore_critical_mmio(uint32_t addr, int is_write,
                                    uint64_t target_cck);
 void bprof_multicore_beam_read(uint32_t addr, int projected,
                                int snapshot_available);
-void bprof_multicore_posted_queued(uint32_t depth, int waited_for_space);
+void bprof_multicore_posted_queued(uint32_t depth);
+void bprof_multicore_posted_full_fallback(void);
 void bprof_multicore_posted_applied(uint32_t count);
 void bellatrix_profile_dump(void);
 void bellatrix_profile_reset(void);

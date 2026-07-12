@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0042
 title: "Fases de boot bem definidas (launcher single-core / runtime multicore)"
-status: backlog
+status: superseded
 priority: medium
 type: refactor
 owner: user
@@ -72,7 +72,7 @@ launcher (working tree, ver ISSUE do launcher-USB / memória).
 
 # Critérios de aceite
 
-- [ ] Fases explícitas com marcadores timestampados.
-- [ ] Launcher roda com Core 3 comprovadamente parado (`runtime_ready==0`).
-- [ ] Logs em ordem/tempo fiéis (independem da ordem de drenagem).
-- [ ] Sem regressão de USB/BT/serial no boot.
+- Histórico (não ativo): Fases explícitas com marcadores timestampados.
+- Histórico (não ativo): Launcher roda com Core 3 comprovadamente parado (`runtime_ready==0`).
+- Histórico (não ativo): Logs em ordem/tempo fiéis (independem da ordem de drenagem).
+- Histórico (não ativo): Sem regressão de USB/BT/serial no boot.

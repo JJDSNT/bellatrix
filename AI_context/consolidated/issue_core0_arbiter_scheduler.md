@@ -1,5 +1,9 @@
 # Issue: Árbitro/Scheduler temporal no Core 0
 
+> **DOCUMENTO HISTÓRICO — SUPERSEDED em 2026-07-12.** O Core 0 não agenda nem
+> limita periodicamente a CPU. A arquitetura canônica está na ISSUE-0051:
+> Core 1 livre, Core 2 self-paced e sincronização apenas em contatos reais.
+
 > Atualização 2026-07-11: topologia ativa = Core 0 supervisor + owner de I/O,
 > Core 1 CPU, Core 2 Rigel e Core 3 reservado para RTG/AHI. Referências abaixo
 > a Core 3 como owner de I/O descrevem o desenho anterior.

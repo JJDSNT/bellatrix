@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0007
 title: "Multicore runtime — Core 0 arbiter, MMIO critical barrier, deadline scheduling"
-status: backlog
+status: superseded
 priority: high
 type: feature
 owner: agent

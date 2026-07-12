@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0039
 title: Emu68 public API phase 1
-status: doing
+status: superseded
 priority: high
 type: feature
 owner: agent
@@ -137,14 +137,14 @@ Introduzir uma API pequena e honesta para:
 - [x] Backend Emu68 dirigido pelo loop generico `CpuBackend.run()`.
 - [x] QEMU curto com `aros.rom` entra no boot/JIT via backend Emu68 dirigido por
   `run_cycles()` e termina apenas pelo timeout planejado.
-- [ ] `EMU68_BUS_SYNC_REQUIRED` encerra janela ativa como barreira real.
-- [ ] Precisao temporal melhor que estimativa `v30 * 8`.
-- [ ] Range API publica definida.
-- [ ] Multicore validado com Emu68 API.
-- [ ] Hardware real validado.
-- [ ] Diagnostico confirma dump/reset por `0xDFFF08` em uma execucao real.
-- [ ] Invalidação validada contra caso real de codigo mutavel.
-- [ ] IPL 1..7/clear validado sem `INT.ARM` ou IRQ ARM fisica no Bellatrix.
+- Histórico (migrado para ISSUE-0051/0052): `EMU68_BUS_SYNC_REQUIRED` encerra janela ativa como barreira real.
+- Histórico (migrado para ISSUE-0051/0052): Precisao temporal melhor que estimativa `v30 * 8`.
+- Histórico (migrado para ISSUE-0051/0052): Range API publica definida.
+- Histórico (migrado para ISSUE-0051/0052): Multicore validado com Emu68 API.
+- Histórico (migrado para ISSUE-0051/0052): Hardware real validado.
+- Histórico (migrado para ISSUE-0051/0052): Diagnostico confirma dump/reset por `0xDFFF08` em uma execucao real.
+- Histórico (migrado para ISSUE-0051/0052): Invalidação validada contra caso real de codigo mutavel.
+- Histórico (migrado para ISSUE-0051/0052): IPL 1..7/clear validado sem `INT.ARM` ou IRQ ARM fisica no Bellatrix.
 
 # Observações
 

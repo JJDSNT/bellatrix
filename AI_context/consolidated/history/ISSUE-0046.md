@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0046
 title: "Estabilização da matriz de builds e regressões antes de novas arquiteturas"
-status: doing
+status: superseded
 priority: critical
 type: infra
 owner: agent
@@ -72,12 +72,12 @@ launcher, USB e HDMI compilaram. Permanece pendente a validação no Pi.
 - [x] 34 testes do harness/Rigel passam.
 - [x] Bare-metal Musashi single-core compila.
 - [x] Bare-metal Musashi multicore compila.
-- [ ] Bare-metal Emu68 single-core compila e boota carga conhecida.
-- [ ] Bare-metal Emu68 multicore compila; execução só após backend estável.
-- [ ] Pi: smoke single-core com KS13 e carga histórica.
+- Histórico (não ativo): Bare-metal Emu68 single-core compila e boota carga conhecida.
+- Histórico (não ativo): Bare-metal Emu68 multicore compila; execução só após backend estável.
+- Histórico (não ativo): Pi: smoke single-core com KS13 e carga histórica.
 - [x] Pi: smoke multicore com launcher + KS13.
-- [ ] Documentar conjunto mínimo de ROM/ADF e resultados esperados.
-- [ ] Automatizar a matriz num comando de CI local sem lançar GUI/QEMU.
+- Histórico (não ativo): Documentar conjunto mínimo de ROM/ADF e resultados esperados.
+- Histórico (não ativo): Automatizar a matriz num comando de CI local sem lançar GUI/QEMU.
 
 ## Política daqui em diante
 

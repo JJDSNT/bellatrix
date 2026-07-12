@@ -23,6 +23,8 @@ option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
 option(BELLATRIX_ENABLE_MULTICORE "Enable multicore runtime (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)" OFF)
 option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO]" OFF)
 option(BELLATRIX_PROFILE "Enable MMIO profiling instrumentation (zero cost when OFF)" OFF)
+option(BELLATRIX_COARSE_OBSERVABLE_DEADLINES
+    "Experimental: let Rigel process observable deadlines internally in Core-2 drains" OFF)
 set(BELLATRIX_TIMELINE_MODE "cpu" CACHE STRING
     "Timeline policy: cpu, realtime, or hybrid")
 set_property(CACHE BELLATRIX_TIMELINE_MODE PROPERTY STRINGS cpu realtime hybrid)
@@ -41,6 +43,10 @@ if(BELLATRIX_PROFILE)
     message(STATUS "[BUILD] MMIO profiling: enabled (BELLATRIX_PROFILE=1)")
 else()
     message(STATUS "[BUILD] MMIO profiling: disabled")
+endif()
+if(BELLATRIX_COARSE_OBSERVABLE_DEADLINES)
+    add_compile_definitions(BELLATRIX_COARSE_OBSERVABLE_DEADLINES=1)
+    message(STATUS "[BUILD] EXPERIMENTAL coarse observable deadlines: enabled")
 endif()
 if(BELLATRIX_ENABLE_MULTICORE)
     add_compile_definitions(BELLATRIX_ENABLE_MULTICORE)
@@ -79,7 +85,11 @@ add_subdirectory(${CMAKE_SOURCE_DIR}/../external/rigel ${CMAKE_BINARY_DIR}/rigel
 # these flags any rigel function may clobber them and crash the LastPC==PC
 # fast dispatch (ISSUE-0038 — AROS checksum-loop halt into wfe).
 target_compile_options(rigel PRIVATE -mbig-endian -fno-stack-protector
-    -ffixed-x12 -ffixed-q31 -ffixed-q30 -ffixed-q29 -ffixed-q28)
+    -ffixed-x12 -ffixed-q31 -ffixed-q30 -ffixed-q29 -ffixed-q28
+    # Pi 3 (BCM2837) is Cortex-A53; Emu68's global -mtune=cortex-a72 targets
+    # the Pi 4 and mis-schedules for the in-order A53 pipeline. Rigel is the
+    # hottest code in the system (~1.08 us/CCK, third Pi gate).
+    -mtune=cortex-a53)
 add_compile_definitions(BELLATRIX_USE_RIGEL_CHIPSET=1)
 set(BELLATRIX_MACHINE_SOURCE
     ${CMAKE_SOURCE_DIR}/../src/machine/machine_rigel.c

@@ -173,15 +173,11 @@ void bprof_multicore_beam_read(uint32_t addr, int projected,
         g_bprof.multicore.beam_snapshot_miss++;
 }
 
-void bprof_multicore_posted_queued(uint32_t depth, int waited_for_space)
+void bprof_multicore_posted_queued(uint32_t depth)
 {
     uint64_t old_max;
 
     __atomic_fetch_add(&g_bprof.multicore.posted_writes, 1u, __ATOMIC_RELAXED);
-    if (waited_for_space) {
-        __atomic_fetch_add(&g_bprof.multicore.posted_queue_full_waits, 1u,
-                           __ATOMIC_RELAXED);
-    }
     old_max = __atomic_load_n(&g_bprof.multicore.posted_queue_depth_max,
                               __ATOMIC_RELAXED);
     while (old_max < depth &&
@@ -189,6 +185,12 @@ void bprof_multicore_posted_queued(uint32_t depth, int waited_for_space)
                &g_bprof.multicore.posted_queue_depth_max, &old_max, depth,
                1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
     }
+}
+
+void bprof_multicore_posted_full_fallback(void)
+{
+    __atomic_fetch_add(&g_bprof.multicore.posted_queue_full_fallbacks, 1u,
+                       __ATOMIC_RELAXED);
 }
 
 void bprof_multicore_posted_applied(uint32_t count)
@@ -427,10 +429,10 @@ void bellatrix_profile_dump(void)
                     (unsigned long long)p->multicore.beam_vposr_fallback,
                     (unsigned long long)p->multicore.beam_vhposr_fallback,
                     (unsigned long long)p->multicore.beam_snapshot_miss);
-            kprintf("[BPROF]   posted queued=%llu applied=%llu full_waits=%llu depth_max=%llu\n",
+            kprintf("[BPROF]   posted queued=%llu applied=%llu full_fallbacks=%llu depth_max=%llu\n",
                     (unsigned long long)p->multicore.posted_writes,
                     (unsigned long long)p->multicore.posted_writes_applied,
-                    (unsigned long long)p->multicore.posted_queue_full_waits,
+                    (unsigned long long)p->multicore.posted_queue_full_fallbacks,
                     (unsigned long long)p->multicore.posted_queue_depth_max);
         }
     }

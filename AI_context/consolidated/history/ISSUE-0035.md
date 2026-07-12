@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0035
 title: "Build bare-metal (BELLATRIX_CPU_BACKEND=musashi) falha no link: getenv/strtoul indisponíveis"
-status: open
+status: resolved
 priority: medium
 type: bug
 owner: unassigned

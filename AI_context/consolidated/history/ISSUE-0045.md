@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0045
 title: "Plataforma multicore: owner único de I/O, IRQs físicas e integração com o árbitro"
-status: doing
+status: superseded
 priority: high
 type: refactor
 owner: agent
@@ -160,18 +160,18 @@ Restrições atuais:
 
 ## Critérios de aceite
 
-- [ ] Exatamente um core pode entrar em cada driver/stack física.
-- [ ] Launcher usa HID e MSC sem chamar CherryUSB/DWC2 no Core 0.
-- [ ] Nenhum handoff de controladora entre launcher e runtime.
-- [ ] Single-core e multicore usam a mesma API e passam os mesmos cenários.
-- [ ] Eventos têm ordering, overflow e transição de contexto definidos.
-- [ ] MSC sobrevive a timeout, disconnect e remoção durante operação.
-- [ ] IRQ física nunca entra no handler INT6 PiStorm do Emu68.
-- [ ] DWC2 e demais devices têm afinidade Core 3 ou fallback documentado.
-- [ ] Polling e IRQ produzem comportamento funcional equivalente.
-- [ ] Core 0 ordena eventos; Core 2 injeta; Core 1 vê somente IPL emulado.
-- [ ] Métricas demonstram ausência de reentrância, drops e lost wakeups.
-- [ ] Pi 3B boota launcher→Kickstart/Workbench com USB, multicore e HDMI áudio.
+- Histórico (migrado para ISSUE-0051/0052): Exatamente um core pode entrar em cada driver/stack física.
+- Histórico (migrado para ISSUE-0051/0052): Launcher usa HID e MSC sem chamar CherryUSB/DWC2 no Core 0.
+- Histórico (migrado para ISSUE-0051/0052): Nenhum handoff de controladora entre launcher e runtime.
+- Histórico (migrado para ISSUE-0051/0052): Single-core e multicore usam a mesma API e passam os mesmos cenários.
+- Histórico (migrado para ISSUE-0051/0052): Eventos têm ordering, overflow e transição de contexto definidos.
+- Histórico (migrado para ISSUE-0051/0052): MSC sobrevive a timeout, disconnect e remoção durante operação.
+- Histórico (migrado para ISSUE-0051/0052): IRQ física nunca entra no handler INT6 PiStorm do Emu68.
+- Histórico (migrado para ISSUE-0051/0052): DWC2 e demais devices têm afinidade Core 3 ou fallback documentado.
+- Histórico (migrado para ISSUE-0051/0052): Polling e IRQ produzem comportamento funcional equivalente.
+- Histórico (migrado para ISSUE-0051/0052): Core 0 ordena eventos; Core 2 injeta; Core 1 vê somente IPL emulado.
+- Histórico (migrado para ISSUE-0051/0052): Métricas demonstram ausência de reentrância, drops e lost wakeups.
+- Histórico (migrado para ISSUE-0051/0052): Pi 3B boota launcher→Kickstart/Workbench com USB, multicore e HDMI áudio.
 
 ## Dependências e relação com outras issues
 

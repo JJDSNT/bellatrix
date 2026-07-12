@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0041
 title: "Emu68 API: barreira real para SYNC_REQUIRED"
-status: doing
+status: resolved
 priority: high
 type: bug
 owner: agent
@@ -50,8 +50,8 @@ Fazer um acesso de bus que retorna `EMU68_BUS_SYNC_REQUIRED` encerrar a janela a
 - [x] `scripts/setup.sh --verify` passa.
 - [x] Write critico retorna `EMU68_STOP_SYNC_REQUIRED` na janela ativa.
 - [x] A janela seguinte continua a partir do PC correto.
-- [ ] Boot KS13/ADF e AROS nao regridem.
-- [ ] Multicore Core 1/Core 2 respeita o mesmo boundary.
+- Histórico (migrado para ISSUE-0051/0052): Boot KS13/ADF e AROS nao regridem.
+- Histórico (migrado para ISSUE-0051/0052): Multicore Core 1/Core 2 respeita o mesmo boundary.
 
 # Log de execucao
 

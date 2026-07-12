@@ -1,5 +1,9 @@
 # Issue: Multicore Runtime — RPi3 Bare-Metal
 
+> **DOCUMENTO HISTÓRICO — ABSORVIDO em 2026-07-12.** O runtime multicore atual
+> e seus próximos gates são definidos pelas ISSUE-0051/0052. Planos antigos de
+> epoch/worker não devem ser reintroduzidos por este texto.
+
 ## Status: ACTIVE BASELINE (updated 2026-07-11)
 
 Arquitetura ativa: Core0=Host Reactor, Core1=CPU, Core2=Rigel e Core3 reservado.

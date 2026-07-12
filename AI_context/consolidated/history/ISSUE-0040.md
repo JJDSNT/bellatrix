@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0040
 title: "Multicore: mover propriedade da UART fisica e drain do console para o Core 3"
-status: in_progress
+status: superseded
 priority: medium
 type: architecture
 owner: agent

@@ -30,12 +30,21 @@ Pointer/setup writes preceding a critical trigger are consumed when the trigger
 drains the queue. A later synchronous read also drains the queue, preserving
 read-after-write without making every setup write a rendezvous.
 
+When the posted ring is full, the producer never waits for Core 2: posting
+returns false and `cpu_bridge` takes its synchronous lock+drain fallback. This
+preserves program order and guarantees progress even when pause has stopped the
+Core-2 host loop. `full_fallbacks` counts this pressure path. Normal Core-2
+consumption applies only entries with `stamp_cck <= chipset_cck`; only an
+explicit CPU contact may force-drain future-stamped entries as an ordering
+barrier.
+
 ## Lifecycle invariants
 
 - Reset limpa fila/snapshots e solicita rebase. Pause/resume e troca de modo
   são pedidos atômicos aplicados pelo Core 0, com rebase no contador e CCK
   correntes; portanto tempo de parede pausado nunca é recuperado.
-- Queue-full waiting remains live if Core 2 is paused or shutting down.
+- Mode changes must still reconcile entries timestamped under the prior mode;
+  this lifecycle barrier remains open.
 - Self-paced mode stamps writes at chipset "now", not unconstrained CPU time.
 - Copper geometry changes require publication before later projections.
 - Table-driven tests prevent new Rigel registers inheriting the wrong class.

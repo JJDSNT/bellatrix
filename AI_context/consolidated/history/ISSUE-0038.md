@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0038
 title: "Emu68 JIT: regressao de liveness do chipset + corrupcao do vetor 0x6C no boot KS13"
-status: doing
+status: superseded
 priority: high
 type: bug
 owner: agent

@@ -17,7 +17,7 @@ related_files:
   - tools/harness/musashi_backend.c
   - src/chipset/denise/denise.c
   - AI_context/consolidated/memory_model.md
-  - AI_context/issues/ISSUE-0031.md
+  - AI_context/consolidated/history/ISSUE-0031.md
 ---
 
 # Contexto

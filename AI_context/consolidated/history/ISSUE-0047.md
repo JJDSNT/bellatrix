@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0047
 title: "Backlog de otimização do Rigel — resultados e experimentos multicore revertidos"
-status: backlog
+status: superseded
 priority: medium
 type: research
 owner: agent
@@ -317,14 +317,14 @@ alterações do submódulo e profiling desta issue foram removidos.
 
 ## Critérios de aceite futuros
 
-- [ ] 34/34 testes continuam passando.
-- [ ] Harness KS13/20/31/AROS mantém checkpoints.
-- [ ] Single-core não muda funcionalmente nem perde loads conhecidos.
-- [ ] Multicore mantém launcher, input, IRQ, Copper, sprites, blitter e disco.
-- [ ] Estado escalar e otimizado coincide nos ticks observáveis.
-- [ ] Áudio produzido acompanha realtime apenas quando emulação acompanha.
-- [ ] Ganho é medido em build release e supera o overhead/risco introduzido.
-- [ ] Cada otimização pode ser ligada/desligada independentemente.
+- Histórico (não ativo): 34/34 testes continuam passando.
+- Histórico (não ativo): Harness KS13/20/31/AROS mantém checkpoints.
+- Histórico (não ativo): Single-core não muda funcionalmente nem perde loads conhecidos.
+- Histórico (não ativo): Multicore mantém launcher, input, IRQ, Copper, sprites, blitter e disco.
+- Histórico (não ativo): Estado escalar e otimizado coincide nos ticks observáveis.
+- Histórico (não ativo): Áudio produzido acompanha realtime apenas quando emulação acompanha.
+- Histórico (não ativo): Ganho é medido em build release e supera o overhead/risco introduzido.
+- Histórico (não ativo): Cada otimização pode ser ligada/desligada independentemente.
 
 ## Relações
 

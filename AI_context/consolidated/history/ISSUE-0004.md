@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0004
 title: "Interrupt model audit — Phase 0"
-status: review
+status: superseded
 priority: medium
 type: research
 owner: agent

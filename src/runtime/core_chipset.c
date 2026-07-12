@@ -74,6 +74,9 @@ static uint32_t s_pending_cck = 0;
 static _Atomic uint64_t s_chipset_cck = 0;
 static _Atomic uint8_t s_pending_ipl = 0;
 static _Atomic uint32_t s_pending_frames = 0;
+static _Atomic uint64_t s_frames_produced = 0;
+static _Atomic uint64_t s_frames_presented = 0;
+static _Atomic uint64_t s_frames_coalesced = 0;
 
 /* Hot read-only registers, published by the Rigel owner and served lock-free
  * to Core 1 poll loops (blit-busy, interrupt waits) without the critical-MMIO
@@ -249,24 +252,51 @@ void core_chipset_drain_host_completions(void)
      * tick) for every emulated frame, but present just once. */
     while (frames > 1u) {
         bellatrix_machine_on_frame_skipped();
+        atomic_fetch_add_explicit(&s_frames_coalesced, 1u,
+                                  memory_order_relaxed);
         frames--;
     }
-    if (frames != 0u)
+    if (frames != 0u) {
         bellatrix_machine_on_frame_ready();
+        atomic_fetch_add_explicit(&s_frames_presented, 1u,
+                                  memory_order_relaxed);
+    }
     bellatrix_machine_host_audio_poll();
+}
+
+void core_chipset_get_frame_completion_stats(RuntimeFrameCompletionStats *stats)
+{
+    if (stats == NULL)
+        return;
+    stats->produced = atomic_load_explicit(&s_frames_produced,
+                                           memory_order_acquire);
+    stats->presented = atomic_load_explicit(&s_frames_presented,
+                                            memory_order_acquire);
+    stats->coalesced = atomic_load_explicit(&s_frames_coalesced,
+                                            memory_order_acquire);
 }
 
 /* Guards chipset state from concurrent CPU-side bus access. Held by the CPU
  * core (cpu_bridge.c) while dispatching MMIO; not needed by this core. */
 #if defined(BELLATRIX_ENABLE_MULTICORE)
 static atomic_flag s_chipset_access_lock = ATOMIC_FLAG_INIT;
+static _Atomic uint32_t s_chipset_lock_waiters = 0u;
 #endif
 
 void core_chipset_lock_acquire(void)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
-    while (atomic_flag_test_and_set_explicit(&s_chipset_access_lock, memory_order_acquire))
+    if (!atomic_flag_test_and_set_explicit(&s_chipset_access_lock,
+                                           memory_order_acquire))
+        return;
+
+    atomic_fetch_add_explicit(&s_chipset_lock_waiters, 1u,
+                              memory_order_relaxed);
+    while (atomic_flag_test_and_set_explicit(&s_chipset_access_lock,
+                                             memory_order_acquire))
         asm volatile("wfe" ::: "memory");
+    atomic_fetch_sub_explicit(&s_chipset_lock_waiters, 1u,
+                              memory_order_relaxed);
 #endif
 }
 
@@ -274,7 +304,14 @@ void core_chipset_lock_release(void)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
     atomic_flag_clear_explicit(&s_chipset_access_lock, memory_order_release);
-    asm volatile("dsb sy\n\t sev" ::: "memory");
+    /* Most releases are Core 2 finishing an uncontended Rigel step.  The old
+     * unconditional `dsb sy; sev` broadcast woke every PE and converted work
+     * completions into empty host-loop iterations.  A release store is the
+     * lock's ordering contract; only publish an event when a waiter actually
+     * parked in WFE. */
+    if (atomic_load_explicit(&s_chipset_lock_waiters,
+                             memory_order_relaxed) != 0u)
+        asm volatile("dmb ishst\n\tsev" ::: "memory");
 #endif
 }
 
@@ -400,7 +437,6 @@ bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size)
                                                     memory_order_acquire);
     uint64_t stamp;
     PostedWrite write;
-    bool waited_for_space = false;
 
     if (!core || !atomic_load_explicit(&core->running, memory_order_acquire))
         return false;
@@ -418,23 +454,20 @@ bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size)
         .stamp_cck = stamp, .addr = addr, .value = value, .size = size,
     };
 
-    /* Full: wait for consumers. Core 2 drains on every host step — including
-     * the caught-up and paused paths — and SEVs after each drain iteration.
-     * The wait policy lives here, not in the queue, so shutdown can always
-     * bail out to the caller's synchronous fallback. */
-    while (!posted_writes_try_push(&s_pw_queue, &write)) {
-        waited_for_space = true;
-        if (!atomic_load_explicit(&core->running, memory_order_acquire))
-            return false;
-        PAL_Runtime_WakeupChipset();
-        asm volatile("wfe" ::: "memory");
+    /* Never wait for space here.  A pause stops the Core-2 host loop while
+     * `core->running` can still be true, so WFE-on-full can deadlock with no
+     * consumer.  False sends this non-critical write through cpu_bridge's
+     * synchronous lock+drain fallback, which both frees the queue and applies
+     * the current write in program order. */
+    if (!posted_writes_try_push(&s_pw_queue, &write)) {
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_multicore_posted_full_fallback();
+#endif
+        return false;
     }
 
 #if BELLATRIX_PROFILE_ENABLED
-    bprof_multicore_posted_queued(posted_writes_depth(&s_pw_queue),
-                                  waited_for_space);
-#else
-    (void)waited_for_space;
+    bprof_multicore_posted_queued(posted_writes_depth(&s_pw_queue));
 #endif
     PAL_Runtime_WakeupChipset();
     return true;
@@ -605,6 +638,9 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_frames, 0u, memory_order_release);
+    atomic_store_explicit(&s_frames_produced, 0u, memory_order_release);
+    atomic_store_explicit(&s_frames_presented, 0u, memory_order_release);
+    atomic_store_explicit(&s_frames_coalesced, 0u, memory_order_release);
     s_m68k_rem    = 0;
     s_pending_cck = 0;
     posted_writes_reset(&s_pw_queue);
@@ -640,6 +676,9 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     atomic_store_explicit(&s_chipset_cck, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     atomic_store_explicit(&s_pending_frames, 0u, memory_order_release);
+    atomic_store_explicit(&s_frames_produced, 0u, memory_order_release);
+    atomic_store_explicit(&s_frames_presented, 0u, memory_order_release);
+    atomic_store_explicit(&s_frames_coalesced, 0u, memory_order_release);
     s_m68k_rem    = 0;
     s_pending_cck = 0;
     posted_writes_reset(&s_pw_queue);
@@ -751,9 +790,6 @@ void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
  * ------------------------------------------------------------------------- */
 void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
 {
-    (void)now;
-    (void)freq;
-
     RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
                                                     memory_order_acquire);
     if (!core || !core->rigel ||
@@ -775,14 +811,32 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
          * CPU posts and only then publishes the surrounding cycles). */
         if (core_chipset_next_posted_stamp() != UINT64_MAX) {
             core_chipset_lock_acquire();
-            core_chipset_apply_posted_writes(UINT64_MAX);
+            /* Only writes whose emulated timestamp is now visible may be
+             * consumed here.  A CPU-driven producer can stamp at
+             * target+s_pending_cck before that remainder is published; an
+             * unconditional drain would apply such a write early.  Explicit
+             * CPU-side contacts retain the UINT64_MAX forced-drain barrier. */
+            core_chipset_apply_posted_writes(chip);
             core_chipset_publish_hot_regs();
             core_chipset_lock_release();
         }
 #if BELLATRIX_PROFILE_ENABLED
         bprof_multicore_empty_host_step(chip, target);
 #endif
-        bellatrix_machine_post_chipset_step();
+        /* The serial/keyboard pumps need ~1 kHz, not one call per idle
+         * spin: each takes the chipset lock, and at the ~500K empty
+         * iterations/s observed on the Pi 3 that overhead consumed a
+         * double-digit share of the Rigel core (third Pi gate, ISSUE-0050).
+         * Advancing bursts still pump unconditionally on exit below. */
+        {
+            static uint64_t s_last_idle_pump = 0u;
+            uint64_t min_gap = freq / 1000u;
+
+            if (now - s_last_idle_pump >= min_gap) {
+                s_last_idle_pump = now;
+                bellatrix_machine_post_chipset_step();
+            }
+        }
         return;
     }
 
@@ -790,7 +844,6 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         uint64_t remaining = target - chip;
         rigel_cycle_t rigel_now = rigel_get_time(core->rigel);
         rigel_cycle_t until = rigel_now + (rigel_cycle_t)remaining;
-        rigel_cycle_t next;
 
         /* Match the synchronous scheduler: stop at host-observable Rigel
          * events.  Internal DMA slots are processed by rigel_step_until().
@@ -798,9 +851,14 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
          * so cutting every temporal bus transition would add slot-by-slot
          * rendezvous without consuming its arbitration result.  The
          * CPU-published target remains the hard upper bound. */
-        next = rigel_get_next_observable_deadline(core->rigel);
-        if (next > rigel_now && next < until)
-            until = next;
+#if !defined(BELLATRIX_COARSE_OBSERVABLE_DEADLINES) || \
+    !BELLATRIX_COARSE_OBSERVABLE_DEADLINES
+        {
+            rigel_cycle_t next = rigel_get_next_observable_deadline(core->rigel);
+            if (next > rigel_now && next < until)
+                until = next;
+        }
+#endif
 
         /* Posted writes are applied at their exact stamp: never step past
          * the earliest pending one. */
@@ -870,9 +928,12 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         if (ipl_changed)
             core_chipset_set_pending_ipl(ipl_snapshot);
 
-        if (r.events & RIGEL_EVENT_FRAME_READY)
+        if (r.events & RIGEL_EVENT_FRAME_READY) {
             atomic_fetch_add_explicit(&s_pending_frames, 1u,
                                       memory_order_release);
+            atomic_fetch_add_explicit(&s_frames_produced, 1u,
+                                      memory_order_relaxed);
+        }
     }
 
     /* Publish progress and wake Core 1 if it is blocked on backpressure. */

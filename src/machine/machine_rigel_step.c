@@ -12,6 +12,7 @@
 #include "audio/output.h"
 #include "machine/memory/chip_ram.h"
 #include "host/pal.h"
+#include "host/osd.h"
 #include "runtime/core_chipset.h"
 #include "runtime/core_io.h"
 #include "support.h"
@@ -843,6 +844,7 @@ void bellatrix_machine_on_frame_ready(void)
 {
     g_machine.frame_counter++;
     machine_mouse_frame_tick();
+    osd_set_machine_frame(g_machine.frame_counter);
     machine_present_frame_from_rigel();
 
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE

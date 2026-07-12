@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0005
 title: "ARM interrupt normalization (bellatrix_irqfabric)"
-status: blocked
+status: superseded
 priority: low
 type: feature
 owner: agent

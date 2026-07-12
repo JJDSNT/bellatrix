@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0026
 title: "aros.rom não completa o startup no harness com HARNESS_CPU=68020 (com ou sem HDF)"
-status: open
+status: superseded
 priority: medium
 type: bug
 owner: unassigned

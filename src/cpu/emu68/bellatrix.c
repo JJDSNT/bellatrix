@@ -24,6 +24,8 @@
 #include "host/pal.h"
 #include "host/raspi3/hdmi_audio.h"
 #include "host/raspi3/vc_mailbox.h"
+#include "host/osd.h"
+#include "audio/output.h"
 #include "devicetree.h"
 #include "host/raspi3/console_log.h"
 #include "io/serial/uart_host.h"
@@ -461,6 +463,8 @@ static void bellatrix_core0_supervise(void)
     uint64_t last_io = PAL_Time_ReadCounter();
     uint64_t last_heartbeat = last_io;
     uint32_t beat = 0u;
+    BellatrixAudioOutputStats last_audio = {0};
+    RuntimeFrameCompletionStats last_frame_stats = {0};
 
 #ifndef BELLATRIX_TIMELINE_DEFAULT
 #define BELLATRIX_TIMELINE_DEFAULT 0
@@ -491,9 +495,7 @@ static void bellatrix_core0_supervise(void)
             asm volatile("yield");
             continue;
         }
-#if BELLATRIX_PROFILE_ENABLED
         uint64_t beat_elapsed = now - last_heartbeat;
-#endif
         last_heartbeat = now;
 
         uint64_t chipset_cck = 0u;
@@ -508,10 +510,21 @@ static void bellatrix_core0_supervise(void)
         uint32_t pc = backend ? cpu_backend_get_pc(backend) : 0u;
         CoreIOSerialStats serial_stats;
         CoreIOReactorStats io_stats;
+        RuntimeFrameCompletionStats frame_stats;
         core_io_serial_get_stats(&serial_stats);
         core_io_reactor_get_stats(&g_runtime.io, &io_stats);
         (void)core_chipset_get_progress(&chipset_cck, &target_cck);
         core_chipset_get_timeline_snapshot(&timeline);
+        core_chipset_get_frame_completion_stats(&frame_stats);
+
+        {
+            uint64_t expected_cck = beat_elapsed && freq
+                ? beat_elapsed * timeline.cck_per_second / freq : 0u;
+            uint64_t advanced_cck = chipset_cck - last_chipset;
+            uint32_t realtime_pct = expected_cck
+                ? (uint32_t)(advanced_cck * 100u / expected_cck) : 0u;
+            osd_set_realtime_percent(realtime_pct);
+        }
 
         kprintf("[CORE0-SUP] beat=%u mode=%u cpu_target=%llu(+%llu) "
                 "horizon=%llu chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x "
@@ -540,13 +553,31 @@ static void bellatrix_core0_supervise(void)
                             (int64_t)chipset_cck),
                 timeline.clamp_active ? 1u : 0u,
                 (unsigned long long)timeline.generation);
+        kprintf("[CORE0-FRAME] produced=%llu(+%llu) presented=%llu(+%llu) "
+                "coalesced=%llu(+%llu)\n",
+                (unsigned long long)frame_stats.produced,
+                (unsigned long long)(frame_stats.produced -
+                                     last_frame_stats.produced),
+                (unsigned long long)frame_stats.presented,
+                (unsigned long long)(frame_stats.presented -
+                                     last_frame_stats.presented),
+                (unsigned long long)frame_stats.coalesced,
+                (unsigned long long)(frame_stats.coalesced -
+                                     last_frame_stats.coalesced));
+        last_frame_stats = frame_stats;
 
         /* Host silicon state: the firmware silently drops the ARM clock to
          * 600 MHz under undervoltage/thermal throttling, which halves every
-         * performance number without any other visible symptom. */
-        kprintf("[CORE0-HW] arm_mhz=%u throttled=%08x\n",
-                (unsigned)(vc_get_arm_clock_hz() / 1000000u),
-                (unsigned)vc_get_throttled());
+         * performance number without any other visible symptom. Proven on
+         * the real board: the second Pi 3 gate ran entirely throttled and
+         * cost exactly 2x. Feed the OSD so the user sees UV! on screen. */
+        {
+            uint32_t throttled = vc_get_throttled();
+            kprintf("[CORE0-HW] arm_mhz=%u throttled=%08x\n",
+                    (unsigned)(vc_get_arm_clock_hz() / 1000000u),
+                    (unsigned)throttled);
+            osd_set_power_alert(throttled == 0xFFFFFFFFu ? 0u : throttled);
+        }
 #if BELLATRIX_PROFILE_ENABLED
         kprintf("[BPROF-BEAM] vposr_fast=%llu vposr_fallback=%llu "
                 "vhposr_fast=%llu vhposr_fallback=%llu snapshot_miss=%llu\n",
@@ -560,13 +591,13 @@ static void bellatrix_core0_supervise(void)
                     &g_bprof.multicore.beam_vhposr_fallback, __ATOMIC_RELAXED),
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.beam_snapshot_miss, __ATOMIC_RELAXED));
-        kprintf("[BPROF-POST] queued=%llu applied=%llu full_waits=%llu depth_max=%llu\n",
+        kprintf("[BPROF-POST] queued=%llu applied=%llu full_fallbacks=%llu depth_max=%llu\n",
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.posted_writes, __ATOMIC_RELAXED),
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.posted_writes_applied, __ATOMIC_RELAXED),
                 (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.posted_queue_full_waits, __ATOMIC_RELAXED),
+                    &g_bprof.multicore.posted_queue_full_fallbacks, __ATOMIC_RELAXED),
                 (unsigned long long)__atomic_load_n(
                     &g_bprof.multicore.posted_queue_depth_max, __ATOMIC_RELAXED));
         /* Per-beat granularity and occupancy. avg_step is the decisive
@@ -619,6 +650,35 @@ static void bellatrix_core0_supervise(void)
                 (unsigned long long)(io_stats.bluetooth_max_ticks * 1000000u / freq),
                 (unsigned long long)(io_stats.serial_max_ticks * 1000000u / freq),
                 (unsigned long long)(io_stats.console_max_ticks * 1000000u / freq));
+
+        /* Audio is meaningful only relative to wall time. Report deltas once
+         * per heartbeat: a sub-realtime producer is immediately distinguishable
+         * from an HDMI consumer/queue fault without per-sample trace noise. */
+        {
+            BellatrixAudioOutputStats audio = bellatrix_audio_output_stats();
+            uint64_t expected = beat_elapsed
+                ? beat_elapsed * BELLATRIX_AUDIO_OUTPUT_RATE_HZ / freq : 0u;
+            uint64_t produced = audio.produced_samples - last_audio.produced_samples;
+            uint64_t consumed = audio.consumed_samples - last_audio.consumed_samples;
+            uint64_t dropped = audio.dropped_samples - last_audio.dropped_samples;
+            uint64_t underrun = audio.underrun_samples - last_audio.underrun_samples;
+            unsigned realtime_pct = expected
+                ? (unsigned)(produced * 100u / expected) : 0u;
+
+            kprintf("[CORE0-AUDIO] expected=%llu produced=%llu consumed=%llu "
+                    "realtime=%u%% underrun=%llu dropped=%llu depth=%u "
+                    "prime=%u primed=%u\n",
+                    (unsigned long long)expected,
+                    (unsigned long long)produced,
+                    (unsigned long long)consumed,
+                    realtime_pct,
+                    (unsigned long long)underrun,
+                    (unsigned long long)dropped,
+                    (unsigned)bellatrix_audio_output_count(),
+                    (unsigned)bellatrix_audio_output_prime_frames(),
+                    bellatrix_audio_output_is_primed() ? 1u : 0u);
+            last_audio = audio;
+        }
 
         last_target = target_cck;
         last_chipset = chipset_cck;
@@ -1374,6 +1434,12 @@ void bellatrix_init(void)
     kprintf("[BELA] MMIO profiling: ENABLED (BELLATRIX_PROFILE=1)\n");
 #else
     kprintf("[BELA] MMIO profiling: disabled\n");
+#endif
+#if defined(BELLATRIX_COARSE_OBSERVABLE_DEADLINES) && \
+    BELLATRIX_COARSE_OBSERVABLE_DEADLINES
+    kprintf("[BELA] EXPERIMENTAL coarse observable deadlines: ENABLED\n");
+#else
+    kprintf("[BELA] coarse observable deadlines: disabled\n");
 #endif
 }
 

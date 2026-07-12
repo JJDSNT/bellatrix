@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0003
 title: "Public Emu68 bus/MMIO callback API"
-status: backlog
+status: superseded
 priority: medium
 type: feature
 owner: agent
