@@ -1,16 +1,18 @@
 diff --git a/include/M68k.h b/include/M68k.h
 --- a/include/M68k.h
 +++ b/include/M68k.h
-@@ -115,3 +115,9 @@ struct M68KState
+@@ -116,6 +116,11 @@ struct M68KState
      };
      uint64_t INSN_COUNT;
-+
+ 
 +#ifdef BELLATRIX
 +    /* Architectural STOP state exported to the embedding scheduler. */
 +    uint32_t STOPPED;
 +#endif
 +
      uint32_t JIT_CACHE_MISS;
+     uint32_t JIT_UNIT_COUNT;
+     uint32_t JIT_CACHE_TOTAL;
 diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
 index 4ed0d5f..1fc2b84 100644
 --- a/src/M68k_LINE4.c

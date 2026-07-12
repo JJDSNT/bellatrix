@@ -226,14 +226,14 @@ index 818aeaf..4b37dbb 100644
      /* Merging adjusts the size - it's sum of both sizes plus size of block header */
 -    SET_SIZE(b1, GET_SIZE(b1) + GET_SIZE(b2) + ROUNDUP(sizeof(hdr_t)));
 +    uintptr_t new_size = GET_SIZE(b1) + GET_SIZE(b2) + ROUNDUP(sizeof(hdr_t));
-+    
++
 +    /* Sanity check: merged size should never exceed reasonable limits (1GB region limit) */
 +    if (unlikely(new_size > 0xffffffff)) {
-+        kprintf("[TLSF] ERROR! MERGE overflow: b1=%p (%p) + b2=%p (%p)\n", 
++        kprintf("[TLSF] ERROR! MERGE overflow: b1=%p (%p) + b2=%p (%p)\n",
 +                b1, GET_SIZE(b1), b2, GET_SIZE(b2));
 +        while (1) asm volatile("wfe");
 +    }
-+    
++
 +    SET_SIZE(b1, new_size);
  }
  
@@ -434,7 +434,7 @@ index 818aeaf..4b37dbb 100644
      {
 -        spinlock_release(&tlsf->lock);
 +        uintptr_t old_size = GET_SIZE(b);
-+        
++
 +        if (tlsf->flags & TLSF_MULTITHREADING) {
 +            spinlock_release(&tlsf->lock);
 +        }
@@ -443,7 +443,7 @@ index 818aeaf..4b37dbb 100644
 -        uintptr_t copy_size = GET_SIZE(b) < new_size ? GET_SIZE(b) : new_size;
 +        if (!p)
 +            return NULL;
-+        
++
 +        uintptr_t copy_size = old_size < new_size ? old_size : new_size;
          memcpy(p, ptr, copy_size);
          tlsf_free(tlsf, ptr);
