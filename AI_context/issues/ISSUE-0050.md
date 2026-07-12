@@ -263,7 +263,21 @@ bloqueios sem criar um escopo paralelo.
   mailbox, inofensiva. EXPECTATIVA com fonte boa: ~2× (11-13 fps) se o
   throttle estava a 600 MHz — coincidiria com a lembrança de >10 fps.
 
+- 2026-07-13: TERCEIRO GATE NO PI 3, fonte trocada: `throttled=00000000` em
+  TODOS os beats (sticky inclusive) e `arm_mhz=1200` agora MEDIDO. Resultado
+  DOBROU, como previsto: chipset ~760 K CCK/s (+1,51-1,53 M/beat; era ~390 K)
+  e ~10,5-11 fps (era ~5,7) — bate com a lembrança do usuário de >10 fps
+  (aquela config tinha alimentação boa). Emu68 ≡ Musashi de novo (mesmos
+  CCK/s e fps); avg_step=237-238 estável; core2_busy=82-83%. Número
+  estrutural honesto do Rigel no A53 @1200 MHz: ~1,08 µs/CCK (~1300 ciclos
+  ARM por CCK) dentro de rigel_step_until. Gap p/ 50 fps: 4,7×. Alvos da
+  Fase 7, em ordem: (a) 17-18% de idle do Core 2 (pacing de horizon a
+  1 kHz); (b) profiling do Rigel por domínio (Agnus × composição Denise) +
+  A/B 3 modos de render; (c) mtune=cortex-a53. Menores: full_waits=129 no
+  Musashi (ainda trivial vs 53 K queued); `arm_mhz=0` no 1º beat e
+  `ffffffff` em ~3 beats = falhas transitórias de mailbox a investigar um
+  dia (talvez concorrência com mailbox do HDMI no mesmo core).
+
 # Bloqueios
 
-Hardware: fonte/cabo do Pi 3 com undervoltage (throttling ativo) — trocar
-antes do próximo gate de performance.
+Nenhum.
