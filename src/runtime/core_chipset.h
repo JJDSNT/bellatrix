@@ -52,4 +52,11 @@ void core_chipset_wait_caught_up(void);
 void core_chipset_publish_hot_regs(void);
 bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value);
 
+/* Posted-write queue: non-critical custom writes are stamped with the CPU's
+ * emulated time and applied by the Rigel owner exactly when it reaches that
+ * stamp. post returns false when unavailable (fall back to the sync path);
+ * drain applies everything pending and requires the access lock held. */
+bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size);
+void core_chipset_drain_posted_writes(void);
+
 #endif

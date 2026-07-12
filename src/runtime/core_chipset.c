@@ -70,6 +70,34 @@ static _Atomic uint16_t s_pub_dmaconr = 0;
 static _Atomic uint16_t s_pub_intenar = 0;
 static _Atomic uint16_t s_pub_intreqr = 0;
 
+/* -----------------------------------------------------------------------
+ * Posted-write queue (PiStorm wb_push/wb_task pattern, with timestamps).
+ *
+ * Non-critical custom-register writes from Core 1 are queued with the CPU's
+ * emulated time and applied by Core 2 exactly when the Rigel reaches that
+ * stamp — no lock, no rendezvous on the CPU side, and better temporal
+ * fidelity than the old inline apply (which landed at the chipset's stale
+ * time). Ordering rules that keep this safe:
+ *   - reads and critical writes drain the queue under the access lock
+ *     before acting, so program order is preserved where it is observable;
+ *   - wait_caught_up (chip == target) already implies every posted stamp
+ *     has been consumed, since stamps never exceed the published target.
+ * Single producer (Core 1); consumers (Core 2 at stamps, Core 1 forced
+ * drain) always hold the chipset access lock while applying.
+ * -------------------------------------------------------------------- */
+#define POSTED_WRITE_RING 256u
+
+typedef struct {
+    uint64_t stamp_cck;
+    uint32_t addr;
+    uint32_t value;
+    uint32_t size;
+} PostedWrite;
+
+static PostedWrite s_pw_ring[POSTED_WRITE_RING];
+static _Atomic uint32_t s_pw_head = 0;   /* producer (Core 1) */
+static _Atomic uint32_t s_pw_tail = 0;   /* consumers (lock-held) */
+
 /* Remainder for M68K→CCK conversion (local to Core 1 call site). */
 static uint32_t s_m68k_rem = 0;
 
@@ -151,6 +179,82 @@ void core_chipset_publish_hot_regs(void)
                           memory_order_release);
 }
 
+/* Post one non-critical custom write with the CPU's current emulated time.
+ * Returns false when the queue is unavailable (multicore off, core not
+ * running) so the caller falls back to the synchronous path. Core 1 only. */
+bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size)
+{
+#if defined(BELLATRIX_ENABLE_MULTICORE)
+    RuntimeCoreChipset *core = s_core;
+    uint32_t head;
+    uint64_t stamp;
+
+    if (!core || !core->running)
+        return false;
+
+    head = atomic_load_explicit(&s_pw_head, memory_order_relaxed);
+
+    /* Full: wait for consumers. Core 2 SEVs after each drain iteration. */
+    while (head - atomic_load_explicit(&s_pw_tail, memory_order_acquire)
+           >= POSTED_WRITE_RING) {
+        if (!core->running)
+            return false;
+        PAL_Runtime_WakeupChipset();
+        asm volatile("wfe" ::: "memory");
+    }
+
+    /* The CPU's emulated "now": everything it published plus the local
+     * aggregation. Never ahead of what Core 2 will eventually reach. */
+    stamp = atomic_load_explicit(&s_cpu_cck_target, memory_order_relaxed)
+          + s_pending_cck;
+
+    s_pw_ring[head & (POSTED_WRITE_RING - 1u)] = (PostedWrite){
+        .stamp_cck = stamp, .addr = addr, .value = value, .size = size,
+    };
+    atomic_store_explicit(&s_pw_head, head + 1u, memory_order_release);
+    PAL_Runtime_WakeupChipset();
+    return true;
+#else
+    (void)addr; (void)value; (void)size;
+    return false;
+#endif
+}
+
+/* Apply queued writes with stamp <= limit (UINT64_MAX = drain everything).
+ * Caller must hold the chipset access lock. */
+static void core_chipset_apply_posted_writes(uint64_t limit)
+{
+    uint32_t tail = atomic_load_explicit(&s_pw_tail, memory_order_relaxed);
+    uint32_t head = atomic_load_explicit(&s_pw_head, memory_order_acquire);
+
+    while (tail != head) {
+        const PostedWrite *w = &s_pw_ring[tail & (POSTED_WRITE_RING - 1u)];
+
+        if (w->stamp_cck > limit)
+            break;
+        bellatrix_machine_write(w->addr, w->value, w->size);
+        tail++;
+    }
+    atomic_store_explicit(&s_pw_tail, tail, memory_order_release);
+}
+
+/* Forced drain before a CPU-side read or critical write (lock held). */
+void core_chipset_drain_posted_writes(void)
+{
+    core_chipset_apply_posted_writes(UINT64_MAX);
+}
+
+/* Earliest pending stamp, or UINT64_MAX when the queue is empty. Core 2. */
+static uint64_t core_chipset_next_posted_stamp(void)
+{
+    uint32_t tail = atomic_load_explicit(&s_pw_tail, memory_order_relaxed);
+    uint32_t head = atomic_load_explicit(&s_pw_head, memory_order_acquire);
+
+    if (tail == head)
+        return UINT64_MAX;
+    return s_pw_ring[tail & (POSTED_WRITE_RING - 1u)].stamp_cck;
+}
+
 /* Lock-free fast path for hot-register reads on Core 1. Returns false when
  * the register is not published or multicore is not active, sending the
  * caller down the regular rendezvous+lock path. */
@@ -230,6 +334,8 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     s_m68k_rem    = 0;
     s_pending_cck = 0;
+    atomic_store_explicit(&s_pw_head, 0u, memory_order_release);
+    atomic_store_explicit(&s_pw_tail, 0u, memory_order_release);
 
     CORE2_LOG("chipset init (Rigel)");
     return true;
@@ -252,6 +358,8 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     atomic_store_explicit(&s_pending_ipl, 0u, memory_order_release);
     s_m68k_rem    = 0;
     s_pending_cck = 0;
+    atomic_store_explicit(&s_pw_head, 0u, memory_order_release);
+    atomic_store_explicit(&s_pw_tail, 0u, memory_order_release);
     CORE2_LOG("chipset reset");
 }
 
@@ -355,6 +463,14 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
     uint64_t chip   = atomic_load_explicit(&s_chipset_cck, memory_order_relaxed);
 
     if (chip >= target) {
+        /* Caught up, but stamps <= target may still sit in the queue (the
+         * CPU posts and only then publishes the surrounding cycles). */
+        if (core_chipset_next_posted_stamp() != UINT64_MAX) {
+            core_chipset_lock_acquire();
+            core_chipset_apply_posted_writes(UINT64_MAX);
+            core_chipset_publish_hot_regs();
+            core_chipset_lock_release();
+        }
 #if BELLATRIX_PROFILE_ENABLED
         bprof_multicore_empty_host_step(chip, target);
 #endif
@@ -378,6 +494,14 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
         if (next > rigel_now && next < until)
             until = next;
 
+        /* Posted writes are applied at their exact stamp: never step past
+         * the earliest pending one. */
+        {
+            uint64_t wstamp = core_chipset_next_posted_stamp();
+            if (wstamp > rigel_now && wstamp < until)
+                until = (rigel_cycle_t)wstamp;
+        }
+
         /* Defensive fallback for a malformed/stale deadline.  remaining is
          * non-zero here, so this always makes forward progress. */
         if (until <= rigel_now)
@@ -390,7 +514,9 @@ void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
          * Core 2 must participate too; otherwise the lock protects CPU callers
          * from each other but not from concurrent Rigel mutation here. */
         core_chipset_lock_acquire();
+        core_chipset_apply_posted_writes((uint64_t)rigel_now);
         rigel_step_result_t r = rigel_step_until(core->rigel, until);
+        core_chipset_apply_posted_writes((uint64_t)r.time);
         core_chipset_publish_hot_regs();
         core_chipset_lock_release();
 #if BELLATRIX_PROFILE_ENABLED

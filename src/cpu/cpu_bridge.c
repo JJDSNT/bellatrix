@@ -41,6 +41,16 @@ __attribute__((weak)) void core_chipset_lock_acquire(void) {}
 __attribute__((weak)) void core_chipset_lock_release(void) {}
 __attribute__((weak)) void core_chipset_wait_caught_up(void) {}
 __attribute__((weak)) void core_chipset_publish_hot_regs(void) {}
+__attribute__((weak)) void core_chipset_drain_posted_writes(void) {}
+__attribute__((weak)) bool core_chipset_post_write(uint32_t addr,
+                                                   uint32_t value,
+                                                   uint32_t size)
+{
+    (void)addr;
+    (void)value;
+    (void)size;
+    return false;
+}
 __attribute__((weak)) bool core_chipset_read_hot_reg(uint32_t normalized_addr,
                                                      uint32_t *value)
 {
@@ -195,6 +205,7 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
         core_chipset_wait_caught_up();
 #endif
     core_chipset_lock_acquire();
+    core_chipset_drain_posted_writes();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
         result = bellatrix_machine_read(addr, size);
     else
@@ -221,12 +232,27 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
     cpu_bridge_profile_critical_mmio(addr, size, 1);
 #endif
 #if defined(BELLATRIX_ENABLE_MULTICORE)
+    /* Non-critical custom-register writes are posted with the CPU's emulated
+     * time and applied by Core 2 exactly at that stamp — no lock and no
+     * rendezvous here (PiStorm write-buffer pattern, ISSUE-0048). Ordering
+     * with everything observable is preserved: reads and critical writes
+     * drain the queue under the lock before acting. */
+    {
+        uint32_t norm = bellatrix_bridge_normalize_addr(addr);
+        if (norm >= 0x00DFF000u && norm <= 0x00DFF1FFu &&
+            !cpu_bridge_is_critical_mmio(addr, size, 1) &&
+            !bellatrix_slow_contains(bellatrix_machine_memory(), addr, size) &&
+            core_chipset_post_write(norm, value, size))
+            return;
+    }
+
     /* Critical write must land at the CPU's time: let Core 2 catch up first so
      * it applies at the right beam position, not up to a backlog window late. */
     if (cpu_bridge_is_critical_mmio(addr, size, 1))
         core_chipset_wait_caught_up();
 #endif
     core_chipset_lock_acquire();
+    core_chipset_drain_posted_writes();
     if (bellatrix_slow_contains(bellatrix_machine_memory(), addr, size))
         bellatrix_machine_write(addr, value, size);
     else
