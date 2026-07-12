@@ -63,6 +63,13 @@ bloqueios sem criar um escopo paralelo.
   atrasado (hoje `while (frames--)` apresenta todos em sequência).
 - [ ] Pi: capturar `[BOOT] ARM Clock` desde o início e ler `[CORE0-HW]`
   durante o run antes de qualquer conclusão de performance.
+- [ ] Pi: medir a frequência ótima do event stream no A53 (250 kHz foi
+  escolha arquitetural, não medida).
+- [ ] Fase 7: A/B de composição com 3 modos (render off / buffer privado
+  sem apresentar / render+apresentação) para separar Agnus de Denise e de
+  custo de framebuffer — complementa o experimento de granularidade.
+- [ ] Fase 8 (Pi): qualidade de áudio sob hybrid (Paula vs realtime) e
+  matriz completa KS1.3/WB/AROS/jogo, USB, rodada longa de drift.
 
 # Evidências
 
