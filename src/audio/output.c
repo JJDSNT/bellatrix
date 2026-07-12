@@ -35,11 +35,38 @@ typedef struct BellatrixAudioOutput {
     uint32_t head;
     uint32_t tail;
     uint32_t count;
+    uint32_t primed;      /* 0 while building the cushion, 1 once playing */
     uint64_t sample_acc;
     BellatrixAudioOutputStats stats;
 } BellatrixAudioOutput;
 
 static BellatrixAudioOutput s_audio_output;
+
+/* Priming depth in stereo frames (config, persists across reset). Default 0 =
+ * OFF: priming only helps near real-time; under sub-real-time emulation the queue
+ * never reaches a threshold, so a non-zero prime would keep it permanently silent.
+ * An auto-adjust loop (or a real-time backend) enables/tunes it via the setter.
+ * ~50 ms (2400) is a sensible value once production keeps up. */
+static uint32_t s_prime_frames = 0u;
+
+void bellatrix_audio_output_set_prime_frames(uint32_t frames)
+{
+    if (frames >= BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE)
+        frames = BELLATRIX_AUDIO_OUTPUT_QUEUE_SIZE - 1u;
+    s_prime_frames = frames;
+    /* Force a re-prime so the new depth takes effect cleanly. */
+    s_audio_output.primed = 0u;
+}
+
+uint32_t bellatrix_audio_output_prime_frames(void)
+{
+    return s_prime_frames;
+}
+
+int bellatrix_audio_output_is_primed(void)
+{
+    return (int)s_audio_output.primed;
+}
 
 static void bellatrix_audio_output_push(int16_t left, int16_t right)
 {
@@ -68,14 +95,30 @@ void bellatrix_audio_output_reset(void)
     memset(&s_audio_output, 0, sizeof(s_audio_output));
 }
 
+/* Runtime DRC enable (default on = committed behavior). The harness A/B toggles
+ * it via bellatrix_audio_output_set_drc() to isolate whether the DRC or the
+ * queue hop is what degrades quality vs the direct-accumulator reference. */
+static int s_drc_enabled = 1;
+
+void bellatrix_audio_output_set_drc(int enabled)
+{
+    s_drc_enabled = enabled ? 1 : 0;
+}
+
 /* DRC: effective sink rate = 48 kHz nudged toward keeping the queue at
- * TARGET_DEPTH. Proportional loop, clamped to ±DRC_MAX_ADJ (±0.4 %). */
+ * TARGET_DEPTH. Proportional loop, clamped to ±DRC_MAX_ADJ (±0.4 %). When
+ * disabled, the producer runs at a fixed rate — matching the harness's
+ * direct-accumulator path. */
 static uint32_t bellatrix_audio_output_rate(void)
 {
-    int32_t delta = (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH
-                    - (int32_t)s_audio_output.count;
-    int32_t adj = ((int32_t)BELLATRIX_AUDIO_DRC_MAX_ADJ * delta)
-                  / (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH;
+    int32_t delta, adj;
+
+    if (!s_drc_enabled)
+        return BELLATRIX_AUDIO_OUTPUT_RATE_HZ;
+
+    delta = (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH - (int32_t)s_audio_output.count;
+    adj = ((int32_t)BELLATRIX_AUDIO_DRC_MAX_ADJ * delta)
+          / (int32_t)BELLATRIX_AUDIO_TARGET_DEPTH;
 
     if (adj > (int32_t)BELLATRIX_AUDIO_DRC_MAX_ADJ)
         adj = (int32_t)BELLATRIX_AUDIO_DRC_MAX_ADJ;
@@ -106,8 +149,20 @@ void bellatrix_audio_output_tick(uint32_t cck_cycles)
 bool bellatrix_audio_output_pop(AudioSample *sample_out)
 {
     if (!sample_out || s_audio_output.count == 0u) {
+        s_audio_output.primed = 0u; /* drained → rebuild the cushion */
         s_audio_output.stats.underrun_samples++;
         return false;
+    }
+
+    /* Priming: withhold output (report underrun so the consumer feeds silence)
+     * until the queue has built a cushion of s_prime_frames. Once primed, play
+     * until it drains empty (handled above), then re-prime. */
+    if (!s_audio_output.primed) {
+        if (s_prime_frames != 0u && s_audio_output.count < s_prime_frames) {
+            s_audio_output.stats.underrun_samples++;
+            return false;
+        }
+        s_audio_output.primed = 1u;
     }
 
     *sample_out = s_audio_output.samples[s_audio_output.head];

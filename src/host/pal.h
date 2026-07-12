@@ -123,9 +123,14 @@ int  pal_sdl_pop_key_event(PAL_KeyEvent *event);
 /* Update window title (e.g. show FPS). No-op on bare-metal. */
 void pal_sdl_set_title(const char *title);
 
-/* Push one stereo sample to the host audio device (44100 Hz S16).
+/* Push one stereo sample to the host audio device (S16, PAL_AUDIO_SAMPLE_RATE).
  * No-op in headless mode or when audio device is unavailable. */
 void pal_audio_push_sample(int16_t left, int16_t right);
+
+/* Non-zero while the host audio ring has room. Lets the harness drain the
+ * shared audio queue with backpressure (so the queue's DRC sees a real
+ * consumer) instead of dumping every available sample at once. */
+int  pal_audio_writable(void);
 
 /* ---- Diagnostic env-var helpers (stubs on bare-metal, env on harness) ---- */
 

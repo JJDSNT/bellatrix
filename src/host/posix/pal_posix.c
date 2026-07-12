@@ -435,7 +435,7 @@ static void pal_sdl_enable_relative_mouse(void)
  * samples are dropped — latency stays bounded and the emulator never blocks
  * on audio. */
 
-#define PAL_AUDIO_SAMPLE_RATE   44100
+#define PAL_AUDIO_SAMPLE_RATE   48000
 #define PAL_AUDIO_BUF_FRAMES    1024
 #define PAL_AUDIO_RING_FRAMES   32768   /* ~743 ms */
 #define PAL_AUDIO_CUSHION_FRAMES 8192   /* ~186 ms before (re)starting */
@@ -500,6 +500,16 @@ static void pal_audio_sdl_init(void)
      * machine that never plays audio never opens an output stream. */
     SDL_PauseAudioDevice(s_audio_dev, 1);
     fprintf(stderr, "[PAL] audio: %d Hz stereo S16\n", PAL_AUDIO_SAMPLE_RATE);
+}
+
+int pal_audio_writable(void)
+{
+    if (!s_audio_dev)
+        return 0;
+    /* Approximate room check: s_audio_ring_rd advances on the SDL callback
+     * thread, but a racy read is fine here — it only paces the drain so the
+     * upstream queue backs up (and its DRC engages) when the sink is full. */
+    return (s_audio_ring_wr - s_audio_ring_rd) < PAL_AUDIO_RING_FRAMES;
 }
 
 void pal_audio_push_sample(int16_t left, int16_t right)

@@ -20,6 +20,8 @@
 #include "machine/expansions/rtg/rtg.h"
 
 #include "machine/machine.h"
+#include "audio/output.h"
+#include "rigel/rigel_time.h"
 #include "cpu/cpu_bridge.h"
 #include "debug/debug.h"
 #include "debug/os_debug.h"
@@ -87,6 +89,7 @@ typedef struct HarnessSerialInject {
 
 #define HARNESS_MAX_SERIAL_SCRIPT 16
 #define HARNESS_MAX_SERIAL_HOLD 128
+#define HARNESS_MAX_MOUSE_HOLD_SCRIPT 16
 
 typedef struct HarnessMouseHold {
     long start_frame;
@@ -492,9 +495,73 @@ static void harness_load_mouse_lmb_hold(HarnessMouseHold *cfg)
     cfg->enabled = 1;
 }
 
+static int harness_load_mouse_lmb_script(HarnessMouseHold *cfgs, size_t max_cfgs)
+{
+    const char *script = getenv("HARNESS_MOUSE_LMB_SCRIPT");
+    char buf[512];
+    char *save = NULL;
+    char *tok = NULL;
+    int count = 0;
+
+    if (!script || !*script || max_cfgs == 0)
+        return 0;
+
+    snprintf(buf, sizeof(buf), "%s", script);
+
+    for (tok = strtok_r(buf, ",", &save);
+         tok && count < (int)max_cfgs;
+         tok = strtok_r(NULL, ",", &save)) {
+        char *sep = strchr(tok, ':');
+        char *end = NULL;
+        long frame = 0;
+        long hold_count = 0;
+
+        if (!sep) {
+            fprintf(stderr,
+                    "[HARNESS] Ignoring HARNESS_MOUSE_LMB_SCRIPT entry '%s'"
+                    " (expected frame:count)\n",
+                    tok);
+            continue;
+        }
+
+        *sep = '\0';
+        frame = strtol(tok, &end, 10);
+        if (!end || *end != '\0' || frame < 0) {
+            fprintf(stderr,
+                    "[HARNESS] Ignoring HARNESS_MOUSE_LMB_SCRIPT frame '%s'\n",
+                    tok);
+            continue;
+        }
+
+        hold_count = strtol(sep + 1, &end, 10);
+        if (!end || *end != '\0' || hold_count <= 0) {
+            fprintf(stderr,
+                    "[HARNESS] Ignoring HARNESS_MOUSE_LMB_SCRIPT count '%s'\n",
+                    sep + 1);
+            continue;
+        }
+
+        memset(&cfgs[count], 0, sizeof(cfgs[count]));
+        cfgs[count].start_frame = frame;
+        cfgs[count].count = hold_count;
+        cfgs[count].port = 0u;
+        cfgs[count].enabled = 1;
+        count++;
+    }
+
+    if (tok) {
+        fprintf(stderr,
+                "[HARNESS] Truncated HARNESS_MOUSE_LMB_SCRIPT to %d entries\n",
+                count);
+    }
+
+    return count;
+}
+
 static void harness_update_mouse_hold(BellatrixMachine *m,
                                       long frame_count,
-                                      HarnessMouseHold *cfg)
+                                      HarnessMouseHold *cfg,
+                                      const char *button_name)
 {
     int pressed;
 
@@ -512,8 +579,9 @@ static void harness_update_mouse_hold(BellatrixMachine *m,
     cfg->active = pressed;
 
     fprintf(stderr,
-            "[HARNESS] Mouse RMB port %u %s at frame %ld\n",
-            cfg->port, pressed ? "pressed" : "released", frame_count);
+            "[HARNESS] Mouse %s port %u %s at frame %ld\n",
+            button_name, cfg->port, pressed ? "pressed" : "released",
+            frame_count);
 }
 
 static void harness_load_mouse_serial_trigger(HarnessMouseSerialTrigger *cfg)
@@ -1131,10 +1199,28 @@ int main(int argc, char **argv)
     const int QUANTUM = 454;
 
     /* Audio sample rate conversion: one S16 stereo sample every
-     * M68K_HZ / AUDIO_RATE cycles (≈ 161 cycles at PAL 7.09 MHz). */
-    static const uint64_t AUDIO_RATE = 44100;
-    static const uint64_t M68K_HZ   = 7093790;
+     * M68K_HZ / AUDIO_RATE cycles. AUDIO_RATE matches the SDL device and the
+     * shared output.c queue (48 kHz) so all A/B modes feed one sink rate. */
+    static const uint64_t AUDIO_RATE = 48000;
+    /* CPU/chipset clock from the machine's Rigel config (PAL 7.09 MHz vs NTSC
+     * 7.16 MHz) rather than hardcoded — mirrors output.c and stays correct per
+     * video standard. rigel_get_clock_hz() falls back to the PAL default if the
+     * context isn't ready. Used by both the audio accumulator and the drift
+     * diagnostic below. */
+    const uint64_t M68K_HZ = (uint64_t)rigel_get_clock_hz(bellatrix_machine_rigel_ctx());
     uint64_t audio_acc = 0;
+
+    /* Audio path A/B (isolate DRC vs queue as the quality degrader):
+     *   HARNESS_AUDIO_UNIFIED=1  drain the shared output.c queue (else legacy
+     *                            direct accumulator = known-good reference)
+     *   HARNESS_AUDIO_DRC=0/1    toggle output.c dynamic rate control
+     * Compare legacy vs unified+DRC0 vs unified+DRC1 in one build. */
+    int audio_unified = PAL_Diag_GetEnvBool("HARNESS_AUDIO_UNIFIED");
+    int audio_drc     = PAL_Diag_GetEnvInt("HARNESS_AUDIO_DRC", 1);
+    bellatrix_audio_output_set_drc(audio_drc);
+    printf("[HARNESS] audio path: %s (drc=%d)\n",
+           audio_unified ? "unified/output.c-queue" : "legacy/direct-accumulator",
+           audio_drc);
 
     long  total_cycles = 0;
     long  frame_count  = 0;
@@ -1146,6 +1232,8 @@ int main(int argc, char **argv)
     int serial_script_count = 0;
     HarnessMouseHold mouse_rmb;
     HarnessMouseHold mouse_lmb;
+    HarnessMouseHold mouse_lmb_script[HARNESS_MAX_MOUSE_HOLD_SCRIPT];
+    int mouse_lmb_script_count = 0;
     HarnessMouseSerialTrigger mouse_serial_trigger;
 
     uint64_t fps_t0    = PAL_Time_ReadCounter();
@@ -1167,6 +1255,9 @@ int main(int argc, char **argv)
         HARNESS_MAX_SERIAL_SCRIPT + HARNESS_MAX_SERIAL_HOLD);
     harness_load_mouse_hold(&mouse_rmb);
     harness_load_mouse_lmb_hold(&mouse_lmb);
+    mouse_lmb_script_count =
+        harness_load_mouse_lmb_script(mouse_lmb_script,
+                                      HARNESS_MAX_MOUSE_HOLD_SCRIPT);
     harness_load_mouse_serial_trigger(&mouse_serial_trigger);
 
     while (running) {
@@ -1175,6 +1266,7 @@ int main(int argc, char **argv)
         int sdl_mouse_left = 0;
         int sdl_mouse_middle = 0;
         int sdl_mouse_right = 0;
+        int scripted_mouse_left = 0;
 
         if (!headless) {
             running = pal_sdl_poll_events();
@@ -1186,11 +1278,17 @@ int main(int argc, char **argv)
             harness_pump_sdl_keyboard();
         }
 
+        scripted_mouse_left = (mouse_lmb.enabled && mouse_lmb.active);
+        for (int i = 0; i < mouse_lmb_script_count; i++) {
+            scripted_mouse_left = scripted_mouse_left ||
+                                  (mouse_lmb_script[i].enabled &&
+                                   mouse_lmb_script[i].active);
+        }
+
         bellatrix_machine_mouse_motion(0u, sdl_mouse_dx, sdl_mouse_dy);
         bellatrix_machine_mouse_button(0u,
                                        BELLATRIX_MOUSE_BUTTON_LEFT,
-                                       sdl_mouse_left ||
-                                       (mouse_lmb.enabled && mouse_lmb.active));
+                                       sdl_mouse_left || scripted_mouse_left);
         bellatrix_machine_mouse_button(0u,
                                        BELLATRIX_MOUSE_BUTTON_MIDDLE,
                                        sdl_mouse_middle);
@@ -1239,9 +1337,15 @@ int main(int argc, char **argv)
             }
         }
 
-        /* Audio output: push samples at 44100 Hz using fractional accumulator */
+        /* Audio output. Unified path drains the shared output.c queue (same
+         * producer the bare-metal HDMI sink uses); legacy path uses the local
+         * direct accumulator below (known-good reference). */
         uint64_t lp_c = s_loop_prof ? PAL_Time_ReadCounter() : 0;
-        if (!headless) {
+        if (!headless && audio_unified) {
+            AudioSample as;
+            while (pal_audio_writable() && bellatrix_audio_output_pop(&as))
+                pal_audio_push_sample(as.left, as.right);
+        } else if (!headless) {
             /* Diagnostic for AI_context/issue_paula_audio_cpu_chipset_sync.md:
              * counts samples pushed twice in a row with the same (left,
              * right) value. Paula's mixed sample only changes when the
@@ -1305,8 +1409,12 @@ int main(int argc, char **argv)
             prev_frame = cur_frame;
             bellatrix_rtg_frame_tick();
 
-            harness_update_mouse_hold(m, frame_count, &mouse_rmb);
-        harness_update_mouse_hold(m, frame_count, &mouse_lmb);
+            harness_update_mouse_hold(m, frame_count, &mouse_rmb, "RMB");
+            harness_update_mouse_hold(m, frame_count, &mouse_lmb, "LMB");
+            for (int i = 0; i < mouse_lmb_script_count; i++) {
+                harness_update_mouse_hold(m, frame_count, &mouse_lmb_script[i],
+                                          "LMB");
+            }
 
             {
                 static int s_move_init = 0;
@@ -1450,10 +1558,11 @@ int main(int argc, char **argv)
             static long dump_frame = -1;
             if (dump_frame < 0) {
                 const char *df = getenv("HARNESS_OS_DEBUG_DUMP");
-                dump_frame = 3000;
+                dump_frame = 0;
                 if (df && atol(df) > 1) dump_frame = atol(df);
+                else if (df && df[0] != '\0' && df[0] != '0') dump_frame = 3000;
             }
-            if (frame_count == dump_frame) {
+            if (dump_frame > 0 && frame_count == dump_frame) {
                 const uint8_t *cr = m->memory.chip_ram;
                 uint32_t eb = ((uint32_t)cr[4] << 24) | ((uint32_t)cr[5] << 16) |
                               ((uint32_t)cr[6] << 8) | (uint32_t)cr[7];

@@ -120,6 +120,8 @@ Harness options (env vars):
                       Number of frames to keep the Amiga right mouse button down
   HARNESS_MOUSE_RMB_PORT=<0|1>
                       Controller port for RMB hold (default: 0)
+  HARNESS_MOUSE_LMB_SCRIPT=<frame:count,...>
+                      Hold Amiga left mouse button for diagnostic scripted clicks
   HARNESS_SERIAL_AFTER_RMB=<char>
                       After a real SDL right-click, inject this serial byte
   HARNESS_SERIAL_AFTER_RMB_DELAY=<n>
