@@ -618,6 +618,8 @@ static rigel_event_flags_t machine_quantum_step(BellatrixMachine *m,
     uint64_t t0 = 0;
     uint64_t t1 = 0;
     uint64_t t2 = 0;
+#else
+    (void)reason;   /* consumed only by the harness perf trace */
 #endif
 
     if (!m || !g_rigel || cycles == 0u) return 0;
