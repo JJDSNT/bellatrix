@@ -3,6 +3,22 @@
 ````md
 # Bellatrix — Runtime, Timing and Temporal Architecture
 
+## Timeline policies
+
+Multicore builds select `BELLATRIX_TIMELINE_MODE=cpu|realtime|hybrid`:
+
+- `cpu` is the deterministic compatibility mode; Core 1 progress is the Core 2
+  horizon.
+- `realtime` makes Core 0 convert `CNTPCT` into PAL CCK and publish an
+  autonomous horizon.
+- `hybrid` clamps that realtime horizon to CPU progress plus the configured
+  maximum backlog.
+
+Core 0 is the only wall-clock policy owner. Core 2 consumes the atomic horizon
+and subdivides it at observable Rigel deadlines and posted-write timestamps.
+The horizon is not a periodic CPU/Core 2 rendezvous. In self-paced modes, MMIO
+observes or stamps current chipset time; only ordering contacts serialize.
+
 ## Purpose
 
 Define the canonical runtime and temporal model of Bellatrix.
