@@ -51,6 +51,18 @@ bloqueios sem criar um escopo paralelo.
   atômicos, sempre com rebase no contador corrente.
 - [x] Extrair/testar a fila SPSC e fechar liveness quando pause coincide com
   fila cheia.
+- [x] Audit cross-core do caminho Core 0 (presenter, input, serial, áudio).
+- [x] Stress SPSC com pthreads reais sob TSAN no ctest.
+- [ ] Experimento de granularidade: drain sem cortes em deadlines observáveis
+  (avg_step 79 → ~2000+) e medir fps no Pi antes de aceitar "custo por CCK".
+- [ ] A/B formal Fase 0 no QEMU: 3 rodadas × {single, multicore-cpu,
+  multicore-hybrid} com PROFILE; tabela de contadores + variância na issue.
+- [ ] Reavaliar CHIPSET_PUBLISH_MIN_CCK 1→227 com o A/B montado (beam f(t)
+  inverteu a conta que fazia disso uma regressão).
+- [ ] Política de presenter: apresentar só o último frame pendente quando
+  atrasado (hoje `while (frames--)` apresenta todos em sequência).
+- [ ] Pi: capturar `[BOOT] ARM Clock` desde o início e ler `[CORE0-HW]`
+  durante o run antes de qualquer conclusão de performance.
 
 # Evidências
 
@@ -143,6 +155,45 @@ bloqueios sem criar um escopo paralelo.
   mtune=cortex-a53 (build usa a72), frameskip de composição.
 - 2026-07-13: builds Pi SEM BTStack (BT em desenvolvimento prende o launcher
   na tela de scan com USB morto; regra registrada) e com USB+PROFILE.
+- 2026-07-13: REVISÃO da conclusão estrutural (consideração externa em
+  `consideracao.md` + recomputação do log do Pi): a métrica decisiva
+  avg_step = CCK/chamada deu **~79 CCK por rigel_step_until** (beat 29→30:
+  756.830 CCK em 9.586 chamadas; um beat ≈ 2 s) — granularidade SUB-scanline
+  (linha = 227 CCK), cortada ~3× por linha por
+  `rigel_get_next_observable_deadline`. O overhead EXTERNO por chamada segue
+  irrelevante (~4,7 K chamadas/s), mas custo fixo INTERNO do Rigel por
+  chamada seria multiplicado 3×: a conclusão "2,6 µs/CCK intrínseco" fica
+  SUSPENSA até o experimento de granularidade (modo que ignora deadlines
+  observáveis no drain e corta só em target/posted-stamp; avg_step deve ir a
+  ~2000+). Se o fps subir → problema é custo por chamada (correção barata:
+  coarsening de deadlines); se não → custo por CCK confirmado, seguir Fase 7.
+  Hipóteses do documento já refutadas pelos dados: handshake dominante
+  (full_waits=0, IO 7 µs, empty steps congelados), avanço duplo (call site
+  único em `core_chipset.c`), fps de apresentação (CCK/s ≈ 5,2 fps virtuais
+  ≈ 5,4 apresentados — emulação e apresentação coladas).
+- 2026-07-13: PONTO CEGO tipo "QEMU órfão" no Pi: o log do primeiro gate NÃO
+  capturou `[BOOT] ARM Clock` (captura serial começou tarde) e nada monitora
+  throttle em runtime — firmware derruba o ARM para 600 MHz por undervoltage
+  /térmica sem outro sintoma, o que halvaria toda a conta. Adicionado ao
+  heartbeat: `[CORE0-HW] arm_mhz= throttled=` (mailbox GET_CLOCK_RATE ARM +
+  GET_THROTTLED, sticky bits 16-18) e `[BPROF-SCHED] avg_step= core2_busy=`
+  (ocupação de parede do Core 2 dentro da seção de step). Usuário reporta
+  que já houve bare metal >10 fps com o Rigel (config a localizar) — se
+  confirmado no mesmo clock, reforça a hipótese de integração/granularidade.
+- 2026-07-13: item 1 (audit cross-core do Core 0) CONCLUÍDO — 4 raças da
+  mesma classe do bug da fila de áudio corrigidas: (a) sync de controller
+  ports (input Core 0 × rigel_step Core 2) sob lock; (b)
+  `post_chipset_step` (serial/CIA SDR) sob lock; (c) presenter lê o struct
+  do frame (width/pitch/pixels) sob lock — cópia de pixels fora, tearing
+  documentado como único risco residual; (d) produção de áudio + leitura de
+  IPL movidas para DENTRO da seção com lock do drain. Auditados e seguros:
+  sync_ipl (só sob lock), console ring (atômico), ADF insert (pré-runtime).
+- 2026-07-13: item 2 (TSAN) CONCLUÍDO — `bellatrix_tsan_posted_writes` e
+  `bellatrix_tsan_audio_queue` no ctest: produtor/consumidor em pthreads
+  reais sob `-fsanitize=thread`, sequência/ordem/perda verificadas através
+  de muitos wraps. Armadilha de ambiente: TSAN aborta com "unexpected memory
+  mapping" sob ASLR de kernels novos (vm.mmap_rnd_bits=32) — testes rodam
+  via `setarch -R`. Suíte completa: 39/39 verdes.
 
 # Bloqueios
 
