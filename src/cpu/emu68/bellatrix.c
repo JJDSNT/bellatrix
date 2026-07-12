@@ -400,6 +400,11 @@ BellatrixRuntime g_runtime;
  * kernel bootargs (cmdline.txt on SD, BOOTARGS/-append in QEMU) — the Fase 0
  * requirement of A/B without recompiling. Same /chosen pattern as Emu68's
  * async_log. */
+/* Where the selected mode came from — printed with the mode so an A/B run
+ * can always tell "cmdline parsed and accepted" from "cmdline never seen",
+ * even when the requested mode equals the build default. */
+static const char *s_timeline_mode_source = "build default (no bootargs)";
+
 static RuntimeTimelineMode bellatrix_timeline_boot_mode(RuntimeTimelineMode fallback)
 {
     of_node_t *chosen = dt_find_node("/chosen");
@@ -415,18 +420,26 @@ static RuntimeTimelineMode bellatrix_timeline_boot_mode(RuntimeTimelineMode fall
 
     args = prop->op_value;
     opt = strstr(args, "timeline=");
-    if (!opt)
+    if (!opt) {
+        s_timeline_mode_source = "build default (no timeline= in bootargs)";
         return fallback;
+    }
     opt += 9;
 
-    if (strncmp(opt, "cpu", 3) == 0)
+    if (strncmp(opt, "cpu", 3) == 0) {
+        s_timeline_mode_source = "bootargs";
         return RUNTIME_TIMELINE_CPU_DRIVEN;
-    if (strncmp(opt, "realtime", 8) == 0)
+    }
+    if (strncmp(opt, "realtime", 8) == 0) {
+        s_timeline_mode_source = "bootargs";
         return RUNTIME_TIMELINE_REALTIME;
-    if (strncmp(opt, "hybrid", 6) == 0)
+    }
+    if (strncmp(opt, "hybrid", 6) == 0) {
+        s_timeline_mode_source = "bootargs";
         return RUNTIME_TIMELINE_HYBRID;
+    }
 
-    kprintf("[CORE0] bootargs timeline= value not recognized; keeping build default\n");
+    s_timeline_mode_source = "build default (timeline= value not recognized)";
     return fallback;
 }
 
@@ -449,12 +462,11 @@ static void bellatrix_core0_supervise(void)
     RuntimeTimelineMode timeline_mode = bellatrix_timeline_boot_mode(
         (RuntimeTimelineMode)BELLATRIX_TIMELINE_DEFAULT);
 
-    kprintf("[CORE0] timeline mode: %s%s\n",
+    kprintf("[CORE0] timeline mode: %s (%s)\n",
             timeline_mode == RUNTIME_TIMELINE_CPU_DRIVEN ? "cpu-driven" :
             timeline_mode == RUNTIME_TIMELINE_REALTIME   ? "realtime" :
                                                            "hybrid",
-            timeline_mode == (RuntimeTimelineMode)BELLATRIX_TIMELINE_DEFAULT
-                ? " (build default)" : " (bootargs override)");
+            s_timeline_mode_source);
 
     core_chipset_timeline_init(last_io, freq, timeline_mode);
 
