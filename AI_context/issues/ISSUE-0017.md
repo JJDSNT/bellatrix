@@ -221,3 +221,27 @@ rtk env BELLATRIX_RIGEL_TRACE=1 \
   no VBL, offset de janela visível corrigido para -128. Commits `357c4ec` e
   `67e82ab` no rigel; bump de submodule em bellatrix. KS20 melhorado; 1943 e EON
   sem regressão. Battle Squadron definido como próximo alvo de rendering.
+
+## Sessão 2026-07-06 — Battle Squadron e eonA
+
+- `eonA.adf` branco não era regressão gráfica: o demo exige
+  `HARNESS_CPU=68000`; o default 68040 permanece branco.
+- No gameplay de Battle, a corrupção já está na chip RAM, não no
+  compositor/viewport. Tile sheet e padrões isolados do blitter estão íntegros.
+- As colunas pretas expõem tiles legítimos de starfield porque passadas de
+  terreno do seam ficam parciais; o jogo continua usando trackloader próprio.
+- Foram observados 14.743 writes de BLTSIZE com blitter ocupado. O experimento
+  de flush do blit anterior e preservação de `INTREQ.BLIT` é plausível e foi
+  preservado, mas não curou o sintoma.
+- A corrupção também ocorre com CPU 68000 e com/sem os WIPs de prioridade,
+  seed e flush. Próximo diagnóstico é descobrir qual estado guest decide a
+  quantidade parcial de colunas (VPOS/VHPOS, VBL, DSKBLK ou relação de IRQ).
+
+Repro histórico:
+
+```sh
+HARNESS_MOUSE_LMB_SCRIPT="250:10,1100:10" \
+  BELLATRIX_RIGEL_DUMP_FRAME=2000 \
+  KICKSTART=src/roms/KS13.rom ADF=src/disks/battle.adf \
+  FRAMES=2020 ./run.sh harness
+```

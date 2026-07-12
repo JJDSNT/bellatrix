@@ -520,3 +520,15 @@ separadamente:
 Uma melhora sem apresentacao acusa o presenter; uma melhora sem drawing acusa
 Denise/composicao; ambos isolados rapidos acusam sincronizacao. Dirty-line copy
 e buffers adicionais so devem virar implementacao apos essa separacao medida.
+
+## Regressão KS20 corrigida em 2026-07-06
+
+O Rigel `d2abef6` fez o KS2.0 repetir indefinidamente o scan de drive-ID: o
+valor `id_data=0xffffffff`, calibrado para a antiga saída invertida de `/CHNG`,
+passou a representar resposta ativa de drive externo na saída não invertida de
+`/DSKRDY`. DF0 interno não possui shifter de ID; a linha deve permanecer HIGH e
+o Kickstart decodifica `0x00000000`.
+
+Corrigido em Rigel `cee4e0d`, com drive desconectado retornando bit 0. Validado
+em KS20 strap, KS13 strap e KS13+WB1.3. Lição: toda mudança de polaridade exige
+revisar valores anteriormente calibrados para a polaridade oposta.

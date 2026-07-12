@@ -1,9 +1,12 @@
+# Local reference material and proprietary Amiga ROM/media images.
 referencias
 src/roms/*
+# Redistributable/open ROM images used by tests.
 !src/roms/aros.rom
 !src/roms/diagrom.rom
 !src/roms/diagrom2.rom
 src/disks/*
+# Redistributable test media. Do not add Workbench or other commercial images.
 !src/disks/AmigaTestKit.adf
 !src/disks/aros.adf
 !src/disks/dopus411.adf
