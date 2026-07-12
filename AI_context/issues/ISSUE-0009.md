@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0009
-title: "Paula audio CPU↔chipset sync — harness choppiness"
-status: done
+title: "Harness: regressão histórica de performance e qualidade de áudio"
+status: doing
 priority: high
 type: bug
 owner: agent
 created_at: 2026-06-26
-updated_at: 2026-06-26
+updated_at: 2026-07-11
 tags:
   - paula
   - audio
@@ -20,7 +20,53 @@ related_files:
   - src/machine/machine_rigel_step.c
 ---
 
-# Issue: Paula audio sounds choppy in the harness — mostly fixed
+# Issue: regressão histórica de performance e áudio no harness
+
+## Reaberto em 2026-07-11 — baseline bom não é mais reproduzível
+
+Em algum ponto posterior aos testes que registraram aproximadamente 50 FPS e
+áudio suave, o harness perdeu performance e qualidade sonora. No estado atual,
+KS1.3 + Battle Squadron fica tipicamente entre 15 e 20 FPS. O caminho direto
+soa melhor que as experiências `HARNESS_AUDIO_UNIFIED`, mas nenhum modo recupera
+o áudio lembrado como bom.
+
+Medições atuais mostram que o áudio host não é o custo dominante:
+
+```text
+[LOOP-PROF] cpu_run=~0.89-0.93s audio=~0.001-0.015s
+[HARNESS-PERF] cck=~0.7-1.5M/s rigel_ms=~390-425 present_ms=~180-255
+```
+
+O PAL precisa de aproximadamente 3,55 milhões de CCK/s. A produção sub-real-time
+explica parte da deterioração auditiva, mas restaurar o ring SDL histórico
+(44,1 kHz, 32768 frames, cushion de 8192) não recuperou o som conhecido.
+
+Testes de arqueologia realizados:
+
+- Rigel atual limpo `cee4e0d`: regressão permanece;
+- Rigel histórico `78c45bf`: regressão permanece quando usado com Bellatrix
+  atual;
+- binário histórico completo de `19e6ad5` + Rigel `78c45bf`: FPS melhora, mas
+  ainda não reproduz a qualidade sonora lembrada;
+- reduzir apresentação com `HARNESS_VIDEO_SKIP=3` diminui `present_ms`, mas não
+  restaura realtime nem áudio;
+- unified com e sem DRC é inferior ao caminho direto e não deve ser promovido.
+
+Conclusão atual: houve regressão real de performance e som, mas não existe um
+commit golden que a reproduza de forma inequívoca nem sabemos ainda como
+recuperá-la. Reconstruir gradualmente, preservando o caminho direto como
+referência perceptual. O objetivo de unificação continua sendo levar a qualidade
+do harness ao bare metal, nunca degradar o harness para igualar o HDMI.
+
+Artefatos preservados para investigação futura:
+
+- workspace histórico: `/tmp/bellatrix-audio-baseline-19e6ad5`;
+- branch Bellatrix `audio-labs`;
+- experimentos Rigel: branch local
+  `wip/battle-blitter-priority-20260711`, commit `ffe3c8f`.
+
+As afirmações históricas abaixo permanecem como arqueologia, não como estado
+atual comprovado.
 
 ## Status: CLOSED (2026-06-26)
 
