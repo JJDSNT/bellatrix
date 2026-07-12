@@ -184,6 +184,57 @@ Conclusões:
   processos QEMU/harness residuais. A linha `[HARNESS-PERF]` agora termina em
   `load=<loadavg 1min>`, carimbando as condições do host em cada medição.
 
+## A/B single vs multicore no QEMU (2026-07-12, Fase 4 antecipada)
+
+Emu68 + PROFILE=1, QEMU raspi3b MTTCG, KS1.3 + megademoA, headless 180 s,
+host ocioso. Números absolutos de TCG não transferem para o Pi; contagens de
+protocolo transferem. Comparação no mesmo ponto emulado (~27,17 M CCK):
+
+```text
+single: 125,1 s de parede, fps=3.06, 1,00 M acessos MMIO
+multi:  136,0 s de parede, fps=2.64, 1,10 M acessos MMIO  (+9% de parede)
+```
+
+Multicore é mais lento que single-core mesmo com sincronização barata do TCG;
+no A53 real (DSB/SEV/WFE físicos + ping-pong de cache line) o déficit só
+amplia. Causas medidas, ranqueadas:
+
+1. **Granularidade de publish**: 1,16 M publishes para 27 M CCK — média de
+   23 CCK (~46 ciclos M68K, um bloco JIT) por transação cross-core. Cada
+   publish = fetch_add + SEV + possível WFE de backpressure.
+2. **Custo por CCK do chipset sobe 73% no Core 2**: 201 cy/CCK (4621 cy por
+   step de 23 CCK) contra 116 cy/CCK no avanço inline do single-core — lock
+   compartilhado + barreiras por fatia + tráfego de cache entre cores.
+3. **75% das leituras MMIO são "críticas"** (778 k de 1,04 M; VHPOSR/DFF006
+   em polling, pc=0x23478) e cada uma exige rendezvous
+   `core_chipset_wait_caught_up()`. O multicore também FAZ mais MMIO que o
+   single no mesmo CCK (+10%): tempo stale/bursty faz busy-waits de beam
+   queimarem mais iterações.
+4. **BUG de protocolo: o bound de backlog (8192 CCK) é violado até 272×** —
+   bprof backlog_max=524.273; supervisor registrou backlog=2.230.452 com
+   2 beats consecutivos congelados (cpu_target +0 E chipset +0) seguidos de
+   drenagem em rajada de 2,2 M CCK. Como `s_chipset_cck` só é publicado ao
+   FIM de `bellatrix_runtime_host_step` (drain completo), durante uma
+   drenagem longa CPU (backpressure) e MMIO crítico (wait_caught_up) esperam
+   às cegas. Investigar quem fura o bound (suspeito: caminho de STOP/idle
+   publish) e publicar progresso por iteração interna do drain.
+5. **Core 2 acorda 10× mais do que trabalha**: empty_host_steps=10,3 M contra
+   1,17 M steps produtivos — todo publish/lock-release SEVa o core à toa.
+
+Correções candidatas (ordem de custo/benefício):
+- publicar `s_chipset_cck` dentro do loop de drain (por iteração);
+- agregar publishes no Core 1 (fronteira mínima de ~227 CCK ou MMIO);
+- servir VPOSR/VHPOSR de estado de beam derivado de `s_chipset_cck` sem
+  rendezvous completo;
+- caçar a violação do bound de 8192;
+- reduzir SEVs supérfluos (só acordar Core 2 quando ele tem alvo novo).
+
+Validação pendente no Pi real: repetir o mesmo A/B com PROFILE=1 e comparar
+as contagens (elas devem bater; os tempos vão divergir).
+
+Colateral: o trace `[HARNESS-PERF]` (commit 10a0bc6/2d678db) quebrava o build
+bare-metal (`-Werror=unused-parameter` em `reason`); corrigido nesta sessão.
+
 # Hipóteses priorizadas
 
 1. Fragmentação externa/interna: deadlines, bus changes e MMIO flush geram
