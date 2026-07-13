@@ -49,26 +49,17 @@ Toda alteração no Emu68 precisa responder:
 
 A direção correta é: **mínimo patch no Emu68, máximo encapsulamento no Bellatrix**.
 
-## API pública Bellatrix/Emu68
+## Emu68 public machine API
 
-A API pública inicial deve seguir a mesma regra:
+The authoritative API contract is [Emu68 Public Machine Integration API](emu68_public_api.md).
 
-- contrato e adapter vivem em `src/cpu/emu68/`;
-- inclusão no firmware acontece por `cmake/bellatrix-variant.cmake`;
-- o submódulo `emu68/` só é alterado via `patches/`;
-- patches no Emu68 devem ser limitados aos pontos onde o core precisa chamar a
-  camada externa.
+The Bellatrix-owned files under `src/cpu/emu68/` and the dispatcher added by
+`patches/0021-emu68-public-bus-dispatch.patch` describe the current integration,
+not the target public API. In particular, dispatching a callback from
+`vectors.c` still depends on Data Abort and must not be used as the basis of the
+machine API.
 
-Estado atual:
-
-- `src/cpu/emu68/emu68_api.h` define o contrato público inicial;
-- `src/cpu/emu68/emu68_api_adapter.c` implementa um singleton sobre o runtime
-  global atual do Emu68;
-- `patches/0021-emu68-public-bus-dispatch.patch` faz `vectors.c` chamar o
-  dispatcher de bus público com fallback para `bellatrix_bus_access()`.
-
-Ainda não existe execução por janela real no Emu68. Enquanto o JIT continuar
-controlado por `MainLoop()`, `emu68_run_cycles()` e `emu68_step()` devem ser
-tratados como API reservada/unsupported.
-
-Documento detalhado: `docs/emu68_public_api.md`.
+The public API is implemented at the JIT memory-emission boundary: direct
+regions keep native loads/stores, external regions use an explicit bridge, and
+unmapped regions use defined 68k semantics. The detailed document defines the
+motivation, current Emu68 operation, and the complete API behavior.
