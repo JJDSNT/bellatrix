@@ -192,6 +192,7 @@ EMU68_PATCHES=(
     "$PATCHES/0020-emu68-stop-liveness.patch"
     "$PATCHES/0021-emu68-public-bus-dispatch.patch"
     "$PATCHES/0025-emu68-machine-continuation.patch"
+    "$PATCHES/0026-emu68-mmu-unmap.patch"
 )
 
 CHERRYUSB_PATCHES=(
