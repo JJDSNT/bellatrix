@@ -67,7 +67,8 @@ static uint32_t *emit_access_prefix(uint32_t *ptr, uint8_t address_reg,
                                     uint8_t width, int write,
                                     uint8_t *page_reg, uint8_t *class_reg,
                                     uint32_t **slow_branch,
-                                    uint32_t **boundary_branch)
+                                    uint32_t **boundary_branch,
+                                    uint32_t **overflow_branch)
 {
     uintptr_t table = write ? (uintptr_t)emu68_machine_write_pages :
                               (uintptr_t)emu68_machine_read_pages;
@@ -82,16 +83,25 @@ static uint32_t *emit_access_prefix(uint32_t *ptr, uint8_t address_reg,
     *ptr++ = cmp_immed(*class_reg, EMU68_PAGE_DIRECT);
     *slow_branch = ptr++;
     *boundary_branch = NULL;
+    *overflow_branch = NULL;
 
     if (width > 1u) {
+        uint32_t *within_page;
+
         *ptr++ = ubfx(*page_reg, address_reg, 0,
                       EMU68_MACHINE_PAGE_SHIFT);
         *ptr++ = mov_immed_u16(limit_reg,
                               (uint16_t)(EMU68_MACHINE_PAGE_SIZE - width), 0);
         *ptr++ = cmp_reg(*page_reg, limit_reg, LSL, 0);
+        within_page = ptr++;
+        *ptr++ = adds_immed(*page_reg, address_reg, width - 1u);
+        *overflow_branch = ptr++;
+        *ptr++ = lsr(*page_reg, *page_reg, EMU68_MACHINE_PAGE_SHIFT);
+        ptr = emit_pointer(ptr, *class_reg, table);
+        *ptr++ = ldrb_regoffset(*class_reg, *class_reg, *page_reg, UXTW);
+        *ptr++ = cmp_immed(*class_reg, EMU68_PAGE_DIRECT);
         *boundary_branch = ptr++;
-        /* Both conditional branches are patched by the caller. The boundary
-         * branch is immediately before the direct operation. */
+        *within_page = b_cc(A64_CC_LS, ptr - within_page);
     }
     RA_FreeARMRegister(&ptr, limit_reg);
     return ptr;
@@ -158,6 +168,7 @@ uint32_t *emu68_machine_emit_load(uint32_t *ptr, uint8_t address_reg,
     uint8_t class_reg;
     uint32_t *slow_branch;
     uint32_t *boundary_branch;
+    uint32_t *overflow_branch;
     uint32_t *done;
     uint32_t *slow;
 
@@ -165,7 +176,8 @@ uint32_t *emu68_machine_emit_load(uint32_t *ptr, uint8_t address_reg,
         return emit_native_load(ptr, address_reg, value_reg, width,
                                 sign_extend);
     ptr = emit_access_prefix(ptr, address_reg, width, 0, &page_reg,
-                             &class_reg, &slow_branch, &boundary_branch);
+                             &class_reg, &slow_branch, &boundary_branch,
+                             &overflow_branch);
     ptr = emit_native_load(ptr, address_reg, value_reg, width, sign_extend);
     done = ptr++;
     slow = ptr;
@@ -173,7 +185,9 @@ uint32_t *emu68_machine_emit_load(uint32_t *ptr, uint8_t address_reg,
                          metadata | width);
     *slow_branch = b_cc(A64_CC_NE, slow - slow_branch);
     if (boundary_branch)
-        *boundary_branch = b_cc(A64_CC_HI, slow - boundary_branch);
+        *boundary_branch = b_cc(A64_CC_NE, slow - boundary_branch);
+    if (overflow_branch)
+        *overflow_branch = b_cc(A64_CC_CS, slow - overflow_branch);
     *done = b(ptr - done);
     RA_FreeARMRegister(&ptr, class_reg);
     RA_FreeARMRegister(&ptr, page_reg);
@@ -188,13 +202,15 @@ uint32_t *emu68_machine_emit_store(uint32_t *ptr, uint8_t address_reg,
     uint8_t class_reg;
     uint32_t *slow_branch;
     uint32_t *boundary_branch;
+    uint32_t *overflow_branch;
     uint32_t *done;
     uint32_t *slow;
 
     if (!emu68_machine_runtime_active())
         return emit_native_store(ptr, address_reg, value_reg, width);
     ptr = emit_access_prefix(ptr, address_reg, width, 1, &page_reg,
-                             &class_reg, &slow_branch, &boundary_branch);
+                             &class_reg, &slow_branch, &boundary_branch,
+                             &overflow_branch);
     ptr = emit_native_store(ptr, address_reg, value_reg, width);
     done = ptr++;
     slow = ptr;
@@ -202,7 +218,9 @@ uint32_t *emu68_machine_emit_store(uint32_t *ptr, uint8_t address_reg,
                          metadata | EMU68_BRIDGE_META_WRITE | width);
     *slow_branch = b_cc(A64_CC_NE, slow - slow_branch);
     if (boundary_branch)
-        *boundary_branch = b_cc(A64_CC_HI, slow - boundary_branch);
+        *boundary_branch = b_cc(A64_CC_NE, slow - boundary_branch);
+    if (overflow_branch)
+        *overflow_branch = b_cc(A64_CC_CS, slow - overflow_branch);
     *done = b(ptr - done);
     RA_FreeARMRegister(&ptr, class_reg);
     RA_FreeARMRegister(&ptr, page_reg);
