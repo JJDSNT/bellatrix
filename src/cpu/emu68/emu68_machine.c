@@ -1,0 +1,497 @@
+#include "cpu/emu68/emu68_machine_internal.h"
+#include "cpu/emu68/emu68_machine_platform.h"
+
+#include <string.h>
+
+#define EMU68_MACHINE_MAX_REGIONS 256u
+#define EMU68_MACHINE_PAGE_SIZE (1u << EMU68_MACHINE_PAGE_SHIFT)
+#define EMU68_MACHINE_VALID_FLAGS                                             \
+    (EMU68_REGION_READ | EMU68_REGION_WRITE | EMU68_REGION_EXECUTE |          \
+     EMU68_REGION_CACHEABLE)
+
+struct emu68_machine_region {
+    uint32_t base;
+    uint64_t size;
+    uintptr_t host_base;
+    uint32_t region_id;
+    uint32_t flags;
+    emu68_region_kind_t kind;
+};
+
+struct emu68_cpu {
+    emu68_execution_mode_t mode;
+    emu68_machine_ops_t ops;
+    void *opaque;
+    struct emu68_machine_region regions[EMU68_MACHINE_MAX_REGIONS];
+    uint16_t region_count;
+    uint8_t active;
+    uint8_t running;
+    uint8_t pending;
+    uint8_t completion_ready;
+    uint64_t next_sequence;
+    emu68_bus_access_t pending_access;
+    volatile uint32_t stop_requested;
+};
+
+uint8_t emu68_machine_read_pages[EMU68_MACHINE_PAGE_COUNT];
+uint8_t emu68_machine_write_pages[EMU68_MACHINE_PAGE_COUNT];
+
+static struct emu68_cpu machine_cpu;
+
+static int public_struct_valid(uint32_t version, size_t actual, size_t required)
+{
+    return version == EMU68_MACHINE_ABI_VERSION && actual >= required;
+}
+
+static int valid_cpu(const emu68_cpu_t *cpu)
+{
+    return cpu == &machine_cpu && machine_cpu.active;
+}
+
+static int valid_range(uint32_t base, uint64_t size)
+{
+    return size != 0u && size <= UINT64_C(0x100000000) &&
+           (uint64_t)base + size <= UINT64_C(0x100000000);
+}
+
+static uint64_t region_end(const struct emu68_machine_region *region)
+{
+    return (uint64_t)region->base + region->size;
+}
+
+static int region_contains(const struct emu68_machine_region *region,
+                           uint32_t address, uint8_t width)
+{
+    uint64_t end = (uint64_t)address + width;
+
+    return width != 0u && (uint64_t)address >= region->base &&
+           end <= region_end(region) && end <= UINT64_C(0x100000000);
+}
+
+static const struct emu68_machine_region *find_region(uint32_t address,
+                                                       uint8_t width)
+{
+    unsigned int i;
+
+    for (i = 0; i < machine_cpu.region_count; ++i) {
+        if (region_contains(&machine_cpu.regions[i], address, width))
+            return &machine_cpu.regions[i];
+    }
+    return NULL;
+}
+
+static uint8_t classify_page(uint32_t page, uint32_t required_flag)
+{
+    uint32_t base = page << EMU68_MACHINE_PAGE_SHIFT;
+    const struct emu68_machine_region *region =
+        find_region(base, (uint8_t)1u);
+    uint64_t end = (uint64_t)base + EMU68_MACHINE_PAGE_SIZE;
+
+    if (!region)
+        return EMU68_PAGE_FAULT;
+    if (end > region_end(region))
+        return EMU68_PAGE_MIXED;
+    if ((region->flags & required_flag) == 0u)
+        return EMU68_PAGE_FAULT;
+    if (region->kind == EMU68_REGION_DIRECT)
+        return EMU68_PAGE_DIRECT;
+    if (region->kind == EMU68_REGION_EXTERNAL)
+        return EMU68_PAGE_EXTERNAL;
+    return EMU68_PAGE_FAULT;
+}
+
+static void rebuild_pages(void)
+{
+    uint32_t page;
+
+    for (page = 0; page < EMU68_MACHINE_PAGE_COUNT; ++page) {
+        emu68_machine_read_pages[page] =
+            classify_page(page, EMU68_REGION_READ);
+        emu68_machine_write_pages[page] =
+            classify_page(page, EMU68_REGION_WRITE);
+    }
+}
+
+static int overlaps_existing(uint32_t base, uint64_t size)
+{
+    uint64_t end = (uint64_t)base + size;
+    unsigned int i;
+
+    for (i = 0; i < machine_cpu.region_count; ++i) {
+        const struct emu68_machine_region *other = &machine_cpu.regions[i];
+        if ((uint64_t)base < region_end(other) && end > other->base)
+            return 1;
+    }
+    return 0;
+}
+
+static emu68_status_t validate_new_region(
+    const struct emu68_machine_region *region)
+{
+    if (!valid_range(region->base, region->size))
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if ((region->flags & ~EMU68_MACHINE_VALID_FLAGS) != 0u)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (overlaps_existing(region->base, region->size))
+        return EMU68_ERR_OVERLAP;
+    if (machine_cpu.region_count == EMU68_MACHINE_MAX_REGIONS)
+        return EMU68_ERR_INTERNAL;
+
+    return EMU68_OK;
+}
+
+static void insert_region(const struct emu68_machine_region *region)
+{
+    unsigned int insert = machine_cpu.region_count;
+
+    while (insert != 0u &&
+           machine_cpu.regions[insert - 1u].base > region->base) {
+        machine_cpu.regions[insert] = machine_cpu.regions[insert - 1u];
+        --insert;
+    }
+    machine_cpu.regions[insert] = *region;
+    ++machine_cpu.region_count;
+    rebuild_pages();
+    emu68_machine_platform_invalidate_all();
+}
+
+emu68_status_t emu68_machine_create(const emu68_machine_config_t *config,
+                                    emu68_cpu_t **out_cpu)
+{
+    if (!config || !out_cpu)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    *out_cpu = NULL;
+    if (!public_struct_valid(config->abi_version, config->struct_size,
+                             sizeof(*config)))
+        return EMU68_ERR_ABI_MISMATCH;
+    if (config->execution_mode != EMU68_EXEC_SYNCHRONOUS &&
+        config->execution_mode != EMU68_EXEC_COOPERATIVE)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (config->execution_mode == EMU68_EXEC_SYNCHRONOUS) {
+        if (!config->ops ||
+            !public_struct_valid(config->ops->abi_version,
+                                 config->ops->struct_size,
+                                 sizeof(*config->ops)) ||
+            !config->ops->bus_access)
+            return EMU68_ERR_INVALID_ARGUMENT;
+    }
+    if (machine_cpu.active)
+        return EMU68_ERR_BUSY;
+
+    memset(&machine_cpu, 0, sizeof(machine_cpu));
+    machine_cpu.mode = config->execution_mode;
+    if (config->ops)
+        machine_cpu.ops = *config->ops;
+    machine_cpu.opaque = config->opaque;
+    machine_cpu.next_sequence = 1u;
+    machine_cpu.active = 1u;
+    rebuild_pages();
+    *out_cpu = &machine_cpu;
+    return EMU68_OK;
+}
+
+void emu68_machine_destroy(emu68_cpu_t *cpu)
+{
+    unsigned int i;
+
+    if (!valid_cpu(cpu) || machine_cpu.running)
+        return;
+    for (i = 0; i < machine_cpu.region_count; ++i) {
+        const struct emu68_machine_region *region = &machine_cpu.regions[i];
+        if (region->kind == EMU68_REGION_DIRECT)
+            emu68_machine_platform_unmap_direct(region->base, region->size);
+    }
+    memset(&machine_cpu, 0, sizeof(machine_cpu));
+    memset(emu68_machine_read_pages, EMU68_PAGE_FAULT,
+           sizeof(emu68_machine_read_pages));
+    memset(emu68_machine_write_pages, EMU68_PAGE_FAULT,
+           sizeof(emu68_machine_write_pages));
+}
+
+emu68_status_t emu68_machine_map_direct(
+    emu68_cpu_t *cpu, const emu68_direct_region_t *public_region)
+{
+    struct emu68_machine_region region;
+    emu68_status_t status;
+
+    if (!valid_cpu(cpu) || !public_region)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    if (!public_struct_valid(public_region->abi_version,
+                             public_region->struct_size,
+                             sizeof(*public_region)))
+        return EMU68_ERR_ABI_MISMATCH;
+    if (!public_region->host_base ||
+        (public_region->guest_base & 0xfffu) != 0u ||
+        ((uintptr_t)public_region->host_base & 0xfffu) != 0u ||
+        (public_region->size & 0xfffu) != 0u)
+        return EMU68_ERR_INVALID_ARGUMENT;
+
+    memset(&region, 0, sizeof(region));
+    region.base = public_region->guest_base;
+    region.size = public_region->size;
+    region.host_base = (uintptr_t)public_region->host_base;
+    region.flags = public_region->flags;
+    region.kind = EMU68_REGION_DIRECT;
+    status = validate_new_region(&region);
+    if (status != EMU68_OK)
+        return status;
+    status = emu68_machine_platform_map_direct(
+        region.base, region.size, (void *)region.host_base, region.flags);
+    if (status != EMU68_OK)
+        return status;
+    insert_region(&region);
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_map_external(
+    emu68_cpu_t *cpu, const emu68_external_region_t *public_region)
+{
+    struct emu68_machine_region region;
+    emu68_status_t status;
+
+    if (!valid_cpu(cpu) || !public_region)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    if (!public_struct_valid(public_region->abi_version,
+                             public_region->struct_size,
+                             sizeof(*public_region)))
+        return EMU68_ERR_ABI_MISMATCH;
+    if ((public_region->flags &
+         (EMU68_REGION_EXECUTE | EMU68_REGION_CACHEABLE)) != 0u)
+        return EMU68_ERR_INVALID_ARGUMENT;
+
+    memset(&region, 0, sizeof(region));
+    region.base = public_region->guest_base;
+    region.size = public_region->size;
+    region.region_id = public_region->region_id;
+    region.flags = public_region->flags;
+    region.kind = EMU68_REGION_EXTERNAL;
+    status = validate_new_region(&region);
+    if (status != EMU68_OK)
+        return status;
+    insert_region(&region);
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_map_unmapped(emu68_cpu_t *cpu,
+                                          uint32_t guest_base, uint64_t size)
+{
+    struct emu68_machine_region region;
+    emu68_status_t status;
+
+    if (!valid_cpu(cpu))
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    memset(&region, 0, sizeof(region));
+    region.base = guest_base;
+    region.size = size;
+    region.kind = EMU68_REGION_UNMAPPED;
+    status = validate_new_region(&region);
+    if (status != EMU68_OK)
+        return status;
+    insert_region(&region);
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_unmap(emu68_cpu_t *cpu, uint32_t guest_base,
+                                   uint64_t size)
+{
+    unsigned int i;
+
+    if (!valid_cpu(cpu) || !valid_range(guest_base, size))
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    for (i = 0; i < machine_cpu.region_count; ++i) {
+        struct emu68_machine_region *region = &machine_cpu.regions[i];
+        if (region->base == guest_base && region->size == size) {
+            unsigned int remaining = machine_cpu.region_count - i - 1u;
+            if (region->kind == EMU68_REGION_DIRECT)
+                emu68_machine_platform_unmap_direct(region->base,
+                                                    region->size);
+            if (remaining != 0u)
+                memmove(region, region + 1, remaining * sizeof(*region));
+            --machine_cpu.region_count;
+            rebuild_pages();
+            emu68_machine_platform_invalidate_all();
+            return EMU68_OK;
+        }
+    }
+    return EMU68_ERR_NOT_FOUND;
+}
+
+emu68_status_t emu68_machine_classify_access(
+    uint32_t address, uint8_t width, emu68_access_kind_t kind,
+    emu68_machine_access_result_t *result)
+{
+    const struct emu68_machine_region *region;
+    uint32_t required;
+
+    if (!result || (width != 1u && width != 2u && width != 4u &&
+                    width != 8u && width != 16u) ||
+        (kind != EMU68_ACCESS_READ && kind != EMU68_ACCESS_WRITE))
+        return EMU68_ERR_INVALID_ARGUMENT;
+
+    memset(result, 0, sizeof(*result));
+    region = find_region(address, width);
+    if (!region) {
+        result->region_kind = EMU68_REGION_UNMAPPED;
+        return EMU68_OK;
+    }
+    required = kind == EMU68_ACCESS_READ ? EMU68_REGION_READ :
+                                           EMU68_REGION_WRITE;
+    if ((region->flags & required) == 0u) {
+        result->region_kind = EMU68_REGION_UNMAPPED;
+        return EMU68_OK;
+    }
+    result->region_kind = region->kind;
+    result->region_id = region->region_id;
+    result->flags = region->flags;
+    return EMU68_OK;
+}
+
+emu68_bus_result_t emu68_machine_dispatch_access(emu68_bus_access_t *access)
+{
+    emu68_machine_access_result_t classification;
+
+    if (!machine_cpu.active || !access ||
+        emu68_machine_classify_access(access->address, access->width,
+                                      access->kind, &classification) != EMU68_OK)
+        return EMU68_BUS_ERROR;
+    if (classification.region_kind != EMU68_REGION_EXTERNAL)
+        return EMU68_BUS_ERROR;
+
+    access->abi_version = EMU68_MACHINE_ABI_VERSION;
+    access->struct_size = sizeof(*access);
+    access->region_id = classification.region_id;
+    access->sequence = machine_cpu.next_sequence++;
+    if (machine_cpu.mode == EMU68_EXEC_SYNCHRONOUS) {
+        if (!machine_cpu.ops.bus_access)
+            return EMU68_BUS_ERROR;
+        access->result = machine_cpu.ops.bus_access(machine_cpu.opaque, access);
+        return access->result;
+    }
+
+    if (machine_cpu.pending)
+        return EMU68_BUS_ERROR;
+    machine_cpu.pending_access = *access;
+    machine_cpu.pending = 1u;
+    machine_cpu.completion_ready = 0u;
+    return EMU68_BUS_COMPLETE;
+}
+
+int emu68_machine_runtime_active(void)
+{
+    return machine_cpu.active;
+}
+
+emu68_status_t emu68_machine_get_pending_access(
+    emu68_cpu_t *cpu, emu68_bus_access_t *out_access)
+{
+    if (!valid_cpu(cpu) || !out_access)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (!machine_cpu.pending)
+        return EMU68_ERR_NOT_FOUND;
+    *out_access = machine_cpu.pending_access;
+    return EMU68_OK;
+}
+
+static int completion_identity_matches(const emu68_bus_access_t *completion)
+{
+    const emu68_bus_access_t *pending = &machine_cpu.pending_access;
+
+    return completion->sequence == pending->sequence &&
+           completion->address == pending->address &&
+           completion->region_id == pending->region_id &&
+           completion->kind == pending->kind &&
+           completion->space == pending->space &&
+           completion->function_code == pending->function_code &&
+           completion->width == pending->width;
+}
+
+emu68_status_t emu68_machine_complete_access(
+    emu68_cpu_t *cpu, const emu68_bus_access_t *completion)
+{
+    if (!valid_cpu(cpu) || !completion)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (!public_struct_valid(completion->abi_version,
+                             completion->struct_size,
+                             sizeof(*completion)))
+        return EMU68_ERR_ABI_MISMATCH;
+    if (machine_cpu.mode != EMU68_EXEC_COOPERATIVE || !machine_cpu.pending)
+        return EMU68_ERR_NOT_FOUND;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    if (!completion_identity_matches(completion))
+        return EMU68_ERR_ACCESS;
+    if (completion->result != EMU68_BUS_COMPLETE &&
+        completion->result != EMU68_BUS_ERROR)
+        return EMU68_ERR_INVALID_ARGUMENT;
+
+    machine_cpu.pending_access.result = completion->result;
+    machine_cpu.pending_access.value_lo = completion->value_lo;
+    machine_cpu.pending_access.value_hi = completion->value_hi;
+    machine_cpu.completion_ready = 1u;
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_reset(emu68_cpu_t *cpu,
+                                   const emu68_reset_state_t *state)
+{
+    if (!valid_cpu(cpu) || !state)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    if (!public_struct_valid(state->abi_version, state->struct_size,
+                             sizeof(*state)))
+        return EMU68_ERR_ABI_MISMATCH;
+
+    machine_cpu.pending = 0u;
+    machine_cpu.completion_ready = 0u;
+    __atomic_store_n(&machine_cpu.stop_requested, 0u, __ATOMIC_RELEASE);
+    return emu68_machine_platform_reset(state->initial_ssp,
+                                        state->initial_pc);
+}
+
+void emu68_machine_request_stop(emu68_cpu_t *cpu)
+{
+    if (valid_cpu(cpu)) {
+        __atomic_store_n(&machine_cpu.stop_requested, 1u, __ATOMIC_RELEASE);
+        emu68_machine_platform_wake();
+    }
+}
+
+emu68_status_t emu68_machine_set_ipl(emu68_cpu_t *cpu, unsigned level)
+{
+    if (!valid_cpu(cpu))
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (level > 7u)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    return emu68_machine_platform_set_ipl(level);
+}
+
+emu68_status_t emu68_machine_invalidate_code(emu68_cpu_t *cpu,
+                                              uint32_t guest_base,
+                                              uint64_t size)
+{
+    if (!valid_cpu(cpu) || !valid_range(guest_base, size))
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    emu68_machine_platform_invalidate(guest_base, size);
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_invalidate_all_code(emu68_cpu_t *cpu)
+{
+    if (!valid_cpu(cpu))
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+    emu68_machine_platform_invalidate_all();
+    return EMU68_OK;
+}
