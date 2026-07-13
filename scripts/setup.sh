@@ -199,6 +199,7 @@ EMU68_PATCHES=(
     "$PATCHES/0030-emu68-explicit-stack-movem.patch"
     "$PATCHES/0031-emu68-explicit-line0-access.patch"
     "$PATCHES/0032-emu68-explicit-bitfield-access.patch"
+    "$PATCHES/0033-emu68-explicit-fpu-access.patch"
 )
 
 CHERRYUSB_PATCHES=(

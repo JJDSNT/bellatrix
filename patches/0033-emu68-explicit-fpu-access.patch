@@ -1,0 +1,935 @@
+diff --git a/src/M68k_LINEF.c b/src/M68k_LINEF.c
+index 0b6690e..1de22ba 100644
+--- a/src/M68k_LINEF.c
++++ b/src/M68k_LINEF.c
+@@ -22,12 +22,65 @@ extern uint32_t val_FPIAR;
+ 
+ uint64_t Load96bit(uintptr_t __ignore, uintptr_t base);
+ uint64_t Store96bit(uintptr_t value, uintptr_t base);
++uint64_t Load96Values(uint16_t exp, uint64_t mant);
++struct FP96Values {
++    uint64_t first;
++    uint32_t last;
++};
++struct FP96Values Store96Values(uint64_t value);
++
++static uint32_t *emit_adjust_guest_address(uint32_t *ptr, uint8_t address,
++                                           int32_t delta)
++{
++    if (delta < 0)
++        *ptr++ = sub_immed(address, address, (uint16_t)-delta);
++    else if (delta > 0)
++        *ptr++ = add_immed(address, address, (uint16_t)delta);
++    return ptr;
++}
++
++static uint32_t *emit_guest_fp_load(uint32_t *ptr, uint8_t address,
++                                    int32_t offset, uint8_t fp_reg,
++                                    uint8_t width, int32_t pre,
++                                    int32_t post, uint32_t metadata)
++{
++    uint8_t value = RA_AllocARMRegister(&ptr);
++
++    ptr = emit_adjust_guest_address(ptr, address, pre);
++#ifdef BELLATRIX
++    ptr = emu68_machine_emit_load_offset(ptr, address, offset, value, width,
++                                          0, metadata);
++#else
++    (void)metadata;
++    EMU68_GUEST_LOAD_OFFSET(ptr, address, offset, value, width, 0);
++#endif
++    *ptr++ = mov_reg_to_simd(fp_reg, width == 8 ? TS_D : TS_S, 0, value);
++    ptr = emit_adjust_guest_address(ptr, address, post);
++    RA_FreeARMRegister(&ptr, value);
++    return ptr;
++}
++
++static uint32_t *emit_guest_fp_store(uint32_t *ptr, uint8_t address,
++                                     int32_t offset, uint8_t fp_reg,
++                                     uint8_t width, int32_t pre,
++                                     int32_t post)
++{
++    uint8_t value = RA_AllocARMRegister(&ptr);
++
++    *ptr++ = mov_simd_to_reg(value, fp_reg,
++                             width == 8 ? TS_D : TS_S, 0);
++    ptr = emit_adjust_guest_address(ptr, address, pre);
++    EMU68_GUEST_STORE_OFFSET(ptr, address, offset, value, width);
++    ptr = emit_adjust_guest_address(ptr, address, post);
++    RA_FreeARMRegister(&ptr, value);
++    return ptr;
++}
+ 
+ uint32_t * get_Load96(uint32_t *ptr)
+ {
+     if (reg_Load96 == 0xff) {
+         reg_Load96 = RA_AllocARMRegister(&ptr);
+-        uint32_t val = (uintptr_t)Load96bit;
++        uint32_t val = (uintptr_t)Load96Values;
+ 
+         *ptr++ = mov_immed_u16(reg_Load96, val & 0xffff, 0);
+         *ptr++ = movk_immed_u16(reg_Load96, val >> 16, 1);
+@@ -41,7 +94,7 @@ uint32_t * get_Save96(uint32_t *ptr)
+ {
+     if (reg_Save96 == 0xff) {
+         reg_Save96 = RA_AllocARMRegister(&ptr);
+-        uint32_t val = (uintptr_t)Store96bit;
++        uint32_t val = (uintptr_t)Store96Values;
+ 
+         *ptr++ = mov_immed_u16(reg_Save96, val & 0xffff, 0);
+         *ptr++ = movk_immed_u16(reg_Save96, val >> 16, 1);
+@@ -50,6 +103,32 @@ uint32_t * get_Save96(uint32_t *ptr)
+     return ptr;
+ }
+ 
++static uint32_t *emit_guest_load96(uint32_t *ptr, uint8_t address,
++                                   int32_t offset, uint8_t fp_reg)
++{
++    ptr = get_Load96(ptr);
++    EMU68_GUEST_LOAD_OFFSET(ptr, address, offset, 0, 2, 0);
++    EMU68_GUEST_LOAD_OFFSET(ptr, address, offset + 4, 1, 8, 0);
++    *ptr++ = str64_offset_preindex(31, 30, -16);
++    *ptr++ = blr(reg_Load96);
++    *ptr++ = mov_reg_to_simd(fp_reg, TS_D, 0, 0);
++    *ptr++ = ldr64_offset_postindex(31, 30, 16);
++    return ptr;
++}
++
++static uint32_t *emit_guest_store96(uint32_t *ptr, uint8_t address,
++                                    int32_t offset, uint8_t fp_reg)
++{
++    ptr = get_Save96(ptr);
++    *ptr++ = stp64_preindex(31, address, 30, -16);
++    *ptr++ = mov_simd_to_reg(0, fp_reg, TS_D, 0);
++    *ptr++ = blr(reg_Save96);
++    *ptr++ = ldp64_postindex(31, address, 30, 16);
++    EMU68_GUEST_STORE_OFFSET(ptr, address, offset, 0, 8);
++    EMU68_GUEST_STORE_OFFSET(ptr, address, offset + 8, 1, 4);
++    return ptr;
++}
++
+ enum {
+     C_PI = 0,
+     C_PI_2,
+@@ -615,7 +694,9 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                 {
+                     int8_t off = 4;
+                     ptr = EMIT_GetOffsetPC(ptr, &off);
+-                    *ptr++ = flds(*reg, REG_PC, off);
++                    ptr = emit_guest_fp_load(
++                        ptr, REG_PC, off, *reg, 4, 0, 0,
++                        EMU68_MACHINE_META_PROGRAM);
+                     *ptr++ = fcvtds(*reg, *reg);
+                     *ext_count += 2;
+                     break;
+@@ -652,7 +733,9 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                 {
+                     int8_t off = 4;
+                     ptr = EMIT_GetOffsetPC(ptr, &off);
+-                    *ptr++ = fldd(*reg, REG_PC, off);
++                    ptr = emit_guest_fp_load(
++                        ptr, REG_PC, off, *reg, 8, 0, 0,
++                        EMU68_MACHINE_META_PROGRAM);
+                     *ext_count += 4;
+                     break;
+                 }
+@@ -669,17 +752,13 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                 switch(size)
+                 {
+                     case SIZE_D:
+-                        *ptr++ = fldd(*reg, int_reg, 0);
++                        ptr = emit_guest_fp_load(ptr, int_reg, 0, *reg, 8,
++                                                 0, 0, 0u);
+                         *ext_count += 4;
+                         break;
+ 
+                     case SIZE_X:
+-                        ptr = get_Load96(ptr);
+-                        *ptr++ = str64_offset_preindex(31, 30, -16);
+-                        *ptr++ = mov_reg(1, int_reg);
+-                        *ptr++ = blr(reg_Load96);
+-                        *ptr++ = mov_reg_to_simd(*reg, TS_D, 0, 0);
+-                        *ptr++ = ldr64_offset_postindex(31, 30, 16);
++                        ptr = emit_guest_load96(ptr, int_reg, 0, *reg);
+                         *ext_count += 6;
+                         break;
+ 
+@@ -688,8 +767,8 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+ 
+                         ptr = EMIT_SaveRegFrame(ptr, (RA_GetTempAllocMask() | REG_PROTECT | 7));
+ 
+-                        *ptr++ = ldr64_offset(int_reg, 0, 0);
+-                        *ptr++ = ldr64_offset(int_reg, 1, 8);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, 0, 0, 8, 0);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, 8, 1, 4, 0);
+                         
+                         *ptr++ = mov64_immed_u16(2, u.u16[3], 0);
+                         *ptr++ = movk64_immed_u16(2, u.u16[2], 1);
+@@ -778,8 +857,10 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+ 
+                         ptr = EMIT_SaveRegFrame(ptr, (RA_GetTempAllocMask() | REG_PROTECT | 7));
+ 
+-                        *ptr++ = ldur64_offset(int_reg, 0, imm_offset);
+-                        *ptr++ = ldur64_offset(int_reg, 1, imm_offset + 8);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                0, 8, 0);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset + 8,
++                                                1, 4, 0);
+                         
+                         *ptr++ = mov64_immed_u16(2, u.u16[3], 0);
+                         *ptr++ = movk64_immed_u16(2, u.u16[2], 1);
+@@ -829,15 +910,8 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                             imm_offset = 0;
+                         }
+ 
+-                        ptr = get_Load96(ptr);
+-                        *ptr++ = str64_offset_preindex(31, 30, -16);
+-                        if (imm_offset < 0)
+-                            *ptr++ = sub_immed(1, int_reg, -imm_offset);
+-                        else
+-                            *ptr++ = add_immed(1, int_reg, imm_offset);
+-                        *ptr++ = blr(reg_Load96);
+-                        *ptr++ = mov_reg_to_simd(*reg, TS_D, 0, 0);
+-                        *ptr++ = ldr64_offset_postindex(31, 30, 16);
++                        ptr = emit_guest_load96(ptr, int_reg, imm_offset,
++                                                *reg);
+ 
+                         //ptr = EMIT_Load96bitFP(ptr, *reg, int_reg, imm_offset);
+ 
+@@ -851,19 +925,23 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                     {
+                         if (pre_sz)
+                         {
+-                            *ptr++ = fldd_preindex(*reg, int_reg, pre_sz);
++                            ptr = emit_guest_fp_load(ptr, int_reg, 0, *reg, 8,
++                                                     pre_sz, 0, 0u);
+                         }
+                         else if (post_sz)
+                         {
+-                            *ptr++ = fldd_postindex(*reg, int_reg, post_sz);
++                            ptr = emit_guest_fp_load(ptr, int_reg, 0, *reg, 8,
++                                                     0, post_sz, 0u);
+                         }
+                         else if (imm_offset >= -255 && imm_offset <= 255)
+                         {
+-                            *ptr++ = fldd(*reg, int_reg, imm_offset);
++                            ptr = emit_guest_fp_load(ptr, int_reg, imm_offset,
++                                                     *reg, 8, 0, 0, 0u);
+                         }
+                         else if (imm_offset >= 0 && imm_offset < 32760 && !(imm_offset & 7))
+                         {
+-                            *ptr++ = fldd_pimm(*reg, int_reg, imm_offset >> 3);
++                            ptr = emit_guest_fp_load(ptr, int_reg, imm_offset,
++                                                     *reg, 8, 0, 0, 0u);
+                         }
+                         else
+                         {
+@@ -884,7 +962,8 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                                     *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                                 *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                             }
+-                            *ptr++ = fldd(*reg, off, 0);
++                            ptr = emit_guest_fp_load(ptr, off, 0, *reg, 8,
++                                                     0, 0, 0u);
+                             RA_FreeARMRegister(&ptr, off);
+                         }
+                     }
+@@ -892,19 +971,23 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                 case SIZE_S:
+                     if (pre_sz)
+                     {
+-                        *ptr++ = flds_preindex(*reg, int_reg, pre_sz);
++                        ptr = emit_guest_fp_load(ptr, int_reg, 0, *reg, 4,
++                                                 pre_sz, 0, 0u);
+                     }
+                     else if (post_sz)
+                     {
+-                        *ptr++ = flds_postindex(*reg, int_reg, post_sz);
++                        ptr = emit_guest_fp_load(ptr, int_reg, 0, *reg, 4,
++                                                 0, post_sz, 0u);
+                     }
+                     else if (imm_offset >= -255 && imm_offset <= 255)
+                     {
+-                        *ptr++ = flds(*reg, int_reg, imm_offset);
++                        ptr = emit_guest_fp_load(ptr, int_reg, imm_offset,
++                                                 *reg, 4, 0, 0, 0u);
+                     }
+                     else if (imm_offset >= 0 && imm_offset < 16380 && !(imm_offset & 3))
+                     {
+-                        *ptr++ = flds_pimm(*reg, int_reg, imm_offset >> 2);
++                        ptr = emit_guest_fp_load(ptr, int_reg, imm_offset,
++                                                 *reg, 4, 0, 0, 0u);
+                     }
+                     else
+                     {
+@@ -925,7 +1008,8 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                                 *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                             *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                         }
+-                        *ptr++ = flds(*reg, off, 0);
++                        ptr = emit_guest_fp_load(ptr, off, 0, *reg, 4,
++                                                 0, 0, 0u);
+                         RA_FreeARMRegister(&ptr, off);
+                     }
+                     *ptr++ = fcvtds(*reg, *reg);
+@@ -935,19 +1019,23 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+ 
+                     if (pre_sz)
+                     {
+-                        *ptr++ = ldr_offset_preindex(int_reg, val_reg, pre_sz);
++                        EMU68_GUEST_PRELOAD(ptr, int_reg, val_reg, 4, 0,
++                                            pre_sz);
+                     }
+                     else if (post_sz)
+                     {
+-                        *ptr++ = ldr_offset_postindex(int_reg, val_reg, post_sz);
++                        EMU68_GUEST_POSTLOAD(ptr, int_reg, val_reg, 4, 0,
++                                             post_sz);
+                     }
+                     else if (imm_offset >= -255 && imm_offset <= 255)
+                     {
+-                        *ptr++ = ldur_offset(int_reg, val_reg, imm_offset);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                val_reg, 4, 0);
+                     }
+                     else if (imm_offset >= 0 && imm_offset < 16380 && !(imm_offset & 3))
+                     {
+-                        *ptr++ = ldr_offset(int_reg, val_reg, imm_offset);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                val_reg, 4, 0);
+                     }
+                     else
+                     {
+@@ -968,7 +1056,7 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                                 *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                             *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                         }
+-                        *ptr++ = ldr_offset(off, val_reg, 0);
++                        EMU68_GUEST_LOAD(ptr, off, val_reg, 4, 0);
+                         RA_FreeARMRegister(&ptr, off);
+                     }
+                     *ptr++ = scvtf_32toD(*reg, val_reg);
+@@ -978,19 +1066,23 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+ 
+                     if (pre_sz)
+                     {
+-                        *ptr++ = ldrsh_offset_preindex(int_reg, val_reg, pre_sz);
++                        EMU68_GUEST_PRELOAD(ptr, int_reg, val_reg, 2, 1,
++                                            pre_sz);
+                     }
+                     else if (post_sz)
+                     {
+-                        *ptr++ = ldrsh_offset_postindex(int_reg, val_reg, post_sz);
++                        EMU68_GUEST_POSTLOAD(ptr, int_reg, val_reg, 2, 1,
++                                             post_sz);
+                     }
+                     else if (imm_offset >= -255 && imm_offset <= 255)
+                     {
+-                        *ptr++ = ldursh_offset(int_reg, val_reg, imm_offset);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                val_reg, 2, 1);
+                     }
+                     else if (imm_offset >= 0 && imm_offset < 8190 && !(imm_offset & 1))
+                     {
+-                        *ptr++ = ldrsh_offset(int_reg, val_reg, imm_offset);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                val_reg, 2, 1);
+                     }
+                     else
+                     {
+@@ -1011,7 +1103,7 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                                 *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                             *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                         }
+-                        *ptr++ = ldrsh_offset(off, val_reg, 0);
++                        EMU68_GUEST_LOAD(ptr, off, val_reg, 2, 1);
+                         RA_FreeARMRegister(&ptr, off);
+                     }
+                     *ptr++ = scvtf_32toD(*reg, val_reg);
+@@ -1021,19 +1113,23 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+ 
+                     if (pre_sz)
+                     {
+-                        *ptr++ = ldrsb_offset_preindex(int_reg, val_reg, pre_sz);
++                        EMU68_GUEST_PRELOAD(ptr, int_reg, val_reg, 1, 1,
++                                            pre_sz);
+                     }
+                     else if (post_sz)
+                     {
+-                        *ptr++ = ldrsb_offset_postindex(int_reg, val_reg, post_sz);
++                        EMU68_GUEST_POSTLOAD(ptr, int_reg, val_reg, 1, 1,
++                                             post_sz);
+                     }
+                     else if (imm_offset >= -255 && imm_offset <= 255)
+                     {
+-                        *ptr++ = ldursb_offset(int_reg, val_reg, imm_offset);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                val_reg, 1, 1);
+                     }
+                     else if (imm_offset >= 0 && imm_offset < 4096)
+                     {
+-                        *ptr++ = ldrsb_offset(int_reg, val_reg, imm_offset);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, int_reg, imm_offset,
++                                                val_reg, 1, 1);
+                     }
+                     else
+                     {
+@@ -1054,7 +1150,7 @@ uint32_t *FPU_FetchData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t *reg, uint16
+                                 *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                             *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                         }
+-                        *ptr++ = ldrsb_offset(off, val_reg, 0);
++                        EMU68_GUEST_LOAD(ptr, off, val_reg, 1, 1);
+                         RA_FreeARMRegister(&ptr, off);
+                     }
+                     *ptr++ = scvtf_32toD(*reg, val_reg);
+@@ -1231,8 +1327,8 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                     *ptr++ = blr(1);
+                 
+                     *ptr++ = ror64(1, 1, 32);
+-                    *ptr++ = stur64_offset(19, 0, imm_offset);
+-                    *ptr++ = stur_offset(19, 1, imm_offset + 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, imm_offset, 0, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, imm_offset + 8, 1, 4);
+ 
+                     ptr = EMIT_RestoreRegFrame(ptr, (RA_GetTempAllocMask() | REG_PROTECT | 3 | (1 << 19)));
+                 }
+@@ -1269,8 +1365,8 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                     *ptr++ = blr(1);
+ 
+                     *ptr++ = ror64(1, 1, 32);
+-                    *ptr++ = stur64_offset(19, 0, 0);
+-                    *ptr++ = stur_offset(19, 1, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, 0, 0, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, 8, 1, 4);
+ 
+                     ptr = EMIT_RestoreRegFrame(ptr, (RA_GetTempAllocMask() | REG_PROTECT | 3 | (1 << 19)));
+                 }
+@@ -1309,8 +1405,8 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                     *ptr++ = blr(1);
+ 
+                     *ptr++ = ror64(1, 1, 32);
+-                    *ptr++ = stur64_offset(19, 0, imm_offset);
+-                    *ptr++ = stur_offset(19, 1, imm_offset + 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, imm_offset, 0, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, imm_offset + 8, 1, 4);
+ 
+                     ptr = EMIT_RestoreRegFrame(ptr, (RA_GetTempAllocMask() | REG_PROTECT | 3 | (1 << 19)));
+                 }
+@@ -1347,8 +1443,8 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                     *ptr++ = blr(1);
+ 
+                     *ptr++ = ror64(1, 1, 32);
+-                    *ptr++ = stur64_offset(19, 0, 0);
+-                    *ptr++ = stur_offset(19, 1, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, 0, 0, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, 19, 8, 1, 4);
+ 
+                     ptr = EMIT_RestoreRegFrame(ptr, (RA_GetTempAllocMask() | REG_PROTECT | 3 | (1 << 19)));
+                 }
+@@ -1367,15 +1463,8 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                     }
+                     if (imm_offset >= -255 && imm_offset <= 251)
+                     {
+-                        ptr = get_Save96(ptr);
+-                        *ptr++ = str64_offset_preindex(31, 30, -16);
+-                        if (imm_offset < 0)
+-                            *ptr++ = sub_immed(1, int_reg, -imm_offset);
+-                        else
+-                            *ptr++ = add_immed(1, int_reg, imm_offset);
+-                        *ptr++ = mov_simd_to_reg(0, reg, TS_D, 0);
+-                        *ptr++ = blr(reg_Save96);
+-                        *ptr++ = ldr64_offset_postindex(31, 30, 16);
++                        ptr = emit_guest_store96(ptr, int_reg, imm_offset,
++                                                 reg);
+ 
+                         //ptr = EMIT_Store96bitFP(ptr, reg, int_reg, imm_offset);
+                     }
+@@ -1399,12 +1488,7 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                             *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                         }
+ 
+-                        ptr = get_Save96(ptr);
+-                        *ptr++ = str64_offset_preindex(31, 30, -16);
+-                        *ptr++ = mov_reg(1, off);
+-                        *ptr++ = mov_simd_to_reg(0, reg, TS_D, 0);
+-                        *ptr++ = blr(reg_Save96);
+-                        *ptr++ = ldr64_offset_postindex(31, 30, 16);
++                        ptr = emit_guest_store96(ptr, off, 0, reg);
+ 
+                         //ptr = EMIT_Store96bitFP(ptr, reg, off, 0);
+                         RA_FreeARMRegister(&ptr, off);
+@@ -1419,19 +1503,23 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                 {
+                     if (pre_sz)
+                     {
+-                        *ptr++ = fstd_preindex(reg, int_reg, pre_sz);
++                        ptr = emit_guest_fp_store(ptr, int_reg, 0, reg, 8,
++                                                  pre_sz, 0);
+                     }
+                     else if (post_sz)
+                     {
+-                        *ptr++ = fstd_postindex(reg, int_reg, post_sz);
++                        ptr = emit_guest_fp_store(ptr, int_reg, 0, reg, 8,
++                                                  0, post_sz);
+                     }
+                     else if (imm_offset >= -255 && imm_offset <= 255)
+                     {
+-                        *ptr++ = fstd(reg, int_reg, imm_offset);
++                        ptr = emit_guest_fp_store(ptr, int_reg, imm_offset,
++                                                  reg, 8, 0, 0);
+                     }
+                     else if (imm_offset >= 0 && imm_offset < 32760 && !(imm_offset & 7))
+                     {
+-                        *ptr++ = fstd_pimm(reg, int_reg, imm_offset >> 3);
++                        ptr = emit_guest_fp_store(ptr, int_reg, imm_offset,
++                                                  reg, 8, 0, 0);
+                     }
+                     else
+                     {
+@@ -1452,7 +1540,7 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                                 *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                             *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                         }
+-                        *ptr++ = fstd(reg, off, 0);
++                        ptr = emit_guest_fp_store(ptr, off, 0, reg, 8, 0, 0);
+                         RA_FreeARMRegister(&ptr, off);
+                     }
+                 }
+@@ -1461,19 +1549,23 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                 *ptr++ = fcvtsd(vfp_reg, reg);
+                 if (pre_sz)
+                 {
+-                    *ptr++ = fsts_preindex(vfp_reg, int_reg, pre_sz);
++                    ptr = emit_guest_fp_store(ptr, int_reg, 0, vfp_reg, 4,
++                                              pre_sz, 0);
+                 }
+                 else if (post_sz)
+                 {
+-                    *ptr++ = fsts_postindex(vfp_reg, int_reg, post_sz);
++                    ptr = emit_guest_fp_store(ptr, int_reg, 0, vfp_reg, 4,
++                                              0, post_sz);
+                 }
+                 else if (imm_offset >= -255 && imm_offset <= 255)
+                 {
+-                    *ptr++ = fsts(vfp_reg, int_reg, imm_offset);
++                    ptr = emit_guest_fp_store(ptr, int_reg, imm_offset,
++                                              vfp_reg, 4, 0, 0);
+                 }
+                 else if (imm_offset >= 0 && imm_offset < 16380 && !(imm_offset & 3))
+                 {
+-                    *ptr++ = fsts_pimm(vfp_reg, int_reg, imm_offset >> 2);
++                    ptr = emit_guest_fp_store(ptr, int_reg, imm_offset,
++                                              vfp_reg, 4, 0, 0);
+                 }
+                 else
+                 {
+@@ -1494,7 +1586,7 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                             *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                         *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                     }
+-                    *ptr++ = fsts(vfp_reg, off, 0);
++                    ptr = emit_guest_fp_store(ptr, off, 0, vfp_reg, 4, 0, 0);
+                     RA_FreeARMRegister(&ptr, off);
+                 }
+                 break;
+@@ -1505,19 +1597,21 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+ 
+                 if (pre_sz)
+                 {
+-                    *ptr++ = str_offset_preindex(int_reg, val_reg, pre_sz);
++                    EMU68_GUEST_PRESTORE(ptr, int_reg, val_reg, 4, pre_sz);
+                 }
+                 else if (post_sz)
+                 {
+-                    *ptr++ = str_offset_postindex(int_reg, val_reg, post_sz);
++                    EMU68_GUEST_POSTSTORE(ptr, int_reg, val_reg, 4, post_sz);
+                 }
+                 else if (imm_offset >= -255 && imm_offset <= 255)
+                 {
+-                    *ptr++ = stur_offset(int_reg, val_reg, imm_offset);
++                    EMU68_GUEST_STORE_OFFSET(ptr, int_reg, imm_offset,
++                                             val_reg, 4);
+                 }
+                 else if (imm_offset >= 0 && imm_offset < 16380 && !(imm_offset & 3))
+                 {
+-                    *ptr++ = str_offset(int_reg, val_reg, imm_offset);
++                    EMU68_GUEST_STORE_OFFSET(ptr, int_reg, imm_offset,
++                                             val_reg, 4);
+                 }
+                 else
+                 {
+@@ -1538,7 +1632,7 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                             *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                         *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                     }
+-                    *ptr++ = str_offset(off, val_reg, 0);
++                    EMU68_GUEST_STORE(ptr, off, val_reg, 4);
+                     RA_FreeARMRegister(&ptr, off);
+                 }
+                 break;
+@@ -1557,19 +1651,21 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+ 
+                 if (pre_sz)
+                 {
+-                    *ptr++ = strh_offset_preindex(int_reg, val_reg, pre_sz);
++                    EMU68_GUEST_PRESTORE(ptr, int_reg, val_reg, 2, pre_sz);
+                 }
+                 else if (post_sz)
+                 {
+-                    *ptr++ = strh_offset_postindex(int_reg, val_reg, post_sz);
++                    EMU68_GUEST_POSTSTORE(ptr, int_reg, val_reg, 2, post_sz);
+                 }
+                 else if (imm_offset >= -255 && imm_offset <= 255)
+                 {
+-                    *ptr++ = sturh_offset(int_reg, val_reg, imm_offset);
++                    EMU68_GUEST_STORE_OFFSET(ptr, int_reg, imm_offset,
++                                             val_reg, 2);
+                 }
+                 else if (imm_offset >= 0 && imm_offset < 8190 && !(imm_offset & 1))
+                 {
+-                    *ptr++ = strh_offset(int_reg, val_reg, imm_offset);
++                    EMU68_GUEST_STORE_OFFSET(ptr, int_reg, imm_offset,
++                                             val_reg, 2);
+                 }
+                 else
+                 {
+@@ -1590,7 +1686,7 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                             *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                         *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                     }
+-                    *ptr++ = strh_offset(off, val_reg, 0);
++                    EMU68_GUEST_STORE(ptr, off, val_reg, 2);
+                     RA_FreeARMRegister(&ptr, off);
+                 }
+                 break;
+@@ -1609,19 +1705,21 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+ 
+                 if (pre_sz)
+                 {
+-                    *ptr++ = strb_offset_preindex(int_reg, val_reg, pre_sz);
++                    EMU68_GUEST_PRESTORE(ptr, int_reg, val_reg, 1, pre_sz);
+                 }
+                 else if (post_sz)
+                 {
+-                    *ptr++ = strb_offset_postindex(int_reg, val_reg, post_sz);
++                    EMU68_GUEST_POSTSTORE(ptr, int_reg, val_reg, 1, post_sz);
+                 }
+                 else if (imm_offset >= -255 && imm_offset <= 255)
+                 {
+-                    *ptr++ = sturb_offset(int_reg, val_reg, imm_offset);
++                    EMU68_GUEST_STORE_OFFSET(ptr, int_reg, imm_offset,
++                                             val_reg, 1);
+                 }
+                 else if (imm_offset >= 0 && imm_offset < 4096)
+                 {
+-                    *ptr++ = strb_offset(int_reg, val_reg, imm_offset);
++                    EMU68_GUEST_STORE_OFFSET(ptr, int_reg, imm_offset,
++                                             val_reg, 1);
+                 }
+                 else
+                 {
+@@ -1642,7 +1740,7 @@ uint32_t *FPU_StoreData(uint32_t *ptr, uint16_t **m68k_ptr, uint8_t reg, uint16_
+                             *ptr++ = movt_immed_u16(off, (imm_offset) & 0xffff);
+                         *ptr++ = add_reg(off, int_reg, off, LSL, 0);
+                     }
+-                    *ptr++ = strb_offset(off, val_reg, 0);
++                    EMU68_GUEST_STORE(ptr, off, val_reg, 1);
+                     RA_FreeARMRegister(&ptr, off);
+                 }
+                 break;
+@@ -3783,14 +3881,14 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+             {
+                 reg = RA_GetFPCR(&ptr);
+                 
+-                *ptr++ = str_offset(dst, reg, offset);
++                EMU68_GUEST_STORE_OFFSET(ptr, dst, offset, reg, 4);
+                 offset += 4;
+             }
+ 
+             if (opcode2 & 0x0800)
+             {
+                 reg = RA_GetFPSR(&ptr);
+-                *ptr++ = str_offset(dst, reg, offset);
++                EMU68_GUEST_STORE_OFFSET(ptr, dst, offset, reg, 4);
+                 offset += 4;
+             }
+ 
+@@ -3804,7 +3902,7 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                 else {
+                     *ptr++ = mov_simd_to_reg(reg, 29, TS_S, 1);
+                 }
+-                *ptr++ = str_offset(dst, reg, offset);
++                EMU68_GUEST_STORE_OFFSET(ptr, dst, offset, reg, 4);
+                 RA_FreeARMRegister(&ptr, reg);
+                 reg = 0xff;
+             }
+@@ -3909,7 +4007,7 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                 uint8_t round = RA_AllocARMRegister(&ptr);
+                 reg = RA_ModifyFPCR(&ptr);
+                 
+-                *ptr++ = ldr_offset(src, tmp, offset);
++                EMU68_GUEST_LOAD_OFFSET(ptr, src, offset, tmp, 4, 0);
+                 *ptr++ = mov_reg(reg, tmp);
+ 
+                 *ptr++ = get_fpcr(tmp);
+@@ -3927,7 +4025,7 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+             if (opcode2 & 0x0800)
+             {
+                 reg = RA_ModifyFPSR(&ptr);
+-                *ptr++ = ldr_offset(src, tmp, offset);
++                EMU68_GUEST_LOAD_OFFSET(ptr, src, offset, tmp, 4, 0);
+                 *ptr++ = mov_reg(reg, tmp);
+                 offset += 4;
+             }
+@@ -3935,7 +4033,7 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+             if (opcode2 & 0x0400)
+             {
+                 val_FPIAR = 0xffffffff;
+-                *ptr++ = ldr_offset(src, tmp, offset);
++                EMU68_GUEST_LOAD_OFFSET(ptr, src, offset, tmp, 4, 0);
+                 *ptr++ = mov_reg_to_simd(29, TS_S, 1, tmp);
+             }
+ 
+@@ -3981,17 +4079,13 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                         size++;
+                 *ptr++ = sub_immed(base_reg, base_reg, 12*size);
+ 
+-                ptr = get_Save96(ptr);
+-                *ptr++ = str64_offset_preindex(31, 30, -16);
+-
+                 for (int i=0; i < 8; i++) {
+                     if ((opcode2 & (1 << i)) != 0) {
+                         uint8_t fp_reg = RA_MapFPURegister(&ptr, i);
+                         //*ptr++ = sub_immed(base_reg, base_reg, 12);
+ 
+-                        *ptr++ = add_immed(1, base_reg, 12*cnt);
+-                        *ptr++ = mov_simd_to_reg(0, fp_reg, TS_D, 0);
+-                        *ptr++ = blr(reg_Save96);
++                        ptr = emit_guest_store96(ptr, base_reg, 12 * cnt,
++                                                 fp_reg);
+                         //ptr = EMIT_Store96bitFP(ptr, fp_reg, base_reg, 12*cnt++);
+                         //*ptr++ = fstd(fp_reg, base_reg, 12*cnt++);
+ 
+@@ -3999,22 +4093,17 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                         RA_FreeFPURegister(&ptr, fp_reg);
+                     }
+                 }
+-                *ptr++ = ldr64_offset_postindex(31, 30, 16);
+                 RA_SetDirtyM68kRegister(&ptr, 8 + (opcode & 7));
+             } else if (mode == 3) {
+                 kprintf("[JIT] Unsupported FMOVEM operation (REG to MEM postindex)\n");
+             } else {
+-                ptr = get_Save96(ptr);
+-                *ptr++ = str64_offset_preindex(31, 30, -16);
+-
+                 int cnt = 0;
+                 for (int i=0; i < 8; i++) {
+                     if ((opcode2 & (0x80 >> i)) != 0) {
+                         uint8_t fp_reg = RA_MapFPURegister(&ptr, i);
+ 
+-                        *ptr++ = add_immed(1, base_reg, 12*cnt);
+-                        *ptr++ = mov_simd_to_reg(0, fp_reg, TS_D, 0);
+-                        *ptr++ = blr(reg_Save96);
++                        ptr = emit_guest_store96(ptr, base_reg, 12 * cnt,
++                                                 fp_reg);
+ 
+                         //ptr = EMIT_Store96bitFP(ptr, fp_reg, base_reg, 12*cnt);
+                         //*ptr++ = fstd(fp_reg, base_reg, cnt*12);
+@@ -4023,7 +4112,6 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                     }
+                 }
+ 
+-                *ptr++ = ldr64_offset_postindex(31, 30, 16);
+             }
+         } else { /* memory to FPn */
+             uint8_t mode = (opcode & 0x0038) >> 3;
+@@ -4035,17 +4123,13 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+ 
+             /* Post index? Note - dynamic mode not supported yet! using double mode instead of extended! */
+             if (mode == 3) {
+-                ptr = get_Load96(ptr);
+-                *ptr++ = str64_offset_preindex(31, 30, -16);
+-
+                 int cnt = 0;
+                 for (int i=0; i < 8; i++) {
+                     if ((opcode2 & (0x80 >> i)) != 0) {
+                         uint8_t fp_reg = RA_MapFPURegisterForWrite(&ptr, i);
+ 
+-                        *ptr++ = add_immed(1, base_reg, 12*cnt);
+-                        *ptr++ = blr(reg_Load96);
+-                        *ptr++ = mov_reg_to_simd(fp_reg, TS_D, 0, 0);
++                        ptr = emit_guest_load96(ptr, base_reg, 12 * cnt,
++                                                fp_reg);
+ 
+                         //ptr = EMIT_Load96bitFP(ptr, fp_reg, base_reg, 12*cnt++);
+                         //*ptr++ = fldd(fp_reg, base_reg, 12*cnt++);
+@@ -4055,24 +4139,18 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                     }
+                 }
+ 
+-                *ptr++ = ldr64_offset_postindex(31, 30, 16);
+-
+                 *ptr++ = add_immed(base_reg, base_reg, 12*cnt);
+                 RA_SetDirtyM68kRegister(&ptr, 8 + (opcode & 7));
+             } else if (mode == 4) {
+                 kprintf("[JIT] Unsupported FMOVEM operation (REG to MEM preindex)\n");
+             } else {
+-                ptr = get_Load96(ptr);
+-                *ptr++ = str64_offset_preindex(31, 30, -16);
+-
+                 int cnt = 0;
+                 for (int i=0; i < 8; i++) {
+                     if ((opcode2 & (0x80 >> i)) != 0) {
+                         uint8_t fp_reg = RA_MapFPURegisterForWrite(&ptr, i);
+ 
+-                        *ptr++ = add_immed(1, base_reg, 12*cnt);
+-                        *ptr++ = blr(reg_Load96);
+-                        *ptr++ = mov_reg_to_simd(fp_reg, TS_D, 0, 0);
++                        ptr = emit_guest_load96(ptr, base_reg, 12 * cnt,
++                                                fp_reg);
+                         //ptr = EMIT_Load96bitFP(ptr, fp_reg, base_reg, 12*cnt);
+                         //*ptr++ = fldd(fp_reg, base_reg, cnt*12);
+                         cnt++;
+@@ -4080,7 +4158,6 @@ uint32_t *EMIT_FPU(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                     }
+                 }
+ 
+-                *ptr++ = ldr64_offset_postindex(31, 30, 16);
+             }
+         }
+ 
+@@ -4699,9 +4776,11 @@ uint32_t *EMIT_lineF(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed
+ 
+         *ptr++ = bic_immed(aligned_src, src, 4, 0);
+         *ptr++ = bic_immed(aligned_dst, dst, 4, 0);
+-        *ptr++ = ldp64(aligned_src, buf1, buf2, 0);
++        EMU68_GUEST_LOAD_OFFSET(ptr, aligned_src, 0, buf1, 8, 0);
++        EMU68_GUEST_LOAD_OFFSET(ptr, aligned_src, 8, buf2, 8, 0);
+         *ptr++ = add_immed(src, src, 16);
+-        *ptr++ = stp64(aligned_dst, buf1, buf2, 0);
++        EMU68_GUEST_STORE_OFFSET(ptr, aligned_dst, 0, buf1, 8);
++        EMU68_GUEST_STORE_OFFSET(ptr, aligned_dst, 8, buf2, 8);
+ 
+         // Update dst only if it is not the same as src!
+         if (dst != src) {
+@@ -4740,12 +4819,16 @@ uint32_t *EMIT_lineF(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed
+         *ptr++ = bic_immed(aligned_reg, reg, 4, 0);
+ 
+         if (opcode & 8) {
+-            *ptr++ = ldp64(aligned_mem, buf1, buf2, 0);
+-            *ptr++ = stp64(aligned_reg, buf1, buf2, 0);
++            EMU68_GUEST_LOAD_OFFSET(ptr, aligned_mem, 0, buf1, 8, 0);
++            EMU68_GUEST_LOAD_OFFSET(ptr, aligned_mem, 8, buf2, 8, 0);
++            EMU68_GUEST_STORE_OFFSET(ptr, aligned_reg, 0, buf1, 8);
++            EMU68_GUEST_STORE_OFFSET(ptr, aligned_reg, 8, buf2, 8);
+         }
+         else {
+-            *ptr++ = ldp64(aligned_reg, buf1, buf2, 0);
+-            *ptr++ = stp64(aligned_mem, buf1, buf2, 0);
++            EMU68_GUEST_LOAD_OFFSET(ptr, aligned_reg, 0, buf1, 8, 0);
++            EMU68_GUEST_LOAD_OFFSET(ptr, aligned_reg, 8, buf2, 8, 0);
++            EMU68_GUEST_STORE_OFFSET(ptr, aligned_mem, 0, buf1, 8);
++            EMU68_GUEST_STORE_OFFSET(ptr, aligned_mem, 8, buf2, 8);
+         }
+ 
+         if (!(opcode & 0x10))
+diff --git a/src/math/96bit.c b/src/math/96bit.c
+index 843ec11..963fca4 100644
+--- a/src/math/96bit.c
++++ b/src/math/96bit.c
+@@ -2,12 +2,8 @@
+ 
+ #define unlikely(x)    __builtin_expect(!!(x), 0)
+ 
+-uint64_t Load96bit(uintptr_t __ignore, uintptr_t base)
++uint64_t Load96Values(uint16_t exp, uint64_t mant)
+ {
+-    (void)__ignore;
+-    
+-    uint16_t exp = *(uint16_t *)base;
+-    uint64_t mant = *(uint64_t *)(base + 4);
+     uint64_t ret;
+ 
+     /* Load zero, positive or negative */
+@@ -41,38 +37,55 @@ uint64_t Load96bit(uintptr_t __ignore, uintptr_t base)
+     return ret;
+ }
+ 
+-void Store96bit(uint64_t value, uintptr_t base)
++uint64_t Load96bit(uintptr_t __ignore, uintptr_t base)
++{
++    (void)__ignore;
++    return Load96Values(*(uint16_t *)base, *(uint64_t *)(base + 4));
++}
++
++struct FP96Values {
++    uint64_t first;
++    uint32_t last;
++};
++
++struct FP96Values Store96Values(uint64_t value)
+ {
+-    uint32_t exp = (value & 0x8000000000000000ULL) >> 32;
++    struct FP96Values result;
++    uint32_t exp = (uint32_t)((value & 0x8000000000000000ULL) >> 32);
+     uint64_t mant = 0x8000000000000000ULL;
+ 
+-    /* Store zero, positive or negative */
+-    if (unlikely((value & 0x7fffffffffffffffULL) == 0))
+-    {
+-        *(uint64_t *)base = value;
+-        *(uint32_t *)(base + 8) = 0;
+-        return;
++    if (unlikely((value & 0x7fffffffffffffffULL) == 0)) {
++        result.first = value;
++        result.last = 0;
++        return result;
+     }
+-
+-    /* Store plus/minus infinity */
+-    if (unlikely((value & 0x7fffffffffffffffULL) == 0x7ff0000000000000ULL))
+-    {
+-        *(uint64_t *)base = value | 0x000f000000000000ULL;
+-        *(uint32_t *)(base + 8) = 0;
+-        return;
++    if (unlikely((value & 0x7fffffffffffffffULL) ==
++                 0x7ff0000000000000ULL)) {
++        result.first = value | 0x000f000000000000ULL;
++        result.last = 0;
++        return result;
+     }
+-
+-    /* Store NaN */
+-    if (unlikely((value & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL && (value & 0x000fffffffffffff) != 0))
+-    {
+-        *(uint32_t *)base = ((value >> 32) | 0x000f0000ULL) & 0xffff0000;
+-        *(uint64_t *)(base + 4) = 0xffffffffffffffffULL;
+-        return;
++    if (unlikely((value & 0x7ff0000000000000ULL) ==
++                     0x7ff0000000000000ULL &&
++                 (value & 0x000fffffffffffffULL) != 0)) {
++        uint32_t header =
++            (uint32_t)(((value >> 32) | 0x000f0000ULL) & 0xffff0000ULL);
++        result.first = ((uint64_t)header << 32) | 0xffffffffULL;
++        result.last = 0xffffffffU;
++        return result;
+     }
+ 
+-    exp |= (((value >> 52) & 0x7ff) - 0x3ff + 0x3fff) << 16;
++    exp |= (uint32_t)((((value >> 52) & 0x7ff) - 0x3ff + 0x3fff)
++                      << 16);
+     mant |= (value & 0x000fffffffffffffULL) << 11;
++    result.first = ((uint64_t)exp << 32) | (mant >> 32);
++    result.last = (uint32_t)mant;
++    return result;
++}
+ 
+-    *(uint32_t *)base = exp;
+-    *(uint64_t *)(base + 4) = mant;
++void Store96bit(uint64_t value, uintptr_t base)
++{
++    struct FP96Values result = Store96Values(value);
++    *(uint64_t *)base = result.first;
++    *(uint32_t *)(base + 8) = result.last;
+ }

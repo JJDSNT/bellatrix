@@ -1,8 +1,8 @@
 diff --git a/include/M68k.h b/include/M68k.h
-index 7372256..162b385 100644
+index 7372256..41cc7c0 100644
 --- a/include/M68k.h
 +++ b/include/M68k.h
-@@ -17,6 +17,153 @@
+@@ -17,6 +17,155 @@
  #include "md5.h"
  #include "lists.h"
  
@@ -40,6 +40,8 @@ index 7372256..162b385 100644
 +            (metadata));                                                      \
 +    } while (0)
 +#else
++#define EMU68_MACHINE_META_PROGRAM 0u
++#define EMU68_MACHINE_META_CPU 0u
 +#define BELLATRIX_MACHINE_API_ACTIVE 0
 +#define EMU68_GUEST_LOAD(ptr, address, value, width, sign_extend)             \
 +    do {                                                                      \
@@ -156,7 +158,7 @@ index 7372256..162b385 100644
  struct M68KLocalState {
      void *          mls_M68kPtr;
      uint32_t        mls_ARMOffset;
-@@ -116,6 +263,11 @@ struct M68KState
+@@ -116,6 +265,11 @@ struct M68KState
      };
      uint64_t INSN_COUNT;
  
