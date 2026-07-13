@@ -8,7 +8,6 @@ index 732a176..9f55465 100644
  #include <config.h>
 +#ifdef BELLATRIX
 +#include "cpu/emu68/bellatrix.h"
-+#include "cpu/emu68/emu68_api.h"
 +#endif
  #ifdef PISTORM
  #ifndef PISTORM32
@@ -57,7 +56,7 @@ index 732a176..9f55465 100644
 +            uint64_t _v30_now, _pc_now, _x12_save;
 +            int _return_to_host;
 +            asm volatile("mov %0, v30.d[0]" : "=r"(_v30_now));
-+            if (ctx->STOPPED || emu68_api_sync_pending() ||
++            if (ctx->STOPPED ||
 +                (_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
 +                ++bela_spins >= 64u) {
 +                bela_insn_prev = _v30_now;
@@ -75,7 +74,7 @@ index 732a176..9f55465 100644
 +                asm volatile("mov %0, x12" : "=r"(_x12_save));
 +                M68K_SaveContext(ctx);
 +                bellatrix_emu68_report_jit_progress(_v30_now, (uint32_t)_pc_now);
-+                _return_to_host = emu68_api_dispatch_quantum_progress(
++                _return_to_host = emu68_machine_dispatch_quantum_progress(
 +                    _v30_now, (uint32_t)_pc_now);
 +                M68K_LoadContext(getCTX());
 +                asm volatile("mov x12, %0" :: "r"(_x12_save));

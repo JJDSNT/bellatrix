@@ -59,8 +59,7 @@ apply_patch_if_needed() {
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
         if grep -Fq 'bellatrix_emu68_report_jit_progress(_v30_now' src/ExecutionLoop.c &&
-           grep -Fq 'emu68_api_dispatch_quantum_progress(_v30_now' src/ExecutionLoop.c &&
-           grep -Fq 'cpu/emu68/emu68_api.h' src/ExecutionLoop.c; then
+           grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
         fi
@@ -90,15 +89,6 @@ apply_patch_if_needed() {
            grep -Fq 'kprintf("[TLSF] ERROR! Double-free detected' src/tlsf.c &&
            grep -Fq 'uintptr_t old_size = GET_SIZE(b);' src/tlsf.c; then
             echo "Patch already applied (TLSF hardening detected): $name"
-            return 0
-        fi
-    fi
-
-    if [ "$name" = "0021-emu68-public-bus-dispatch.patch" ]; then
-        if grep -Fq 'BELLATRIX_HAVE_EMU68_API' src/aarch64/vectors.c &&
-           grep -Fq 'emu68_api_dispatch_bus_access((uint32_t)far' src/aarch64/vectors.c &&
-           grep -Fq 'EMU68_SPACE_DATA' src/aarch64/vectors.c; then
-            echo "Patch already applied (built-in public bus dispatch detected): $name"
             return 0
         fi
     fi
@@ -190,7 +180,6 @@ EMU68_PATCHES=(
     "$PATCHES/0010-bellatrix-z2ram-fixes.patch"
     "$PATCHES/0019-emu68-tlsf-hardening.patch"
     "$PATCHES/0020-emu68-stop-liveness.patch"
-    "$PATCHES/0021-emu68-public-bus-dispatch.patch"
     "$PATCHES/0025-emu68-machine-continuation.patch"
     "$PATCHES/0026-emu68-mmu-unmap.patch"
     "$PATCHES/0027-emu68-explicit-ea-access.patch"
@@ -267,8 +256,7 @@ check_emu68_patch_applied() {
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
         if grep -Fq 'bellatrix_emu68_report_jit_progress(_v30_now' src/ExecutionLoop.c &&
-           grep -Fq 'emu68_api_dispatch_quantum_progress(_v30_now' src/ExecutionLoop.c &&
-           grep -Fq 'cpu/emu68/emu68_api.h' src/ExecutionLoop.c; then
+           grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
         fi
@@ -290,15 +278,6 @@ check_emu68_patch_applied() {
            grep -Fq 'kprintf("[TLSF] ERROR! Double-free detected' src/tlsf.c &&
            grep -Fq 'uintptr_t old_size = GET_SIZE(b);' src/tlsf.c; then
             echo "  OK  $name  [content match; whitespace normalized in patch]"
-            return 0
-        fi
-    fi
-
-    if [ "$name" = "0021-emu68-public-bus-dispatch.patch" ]; then
-        if grep -Fq 'BELLATRIX_HAVE_EMU68_API' src/aarch64/vectors.c &&
-           grep -Fq 'emu68_api_dispatch_bus_access((uint32_t)far' src/aarch64/vectors.c &&
-           grep -Fq 'EMU68_SPACE_DATA' src/aarch64/vectors.c; then
-            echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
         fi
     fi

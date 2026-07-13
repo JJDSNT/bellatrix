@@ -723,6 +723,7 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
     }
     if (__atomic_load_n(&machine_cpu.stop_requested, __ATOMIC_ACQUIRE)) {
         result->reason = EMU68_STOP_REQUESTED;
+        __atomic_store_n(&machine_cpu.stop_requested, 0u, __ATOMIC_RELEASE);
         return EMU68_OK;
     }
     if (stopped) {
@@ -756,9 +757,10 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
         result->reason = EMU68_STOP_EXTERNAL_ACCESS;
     else if (machine_cpu.bus_error_pending)
         result->reason = EMU68_STOP_BUS_ERROR;
-    else if (__atomic_load_n(&machine_cpu.stop_requested, __ATOMIC_ACQUIRE))
+    else if (__atomic_load_n(&machine_cpu.stop_requested, __ATOMIC_ACQUIRE)) {
         result->reason = EMU68_STOP_REQUESTED;
-    else if (stopped)
+        __atomic_store_n(&machine_cpu.stop_requested, 0u, __ATOMIC_RELEASE);
+    } else if (stopped)
         result->reason = EMU68_STOP_STOPPED;
     else
         result->reason = EMU68_STOP_BUDGET;
