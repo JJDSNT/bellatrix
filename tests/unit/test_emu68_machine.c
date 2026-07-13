@@ -383,6 +383,21 @@ static void test_bus_error_frame(void)
     CHECK(memory[platform_arch.a7 + 7u] == 0x08u);
     CHECK(memory[platform_arch.a7 + 20u] == 0x00u);
     CHECK(memory[platform_arch.a7 + 22u] == 0x00u);
+
+    memory[12] = 0x00u; memory[13] = 0x00u;
+    memory[14] = 0x30u; memory[15] = 0x00u;
+    platform_arch.a7 = 0x8000u;
+    platform_arch.isp = 0x8000u;
+    platform_arch.sr = 0x2700u;
+    CHECK(!emu68_machine_instruction_fetch_allowed(0x1001u, 2u));
+    CHECK(emu68_machine_enter_bus_error());
+    CHECK(platform_arch.a7 == 0x8000u - 12u);
+    CHECK(platform_arch.pc == 0x3000u);
+    CHECK(memory[platform_arch.a7 + 6u] == 0x20u);
+    CHECK(memory[platform_arch.a7 + 7u] == 0x0cu);
+    CHECK(memory[platform_arch.a7 + 8u] == 0x00u);
+    CHECK(memory[platform_arch.a7 + 10u] == 0x10u);
+    CHECK(memory[platform_arch.a7 + 11u] == 0x00u);
     emu68_machine_destroy(cpu);
 }
 

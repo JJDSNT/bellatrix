@@ -29,6 +29,7 @@ struct emu68_cpu {
     uint8_t pending;
     uint8_t completion_ready;
     uint8_t bus_error_pending;
+    uint8_t address_error_pending;
     uint8_t stopped;
     uint64_t next_sequence;
     emu68_bus_access_t pending_access;
@@ -588,29 +589,43 @@ int emu68_machine_enter_bus_error(void)
     } else {
         sp = state.a7;
     }
-    if (sp < 60u)
-        return 0;
-    sp -= 60u;
-    frame = direct_pointer(sp, 60u, EMU68_REGION_WRITE);
-    vector = direct_pointer(state.vbr + 8u, 4u, EMU68_REGION_READ);
-    if (!frame || !vector)
-        return 0;
+    if (machine_cpu.address_error_pending) {
+        if (sp < 12u)
+            return 0;
+        sp -= 12u;
+        frame = direct_pointer(sp, 12u, EMU68_REGION_WRITE);
+        vector = direct_pointer(state.vbr + 12u, 4u, EMU68_REGION_READ);
+        if (!frame || !vector)
+            return 0;
+        put_be16(frame, old_sr);
+        put_be32(frame + 2u, machine_cpu.fault_pc);
+        put_be16(frame + 6u, 0x200cu);
+        put_be32(frame + 8u, machine_cpu.fault_access.address & ~1u);
+    } else {
+        if (sp < 60u)
+            return 0;
+        sp -= 60u;
+        frame = direct_pointer(sp, 60u, EMU68_REGION_WRITE);
+        vector = direct_pointer(state.vbr + 8u, 4u, EMU68_REGION_READ);
+        if (!frame || !vector)
+            return 0;
 
-    memset(frame, 0, 60u);
-    put_be16(frame, old_sr);
-    put_be32(frame + 2u, machine_cpu.fault_pc);
-    put_be16(frame + 6u, 0x7008u);
-    switch (machine_cpu.fault_access.width) {
-    case 1u: size_code = 1u; break;
-    case 2u: size_code = 2u; break;
-    default: size_code = 0u; break;
+        memset(frame, 0, 60u);
+        put_be16(frame, old_sr);
+        put_be32(frame + 2u, machine_cpu.fault_pc);
+        put_be16(frame + 6u, 0x7008u);
+        switch (machine_cpu.fault_access.width) {
+        case 1u: size_code = 1u; break;
+        case 2u: size_code = 2u; break;
+        default: size_code = 0u; break;
+        }
+        ssw = (uint16_t)((machine_cpu.fault_access.kind == EMU68_ACCESS_READ ?
+                              1u << 8 : 0u) |
+                         (size_code << 5) |
+                         (machine_cpu.fault_access.function_code & 7u));
+        put_be16(frame + 12u, ssw);
+        put_be32(frame + 20u, machine_cpu.fault_access.address);
     }
-    ssw = (uint16_t)((machine_cpu.fault_access.kind == EMU68_ACCESS_READ ?
-                          1u << 8 : 0u) |
-                     (size_code << 5) |
-                     (machine_cpu.fault_access.function_code & 7u));
-    put_be16(frame + 12u, ssw);
-    put_be32(frame + 20u, machine_cpu.fault_access.address);
 
     state.sr = (uint16_t)((old_sr | 0x2000u) & ~(0xc000u));
     state.a7 = sp;
@@ -621,8 +636,10 @@ int emu68_machine_enter_bus_error(void)
     state.pc = get_be32(vector);
     if (emu68_machine_platform_set_arch_state(&state) != EMU68_OK)
         return 0;
-    emu68_machine_platform_add_cycles(50u);
+    emu68_machine_platform_add_cycles(
+        machine_cpu.address_error_pending ? 30u : 50u);
     machine_cpu.bus_error_pending = 0u;
+    machine_cpu.address_error_pending = 0u;
     return 1;
 }
 
@@ -632,6 +649,22 @@ int emu68_machine_instruction_fetch_allowed(uint32_t address, uint8_t width)
 
     if (!machine_cpu.active)
         return 1;
+    if ((address & 1u) != 0u) {
+        if (!machine_cpu.bus_error_pending) {
+            memset(&machine_cpu.fault_access, 0,
+                   sizeof(machine_cpu.fault_access));
+            machine_cpu.fault_access.address = address;
+            machine_cpu.fault_access.kind = EMU68_ACCESS_READ;
+            machine_cpu.fault_access.space = EMU68_SPACE_PROGRAM;
+            machine_cpu.fault_access.function_code =
+                current_function_code(EMU68_SPACE_PROGRAM, 0u);
+            machine_cpu.fault_access.width = width;
+            machine_cpu.fault_pc = address;
+            machine_cpu.address_error_pending = 1u;
+            machine_cpu.bus_error_pending = 1u;
+        }
+        return 0;
+    }
     region = find_region(address, width);
     if (region && region->kind == EMU68_REGION_DIRECT &&
         (region->flags & (EMU68_REGION_READ | EMU68_REGION_EXECUTE)) ==
@@ -824,6 +857,7 @@ emu68_status_t emu68_machine_reset(emu68_cpu_t *cpu,
     machine_cpu.completion_ready = 0u;
     machine_cpu.native_resume = 0u;
     machine_cpu.bus_error_pending = 0u;
+    machine_cpu.address_error_pending = 0u;
     __atomic_store_n(&machine_cpu.stop_requested, 0u, __ATOMIC_RELEASE);
     return emu68_machine_platform_reset(state->initial_ssp,
                                         state->initial_pc);
