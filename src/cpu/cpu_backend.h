@@ -5,10 +5,6 @@
 // publication), but executable backends may also expose reset/run so the same
 // machine/runtime shell can drive different CPU engines.
 //
-// The Emu68 backend currently implements only get_pc + set_ipl because the
-// JIT owns the real execution loop in baremetal.
-// The Musashi backend implements all four callbacks.
-
 #pragma once
 
 #include <stdint.h>
@@ -26,3 +22,11 @@ uint32_t cpu_backend_get_pc(CpuBackend *backend);
 void     cpu_backend_set_ipl(CpuBackend *backend, int level);
 void     cpu_backend_reset(CpuBackend *backend);
 int      cpu_backend_run(CpuBackend *backend, uint32_t cycles);
+
+/* Build-selected backend ownership. This generic layer, not an Emu68 source
+ * file, selects and drives Emu68 or Musashi. */
+CpuBackend *cpu_backend_selected(void);
+void cpu_backend_init_selected(void);
+void cpu_backend_log_selected(void);
+int cpu_backend_owns_execution_loop(void);
+void cpu_backend_run_selected(void);

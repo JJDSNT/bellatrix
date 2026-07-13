@@ -13,7 +13,6 @@
 #include <stdatomic.h>
 #include <limits.h>
 #include "cpu/cpu_backend.h"
-#include "cpu/musashi/musashi_backend.h"
 #include "machine/machine.h"
 #include "rigel/rigel_custom.h"
 #include "rigel/rigel_cia.h"
@@ -142,6 +141,11 @@ static CpuBackend g_emu68_backend __attribute__((unused)) = {
     .progress_in_run = 1,
 };
 
+CpuBackend *bellatrix_emu68_backend_get(void)
+{
+    return &g_emu68_backend;
+}
+
 static int bellatrix_emu68_api_access_needs_sync(uint32_t addr, unsigned int size,
                                                  int is_write)
 {
@@ -245,7 +249,7 @@ static emu68_bus_write_t bellatrix_emu68_api_write32(void *user, uint32_t addr,
     return result;
 }
 
-static void bellatrix_emu68_api_init(void)
+void bellatrix_emu68_backend_init(void)
 {
     static const emu68_bus_ops_t bus_ops = {
         .read8 = bellatrix_emu68_api_read8,
@@ -299,19 +303,7 @@ static void bellatrix_emu68_api_dump_stats(void)
             (unsigned long long)s.irq_level_change_count);
 }
 
-#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
-static CpuBackend *bellatrix_selected_cpu_backend(void)
-{
-    return bellatrix_musashi_backend_get();
-}
-#else
-static CpuBackend *bellatrix_selected_cpu_backend(void)
-{
-    return &g_emu68_backend;
-}
-#endif
-
-static void bellatrix_singlecore_advance_cpu_cycles(uint32_t cycles);
+void bellatrix_machine_advance_cpu_cycles(uint32_t cycles);
 
 static void bellatrix_runtime_poll_from_emu68(void)
 {
@@ -328,45 +320,12 @@ static void bellatrix_runtime_poll_from_emu68(void)
 
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
-    CpuBackend *backend = bellatrix_selected_cpu_backend();
-    return backend && backend->run && backend->reset;
+    return cpu_backend_owns_execution_loop();
 }
 
 void bellatrix_run_selected_cpu_backend(void)
 {
-    CpuBackend *backend = bellatrix_selected_cpu_backend();
-
-    if (!backend || !backend->run || !backend->reset) {
-        return;
-    }
-
-    cpu_backend_reset(backend);
-
-    for (;;) {
-        if (PAL_Core_IsMulticoreEnabled())
-            cpu_backend_set_ipl(backend, (int)core_chipset_get_pending_ipl());
-
-        uint32_t ran = cpu_backend_run(backend, 454u);
-        uint32_t cycles = ran > 0u ? ran : 454u;
-
-        if (backend->progress_in_run) {
-            /* Emu68 reports CPU progress from inside MainLoop via
-             * bellatrix_emu68_report_jit_progress(); do not publish or step
-             * the chipset again here. */
-        } else if (PAL_Core_IsMulticoreEnabled()) {
-            /* Multicore: Core 2 advances the chipset independently; Core 0
-             * owns physical IO from its supervisor loop.
-             * publish cross-core like the Emu68 JIT path does instead of
-             * stepping Rigel synchronously on this (CPU) core. */
-            bellatrix_bridge_publish_cpu_cycles(cycles);
-        } else {
-            bellatrix_singlecore_advance_cpu_cycles(cycles);
-            /* The Musashi loop never goes through bellatrix_bus_access (that is
-             * the Emu68 JIT fault hook), so the single-core IO service point
-             * (USB/BT via PAL_Runtime_Poll's ~1ms throttle) must live here. */
-            PAL_Runtime_Poll();
-        }
-    }
+    cpu_backend_run_selected();
 }
 
 /* ---------------------------------------------------------------------------
@@ -503,7 +462,7 @@ static void bellatrix_core0_supervise(void)
         uint64_t horizon_cck = core_chipset_get_horizon();
         RuntimeTimeline timeline;
         BellatrixMachine *machine = bellatrix_machine_get();
-        CpuBackend *backend = bellatrix_selected_cpu_backend();
+        CpuBackend *backend = cpu_backend_selected();
         uint64_t frames = machine
             ? __atomic_load_n(&machine->frame_counter, __ATOMIC_ACQUIRE)
             : 0u;
@@ -708,7 +667,7 @@ void bellatrix_launch_cpu_and_park(void (*entry)(void))
  * route it through cpu_bridge/runtime publish symbols; those are intentionally
  * owned by the generic runtime path and may resolve to the multicore publisher.
  * ------------------------------------------------------------------------- */
-static void bellatrix_singlecore_advance_cpu_cycles(uint32_t cycles)
+void bellatrix_machine_advance_cpu_cycles(uint32_t cycles)
 {
 #if BELLATRIX_PROFILE_ENABLED
     uint64_t t0 = bprof_now();
@@ -749,7 +708,7 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
         if (PAL_Core_IsMulticoreEnabled())
             bellatrix_bridge_publish_cpu_cycles(cycles);
         else
-            bellatrix_singlecore_advance_cpu_cycles(cycles);
+            bellatrix_machine_advance_cpu_cycles(cycles);
     }
 
     /* Safe liveness checkpoints: this function is called only while MainLoop
@@ -871,7 +830,7 @@ static void bellatrix_emu68_publish_idle_cycles(uint32_t cycles)
     if (PAL_Core_IsMulticoreEnabled())
         bellatrix_bridge_publish_cpu_cycles(cycles);
     else
-        bellatrix_singlecore_advance_cpu_cycles(cycles);
+        bellatrix_machine_advance_cpu_cycles(cycles);
 
     bellatrix_runtime_poll_from_emu68();
 }
@@ -1073,12 +1032,8 @@ void bellatrix_init(void)
             (unsigned long long)init_sp);
 #endif
     bellatrix_emu68_boards_reset();
-    cpu_backend = bellatrix_selected_cpu_backend();
-    bellatrix_emu68_api_init();
-
-#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
-    bellatrix_musashi_backend_init();
-#endif
+    cpu_backend = cpu_backend_selected();
+    cpu_backend_init_selected();
 
 #if !BELLATRIX_ENABLE_EMU68_BOARDS
     /* Legacy non-boards path: Bellatrix owns the Zorro II protocol when
@@ -1423,12 +1378,7 @@ void bellatrix_init(void)
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }
 
-#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
-    kprintf("[BELA] CPU backend: musashi (%s)\n",
-            bellatrix_musashi_cpu_model());
-#else
-    kprintf("[BELA] CPU backend: emu68\n");
-#endif
+    cpu_backend_log_selected();
 #if BELLATRIX_PROFILE_ENABLED
     bellatrix_profile_reset();
     kprintf("[BELA] MMIO profiling: ENABLED (BELLATRIX_PROFILE=1)\n");

@@ -18,6 +18,11 @@ int  bellatrix_cpu_backend_owns_execution_loop(void);
 void bellatrix_run_selected_cpu_backend(void);
 void bellatrix_emu68_boards_reset(void);
 
+struct CpuBackend;
+struct CpuBackend *bellatrix_emu68_backend_get(void);
+void bellatrix_emu68_backend_init(void);
+void bellatrix_machine_advance_cpu_cycles(uint32_t cycles);
+
 // Single-core: calls entry() directly, forever, on the boot core (today's
 // behavior). Multicore: launches entry() on Core 1 and parks the boot core
 // (Core 0) as the light Machine/scheduler arbiter — it never returns.
