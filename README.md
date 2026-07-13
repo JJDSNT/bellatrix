@@ -13,10 +13,11 @@ image includes a `.sha256` checksum. The Musashi builds are the stable ones —
 Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Six
 areas remain in progress:
 
-- **Emu68 JIT integration** — the public bus API, cooperative quantum windows,
-  virtual IPL delivery, and explicit STOP state now reach the AROS boot screen
-  on a real Pi. Broader workload validation and performance stabilization are
-  still in progress; Musashi 68040 remains the recommended path for now.
+- **Emu68 JIT integration** — the current experimental Bellatrix adapter reaches
+  the AROS boot screen, but its bus callbacks still run downstream of Data Abort.
+  The fault-independent public machine API defined in
+  [`docs/emu68_public_api.md`](docs/emu68_public_api.md) is not implemented.
+  Musashi 68040 remains the recommended path.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
 - **RTG support** — `bellatrix.rtg` and the P96 `bellatrix.card` path are in progress; DiagArea/CardLoader residency is confirmed, but p96gfx discovery, live RTG output, and the VC4 bare-metal backend still need validation/completion.

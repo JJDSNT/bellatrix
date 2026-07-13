@@ -1,227 +1,141 @@
-# Emu68 Public API Adapter
+# Emu68 Public Machine API — Authoritative Status
 
-## O que esta sendo feito
+## Status warning
 
-Estamos iniciando uma API publica Bellatrix/Emu68, mas sem transformar o Emu68
-em uma biblioteca embutivel completa de uma vez.
+**The public Emu68 machine API is not implemented.**
 
-O primeiro corte cria:
+The files currently named `emu68_api.h` and `emu68_api_adapter.c` do not satisfy
+the public API contract. They are a Bellatrix-owned experimental adapter around
+the existing Emu68 singleton and page-fault bus path.
 
-- um contrato publico em `src/cpu/emu68/emu68_api.h`;
-- um adapter em `src/cpu/emu68/emu68_api_adapter.c`;
-- registro desse adapter no build por `cmake/bellatrix-variant.cmake`;
-- um patch minimo no Emu68, `patches/0021-emu68-public-bus-dispatch.patch`, que
-  faz o fault/MMIO path existente chamar o dispatcher da API publica antes de
-  cair no fallback `bellatrix_bus_access()`.
-
-## Por que esta sendo feito
-
-Hoje o Bellatrix depende de pontos internos do Emu68 para integrar bus, IRQ,
-estado, invalidação e avanço temporal. Isso funciona, mas cria acoplamento forte:
-
-- o Bellatrix precisa conhecer detalhes do live path do Emu68;
-- mudancas no JIT/fault path podem quebrar a integracao sem contrato claro;
-- fica dificil evoluir para execucao por janela e sincronizacao multicore limpa;
-- fica dificil diferenciar "API publica suportada" de "detalhe privado atual".
-
-A API publica cria uma fronteira explicita, com uma superficie pequena e honesta.
-
-## Para que serve
-
-Serve para permitir que o Bellatrix consuma o Emu68 como backend de CPU/JIT por
-um contrato progressivo:
-
-- bus externo por callbacks;
-- IRQ por nivel;
-- estado minimo inspecionavel/aplicavel;
-- invalidacao de codigo;
-- eventos basicos;
-- estatisticas leves para validar uso do dispatcher;
-- futuramente execucao por janela e sync boundary real.
-
-O objetivo pratico e reduzir o acoplamento direto com `vectors.c`,
-`ExecutionLoop.c`, caches internas e estado global, sem quebrar o boot atual.
-
-## Escopo desta fase
-
-Esta fase nao tenta resolver tudo.
-
-Dentro do escopo:
-
-- criar o header publico;
-- criar o adapter Bellatrix-owned;
-- conectar o bus publico ao hook ja existente do patch `0002`;
-- sinalizar `EMU68_BUS_SYNC_REQUIRED` em writes criticos de custom/CIA;
-- manter fallback para o caminho legado;
-- validar build e patch verification;
-- documentar a fronteira em `docs/`.
-
-Fora do escopo por enquanto:
-
-- `run_cycles()` real;
-- `step()` real;
-- HLE;
-- multi-instancia real;
-- API publica de FPU/MMU;
-- snapshot completo;
-- remover o live path existente.
-
-## Decisao
-
-A API publica inicial do Emu68 para Bellatrix fica no lado Bellatrix:
-
-- `src/cpu/emu68/emu68_api.h`
-- `src/cpu/emu68/emu68_api_adapter.c`
-- registro no build por `cmake/bellatrix-variant.cmake`
-
-O submodulo `emu68/` continua sendo alterado apenas por patches em `patches/`.
-Nao adicionar arquivos diretamente ao submodulo como fonte de verdade.
-
-## Por que
-
-O projeto ja tem uma fronteira de build correta:
-
-- `patches/0001-add-bellatrix-variant-cmake.patch` registra `VARIANT=bellatrix`;
-- `emu68/CMakeLists.txt` inclui `../cmake/bellatrix-variant.cmake`;
-- `cmake/bellatrix-variant.cmake` lista fontes, includes e defines Bellatrix.
-
-Logo, fontes novas de integracao pertencem a `src/` e ao `cmake/` do Bellatrix,
-nao ao tree upstream do Emu68.
-
-## Patch Emu68 Necessario
-
-`patches/0021-emu68-public-bus-dispatch.patch` e o patch novo de bus publico
-desta fase. Ele altera `emu68/src/aarch64/vectors.c` para:
-
-- incluir `cpu/emu68/emu68_api.h`;
-- chamar `emu68_api_dispatch_bus_access(...)` no path de fault/MMIO;
-- cair para `bellatrix_bus_access(...)` se a API nao estiver inicializada ou nao
-  suportar aquele acesso.
-
-Isso preserva o live path existente e reduz risco.
-
-`patches/0003-bellatrix-execution-loop.patch` tambem participa da API agora:
-alem do progresso Bellatrix existente, o bloco de progresso do `MainLoop()`
-chama `emu68_api_dispatch_quantum_progress(...)`. Sem janela ativa isso e
-no-op; com uma janela armada por `emu68_run_cycles()`, o loop retorna quando o
-orcamento expira ou quando `emu68_request_stop()` e observado.
-
-## Estado Real da API
-
-Funcional nesta fase:
-
-- `emu68_api_version()`
-- singleton `emu68_create()` / `emu68_destroy()`
-- `emu68_set_bus()`
-- log de boot `[EMU68-API] v1 bus registered` quando o bus publico e registrado
-- trace opt-in `BELLATRIX_EMU68_API_TRACE=1` para imprimir primeira leitura,
-  primeira escrita e primeiro `sync-required` via dispatcher publico
-- autodump opt-in `BELLATRIX_EMU68_API_AUTODUMP=1` para imprimir uma linha de
-  stats no primeiro `sync-required`, util em QEMU quando nao ha ferramenta guest
-  para escrever em `0xDFFF08`
-- callbacks de bus 8/16/32 via fault path de `vectors.c`
-- `EMU68_BUS_SYNC_REQUIRED` para writes criticos de custom/CIA, ainda como
-  sinal/evento sem parar execucao
-- `emu68_get_stats()` / `emu68_reset_stats()` para diagnostico leve
-- controle temporario `0xDFFF08`: write `1` dump, `2` reset, `3` dump+reset
-- `emu68_set_irq_level()`
-- `emu68_get_state()` / `emu68_set_state()`
-- `emu68_invalidate_code_range()` / `emu68_invalidate_all_code()`
-- eventos basicos para stop, invalidate e sync-required
-- `emu68_run_cycles()` como janela cooperativa sobre o `MainLoop()` vivo,
-  quando `__m68k_state` ja foi inicializado
-- `emu68_step()` como janela minima de 8 ciclos estimados
-- backend Emu68 conectado ao loop generico `CpuBackend`: `reset()` inicializa
-  o contexto via `M68K_StartEmu()` e `run()` chama `emu68_run_cycles()`
-- caminho Bellatrix em `M68K_StartEmu()` usa contexto M68K estatico e retorna
-  antes do `MainLoop()` quando `CpuBackend` e dono da execucao
-
-Ainda nao funcional como contrato real completo:
-
-- HLE callbacks
-- multi-instancia real
-- bootstrap publico independente de `M68K_StartEmu()` / estado global
-
-Motivo: o Emu68 atual ainda nasce pelo `M68K_StartEmu()` global e o boot normal
-continua dependendo de estado global do Emu68. A janela cooperativa agora e
-dirigida pelo `CpuBackend`, mas ainda nao transforma o Emu68 em uma biblioteca
-multi-instancia.
-
-## Relacao com `wip/emu68-liveness`
-
-O branch `wip/emu68-liveness` e uma linha de diagnostico/bisseccao de liveness,
-nao uma base de API publica. Ele altera principalmente:
-
-- `patches/0003-bellatrix-execution-loop.patch`
-- `patches/0009-bellatrix-boot-config.patch`
-- `cmake/bellatrix-variant.cmake`
-- issues de diagnostico
-
-Nao misturar automaticamente essas alteracoes com a API. Se for integrar o branch,
-fazer uma avaliacao separada porque ele desfaz parte das protecoes de `x12/v28`
-que existem no branch atual.
-
-## Build Validado
-
-Validado com:
-
-```bash
-rtk timeout 120s bash scripts/build.sh
-rtk timeout 180s env BELLATRIX_LAUNCHER=0 bash scripts/build.sh
-rtk timeout 120s bash scripts/setup.sh --verify
-rtk timeout 180s env BELLATRIX_CPU_BACKEND=emu68 BELLATRIX_HDMI_AUDIO=1 BELLATRIX_USBSTACK=1 BELLATRIX_BTSTACK=0 BELLATRIX_LAUNCHER=0 bash scripts/build.sh
-```
-
-Resultado: `emu68/install-bellatrix-rigel/Emu68.img` gerado com sucesso.
-
-Tambem validado com uma execucao curta no QEMU sem launcher:
-
-```bash
-rtk timeout 35s qemu-system-aarch64 \
-  -M raspi3b -accel tcg,tb-size=64 \
-  -kernel emu68/install-bellatrix-rigel/Emu68.img \
-  -dtb emu68/install-bellatrix-rigel/bcm2710-rpi-3-b.dtb \
-  -serial null -serial stdio -display none \
-  -append enable_cache -initrd src/roms/KS13.rom
-```
-
-Resultado observado: boot Emu68/Bellatrix, log
-`[EMU68-API] v1 bus registered`, entrada no JIT, overlay desligado e Z2 Fast RAM
-configurada. QEMU TCG e lento, entao isso e sanity check de inicializacao, nao
-validacao funcional completa dos contadores.
-
-Validacao especifica da API com `src/roms/aros.rom`:
+The following messages are not evidence that the public API is ready:
 
 ```text
 [EMU68-API] v1 bus registered
-[EMU68-API] first bus write addr=000000e4 size=4 value=03fbdec0 pc=00000000
-[EMU68-API] first bus read addr=00f00000 size=2 value=00000000 pc=00f8011c
-[EMU68-API] first sync-required addr=00bfe001 size=1 value=00000000 pc=00f80144
+[EMU68-API] first bus read ...
+[EMU68-API] first bus write ...
+[EMU68-API] first sync-required ...
 ```
 
-Esses logs confirmam que:
+They prove only that the experimental adapter was registered and invoked after
+a Data Abort. They do not prove explicit JIT bus dispatch, host ownership of the
+ARM exception infrastructure, or independence from fault-as-bus.
 
-- o singleton da API publica foi criado no boot;
-- o fault path passa pelo dispatcher publico para write;
-- o fault path passa pelo dispatcher publico para read;
-- o sinal `EMU68_BUS_SYNC_REQUIRED` esta sendo produzido em acesso CIA.
+The normative contract is
+[`docs/emu68_public_api.md`](../../docs/emu68_public_api.md). Implementation work
+is tracked by [`ISSUE-0057`](../issues/ISSUE-0057.md). If this context conflicts
+with an older issue or historical note, this file and the normative document
+take precedence.
 
-Esses logs de primeira ocorrencia dependem de build com
-`BELLATRIX_EMU68_API_TRACE=1`; builds normais mantem apenas os contadores e o
-controle `0xDFFF08`.
+## Current implementation
 
-Para validar stats sem guest tool, usar build com
-`BELLATRIX_EMU68_API_AUTODUMP=1`. Isso imprime uma linha
-`[EMU68-API] first-sync stats ...` no primeiro acesso que retornar
-`EMU68_BUS_SYNC_REQUIRED`. O controle explicito `0xDFFF08` continua sendo o
-caminho guest-facing para dump/reset.
-
-Validado em QEMU/AROS:
+The current Bellatrix Emu68 bus flow is:
 
 ```text
-[EMU68-API] first-sync stats bus_r=1 bus_w=2 sync=1 err=0 unhandled=0 bad_size=0 stop=0 inv=0
+JIT emits native LDR/STR
+    -> unmapped/protected guest address
+    -> ARM Data Abort
+    -> SYSPageFaultReadHandler()/SYSPageFaultWriteHandler()
+    -> SYSReadValFromAddr()/SYSWriteValToAddr()
+    -> emu68_api_dispatch_bus_access()
+    -> Bellatrix callback
+    -> bellatrix_bus_access() fallback when unhandled
 ```
 
-O mesmo run chegou ao serial do AROS com lista de resident modules,
-`ROMInfo: 1MiB ROM detected` e autoconfig da Z2 Fast RAM. O timeout cortou a
-saida depois disso, entao ainda nao tratar como boot completo de Workbench.
+Relevant current files are:
+
+- `src/cpu/emu68/emu68_api.h`;
+- `src/cpu/emu68/emu68_api_adapter.c`;
+- `src/cpu/emu68/bellatrix.c`;
+- `patches/0002-add-bellatrix-bus-hook.patch`;
+- `patches/0021-emu68-public-bus-dispatch.patch`;
+- patched `emu68/src/aarch64/vectors.c` and `ExecutionLoop.c`.
+
+What exists today:
+
+- an opaque-looking handle over one global Emu68 runtime;
+- 8/16/32-bit callbacks reached from `vectors.c` after Data Abort;
+- estimated bounded windows around the patched `MainLoop()`;
+- guest IPL publication, STOP handling, stop request, partial state access,
+  invalidation wrappers, events and diagnostic counters;
+- successful builds and AROS boot progress through that experimental path.
+
+What does not exist today:
+
+- an upstream-neutral public header implemented inside Emu68;
+- a direct/external/unmapped guest-region registry;
+- JIT classification before host memory is touched;
+- an explicit external-access helper emitted by the JIT;
+- a cooperative pending-access get/complete protocol;
+- modeled 68k cycle accounting required by the run contract;
+- a Bellatrix Emu68 profile in which normal guest bus traffic is independent of
+  Data Abort and `SYS*ValFromAddr()`;
+- a public API whose operation has been validated independently of the legacy
+  fault dispatcher.
+
+Therefore the current adapter must never be described simply as “the public
+Emu68 API.” Use “experimental Bellatrix fault-path adapter” when referring to
+the existing implementation.
+
+## Required architecture
+
+The public API is implemented at the Emu68 JIT memory-emission boundary, not in
+`vectors.c` and not as another layer around
+`emu68_api_dispatch_bus_access()`.
+
+The required access split is:
+
+```text
+DIRECT region
+    -> existing native AArch64 load/store
+
+EXTERNAL region
+    -> explicit synchronous callback
+       or cooperative EMU68_STOP_EXTERNAL_ACCESS
+
+UNMAPPED address
+    -> defined 68k bus-error/unmapped semantics
+```
+
+The JIT must normalize the computed address to 32 bits before classification so
+the aliases created by `mirror_page()` retain identical guest semantics.
+
+The MMU remains responsible for direct RAM/ROM mappings, JIT mappings,
+protection, aliases and cache attributes. Only its accidental second role as an
+external-region detector through faults is removed from the machine profile.
+
+Physical ARM IRQ/FIQ and 68k IPL remain distinct:
+
+```text
+physical ARM IRQ/FIQ
+    -> Bellatrix host/platform
+
+guest 68k IPL
+    -> emu68_machine_set_ipl()
+    -> Emu68 architectural interrupt delivery
+```
+
+The API cannot expose ARM vector ownership, GPIO, PiStorm transaction slots,
+host core numbers, or JIT-private state. PiStorm remains behind its own platform
+backend.
+
+## Completion condition
+
+The public API may be called implemented only when all behavior defined in
+`docs/emu68_public_api.md` exists and is validated. At minimum:
+
+- direct RAM/ROM still use native JIT loads/stores;
+- every external access reaches the explicit API before any host access;
+- synchronous and cooperative modes follow the documented ordering rules;
+- cooperative reads and writes use the documented pending-access lifetime;
+- unmapped accesses use defined 68k semantics;
+- no normal Bellatrix transaction reaches a page-fault or
+  `SYS*ValFromAddr()` handler;
+- guest IPL, STOP, reset, stop request, bounded run and invalidation work through
+  the public contract;
+- physical ARM interrupt and exception ownership remains with Bellatrix;
+- PiStorm continues to work behind its platform backend;
+- tests and traces demonstrate zero fault-originated normal bus transactions.
+
+Until every condition holds, the API status remains **not implemented**, even
+if the current adapter builds, boots, logs callbacks, or reaches an AROS screen.
