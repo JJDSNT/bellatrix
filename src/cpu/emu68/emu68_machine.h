@@ -91,11 +91,15 @@ typedef struct emu68_bus_access {
 
 typedef emu68_bus_result_t (*emu68_bus_access_fn)(
     void *opaque, emu68_bus_access_t *access);
+typedef void (*emu68_progress_fn)(
+    void *opaque, uint64_t cycle_delta, uint64_t instruction_delta,
+    uint32_t pc);
 
 typedef struct emu68_machine_ops {
     uint32_t abi_version;
     size_t struct_size;
     emu68_bus_access_fn bus_access;
+    emu68_progress_fn progress;
 } emu68_machine_ops_t;
 
 typedef struct emu68_machine_config {

@@ -2,6 +2,7 @@
 
 #include "cpu/cpu_bridge.h"
 #include "cpu/emu68/bellatrix.h"
+#include "cpu/emu68/emu68_backend.h"
 #include "cpu/musashi/musashi_backend.h"
 #include "host/pal.h"
 #include "runtime/core_chipset.h"

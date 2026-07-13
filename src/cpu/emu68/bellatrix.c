@@ -4,6 +4,7 @@
 // Routes every unmapped M68K bus access to the appropriate chipset module.
 
 #include "cpu/emu68/bellatrix.h"
+#include "cpu/emu68/emu68_backend.h"
 #include "cpu/emu68/bellatrix_profile.h"
 #include "cpu/cpu_bridge.h"
 #include "runtime/runtime.h"
@@ -49,8 +50,8 @@ uint32_t g_bela_irq_deliver_ring[8];
 #endif
 
 extern struct M68KState *__m68k_state;
-/* The CPU backend lives in emu68_backend.c. This file owns the Bellatrix
- * environment and the bus implementation offered to that backend. */
+/* This file owns the Bellatrix environment and the bus implementation offered
+ * to CPU backends. Emu68 CPU ownership lives in emu68_backend.c. */
 
 void bellatrix_machine_advance_cpu_cycles(uint32_t cycles);
 
@@ -433,6 +434,23 @@ void bellatrix_machine_advance_cpu_cycles(uint32_t cycles)
 #endif
 }
 
+void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
+                                         uint64_t instructions,
+                                         uint32_t pc)
+{
+    uint32_t publish_cycles = cycles > UINT32_MAX ?
+        UINT32_MAX : (uint32_t)cycles;
+
+    (void)instructions;
+    g_bellatrix_exec_pc = pc;
+    if (publish_cycles == 0u)
+        return;
+    if (PAL_Core_IsMulticoreEnabled())
+        bellatrix_bridge_publish_cpu_cycles(publish_cycles);
+    else
+        bellatrix_machine_advance_cpu_cycles(publish_cycles);
+}
+
 void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
 {
     static uint64_t s_prev_cycle_count;
@@ -441,8 +459,6 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
     static uint32_t s_same_pc_reports;
 #endif
     uint32_t cycles = 0u;
-
-    g_bellatrix_exec_pc = pc;
 
     {
         uint64_t cycle_count = __m68k_state ? __m68k_state->CYCLE_COUNT : 0u;
@@ -454,12 +470,7 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
         cycles = delta > UINT32_MAX ? UINT32_MAX : (uint32_t)delta;
     }
 
-    if (cycles > 0u) {
-        if (PAL_Core_IsMulticoreEnabled())
-            bellatrix_bridge_publish_cpu_cycles(cycles);
-        else
-            bellatrix_machine_advance_cpu_cycles(cycles);
-    }
+    bellatrix_emu68_publish_cpu_progress(cycles, insn_count, pc);
 
     /* Safe liveness checkpoints: this function is called only while MainLoop
      * has spilled the pinned guest context. Keep diagnostics out of the live

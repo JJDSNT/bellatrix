@@ -1,8 +1,7 @@
 // src/variants/bellatrix/bellatrix.h
 //
-// Public interface between Emu68's fault handler and the Bellatrix
-// chipset emulator. This is the only header included by Emu68 code
-// (via the 0002 patch to vectors.c).
+// Bellatrix environment interface used by CPU backends and, until the
+// independent physical-infrastructure removal, the legacy Emu68 fault path.
 
 #ifndef _BELLATRIX_H
 #define _BELLATRIX_H
@@ -18,12 +17,11 @@ int  bellatrix_cpu_backend_owns_execution_loop(void);
 void bellatrix_run_selected_cpu_backend(void);
 void bellatrix_emu68_boards_reset(void);
 
-struct CpuBackend;
-struct CpuBackend *bellatrix_emu68_backend_get(void);
-void bellatrix_emu68_backend_init(void);
-int bellatrix_emu68_backend_set_overlay(int enabled);
 void bellatrix_machine_advance_cpu_cycles(uint32_t cycles);
 void bellatrix_emu68_publish_idle_cycles(uint32_t cycles);
+void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
+                                         uint64_t instructions,
+                                         uint32_t pc);
 
 // Single-core: calls entry() directly, forever, on the boot core (today's
 // behavior). Multicore: launches entry() on Core 1 and parks the boot core

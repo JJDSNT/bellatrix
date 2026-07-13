@@ -1,4 +1,5 @@
 #include "cpu/emu68/bellatrix.h"
+#include "cpu/emu68/emu68_backend.h"
 #include "cpu/emu68/emu68_machine.h"
 #include "cpu/cpu_backend.h"
 #include "machine/memory/memory.h"
@@ -231,6 +232,13 @@ static emu68_bus_result_t machine_bus_access(void *opaque,
     return EMU68_BUS_COMPLETE;
 }
 
+static void machine_progress(void *opaque, uint64_t cycle_delta,
+                             uint64_t instruction_delta, uint32_t pc)
+{
+    (void)opaque;
+    bellatrix_emu68_publish_cpu_progress(cycle_delta, instruction_delta, pc);
+}
+
 static uint32_t backend_get_pc(void *ctx)
 {
     (void)ctx;
@@ -341,6 +349,7 @@ void bellatrix_emu68_backend_init(void)
         .abi_version = EMU68_MACHINE_ABI_VERSION,
         .struct_size = sizeof(ops),
         .bus_access = machine_bus_access,
+        .progress = machine_progress,
     };
     emu68_machine_config_t config = {
         .abi_version = EMU68_MACHINE_ABI_VERSION,

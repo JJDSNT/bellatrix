@@ -13,6 +13,10 @@ static unsigned reset_calls;
 static unsigned wake_calls;
 static unsigned ipl_value;
 static unsigned callback_calls;
+static unsigned progress_calls;
+static uint64_t progress_cycles;
+static uint64_t progress_instructions;
+static uint32_t progress_pc;
 static uint64_t platform_instructions;
 static uint32_t platform_pc;
 static int platform_stopped;
@@ -136,12 +140,23 @@ static emu68_bus_result_t synchronous_access(void *opaque,
     return EMU68_BUS_COMPLETE;
 }
 
+static void synchronous_progress(void *opaque, uint64_t cycle_delta,
+                                 uint64_t instruction_delta, uint32_t pc)
+{
+    CHECK(opaque == (void *)0x1234u);
+    ++progress_calls;
+    progress_cycles += cycle_delta;
+    progress_instructions += instruction_delta;
+    progress_pc = pc;
+}
+
 static emu68_cpu_t *create_cpu(emu68_execution_mode_t mode)
 {
     static const emu68_machine_ops_t ops = {
         .abi_version = EMU68_MACHINE_ABI_VERSION,
         .struct_size = sizeof(ops),
         .bus_access = synchronous_access,
+        .progress = synchronous_progress,
     };
     emu68_machine_config_t config = {
         .abi_version = EMU68_MACHINE_ABI_VERSION,
@@ -335,11 +350,19 @@ static void test_run_boundary(void)
     platform_instructions = 100u;
     platform_pc = 0x1000u;
     platform_stopped = 0;
+    progress_calls = 0u;
+    progress_cycles = 0u;
+    progress_instructions = 0u;
+    progress_pc = 0u;
     CHECK(emu68_machine_run(cpu, 64u, &result) == EMU68_OK);
     CHECK(result.reason == EMU68_STOP_BUDGET);
     CHECK(result.instructions_executed == 10u);
     CHECK(result.cycles_executed == 80u);
     CHECK(result.pc == 0x1014u);
+    CHECK(progress_calls == 1u);
+    CHECK(progress_cycles == 80u);
+    CHECK(progress_instructions == 10u);
+    CHECK(progress_pc == 0x1014u);
 
     result.abi_version = EMU68_MACHINE_ABI_VERSION;
     result.struct_size = sizeof(result);

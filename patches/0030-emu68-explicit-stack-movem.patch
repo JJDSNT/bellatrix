@@ -259,37 +259,6 @@ index 4ed0d5f..45bd702 100644
  
      RA_SetDirtyM68kRegister(&ptr, 8 + (opcode & 7));
      RA_SetDirtyM68kRegister(&ptr, 15);
-@@ -1535,6 +1541,22 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
-     *ptr++ = b(2);
-     *ptr++ = mov_simd_to_reg(sp, 31, TS_S, 2);  // Load ISP
- 
-+#ifdef BELLATRIX
-+    /* Bellatrix is embedded: STOP yields to its scheduler instead of sleeping
-+     * on a physical ARM interrupt. Retire STOP exactly once, leave PC at the
-+     * following instruction and publish explicit architectural state. */
-+    {
-+        uint8_t tmpreg = RA_AllocARMRegister(&ptr);
-+        uint8_t ctx = RA_GetCTX(&ptr);
-+
-+        *ptr++ = mov_immed_u16(tmpreg, 1, 0);
-+        *ptr++ = str_offset(ctx, tmpreg,
-+                            __builtin_offsetof(struct M68KState, STOPPED));
-+        *ptr++ = add_immed(REG_PC, REG_PC, 4);
-+
-+        RA_FreeARMRegister(&ptr, tmpreg);
-+    }
-+#else
-     /* Now do what stop does - wait for interrupt */
-     *ptr++ = add_immed(REG_PC, REG_PC, 4);
- 
-@@ -1568,6 +1590,7 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
- 
-     RA_FreeARMRegister(&ptr, tmpreg);
- #endif
-+#endif /* BELLATRIX */
- 
-     *tmpptr = b(ptr - tmpptr);
- 
 @@ -1610,7 +1633,7 @@ static uint32_t *EMIT_RTE(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr, u
      ptr++;
  

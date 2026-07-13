@@ -39,6 +39,8 @@ struct emu68_cpu {
     uint64_t run_start_cycles;
     uint64_t run_instructions;
     uint64_t run_cycles;
+    uint64_t run_published_instructions;
+    uint64_t run_published_cycles;
     uint32_t run_pc;
     emu68_bus_access_t fault_access;
     uint32_t fault_pc;
@@ -62,6 +64,34 @@ uint8_t emu68_machine_read_pages[EMU68_MACHINE_PAGE_COUNT];
 uint8_t emu68_machine_write_pages[EMU68_MACHINE_PAGE_COUNT];
 
 static struct emu68_cpu machine_cpu;
+
+static void publish_progress(uint64_t instructions, uint64_t cycles,
+                             uint32_t pc)
+{
+    uint64_t run_instructions;
+    uint64_t run_cycles;
+    uint64_t instruction_delta;
+    uint64_t cycle_delta;
+
+    if (!machine_cpu.running)
+        return;
+    run_instructions = instructions >= machine_cpu.run_start_instructions ?
+        instructions - machine_cpu.run_start_instructions : 0u;
+    run_cycles = cycles >= machine_cpu.run_start_cycles ?
+        cycles - machine_cpu.run_start_cycles : 0u;
+    instruction_delta =
+        run_instructions - machine_cpu.run_published_instructions;
+    cycle_delta = run_cycles - machine_cpu.run_published_cycles;
+    machine_cpu.run_instructions = run_instructions;
+    machine_cpu.run_cycles = run_cycles;
+    machine_cpu.run_pc = pc;
+    machine_cpu.run_published_instructions = run_instructions;
+    machine_cpu.run_published_cycles = run_cycles;
+    if ((instruction_delta != 0u || cycle_delta != 0u) &&
+        machine_cpu.ops.progress)
+        machine_cpu.ops.progress(machine_cpu.opaque, cycle_delta,
+                                 instruction_delta, pc);
+}
 
 static void put_be16(uint8_t *p, uint16_t value)
 {
@@ -415,6 +445,9 @@ emu68_status_t emu68_machine_classify_access(
 emu68_bus_result_t emu68_machine_dispatch_access(emu68_bus_access_t *access)
 {
     emu68_machine_access_result_t classification;
+    uint64_t instructions = 0u;
+    uint64_t cycles = 0u;
+    uint32_t pc = 0u;
 
     if (!machine_cpu.active || !access ||
         emu68_machine_classify_access(access->address, access->width,
@@ -427,6 +460,8 @@ emu68_bus_result_t emu68_machine_dispatch_access(emu68_bus_access_t *access)
     access->struct_size = sizeof(*access);
     access->region_id = classification.region_id;
     access->sequence = machine_cpu.next_sequence++;
+    emu68_machine_platform_snapshot(&instructions, &cycles, &pc, NULL);
+    publish_progress(instructions, cycles, pc);
     if (machine_cpu.mode == EMU68_EXEC_SYNCHRONOUS) {
         if (!machine_cpu.ops.bus_access)
             return EMU68_BUS_ERROR;
@@ -703,6 +738,7 @@ int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
     machine_cpu.run_cycles = modeled_cycles >= machine_cpu.run_start_cycles ?
         modeled_cycles - machine_cpu.run_start_cycles : 0u;
     machine_cpu.run_pc = pc;
+    publish_progress(retired_instructions, modeled_cycles, pc);
     machine_cpu.stopped = stopped != 0;
     return machine_cpu.pending || machine_cpu.bus_error_pending ||
            machine_cpu.stopped ||
@@ -774,13 +810,16 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
     machine_cpu.run_start_cycles = cycles;
     machine_cpu.run_instructions = 0u;
     machine_cpu.run_cycles = 0u;
+    machine_cpu.run_published_instructions = 0u;
+    machine_cpu.run_published_cycles = 0u;
     machine_cpu.run_pc = pc;
     machine_cpu.stopped = 0u;
     machine_cpu.running = 1u;
     emu68_machine_platform_run();
-    machine_cpu.running = 0u;
 
     emu68_machine_platform_snapshot(&instructions, &cycles, &pc, &stopped);
+    publish_progress(instructions, cycles, pc);
+    machine_cpu.running = 0u;
     if (instructions >= machine_cpu.run_start_instructions)
         machine_cpu.run_instructions =
             instructions - machine_cpu.run_start_instructions;

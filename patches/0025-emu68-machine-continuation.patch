@@ -1,53 +1,6 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -4,5 +4,12 @@
- #ifdef BELLATRIX
- #include "cpu/emu68/bellatrix.h"
-+extern int emu68_machine_prepare_native_resume(void);
-+extern int emu68_machine_native_access_pending(void);
-+extern int emu68_machine_native_bus_error_pending(void);
-+extern int emu68_machine_enter_bus_error(void);
-+extern int emu68_machine_instruction_fetch_allowed(uint32_t, uint8_t);
-+extern int emu68_machine_dispatch_quantum_progress(uint64_t, uint32_t);
-+extern void emu68_machine_resume_native(void);
- #endif
- #ifdef PISTORM
- #ifndef PISTORM32
-@@ -147,7 +154,33 @@ void MainLoop()
-         LastPC = getLastPC();
-         ctx = getCTX();
- 
- #ifdef BELLATRIX
-+        if (!emu68_machine_instruction_fetch_allowed((uint32_t)(uintptr_t)PC,
-+                                                      2u)) {
-+            M68K_SaveContext(ctx);
-+            if (emu68_machine_enter_bus_error()) {
-+                M68K_LoadContext(ctx);
-+                continue;
-+            }
-+            return;
-+        }
-+        if (emu68_machine_prepare_native_resume()) {
-+            emu68_machine_resume_native();
-+            continue;
-+        }
-+        if (emu68_machine_native_access_pending()) {
-+            M68K_SaveContext(ctx);
-+            return;
-+        }
-+        if (emu68_machine_native_bus_error_pending()) {
-+            M68K_SaveContext(ctx);
-+            if (emu68_machine_enter_bus_error()) {
-+                M68K_LoadContext(ctx);
-+                continue;
-+            }
-+            return;
-+        }
-+
-         /* Advance the Bellatrix chipset on every pass through the loop, not
-          * only on MMIO faults. Without this, guest phases that touch no
-          * unmapped address (RAM-only loops, Wait/STOP idling) freeze chipset
 @@ -439,6 +474,8 @@ void MainLoop()
                  node = M68K_GetTranslationUnit(copyPC);
                  /* Load CPU context */
