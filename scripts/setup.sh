@@ -197,6 +197,7 @@ EMU68_PATCHES=(
     "$PATCHES/0028-emu68-explicit-fetch-and-exception.patch"
     "$PATCHES/0029-emu68-explicit-special-access.patch"
     "$PATCHES/0030-emu68-explicit-stack-movem.patch"
+    "$PATCHES/0031-emu68-explicit-line0-access.patch"
 )
 
 CHERRYUSB_PATCHES=(

@@ -1,8 +1,8 @@
 diff --git a/include/M68k.h b/include/M68k.h
-index 7372256..9794af5 100644
+index 7372256..50bb6a3 100644
 --- a/include/M68k.h
 +++ b/include/M68k.h
-@@ -17,6 +17,139 @@
+@@ -17,6 +17,142 @@
  #include "md5.h"
  #include "lists.h"
  
@@ -12,22 +12,25 @@ index 7372256..9794af5 100644
 +#define EMU68_GUEST_LOAD(ptr, address, value, width, sign_extend)             \
 +    do {                                                                      \
 +        (ptr) = emu68_machine_emit_load((ptr), (address), (value), (width),   \
-+                                        (sign_extend), 0u);                   \
++                                        (sign_extend),                       \
++                                        emu68_machine_translation_metadata); \
 +    } while (0)
 +#define EMU68_GUEST_STORE(ptr, address, value, width)                         \
 +    do {                                                                      \
 +        (ptr) = emu68_machine_emit_store((ptr), (address), (value), (width), \
-+                                         0u);                                 \
++                                         emu68_machine_translation_metadata); \
 +    } while (0)
 +#define EMU68_GUEST_LOAD_OFFSET(ptr, base, offset, value, width, sign_extend) \
 +    do {                                                                      \
 +        (ptr) = emu68_machine_emit_load_offset(                              \
-+            (ptr), (base), (offset), (value), (width), (sign_extend), 0u);   \
++            (ptr), (base), (offset), (value), (width), (sign_extend),        \
++            emu68_machine_translation_metadata);                             \
 +    } while (0)
 +#define EMU68_GUEST_STORE_OFFSET(ptr, base, offset, value, width)             \
 +    do {                                                                      \
 +        (ptr) = emu68_machine_emit_store_offset(                             \
-+            (ptr), (base), (offset), (value), (width), 0u);                  \
++            (ptr), (base), (offset), (value), (width),                       \
++            emu68_machine_translation_metadata);                             \
 +    } while (0)
 +#else
 +#define BELLATRIX_MACHINE_API_ACTIVE 0
@@ -142,7 +145,7 @@ index 7372256..9794af5 100644
  struct M68KLocalState {
      void *          mls_M68kPtr;
      uint32_t        mls_ARMOffset;
-@@ -116,6 +249,11 @@ struct M68KState
+@@ -116,6 +252,11 @@ struct M68KState
      };
      uint64_t INSN_COUNT;
  

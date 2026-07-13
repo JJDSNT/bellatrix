@@ -116,6 +116,14 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
     }
 }
 
+uint8_t emu68_machine_platform_source_function_code(int destination)
+{
+    if (!__m68k_state)
+        return 0u;
+    return destination ? (__m68k_state->DFC & 7u) :
+                         (__m68k_state->SFC & 7u);
+}
+
 emu68_status_t emu68_machine_platform_get_arch_state(
     emu68_machine_arch_state_t *state)
 {

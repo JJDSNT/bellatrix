@@ -448,6 +448,10 @@ static uint8_t current_function_code(emu68_address_space_t space,
                   EMU68_BRIDGE_META_FC_SHIFT);
     uint32_t sr = 0u;
 
+    if (metadata & EMU68_BRIDGE_META_USE_SFC)
+        return emu68_machine_platform_source_function_code(0);
+    if (metadata & EMU68_BRIDGE_META_USE_DFC)
+        return emu68_machine_platform_source_function_code(1);
     if (explicit_fc != 0u)
         return explicit_fc;
 #ifdef __aarch64__
@@ -483,6 +487,13 @@ emu68_machine_bridge_result_t emu68_machine_bridge_dispatch(
     machine_cpu.fault_access.space = space;
     machine_cpu.fault_access.function_code =
         current_function_code(space, metadata);
+    if (metadata & (EMU68_BRIDGE_META_USE_SFC |
+                    EMU68_BRIDGE_META_USE_DFC)) {
+        uint8_t fc = machine_cpu.fault_access.function_code;
+        space = fc == 7u ? EMU68_SPACE_CPU :
+                ((fc & 3u) == 2u ? EMU68_SPACE_PROGRAM : EMU68_SPACE_DATA);
+        machine_cpu.fault_access.space = space;
+    }
     machine_cpu.fault_access.width = width;
     machine_cpu.fault_pc = native_frame ?
         (uint32_t)((const uint64_t *)native_frame)[16] : machine_cpu.run_pc;

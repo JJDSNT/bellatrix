@@ -5,6 +5,8 @@
 #include "A64.h"
 #include "RegisterAllocator.h"
 
+uint32_t emu68_machine_translation_metadata;
+
 static uint32_t *emit_pointer(uint32_t *ptr, uint8_t reg, uintptr_t value)
 {
     *ptr++ = mov64_immed_u16(reg, (uint16_t)value, 0);

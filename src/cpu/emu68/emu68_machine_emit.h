@@ -3,6 +3,13 @@
 
 #include <stdint.h>
 
+enum {
+    EMU68_MACHINE_META_USE_SFC = 1u << 14,
+    EMU68_MACHINE_META_USE_DFC = 1u << 15
+};
+
+extern uint32_t emu68_machine_translation_metadata;
+
 uint32_t *emu68_machine_emit_load(uint32_t *ptr, uint8_t address_reg,
                                   uint8_t value_reg, uint8_t width,
                                   int sign_extend, uint32_t metadata);
