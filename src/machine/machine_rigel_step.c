@@ -29,6 +29,13 @@
 #include "rigel/rigel_serial.h"
 #include "host/raspi3/console_log.h"
 #include "host/raspi3/hdmi_audio.h"
+#ifdef BELLATRIX_LAUNCHER
+#include "launcher/launcher.h"
+#endif
+
+#ifndef BELLATRIX_ENABLE_HDMI_AUDIO
+#define BELLATRIX_ENABLE_HDMI_AUDIO 0
+#endif
 
 #ifdef BELLATRIX_HARNESS
 #include <stdio.h>
@@ -845,6 +852,13 @@ void bellatrix_machine_on_frame_ready(void)
     g_machine.frame_counter++;
     machine_mouse_frame_tick();
     osd_set_machine_frame(g_machine.frame_counter);
+    /* Runtime launcher screens share the physical framebuffer with Rigel.
+     * Keep CPU/chipset/frame accounting alive, but preserve the modal until
+     * Core 3 closes it; the next completed frame restores the guest image. */
+#ifdef BELLATRIX_LAUNCHER
+    if (launcher_runtime_modal_active())
+        return;
+#endif
     machine_present_frame_from_rigel();
 
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE

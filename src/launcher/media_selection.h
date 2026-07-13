@@ -10,3 +10,9 @@
 // Returns true if a disk was inserted; false if the user skipped (ESC) or no
 // media was found.
 bool media_selection_run(void);
+
+// Runtime modal lifecycle. Runtime selection is intentionally ADF-only until
+// HDF/ISO hot-swap ownership has an equally explicit safe boundary.
+bool media_selection_runtime_open(void);
+bool media_selection_runtime_step(void); // true while modal remains active
+void media_selection_runtime_close(void);

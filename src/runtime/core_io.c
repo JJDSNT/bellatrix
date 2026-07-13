@@ -17,6 +17,9 @@
 #include "debug/core_log.h"
 #include "host/pal.h"
 #include "host/raspi3/console_log.h"
+#ifdef BELLATRIX_LAUNCHER
+#include "launcher/launcher.h"
+#endif
 
 #define CORE_IO_SERIAL_QUEUE_SIZE 1024u
 #define CORE_IO_SERIAL_QUEUE_MASK (CORE_IO_SERIAL_QUEUE_SIZE - 1u)
@@ -294,4 +297,7 @@ void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
     extern BellatrixRuntime g_runtime;
     core_io_step(&g_runtime.io, now, freq);
+#ifdef BELLATRIX_LAUNCHER
+    launcher_runtime_step();
+#endif
 }

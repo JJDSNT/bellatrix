@@ -19,3 +19,7 @@
 bool launcher_run(void);
 
 /* launcher_save_bt_report() (BTSCAN.TXT diagnostics) now lives in btscan.h. */
+// Core-3 runtime dispatcher. HID callbacks only publish actions; this step
+// owns modal lifecycle after the normal host-reactor pass.
+void launcher_runtime_step(void);
+bool launcher_runtime_modal_active(void);

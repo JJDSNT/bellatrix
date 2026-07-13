@@ -21,7 +21,19 @@
 // BT service glue, implemented in the runtime IO layer.
 void bellatrix_launcher_pump_bt(void);
 void bellatrix_launcher_bt_open_pairing(void);
+void bellatrix_launcher_bt_close_pairing(void);
 int  bellatrix_launcher_bt_ready(void);
+
+static bool s_bt_runtime_active;
+static bool s_bt_runtime_working;
+static bool s_bt_runtime_sd_ok;
+static bool s_bt_runtime_connect_selected;
+static uint32_t s_bt_runtime_last_gen;
+static uint64_t s_bt_runtime_started;
+static uint64_t s_bt_runtime_connect_started;
+static bool s_bt_runtime_connect_pending;
+static uint8_t s_bt_runtime_selected_addr[6];
+static Fat32State s_bt_runtime_fs;
 
 // ---------------------------------------------------------------------------
 // Address formatting
@@ -93,7 +105,9 @@ static void bt_draw_scan_chrome(void)
     fb_puts(lui_margin_x, H - lui_status_h + (lui_status_h - lui_char) / 2u,
             build_tag, COL_TEXT, COL_STATUS_BG);
     fb_puts_centred(0, W, H - lui_status_h + (lui_status_h - lui_char) / 2u,
-                    "UP/DOWN=select  ENTER=pair/unpair  ESC=boot",
+                    s_bt_runtime_active
+                        ? "UP/DOWN=select  ENTER=confirm/close  ESC=cancel"
+                        : "UP/DOWN=select  ENTER=pair/unpair  ESC=boot",
                     COL_TEXT, COL_STATUS_BG);
 }
 
@@ -378,6 +392,150 @@ static void bt_pairs_save_to_sd(Fat32State *fs)
 // ---------------------------------------------------------------------------
 // Scan screen
 // ---------------------------------------------------------------------------
+
+bool btscan_runtime_open(void)
+{
+    if (s_bt_runtime_active || s_bt_runtime_connect_pending)
+        return false;
+
+    s_bt_runtime_active = true;
+    s_bt_runtime_working = bellatrix_launcher_bt_ready() != 0;
+    s_bt_runtime_connect_selected = false;
+    memset(s_bt_runtime_selected_addr, 0,
+           sizeof(s_bt_runtime_selected_addr));
+    s_bt_cursor = 0u;
+    s_bt_runtime_last_gen = 0xFFFFFFFFu;
+    s_bt_runtime_started = PAL_Time_ReadCounter();
+
+    /* Runtime reopen uses the in-memory pair/key databases already owned by
+     * BT. Mount SD only as the persistence target; reloading here could erase
+     * a link key learned after boot. */
+    s_bt_runtime_sd_ok = bcm_emmc_init() &&
+        fat32_init_with_reader(&s_bt_runtime_fs, sd_read_block_cb, NULL);
+    if (s_bt_runtime_sd_ok)
+        fat32_set_writer(&s_bt_runtime_fs, sd_write_block_cb, NULL);
+
+    if (s_bt_runtime_working) {
+        bellatrix_launcher_bt_open_pairing();
+        bt_scan_start();
+    }
+
+    bt_draw_scan_chrome();
+    if (!s_bt_runtime_working)
+        fb_puts(lui_margin_x, lui_title_h + 4u,
+                "controller unavailable - ESC to close",
+                COL_CURSOR_BG, COL_BG);
+    bt_draw_scan_rows();
+    return true;
+}
+
+void btscan_runtime_close(bool confirmed)
+{
+    if (!s_bt_runtime_active)
+        return;
+
+    if (s_bt_runtime_working)
+        bt_scan_stop();
+
+    if (confirmed && s_bt_runtime_connect_selected) {
+        /* Pairing and connection outlive the screen. The reactor advances
+         * authentication after the framebuffer modal has closed. */
+        bellatrix_launcher_bt_prepare_pairing(
+            s_bt_runtime_selected_addr);
+        s_bt_runtime_connect_started = PAL_Time_ReadCounter();
+        s_bt_runtime_connect_pending = true;
+    } else {
+        bellatrix_launcher_bt_close_pairing();
+    }
+
+    if (s_bt_runtime_sd_ok)
+        bt_pairs_save_to_sd(&s_bt_runtime_fs);
+
+    s_bt_runtime_active = false;
+}
+
+void btscan_runtime_background_step(void)
+{
+    if (!s_bt_runtime_connect_pending)
+        return;
+    /* Inquiry cancel is asynchronous. Preserve the proven ordering without
+     * keeping the modal open or spinning Core 0 waiting for HCI completion. */
+    if (launcher_ms_since(s_bt_runtime_connect_started) < 200u)
+        return;
+    s_bt_runtime_connect_pending = false;
+    bellatrix_launcher_bt_connect_now();
+}
+
+bool btscan_runtime_step(void)
+{
+    if (!s_bt_runtime_active)
+        return false;
+
+    uint8_t key = launcher_input_pop();
+    bool redraw = false;
+
+    if (key == LAUNCHER_KEY_ESC) {
+        btscan_runtime_close(false);
+        return false;
+    }
+
+    if (key == LAUNCHER_KEY_ENTER || key == LAUNCHER_KEY_KPENTER) {
+        unsigned count = bt_scan_count();
+        if (count > 0u) {
+            const BTScanResult *r = bt_scan_get(s_bt_cursor);
+            if (r) {
+                if (bt_pairs_is_known(r->addr)) {
+                    bt_pairs_remove(r->addr);
+                } else {
+                    (void)bt_pairs_add(r);
+                    memcpy(s_bt_runtime_selected_addr, r->addr,
+                           sizeof(s_bt_runtime_selected_addr));
+                    s_bt_runtime_connect_selected = true;
+                }
+            }
+        }
+        btscan_runtime_close(true);
+        return false;
+    }
+
+    if ((key == LAUNCHER_KEY_DEL || key == LAUNCHER_KEY_BKSP) &&
+        bt_scan_count() > 0u) {
+        const BTScanResult *r = bt_scan_get(s_bt_cursor);
+        if (r && bt_pairs_is_known(r->addr)) {
+            bt_pairs_remove(r->addr);
+            redraw = true;
+        }
+    }
+
+    if (key == LAUNCHER_KEY_UP && s_bt_cursor > 0u) {
+        s_bt_cursor--;
+        redraw = true;
+    }
+    if (key == LAUNCHER_KEY_DOWN &&
+        s_bt_cursor + 1u < bt_scan_count()) {
+        s_bt_cursor++;
+        redraw = true;
+    }
+
+    uint32_t generation = bt_scan_generation();
+    if (generation != s_bt_runtime_last_gen) {
+        s_bt_runtime_last_gen = generation;
+        unsigned count = bt_scan_count();
+        if (count > 0u && s_bt_cursor >= count)
+            s_bt_cursor = count - 1u;
+        redraw = true;
+    }
+
+    if (redraw)
+        bt_draw_scan_rows();
+
+    uint32_t timeout_ms = s_bt_runtime_working ? 90000u : 12000u;
+    if (launcher_ms_since(s_bt_runtime_started) >= timeout_ms) {
+        btscan_runtime_close(false);
+        return false;
+    }
+    return true;
+}
 
 // Run the scan screen until the user continues or ~90 s elapse.
 // Shown even when the controller bootstrap failed, so the failure is

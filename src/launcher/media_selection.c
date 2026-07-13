@@ -8,6 +8,7 @@
 #include "storage/fat/fat32.h"
 #include "storage/iso/iso_image.h"
 #include "host/pal.h"
+#include "runtime/core_chipset.h"
 #if BELLATRIX_ENABLE_USBSTACK
 #include "io/usb/usb_msc_bellatrix.h"
 #endif
@@ -46,6 +47,31 @@ typedef struct {
     MediaType type;
     bool      selected;
 } MediaEntry;
+
+typedef enum RuntimeMediaPhase {
+    RUNTIME_MEDIA_CLOSED = 0,
+    RUNTIME_MEDIA_WAIT_MSC,
+    RUNTIME_MEDIA_SELECT,
+    RUNTIME_MEDIA_EMPTY,
+    RUNTIME_MEDIA_APPLY_OPEN,
+    RUNTIME_MEDIA_APPLY_READ,
+    RUNTIME_MEDIA_APPLY_COMMIT,
+    RUNTIME_MEDIA_ERROR,
+} RuntimeMediaPhase;
+
+static RuntimeMediaPhase s_runtime_phase;
+static MediaEntry s_runtime_entries[MAX_FILES];
+static uint32_t s_runtime_count;
+static uint32_t s_runtime_cursor;
+static uint32_t s_runtime_scroll;
+static uint64_t s_runtime_started;
+static uint32_t s_runtime_apply_index;
+static uint32_t s_runtime_apply_drive;
+static uint32_t s_runtime_loaded;
+#if BELLATRIX_ENABLE_USBSTACK
+static char s_runtime_names[MAX_FILES][FAT32_NAME_MAX];
+static Fat32File s_runtime_adf_file;
+#endif
 
 // ---------------------------------------------------------------------------
 // Media type filter — the FAT32 layer lists everything; deciding what is
@@ -169,7 +195,9 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
     // Title bar
     fb_fill_rect(0, 0, W, lui_title_h, COL_TITLE_BG);
     fb_puts_centred(0, W, (lui_title_h - lui_char) / 2u,
-                    "BELLATRIX LAUNCHER  --  Select media (ISO, HDF, up to 4 ADF):",
+                    s_runtime_phase != RUNTIME_MEDIA_CLOSED
+                        ? "BELLATRIX MEDIA  --  Select up to 4 ADFs"
+                        : "BELLATRIX LAUNCHER  --  Select media (ISO, HDF, up to 4 ADF):",
                     COL_TEXT, COL_TITLE_BG);
 
     // File list
@@ -215,7 +243,9 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
         while (tmp) { dbuf[nd++] = (char)('0' + tmp % 10u); tmp /= 10u; }
         for (unsigned d = nd; d > 0u; d--) hint[n_chars++] = dbuf[d - 1u];
     }
-    const char *suffix = "  |  UP/DOWN: navigate  |  SPACE: mark  |  ENTER: boot  |  ESC: no disk";
+    const char *suffix = s_runtime_phase != RUNTIME_MEDIA_CLOSED
+        ? "  |  UP/DOWN: navigate  |  SPACE: mark  |  ENTER: insert/close  |  ESC: cancel"
+        : "  |  UP/DOWN: navigate  |  SPACE: mark  |  ENTER: boot  |  ESC: no disk";
     for (const char *p = suffix; *p; p++) hint[n_chars++] = *p;
     hint[n_chars] = '\0';
 
@@ -229,6 +259,7 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
 // ---------------------------------------------------------------------------
 
 static uint8_t s_adf_buf[MAX_ADF_SELECTIONS][ADF_BUF_SIZE] __attribute__((aligned(512)));
+static uint8_t s_adf_stage[ADF_BUF_SIZE] __attribute__((aligned(512)));
 
 #if BELLATRIX_ENABLE_USBSTACK
 static Fat32State s_fat32;
@@ -262,6 +293,192 @@ static int fat32_hdf_read_cb(void *ctx, uint32_t lba, uint32_t count, uint8_t *d
     return fat32_read(f, dst, want) == want ? 0 : -1;
 }
 #endif /* BELLATRIX_ENABLE_USBSTACK */
+
+static uint32_t media_runtime_scan_adfs(void)
+{
+    s_runtime_count = 0u;
+#if BELLATRIX_ENABLE_USBSTACK
+    if (!usb_msc_is_ready() || !fat32_init_usb(&s_fat32))
+        return 0u;
+
+    uint32_t n_files = fat32_list(&s_fat32, s_runtime_names, MAX_FILES);
+    for (uint32_t i = 0u; i < n_files && s_runtime_count < MAX_FILES; i++) {
+        if (!name_has_ext(s_runtime_names[i], ".adf"))
+            continue;
+        MediaEntry *entry = &s_runtime_entries[s_runtime_count++];
+        memcpy(entry->name, s_runtime_names[i], FAT32_NAME_MAX);
+        entry->type = MEDIA_ADF;
+        entry->selected = false;
+    }
+    sort_media_entries(s_runtime_entries, s_runtime_count);
+    kprintf("[LAUNCHER] runtime media: %u files, %u ADFs\n",
+            (unsigned)n_files, (unsigned)s_runtime_count);
+#endif
+    return s_runtime_count;
+}
+
+bool media_selection_runtime_open(void)
+{
+    if (s_runtime_phase != RUNTIME_MEDIA_CLOSED)
+        return false;
+
+    s_runtime_count = 0u;
+    s_runtime_cursor = 0u;
+    s_runtime_scroll = 0u;
+    s_runtime_started = PAL_Time_ReadCounter();
+    s_runtime_phase = RUNTIME_MEDIA_WAIT_MSC;
+    while (launcher_input_pop() != 0u) {}
+    draw_message("Scanning USB media...", COL_TITLE_BG);
+    return true;
+}
+
+void media_selection_runtime_close(void)
+{
+    s_runtime_phase = RUNTIME_MEDIA_CLOSED;
+}
+
+static void media_runtime_fail(const char *message)
+{
+    kprintf("[LAUNCHER] runtime media failed: %s\n", message);
+    draw_message(message, COL_STATUS_BG);
+    s_runtime_phase = RUNTIME_MEDIA_ERROR;
+}
+
+bool media_selection_runtime_step(void)
+{
+    if (s_runtime_phase == RUNTIME_MEDIA_CLOSED)
+        return false;
+
+    uint8_t key = launcher_input_pop();
+    if (key == LAUNCHER_KEY_ESC) {
+        media_selection_runtime_close();
+        return false;
+    }
+
+    if (s_runtime_phase == RUNTIME_MEDIA_WAIT_MSC) {
+#if BELLATRIX_ENABLE_USBSTACK
+        if (usb_msc_is_ready()) {
+            if (media_runtime_scan_adfs() != 0u) {
+                s_runtime_phase = RUNTIME_MEDIA_SELECT;
+                draw_frame(s_runtime_count, s_runtime_cursor,
+                           s_runtime_scroll, s_runtime_entries);
+            } else {
+                s_runtime_phase = RUNTIME_MEDIA_EMPTY;
+                draw_message("No ADF media found. ENTER/ESC closes.",
+                             COL_STATUS_BG);
+            }
+        } else
+#endif
+        if (launcher_ms_since(s_runtime_started) >= 5000u) {
+            s_runtime_phase = RUNTIME_MEDIA_EMPTY;
+            draw_message("USB media unavailable. ENTER/ESC closes.",
+                         COL_STATUS_BG);
+        }
+        return true;
+    }
+
+    if (s_runtime_phase == RUNTIME_MEDIA_EMPTY ||
+        s_runtime_phase == RUNTIME_MEDIA_ERROR) {
+        if (key == LAUNCHER_KEY_ENTER || key == LAUNCHER_KEY_KPENTER) {
+            media_selection_runtime_close();
+            return false;
+        }
+        return true;
+    }
+
+    if (s_runtime_phase == RUNTIME_MEDIA_SELECT) {
+        bool redraw = false;
+        if (key == LAUNCHER_KEY_UP && s_runtime_cursor > 0u) {
+            s_runtime_cursor--;
+            if (s_runtime_cursor < s_runtime_scroll)
+                s_runtime_scroll = s_runtime_cursor;
+            redraw = true;
+        } else if (key == LAUNCHER_KEY_DOWN &&
+                   s_runtime_cursor + 1u < s_runtime_count) {
+            s_runtime_cursor++;
+            if (s_runtime_cursor >= s_runtime_scroll + lui_visible_rows)
+                s_runtime_scroll = s_runtime_cursor - lui_visible_rows + 1u;
+            redraw = true;
+        } else if (key == LAUNCHER_KEY_SPACE) {
+            toggle_media_selection(s_runtime_entries, s_runtime_count,
+                                   s_runtime_cursor);
+            redraw = true;
+        } else if (key == LAUNCHER_KEY_ENTER ||
+                   key == LAUNCHER_KEY_KPENTER) {
+            if (!any_media_selected(s_runtime_entries, s_runtime_count))
+                toggle_media_selection(s_runtime_entries, s_runtime_count,
+                                       s_runtime_cursor);
+            s_runtime_apply_index = 0u;
+            s_runtime_apply_drive = 0u;
+            s_runtime_phase = RUNTIME_MEDIA_APPLY_OPEN;
+            draw_message("Loading selected ADF...", COL_TITLE_BG);
+        }
+        if (redraw)
+            draw_frame(s_runtime_count, s_runtime_cursor,
+                       s_runtime_scroll, s_runtime_entries);
+        return true;
+    }
+
+#if BELLATRIX_ENABLE_USBSTACK
+    if (s_runtime_phase == RUNTIME_MEDIA_APPLY_OPEN) {
+        while (s_runtime_apply_index < s_runtime_count &&
+               !s_runtime_entries[s_runtime_apply_index].selected)
+            s_runtime_apply_index++;
+        if (s_runtime_apply_index >= s_runtime_count) {
+            media_selection_runtime_close();
+            return false;
+        }
+
+        const MediaEntry *entry =
+            &s_runtime_entries[s_runtime_apply_index];
+        if (!fat32_open(&s_fat32, entry->name, &s_runtime_adf_file) ||
+            s_runtime_adf_file.file_size == 0u ||
+            s_runtime_adf_file.file_size > ADF_BUF_SIZE) {
+            media_runtime_fail("ADF open/size failed. ENTER/ESC closes.");
+            return true;
+        }
+        s_runtime_loaded = 0u;
+        s_runtime_phase = RUNTIME_MEDIA_APPLY_READ;
+        return true;
+    }
+
+    if (s_runtime_phase == RUNTIME_MEDIA_APPLY_READ) {
+        uint32_t remaining = s_runtime_adf_file.file_size - s_runtime_loaded;
+        uint32_t chunk = remaining > 512u ? 512u : remaining;
+        uint32_t got = fat32_read(&s_runtime_adf_file,
+                                  s_adf_stage + s_runtime_loaded, chunk);
+        if (got != chunk) {
+            media_runtime_fail("ADF read failed. ENTER/ESC closes.");
+            return true;
+        }
+        s_runtime_loaded += got;
+        if (s_runtime_loaded == s_runtime_adf_file.file_size)
+            s_runtime_phase = RUNTIME_MEDIA_APPLY_COMMIT;
+        return true;
+    }
+
+    if (s_runtime_phase == RUNTIME_MEDIA_APPLY_COMMIT) {
+        core_chipset_lock_acquire();
+        memcpy(s_adf_buf[s_runtime_apply_drive], s_adf_stage,
+               s_runtime_loaded);
+        int inserted = bellatrix_machine_insert_df_adf(
+            s_runtime_apply_drive, s_adf_buf[s_runtime_apply_drive],
+            s_runtime_loaded);
+        core_chipset_lock_release();
+        if (!inserted) {
+            media_runtime_fail("ADF insert failed. ENTER/ESC closes.");
+            return true;
+        }
+        s_runtime_apply_drive++;
+        s_runtime_apply_index++;
+        s_runtime_phase = RUNTIME_MEDIA_APPLY_OPEN;
+        return true;
+    }
+#else
+    media_runtime_fail("USB support disabled. ENTER/ESC closes.");
+#endif
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // QEMU fallback: load media placed by "-device loader,addr=..."
