@@ -1,85 +1,82 @@
-# Emu68 Public Machine API — Current Architecture
+# Emu68 Public Machine API — Working Context
 
-The normative contract is
-[`docs/emu68_public_api.md`](../../docs/emu68_public_api.md). This context records
-the implemented architecture so future work does not confuse the public API
-with the legacy physical fault path.
+The normative, high-level contract is
+[`docs/emu68_public_api.md`](../../docs/emu68_public_api.md). This file records
+implementation and validation state; those details do not belong in the public
+document.
 
-## Status
+## Required architecture
 
-The fault-independent public machine API is implemented. Bellatrix selects it
-through `src/cpu/emu68/emu68_backend.c`; there is no compatibility fallback to
-the old fault-dispatch wrapper.
-
-The normal machine-profile access flow is:
+The normal machine-profile flow is:
 
 ```text
 translated 68k access
-    -> JIT classifies the complete normalized 32-bit access
+    -> normalize the complete 32-bit guest access
+    -> classify its full width and permission
        -> DIRECT: native AArch64 load/store
-       -> EXTERNAL: public callback or cooperative pending access
+       -> EXTERNAL: explicit callback or cooperative pending access
        -> UNMAPPED/disallowed: guest 68k access error
 ```
 
-Normal external accesses do not enter Data Abort,
-`SYSPageFaultReadHandler()`, `SYSPageFaultWriteHandler()`,
-`SYSReadValFromAddr()`, or `SYSWriteValToAddr()`. The former
-`emu68_api.h`/`emu68_api_adapter.c` wrapper and its bus-dispatch patch are not
-part of the tree.
+The public ABI is opaque, versioned and host-neutral. Emu68 owns 68k execution,
+architectural state, guest exceptions, STOP, IPL semantics, JIT classification
+and exact continuation. The host owns topology, external devices and
+scheduling. Normal EXTERNAL traffic must not reach the host through Data Abort
+or a wrapper around `SYSPageFault*`/`SYS*ValFromAddr()`.
 
-## Ownership
+## Current implementation state
 
-Emu68 owns 68k execution, architectural CPU state, exception entry, STOP,
-guest IPL semantics, JIT classification, modeled-cycle accounting, and exact
-continuation after a cooperative access.
+Lifecycle, region descriptors, page classification, synchronous and
+cooperative access descriptors, bounded runs, progress, reset, STOP, guest IPL,
+invalidation, exception construction and a native explicit bridge are present.
+The unit suite passes and the image builds.
 
-The machine host owns guest topology, external devices, scheduling, physical
-ARM IRQ/FIQ and exception-vector policy, and the decision to use synchronous or
-cooperative access. Bellatrix's adapter maps its topology, converts public bus
-descriptors to `bellatrix_bus_access()`, and consumes the generic progress
-callback to advance Rigel.
+The runtime implementation is not validated. KS1.3 does not boot through the
+explicit bridge, while an A/B configuration using the same classifier and the
+old faulting access does boot. ISSUE-0057 must remain `in_progress` until the
+real Emu68/QEMU regression passes.
 
-The public ABI contains no Bellatrix, Rigel, PiStorm, GPIO, ARM-vector, MMU-table,
-or JIT-register type. Emu68's translated loop reports progress only through the
-host-neutral API callback; it does not call a Bellatrix function.
+## Facts established by the runtime audit
 
-Physical-infrastructure removal and Bluetooth work are independent changes.
-The intended dependency order is public API, physical-infrastructure removal,
-then Bluetooth, but work already present in another area does not change these
-ownership boundaries. Neither later change is part of the API implementation,
-and the API does not depend on the physical path that may be removed.
+- Topology must be installed on Core 0 before workers start.
+- Cache invalidation must not run before JIT state exists.
+- Page classification rebuilds only changed ranges.
+- A catch-all external 4 GiB range is invalid; uncovered space is UNMAPPED.
+- Full-width page-boundary classification is required.
+- The old fault path can still boot KS1.3 under the current surrounding
+  scheduler/topology, isolating the regression to explicit bridge execution.
+- The first observed bus divergence is an expected `INTENA=0x7fff` write
+  becoming `0x0000`, followed by unrelated values.
+- Static objdump of the 832-byte native bridge matches its assembly source.
+- The unresolved defect concerns runtime-emitted AArch64 state/continuation,
+  not evidence of compiler alteration of the static assembly.
+- `x0`-`x3` are outside the general allocator, but neither blindly clobbering
+  nor blindly restoring them defines the TU contract.
+- `x4`-`x11` can all be live in complex effective-address generation.
+- `x12`, pinned guest GPRs, `x18`, `x30`, `v28` and `v30` have known special
+  roles documented by earlier Emu68 integration issues and must be handled
+  according to the real TU entry/exit convention.
+- Overlay/remap invalidation and continuation safety must be verified together.
 
-## Implemented contract
+## Validation rules
 
-- Versioned, opaque single-runtime handle in `emu68_machine.h`.
-- Non-overlapping DIRECT, EXTERNAL, and UNMAPPED regions across the 32-bit guest
-  address space, with full-width permission and boundary checks.
-- Native JIT access for DIRECT memory and explicit pre-fault dispatch for every
-  external effective-address, stack, MOVEM, alternate-FC, bitfield, FPU, paired,
-  wide, instruction-fetch, exception-stack, and vector access path.
-- Synchronous callbacks and cooperative pending/completion with stable identity,
-  one pending access, program ordering, and exact native continuation without
-  replaying the instruction or write.
-- Guest vector 2 format-$7 access-error entry and vector 3 format-$2 odd
-  instruction-address entry.
-- Bounded runs, STOP, one-shot stop requests, persistent guest IPL, reset, MMU
-  unmap/remap, and translation invalidation.
-- Generic progress callback with cycle/instruction deltas and PC, emitted at
-  safe boundaries and before external accesses.
-- Deterministic instruction-aware 68k cycle model. It is not a cycle-exact model
-  of the MC68040 pipeline, caches, or physical bus.
-- PiStorm remains isolated behind its physical platform backend.
+The harness is a behavioral oracle only. It cannot validate the API. A valid
+result requires a real Emu68 guest under QEMU or hardware and an observable
+guest milestone.
 
-## Validation facts
+The KS1.3 regression captures the framebuffer and rejects flat grey, yellow
+fatal and otherwise blank output. Frame counters alone are not success. For
+AROS, the first accepted milestone is serial output produced by the emulated
+Amiga guest; early host-side serial text does not count. DiagROM may be used to
+isolate CPU/register behavior but does not replace the KS1.3 regression.
 
-The public API unit suite covers ABI checks, singleton lifecycle, mapping and
-classification, synchronous and cooperative descriptors, pending completion,
-bounded runs, progress publication, STOP/stop request/IPL, invalidation, reset,
-and guest exception-frame construction. The clean patch stack applies and
-reverses successfully from pinned submodule commits. Bellatrix builds with the
-Emu68 backend, with Emu68 boards enabled or disabled, and with the Musashi
-backend selected.
+Current results:
 
-Those facts establish the implemented contract and build integration. They do
-not claim cycle-exact MC68040 timing or turn the legacy physical path into part
-of the API.
+- machine API unit suite: PASS;
+- multicore Emu68 cross build: PASS;
+- static native-bridge disassembly: PASS;
+- KS1.3 explicit API boot: FAIL;
+- AROS guest serial milestone: not reached.
+
+Do not state that the public API is complete, fault-independent in practice, or
+ready for dependent implementation until those runtime facts change.

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0057
 title: "Implement the fault-independent Emu68 public machine API"
-status: done
+status: in_progress
 priority: high
 type: architecture
 owner: unassigned
@@ -14,47 +14,88 @@ related_files:
   - src/cpu/emu68/emu68_machine.h
   - src/cpu/emu68/emu68_machine.c
   - src/cpu/emu68/emu68_machine_emit.c
+  - src/cpu/emu68/emu68_machine_bridge.S
   - src/cpu/emu68/emu68_machine_platform.c
   - src/cpu/emu68/emu68_backend.c
   - emu68/src/ExecutionLoop.c
   - emu68/src/M68k_EA.c
 ---
 
-# Result
+# Current result
 
-The public machine API defined by `docs/emu68_public_api.md` is implemented at
-the JIT memory-emission boundary. Bellatrix uses it as the sole normal Emu68
-external-access path. DIRECT memory stays native, EXTERNAL memory reaches an
-explicit callback or cooperative exit, and UNMAPPED/disallowed accesses enter
-guest 68k fault semantics before any host access can fault.
+The public types, lifecycle, topology, synchronous/cooperative descriptors,
+bounded execution, reset, stop, IPL, invalidation, JIT classifier and native
+bridge exist. Unit tests pass, but the required KS1.3 runtime regression does
+not. The API is therefore not complete and must not be described as validated
+or ready for dependent work.
 
-The obsolete `emu68_api.h`/`emu68_api_adapter.c` fault wrapper, its dispatcher
-patch, and its fallback to `bellatrix_bus_access()` are removed. Data Abort is
-not a normal machine bus mechanism.
+The harness remains an oracle for machine behavior. It is not validation of the
+Emu68 API because it does not execute the Emu68 JIT or its explicit bridge.
 
-# Architectural invariants
+# Runtime evidence
 
-- The public ABI is opaque, versioned, and host-neutral.
-- Every guest access path uses full-width DIRECT/EXTERNAL/UNMAPPED
-  classification, including instruction fetch and exception traffic.
-- Synchronous and cooperative external accesses are ordered and never replay a
-  completed write.
-- Bounded execution, modeled cycles, progress callbacks, reset, STOP, stop
-  request, guest IPL, and invalidation are owned by the machine API.
-- Emu68 does not own physical ARM IRQ/FIQ, vector policy, timers, or host
-  devices.
-- Legacy physical-infrastructure removal and Bluetooth are independent work;
-  neither belongs to this API, and this API does not depend on the legacy path.
-- PiStorm remains behind its platform backend.
+The old Bellatrix fault path, with the same API lifecycle, topology and
+scheduler temporarily retained around it, reached the KS1.3 boot display at
+frame 500:
 
-# Validation record
+```text
+frame=640x480 colors=4 dominant=0.9744 rgb=(248,252,248) PASS
+```
 
-- Emu68 machine API unit tests pass, including ABI, regions, access modes,
-  continuation, bounded runs, progress and exception frames.
-- The complete patch stack verifies from pinned submodule commits.
-- Bellatrix Emu68 builds pass with Emu68 boards disabled and enabled.
-- Bellatrix's Musashi-selected build also passes, confirming backend separation.
+The explicit bridge did not. A finite bus trace gives the first decisive
+divergence:
 
-The cycle model is deterministic and instruction-aware, not a cycle-exact
-MC68040 pipeline/cache/bus simulation. The normative API document is the source
-of truth for all public behavior and limits.
+```text
+old fault path: W dff09a[2]=00007fff
+explicit path:  W dff09a[2]=00000000
+                W dff09a[2]=0000f2d4
+                R dff09a[2]=00000000
+```
+
+The classifier itself was isolated by making its EXTERNAL branch execute the
+old native/faulting access. That configuration booted, so the failure is in the
+explicit emitted-call/continuation contract rather than page classification.
+
+# Generated-code audit
+
+`aarch64-linux-gnu-objdump` confirms that
+`emu68_machine_native_bridge` is assembled as written: its 832-byte frame saves
+and restores the intended GPR, SIMD, status and TPIDR state. There is no current
+evidence that the C compiler or assembler changed the static bridge semantics.
+
+The defect is in the AArch64 sequence generated at runtime by
+`emu68_machine_emit.c`, or in its assumptions about the live JIT state. The
+audit found and corrected an earlier source-ordering error in which direct and
+slow operations were emitted on the wrong branches. It also found that fixed
+scratch operands can alias address/value operands. Dynamic scratch selection
+avoids that direct alias, but KS1.3 still diverges.
+
+Further experiments established constraints rather than a final fix:
+
+- classification instructions modify `NZCV`; preserving it alone did not
+  restore the old behavior;
+- treating `x0`-`x3` as persistent state and restoring them is also wrong for
+  the TU calling convention;
+- requesting additional allocator registers can exhaust `x4`-`x11` in complex
+  effective-address emitters;
+- using `x30` as a general classifier register corrupted translated
+  continuation;
+- overlay/remap invalidation must not leave the currently executing translated
+  continuation pointing at invalid code.
+
+Temporary diagnostic variants that made those experiments fail were reverted;
+they are not the intended API design.
+
+# Validation state
+
+- `tests/unit/run_emu68_machine.sh`: PASS.
+- Cross build of the multicore Bellatrix/Emu68 image: PASS.
+- Static bridge disassembly: matches the assembly source.
+- KS1.3 explicit-API framebuffer regression: FAIL.
+- AROS guest serial milestone: not reached.
+- DiagROM showed guest activity but is not an API success criterion.
+
+Completion requires the explicit path to preserve the actual Emu68 JIT/TU
+contract and pass a real QEMU guest regression without falling back to Data
+Abort dispatch. Produced frames, harness execution, or unit tests alone are not
+sufficient.

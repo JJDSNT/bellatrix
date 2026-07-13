@@ -45,13 +45,6 @@ Emu68 must be usable as the CPU component without taking ownership of
 `VBAR_EL1`, physical ARM IRQ/FIQ routing, the interrupt controller, timers, or
 host devices.
 
-This ownership boundary does not make migration of the existing physical
-exception and IRQ infrastructure part of the API implementation. That migration
-is a separate host-integration change and may happen after the API is complete.
-During the transition the legacy infrastructure may still be present, but no
-operation in this API may depend on it for normal CPU execution, external
-access, bounded return, STOP, or guest IPL delivery.
-
 ARM interrupts and 68k interrupts are different contracts. A physical IRQ is a
 host-platform event. IPL is a persistent architectural input to the emulated
 68k CPU. For example:
@@ -237,15 +230,19 @@ EMIT_LoadFromEffectiveAddress()/EMIT_StoreToEffectiveAddress()
 ```
 
 `patches/0002-add-bellatrix-bus-hook.patch` installs the Bellatrix page-fault
-bridge that remains available to the independent legacy physical profile. It is
-not the machine API. The machine profile does not call it, does not fall back to
-it, and is not implemented in `vectors.c`. Its integration point is the JIT
-memory emitter before any potentially faulting host access is emitted.
+bridge used by the physical profile. It is not the machine API. The machine
+profile does not call it, does not fall back to it, and is not implemented in
+`vectors.c`. Its integration point is the JIT memory emitter before any
+potentially faulting host access is emitted.
 
-The continued presence of the legacy physical infrastructure is not an API
-dependency. Removing that infrastructure is separate work, as is Bluetooth
-integration. Their implementation order does not turn either one into part of
-this API or into a prerequisite for its normal execution path.
+| Property | Physical fault path | Public machine API |
+| --- | --- | --- |
+| Entry | Synchronous Data Abort | Explicit JIT-generated branch/call |
+| Guest address | Recovered from the fault | Known by the translator |
+| Width and direction | Decoded from the faulting AArch64 instruction | Supplied by the memory emitter |
+| Host transfer | Physical-platform bus handler | Synchronous callback or cooperative exit |
+| Return | Exception return | Normal translated continuation |
+| ARM fault dependency | Required for external traffic | None |
 
 ### PiStorm physical-bus backend
 
@@ -286,9 +283,14 @@ boundary, Emu68 remains stopped while the published IPL is masked, and resumes
 68k interrupt delivery when an eligible level exists. PiStorm's existing
 `wfe`/physical-interrupt behavior remains confined to its platform path.
 
-### Machine-profile implementation
+### Machine-profile structure
 
-The implementation is split by ownership. `emu68_machine.h` is the public ABI;
+<!-- TODO: Once the JIT bridge ABI is stable, document its register,
+continuation, live-temporary, status-register, and cooperative-resume contract
+here. Do not describe an experimental emitter convention as part of the public
+architecture. -->
+
+The machine profile is split by ownership. `emu68_machine.h` is the public ABI;
 `emu68_machine.c` owns lifecycle, regions, execution, pending accesses, IPL,
 STOP, exceptions, and invalidation; `emu68_machine_emit.c` generates the
 direct/external/unmapped access paths; and `emu68_machine_platform.c` is the
@@ -298,8 +300,8 @@ private glue to Emu68 state, MMU, and translation cache.
 adapter: it declares the Bellatrix guest topology, services public bus
 descriptors through `bellatrix_bus_access()`, publishes CPU progress to the
 chipset scheduler, and applies overlay changes at a safe stop. Emu68 never
-includes that backend or any Bellatrix type. The obsolete fault-dispatch
-wrapper and its compatibility fallback are absent.
+includes that backend or any Bellatrix type. The public path has no
+fault-dispatch wrapper or compatibility fallback.
 
 ## 3. How the Public API Works
 
@@ -441,12 +443,14 @@ Every topology change invalidates affected translation units and performs the
 required TLB/cache maintenance before returning. No translated unit may retain
 an access strategy inconsistent with the current region table.
 
-The JIT normalizes every computed address to 32 bits before classification. For
-a statically known direct range it emits the existing native access. For a
-statically known external range it emits the external helper. For a dynamic
-address it emits a fast region test and branches to the selected direct,
-external, or unmapped path. The external and unmapped branches execute before
-any native access to the guest address.
+The JIT normalizes every computed address to 32 bits before classification.
+Read and write page-class tables describe the 32-bit space in 64 KiB pages. A
+page is DIRECT only when the complete page has the corresponding direct
+permission; external, unmapped, mixed, and range-boundary cases take the slow
+classifier. For a statically known direct range the translator emits the
+existing native access. For a dynamic address it emits an inline page test and
+branches to the direct, external, or unmapped path. The external and unmapped
+branches execute before any native access to the guest address.
 
 Classification covers the complete access width, not only its first byte. An
 access whose bytes do not all belong to one region with the required permission
@@ -692,9 +696,9 @@ For external accesses, the contract is sequential and conservative:
 - an interrupt is not delivered in the middle of an incomplete access;
 - region changes and code invalidation are complete before the next run.
 
-### Integration guarantees
+### Integration contract
 
-The API is implemented in the Emu68 machine profile, not around the Bellatrix
+The API belongs in the Emu68 machine profile, not around the Bellatrix
 fault bridge. Effective-address emitters and their shared load/store helpers use
 the registered region metadata and generate the direct/external/unmapped split.
 Indexed, predecrement, postincrement, stack, MOVEM, alternate-function-code,
@@ -702,7 +706,7 @@ bitfield, floating-point, paired, and wide operations follow the same
 classification rule. Instruction fetch, exception stack traffic, and vector
 fetches are also explicit machine accesses.
 
-The implemented machine profile guarantees that:
+The machine profile guarantees that:
 
 - direct RAM/ROM still use native JIT loads and stores;
 - external regions reach the public callback or cooperative exit explicitly;
@@ -712,8 +716,7 @@ The implemented machine profile guarantees that:
 - region changes invalidate every affected translation;
 - guest IPL and STOP work without physical ARM interrupts;
 - the API neither acquires nor depends on ARM vector, IRQ/FIQ, timer, or device
-  ownership; transferring any legacy physical infrastructure to the host is a
-  separate implementation;
+  ownership;
 - PiStorm remains isolated behind its existing platform backend;
 - no public type exposes Bellatrix, Rigel, GPIO, exception-frame, MMU-table, or
   JIT-register details.
