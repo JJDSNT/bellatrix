@@ -180,6 +180,7 @@ static void test_regions_and_sync_access(void)
     CHECK(map_calls == 1u);
 
     CHECK(emu68_machine_map_external(cpu, &external) == EMU68_OK);
+    CHECK(unmap_calls == 1u);
     CHECK(emu68_machine_classify_access(0x00dff020u, 4u,
                                         EMU68_ACCESS_READ,
                                         &classification) == EMU68_OK);
@@ -209,7 +210,7 @@ static void test_regions_and_sync_access(void)
     }
 
     CHECK(emu68_machine_unmap(cpu, direct.guest_base, direct.size) == EMU68_OK);
-    CHECK(unmap_calls == 1u);
+    CHECK(unmap_calls == 2u);
     CHECK(emu68_machine_unmap(cpu, direct.guest_base, direct.size) ==
           EMU68_ERR_NOT_FOUND);
     emu68_machine_destroy(cpu);

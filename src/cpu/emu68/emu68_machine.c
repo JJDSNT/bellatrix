@@ -293,6 +293,7 @@ emu68_status_t emu68_machine_map_external(
     status = validate_new_region(&region);
     if (status != EMU68_OK)
         return status;
+    emu68_machine_platform_unmap_direct(region.base, region.size);
     insert_region(&region);
     return EMU68_OK;
 }
@@ -314,6 +315,7 @@ emu68_status_t emu68_machine_map_unmapped(emu68_cpu_t *cpu,
     status = validate_new_region(&region);
     if (status != EMU68_OK)
         return status;
+    emu68_machine_platform_unmap_direct(region.base, region.size);
     insert_region(&region);
     return EMU68_OK;
 }

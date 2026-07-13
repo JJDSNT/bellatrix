@@ -15,19 +15,26 @@ emu68_status_t emu68_machine_platform_map_direct(
     uint32_t guest_base, uint64_t size, void *host_base, uint32_t flags)
 {
     uint32_t attr = MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0;
+    uintptr_t phys = mmu_virt2phys((uintptr_t)host_base);
+
+    if (phys == (uintptr_t)-1)
+        return EMU68_ERR_ACCESS;
 
     attr |= (flags & EMU68_REGION_CACHEABLE) ? MMU_ATTR_CACHED :
                                                MMU_ATTR_UNCACHED;
     if ((flags & EMU68_REGION_WRITE) == 0u)
         attr |= MMU_READ_ONLY;
-    mmu_map(mmu_virt2phys((uintptr_t)host_base), guest_base,
-            (uintptr_t)size, attr, 0u);
+    mmu_map(phys, guest_base, (uintptr_t)size, attr, 0u);
     return EMU68_OK;
 }
 
 void emu68_machine_platform_unmap_direct(uint32_t guest_base, uint64_t size)
 {
-    mmu_unmap(guest_base, (uintptr_t)size);
+    uintptr_t first = (uintptr_t)guest_base & ~(uintptr_t)0xfffu;
+    uintptr_t end = (uintptr_t)((uint64_t)guest_base + size + 0xfffu) &
+                    ~(uintptr_t)0xfffu;
+
+    mmu_unmap(first, end - first);
 }
 
 void emu68_machine_platform_invalidate(uint32_t guest_base, uint64_t size)
@@ -95,5 +102,16 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
     if (pc)
         *pc = __m68k_state ? __m68k_state->PC : 0u;
     if (stopped)
-        *stopped = __m68k_state ? (__m68k_state->STOPPED != 0u) : 0;
+    {
+        int is_stopped = __m68k_state ? (__m68k_state->STOPPED != 0u) : 0;
+        if (is_stopped) {
+            unsigned mask = (__m68k_state->SR & SR_IPL) >> SRB_IPL;
+            unsigned level = __m68k_state->INT.IPL;
+            if (level == 7u || level > mask) {
+                __m68k_state->STOPPED = 0u;
+                is_stopped = 0;
+            }
+        }
+        *stopped = is_stopped;
+    }
 }
