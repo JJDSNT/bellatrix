@@ -1,8 +1,8 @@
 diff --git a/include/M68k.h b/include/M68k.h
-index 7372256..7eafd6b 100644
+index 7372256..9794af5 100644
 --- a/include/M68k.h
 +++ b/include/M68k.h
-@@ -17,6 +17,107 @@
+@@ -17,6 +17,139 @@
  #include "md5.h"
  #include "lists.h"
  
@@ -18,6 +18,16 @@ index 7372256..7eafd6b 100644
 +    do {                                                                      \
 +        (ptr) = emu68_machine_emit_store((ptr), (address), (value), (width), \
 +                                         0u);                                 \
++    } while (0)
++#define EMU68_GUEST_LOAD_OFFSET(ptr, base, offset, value, width, sign_extend) \
++    do {                                                                      \
++        (ptr) = emu68_machine_emit_load_offset(                              \
++            (ptr), (base), (offset), (value), (width), (sign_extend), 0u);   \
++    } while (0)
++#define EMU68_GUEST_STORE_OFFSET(ptr, base, offset, value, width)             \
++    do {                                                                      \
++        (ptr) = emu68_machine_emit_store_offset(                             \
++            (ptr), (base), (offset), (value), (width), 0u);                  \
 +    } while (0)
 +#else
 +#define BELLATRIX_MACHINE_API_ACTIVE 0
@@ -42,6 +52,28 @@ index 7372256..7eafd6b 100644
 +            *(ptr)++ = strh_offset((address), (value), 0);                   \
 +        else                                                                  \
 +            *(ptr)++ = strb_offset((address), (value), 0);                   \
++    } while (0)
++#define EMU68_GUEST_LOAD_OFFSET(ptr, base, offset, value, width, sign_extend) \
++    do {                                                                      \
++        if ((width) == 4)                                                     \
++            *(ptr)++ = ldr_offset((base), (value), (offset));                \
++        else if ((width) == 2)                                                \
++            *(ptr)++ = (sign_extend) ?                                       \
++                ldrsh_offset((base), (value), (offset)) :                     \
++                ldrh_offset((base), (value), (offset));                       \
++        else                                                                  \
++            *(ptr)++ = (sign_extend) ?                                       \
++                ldrsb_offset((base), (value), (offset)) :                     \
++                ldrb_offset((base), (value), (offset));                       \
++    } while (0)
++#define EMU68_GUEST_STORE_OFFSET(ptr, base, offset, value, width)             \
++    do {                                                                      \
++        if ((width) == 4)                                                     \
++            *(ptr)++ = str_offset((base), (value), (offset));                \
++        else if ((width) == 2)                                                \
++            *(ptr)++ = strh_offset((base), (value), (offset));               \
++        else                                                                  \
++            *(ptr)++ = strb_offset((base), (value), (offset));               \
 +    } while (0)
 +#endif
 +
@@ -110,7 +142,7 @@ index 7372256..7eafd6b 100644
  struct M68KLocalState {
      void *          mls_M68kPtr;
      uint32_t        mls_ARMOffset;
-@@ -116,6 +217,11 @@ struct M68KState
+@@ -116,6 +249,11 @@ struct M68KState
      };
      uint64_t INSN_COUNT;
  
