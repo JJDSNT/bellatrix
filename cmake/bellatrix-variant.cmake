@@ -168,6 +168,8 @@ endif()
 
 list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_bridge.S
+    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_emit.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_platform.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_api_adapter.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/mainloop_window.S

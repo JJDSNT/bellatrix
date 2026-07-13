@@ -4,7 +4,7 @@
 #include <string.h>
 
 #define EMU68_MACHINE_MAX_REGIONS 256u
-#define EMU68_MACHINE_PAGE_SIZE (1u << EMU68_MACHINE_PAGE_SHIFT)
+#define EMU68_MACHINE_NATIVE_FRAME_SIZE 800u
 #define EMU68_MACHINE_VALID_FLAGS                                             \
     (EMU68_REGION_READ | EMU68_REGION_WRITE | EMU68_REGION_EXECUTE |          \
      EMU68_REGION_CACHEABLE)
@@ -30,8 +30,22 @@ struct emu68_cpu {
     uint8_t completion_ready;
     uint64_t next_sequence;
     emu68_bus_access_t pending_access;
+    uintptr_t native_resume;
+    uint8_t native_frame[EMU68_MACHINE_NATIVE_FRAME_SIZE]
+        __attribute__((aligned(16)));
     volatile uint32_t stop_requested;
 };
+
+uint8_t *emu68_machine_resume_frame;
+uintptr_t emu68_machine_resume_address;
+uint64_t emu68_machine_resume_value;
+uint64_t emu68_machine_resume_outcome;
+uint32_t emu68_machine_bridge_address;
+uint64_t emu68_machine_bridge_write_value;
+uint32_t emu68_machine_bridge_metadata;
+uintptr_t emu68_machine_bridge_tu_return;
+uint64_t emu68_machine_bridge_read_value;
+uint64_t emu68_machine_bridge_outcome;
 
 uint8_t emu68_machine_read_pages[EMU68_MACHINE_PAGE_COUNT];
 uint8_t emu68_machine_write_pages[EMU68_MACHINE_PAGE_COUNT];
@@ -384,6 +398,99 @@ emu68_bus_result_t emu68_machine_dispatch_access(emu68_bus_access_t *access)
     return EMU68_BUS_COMPLETE;
 }
 
+static uint8_t current_function_code(emu68_address_space_t space,
+                                     uint32_t metadata)
+{
+    uint8_t explicit_fc =
+        (uint8_t)((metadata & EMU68_BRIDGE_META_FC_MASK) >>
+                  EMU68_BRIDGE_META_FC_SHIFT);
+    uint32_t sr = 0u;
+
+    if (explicit_fc != 0u)
+        return explicit_fc;
+#ifdef __aarch64__
+    __asm__ volatile("mrs %0, TPIDR_EL0" : "=r"(sr));
+#endif
+    if (space == EMU68_SPACE_CPU)
+        return 7u;
+    return (uint8_t)(((sr & 0x2000u) ? 4u : 0u) |
+                     (space == EMU68_SPACE_PROGRAM ? 2u : 1u));
+}
+
+emu68_machine_bridge_result_t emu68_machine_bridge_dispatch(
+    uint32_t address, uint64_t value, uint32_t metadata,
+    uintptr_t native_resume, const void *native_frame)
+{
+    emu68_machine_bridge_result_t bridge = {
+        .value = 0u,
+        .outcome = EMU68_BRIDGE_BUS_ERROR,
+    };
+    emu68_bus_access_t access;
+    emu68_machine_access_result_t classification;
+    emu68_access_kind_t kind =
+        (metadata & EMU68_BRIDGE_META_WRITE) ? EMU68_ACCESS_WRITE :
+                                                EMU68_ACCESS_READ;
+    emu68_address_space_t space = (emu68_address_space_t)(
+        (metadata & EMU68_BRIDGE_META_SPACE_MASK) >>
+        EMU68_BRIDGE_META_SPACE_SHIFT);
+    uint8_t width = (uint8_t)(metadata & EMU68_BRIDGE_META_WIDTH_MASK);
+
+    if (space > EMU68_SPACE_CPU ||
+        emu68_machine_classify_access(address, width, kind,
+                                      &classification) != EMU68_OK ||
+        classification.region_kind != EMU68_REGION_EXTERNAL)
+        return bridge;
+
+    if (machine_cpu.mode == EMU68_EXEC_COOPERATIVE &&
+        (!native_resume || !native_frame))
+        return bridge;
+
+    memset(&access, 0, sizeof(access));
+    access.address = address;
+    access.kind = kind;
+    access.space = space;
+    access.function_code = current_function_code(space, metadata);
+    access.width = width;
+    access.value_lo = value;
+    if (emu68_machine_dispatch_access(&access) != EMU68_BUS_COMPLETE)
+        return bridge;
+    if (machine_cpu.mode == EMU68_EXEC_COOPERATIVE) {
+        machine_cpu.native_resume = native_resume;
+        memcpy(machine_cpu.native_frame, native_frame,
+               sizeof(machine_cpu.native_frame));
+        bridge.outcome = EMU68_BRIDGE_PENDING;
+        return bridge;
+    }
+    bridge.value = access.value_lo;
+    bridge.outcome = access.result == EMU68_BUS_COMPLETE ?
+                         EMU68_BRIDGE_COMPLETE : EMU68_BRIDGE_BUS_ERROR;
+    return bridge;
+}
+
+int emu68_machine_prepare_native_resume(void)
+{
+    if (!machine_cpu.active || !machine_cpu.pending ||
+        !machine_cpu.completion_ready || !machine_cpu.native_resume)
+        return 0;
+
+    emu68_machine_resume_frame = machine_cpu.native_frame;
+    emu68_machine_resume_address = machine_cpu.native_resume;
+    emu68_machine_resume_value = machine_cpu.pending_access.value_lo;
+    emu68_machine_resume_outcome =
+        machine_cpu.pending_access.result == EMU68_BUS_COMPLETE ?
+            EMU68_BRIDGE_COMPLETE : EMU68_BRIDGE_BUS_ERROR;
+    machine_cpu.pending = 0u;
+    machine_cpu.completion_ready = 0u;
+    machine_cpu.native_resume = 0u;
+    return 1;
+}
+
+int emu68_machine_native_access_pending(void)
+{
+    return machine_cpu.active && machine_cpu.pending &&
+           !machine_cpu.completion_ready;
+}
+
 int emu68_machine_runtime_active(void)
 {
     return machine_cpu.active;
@@ -452,6 +559,7 @@ emu68_status_t emu68_machine_reset(emu68_cpu_t *cpu,
 
     machine_cpu.pending = 0u;
     machine_cpu.completion_ready = 0u;
+    machine_cpu.native_resume = 0u;
     __atomic_store_n(&machine_cpu.stop_requested, 0u, __ATOMIC_RELEASE);
     return emu68_machine_platform_reset(state->initial_ssp,
                                         state->initial_pc);

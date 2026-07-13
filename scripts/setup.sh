@@ -191,6 +191,7 @@ EMU68_PATCHES=(
     "$PATCHES/0019-emu68-tlsf-hardening.patch"
     "$PATCHES/0020-emu68-stop-liveness.patch"
     "$PATCHES/0021-emu68-public-bus-dispatch.patch"
+    "$PATCHES/0025-emu68-machine-continuation.patch"
 )
 
 CHERRYUSB_PATCHES=(

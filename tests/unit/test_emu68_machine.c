@@ -178,6 +178,13 @@ static void test_regions_and_sync_access(void)
     CHECK(callback_calls == 1u);
     CHECK(access.sequence == 1u);
     CHECK(access.value_lo == 0xfeedu);
+    {
+        emu68_machine_bridge_result_t bridge = emu68_machine_bridge_dispatch(
+            0x00dff020u, 0u, 2u, 0u, NULL);
+        CHECK(bridge.outcome == EMU68_BRIDGE_COMPLETE);
+        CHECK(bridge.value == 0xfeedu);
+        CHECK(callback_calls == 2u);
+    }
 
     CHECK(emu68_machine_unmap(cpu, direct.guest_base, direct.size) == EMU68_OK);
     CHECK(unmap_calls == 1u);
@@ -189,6 +196,7 @@ static void test_regions_and_sync_access(void)
 static void test_cooperative_access(void)
 {
     emu68_cpu_t *cpu = create_cpu(EMU68_EXEC_COOPERATIVE);
+    uint8_t native_frame[800];
     emu68_external_region_t external = {
         .abi_version = EMU68_MACHINE_ABI_VERSION,
         .struct_size = sizeof(external),
@@ -207,6 +215,31 @@ static void test_cooperative_access(void)
     };
 
     CHECK(emu68_machine_map_external(cpu, &external) == EMU68_OK);
+    CHECK(emu68_machine_bridge_dispatch(
+              0x00bfd100u, 0x55u,
+              EMU68_BRIDGE_META_WRITE | 1u, 0u, NULL).outcome ==
+          EMU68_BRIDGE_BUS_ERROR);
+    CHECK(emu68_machine_get_pending_access(cpu, &pending) ==
+          EMU68_ERR_NOT_FOUND);
+
+    memset(native_frame, 0xa5, sizeof(native_frame));
+    CHECK(emu68_machine_bridge_dispatch(
+              0x00bfd100u, 0x55u,
+              EMU68_BRIDGE_META_WRITE | 1u, 0x12345678u,
+              native_frame).outcome == EMU68_BRIDGE_PENDING);
+    CHECK(emu68_machine_native_access_pending());
+    CHECK(!emu68_machine_prepare_native_resume());
+    CHECK(emu68_machine_get_pending_access(cpu, &pending) == EMU68_OK);
+    CHECK(pending.sequence == 1u);
+    CHECK(pending.value_lo == 0x55u);
+    pending.result = EMU68_BUS_COMPLETE;
+    CHECK(emu68_machine_complete_access(cpu, &pending) == EMU68_OK);
+    CHECK(emu68_machine_prepare_native_resume());
+    CHECK(emu68_machine_resume_address == (uintptr_t)0x12345678u);
+    CHECK(emu68_machine_resume_outcome == EMU68_BRIDGE_COMPLETE);
+    CHECK(emu68_machine_resume_frame[799] == 0xa5u);
+    CHECK(!emu68_machine_native_access_pending());
+
     memset(&access, 0, sizeof(access));
     access.address = 0x00bfd100u;
     access.kind = EMU68_ACCESS_WRITE;
@@ -216,7 +249,7 @@ static void test_cooperative_access(void)
     access.value_lo = 0x55u;
     CHECK(emu68_machine_dispatch_access(&access) == EMU68_BUS_COMPLETE);
     CHECK(emu68_machine_get_pending_access(cpu, &pending) == EMU68_OK);
-    CHECK(pending.sequence == 1u);
+    CHECK(pending.sequence == 2u);
     CHECK(pending.value_lo == 0x55u);
 
     pending.sequence++;

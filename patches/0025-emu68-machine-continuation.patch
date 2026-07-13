@@ -1,0 +1,30 @@
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -4,6 +4,9 @@
+ #ifdef BELLATRIX
+ #include "cpu/emu68/bellatrix.h"
+ #include "cpu/emu68/emu68_api.h"
++extern int emu68_machine_prepare_native_resume(void);
++extern int emu68_machine_native_access_pending(void);
++extern void emu68_machine_resume_native(void);
+ #endif
+ #ifdef PISTORM
+ #ifndef PISTORM32
+@@ -145,7 +148,16 @@ void MainLoop()
+         LastPC = getLastPC();
+         ctx = getCTX();
+ 
+ #ifdef BELLATRIX
++        if (emu68_machine_prepare_native_resume()) {
++            emu68_machine_resume_native();
++            continue;
++        }
++        if (emu68_machine_native_access_pending()) {
++            M68K_SaveContext(ctx);
++            return;
++        }
++
+         /* Advance the Bellatrix chipset on every pass through the loop, not
+          * only on MMIO faults. Without this, guest phases that touch no
+          * unmapped address (RAM-only loops, Wait/STOP idling) freeze chipset
