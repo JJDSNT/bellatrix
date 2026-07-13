@@ -74,6 +74,9 @@ list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src/cpu
     ${CMAKE_SOURCE_DIR}/../src/host
 )
+list(APPEND BELLATRIX_SOURCES
+    ${CMAKE_SOURCE_DIR}/../src/io/hid/hid_router.c
+)
 # Rigel is THE Bellatrix chipset backend — not an option.
 # (BELLATRIX_USE_RIGEL_CHIPSET=1 stays defined because sources still #if on it.)
 list(APPEND BELLATRIX_INCLUDE_DIRS

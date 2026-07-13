@@ -1,10 +1,6 @@
 #include "machine/machine.h"
-#include "io/hid/hid_amiga_map.h"
+#include "io/hid/hid_router.h"
 #include "support.h"
-
-#ifdef BELLATRIX_LAUNCHER
-#include "launcher/launcher_input.h"
-#endif
 
 #if BELLATRIX_ENABLE_USBSTACK
 
@@ -54,13 +50,6 @@ static BellatrixUSBHIDMouse *bellatrix_usb_hid_mouse_for_minor(uint8_t minor)
     return &g_bellatrix_usb_hid_mice[minor];
 }
 
-/* Thin wrapper kept for call-site compatibility inside this file. */
-static bool bellatrix_usb_hid_usage_to_amiga_raw(uint8_t usage, uint8_t *rawkey)
-{
-    if (!rawkey) return false;
-    return hid_usage_to_amiga_raw(usage, rawkey);
-}
-
 static bool bellatrix_usb_hid_report_contains(const uint8_t keys[6], uint8_t usage)
 {
     unsigned int i;
@@ -74,40 +63,18 @@ static bool bellatrix_usb_hid_report_contains(const uint8_t keys[6], uint8_t usa
     return false;
 }
 
-static void bellatrix_usb_hid_emit_usage(uint8_t usage, bool pressed)
+static void bellatrix_usb_hid_emit_usage(uint8_t minor, uint8_t usage,
+                                         bool pressed)
 {
-    uint8_t rawkey;
-
     if (usage == HID_KBD_USAGE_NONE) {
         return;
     }
-
-#ifdef BELLATRIX_LAUNCHER
-    if (pressed && launcher_input_is_active()) {
-        launcher_input_push(usage);
-        return;
-    }
-#endif
-
-    if (usage == HID_KBD_USAGE_F11 || usage == HID_KBD_USAGE_F12) {
-        unsigned button = (usage == HID_KBD_USAGE_F11) ? 0u : 1u;
-        kprintf("[HID->MOUSE] usage=0x%02x %s button=%u\n",
-                (unsigned)usage, pressed ? "down" : "up", button);
-        bellatrix_machine_mouse_button(0u, button, pressed ? 1 : 0);
-        return;
-    }
-
-    if (bellatrix_usb_hid_usage_to_amiga_raw(usage, &rawkey)) {
-        kprintf("[HID->AMIGA] usage=0x%02x %s rawkey=0x%02x\n",
-                (unsigned)usage, pressed ? "down" : "up", (unsigned)rawkey);
-        bellatrix_machine_keyboard_rawkey(rawkey, pressed ? 1 : 0);
-    } else {
-        kprintf("[HID->AMIGA] usage=0x%02x %s (no amiga mapping)\n",
-                (unsigned)usage, pressed ? "down" : "up");
-    }
+    hid_router_key(HID_INPUT_USB, minor, usage, pressed);
 }
 
-static void bellatrix_usb_hid_emit_modifier_changes(uint8_t previous, uint8_t current)
+static void bellatrix_usb_hid_emit_modifier_changes(uint8_t minor,
+                                                     uint8_t previous,
+                                                     uint8_t current)
 {
     const struct {
         uint8_t mask;
@@ -129,7 +96,7 @@ static void bellatrix_usb_hid_emit_modifier_changes(uint8_t previous, uint8_t cu
         bool is_pressed = (current & modifiers[i].mask) != 0u;
 
         if (was_pressed != is_pressed) {
-            bellatrix_usb_hid_emit_usage(modifiers[i].usage, is_pressed);
+            bellatrix_usb_hid_emit_usage(minor, modifiers[i].usage, is_pressed);
         }
     }
 }
@@ -142,9 +109,11 @@ static void bellatrix_usb_hid_release_all(BellatrixUSBHIDKeyboard *keyboard)
         return;
     }
 
-    bellatrix_usb_hid_emit_modifier_changes(keyboard->modifiers, 0u);
+    bellatrix_usb_hid_emit_modifier_changes(keyboard->minor,
+                                             keyboard->modifiers, 0u);
     for (i = 0; i < 6u; ++i) {
-        bellatrix_usb_hid_emit_usage(keyboard->keys[i], false);
+        bellatrix_usb_hid_emit_usage(keyboard->minor,
+                                     keyboard->keys[i], false);
     }
 
     keyboard->modifiers = 0u;
@@ -198,19 +167,31 @@ static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
     if (nbytes >= (int)sizeof(struct usb_hid_kbd_report)) {
         report = (struct usb_hid_kbd_report *)g_bellatrix_usb_hid_report[hid_class->minor];
 
-        bellatrix_usb_hid_emit_modifier_changes(keyboard->modifiers, report->modifier);
+        /* Boot-protocol error report: keys[] carrying ErrorRollOver/POSTFail/
+         * ErrorUndefined (0x01-0x03) means "ignore this report", not "keys
+         * changed".  The composite adapter spams these; diffing them
+         * fabricated endless key events and flooded the Amiga keyboard. */
+        for (i = 0; i < 6u; ++i) {
+            uint8_t usage = report->key[i];
+            if (usage >= 0x01u && usage <= 0x03u)
+                goto rearm;
+        }
+
+        bellatrix_usb_hid_emit_modifier_changes(keyboard->minor,
+                                                 keyboard->modifiers,
+                                                 report->modifier);
 
         for (i = 0; i < 6u; ++i) {
             uint8_t usage = keyboard->keys[i];
             if (usage != HID_KBD_USAGE_NONE && !bellatrix_usb_hid_report_contains(report->key, usage)) {
-                bellatrix_usb_hid_emit_usage(usage, false);
+                bellatrix_usb_hid_emit_usage(keyboard->minor, usage, false);
             }
         }
 
         for (i = 0; i < 6u; ++i) {
             uint8_t usage = report->key[i];
             if (usage != HID_KBD_USAGE_NONE && !bellatrix_usb_hid_report_contains(keyboard->keys, usage)) {
-                bellatrix_usb_hid_emit_usage(usage, true);
+                bellatrix_usb_hid_emit_usage(keyboard->minor, usage, true);
             }
         }
 
@@ -220,6 +201,7 @@ static void bellatrix_usb_hid_keyboard_callback(void *arg, int nbytes)
         }
     }
 
+rearm:
     /* Interrupt endpoints must always be re-armed regardless of error code.
      * Any error other than NAK (e.g. timeout, pipe stall) would otherwise
      * silently kill the callback chain on real hardware. */
@@ -260,16 +242,17 @@ static void bellatrix_usb_hid_mouse_callback(void *arg, int nbytes)
         }
 
         if (report->xdisp || report->ydisp) {
-            bellatrix_machine_mouse_motion(0u,
-                                           (int)report->xdisp,
-                                           (int)report->ydisp);
+            hid_router_mouse_motion(HID_INPUT_USB, hid_class->minor,
+                                    (int)report->xdisp,
+                                    (int)report->ydisp);
         }
 
         for (btn = 0; btn < 3u; ++btn) {
             int was = (mouse->buttons >> btn) & 1;
             int is  = (report->buttons >> btn) & 1;
             if (was != is) {
-                bellatrix_machine_mouse_button(0u, btn, is);
+                hid_router_mouse_button(HID_INPUT_USB, hid_class->minor,
+                                        btn, is != 0);
             }
         }
 
@@ -358,6 +341,8 @@ void usbh_hid_stop(struct usbh_hid *hid_class)
         BellatrixUSBHIDKeyboard *keyboard = (BellatrixUSBHIDKeyboard *)hid_class->user_data;
         if (keyboard) {
             bellatrix_usb_hid_release_all(keyboard);
+            hid_router_device_disconnected(HID_INPUT_USB,
+                                            hid_class->minor);
             keyboard->active = false;
             hid_class->user_data = NULL;
             kprintf("[USB-HID] keyboard detached: minor=%u\n", (unsigned)hid_class->minor);
@@ -365,15 +350,8 @@ void usbh_hid_stop(struct usbh_hid *hid_class)
     } else if (protocol == HID_PROTOCOL_MOUSE) {
         BellatrixUSBHIDMouse *mouse = (BellatrixUSBHIDMouse *)hid_class->user_data;
         if (mouse) {
-            BellatrixMachine *m = bellatrix_machine_get();
-            unsigned int btn;
-            for (btn = 0; btn < 3u; ++btn) {
-                if ((mouse->buttons >> btn) & 1) {
-                    bellatrix_controller_port_set_mouse_button(&m->controller_ports,
-                                                               BELLATRIX_CONTROLLER_PORT_MOUSE,
-                                                               btn, 0);
-                }
-            }
+            hid_router_device_disconnected(HID_INPUT_USB,
+                                            hid_class->minor);
             mouse->active = false;
             hid_class->user_data = NULL;
             kprintf("[USB-HID] mouse detached: minor=%u\n", (unsigned)hid_class->minor);
