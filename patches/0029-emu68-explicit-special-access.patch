@@ -158,11 +158,13 @@ index 7372256..41cc7c0 100644
  struct M68KLocalState {
      void *          mls_M68kPtr;
      uint32_t        mls_ARMOffset;
-@@ -116,6 +265,11 @@ struct M68KState
+@@ -116,6 +265,13 @@ struct M68KState
      };
      uint64_t INSN_COUNT;
  
 +#ifdef BELLATRIX
++    /* Modeled 68k cycles retired by translated instructions. */
++    uint64_t CYCLE_COUNT;
 +    /* Architectural STOP state exported to the embedding scheduler. */
 +    uint32_t STOPPED;
 +#endif

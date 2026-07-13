@@ -2,7 +2,7 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 index 732a176..9f55465 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -1,6 +1,10 @@
+@@ -1,6 +1,9 @@
  #include <M68k.h>
  #include <support.h>
  #include <config.h>
@@ -12,7 +12,7 @@ index 732a176..9f55465 100644
  #ifdef PISTORM
  #ifndef PISTORM32
  #define PS_PROTOCOL_IMPL
-@@ -138,11 +142,73 @@ void MainLoop()
+@@ -138,11 +141,63 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -36,21 +36,10 @@ index 732a176..9f55465 100644
 +         * (v28-v31 hold INSN_COUNT/CACR/FP flags and are not callee-saved).
 +         * Wrap the call in a full context spill/reload, exactly like the
 +         * translation-miss path below does around M68K_GetTranslationUnit. */
-+        /* The spill/reload is too expensive to pay on every unit dispatch,
-+         * so gate it: report once at least 64 instructions retired since the
-+         * last report (~512 M68K cycles, about two scanlines of IRQ latency
-+         * — the vectors.c fault hook still syncs precisely before MMIO), or
-+         * after 64 dispatches without progress (translation misses; a
-+         * re-dispatched STOP retires instructions each pass, so idle time
-+         * keeps flowing through the delta path). */
++        /* Machine mode returns at every modeled instruction boundary so the
++         * public cycle budget can overshoot by at most that instruction. */
 +        {
-+#if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
-+            /* Trace builds: fine-grained reports so host-side low-memory
-+             * watchers can bracket a writer to within a few instructions. */
-+            enum { BELA_REPORT_DELTA = 8 };
-+#else
-+            enum { BELA_REPORT_DELTA = 64 };
-+#endif
++            enum { BELA_REPORT_DELTA = 1 };
 +            static uint64_t bela_insn_prev;
 +            static uint32_t bela_spins;
 +            uint64_t _v30_now, _pc_now, _x12_save;
@@ -58,7 +47,7 @@ index 732a176..9f55465 100644
 +            asm volatile("mov %0, v30.d[0]" : "=r"(_v30_now));
 +            if (ctx->STOPPED ||
 +                (_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
-+                ++bela_spins >= 64u) {
++                ++bela_spins >= 1u) {
 +                bela_insn_prev = _v30_now;
 +                bela_spins = 0u;
 +                asm volatile("mov %0, x18" : "=r"(_pc_now));
@@ -88,7 +77,7 @@ index 732a176..9f55465 100644
          /* If (unlikely) there was interrupt pending, check if it needs to be processed */
          if (unlikely(ctx->INT32 != 0))
          {
-@@ -152,6 +215,13 @@ void MainLoop()
+@@ -152,6 +204,13 @@ void MainLoop()
              uint32_t vbr;
  
              /* Find out requested IPL level based on ARM state and real IPL line */
@@ -102,7 +91,7 @@ index 732a176..9f55465 100644
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +239,7 @@ void MainLoop()
+@@ -169,7 +228,7 @@ void MainLoop()
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
@@ -111,7 +100,7 @@ index 732a176..9f55465 100644
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +260,10 @@ void MainLoop()
+@@ -190,9 +249,10 @@ void MainLoop()
                      {
                          level = ipl_level;
                      }
@@ -123,7 +112,7 @@ index 732a176..9f55465 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +307,64 @@ void MainLoop()
+@@ -236,6 +296,64 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
@@ -188,7 +177,7 @@ index 732a176..9f55465 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +377,8 @@ void MainLoop()
+@@ -248,7 +366,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */

@@ -61,6 +61,12 @@ emu68_status_t emu68_machine_platform_reset(uint32_t initial_ssp,
 
     jit_control = __m68k_state->JIT_CONTROL;
     jit_control2 = __m68k_state->JIT_CONTROL2;
+    /* A machine run may overshoot its budget by at most one instruction.
+     * One-instruction translation units make every dispatcher return point
+     * an architectural instruction boundary. */
+    jit_control &= ~(JCCB_INSN_DEPTH_MASK << JCCB_INSN_DEPTH);
+    jit_control |= 1u << JCCB_INSN_DEPTH;
+    jit_control &= ~(JCCB_INLINE_RANGE_MASK << JCCB_INLINE_RANGE);
     memset(__m68k_state, 0, sizeof(*__m68k_state));
     __m68k_state->JIT_CONTROL = jit_control;
     __m68k_state->JIT_CONTROL2 = jit_control2;
@@ -94,11 +100,13 @@ void emu68_machine_platform_run(void)
     MainLoopWindow();
 }
 
-void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
-                                     int *stopped)
+void emu68_machine_platform_snapshot(uint64_t *instructions, uint64_t *cycles,
+                                     uint32_t *pc, int *stopped)
 {
     if (instructions)
         *instructions = __m68k_state ? __m68k_state->INSN_COUNT : 0u;
+    if (cycles)
+        *cycles = __m68k_state ? __m68k_state->CYCLE_COUNT : 0u;
     if (pc)
         *pc = __m68k_state ? __m68k_state->PC : 0u;
     if (stopped)

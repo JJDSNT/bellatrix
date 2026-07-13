@@ -1,11 +1,13 @@
 diff --git a/include/M68k.h b/include/M68k.h
 --- a/include/M68k.h
 +++ b/include/M68k.h
-@@ -116,6 +116,11 @@ struct M68KState
+@@ -116,6 +116,13 @@ struct M68KState
      };
      uint64_t INSN_COUNT;
  
 +#ifdef BELLATRIX
++    /* Modeled 68k cycles retired by translated instructions. */
++    uint64_t CYCLE_COUNT;
 +    /* Architectural STOP state exported to the embedding scheduler. */
 +    uint32_t STOPPED;
 +#endif

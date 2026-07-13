@@ -435,7 +435,7 @@ void bellatrix_machine_advance_cpu_cycles(uint32_t cycles)
 
 void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
 {
-    static uint64_t s_prev_insn_count;
+    static uint64_t s_prev_cycle_count;
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
     static uint32_t s_last_pc;
     static uint32_t s_same_pc_reports;
@@ -444,13 +444,14 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
 
     g_bellatrix_exec_pc = pc;
 
-    if (!s_prev_insn_count || insn_count <= s_prev_insn_count) {
-        s_prev_insn_count = insn_count;
-        cycles = 8u;
-    } else {
-        uint64_t delta = insn_count - s_prev_insn_count;
-        s_prev_insn_count = insn_count;
-        cycles = (uint32_t)delta * 8u;
+    {
+        uint64_t cycle_count = __m68k_state ? __m68k_state->CYCLE_COUNT : 0u;
+        uint64_t delta;
+        if (cycle_count < s_prev_cycle_count)
+            s_prev_cycle_count = 0u;
+        delta = cycle_count - s_prev_cycle_count;
+        s_prev_cycle_count = cycle_count;
+        cycles = delta > UINT32_MAX ? UINT32_MAX : (uint32_t)delta;
     }
 
     if (cycles > 0u) {

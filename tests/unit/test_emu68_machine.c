@@ -88,11 +88,13 @@ void emu68_machine_platform_run(void)
                                                   platform_pc);
 }
 
-void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
-                                     int *stopped)
+void emu68_machine_platform_snapshot(uint64_t *instructions, uint64_t *cycles,
+                                     uint32_t *pc, int *stopped)
 {
     if (instructions)
         *instructions = platform_instructions;
+    if (cycles)
+        *cycles = platform_instructions * 8u;
     if (pc)
         *pc = platform_pc;
     if (stopped)

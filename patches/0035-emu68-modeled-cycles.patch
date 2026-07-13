@@ -1,0 +1,85 @@
+diff --git a/src/M68k_Translator.c b/src/M68k_Translator.c
+--- a/src/M68k_Translator.c
++++ b/src/M68k_Translator.c
+@@ -148,6 +148,61 @@ static uint32_t * (*line_array[16])(uint32_t *arm_ptr, uint16_t **m68k_ptr, uint
+     EMIT_lineF
+ };
+ 
++#ifdef BELLATRIX
++static uint16_t M68K_OpcodeCycles(uint16_t opcode)
++{
++    static const uint8_t ea_cycles[8] = { 0u, 0u, 4u, 4u, 6u, 8u, 10u, 8u };
++    uint8_t group = (uint8_t)(opcode >> 12);
++    uint8_t mode = (uint8_t)((opcode >> 3) & 7u);
++    uint16_t ea = ea_cycles[mode];
++
++    if (mode == 7u) {
++        switch (opcode & 7u) {
++        case 0u: ea = 8u; break;
++        case 1u: ea = 12u; break;
++        case 2u: ea = 8u; break;
++        case 3u: ea = 10u; break;
++        case 4u: ea = 4u; break;
++        default: ea = 0u; break;
++        }
++    }
++
++    switch (group) {
++    case 0x0u: return (uint16_t)(8u + ea);
++    case 0x1u:
++    case 0x2u:
++    case 0x3u: return (uint16_t)(4u + ea);
++    case 0x4u:
++        if (opcode == 0x4e70u) return 132u;
++        if (opcode == 0x4e71u || opcode == 0x4e72u) return 4u;
++        if (opcode == 0x4e73u) return 20u;
++        if (opcode == 0x4e75u) return 16u;
++        if ((opcode & 0xffc0u) == 0x4e80u) return (uint16_t)(16u + ea);
++        if ((opcode & 0xffc0u) == 0x4ec0u) return (uint16_t)(8u + ea);
++        if ((opcode & 0xfff0u) == 0x4e40u) return 34u;
++        return (uint16_t)(4u + ea);
++    case 0x5u:
++        if ((opcode & 0x00f8u) == 0x00c8u) return 10u;
++        return (uint16_t)(4u + ea);
++    case 0x6u: return (opcode & 0x0f00u) == 0x0100u ? 18u : 10u;
++    case 0x7u: return 4u;
++    case 0x8u:
++        if ((opcode & 0x01c0u) == 0x00c0u) return (uint16_t)(140u + ea);
++        return (uint16_t)(4u + ea);
++    case 0x9u:
++    case 0xbu: return (uint16_t)(4u + ea);
++    case 0xcu:
++        if ((opcode & 0x01c0u) == 0x00c0u) return (uint16_t)(70u + ea);
++        return (uint16_t)(4u + ea);
++    case 0xdu: return (uint16_t)(4u + ea);
++    case 0xeu:
++        return (uint16_t)(((opcode & 0x00c0u) == 0x00c0u ? 8u : 6u) + ea);
++    case 0xfu: return 20u;
++    default: return 4u;
++    }
++}
++#endif
++
+ extern struct M68KState *__m68k_state;
+ 
+ static inline uint32_t *EmitINSN(uint32_t *arm_ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+@@ -156,6 +211,19 @@ static inline uint32_t *EmitINSN(uint32_t *arm_ptr, uint16_t **m68k_ptr, uint16_
+     uint16_t opcode = cache_read_16(ICACHE, (uint32_t)(uintptr_t)*m68k_ptr);
+     uint8_t group = opcode >> 12;
+ 
++#ifdef BELLATRIX
++    {
++        uint8_t ctx = RA_GetCTX(&ptr);
++        uint8_t cycles = RA_AllocARMRegister(&ptr);
++        *ptr++ = ldr64_offset(ctx, cycles,
++            __builtin_offsetof(struct M68KState, CYCLE_COUNT));
++        *ptr++ = add64_immed(cycles, cycles, M68K_OpcodeCycles(opcode));
++        *ptr++ = str64_offset(ctx, cycles,
++            __builtin_offsetof(struct M68KState, CYCLE_COUNT));
++        RA_FreeARMRegister(&ptr, cycles);
++    }
++#endif
++
+     if (debug > 2)
+     {
+         *ptr++ = hint(0);

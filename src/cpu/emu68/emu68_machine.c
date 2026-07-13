@@ -35,6 +35,7 @@ struct emu68_cpu {
     uintptr_t native_resume;
     uint64_t run_budget;
     uint64_t run_start_instructions;
+    uint64_t run_start_cycles;
     uint64_t run_instructions;
     uint64_t run_cycles;
     uint32_t run_pc;
@@ -655,6 +656,7 @@ int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
                                             uint32_t pc)
 {
     uint64_t delta;
+    uint64_t modeled_cycles = 0u;
     int stopped = 0;
 
     if (!machine_cpu.active || !machine_cpu.running)
@@ -663,13 +665,10 @@ int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
         retired_instructions = machine_cpu.run_start_instructions;
     delta = retired_instructions - machine_cpu.run_start_instructions;
     machine_cpu.run_instructions = delta;
-    /* Emu68 currently exposes only retired instructions. This temporary
-     * conversion keeps bounded execution functional while the translator's
-     * per-opcode 68k cycle accumulator is introduced. The public contract is
-     * not considered complete until that accumulator replaces this line. */
-    machine_cpu.run_cycles = delta * 8u;
+    emu68_machine_platform_snapshot(NULL, &modeled_cycles, NULL, &stopped);
+    machine_cpu.run_cycles = modeled_cycles >= machine_cpu.run_start_cycles ?
+        modeled_cycles - machine_cpu.run_start_cycles : 0u;
     machine_cpu.run_pc = pc;
-    emu68_machine_platform_snapshot(NULL, NULL, &stopped);
     machine_cpu.stopped = stopped != 0;
     return machine_cpu.pending || machine_cpu.bus_error_pending ||
            machine_cpu.stopped ||
@@ -697,6 +696,7 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
                                  emu68_run_result_t *result)
 {
     uint64_t instructions = 0u;
+    uint64_t cycles = 0u;
     uint32_t pc = 0u;
     int stopped = 0;
 
@@ -708,7 +708,7 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
     if (machine_cpu.running)
         return EMU68_ERR_BUSY;
 
-    emu68_machine_platform_snapshot(&instructions, &pc, &stopped);
+    emu68_machine_platform_snapshot(&instructions, &cycles, &pc, &stopped);
     memset(result, 0, sizeof(*result));
     result->abi_version = EMU68_MACHINE_ABI_VERSION;
     result->struct_size = sizeof(*result);
@@ -737,6 +737,7 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
 
     machine_cpu.run_budget = cycle_budget;
     machine_cpu.run_start_instructions = instructions;
+    machine_cpu.run_start_cycles = cycles;
     machine_cpu.run_instructions = 0u;
     machine_cpu.run_cycles = 0u;
     machine_cpu.run_pc = pc;
@@ -745,11 +746,12 @@ emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
     emu68_machine_platform_run();
     machine_cpu.running = 0u;
 
-    emu68_machine_platform_snapshot(&instructions, &pc, &stopped);
+    emu68_machine_platform_snapshot(&instructions, &cycles, &pc, &stopped);
     if (instructions >= machine_cpu.run_start_instructions)
         machine_cpu.run_instructions =
             instructions - machine_cpu.run_start_instructions;
-    machine_cpu.run_cycles = machine_cpu.run_instructions * 8u;
+    machine_cpu.run_cycles = cycles >= machine_cpu.run_start_cycles ?
+        cycles - machine_cpu.run_start_cycles : 0u;
     result->cycles_executed = machine_cpu.run_cycles;
     result->instructions_executed = machine_cpu.run_instructions;
     result->pc = pc;
