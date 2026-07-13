@@ -53,13 +53,13 @@ A direção correta é: **mínimo patch no Emu68, máximo encapsulamento no Bell
 
 The authoritative API contract is [Emu68 Public Machine Integration API](emu68_public_api.md).
 
-The Bellatrix-owned files under `src/cpu/emu68/` and the dispatcher added by
-`patches/0021-emu68-public-bus-dispatch.patch` describe the current integration,
-not the target public API. In particular, dispatching a callback from
-`vectors.c` still depends on Data Abort and must not be used as the basis of the
-machine API.
+The public API is implemented by `src/cpu/emu68/emu68_machine.*` and the minimal
+JIT integration patches. It is not the legacy callback path in `vectors.c`:
+normal external access is classified before any host load/store and never uses
+Data Abort or a compatibility fallback.
 
-The public API is implemented at the JIT memory-emission boundary: direct
-regions keep native loads/stores, external regions use an explicit bridge, and
-unmapped regions use defined 68k semantics. The detailed document defines the
-motivation, current Emu68 operation, and the complete API behavior.
+Direct regions keep native loads/stores, external regions use an explicit
+callback or cooperative exit, and unmapped regions use defined 68k semantics.
+`src/cpu/emu68/emu68_backend.c` is Bellatrix's adapter to that host-neutral
+contract. The authoritative document defines the motivation, Emu68 operation,
+API behavior, guarantees, and limits.

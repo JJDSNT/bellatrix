@@ -70,10 +70,11 @@ without asserting a physical ARM interrupt.
 
 ### Guest MMIO is not a host fault
 
-The current Bellatrix bridge is entered after translated native loads or stores
+The legacy Bellatrix bridge is entered after translated native loads or stores
 touch an unmapped or protected address. The resulting synchronous Data Abort is
-decoded by Emu68 and converted into a machine access. This preserves a cheap RAM
-path, but makes normal guest device activity depend on the ARM exception path.
+decoded by Emu68 and converted into a physical-style bus access. This preserves
+a cheap RAM path, but makes normal guest device activity depend on the ARM
+exception path.
 
 That dependency conflicts with a host which must own the exception
 infrastructure for real faults and physical services. The required rule is:
@@ -182,12 +183,13 @@ addresses and emit native AArch64 `ldr*` and `str*` forms for the different
 addressing modes. Consequently, mapped guest memory is accessed without a C
 callback.
 
-Bellatrix currently patches `MainLoop()` with safe return points and wraps it in
-`src/cpu/emu68/mainloop_window.S:MainLoopWindow()`. The adapter reports the
-retired instruction counter held by the JIT and can return on a host stop,
-guest STOP, a synchronization marker, or an estimated budget boundary. This
-proves that bounded execution is possible, although the public API must make the
-run boundary a native Emu68 facility instead of a Bellatrix wrapper.
+The machine profile adds safe instruction boundaries to `MainLoop()` and enters
+it through `src/cpu/emu68/mainloop_window.S:MainLoopWindow()`. At each boundary,
+Emu68 records the retired-instruction count, modeled cycles, and current PC,
+publishes host-neutral progress, and tests the run budget, STOP state, pending
+external access, bus error, and explicit stop request. `emu68_machine_run()` is
+therefore the owner of bounded execution; the Bellatrix backend calls that API
+and does not wrap or replay the execution loop.
 
 ### MMU layout and guest-address aliases
 
@@ -200,7 +202,7 @@ GiB and topmost -4..0 GiB virtual ranges:
 /* For 0..4GB create a shadow in the 4..8GB and -4..0GB areas */
 ```
 
-The current fault handlers normalize these aliases before bus dispatch. The
+The legacy fault handlers normalize these aliases before bus dispatch. The
 explicit classifier must do the same before looking up a guest region:
 
 ```c
@@ -211,7 +213,7 @@ Thus `0x00000000xxxxxxxx`, `0x00000001xxxxxxxx`, and
 `0xffffffffxxxxxxxx` aliases name the same 32-bit guest address when their low
 bits match.
 
-In the current Bellatrix path, the MMU has two roles:
+In the legacy Bellatrix fault path, the MMU has two roles:
 
 1. map directly accessible guest memory;
 2. detect external regions by leaving their pages absent or protected.
@@ -219,9 +221,9 @@ In the current Bellatrix path, the MMU has two roles:
 The public machine profile retains the first role. Region metadata and JIT
 code generation replace the second.
 
-### Current fault-based external access
+### Legacy fault-based external access
 
-The present Bellatrix flow is:
+The physical PiStorm-style integration historically used this flow:
 
 ```text
 EMIT_LoadFromEffectiveAddress()/EMIT_StoreToEffectiveAddress()
@@ -230,21 +232,20 @@ EMIT_LoadFromEffectiveAddress()/EMIT_StoreToEffectiveAddress()
     -> vectors.c decodes the faulting AArch64 instruction
     -> SYSPageFaultReadHandler()/SYSPageFaultWriteHandler()
     -> SYSReadValFromAddr()/SYSWriteValToAddr()
-    -> emu68_api_dispatch_bus_access()
-    -> registered Bellatrix callback
-    -> bellatrix_bus_access() fallback when the wrapper does not handle it
+    -> a platform-specific physical-bus callback
     -> handler advances ELR and translated execution resumes
 ```
 
 `patches/0002-add-bellatrix-bus-hook.patch` installs the Bellatrix page-fault
-bridge. `patches/0021-emu68-public-bus-dispatch.patch` adds the current API
-dispatcher inside that bridge.
+bridge that remains available to the independent legacy physical profile. It is
+not the machine API. The machine profile does not call it, does not fall back to
+it, and is not implemented in `vectors.c`. Its integration point is the JIT
+memory emitter before any potentially faulting host access is emitted.
 
-That dispatcher is the architectural problem, not the solution: it wraps the
-path from which the machine API must become independent. The new public API does
-not call it, does not fall back to it, and is not implemented in `vectors.c`.
-Its integration point is the JIT memory emitter before any potentially faulting
-host access is emitted.
+The continued presence of the legacy physical infrastructure is not an API
+dependency. Removing that infrastructure is separate work, as is Bluetooth
+integration. Their implementation order does not turn either one into part of
+this API or into a prerequisite for its normal execution path.
 
 ### PiStorm physical-bus backend
 
@@ -285,25 +286,20 @@ boundary, Emu68 remains stopped while the published IPL is masked, and resumes
 68k interrupt delivery when an eligible level exists. PiStorm's existing
 `wfe`/physical-interrupt behavior remains confined to its platform path.
 
-### Existing public-looking wrapper
+### Machine-profile implementation
 
-`src/cpu/emu68/emu68_api.h` and
-`src/cpu/emu68/emu68_api_adapter.c` currently provide an opaque singleton
-handle, lifecycle functions, bounded-run wrappers, bus callbacks, guest IPL,
-partial state access, invalidation, events, and statistics.
+The implementation is split by ownership. `emu68_machine.h` is the public ABI;
+`emu68_machine.c` owns lifecycle, regions, execution, pending accesses, IPL,
+STOP, exceptions, and invalidation; `emu68_machine_emit.c` generates the
+direct/external/unmapped access paths; and `emu68_machine_platform.c` is the
+private glue to Emu68 state, MMU, and translation cache.
 
-This interface is not the API defined by this document. In particular:
-
-- its bus dispatcher is called from the page-fault path;
-- it has no direct/external/unmapped region registry;
-- it exposes a Bellatrix-owned singleton wrapper over global Emu68 state;
-- its synchronization result is a delayed run marker, not a pending-access
-  protocol;
-- it labels the live fault traffic as data space even when the underlying 68k
-  function code is not represented.
-
-The implementation uses the public contract below directly. It does not extend
-or layer another wrapper over the current fault dispatcher.
+`src/cpu/emu68/emu68_backend.c` is not part of Emu68. It is Bellatrix's host
+adapter: it declares the Bellatrix guest topology, services public bus
+descriptors through `bellatrix_bus_access()`, publishes CPU progress to the
+chipset scheduler, and applies overlay changes at a safe stop. Emu68 never
+includes that backend or any Bellatrix type. The obsolete fault-dispatch
+wrapper and its compatibility fallback are absent.
 
 ## 3. How the Public API Works
 
@@ -437,8 +433,9 @@ pointer or an ARM fault.
 DIRECT registration uses Emu68's MMU to establish the native mapping with the
 requested permissions and attributes. EXTERNAL registration creates JIT-visible
 classification metadata but no host mapping. UNMAPPED registration explicitly
-selects 68k bus-error semantics. Reclassification first unmaps the old range and
-then registers the replacement.
+selects 68k bus-error semantics. `emu68_machine_unmap()` identifies an exact
+registered range. Reclassification first unmaps that range and then registers
+the replacement.
 
 Every topology change invalidates affected translation units and performs the
 required TLB/cache maintenance before returning. No translated unit may retain
@@ -504,16 +501,39 @@ low 64 bits and `value_hi` for the high 64 bits. For a write, Emu68 fills the
 value before handing the descriptor to the host. For a read, the host fills it
 before successful completion.
 
+### Guest fault semantics
+
+An uncovered address, a permission violation, an access spanning incompatible
+regions, or `EMU68_BUS_ERROR` enters guest exception vector 2. The machine
+profile builds a 68040 format-$7 access-error frame with the access address,
+width, direction, function code, SR, and fault PC available to the guest
+handler. An odd instruction address enters vector 3 with the six-word format-$2
+instruction-address-error frame. Exception stack writes and vector reads use the
+same explicit topology rules; they do not escape through Data Abort.
+
+These frames preserve the architectural information required by a guest
+handler, but the machine profile is not presented as a signal-accurate model of
+the MC68040 bus or pipeline. If the exception frame itself cannot be written or
+its vector cannot be read through a DIRECT region, execution returns a bus/fatal
+stop instead of invoking a host fault dispatcher.
+
 ### Synchronous mode
 
 ```c
 typedef emu68_bus_result_t (*emu68_bus_access_fn)(
     void *opaque, emu68_bus_access_t *access);
 
+typedef void (*emu68_progress_fn)(
+    void *opaque,
+    uint64_t cycle_delta,
+    uint64_t instruction_delta,
+    uint32_t pc);
+
 struct emu68_machine_ops {
     uint32_t abi_version;
     size_t struct_size;
     emu68_bus_access_fn bus_access;
+    emu68_progress_fn progress;
 };
 ```
 
@@ -531,6 +551,15 @@ no posted writes and no external-access reordering.
 The callback must not recursively run or destroy the same CPU, change its region
 topology, reset it, mutate its register state, or invalidate code. It may call
 the cross-thread-safe IPL and stop-request operations.
+
+`progress()` is optional and host-neutral. Emu68 calls it at safe instruction
+boundaries, immediately before a synchronous or cooperative external access,
+and for any remaining progress before a run returns. The deltas are relative to
+the previous callback in the same run; `pc` is the current 68k PC. This lets a
+host advance timers and devices without placing a host-specific call in the JIT
+loop. Bellatrix uses it to advance Rigel and keep guest interrupt generation
+live even during RAM-only code. The callback follows the same reentrancy
+restrictions as `bus_access()`.
 
 ### Cooperative mode
 
@@ -585,10 +614,18 @@ interrupt at the next valid 68k boundary. A stop request returns control without
 inventing an access result. Reset cancels the pending access.
 
 `cycle_budget` is measured in modeled 68k cycles, not ARM cycles or elapsed wall
-time. Emu68 accounts each retired instruction and exception using its 68k cost
-model. `cycles_executed` may exceed the requested budget only by the cost of the
+time. The model is deterministic and instruction-aware, including addressing
+mode and exception costs; it is a scheduling/compatibility model, not a
+cycle-exact simulation of the MC68040 pipeline, caches, or bus. In ordinary
+execution, `cycles_executed` may exceed the budget only by the cost of the
 instruction that reaches the next safe return boundary. The result also reports
 the exact number of retired 68k instructions.
+
+In cooperative mode an instruction can suspend after its modeled cost has been
+charged but before it retires. That cost is reported once in the run that
+returns `EMU68_STOP_EXTERNAL_ACCESS`; it is not charged again after completion.
+`instructions_executed` increases only when the instruction retires. This rule
+keeps progress monotonic without replaying an instruction or an external write.
 
 Synchronous mode uses the same run operation; its external accesses complete
 inside callbacks and therefore do not return `EMU68_STOP_EXTERNAL_ACCESS`.
@@ -655,16 +692,17 @@ For external accesses, the contract is sequential and conservative:
 - an interrupt is not delivered in the middle of an incomplete access;
 - region changes and code invalidation are complete before the next run.
 
-### Required Emu68 integration
+### Integration guarantees
 
-The API is implemented inside Emu68, not around the Bellatrix fault bridge. The
-effective-address emitters and their shared load/store helpers must use the
-registered region metadata and generate the direct/external/unmapped split.
-All load and store forms, including indexed, predecrement, postincrement,
-floating-point, and wide operations, must pass through the same classification
-rule.
+The API is implemented in the Emu68 machine profile, not around the Bellatrix
+fault bridge. Effective-address emitters and their shared load/store helpers use
+the registered region metadata and generate the direct/external/unmapped split.
+Indexed, predecrement, postincrement, stack, MOVEM, alternate-function-code,
+bitfield, floating-point, paired, and wide operations follow the same
+classification rule. Instruction fetch, exception stack traffic, and vector
+fetches are also explicit machine accesses.
 
-The machine profile is correct when:
+The implemented machine profile guarantees that:
 
 - direct RAM/ROM still use native JIT loads and stores;
 - external regions reach the public callback or cooperative exit explicitly;
@@ -680,6 +718,6 @@ The machine profile is correct when:
 - no public type exposes Bellatrix, Rigel, GPIO, exception-frame, MMU-table, or
   JIT-register details.
 
-There is no compatibility fallback from this API to the current Bellatrix
+There is no compatibility fallback from this API to the legacy Bellatrix
 fault dispatcher. Once the machine profile selects this API, Data Abort means a
 real host fault or diagnostic condition, never ordinary guest bus traffic.

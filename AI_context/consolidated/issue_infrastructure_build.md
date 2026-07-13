@@ -97,21 +97,24 @@ bellatrix/
 - `start.c`: secondary_boot para Core 1/2/3 (multicore)
 
 ### `0003-bellatrix-execution-loop.patch`
-- `ExecutionLoop.c`: bloco BELLATRIX que lê `v30` e chama `bellatrix_bridge_cpu_progress(bela_delta * 8u)`
+- `ExecutionLoop.c`: fronteiras seguras que reportam instruções/ciclos ao runtime
+  genérico da machine API; não chama código Bellatrix diretamente
 
 ### `0004-bellatrix-cherryusb-dwc2-host.patch`
 - Patches no CherryUSB: endianness LE, hub descriptor parsing, polling mode, DWC2 MMIO LE accessors
 
-### `0021-emu68-public-bus-dispatch.patch`
-- `vectors.c`: inclui `cpu/emu68/emu68_api.h`
-- `vectors.c`: chama `emu68_api_dispatch_bus_access(...)` no path de fault/MMIO
-- fallback preservado para `bellatrix_bus_access(...)` quando a API publica nao
-  estiver inicializada ou nao atender o acesso
+### `0025`–`0035`: machine API do Emu68
+- adicionam retorno/continuação exata do loop, `mmu_unmap`, classificação
+  explícita de todos os caminhos de acesso e contagem determinística de ciclos
+- acessos EXTERNAL chegam ao contrato público antes de qualquer load/store host
+- o antigo patch `0021` e o wrapper baseado em fault foram removidos
 
-O contrato e o adapter da API ficam fora do submodulo:
+O contrato e o backend ficam no repositório principal:
 
-- `src/cpu/emu68/emu68_api.h`
-- `src/cpu/emu68/emu68_api_adapter.c`
+- `src/cpu/emu68/emu68_machine.h/.c`
+- `src/cpu/emu68/emu68_machine_emit.c`
+- `src/cpu/emu68/emu68_machine_platform.c`
+- `src/cpu/emu68/emu68_backend.c`
 - registrados em `cmake/bellatrix-variant.cmake`
 
 ## Build Commands
@@ -192,7 +195,8 @@ constantes centrais, nunca hardcode de `0x1FFFFF` ou `0x200000`.
 - `emu68/CMakeLists.txt` ↔ `patches/0001-...`
 - `emu68/src/aarch64/vectors.c` ↔ `patches/0002-...`
 - `emu68/src/aarch64/start.c` ↔ `patches/0002-...`
-- `emu68/src/ExecutionLoop.c` ↔ `patches/0003-...`
-- `emu68/src/aarch64/vectors.c` ↔ `patches/0021-...`
-- `src/cpu/emu68/emu68_api*` ↔ `cmake/bellatrix-variant.cmake`
+- `emu68/src/ExecutionLoop.c` ↔ `patches/0003-...` e `patches/0025-...`
+- emissores `emu68/src/M68k_*.c` ↔ `patches/0027-...` a `0035-...`
+- `src/cpu/emu68/emu68_machine*` e `emu68_backend.c` ↔
+  `cmake/bellatrix-variant.cmake`
 - `external/cherryusb/` ↔ `patches/0004-...`

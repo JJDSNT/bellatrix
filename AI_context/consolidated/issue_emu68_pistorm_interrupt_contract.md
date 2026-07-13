@@ -93,10 +93,11 @@ rascunhos apagados propunham). É separar de vez o que o Emu68 confunde
 (`ARM IRQ ≡ Amiga IPL`), dando a ele um contrato de host pequeno — do qual metade
 já existe em `[[emu68_public_api]]`:
 
-- `emu68_set_irq_level()` — IPL persistente dirigido por software; o host decide a
-  fonte (Rigel hoje, fio real no PiStorm, stub no teste). **Já implementado.**
-- `emu68_run_cycles()` / `emu68_request_stop()` — JIT como backend escalonável, não
-  dono do core. **Já implementado** como janela cooperativa sobre o `MainLoop()`.
+- `emu68_machine_set_ipl()` — IPL persistente dirigido por software; o host
+  decide a fonte (Rigel hoje, fio real no PiStorm, stub no teste).
+- `emu68_machine_run()` / `emu68_machine_request_stop()` — JIT como backend
+  escalonável, não dono do core, implementado pelo runtime público com fronteiras
+  nativas e contagem de ciclos, não por wrapper Bellatrix.
 - IRQ de device do host permanece inteiramente fora do Emu68: ou polled (atual), ou
   — se algum dia medição justificar — numa vector table **do Bellatrix**, num core
   onde o Emu68 não roda, nunca encadeada no tradutor INT6 dele.
@@ -146,5 +147,6 @@ owner do hardware, e não o Core 0.
 - `emu68/src/aarch64/vectors.c:140-189` — vectors IRQ/FIQ/SError (tradutor INT6→IPL)
 - `src/runtime/core_io.c` — Core 3, polling de USB + Bluetooth
 - `src/io/bluetooth/bt_hal_raspi3.c:40-51` — regime "no routed IRQs" documentado
-- `src/cpu/emu68/emu68_api.h` / `emu68_api_adapter.c` — contrato público (IPL, janela)
+- `src/cpu/emu68/emu68_machine.h` — contrato público de CPU, memória, execução e IPL
+- `src/cpu/emu68/emu68_backend.c` — adapter Bellatrix para o contrato público
 - CLAUDE.md — "IPL injection", "ABI constraint"
