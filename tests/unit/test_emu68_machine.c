@@ -99,6 +99,11 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
         *stopped = platform_stopped;
 }
 
+uint8_t emu68_machine_platform_source_function_code(int destination)
+{
+    return destination ? 5u : 1u;
+}
+
 emu68_status_t emu68_machine_platform_get_arch_state(
     emu68_machine_arch_state_t *state)
 {
