@@ -1,5 +1,5 @@
 diff --git a/src/M68k_LINE0.c b/src/M68k_LINE0.c
-index 557cf63..11149da 100644
+index 557cf63..da22389 100644
 --- a/src/M68k_LINE0.c
 +++ b/src/M68k_LINE0.c
 @@ -262,11 +262,11 @@ uint32_t *EMIT_SUBI(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
@@ -515,7 +515,125 @@ index 557cf63..11149da 100644
  
          RA_FreeARMRegister(&ptr, tmp);
      }
-@@ -2623,18 +2640,18 @@ uint32_t *EMIT_MOVEP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+@@ -2282,17 +2299,17 @@ uint32_t *EMIT_CAS(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+         switch (size) \
+         { \
+             case 1:\
+-                *ptr++ = ldrb_offset(ea, tmp, 0);\
++                EMU68_GUEST_LOAD(ptr, ea, tmp, 1, 0);\
+                 *ptr++ = lsl(tmp, tmp, 24);\
+                 *ptr++ = subs_reg(31, tmp, dc, LSL, 24);\
+                 break;\
+             case 2:\
+-                *ptr++ = ldrh_offset(ea, tmp, 0);\
++                EMU68_GUEST_LOAD(ptr, ea, tmp, 2, 0);\
+                 *ptr++ = lsl(tmp, tmp, 16);\
+                 *ptr++ = subs_reg(31, tmp, dc, LSL, 16);\
+                 break;\
+             case 3:\
+-                *ptr++ = ldr_offset(ea, tmp, 0);\
++                EMU68_GUEST_LOAD(ptr, ea, tmp, 4, 0);\
+                 *ptr++ = subs_reg(31, tmp, dc, LSL, 0);\
+                 break;\
+         }\
+@@ -2301,13 +2318,13 @@ uint32_t *EMIT_CAS(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+         switch (size)\
+         {\
+             case 1:\
+-                *ptr++ = strb_offset(ea, du, 0);\
++                EMU68_GUEST_STORE(ptr, ea, du, 1);\
+                 break;\
+             case 2:\
+-                *ptr++ = strh_offset(ea, du, 0);\
++                EMU68_GUEST_STORE(ptr, ea, du, 2);\
+                 break;\
+             case 3:\
+-                *ptr++ = str_offset(ea, du, 0);\
++                EMU68_GUEST_STORE(ptr, ea, du, 4);\
+                 break;\
+         }\
+         *ptr++ = b(2);\
+@@ -2351,37 +2368,47 @@ uint32_t *EMIT_CAS(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+         {
+             uint8_t tmp1 = RA_AllocARMRegister(&ptr);
+             uint8_t tmp2 = RA_AllocARMRegister(&ptr);
+-            *ptr++ = ldrh_offset(rn1, val1, 0);
+-            *ptr++ = ldrh_offset(rn2, val2, 0);
++            EMU68_GUEST_LOAD(ptr, rn1, val1, 2, 0);
++            EMU68_GUEST_LOAD(ptr, rn2, val2, 2, 0);
+             *ptr++ = lsl(val1, val1, 16);
+             *ptr++ = lsl(val2, val2, 16);
+             *ptr++ = subs_reg(31, val1, dc1, LSL, 16);
+-            *ptr++ = b_cc(A64_CC_NE, 6);
++            uint32_t *first_failed = ptr++;
+             *ptr++ = subs_reg(31, val2, dc2, LSL, 16);
+-            *ptr++ = b_cc(A64_CC_NE, 4);
++            uint32_t *second_failed = ptr++;
+             // 68040 stores du2 first, then du1
+-            *ptr++ = strh_offset(rn2, du2, 0);
+-            *ptr++ = strh_offset(rn1, du1, 0);
+-            *ptr++ = b(3);
++            EMU68_GUEST_STORE(ptr, rn2, du2, 2);
++            EMU68_GUEST_STORE(ptr, rn1, du1, 2);
++            uint32_t *success = ptr++;
++            uint32_t *failed = ptr;
+             *ptr++ = bfxil(dc1, val1, 16, 16);
+             *ptr++ = bfxil(dc2, val2, 16, 16);
++            uint32_t *done = ptr;
++            *first_failed = b_cc(A64_CC_NE, failed - first_failed);
++            *second_failed = b_cc(A64_CC_NE, failed - second_failed);
++            *success = b(done - success);
+             RA_FreeARMRegister(&ptr, tmp1);
+             RA_FreeARMRegister(&ptr, tmp2);
+         }
+         else
+         {
+-            *ptr++ = ldr_offset(rn1, val1, 0);
+-            *ptr++ = ldr_offset(rn2, val2, 0);
++            EMU68_GUEST_LOAD(ptr, rn1, val1, 4, 0);
++            EMU68_GUEST_LOAD(ptr, rn2, val2, 4, 0);
+             *ptr++ = subs_reg(31, val1, dc1, LSL, 0);
+-            *ptr++ = b_cc(A64_CC_NE, 6);
++            uint32_t *first_failed = ptr++;
+             *ptr++ = subs_reg(31, val2, dc2, LSL, 0);
+-            *ptr++ = b_cc(A64_CC_NE, 4);
++            uint32_t *second_failed = ptr++;
+             // 68040 stores du2 first, then du1
+-            *ptr++ = str_offset(rn2, du2, 0);
+-            *ptr++ = str_offset(rn1, du1, 0);
+-            *ptr++ = b(3);
++            EMU68_GUEST_STORE(ptr, rn2, du2, 4);
++            EMU68_GUEST_STORE(ptr, rn1, du1, 4);
++            uint32_t *success = ptr++;
++            uint32_t *failed = ptr;
+             *ptr++ = mov_reg(dc1, val1);
+             *ptr++ = mov_reg(dc2, val2);
++            uint32_t *done = ptr;
++            *first_failed = b_cc(A64_CC_NE, failed - first_failed);
++            *second_failed = b_cc(A64_CC_NE, failed - second_failed);
++            *success = b(done - success);
+         }
+ 
+         *ptr++ = dmb_ish();
+@@ -2450,6 +2477,9 @@ uint32_t *EMIT_CAS(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+             RA_SetDirtyM68kRegister(&ptr, 8 + (opcode & 7));
+         }
+ 
++#ifdef BELLATRIX
++        CAS_UNSAFE();
++#else
+         if (size == 1)
+         {
+             CAS_ATOMIC();
+@@ -2514,6 +2544,7 @@ uint32_t *EMIT_CAS(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+             *b_ = b(ptr - b_);
+             *b_eq = b_cc(A64_CC_EQ, 1 + b_ - b_eq);
+         }
++#endif
+ 
+         *ptr++ = dmb_ish();
+ 
+@@ -2623,18 +2654,18 @@ uint32_t *EMIT_MOVEP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
          /* Long mode */
          if (opcode & 0x40) {
              *ptr++ = lsr(tmp, dn, 24);
@@ -540,7 +658,7 @@ index 557cf63..11149da 100644
          }
      }
      /* Memory to register transfer */
-@@ -2643,21 +2660,21 @@ uint32_t *EMIT_MOVEP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+@@ -2643,21 +2674,21 @@ uint32_t *EMIT_MOVEP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
          
          /* Long mode */
          if (opcode & 0x40) {
@@ -568,7 +686,7 @@ index 557cf63..11149da 100644
              *ptr++ = orr_reg(dn, dn, tmp, LSL, 0);
          }
      }
-@@ -2694,6 +2711,10 @@ uint32_t *EMIT_MOVES(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+@@ -2694,6 +2725,10 @@ uint32_t *EMIT_MOVES(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
      // Transfer from Register to EA
      if (opcode2 & (1 << 11)) {
  
@@ -579,7 +697,7 @@ index 557cf63..11149da 100644
          if (((opcode & 0x38) == 0x18) && (8 + (opcode & 7)) == (opcode2 >> 12))
          {
              uint8_t tmpreg = RA_AllocARMRegister(&ptr);
-@@ -2715,6 +2736,9 @@ uint32_t *EMIT_MOVES(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+@@ -2715,6 +2750,9 @@ uint32_t *EMIT_MOVES(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
      }
      // Transfer from EA to Register
      else {
@@ -589,7 +707,7 @@ index 557cf63..11149da 100644
          RA_SetDirtyM68kRegister(&ptr, opcode2 >> 12);
          if (size == 4)
              ptr = EMIT_LoadFromEffectiveAddress(ptr, size, &reg, opcode & 0x3f, *m68k_ptr, &ext_count, 0, NULL);
-@@ -2750,6 +2774,10 @@ uint32_t *EMIT_MOVES(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+@@ -2750,6 +2788,10 @@ uint32_t *EMIT_MOVES(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
          }
      }
  
