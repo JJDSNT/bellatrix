@@ -25,6 +25,7 @@ void emu68_machine_platform_wake(void);
 void emu68_machine_platform_run(void);
 void emu68_machine_platform_snapshot(uint64_t *instructions, uint64_t *cycles,
                                      uint32_t *pc, int *stopped);
+void emu68_machine_platform_add_cycles(uint32_t cycles);
 uint8_t emu68_machine_platform_source_function_code(int destination);
 emu68_status_t emu68_machine_platform_get_arch_state(
     emu68_machine_arch_state_t *state);

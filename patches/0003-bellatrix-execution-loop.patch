@@ -112,13 +112,14 @@ index 732a176..9f55465 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +296,64 @@ void MainLoop()
+@@ -236,6 +296,65 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
 +
 +#ifdef BELLATRIX
 +                {
++                    ctx->CYCLE_COUNT += 44u;
 +                    /* setSR may clobber x18 (M68K PC); save once, restore after setSR. */
 +                    uint64_t _x18_save;
 +                    asm volatile("mov %0, x18" : "=r"(_x18_save));
@@ -177,7 +178,7 @@ index 732a176..9f55465 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +366,8 @@ void MainLoop()
+@@ -248,7 +367,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */

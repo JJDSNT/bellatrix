@@ -621,6 +621,7 @@ int emu68_machine_enter_bus_error(void)
     state.pc = get_be32(vector);
     if (emu68_machine_platform_set_arch_state(&state) != EMU68_OK)
         return 0;
+    emu68_machine_platform_add_cycles(50u);
     machine_cpu.bus_error_pending = 0u;
     return 1;
 }

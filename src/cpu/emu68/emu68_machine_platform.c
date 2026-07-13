@@ -124,6 +124,12 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint64_t *cycles,
     }
 }
 
+void emu68_machine_platform_add_cycles(uint32_t cycles)
+{
+    if (__m68k_state)
+        __m68k_state->CYCLE_COUNT += cycles;
+}
+
 uint8_t emu68_machine_platform_source_function_code(int destination)
 {
     if (!__m68k_state)

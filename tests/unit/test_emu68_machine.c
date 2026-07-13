@@ -101,6 +101,11 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint64_t *cycles,
         *stopped = platform_stopped;
 }
 
+void emu68_machine_platform_add_cycles(uint32_t cycles)
+{
+    (void)cycles;
+}
+
 uint8_t emu68_machine_platform_source_function_code(int destination)
 {
     return destination ? 5u : 1u;
