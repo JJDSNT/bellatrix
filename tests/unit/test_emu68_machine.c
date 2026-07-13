@@ -191,6 +191,7 @@ static void test_regions_and_sync_access(void)
     CHECK(map_calls == 1u);
     CHECK(emu68_machine_read_pages[1] == EMU68_PAGE_DIRECT);
     CHECK(emu68_machine_write_pages[1] == EMU68_PAGE_DIRECT);
+    CHECK(emu68_machine_instruction_fetch_allowed(0x00010000u, 2u));
     CHECK(emu68_machine_map_direct(cpu, &direct) == EMU68_ERR_OVERLAP);
     CHECK(map_calls == 1u);
 
@@ -223,6 +224,7 @@ static void test_regions_and_sync_access(void)
         CHECK(bridge.value == 0xfeedu);
         CHECK(callback_calls == 2u);
     }
+    CHECK(!emu68_machine_instruction_fetch_allowed(0x00dff020u, 2u));
 
     CHECK(emu68_machine_unmap(cpu, direct.guest_base, direct.size) == EMU68_OK);
     CHECK(unmap_calls == 2u);

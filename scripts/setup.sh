@@ -194,6 +194,7 @@ EMU68_PATCHES=(
     "$PATCHES/0025-emu68-machine-continuation.patch"
     "$PATCHES/0026-emu68-mmu-unmap.patch"
     "$PATCHES/0027-emu68-explicit-ea-access.patch"
+    "$PATCHES/0028-emu68-explicit-fetch-and-exception.patch"
 )
 
 CHERRYUSB_PATCHES=(

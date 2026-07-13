@@ -72,6 +72,7 @@ int emu68_machine_prepare_native_resume(void);
 int emu68_machine_native_access_pending(void);
 int emu68_machine_native_bus_error_pending(void);
 int emu68_machine_enter_bus_error(void);
+int emu68_machine_instruction_fetch_allowed(uint32_t address, uint8_t width);
 int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
                                             uint32_t pc);
 void emu68_machine_resume_native(void);

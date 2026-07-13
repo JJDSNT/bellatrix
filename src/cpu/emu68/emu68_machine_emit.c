@@ -226,3 +226,48 @@ uint32_t *emu68_machine_emit_store(uint32_t *ptr, uint8_t address_reg,
     RA_FreeARMRegister(&ptr, page_reg);
     return ptr;
 }
+
+static uint32_t *emit_offset_address(uint32_t *ptr, uint8_t base_reg,
+                                     int32_t offset, uint8_t address_reg,
+                                     uint8_t offset_reg)
+{
+    if (offset == 0) {
+        *ptr++ = mov_reg(address_reg, base_reg);
+        return ptr;
+    }
+    *ptr++ = movw_immed_u16(offset_reg, (uint16_t)offset);
+    *ptr++ = movt_immed_u16(offset_reg,
+                            (uint16_t)((uint32_t)offset >> 16));
+    *ptr++ = add_reg(address_reg, base_reg, offset_reg, LSL, 0);
+    return ptr;
+}
+
+uint32_t *emu68_machine_emit_load_offset(
+    uint32_t *ptr, uint8_t base_reg, int32_t offset, uint8_t value_reg,
+    uint8_t width, int sign_extend, uint32_t metadata)
+{
+    uint8_t address_reg = RA_AllocARMRegister(&ptr);
+    uint8_t offset_reg = RA_AllocARMRegister(&ptr);
+
+    ptr = emit_offset_address(ptr, base_reg, offset, address_reg, offset_reg);
+    ptr = emu68_machine_emit_load(ptr, address_reg, value_reg, width,
+                                  sign_extend, metadata);
+    RA_FreeARMRegister(&ptr, offset_reg);
+    RA_FreeARMRegister(&ptr, address_reg);
+    return ptr;
+}
+
+uint32_t *emu68_machine_emit_store_offset(
+    uint32_t *ptr, uint8_t base_reg, int32_t offset, uint8_t value_reg,
+    uint8_t width, uint32_t metadata)
+{
+    uint8_t address_reg = RA_AllocARMRegister(&ptr);
+    uint8_t offset_reg = RA_AllocARMRegister(&ptr);
+
+    ptr = emit_offset_address(ptr, base_reg, offset, address_reg, offset_reg);
+    ptr = emu68_machine_emit_store(ptr, address_reg, value_reg, width,
+                                   metadata);
+    RA_FreeARMRegister(&ptr, offset_reg);
+    RA_FreeARMRegister(&ptr, address_reg);
+    return ptr;
+}

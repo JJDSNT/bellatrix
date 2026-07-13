@@ -1,0 +1,182 @@
+diff --git a/src/M68k_Exception.c b/src/M68k_Exception.c
+index cb13256..034d347 100644
+--- a/src/M68k_Exception.c
++++ b/src/M68k_Exception.c
+@@ -12,6 +12,9 @@
+ #include "support.h"
+ #include "M68k.h"
+ #include "RegisterAllocator.h"
++#ifdef BELLATRIX
++#include "cpu/emu68/emu68_machine_emit.h"
++#endif
+ 
+ uint32_t *EMIT_Exception(uint32_t *ptr, uint16_t exception, uint8_t format, ...)
+ {
+@@ -70,7 +73,12 @@ uint32_t *EMIT_Exception(uint32_t *ptr, uint16_t exception, uint8_t format, ...)
+         *ptr++ = movw_immed_u16(vbr, ea & 0xffff);
+         if ((ea >> 16) != 0)
+             *ptr++ = movt_immed_u16(vbr, ea >> 16);
++#ifdef BELLATRIX
++        *ptr++ = sub_immed(sp, sp, 4);
++        ptr = emu68_machine_emit_store(ptr, sp, vbr, 4, 0u);
++#else
+         *ptr++ = str_offset_preindex(sp, vbr, -4);
++#endif
+     }
+     else if (format == 4)
+     {
+@@ -81,12 +89,21 @@ uint32_t *EMIT_Exception(uint32_t *ptr, uint16_t exception, uint8_t format, ...)
+         *ptr++ = movw_immed_u16(vbr, fault & 0xffff);
+         if ((fault >> 16) != 0)
+             *ptr++ = movt_immed_u16(vbr, fault >> 16);
++#ifdef BELLATRIX
++        *ptr++ = sub_immed(sp, sp, 8);
++        ptr = emu68_machine_emit_store(ptr, sp, vbr, 4, 0u);
++#else
+         *ptr++ = str_offset_preindex(sp, vbr, -8);
++#endif
+ 
+         *ptr++ = movw_immed_u16(vbr, ea & 0xffff);
+         if ((ea >> 16) != 0)
+             *ptr++ = movt_immed_u16(vbr, ea >> 16);
++#ifdef BELLATRIX
++        ptr = emu68_machine_emit_store_offset(ptr, sp, 4, vbr, 4, 0u);
++#else
+         *ptr++ = str_offset(sp, vbr, 4);
++#endif
+     }
+ 
+     uint8_t cc_copy = RA_AllocARMRegister(&ptr);
+@@ -95,16 +112,29 @@ uint32_t *EMIT_Exception(uint32_t *ptr, uint16_t exception, uint8_t format, ...)
+     *ptr++ = rbit(vbr, cc);
+     *ptr++ = bfxil(cc_copy, vbr, 30, 2);
+     /* Store SR */
++#ifdef BELLATRIX
++    *ptr++ = sub_immed(sp, sp, 8);
++    ptr = emu68_machine_emit_store(ptr, sp, cc_copy, 2, 0u);
++#else
+     *ptr++ = strh_offset_preindex(sp, cc_copy, -8);
++#endif
+ 
+     RA_FreeARMRegister(&ptr, cc_copy);
+ 
+     /* Store program counter */
++#ifdef BELLATRIX
++    ptr = emu68_machine_emit_store_offset(ptr, sp, 2, REG_PC, 4, 0u);
++#else
+     *ptr++ = stur_offset(sp, REG_PC, 2);
++#endif
+ 
+     /* Store exception vector and type */
+     *ptr++ = mov_immed_u16(vbr, (format << 12) | (exception & 0xfff), 0);
++#ifdef BELLATRIX
++    ptr = emu68_machine_emit_store_offset(ptr, sp, 6, vbr, 2, 0u);
++#else
+     *ptr++ = strh_offset(sp, vbr, 6);
++#endif
+ 
+     /* Clear trace flags, set supervisor */
+     *ptr++ = bic_immed(cc, cc, 2, 32 - SRB_T0);
+@@ -112,7 +142,12 @@ uint32_t *EMIT_Exception(uint32_t *ptr, uint16_t exception, uint8_t format, ...)
+ 
+     /* Load VBR */
+     *ptr++ = ldr_offset(ctx, vbr, __builtin_offsetof(struct M68KState, VBR));
++#ifdef BELLATRIX
++    ptr = emu68_machine_emit_load_offset(ptr, vbr, exception, REG_PC, 4,
++                                         0, 0u);
++#else
+     *ptr++ = ldr_offset(vbr, REG_PC, exception);
++#endif
+ 
+     RA_FreeARMRegister(&ptr, vbr);
+     
+diff --git a/src/M68k_Translator.c b/src/M68k_Translator.c
+index c95ee46..672e354 100644
+--- a/src/M68k_Translator.c
++++ b/src/M68k_Translator.c
+@@ -19,6 +19,10 @@
+ #include "DuffCopy.h"
+ #include "disasm.h"
+ #include "cache.h"
++#ifdef BELLATRIX
++#include "cpu/emu68/emu68_machine_emit.h"
++#include "cpu/emu68/emu68_machine_internal.h"
++#endif
+ 
+ #if SET_FEATURES_AT_RUNTIME
+ features_t Features;
+@@ -177,7 +181,13 @@ static inline uint32_t *EmitINSN(uint32_t *arm_ptr, uint16_t **m68k_ptr, uint16_
+         {
+             int8_t off = 0;
+             ptr = EMIT_GetOffsetPC(ptr, &off);
++#ifdef BELLATRIX
++            ptr = emu68_machine_emit_load_offset(
++                ptr, REG_PC, off, 0, 2, 0,
++                EMU68_SPACE_PROGRAM << EMU68_BRIDGE_META_SPACE_SHIFT);
++#else
+             *ptr++ = ldurh_offset(REG_PC, 0, off);
++#endif
+         }
+     }
+ 
+diff --git a/src/cache.c b/src/cache.c
+index 3e5b953..af95c51 100644
+--- a/src/cache.c
++++ b/src/cache.c
+@@ -2,6 +2,18 @@
+ #include "tlsf.h"
+ #include "support.h"
+ #include "cache.h"
++#ifdef BELLATRIX
++extern int emu68_machine_runtime_active(void);
++extern int emu68_machine_instruction_fetch_allowed(uint32_t, uint8_t);
++#define CHECK_MACHINE_FETCH(type, address, width)                            \
++    do {                                                                      \
++        if ((type) == ICACHE && emu68_machine_runtime_active() &&             \
++            !emu68_machine_instruction_fetch_allowed((address), (width)))     \
++            return 0;                                                         \
++    } while (0)
++#else
++#define CHECK_MACHINE_FETCH(type, address, width) do { } while (0)
++#endif
+ //#include "ps_protocol.h"
+ #include "M68k.h"
+ #include <stdint.h>
+@@ -294,6 +306,7 @@ uint128_t cache_read_128(enum CacheType type, uint32_t address)
+ 
+ uint64_t cache_read_64(enum CacheType type, uint32_t address)
+ {
++    CHECK_MACHINE_FETCH(type, address, 8u);
+     struct Cache *cache = (type == ICACHE) ? IC : DC;
+     const uint32_t tag = GET_TAG(address);
+     const uint32_t set = GET_SET(address);
+@@ -425,6 +438,7 @@ uint64_t cache_read_64(enum CacheType type, uint32_t address)
+ 
+ uint32_t cache_read_32(enum CacheType type, uint32_t address)
+ {
++    CHECK_MACHINE_FETCH(type, address, 4u);
+     struct Cache *cache = (type == ICACHE) ? IC : DC;
+     const uint32_t tag = GET_TAG(address);
+     const uint32_t set = GET_SET(address);
+@@ -533,6 +547,7 @@ uint32_t cache_read_32(enum CacheType type, uint32_t address)
+ 
+ uint16_t cache_read_16(enum CacheType type, uint32_t address)
+ {
++    CHECK_MACHINE_FETCH(type, address, 2u);
+     struct Cache *cache = (type == ICACHE) ? IC : DC;
+     const uint32_t tag = GET_TAG(address);
+     const uint32_t set = GET_SET(address);
+@@ -626,6 +641,7 @@ uint16_t cache_read_16(enum CacheType type, uint32_t address)
+ 
+ uint8_t cache_read_8(enum CacheType type, uint32_t address)
+ {
++    CHECK_MACHINE_FETCH(type, address, 1u);
+     struct Cache *cache = (type == ICACHE) ? IC : DC;
+     const uint32_t tag = GET_TAG(address);
+     const uint32_t set = GET_SET(address);
+@@ -1281,4 +1297,3 @@ int cache_write_8(enum CacheType type, uint32_t address, uint8_t data, uint8_t w
+ 
+     return 1;
+ }
+-
+

@@ -1,7 +1,7 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -4,6 +4,13 @@
+@@ -4,6 +4,14 @@
  #ifdef BELLATRIX
  #include "cpu/emu68/bellatrix.h"
  #include "cpu/emu68/emu68_api.h"
@@ -9,17 +9,28 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 +extern int emu68_machine_native_access_pending(void);
 +extern int emu68_machine_native_bus_error_pending(void);
 +extern int emu68_machine_enter_bus_error(void);
++extern int emu68_machine_instruction_fetch_allowed(uint32_t, uint8_t);
 +extern int emu68_machine_runtime_active(void);
 +extern int emu68_machine_dispatch_quantum_progress(uint64_t, uint32_t);
 +extern void emu68_machine_resume_native(void);
  #endif
  #ifdef PISTORM
  #ifndef PISTORM32
-@@ -147,7 +154,24 @@ void MainLoop()
+@@ -147,7 +155,34 @@ void MainLoop()
          LastPC = getLastPC();
          ctx = getCTX();
  
  #ifdef BELLATRIX
++        if (emu68_machine_runtime_active() &&
++            !emu68_machine_instruction_fetch_allowed((uint32_t)(uintptr_t)PC,
++                                                       2u)) {
++            M68K_SaveContext(ctx);
++            if (emu68_machine_enter_bus_error()) {
++                M68K_LoadContext(ctx);
++                continue;
++            }
++            return;
++        }
 +        if (emu68_machine_prepare_native_resume()) {
 +            emu68_machine_resume_native();
 +            continue;
@@ -40,7 +51,7 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
          /* Advance the Bellatrix chipset on every pass through the loop, not
           * only on MMIO faults. Without this, guest phases that touch no
           * unmapped address (RAM-only loops, Wait/STOP idling) freeze chipset
-@@ -198,8 +222,12 @@ void MainLoop()
+@@ -198,8 +233,12 @@ void MainLoop()
                  asm volatile("mov %0, x12" : "=r"(_x12_save));
                  M68K_SaveContext(ctx);
                  bellatrix_emu68_report_jit_progress(_v30_now, (uint32_t)_pc_now);
@@ -55,3 +66,19 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
                  M68K_LoadContext(getCTX());
                  asm volatile("mov x12, %0" :: "r"(_x12_save));
                  asm volatile("mov v28.d[0], xzr");
+@@ -439,6 +478,8 @@ void MainLoop()
+                 node = M68K_GetTranslationUnit(copyPC);
+                 /* Load CPU context */
+                 M68K_LoadContext(getCTX());
++                if (emu68_machine_native_bus_error_pending())
++                    continue;
+                 asm volatile("msr TPIDR_EL1, %0"::"r"(PC));
+                 /* Prepare ARM pointer in x12 and call it */
+                 ARM = node->mt_ARMEntryPoint;
+@@ -467,4 +508,6 @@ void MainLoop()
+             M68K_LoadContext(getCTX());
++            if (emu68_machine_native_bus_error_pending())
++                continue;
+             ARM = node->mt_ARMEntryPoint;
+             asm volatile("":"=r"(ARM):"0"(ARM));
+             CallARMCode();

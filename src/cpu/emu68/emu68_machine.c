@@ -613,6 +613,33 @@ int emu68_machine_enter_bus_error(void)
     return 1;
 }
 
+int emu68_machine_instruction_fetch_allowed(uint32_t address, uint8_t width)
+{
+    const struct emu68_machine_region *region;
+
+    if (!machine_cpu.active)
+        return 1;
+    region = find_region(address, width);
+    if (region && region->kind == EMU68_REGION_DIRECT &&
+        (region->flags & (EMU68_REGION_READ | EMU68_REGION_EXECUTE)) ==
+            (EMU68_REGION_READ | EMU68_REGION_EXECUTE))
+        return 1;
+
+    if (!machine_cpu.bus_error_pending) {
+        memset(&machine_cpu.fault_access, 0,
+               sizeof(machine_cpu.fault_access));
+        machine_cpu.fault_access.address = address;
+        machine_cpu.fault_access.kind = EMU68_ACCESS_READ;
+        machine_cpu.fault_access.space = EMU68_SPACE_PROGRAM;
+        machine_cpu.fault_access.function_code =
+            current_function_code(EMU68_SPACE_PROGRAM, 0u);
+        machine_cpu.fault_access.width = width;
+        machine_cpu.fault_pc = address;
+        machine_cpu.bus_error_pending = 1u;
+    }
+    return 0;
+}
+
 int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
                                             uint32_t pc)
 {
