@@ -135,7 +135,8 @@ static int board_access(emu68_bus_access_t *access)
     if (access->kind == EMU68_ACCESS_READ) {
         if (access->width != 1u)
             return 0;
-        access->value_lo = board->rom_file[access->address - 0x00e80000u];
+        access->value_lo =
+            ((const uint8_t *)board->rom_file)[access->address - 0x00e80000u];
         return 1;
     }
 
