@@ -171,7 +171,7 @@ index 7372256..41cc7c0 100644
      uint32_t JIT_UNIT_COUNT;
      uint32_t JIT_CACHE_TOTAL;
 diff --git a/src/M68k_LINE5.c b/src/M68k_LINE5.c
-index 205bcd1..9b7c803 100644
+index 205bcd1..5eca14f 100644
 --- a/src/M68k_LINE5.c
 +++ b/src/M68k_LINE5.c
 @@ -117,11 +117,12 @@ uint32_t *EMIT_ADDQ(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
@@ -338,6 +338,16 @@ index 205bcd1..9b7c803 100644
              break;
          }
  
+@@ -686,7 +690,8 @@ uint32_t *EMIT_DBcc(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr)
+         // Suggested by Paraj - a way to allow old code using DBF as busy loop work:
+         // For busy loops (of the form l dbf dN,l) in chip mem add extra delay that is
+         // at least 10 7MHz clocks (For old school replayer routines)
+-        if (__m68k_state->JIT_CONTROL2 & JC2F_DBF_SLOWDOWN)
++        if (!BELLATRIX_MACHINE_API_ACTIVE &&
++            (__m68k_state->JIT_CONTROL2 & JC2F_DBF_SLOWDOWN))
+         {
+             if (m68k_condition == M_CC_F && branch_offset == 0 && (uintptr_t)*m68k_ptr < 0x200000)
+             {
 diff --git a/src/M68k_LINE6.c b/src/M68k_LINE6.c
 index 6073ee6..772a077 100644
 --- a/src/M68k_LINE6.c

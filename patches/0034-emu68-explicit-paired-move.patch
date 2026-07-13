@@ -1,0 +1,52 @@
+diff --git a/src/M68k_MOVE.c b/src/M68k_MOVE.c
+index f0ad21b..60a5349 100644
+--- a/src/M68k_MOVE.c
++++ b/src/M68k_MOVE.c
+@@ -170,7 +170,9 @@ uint32_t *EMIT_move(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                         *ptr++ = cmn_reg(31, src_reg_2, LSL, 0);
+                     }
+ 
+-                    *ptr++ = stp_preindex(addr_reg, src_reg_2, src_reg_1, -8);
++                    *ptr++ = sub_immed(addr_reg, addr_reg, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, addr_reg, 0, src_reg_2, 4);
++                    EMU68_GUEST_STORE_OFFSET(ptr, addr_reg, 4, src_reg_1, 4);
+ 
+                     tmp_reg = src_reg_2;
+                 
+@@ -208,7 +210,9 @@ uint32_t *EMIT_move(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                         *ptr++ = cmn_reg(31, src_reg_2, LSL, 0);
+                     }
+ 
+-                    *ptr++ = stp_postindex(addr_reg, src_reg_1, src_reg_2, 8);
++                    EMU68_GUEST_STORE_OFFSET(ptr, addr_reg, 0, src_reg_1, 4);
++                    EMU68_GUEST_STORE_OFFSET(ptr, addr_reg, 4, src_reg_2, 4);
++                    *ptr++ = add_immed(addr_reg, addr_reg, 8);
+ 
+                     tmp_reg = src_reg_2;
+                 
+@@ -244,7 +248,11 @@ uint32_t *EMIT_move(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                         /* Two subsequent register moves from (An)+ */
+                         (*m68k_ptr)+=2;
+                         
+-                        *ptr++ = ldp_postindex(addr_reg, dst_reg_1, dst_reg_2, 8);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, addr_reg, 0, dst_reg_1,
++                                                4, 0);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, addr_reg, 4, dst_reg_2,
++                                                4, 0);
++                        *ptr++ = add_immed(addr_reg, addr_reg, 8);
+ 
+                         if (!is_movea2) {
+                             update_mask = M68K_GetSRMask(*m68k_ptr - 1);
+@@ -295,7 +303,11 @@ uint32_t *EMIT_move(uint32_t *ptr, uint16_t **m68k_ptr, uint16_t *insn_consumed)
+                         /* Two subsequent register moves to (An)+ */
+                         (*m68k_ptr)+=2;
+ 
+-                        *ptr++ = ldp_preindex(addr_reg, dst_reg_2, dst_reg_1, -8);
++                        *ptr++ = sub_immed(addr_reg, addr_reg, 8);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, addr_reg, 0, dst_reg_2,
++                                                4, 0);
++                        EMU68_GUEST_LOAD_OFFSET(ptr, addr_reg, 4, dst_reg_1,
++                                                4, 0);
+ 
+                         if (!is_movea2) {
+                             update_mask = M68K_GetSRMask(*m68k_ptr - 1);
