@@ -115,3 +115,33 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
         *stopped = is_stopped;
     }
 }
+
+emu68_status_t emu68_machine_platform_get_arch_state(
+    emu68_machine_arch_state_t *state)
+{
+    if (!state || !__m68k_state)
+        return EMU68_ERR_INTERNAL;
+    state->pc = __m68k_state->PC;
+    state->a7 = __m68k_state->A[7].u32;
+    state->usp = __m68k_state->USP.u32;
+    state->isp = __m68k_state->ISP.u32;
+    state->msp = __m68k_state->MSP.u32;
+    state->vbr = __m68k_state->VBR;
+    state->sr = __m68k_state->SR;
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_platform_set_arch_state(
+    const emu68_machine_arch_state_t *state)
+{
+    if (!state || !__m68k_state)
+        return EMU68_ERR_INTERNAL;
+    __m68k_state->PC = state->pc;
+    __m68k_state->A[7].u32 = state->a7;
+    __m68k_state->USP.u32 = state->usp;
+    __m68k_state->ISP.u32 = state->isp;
+    __m68k_state->MSP.u32 = state->msp;
+    __m68k_state->VBR = state->vbr;
+    __m68k_state->SR = state->sr;
+    return EMU68_OK;
+}

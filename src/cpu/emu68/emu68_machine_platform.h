@@ -3,6 +3,16 @@
 
 #include "cpu/emu68/emu68_machine.h"
 
+typedef struct emu68_machine_arch_state {
+    uint32_t pc;
+    uint32_t a7;
+    uint32_t usp;
+    uint32_t isp;
+    uint32_t msp;
+    uint32_t vbr;
+    uint16_t sr;
+} emu68_machine_arch_state_t;
+
 emu68_status_t emu68_machine_platform_map_direct(
     uint32_t guest_base, uint64_t size, void *host_base, uint32_t flags);
 void emu68_machine_platform_unmap_direct(uint32_t guest_base, uint64_t size);
@@ -15,5 +25,9 @@ void emu68_machine_platform_wake(void);
 void emu68_machine_platform_run(void);
 void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
                                      int *stopped);
+emu68_status_t emu68_machine_platform_get_arch_state(
+    emu68_machine_arch_state_t *state);
+emu68_status_t emu68_machine_platform_set_arch_state(
+    const emu68_machine_arch_state_t *state);
 
 #endif

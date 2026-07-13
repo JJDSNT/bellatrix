@@ -16,6 +16,7 @@ static unsigned callback_calls;
 static uint64_t platform_instructions;
 static uint32_t platform_pc;
 static int platform_stopped;
+static emu68_machine_arch_state_t platform_arch;
 
 static void fail(const char *expression, int line)
 {
@@ -96,6 +97,20 @@ void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
         *pc = platform_pc;
     if (stopped)
         *stopped = platform_stopped;
+}
+
+emu68_status_t emu68_machine_platform_get_arch_state(
+    emu68_machine_arch_state_t *state)
+{
+    *state = platform_arch;
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_platform_set_arch_state(
+    const emu68_machine_arch_state_t *state)
+{
+    platform_arch = *state;
+    return EMU68_OK;
 }
 
 static emu68_bus_result_t synchronous_access(void *opaque,
@@ -320,12 +335,50 @@ static void test_run_boundary(void)
     emu68_machine_destroy(cpu);
 }
 
+static void test_bus_error_frame(void)
+{
+    static uint8_t memory[0x10000] __attribute__((aligned(4096)));
+    uint64_t native_frame[100] = {0};
+    emu68_cpu_t *cpu = create_cpu(EMU68_EXEC_SYNCHRONOUS);
+    emu68_direct_region_t direct = {
+        .abi_version = EMU68_MACHINE_ABI_VERSION,
+        .struct_size = sizeof(direct),
+        .guest_base = 0u,
+        .size = sizeof(memory),
+        .host_base = memory,
+        .flags = EMU68_REGION_READ | EMU68_REGION_WRITE |
+                 EMU68_REGION_EXECUTE,
+    };
+
+    memset(memory, 0, sizeof(memory));
+    memory[8] = 0x00u; memory[9] = 0x00u;
+    memory[10] = 0x20u; memory[11] = 0x00u;
+    CHECK(emu68_machine_map_direct(cpu, &direct) == EMU68_OK);
+    memset(&platform_arch, 0, sizeof(platform_arch));
+    platform_arch.a7 = 0x8000u;
+    platform_arch.isp = 0x8000u;
+    platform_arch.sr = 0x2700u;
+    native_frame[16] = 0x1234u;
+    CHECK(emu68_machine_bridge_dispatch(0x10000u, 0u, 2u,
+                                        1u, native_frame).outcome ==
+          EMU68_BRIDGE_BUS_ERROR);
+    CHECK(emu68_machine_enter_bus_error());
+    CHECK(platform_arch.a7 == 0x8000u - 60u);
+    CHECK(platform_arch.pc == 0x2000u);
+    CHECK(memory[platform_arch.a7 + 6u] == 0x70u);
+    CHECK(memory[platform_arch.a7 + 7u] == 0x08u);
+    CHECK(memory[platform_arch.a7 + 20u] == 0x00u);
+    CHECK(memory[platform_arch.a7 + 22u] == 0x00u);
+    emu68_machine_destroy(cpu);
+}
+
 int main(void)
 {
     test_abi_and_singleton();
     test_regions_and_sync_access();
     test_cooperative_access();
     test_run_boundary();
+    test_bus_error_frame();
     puts("emu68 machine API unit tests: PASS");
     return 0;
 }
