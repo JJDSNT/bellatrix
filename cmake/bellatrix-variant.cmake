@@ -414,6 +414,9 @@ if(BELLATRIX_LAUNCHER)
     add_compile_definitions(BELLATRIX_LAUNCHER=1)
     list(APPEND BELLATRIX_SOURCES
         ${CMAKE_SOURCE_DIR}/../src/launcher/launcher.c
+        ${CMAKE_SOURCE_DIR}/../src/launcher/launcher_ui.c
+        ${CMAKE_SOURCE_DIR}/../src/launcher/media_selection.c
+        ${CMAKE_SOURCE_DIR}/../src/launcher/btscan.c
         ${CMAKE_SOURCE_DIR}/../src/launcher/launcher_input.c
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32.c
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32_lfn.c
