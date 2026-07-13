@@ -1,5 +1,5 @@
 diff --git a/src/M68k_EA.c b/src/M68k_EA.c
-index 4c8ef45..6e661a9 100644
+index 4c8ef45..ff90049 100644
 --- a/src/M68k_EA.c
 +++ b/src/M68k_EA.c
 @@ -12,6 +12,9 @@
@@ -12,7 +12,7 @@ index 4c8ef45..6e661a9 100644
  
  static inline __attribute__((always_inline)) uint32_t * load_s16_ext32(uint32_t *ptr, uint8_t reg, int16_t s16)
  {
-@@ -36,6 +39,27 @@ static inline __attribute__((always_inline)) uint32_t * load_reg_from_addr_offse
+@@ -36,6 +39,29 @@ static inline __attribute__((always_inline)) uint32_t * load_reg_from_addr_offse
          *ptr++ = mov_reg(base, 31);
      }
  
@@ -28,7 +28,9 @@ index 4c8ef45..6e661a9 100644
 +            *ptr++ = movt_immed_u16(reg_d16, (uint16_t)((uint32_t)offset >> 16));
 +            *ptr++ = add_reg(address, base, reg_d16, LSL, 0);
 +        }
-+        ptr = emu68_machine_emit_load(ptr, address, reg, size, sign_ext, 0u);
++        ptr = emu68_machine_emit_load(
++            ptr, address, reg, size, sign_ext,
++            emu68_machine_translation_metadata);
 +        RA_FreeARMRegister(&ptr, address);
 +        RA_FreeARMRegister(&ptr, reg_d16);
 +        if (free_base)
@@ -40,7 +42,7 @@ index 4c8ef45..6e661a9 100644
      switch (size)
      {
          case 4:
-@@ -205,6 +229,22 @@ static inline __attribute__((always_inline)) uint32_t * load_reg_from_addr(uint3
+@@ -205,6 +231,24 @@ static inline __attribute__((always_inline)) uint32_t * load_reg_from_addr(uint3
          *ptr++ = mov_reg(base, 31);
      }
  
@@ -52,7 +54,9 @@ index 4c8ef45..6e661a9 100644
 +            *ptr++ = mov_reg(address, base);
 +        else
 +            *ptr++ = add_reg(address, base, index, LSL, shift);
-+        ptr = emu68_machine_emit_load(ptr, address, reg, size, sign_ext, 0u);
++        ptr = emu68_machine_emit_load(
++            ptr, address, reg, size, sign_ext,
++            emu68_machine_translation_metadata);
 +        RA_FreeARMRegister(&ptr, address);
 +        if (free_base)
 +            RA_FreeARMRegister(&ptr, base);
@@ -63,7 +67,7 @@ index 4c8ef45..6e661a9 100644
      if (index == 0xff)
      {
          switch (size)
-@@ -283,6 +323,27 @@ static inline __attribute__((always_inline)) uint32_t * store_reg_to_addr_offset
+@@ -283,6 +327,28 @@ static inline __attribute__((always_inline)) uint32_t * store_reg_to_addr_offset
          *ptr++ = mov_reg(base, 31);
      }
  
@@ -79,7 +83,8 @@ index 4c8ef45..6e661a9 100644
 +            *ptr++ = movt_immed_u16(reg_d16, (uint16_t)((uint32_t)offset >> 16));
 +            *ptr++ = add_reg(address, base, reg_d16, LSL, 0);
 +        }
-+        ptr = emu68_machine_emit_store(ptr, address, reg, size, 0u);
++        ptr = emu68_machine_emit_store(
++            ptr, address, reg, size, emu68_machine_translation_metadata);
 +        RA_FreeARMRegister(&ptr, address);
 +        RA_FreeARMRegister(&ptr, reg_d16);
 +        if (free_base)
@@ -91,7 +96,7 @@ index 4c8ef45..6e661a9 100644
      switch (size)
      {
          case 4:
-@@ -431,6 +492,22 @@ static inline __attribute__((always_inline)) uint32_t * store_reg_to_addr(uint32
+@@ -431,6 +497,23 @@ static inline __attribute__((always_inline)) uint32_t * store_reg_to_addr(uint32
          *ptr++ = mov_reg(base, 31);
      }
  
@@ -103,7 +108,8 @@ index 4c8ef45..6e661a9 100644
 +            *ptr++ = mov_reg(address, base);
 +        else
 +            *ptr++ = add_reg(address, base, index, LSL, shift);
-+        ptr = emu68_machine_emit_store(ptr, address, reg, size, 0u);
++        ptr = emu68_machine_emit_store(
++            ptr, address, reg, size, emu68_machine_translation_metadata);
 +        RA_FreeARMRegister(&ptr, address);
 +        if (free_base)
 +            RA_FreeARMRegister(&ptr, base);
@@ -114,7 +120,7 @@ index 4c8ef45..6e661a9 100644
      if (index == 0xff)
      {
          switch (size)
-@@ -633,6 +710,10 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+@@ -633,27 +716,32 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
              else
              {
                  uint8_t reg_An = RA_MapM68kRegister(&ptr, src_reg + 8);
@@ -125,7 +131,26 @@ index 4c8ef45..6e661a9 100644
                  switch (size)
                  {
                      case 4:
-@@ -654,6 +735,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+-                        *ptr++ = ldr_offset(reg_An, *arm_reg, 0);
++                        EMU68_GUEST_LOAD(ptr, reg_An, *arm_reg, 4, 0);
+                         break;
+                     case 2:
+                         if (sign_ext)
+-                            *ptr++ = ldrsh_offset(reg_An, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, reg_An, *arm_reg, 2, 1);
+                         else
+-                            *ptr++ = ldrh_offset(reg_An, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, reg_An, *arm_reg, 2, 0);
+                         break;
+                     case 1:
+                         if (sign_ext)
+-                            *ptr++ = ldrsb_offset(reg_An, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, reg_An, *arm_reg, 1, 1);
+                         else
+-                            *ptr++ = ldrb_offset(reg_An, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, reg_An, *arm_reg, 1, 0);
+                         break;
+                     default:
                          kprintf("Unknown size opcode\n");
                          break;
                  }
@@ -133,7 +158,7 @@ index 4c8ef45..6e661a9 100644
              }
          }
          else if (mode == 3) /* Mode 003: (An)+ */
-@@ -669,6 +751,13 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+@@ -669,39 +757,47 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
                  RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
  
                  /* Rare case where source and dest are the same register and size == 4 */
@@ -145,9 +170,43 @@ index 4c8ef45..6e661a9 100644
 +                                       (size == 1 && src_reg == 7) ? 2 : size);
 +#else
                  if (size == 4 && reg_An == *arm_reg) {
-                     *ptr++ = ldr_offset(reg_An, *arm_reg, 0);
+-                    *ptr++ = ldr_offset(reg_An, *arm_reg, 0);
++                    EMU68_GUEST_LOAD(ptr, reg_An, *arm_reg, 4, 0);
                  }
-@@ -702,6 +791,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                 else
+                 {
+                     switch (size)
+                     {
+                         case 4:
+-                            *ptr++ = ldr_offset_postindex(reg_An, *arm_reg, 4);
++                            EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 4, 0, 4);
+                             break;
+                         case 2:
+                             if (sign_ext)
+-                                *ptr++ = ldrsh_offset_postindex(reg_An, *arm_reg, 2);
++                                EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 2, 1, 2);
+                             else
+-                                *ptr++ = ldrh_offset_postindex(reg_An, *arm_reg, 2);
++                                EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 2, 0, 2);
+                             break;
+                         case 1:
+                             if (src_reg == 7)
+                                 if (sign_ext)
+-                                    *ptr++ = ldrsb_offset_postindex(reg_An, *arm_reg, 2);
++                                    EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 1, 1, 2);
+                                 else
+-                                    *ptr++ = ldrb_offset_postindex(reg_An, *arm_reg, 2);
++                                    EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 1, 0, 2);
+                             else
+                                 if (sign_ext)
+-                                    *ptr++ = ldrsb_offset_postindex(reg_An, *arm_reg, 1);
++                                    EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 1, 1, 1);
+                                 else
+-                                    *ptr++ = ldrb_offset_postindex(reg_An, *arm_reg, 1);
++                                    EMU68_GUEST_POSTLOAD(ptr, reg_An, *arm_reg, 1, 0, 1);
+                             break;
+                         default:
+                             kprintf("Unknown size opcode\n");
                              break;
                      }
                  }
@@ -155,7 +214,7 @@ index 4c8ef45..6e661a9 100644
              }
          }
          else if (mode == 4) /* Mode 004: -(An) */
-@@ -716,6 +806,18 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+@@ -716,39 +812,52 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
                  RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
  
                  /* Rare case where source and dest are the same register and size == 4 */
@@ -172,9 +231,43 @@ index 4c8ef45..6e661a9 100644
 +                }
 +#else
                  if (size == 4 && reg_An == *arm_reg) {
-                     *ptr++ = ldur_offset(reg_An, *arm_reg, -4);
+-                    *ptr++ = ldur_offset(reg_An, *arm_reg, -4);
++                    EMU68_GUEST_LOAD_OFFSET(ptr, reg_An, -4, *arm_reg, 4, 0);
                  }
-@@ -749,6 +851,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                 else
+                 {
+                     switch (size)
+                     {
+                         case 4:
+-                            *ptr++ = ldr_offset_preindex(reg_An, *arm_reg, -4);
++                            EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 4, 0, -4);
+                             break;
+                         case 2:
+                             if (sign_ext)
+-                                *ptr++ = ldrsh_offset_preindex(reg_An, *arm_reg, -2);
++                                EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 2, 1, -2);
+                             else
+-                                *ptr++ = ldrh_offset_preindex(reg_An, *arm_reg, -2);
++                                EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 2, 0, -2);
+                             break;
+                         case 1:
+                             if (src_reg == 7)
+                                 if (sign_ext)
+-                                    *ptr++ = ldrsb_offset_preindex(reg_An, *arm_reg, -2);
++                                    EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 1, 1, -2);
+                                 else
+-                                    *ptr++ = ldrb_offset_preindex(reg_An, *arm_reg, -2);
++                                    EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 1, 0, -2);
+                             else
+                                 if (sign_ext)
+-                                    *ptr++ = ldrsb_offset_preindex(reg_An, *arm_reg, -1);
++                                    EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 1, 1, -1);
+                                 else
+-                                    *ptr++ = ldrb_offset_preindex(reg_An, *arm_reg, -1);
++                                    EMU68_GUEST_PRELOAD(ptr, reg_An, *arm_reg, 1, 0, -1);
+                             break;
+                         default:
+                             kprintf("Unknown size opcode\n");
                              break;
                      }
                  }
@@ -182,7 +275,133 @@ index 4c8ef45..6e661a9 100644
              }
          }
          else if (mode == 5) /* Mode 005: (d16, An) */
-@@ -1490,6 +1593,11 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+@@ -932,9 +1041,9 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                     {
+                         /* Fetch data from base reg */
+                         if (base_reg == 0xff)
+-                            *ptr++ = ldr_offset(bd_reg, bd_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, bd_reg, bd_reg, 4, 0);
+                         else
+-                            *ptr++ = ldr_regoffset(bd_reg, bd_reg, base_reg, UXTW, 0);
++                            ptr = load_reg_from_addr(ptr, 4, bd_reg, bd_reg, base_reg, 0, 0);
+                         
+                         if (outer_reg != 0xff)
+                             *ptr++ = add_reg(bd_reg, bd_reg, outer_reg, LSL, 0);
+@@ -948,7 +1057,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                         {
+                             if (bd_reg == 0xff) {
+                                 bd_reg = RA_AllocARMRegister(&ptr);
+-                                *ptr++ = ldr_offset(base_reg, bd_reg, 0);
++                                EMU68_GUEST_LOAD(ptr, base_reg, bd_reg, 4, 0);
+                             }
+                             else
+                                 ptr = load_reg_from_addr(ptr, 4, base_reg, bd_reg, bd_reg, 0, 0);
+@@ -1103,16 +1212,16 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                     {
+                         case 2: /* Word displacement */
+                             bd_reg = RA_AllocARMRegister(&ptr);
+-                            *ptr++ = ldrsh_offset(REG_PC, bd_reg, pc_off);
++                            EMU68_GUEST_LOAD_OFFSET_META(
++                                ptr, REG_PC, pc_off, bd_reg, 2, 1,
++                                EMU68_MACHINE_META_PROGRAM);
+                             (*ext_words)++;
+                             break;
+                         case 3: /* Long displacement */
+                             bd_reg = RA_AllocARMRegister(&ptr);
+-                            if (pc_off & 2) {
+-                                *ptr++ = ldur_offset(REG_PC, bd_reg, pc_off);
+-                            } else {
+-                                *ptr++ = ldr_offset(REG_PC, bd_reg, pc_off);
+-                            }
++                            EMU68_GUEST_LOAD_OFFSET_META(
++                                ptr, REG_PC, pc_off, bd_reg, 4, 0,
++                                EMU68_MACHINE_META_PROGRAM);
+                             (*ext_words) += 2;
+                             break;
+                     }
+@@ -1125,16 +1234,16 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                     {
+                         case 2: /* Word outer displacement */
+                             outer_reg = RA_AllocARMRegister(&ptr);
+-                            *ptr++ = ldrsh_offset(REG_PC, outer_reg, pc_off);
++                            EMU68_GUEST_LOAD_OFFSET_META(
++                                ptr, REG_PC, pc_off, outer_reg, 2, 1,
++                                EMU68_MACHINE_META_PROGRAM);
+                             (*ext_words)++;
+                             break;
+                         case 3: /* Long outer displacement */
+                             outer_reg = RA_AllocARMRegister(&ptr);
+-                            if (pc_off & 2) {
+-                                *ptr++ = ldur_offset(REG_PC, outer_reg, pc_off);
+-                            }
+-                            else
+-                                *ptr++ = ldr_offset(REG_PC, outer_reg, pc_off);
++                            EMU68_GUEST_LOAD_OFFSET_META(
++                                ptr, REG_PC, pc_off, outer_reg, 4, 0,
++                                EMU68_MACHINE_META_PROGRAM);
+                             (*ext_words) += 2;
+                             break;
+                     }
+@@ -1174,9 +1283,9 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                         {
+                             /* Fetch data from base reg */
+                             if (base_reg == 0xff)
+-                                *ptr++ = ldr_offset(bd_reg, bd_reg, 0);
++                                EMU68_GUEST_LOAD(ptr, bd_reg, bd_reg, 4, 0);
+                             else
+-                                *ptr++ = ldr_regoffset(bd_reg, bd_reg, base_reg, UXTW, 0);
++                                ptr = load_reg_from_addr(ptr, 4, bd_reg, bd_reg, base_reg, 0, 0);
+ 
+                             if (outer_reg != 0xff)
+                                 *ptr++ = add_reg(bd_reg, bd_reg, outer_reg, LSL, 0);
+@@ -1190,18 +1299,18 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                             {
+                                 if (bd_reg == 0xff) {
+                                     bd_reg = RA_AllocARMRegister(&ptr);
+-                                    *ptr++ = ldr_offset(base_reg, bd_reg, 0);
++                                    EMU68_GUEST_LOAD(ptr, base_reg, bd_reg, 4, 0);
+                                 }
+                                 else
+                                 {
+                                     if (base_reg == 0xff) {
+                                         uint8_t t = RA_AllocARMRegister(&ptr);
+                                         *ptr++ = mov_reg(t, 31);
+-                                        *ptr++ = ldr_regoffset(t, bd_reg, bd_reg, UXTW, 0);
++                                        ptr = load_reg_from_addr(ptr, 4, t, bd_reg, bd_reg, 0, 0);
+                                         RA_FreeARMRegister(&ptr, t);
+                                     }
+                                     else {
+-                                        *ptr++ = ldr_regoffset(base_reg, bd_reg, bd_reg, UXTW, 0);
++                                        ptr = load_reg_from_addr(ptr, 4, base_reg, bd_reg, bd_reg, 0, 0);
+                                     }
+                                 }
+                             }
+@@ -1292,19 +1401,15 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                     switch (size)
+                     {
+                         case 4:
+-                            *ptr++ = ldr_offset(tmp_reg, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, tmp_reg, *arm_reg, 4, 0);
+                             break;
+                         case 2:
+-                            if (sign_ext)
+-                                *ptr++ = ldrsh_offset(tmp_reg, *arm_reg, 0);
+-                            else
+-                                *ptr++ = ldrh_offset(tmp_reg, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, tmp_reg, *arm_reg, 2,
++                                            sign_ext);
+                             break;
+                         case 1:
+-                            if (sign_ext)
+-                                *ptr++ = ldrsb_offset(tmp_reg, *arm_reg, 0);
+-                            else
+-                                *ptr++ = ldrb_offset(tmp_reg, *arm_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, tmp_reg, *arm_reg, 1,
++                                            sign_ext);
+                             break;
+                     }
+                     RA_FreeARMRegister(&ptr, tmp_reg);
+@@ -1490,24 +1595,30 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
  
                  RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
  
@@ -194,7 +413,22 @@ index 4c8ef45..6e661a9 100644
                  switch (size)
                  {
                  case 4:
-@@ -1508,6 +1616,7 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+-                    *ptr++ = str_offset_postindex(reg_An, *arm_reg, 4);
++                    EMU68_GUEST_POSTSTORE(ptr, reg_An, *arm_reg, 4, 4);
+                     break;
+                 case 2:
+-                    *ptr++ = strh_offset_postindex(reg_An, *arm_reg, 2);
++                    EMU68_GUEST_POSTSTORE(ptr, reg_An, *arm_reg, 2, 2);
+                     break;
+                 case 1:
+                     if (src_reg == 7)
+-                        *ptr++ = strb_offset_postindex(reg_An, *arm_reg, 2);
++                        EMU68_GUEST_POSTSTORE(ptr, reg_An, *arm_reg, 1, 2);
+                     else
+-                        *ptr++ = strb_offset_postindex(reg_An, *arm_reg, 1);
++                        EMU68_GUEST_POSTSTORE(ptr, reg_An, *arm_reg, 1, 1);
+                     break;
+                 default:
                      kprintf("Unknown size opcode\n");
                      break;
                  }
@@ -202,7 +436,7 @@ index 4c8ef45..6e661a9 100644
              }
          }
          else if (mode == 4) /* Mode 004: -(An) */
-@@ -1522,6 +1631,11 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+@@ -1522,24 +1633,30 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
  
                  RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
  
@@ -214,7 +448,22 @@ index 4c8ef45..6e661a9 100644
                  switch (size)
                  {
                  case 4:
-@@ -1540,6 +1654,7 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+-                    *ptr++ = str_offset_preindex(reg_An, *arm_reg, -4);
++                    EMU68_GUEST_PRESTORE(ptr, reg_An, *arm_reg, 4, -4);
+                     break;
+                 case 2:
+-                    *ptr++ = strh_offset_preindex(reg_An, *arm_reg, -2);
++                    EMU68_GUEST_PRESTORE(ptr, reg_An, *arm_reg, 2, -2);
+                     break;
+                 case 1:
+                     if (src_reg == 7)
+-                        *ptr++ = strb_offset_preindex(reg_An, *arm_reg, -2);
++                        EMU68_GUEST_PRESTORE(ptr, reg_An, *arm_reg, 1, -2);
+                     else
+-                        *ptr++ = strb_offset_preindex(reg_An, *arm_reg, -1);
++                        EMU68_GUEST_PRESTORE(ptr, reg_An, *arm_reg, 1, -1);
+                     break;
+                 default:
                      kprintf("Unknown size opcode\n");
                      break;
                  }
@@ -222,4 +471,55 @@ index 4c8ef45..6e661a9 100644
              }
          }
          else if (mode == 5) /* Mode 005: (d16, An) */
-
+@@ -1711,9 +1828,9 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+                     {
+                         /* Fetch data from base reg */
+                         if (base_reg == 0xff)
+-                            *ptr++ = ldr_offset(bd_reg, bd_reg, 0);
++                            EMU68_GUEST_LOAD(ptr, bd_reg, bd_reg, 4, 0);
+                         else
+-                            *ptr++ = ldr_regoffset(bd_reg, bd_reg, base_reg, UXTW, 0);
++                            ptr = load_reg_from_addr(ptr, 4, bd_reg, bd_reg, base_reg, 0, 0);
+                         
+                         if (outer_reg != 0xff)
+                             *ptr++ = add_reg(bd_reg, bd_reg, outer_reg, LSL, 0);
+@@ -1728,18 +1845,18 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+                             if (bd_reg == 0xff)
+                             {
+                                 bd_reg = RA_AllocARMRegister(&ptr);
+-                                *ptr++ = ldr_offset(base_reg, bd_reg, 0);
++                                EMU68_GUEST_LOAD(ptr, base_reg, bd_reg, 4, 0);
+                             }
+                             else
+                             {
+                                 if (base_reg == 0xff) {
+                                     uint8_t t = RA_AllocARMRegister(&ptr);
+                                     *ptr++ = mov_reg(t, 31);
+-                                    *ptr++ = ldr_regoffset(t, bd_reg, bd_reg, UXTW, 0);
++                                    ptr = load_reg_from_addr(ptr, 4, t, bd_reg, bd_reg, 0, 0);
+                                     RA_FreeARMRegister(&ptr, t);
+                                 }
+                                 else
+-                                    *ptr++ = ldr_regoffset(base_reg, bd_reg, bd_reg, UXTW, 0);
++                                    ptr = load_reg_from_addr(ptr, 4, base_reg, bd_reg, bd_reg, 0, 0);
+                             }
+                         }
+                         else
+@@ -1948,7 +2065,7 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+                         {
+                             /* Fetch data from base reg */
+                             if (base_reg == 0xff)
+-                                *ptr++ = ldr_offset(bd_reg, bd_reg, 0);
++                                EMU68_GUEST_LOAD(ptr, bd_reg, bd_reg, 4, 0);
+                             else
+                                 ptr = load_reg_from_addr(ptr, 4, bd_reg, bd_reg, base_reg, 0, 0);
+ 
+@@ -1964,7 +2081,7 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+                             {
+                                 if (bd_reg == 0xff) {
+                                     bd_reg = RA_AllocARMRegister(&ptr);
+-                                    *ptr++ = ldr_offset(base_reg, bd_reg, 0);
++                                    EMU68_GUEST_LOAD(ptr, base_reg, bd_reg, 4, 0);
+                                 }
+                                 else
+                                     ptr = load_reg_from_addr(ptr, 4, base_reg, bd_reg, bd_reg, 0, 0);

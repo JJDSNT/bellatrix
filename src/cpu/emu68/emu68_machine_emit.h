@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 enum {
+    EMU68_MACHINE_META_PROGRAM = 1u << 9,
+    EMU68_MACHINE_META_CPU = 2u << 9,
     EMU68_MACHINE_META_USE_SFC = 1u << 14,
     EMU68_MACHINE_META_USE_DFC = 1u << 15
 };
