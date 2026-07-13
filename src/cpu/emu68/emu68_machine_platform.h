@@ -12,5 +12,8 @@ emu68_status_t emu68_machine_platform_reset(uint32_t initial_ssp,
                                             uint32_t initial_pc);
 emu68_status_t emu68_machine_platform_set_ipl(unsigned level);
 void emu68_machine_platform_wake(void);
+void emu68_machine_platform_run(void);
+void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
+                                     int *stopped);
 
 #endif

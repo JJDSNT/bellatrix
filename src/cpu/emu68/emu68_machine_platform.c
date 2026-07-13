@@ -9,6 +9,7 @@
 
 extern struct M68KState *__m68k_state;
 extern void mmu_unmap(uintptr_t virt, uintptr_t length);
+extern void MainLoopWindow(void);
 
 emu68_status_t emu68_machine_platform_map_direct(
     uint32_t guest_base, uint64_t size, void *host_base, uint32_t flags)
@@ -79,4 +80,20 @@ void emu68_machine_platform_wake(void)
 #ifdef __aarch64__
     __asm__ volatile("sev" ::: "memory");
 #endif
+}
+
+void emu68_machine_platform_run(void)
+{
+    MainLoopWindow();
+}
+
+void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
+                                     int *stopped)
+{
+    if (instructions)
+        *instructions = __m68k_state ? __m68k_state->INSN_COUNT : 0u;
+    if (pc)
+        *pc = __m68k_state ? __m68k_state->PC : 0u;
+    if (stopped)
+        *stopped = __m68k_state ? (__m68k_state->STOPPED != 0u) : 0;
 }

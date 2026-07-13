@@ -28,9 +28,16 @@ struct emu68_cpu {
     uint8_t running;
     uint8_t pending;
     uint8_t completion_ready;
+    uint8_t bus_error_pending;
+    uint8_t stopped;
     uint64_t next_sequence;
     emu68_bus_access_t pending_access;
     uintptr_t native_resume;
+    uint64_t run_budget;
+    uint64_t run_start_instructions;
+    uint64_t run_instructions;
+    uint64_t run_cycles;
+    uint32_t run_pc;
     uint8_t native_frame[EMU68_MACHINE_NATIVE_FRAME_SIZE]
         __attribute__((aligned(16)));
     volatile uint32_t stop_requested;
@@ -438,8 +445,10 @@ emu68_machine_bridge_result_t emu68_machine_bridge_dispatch(
     if (space > EMU68_SPACE_CPU ||
         emu68_machine_classify_access(address, width, kind,
                                       &classification) != EMU68_OK ||
-        classification.region_kind != EMU68_REGION_EXTERNAL)
+        classification.region_kind != EMU68_REGION_EXTERNAL) {
+        machine_cpu.bus_error_pending = 1u;
         return bridge;
+    }
 
     if (machine_cpu.mode == EMU68_EXEC_COOPERATIVE &&
         (!native_resume || !native_frame))
@@ -452,8 +461,10 @@ emu68_machine_bridge_result_t emu68_machine_bridge_dispatch(
     access.function_code = current_function_code(space, metadata);
     access.width = width;
     access.value_lo = value;
-    if (emu68_machine_dispatch_access(&access) != EMU68_BUS_COMPLETE)
+    if (emu68_machine_dispatch_access(&access) != EMU68_BUS_COMPLETE) {
+        machine_cpu.bus_error_pending = 1u;
         return bridge;
+    }
     if (machine_cpu.mode == EMU68_EXEC_COOPERATIVE) {
         machine_cpu.native_resume = native_resume;
         memcpy(machine_cpu.native_frame, native_frame,
@@ -464,6 +475,8 @@ emu68_machine_bridge_result_t emu68_machine_bridge_dispatch(
     bridge.value = access.value_lo;
     bridge.outcome = access.result == EMU68_BUS_COMPLETE ?
                          EMU68_BRIDGE_COMPLETE : EMU68_BRIDGE_BUS_ERROR;
+    if (bridge.outcome == EMU68_BRIDGE_BUS_ERROR)
+        machine_cpu.bus_error_pending = 1u;
     return bridge;
 }
 
@@ -479,6 +492,8 @@ int emu68_machine_prepare_native_resume(void)
     emu68_machine_resume_outcome =
         machine_cpu.pending_access.result == EMU68_BUS_COMPLETE ?
             EMU68_BRIDGE_COMPLETE : EMU68_BRIDGE_BUS_ERROR;
+    if (emu68_machine_resume_outcome == EMU68_BRIDGE_BUS_ERROR)
+        machine_cpu.bus_error_pending = 1u;
     machine_cpu.pending = 0u;
     machine_cpu.completion_ready = 0u;
     machine_cpu.native_resume = 0u;
@@ -489,6 +504,37 @@ int emu68_machine_native_access_pending(void)
 {
     return machine_cpu.active && machine_cpu.pending &&
            !machine_cpu.completion_ready;
+}
+
+int emu68_machine_native_bus_error_pending(void)
+{
+    return machine_cpu.active && machine_cpu.bus_error_pending;
+}
+
+int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
+                                            uint32_t pc)
+{
+    uint64_t delta;
+    int stopped = 0;
+
+    if (!machine_cpu.active || !machine_cpu.running)
+        return 0;
+    if (retired_instructions < machine_cpu.run_start_instructions)
+        retired_instructions = machine_cpu.run_start_instructions;
+    delta = retired_instructions - machine_cpu.run_start_instructions;
+    machine_cpu.run_instructions = delta;
+    /* Emu68 currently exposes only retired instructions. This temporary
+     * conversion keeps bounded execution functional while the translator's
+     * per-opcode 68k cycle accumulator is introduced. The public contract is
+     * not considered complete until that accumulator replaces this line. */
+    machine_cpu.run_cycles = delta * 8u;
+    machine_cpu.run_pc = pc;
+    emu68_machine_platform_snapshot(NULL, NULL, &stopped);
+    machine_cpu.stopped = stopped != 0;
+    return machine_cpu.pending || machine_cpu.bus_error_pending ||
+           machine_cpu.stopped ||
+           __atomic_load_n(&machine_cpu.stop_requested, __ATOMIC_ACQUIRE) ||
+           machine_cpu.run_cycles >= machine_cpu.run_budget;
 }
 
 int emu68_machine_runtime_active(void)
@@ -504,6 +550,78 @@ emu68_status_t emu68_machine_get_pending_access(
     if (!machine_cpu.pending)
         return EMU68_ERR_NOT_FOUND;
     *out_access = machine_cpu.pending_access;
+    return EMU68_OK;
+}
+
+emu68_status_t emu68_machine_run(emu68_cpu_t *cpu, uint64_t cycle_budget,
+                                 emu68_run_result_t *result)
+{
+    uint64_t instructions = 0u;
+    uint32_t pc = 0u;
+    int stopped = 0;
+
+    if (!valid_cpu(cpu) || !result)
+        return EMU68_ERR_INVALID_ARGUMENT;
+    if (!public_struct_valid(result->abi_version, result->struct_size,
+                             sizeof(*result)))
+        return EMU68_ERR_ABI_MISMATCH;
+    if (machine_cpu.running)
+        return EMU68_ERR_BUSY;
+
+    emu68_machine_platform_snapshot(&instructions, &pc, &stopped);
+    memset(result, 0, sizeof(*result));
+    result->abi_version = EMU68_MACHINE_ABI_VERSION;
+    result->struct_size = sizeof(*result);
+    result->pc = pc;
+    if (machine_cpu.pending && !machine_cpu.completion_ready) {
+        result->reason = EMU68_STOP_EXTERNAL_ACCESS;
+        return EMU68_OK;
+    }
+    if (machine_cpu.bus_error_pending) {
+        result->reason = EMU68_STOP_BUS_ERROR;
+        return EMU68_OK;
+    }
+    if (__atomic_load_n(&machine_cpu.stop_requested, __ATOMIC_ACQUIRE)) {
+        result->reason = EMU68_STOP_REQUESTED;
+        return EMU68_OK;
+    }
+    if (stopped) {
+        result->reason = EMU68_STOP_STOPPED;
+        return EMU68_OK;
+    }
+    if (cycle_budget == 0u) {
+        result->reason = EMU68_STOP_BUDGET;
+        return EMU68_OK;
+    }
+
+    machine_cpu.run_budget = cycle_budget;
+    machine_cpu.run_start_instructions = instructions;
+    machine_cpu.run_instructions = 0u;
+    machine_cpu.run_cycles = 0u;
+    machine_cpu.run_pc = pc;
+    machine_cpu.stopped = 0u;
+    machine_cpu.running = 1u;
+    emu68_machine_platform_run();
+    machine_cpu.running = 0u;
+
+    emu68_machine_platform_snapshot(&instructions, &pc, &stopped);
+    if (instructions >= machine_cpu.run_start_instructions)
+        machine_cpu.run_instructions =
+            instructions - machine_cpu.run_start_instructions;
+    machine_cpu.run_cycles = machine_cpu.run_instructions * 8u;
+    result->cycles_executed = machine_cpu.run_cycles;
+    result->instructions_executed = machine_cpu.run_instructions;
+    result->pc = pc;
+    if (machine_cpu.pending && !machine_cpu.completion_ready)
+        result->reason = EMU68_STOP_EXTERNAL_ACCESS;
+    else if (machine_cpu.bus_error_pending)
+        result->reason = EMU68_STOP_BUS_ERROR;
+    else if (__atomic_load_n(&machine_cpu.stop_requested, __ATOMIC_ACQUIRE))
+        result->reason = EMU68_STOP_REQUESTED;
+    else if (stopped)
+        result->reason = EMU68_STOP_STOPPED;
+    else
+        result->reason = EMU68_STOP_BUDGET;
     return EMU68_OK;
 }
 
@@ -560,6 +678,7 @@ emu68_status_t emu68_machine_reset(emu68_cpu_t *cpu,
     machine_cpu.pending = 0u;
     machine_cpu.completion_ready = 0u;
     machine_cpu.native_resume = 0u;
+    machine_cpu.bus_error_pending = 0u;
     __atomic_store_n(&machine_cpu.stop_requested, 0u, __ATOMIC_RELEASE);
     return emu68_machine_platform_reset(state->initial_ssp,
                                         state->initial_pc);

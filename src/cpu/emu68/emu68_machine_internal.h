@@ -70,6 +70,9 @@ extern uint64_t emu68_machine_bridge_outcome;
 
 int emu68_machine_prepare_native_resume(void);
 int emu68_machine_native_access_pending(void);
+int emu68_machine_native_bus_error_pending(void);
+int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
+                                            uint32_t pc);
 void emu68_machine_resume_native(void);
 
 int emu68_machine_runtime_active(void);

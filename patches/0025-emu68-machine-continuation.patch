@@ -1,17 +1,20 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -4,6 +4,9 @@
+@@ -4,6 +4,12 @@
  #ifdef BELLATRIX
  #include "cpu/emu68/bellatrix.h"
  #include "cpu/emu68/emu68_api.h"
 +extern int emu68_machine_prepare_native_resume(void);
 +extern int emu68_machine_native_access_pending(void);
++extern int emu68_machine_native_bus_error_pending(void);
++extern int emu68_machine_runtime_active(void);
++extern int emu68_machine_dispatch_quantum_progress(uint64_t, uint32_t);
 +extern void emu68_machine_resume_native(void);
  #endif
  #ifdef PISTORM
  #ifndef PISTORM32
-@@ -145,7 +148,16 @@ void MainLoop()
+@@ -147,7 +153,20 @@ void MainLoop()
          LastPC = getLastPC();
          ctx = getCTX();
  
@@ -24,7 +27,26 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 +            M68K_SaveContext(ctx);
 +            return;
 +        }
++        if (emu68_machine_native_bus_error_pending()) {
++            M68K_SaveContext(ctx);
++            return;
++        }
 +
          /* Advance the Bellatrix chipset on every pass through the loop, not
           * only on MMIO faults. Without this, guest phases that touch no
           * unmapped address (RAM-only loops, Wait/STOP idling) freeze chipset
+@@ -198,8 +217,12 @@ void MainLoop()
+                 asm volatile("mov %0, x12" : "=r"(_x12_save));
+                 M68K_SaveContext(ctx);
+                 bellatrix_emu68_report_jit_progress(_v30_now, (uint32_t)_pc_now);
+-                _return_to_host = emu68_api_dispatch_quantum_progress(
+-                    _v30_now, (uint32_t)_pc_now);
++                if (emu68_machine_runtime_active())
++                    _return_to_host = emu68_machine_dispatch_quantum_progress(
++                        _v30_now, (uint32_t)_pc_now);
++                else
++                    _return_to_host = emu68_api_dispatch_quantum_progress(
++                        _v30_now, (uint32_t)_pc_now);
+                 M68K_LoadContext(getCTX());
+                 asm volatile("mov x12, %0" :: "r"(_x12_save));
+                 asm volatile("mov v28.d[0], xzr");

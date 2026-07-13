@@ -13,6 +13,9 @@ static unsigned reset_calls;
 static unsigned wake_calls;
 static unsigned ipl_value;
 static unsigned callback_calls;
+static uint64_t platform_instructions;
+static uint32_t platform_pc;
+static int platform_stopped;
 
 static void fail(const char *expression, int line)
 {
@@ -74,6 +77,25 @@ emu68_status_t emu68_machine_platform_set_ipl(unsigned level)
 void emu68_machine_platform_wake(void)
 {
     ++wake_calls;
+}
+
+void emu68_machine_platform_run(void)
+{
+    platform_instructions += 10u;
+    platform_pc += 20u;
+    (void)emu68_machine_dispatch_quantum_progress(platform_instructions,
+                                                  platform_pc);
+}
+
+void emu68_machine_platform_snapshot(uint64_t *instructions, uint32_t *pc,
+                                     int *stopped)
+{
+    if (instructions)
+        *instructions = platform_instructions;
+    if (pc)
+        *pc = platform_pc;
+    if (stopped)
+        *stopped = platform_stopped;
 }
 
 static emu68_bus_result_t synchronous_access(void *opaque,
@@ -272,11 +294,37 @@ static void test_cooperative_access(void)
     emu68_machine_destroy(cpu);
 }
 
+static void test_run_boundary(void)
+{
+    emu68_cpu_t *cpu = create_cpu(EMU68_EXEC_SYNCHRONOUS);
+    emu68_run_result_t result = {
+        .abi_version = EMU68_MACHINE_ABI_VERSION,
+        .struct_size = sizeof(result),
+    };
+
+    platform_instructions = 100u;
+    platform_pc = 0x1000u;
+    platform_stopped = 0;
+    CHECK(emu68_machine_run(cpu, 64u, &result) == EMU68_OK);
+    CHECK(result.reason == EMU68_STOP_BUDGET);
+    CHECK(result.instructions_executed == 10u);
+    CHECK(result.cycles_executed == 80u);
+    CHECK(result.pc == 0x1014u);
+
+    result.abi_version = EMU68_MACHINE_ABI_VERSION;
+    result.struct_size = sizeof(result);
+    platform_stopped = 1;
+    CHECK(emu68_machine_run(cpu, 64u, &result) == EMU68_OK);
+    CHECK(result.reason == EMU68_STOP_STOPPED);
+    emu68_machine_destroy(cpu);
+}
+
 int main(void)
 {
     test_abi_and_singleton();
     test_regions_and_sync_access();
     test_cooperative_access();
+    test_run_boundary();
     puts("emu68 machine API unit tests: PASS");
     return 0;
 }
