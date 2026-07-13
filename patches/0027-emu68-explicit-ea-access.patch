@@ -1,0 +1,225 @@
+diff --git a/src/M68k_EA.c b/src/M68k_EA.c
+index 4c8ef45..6e661a9 100644
+--- a/src/M68k_EA.c
++++ b/src/M68k_EA.c
+@@ -12,6 +12,9 @@
+ #include "M68k.h"
+ #include "RegisterAllocator.h"
+ #include "cache.h"
++#ifdef BELLATRIX
++#include "cpu/emu68/emu68_machine_emit.h"
++#endif
+ 
+ static inline __attribute__((always_inline)) uint32_t * load_s16_ext32(uint32_t *ptr, uint8_t reg, int16_t s16)
+ {
+@@ -36,6 +39,27 @@ static inline __attribute__((always_inline)) uint32_t * load_reg_from_addr_offse
+         *ptr++ = mov_reg(base, 31);
+     }
+ 
++#ifdef BELLATRIX
++    if (size != 0)
++    {
++        uint8_t address = RA_AllocARMRegister(&ptr);
++        if (offset == 0)
++            *ptr++ = mov_reg(address, base);
++        else
++        {
++            *ptr++ = movw_immed_u16(reg_d16, (uint16_t)offset);
++            *ptr++ = movt_immed_u16(reg_d16, (uint16_t)((uint32_t)offset >> 16));
++            *ptr++ = add_reg(address, base, reg_d16, LSL, 0);
++        }
++        ptr = emu68_machine_emit_load(ptr, address, reg, size, sign_ext, 0u);
++        RA_FreeARMRegister(&ptr, address);
++        RA_FreeARMRegister(&ptr, reg_d16);
++        if (free_base)
++            RA_FreeARMRegister(&ptr, base);
++        return ptr;
++    }
++#endif
++
+     switch (size)
+     {
+         case 4:
+@@ -205,6 +229,22 @@ static inline __attribute__((always_inline)) uint32_t * load_reg_from_addr(uint3
+         *ptr++ = mov_reg(base, 31);
+     }
+ 
++#ifdef BELLATRIX
++    if (size != 0)
++    {
++        uint8_t address = RA_AllocARMRegister(&ptr);
++        if (index == 0xff)
++            *ptr++ = mov_reg(address, base);
++        else
++            *ptr++ = add_reg(address, base, index, LSL, shift);
++        ptr = emu68_machine_emit_load(ptr, address, reg, size, sign_ext, 0u);
++        RA_FreeARMRegister(&ptr, address);
++        if (free_base)
++            RA_FreeARMRegister(&ptr, base);
++        return ptr;
++    }
++#endif
++
+     if (index == 0xff)
+     {
+         switch (size)
+@@ -283,6 +323,27 @@ static inline __attribute__((always_inline)) uint32_t * store_reg_to_addr_offset
+         *ptr++ = mov_reg(base, 31);
+     }
+ 
++#ifdef BELLATRIX
++    if (size != 0)
++    {
++        uint8_t address = RA_AllocARMRegister(&ptr);
++        if (offset == 0)
++            *ptr++ = mov_reg(address, base);
++        else
++        {
++            *ptr++ = movw_immed_u16(reg_d16, (uint16_t)offset);
++            *ptr++ = movt_immed_u16(reg_d16, (uint16_t)((uint32_t)offset >> 16));
++            *ptr++ = add_reg(address, base, reg_d16, LSL, 0);
++        }
++        ptr = emu68_machine_emit_store(ptr, address, reg, size, 0u);
++        RA_FreeARMRegister(&ptr, address);
++        RA_FreeARMRegister(&ptr, reg_d16);
++        if (free_base)
++            RA_FreeARMRegister(&ptr, base);
++        return ptr;
++    }
++#endif
++
+     switch (size)
+     {
+         case 4:
+@@ -431,6 +492,22 @@ static inline __attribute__((always_inline)) uint32_t * store_reg_to_addr(uint32
+         *ptr++ = mov_reg(base, 31);
+     }
+ 
++#ifdef BELLATRIX
++    if (size != 0)
++    {
++        uint8_t address = RA_AllocARMRegister(&ptr);
++        if (index == 0xff)
++            *ptr++ = mov_reg(address, base);
++        else
++            *ptr++ = add_reg(address, base, index, LSL, shift);
++        ptr = emu68_machine_emit_store(ptr, address, reg, size, 0u);
++        RA_FreeARMRegister(&ptr, address);
++        if (free_base)
++            RA_FreeARMRegister(&ptr, base);
++        return ptr;
++    }
++#endif
++
+     if (index == 0xff)
+     {
+         switch (size)
+@@ -633,6 +710,10 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+             else
+             {
+                 uint8_t reg_An = RA_MapM68kRegister(&ptr, src_reg + 8);
++#ifdef BELLATRIX
++                ptr = emu68_machine_emit_load(ptr, reg_An, *arm_reg, size,
++                                              sign_ext, 0u);
++#else
+                 switch (size)
+                 {
+                     case 4:
+@@ -654,6 +735,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                         kprintf("Unknown size opcode\n");
+                         break;
+                 }
++#endif
+             }
+         }
+         else if (mode == 3) /* Mode 003: (An)+ */
+@@ -669,6 +751,13 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                 RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
+ 
+                 /* Rare case where source and dest are the same register and size == 4 */
++#ifdef BELLATRIX
++                ptr = emu68_machine_emit_load(ptr, reg_An, *arm_reg, size,
++                                              sign_ext, 0u);
++                if (!(size == 4 && reg_An == *arm_reg))
++                    *ptr++ = add_immed(reg_An, reg_An,
++                                       (size == 1 && src_reg == 7) ? 2 : size);
++#else
+                 if (size == 4 && reg_An == *arm_reg) {
+                     *ptr++ = ldr_offset(reg_An, *arm_reg, 0);
+                 }
+@@ -702,6 +791,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                             break;
+                     }
+                 }
++#endif
+             }
+         }
+         else if (mode == 4) /* Mode 004: -(An) */
+@@ -716,6 +806,18 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                 RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
+ 
+                 /* Rare case where source and dest are the same register and size == 4 */
++#ifdef BELLATRIX
++                if (size == 4 && reg_An == *arm_reg)
++                    ptr = load_reg_from_addr_offset(ptr, size, reg_An,
++                                                    *arm_reg, -4, 0, sign_ext);
++                else
++                {
++                    *ptr++ = sub_immed(reg_An, reg_An,
++                                       (size == 1 && src_reg == 7) ? 2 : size);
++                    ptr = emu68_machine_emit_load(ptr, reg_An, *arm_reg, size,
++                                                  sign_ext, 0u);
++                }
++#else
+                 if (size == 4 && reg_An == *arm_reg) {
+                     *ptr++ = ldur_offset(reg_An, *arm_reg, -4);
+                 }
+@@ -749,6 +851,7 @@ uint32_t *EMIT_LoadFromEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *ar
+                             break;
+                     }
+                 }
++#endif
+             }
+         }
+         else if (mode == 5) /* Mode 005: (d16, An) */
+@@ -1490,6 +1593,11 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+ 
+                 RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
+ 
++#ifdef BELLATRIX
++                ptr = emu68_machine_emit_store(ptr, reg_An, *arm_reg, size, 0u);
++                *ptr++ = add_immed(reg_An, reg_An,
++                                   (size == 1 && src_reg == 7) ? 2 : size);
++#else
+                 switch (size)
+                 {
+                 case 4:
+@@ -1508,6 +1616,7 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+                     kprintf("Unknown size opcode\n");
+                     break;
+                 }
++#endif
+             }
+         }
+         else if (mode == 4) /* Mode 004: -(An) */
+@@ -1522,6 +1631,11 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+ 
+                 RA_SetDirtyM68kRegister(&ptr, 8 + src_reg);
+ 
++#ifdef BELLATRIX
++                *ptr++ = sub_immed(reg_An, reg_An,
++                                   (size == 1 && src_reg == 7) ? 2 : size);
++                ptr = emu68_machine_emit_store(ptr, reg_An, *arm_reg, size, 0u);
++#else
+                 switch (size)
+                 {
+                 case 4:
+@@ -1540,6 +1654,7 @@ uint32_t *EMIT_StoreToEffectiveAddress(uint32_t *ptr, uint8_t size, uint8_t *arm
+                     kprintf("Unknown size opcode\n");
+                     break;
+                 }
++#endif
+             }
+         }
+         else if (mode == 5) /* Mode 005: (d16, An) */
+
