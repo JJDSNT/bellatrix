@@ -45,6 +45,13 @@ Emu68 must be usable as the CPU component without taking ownership of
 `VBAR_EL1`, physical ARM IRQ/FIQ routing, the interrupt controller, timers, or
 host devices.
 
+This ownership boundary does not make migration of the existing physical
+exception and IRQ infrastructure part of the API implementation. That migration
+is a separate host-integration change and may happen after the API is complete.
+During the transition the legacy infrastructure may still be present, but no
+operation in this API may depend on it for normal CPU execution, external
+access, bounded return, STOP, or guest IPL delivery.
+
 ARM interrupts and 68k interrupts are different contracts. A physical IRQ is a
 host-platform event. IPL is a persistent architectural input to the emulated
 68k CPU. For example:
@@ -302,9 +309,10 @@ or layer another wrapper over the current fault dispatcher.
 
 ### Public header and ABI
 
-The public header is `emu68/include/emu68_machine.h`. It contains no Bellatrix
-headers and is usable by any machine host. All CPU internals remain behind an
-opaque handle:
+The public header is `src/cpu/emu68/emu68_machine.h` in the embedding
+repository. It contains no Bellatrix headers and is usable by any machine host.
+The runtime lives beside it; only the minimal JIT integration hooks are carried
+as Emu68 patches. All CPU internals remain behind an opaque handle:
 
 ```c
 #define EMU68_MACHINE_ABI_VERSION 1u
@@ -419,6 +427,13 @@ A region may not wrap past `0xffffffff`, have zero size, or overlap another
 region. An uncovered address is UNMAPPED. `region_id` is an opaque value returned
 to the host with external accesses; Emu68 does not interpret it.
 
+DIRECT regions require page-aligned guest and host bases and a page-multiple
+size. `EMU68_REGION_EXECUTE` is valid only for DIRECT regions because Emu68's
+translator consumes instruction bytes from directly mapped memory. An opcode
+fetch from any address which is not both DIRECT and executable takes the
+defined 68k access-fault path; it never invokes the translator through a host
+pointer or an ARM fault.
+
 DIRECT registration uses Emu68's MMU to establish the native mapping with the
 requested permissions and attributes. EXTERNAL registration creates JIT-visible
 classification metadata but no host mapping. UNMAPPED registration explicitly
@@ -435,6 +450,11 @@ statically known external range it emits the external helper. For a dynamic
 address it emits a fast region test and branches to the selected direct,
 external, or unmapped path. The external and unmapped branches execute before
 any native access to the guest address.
+
+Classification covers the complete access width, not only its first byte. An
+access whose bytes do not all belong to one region with the required permission
+takes the defined 68k access-fault path. This also prevents a native DIRECT
+operation from crossing into an EXTERNAL or UNMAPPED region.
 
 ### External-access descriptor
 
@@ -576,7 +596,15 @@ inside callbacks and therefore do not return `EMU68_STOP_EXTERNAL_ACCESS`.
 ### Reset, stop, IPL, and invalidation
 
 ```c
-emu68_status_t emu68_machine_reset(emu68_cpu_t *cpu);
+typedef struct emu68_reset_state {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint32_t initial_ssp;
+    uint32_t initial_pc;
+} emu68_reset_state_t;
+
+emu68_status_t emu68_machine_reset(
+    emu68_cpu_t *cpu, const emu68_reset_state_t *state);
 void emu68_machine_request_stop(emu68_cpu_t *cpu);
 emu68_status_t emu68_machine_set_ipl(emu68_cpu_t *cpu, unsigned level);
 
@@ -586,9 +614,12 @@ emu68_status_t emu68_machine_invalidate_code(
 emu68_status_t emu68_machine_invalidate_all_code(emu68_cpu_t *cpu);
 ```
 
-Reset restores architectural reset state, cancels any pending access, clears
-STOP and stop-request state, and invalidates translations as required. It does
-not reset host devices; the host owns the machine reset sequence.
+The host owns the machine reset sequence, including reading reset vectors 0 and
+4 through its memory system, and supplies their resulting SSP and PC values.
+Reset installs those values, restores the remaining architectural reset state,
+cancels any pending access, clears STOP and stop-request state, and invalidates
+translations as required. It does not reset host devices and cannot itself
+create a cooperative external access.
 
 `emu68_machine_request_stop()` asks the running owner to return
 `EMU68_STOP_REQUESTED` at the next safe boundary. It does not modify 68k state.
@@ -642,7 +673,9 @@ The machine profile is correct when:
 - aliases are normalized consistently to a 32-bit guest address;
 - region changes invalidate every affected translation;
 - guest IPL and STOP work without physical ARM interrupts;
-- the host retains ARM vector, IRQ/FIQ, timer, and device ownership;
+- the API neither acquires nor depends on ARM vector, IRQ/FIQ, timer, or device
+  ownership; transferring any legacy physical infrastructure to the host is a
+  separate implementation;
 - PiStorm remains isolated behind its existing platform backend;
 - no public type exposes Bellatrix, Rigel, GPIO, exception-frame, MMU-table, or
   JIT-register details.

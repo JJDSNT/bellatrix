@@ -15,6 +15,7 @@ related_files:
   - emu68/src/ExecutionLoop.c
   - emu68/src/aarch64/mmu.c
   - emu68/src/aarch64/vectors.c
+  - src/cpu/emu68/bellatrix.c
   - src/cpu/emu68/emu68_api.h
   - src/cpu/emu68/emu68_api_adapter.c
   - patches/0002-add-bellatrix-bus-hook.patch
@@ -47,11 +48,15 @@ machine API.
 
 # Required implementation
 
-- Add the upstream-neutral `emu68/include/emu68_machine.h` contract defined by
-  the normative document.
+- Add the upstream-neutral public header and runtime in the main repository at
+  `src/cpu/emu68/emu68_machine.*`; keep Emu68 patches limited to unavoidable
+  JIT integration hooks.
 - Implement lifecycle and the opaque single-runtime handle without exposing
   `M68KState` or Bellatrix types.
 - Implement non-overlapping DIRECT, EXTERNAL and UNMAPPED region registration.
+- Require executable code to be DIRECT, classify the complete access width, and
+  reject cross-region or permission-violating accesses before a native load or
+  store.
 - Preserve `mmu_map()`, TTBR tables, aliases, JIT protection and direct RAM/ROM
   mappings.
 - Normalize computed guest addresses to 32 bits before region classification.
@@ -68,10 +73,20 @@ machine API.
   runs.
 - Implement reset, stop request, guest IPL and code invalidation with the
   documented thread/ordering contract.
+- Reset receives the host-resolved initial SSP and PC; it must not depend on
+  Bellatrix reset globals or create a cooperative access while resetting.
 - Keep physical ARM IRQ/FIQ, exception-vector ownership and host devices outside
   Emu68's public machine contract.
+- Do not include transfer or removal of the legacy physical exception/IRQ
+  infrastructure in this issue. It may coexist while the API is implemented,
+  but the completed API must not depend on it.
 - Keep PiStorm behind its platform backend without exposing its GPIO/slot
   protocol through the public ABI.
+- Do not add backend selection, Musashi initialization, or the generic
+  `CpuBackend` execution loop to the Emu68 machine API. Historical ISSUE-0043
+  was archived without implementing that separation: generic and Musashi
+  responsibilities must move to `src/cpu/`, while the Emu68 adapter remains
+  under `src/cpu/emu68/`.
 - Remove every Bellatrix normal-bus dependency on
   `SYSPageFaultReadHandler()`, `SYSPageFaultWriteHandler()`,
   `SYSReadValFromAddr()`, `SYSWriteValToAddr()`, and the legacy fallback.

@@ -62,7 +62,8 @@ What exists today:
 
 What does not exist today:
 
-- an upstream-neutral public header implemented inside Emu68;
+- an upstream-neutral public header and runtime in the main repository, with
+  Emu68 patches limited to unavoidable JIT integration hooks;
 - a direct/external/unmapped guest-region registry;
 - JIT classification before host memory is touched;
 - an explicit external-access helper emitted by the JIT;
@@ -133,9 +134,18 @@ The public API may be called implemented only when all behavior defined in
   `SYS*ValFromAddr()` handler;
 - guest IPL, STOP, reset, stop request, bounded run and invalidation work through
   the public contract;
-- physical ARM interrupt and exception ownership remains with Bellatrix;
+- the API neither acquires nor depends on physical ARM interrupt or exception
+  ownership; transferring legacy physical infrastructure to Bellatrix is a
+  separate implementation and is not an API acceptance gate;
 - PiStorm continues to work behind its platform backend;
 - tests and traces demonstrate zero fault-originated normal bus transactions.
 
 Until every condition holds, the API status remains **not implemented**, even
 if the current adapter builds, boots, logs callbacks, or reaches an AROS screen.
+
+The API must also respect CPU-backend ownership. Historical ISSUE-0043 was
+archived without implementing its separation: `src/cpu/emu68/bellatrix.c`
+still selects and initializes Musashi and owns the generic `CpuBackend` loop.
+New API code must not deepen that coupling. Generic backend selection and
+execution belong in `src/cpu/`; only the Emu68 backend adapter belongs in
+`src/cpu/emu68/`.
