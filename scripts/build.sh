@@ -287,6 +287,22 @@ if [ "${BELLATRIX_EMU68_API_AUTODUMP:-0}" = "1" ]; then
     echo "[BUILD] Emu68 API auto stats dump: enabled"
 fi
 
+EMU68_ACCESS_MODE="${BELLATRIX_EMU68_ACCESS_MODE:-public}"
+case "$EMU68_ACCESS_MODE" in
+    public)
+        echo "[BUILD] Emu68 access mode: public machine API"
+        ;;
+    fault)
+        EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_FAULT_DRIVEN=1"
+        echo "[BUILD] Emu68 access mode: diagnostic fault-driven"
+        ;;
+    *)
+        echo "ERROR: invalid BELLATRIX_EMU68_ACCESS_MODE: $EMU68_ACCESS_MODE"
+        echo "       expected: public or fault"
+        exit 1
+        ;;
+esac
+
 PROFILE_FLAG="OFF"
 if [ "${BELLATRIX_PROFILE:-0}" = "1" ]; then
     PROFILE_FLAG="ON"
