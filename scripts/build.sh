@@ -136,6 +136,7 @@ if [ -n "${BTRACE_FILTER:-}" ]; then
 fi
 
 MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
+EMU68_CORE0_REBASELINE="${BELLATRIX_EMU68_CORE0_REBASELINE:-1}"
 MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${BELLATRIX_LOGS:-${CORE_LOG:-0}}}"
 if [ "$MULTICORE_BUILD" != "1" ]; then
     MULTICORE_LOGS="0"
@@ -161,7 +162,11 @@ echo "[BUILD] coarse observable deadlines: $COARSE_DEADLINES_ENABLED"
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
     MULTICORE_FLAG="ON"
-    echo "[BUILD] multicore: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved"
+    if [ "$CPU_BACKEND" = "emu68" ] && [ "$EMU68_CORE0_REBASELINE" = "1" ]; then
+        echo "[BUILD] multicore rebaseline: Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO"
+    else
+        echo "[BUILD] multicore legacy: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved"
+    fi
 fi
 
 if [ "$MULTICORE_BUILD" != "1" ]; then
@@ -287,7 +292,7 @@ if [ "${BELLATRIX_EMU68_API_AUTODUMP:-0}" = "1" ]; then
     echo "[BUILD] Emu68 API auto stats dump: enabled"
 fi
 
-EMU68_ACCESS_MODE="${BELLATRIX_EMU68_ACCESS_MODE:-public}"
+EMU68_ACCESS_MODE="${BELLATRIX_EMU68_ACCESS_MODE:-fault}"
 case "$EMU68_ACCESS_MODE" in
     public)
         echo "[BUILD] Emu68 access mode: public machine API"
@@ -334,6 +339,7 @@ cmake "$EMU68" \
     -DBELLATRIX_BTSTACK_PATCHRAM_SOURCE="$BT_PATCHRAM_SOURCE" \
     -DBELLATRIX_OSD="$OSD_FLAG" \
     -DBELLATRIX_ENABLE_MULTICORE="$MULTICORE_FLAG" \
+    -DBELLATRIX_EMU68_CORE0_REBASELINE="$EMU68_CORE0_REBASELINE" \
     -DBELLATRIX_CORE_LOG="$CORELOG_FLAG" \
     -DBELLATRIX_LAUNCHER="$LAUNCHER_FLAG" \
     -DBELLATRIX_PROFILE="$PROFILE_FLAG" \

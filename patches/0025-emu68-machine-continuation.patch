@@ -1,19 +1,25 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -439,6 +474,8 @@ void MainLoop()
+@@ -439,6 +474,11 @@ void MainLoop()
                  node = M68K_GetTranslationUnit(copyPC);
                  /* Load CPU context */
                  M68K_LoadContext(getCTX());
++#if !defined(BELLATRIX_EMU68_FAULT_DRIVEN) || \
++    !BELLATRIX_EMU68_FAULT_DRIVEN
 +                if (emu68_machine_native_bus_error_pending())
 +                    continue;
++#endif
                  asm volatile("msr TPIDR_EL1, %0"::"r"(PC));
                  /* Prepare ARM pointer in x12 and call it */
                  ARM = node->mt_ARMEntryPoint;
-@@ -467,4 +503,6 @@ void MainLoop()
+@@ -467,4 +506,9 @@ void MainLoop()
              M68K_LoadContext(getCTX());
++#if !defined(BELLATRIX_EMU68_FAULT_DRIVEN) || \
++    !BELLATRIX_EMU68_FAULT_DRIVEN
 +            if (emu68_machine_native_bus_error_pending())
 +                continue;
++#endif
              ARM = node->mt_ARMEntryPoint;
              asm volatile("":"=r"(ARM):"0"(ARM));
              CallARMCode();

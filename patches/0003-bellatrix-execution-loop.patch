@@ -16,7 +16,7 @@ index 732a176..9f55465 100644
 +extern void emu68_machine_resume_native(void);
 +#endif
  #ifdef PISTORM
-@@ -138,11 +147,84 @@ void MainLoop()
+@@ -138,11 +147,86 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -27,7 +27,9 @@ index 732a176..9f55465 100644
          LastPC = getLastPC();
          ctx = getCTX();
  
-+#ifdef BELLATRIX
++#if defined(BELLATRIX) && \
++    (!defined(BELLATRIX_EMU68_FAULT_DRIVEN) || \
++     !BELLATRIX_EMU68_FAULT_DRIVEN)
 +        if (!emu68_machine_instruction_fetch_allowed((uint32_t)(uintptr_t)PC,
 +                                                      2u)) {
 +            M68K_SaveContext(ctx);
@@ -103,21 +105,27 @@ index 732a176..9f55465 100644
          /* If (unlikely) there was interrupt pending, check if it needs to be processed */
          if (unlikely(ctx->INT32 != 0))
          {
-@@ -152,6 +225,13 @@ void MainLoop()
+@@ -152,6 +227,19 @@ void MainLoop()
              uint32_t vbr;
  
              /* Find out requested IPL level based on ARM state and real IPL line */
 +#ifdef BELLATRIX
-+            /* Bellatrix writes the actual IPL level into INT.IPL directly.
-+             * INT.ARM is not used for level; clear it so this block is not re-entered. */
-+            level = (int)ctx->INT.IPL;
-+            ctx->INT.ARM = 0;
-+            ctx->INT.ARM_err = 0;
++            /* Preserve Emu68's physical ARM interrupt semantics while also
++             * accepting Rigel's explicitly published Amiga IPL. */
++            if (ctx->INT.ARM_err) {
++                level = 7;
++                ctx->INT.ARM_err = 0;
++            } else if (ctx->INT.ARM) {
++                level = 6;
++                ctx->INT.ARM = 0;
++            }
++            if (ctx->INT.IPL > level)
++                level = ctx->INT.IPL;
 +#else
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +249,7 @@ void MainLoop()
+@@ -169,7 +257,7 @@ void MainLoop()
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
@@ -126,7 +134,7 @@ index 732a176..9f55465 100644
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +270,10 @@ void MainLoop()
+@@ -190,9 +278,10 @@ void MainLoop()
                      {
                          level = ipl_level;
                      }
@@ -138,7 +146,7 @@ index 732a176..9f55465 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +317,65 @@ void MainLoop()
+@@ -236,6 +325,65 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
@@ -204,7 +212,7 @@ index 732a176..9f55465 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +388,8 @@ void MainLoop()
+@@ -248,7 +396,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */

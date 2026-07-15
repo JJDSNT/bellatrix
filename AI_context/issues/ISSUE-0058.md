@@ -212,6 +212,50 @@ protótipo pode usar um trampoline assembly com save completo demonstrável; uma
 chamada C só é aceitável depois dessa preservação. FIQ permanece intocada pelo
 Bluetooth.
 
+# Primeiro baseline implementado
+
+O branch `emu68-core0-rebaseline` implementa a topologia conservadora atrás de
+dois controles reversíveis:
+
+- `BELLATRIX_EMU68_CORE0_REBASELINE=1` (padrão no branch) mantém o entry do
+  Emu68 no boot Core 0; valor zero restaura a topologia multicore anterior;
+- `BELLATRIX_EMU68_ACCESS_MODE=fault` (padrão no branch) seleciona a execução
+  nativa fault-driven; `public` preserva o A/B com a API explícita.
+
+No modo conservador:
+
+- Core 0 entra diretamente em `M68K_StartEmu`, sem o loop de quanta da API;
+- Core 2 continua owner único do Rigel;
+- Core 3 executa o reactor físico e recebe event stream local de ~953 Hz;
+- Core 1 permanece estacionado;
+- o `MainLoop` compilado não chama helpers `emu68_machine_*`;
+- STOP volta ao caminho PiStorm original com `WFE`, em vez de yield gerenciado;
+- a entrega de interrupção combina `INT.ARM`/níveis 6-7 originais com o IPL
+  publicado pelo Rigel, sem descartar a IRQ física;
+- mudanças de IPL no Core 2 atualizam o `M68KState` nativo via `PAL_IPL_Set()` e
+  emitem `SEV`, pois não existe mais um quantum gerenciado no Core 1 para puxar
+  `s_pending_ipl`.
+
+O fault handler e os slots de `vectors.c` não foram substituídos. O ELF mantém
+os oito slots nos offsets arquiteturais `+0x000`, `+0x080`, `+0x100`,
+`+0x180`, `+0x200`, `+0x280`, `+0x300` e `+0x380`.
+
+## Validação inicial do baseline
+
+- build cruzado Emu68/multicore/fault, USB/BT/launcher desligados: PASS;
+- `tests/unit/run_emu68_machine.sh`: PASS, preservando o A/B público;
+- verificação de reprodução: patches `0003`, `0020` e `0025` passam
+  `git apply --reverse --check` sobre o checkout configurado;
+- QEMU `raspi3b` + DiagROM: PASS até OVL, UDS/LDS e detecção/teste de Chip RAM;
+- o log confirma `core=0`, `native fault-driven execution selected`, Core 2 a
+  244140 Hz e Core 3 a 953 Hz;
+- imagem do gate: SHA-256
+  `d055e3f1b1078d750109dcdc54b2a29cb5b76f4f944af29fc50aa9d5548c8206`.
+
+O download de firmware do CMake produziu um DTB vazio neste worktree isolado;
+o smoke QEMU usou o DTB válido do checkout principal, do mesmo modelo/commit.
+Isso é uma pendência de infraestrutura do artefato, não um resultado do guest.
+
 # Decisão arquitetural vigente
 
 ## 1. Baseline de colocação
@@ -319,12 +363,16 @@ selecionáveis depois que o baseline conservador estiver provado.
 
 ## P2 — Rebaseline funcional no Core 0
 
-- [ ] Construir uma variante mínima com Emu68 no Core 0 e fault handler nativo.
-- [ ] Manter `vectors.c` no caminho de MMIO e eliminar apenas duplicação
-  Bellatrix que não faça parte do adaptador fino.
-- [ ] Definir placement provisório de Rigel e serviços sem alterar o contrato
+- [x] Construir uma variante mínima com Emu68 no Core 0 e fault handler nativo.
+- [x] Manter `vectors.c` e o fault handler no caminho de MMIO.
+- [ ] Afinar o adaptador e eliminar apenas duplicação Bellatrix comprovada,
+  depois dos gates funcionais.
+- [x] Definir placement provisório de Rigel e serviços sem alterar o contrato
   Emu68 antes das medições.
 - [ ] Validar DiagROM, KS1.3, KS3.1 e AROS, incluindo STOP/IRQ/MMIO/FPU/Fast RAM.
+  - [x] DiagROM em QEMU: OVL, UDS/LDS e Chip RAM alcançados.
+  - [ ] KS1.3, KS3.1 e AROS em QEMU.
+  - [ ] STOP/IRQ/FPU/Fast RAM e código mutável em testes dedicados.
 - [ ] Congelar essa imagem como referência de hardware Raspberry Pi 3B.
 
 ## P3 — IRQ Bluetooth alinhada
@@ -390,3 +438,8 @@ houver conflito.
 - 2026-07-15: topologia provisória registrada: Emu68/Core 0, Rigel/Core 2 e
   reactor físico/Core 3; Core 1 permanece auxiliar até haver necessidade
   medida.
+- 2026-07-15: primeiro baseline Core0/fault implementado com rollback por flags.
+  O caminho fault remove do `MainLoop` os hooks da API explícita, restaura STOP
+  com `WFE`, preserva `INT.ARM` e entrega o IPL Rigel ao contexto nativo.
+- 2026-07-15: build cruzado e unit tests passaram; QEMU/DiagROM alcançou OVL,
+  UDS/LDS e teste de Chip RAM com Core0=Emu68, Core2=Rigel e Core3=IO.

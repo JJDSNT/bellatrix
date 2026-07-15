@@ -366,7 +366,11 @@ void bellatrix_emu68_backend_init(void)
         return;
     }
     s_backend.ready = 1;
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    kprintf("[EMU68-MACHINE] native fault-driven execution selected\n");
+#else
     kprintf("[EMU68-MACHINE] public machine API active\n");
+#endif
 }
 
 int bellatrix_emu68_backend_prepare_topology(void)
