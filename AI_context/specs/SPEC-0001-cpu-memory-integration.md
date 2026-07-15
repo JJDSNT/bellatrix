@@ -174,6 +174,20 @@ Memória sem efeitos colaterais por acesso:
 
 Exemplos: Chip RAM, Fast RAM Z2/Z3, ROM, VRAM armazenável e dados de uma board.
 
+Backing e mapping têm lifecycles distintos. A board reserva backing uma vez e
+o mantém invisível ao guest; Autoconfig apenas instala/remove a tradução desse
+backing na base escolhida. No Emu68, uma Fast RAM grande não pode vir do heap
+TLSF local do kernel: deve ser retirada de um bloco de `sys_memory`, com a mesma
+atualização atômica do bloco/device tree usada pelo allocator de páginas MMU.
+Só depois `mmu_map(phys, guest, size, ... | MMU_ALLOW_EL0)` torna a região
+visível. O alias físico alto continua disponível ao ARM para inicialização e
+para owners de DMA. No Musashi, o mesmo backing é registrado como bank/buffer e
+consultado pelo callback de memória; ele não é copiado nem roteado por Rigel.
+
+A reserva deve ocorrer antes de qualquer `mmu_map()` que possa pedir novas
+páginas de tabela, porque o allocator do Emu68 também reduz o topo de
+`sys_memory`. Falha de reserva ou mapping não pode avançar o Autoconfig.
+
 ## `EXTERNAL`
 
 Região com semântica de dispositivo ou efeito colateral:
@@ -326,6 +340,11 @@ sucesso marca a board configurada. Falha mantém a board pendente, e reset,
 re-registro ou remoção chamam `unmap`. Validação de alinhamento, sobreposição e
 capacidade pertence ao `map()` do backend/descritor e ainda precisa ser
 implementada junto da primeira board `DIRECT`.
+
+Para uma Z3 Fast RAM de 128 MiB, o ROM de Autoconfig precisa declarar a forma
+Z3 estendida (tamanho base em `er_Type` e `ERFF_EXTENDED` em `er_Flags`). Os
+códigos Z2 de 64 KiB–8 MiB não podem ser reutilizados isoladamente para inferir
+esse tamanho.
 
 # Ordem de implementação
 

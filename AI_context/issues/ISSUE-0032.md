@@ -63,6 +63,9 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
   descoberta e faixa válida precisam ser definidas pelo contrato de perfil;
 - o callback comum de lifecycle Z3 `map/unmap` existe, mas ainda não há
   implementação de mapping `DIRECT` específica para Emu68 ou Musashi;
+- uma Fast RAM grande não cabe no TLSF local: falta reservar backing do topo de
+  `sys_memory`, atualizar o bloco/device tree e coordenar essa reserva com o
+  allocator de páginas MMU, que consome o mesmo topo;
 - callbacks byte a byte atuais não distinguem memória direta de registradores;
 - ainda não existe board Z3 funcional registrada no runtime Bellatrix.
 
@@ -77,6 +80,13 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 
 Isso fecha o sequenciamento e o esqueleto de lifecycle, mas não constitui
 suporte Z3: falta a primeira board Fast RAM e o mapping direto nos backends.
+
+A auditoria do backing também confirmou que a identidade física criada por
+`start.c` não concede `MMU_ALLOW_EL0`. Isso permite manter a reserva acessível
+ao ARM e invisível ao 68k até Autoconfig; o `map()` da board instala a tradução
+guest com permissão EL0. Musashi deve registrar o mesmo buffer como região
+direta. A API pública antiga já contém uma primitiva MMU semelhante, mas ela
+deve ser extraída para uma fronteira esparsa, não reutilizada como machine box.
 
 # Objetivo revisado
 

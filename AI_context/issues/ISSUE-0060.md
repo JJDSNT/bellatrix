@@ -150,3 +150,8 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   palavra escrita em `$E80044`, chama `map()` fora do hot path e desfaz mapping
   em reset/remoção. O teste de contrato cobre ordem, base guest-assigned,
   rollback de `map()` e `unmap()`; ainda não existe uma board Z3 Fast RAM.
+- 2026-07-15: a auditoria do primeiro `DIRECT` separou reserva de backing de
+  mapping guest. Z3 RAM deve retirar backing do topo de `sys_memory` (e refletir
+  a redução no device tree) antes de instalar MMU/bank. O heap TLSF local não é
+  apropriado para dezenas de MiB, e o allocator de page tables precisa dividir
+  o mesmo topo de forma ordenada.
