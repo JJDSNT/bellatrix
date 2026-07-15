@@ -33,7 +33,6 @@ static bool s_bt_runtime_sd_ok;
 static bool s_bt_runtime_connect_selected;
 static uint32_t s_bt_runtime_last_gen;
 static uint64_t s_bt_runtime_started;
-static bool s_bt_runtime_connect_pending;
 static uint8_t s_bt_runtime_selected_addr[6];
 static Fat32State s_bt_runtime_fs;
 
@@ -397,7 +396,7 @@ static void bt_pairs_save_to_sd(Fat32State *fs)
 
 bool btscan_runtime_open(void)
 {
-    if (s_bt_runtime_active || s_bt_runtime_connect_pending)
+    if (s_bt_runtime_active)
         return false;
 
     s_bt_runtime_active = true;
@@ -444,7 +443,10 @@ void btscan_runtime_close(bool confirmed)
          * authentication after the framebuffer modal has closed. */
         bellatrix_launcher_bt_prepare_pairing(
             s_bt_runtime_selected_addr);
-        s_bt_runtime_connect_pending = true;
+        /* This function runs after the normal BTstack pass, not in its HID
+         * callback. Publish reconnect immediately; Core 3 submits it on the
+         * next normal reactor pass. */
+        bellatrix_launcher_bt_connect_now();
     } else {
         bellatrix_launcher_bt_close_pairing();
     }
@@ -457,19 +459,12 @@ void btscan_runtime_close(bool confirmed)
 
 void btscan_runtime_background_step(void)
 {
-    if (!s_bt_runtime_connect_pending) {
-        /* A new link key is produced asynchronously after the modal closes.
-         * Persist it only once the HID link is live, from the reactor owner. */
-        if (s_bt_runtime_sd_ok &&
-            bellatrix_launcher_bt_mouse_connected() &&
-            bt_link_key_db_sd_dirty())
-            bt_pairs_save_to_sd(&s_bt_runtime_fs);
-        return;
-    }
-    /* Connect on the next Core-3 reactor pass. This preserves the observed
-     * immediate-on-discovery behavior without doing HCI work in a callback. */
-    s_bt_runtime_connect_pending = false;
-    bellatrix_launcher_bt_connect_now();
+    /* A new link key is produced asynchronously after the modal closes.
+     * Persist it only once the HID link is live, from the reactor owner. */
+    if (s_bt_runtime_sd_ok &&
+        bellatrix_launcher_bt_mouse_connected() &&
+        bt_link_key_db_sd_dirty())
+        bt_pairs_save_to_sd(&s_bt_runtime_fs);
 }
 
 bool btscan_runtime_step(void)

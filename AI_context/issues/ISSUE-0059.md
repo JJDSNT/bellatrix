@@ -35,8 +35,9 @@ as premissas arquiteturais superadas daquela branch. A autoridade permanece:
   link key continuam em background depois do fechamento da tela.
 - Ao identificar um mouse HID durante um scan de pareamento, o fluxo padrão
   inicia a conexão imediatamente, que é o único comportamento comprovado pela
-  evidência anterior. No F11 o pedido ocorre no passo seguinte do Core 3 para
-  manter HCI fora do callback, sem espera artificial e sem aguardar `Enter`.
+  evidência anterior. No F11 o pedido é publicado no próprio fechamento do
+  scan, fora do callback; Core 3 o submete no passo normal seguinte, sem timer,
+  sem passagem intermediária do modal e sem aguardar `Enter`.
 - Reconexão HID tem tentativas assíncronas e limitadas. Pares conhecidos podem
   autenticar fora da janela; dispositivos desconhecidos continuam negados.
 - Relatórios HID de erro `0x01..0x03` são ignorados em USB e BT.
