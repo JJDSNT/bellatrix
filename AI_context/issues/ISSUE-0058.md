@@ -268,8 +268,8 @@ O desvio UART entra num trampoline fora da vector table que salva e restaura
 
 O reactor normal no Core 3 consome o ring e rearma PL011 + controlador. FIQ e
 o fault handler não foram modificados. O gate `scripts/check_bt_irq_abi.sh`
-verifica offsets, fallback Emu68, contexto completo e FIQ intocada em todo
-build.
+verifica offsets, dispatch físico sem injeção guest, contenção de fonte
+desconhecida, contexto completo e FIQ intocada em todo build.
 
 ## Escopo de validação vigente
 
@@ -628,10 +628,18 @@ Para Bellatrix, o dispatcher deve decidir antes da injeção:
 - fontes desconhecidas: conter e diagnosticar, nunca fabricar `EXTER` por
   padrão sem identificar acknowledge e ownership.
 
-O protótipo atual ainda preserva byte a byte o fallback original para toda
-fonte não-PL011. Isso foi correto para o primeiro A/B conservador, mas fica
-agora marcado como dívida arquitetural: deve ser substituído por dispatch de
-fontes conhecidas antes de habilitar outras IRQs físicas Bellatrix.
+Implementado no commit `0adc636`: no build Bellatrix, o slot IRQ SPx envia
+UART0 ao top-half Bluetooth e envia qualquer outra fonte ao caminho de
+contenção. A fonte desconhecida é contada, retorna com IRQ ARM mascarada para
+evitar uma tempestade de nível e nunca escreve `INT.ARM`. O caminho original
+Emu68 continua disponível somente em builds não-Bellatrix. FIQ permanece
+inalterada e sem fonte habilitada; quando houver candidato USB/FIQ, deverá
+ganhar dispatcher físico próprio em vez de injeção guest implícita.
+
+O contador `bellatrix_physical_unknown_irq_count()` aparece na telemetria de
+bootstrap/scan Bluetooth. Atualmente UART0/GPU IRQ 57 é a única fonte GPU IRQ
+explicitamente habilitada pelo Bellatrix, portanto valor não zero é falha de
+configuração ou nova fonte ainda sem ownership.
 
 # Impacto nas branches existentes
 
@@ -693,6 +701,8 @@ selecionáveis depois que o baseline conservador estiver provado.
 - [x] Projetar IRQ normal para Bluetooth compatível com o Core 0/Emu68.
 - [x] Handler mínimo: identificar e reconhecer o hardware, registrar pending e
   retornar; executar BTStack fora da exceção.
+- [x] Remover fallback Bellatrix que convertia IRQ física desconhecida em
+  `INT.ARM`/EXTER; conter e contar a fonte sem tocar no guest.
 - [ ] Provar ausência de corrupção de contexto JIT, IRQ Amiga espúria, perda de
   byte UART, regressão de boot e starvation.
 - [x] Reaproveitar seletivamente ring SPSC, budgets e defer da branch
@@ -724,8 +734,8 @@ Até nova validação, não usar como decisão vigente afirmações de que:
 
 - Emu68 deve necessariamente rodar no Core 1;
 - Core 0 deve necessariamente ser Host Reactor separado do JIT;
-- Emu68 não depende de IRQ ARM física no Bellatrix;
-- IRQ física nunca deve entrar no domínio/vector do Emu68;
+- toda IRQ física ARM deve ser convertida em `INT.ARM`/EXTER;
+- o housekeeper PiStorm é uma ISR ARM;
 - o roteamento original ao Core 0 é mera herança descartável;
 - o fault handler deve ser substituído pela API pública;
 - a API pública é pré-requisito para scheduler/multicore correto.
@@ -762,6 +772,10 @@ houver conflito.
   atual pelo usuário; continuar somente com build, testes e QEMU.
 - 2026-07-15: implementado primeiro protótipo de Bluetooth por IRQ normal.
   UART0 é discriminada dentro do slot SPx e desviada para trampoline completo;
-  demais IRQs mantêm a semântica Emu68 e FIQ permanece intocada.
+  nessa etapa, demais IRQs ainda mantinham a semântica Emu68 e FIQ permanecia
+  intocada.
+- 2026-07-15: após esclarecimento do autor, separado housekeeper/IPL Amiga de
+  IRQs físicas ARM. Removido no Bellatrix o fallback não-PL011 para
+  `INT.ARM=6`; IRQ desconhecida agora é contida, contada e nunca chega ao guest.
 - 2026-07-15: consolidado ownership sem handoff: miniUART=log desde o início,
   PL011=Bluetooth desde o início. QEMU/DiagROM repetido pela segunda UART.
