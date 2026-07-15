@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0058
 title: "Rebaseline conservador do Emu68: Core 0, fault handler, IRQ física e vectors.c"
-status: ready
+status: doing
 priority: critical
 type: research
 owner: agent
@@ -82,6 +82,135 @@ Há uso observável de IRQ física no desenho Emu68:
 Não se deve concluir antecipadamente que todo esse mecanismo continua
 necessário no variant Bellatrix, mas também não se pode declará-lo morto antes
 de uma auditoria e uma prova de equivalência.
+
+# Resultado da auditoria P1
+
+## O que o `start.c` original realmente faz
+
+O log `Setting IRQ routing to core 0` corresponde à escrita zero em
+`0x4000000c` (vista no mapeamento virtual como `0xf300000c`): seleciona o Core 0
+como destino das GPU IRQs. Não significa, isoladamente, "desabilitar todas as
+IRQs". O bloco seguinte configura separadamente as fontes locais:
+
+| Recurso | Core 0 original | Cores 1-3 originais | Consequência |
+|---|---|---|---|
+| execução Emu68/JIT | `M68K_StartEmu()` | tarefas PiStorm/park | CPU, contexto e exceções coincidem no Core 0 |
+| `VBAR_EL1` | vetores Emu68 | vetores Emu68 em `secondary_boot()` | qualquer exceção entra no contrato Emu68 |
+| `TPIDRRO_EL0` | aponta para `M68KState` ao carregar/iniciar contexto | não recebe contexto M68K | os vetores rápidos só são válidos no core do JIT |
+| GPU IRQ | roteada ao Core 0 | não selecionada | periféricos ARM e caminho PiStorm convergem no Core 0 |
+| PMU IRQ | habilitada/roteada ao Core 0 | mascarada nos outros cores | não remover antes de provar que overflow não participa do runtime |
+| timer IRQ local | quatro fontes habilitadas no Core 0 | desabilitadas | preservar no primeiro baseline; medir consumidores depois |
+| mailbox IRQ local | desabilitada | desabilitada | `SEV/WFE` não depende de mailbox IRQ |
+| PMU cycle counter | inicializado | inicializado em cada secondary | contagem por core faz parte do ambiente usado por métricas/JIT |
+
+O patch Bellatrix `0007` mantém esse bloco de roteamento, mas muda o consumidor:
+Core 0 vira supervisor e o JIT passa ao Core 1. O Core 1 recebe MMU/cache,
+`VBAR_EL1`, PMU e depois `TPIDRRO_EL0`, porém não recebe o roteamento físico que
+continuou no Core 0. Assim, cada metade parece inicializada isoladamente, mas o
+contrato original deixou de estar co-localizado.
+
+## Contrato observado em `vectors.c` e no JIT
+
+- Data Abort síncrono entra em `SYSHandler`/`SYSPageFault*Handler` e implementa
+  o acesso externo PiStorm. Este é o fault handler a preservar.
+- O slot IRQ de EL1h/SPx original é deliberadamente especial: salva somente
+  `x0/x1`, consulta `INT_shadow`, obtém `M68KState` via `TPIDRRO_EL0` e publica
+  `INT.ARM=6` quando `INTENA` permite EXTER.
+- FIQ segue contrato semelhante e SError publica nível 7. Portanto não são
+  slots genéricos onde uma função C comum possa ser ligada sem redefinir a ABI.
+- O JIT usa registradores AArch64 fixos, inclusive SIMD, e código gerado altera
+  `DAIF` de acordo com o IPL 68k em MOVE-to-SR, RTE e STOP. Preservar apenas a
+  ABI C normal dentro de uma exceção não basta.
+- `ExecutionLoop.c` consome `INT.ARM`, `INT.ARM_err` e IPL para construir a
+  entrada de interrupção 68k. Desacoplar esses campos é uma alteração semântica,
+  não mera limpeza de plataforma.
+- STOP usa `WFE` no variant PiStorm e observa o estado de interrupção. O patch
+  Bellatrix que transforma STOP em yield pode continuar útil, mas precisa ser
+  validado como adaptação consciente, não como evidência de que o contrato
+  físico original é dispensável.
+
+## Classificação para a rebaseline
+
+### Invariantes do core do JIT — preservar sem negociação no primeiro passo
+
+- EL1, MMU/TTBR, caches, stack e `VBAR_EL1` válidos;
+- `TPIDRRO_EL0` apontando para o contexto M68K corrente;
+- contexto inteiro/SIMD do JIT preservado exatamente nas exceções;
+- Data Abort e retomada pelo fault handler original;
+- coerência entre IPL 68k, `DAIF`, STOP/WFE e wakeup;
+- PMU/timer/routing original até existir teste que autorize cada remoção.
+
+### Semântica PiStorm que pode mudar somente com prova de equivalência
+
+- tradução de IRQ/FIQ física em `INT.ARM`/nível 6;
+- sombras `INTENA`/`INTREQ`, overlay, autoconfig e despacho de bus em
+  `vectors.c`;
+- tarefas auxiliares e cadência de housekeeper que possam produzir eventos
+  observados pela CPU.
+
+### Placement que pode ser redefinido
+
+- async logger, write-back e housekeeper nos cores secundários;
+- core exato do Rigel e do reactor físico, desde que ownership e comunicação
+  sejam explícitos;
+- otimizações da API pública e polling cooperativo, depois do baseline.
+
+## Auditoria da branch `issue-0054-bt-physical-irq`
+
+A branch contém evidência de hardware e componentes valiosos: ring SPSC de RX,
+top-half limitado, defer/rearm, budgets do BTstack, máquina de estados, parser
+HID, contadores de erro/overflow e um gate que verifica os offsets arquiteturais
+de 0x80 bytes da vector table. Esses itens são candidatos a cherry-pick ou
+transplante seletivo.
+
+Sua política de exceções não é transplantável como está:
+
+- reserva FIQ para PL011, contrariando a orientação vigente;
+- substitui os slots IRQ/FIQ do Emu68 por handlers físicos Bellatrix;
+- trata `INT.ARM` como legado que nunca deve receber IRQ física;
+- mascara PMU/timers no `start.c` sem antes reconstruir o contrato original;
+- usa IRQ normal para DWC2 e FIQ para Bluetooth, alocação que agora deve ser
+  reavaliada/invertida;
+- chama C após um save de contexto criado pela própria branch; isso não pode
+  ser aplicado sobre o slot SPx original, que salva apenas `x0/x1`.
+
+O bug descoberto nessa branch — slots IRQ/FIQ maiores que 0x80 fazendo o
+hardware entrar no meio do slot anterior — permanece uma lição e um gate de
+build obrigatório para qualquer nova integração de `vectors.c`.
+
+## Topologia conservadora provisória
+
+| Core | Papel inicial | Contrato |
+|---|---|---|
+| 0 | Emu68/JIT | boot original, fault handler, `VBAR`, `TPIDRRO`, DAIF e IRQ física preservados |
+| 1 | auxiliar/park | disponível para serviço medido; não recebe o JIT nesta fase |
+| 2 | Rigel | owner único do chipset e produtor do IPL Amiga |
+| 3 | reactor físico provisório | BTstack/USB/console fora da exceção, acordado por flag + `SEV` |
+
+O Core 3 é provisório porque o runtime atual já possui uma entrada de I/O
+estacionada, reduzindo o deslocamento necessário. A IRQ PL011 chega ao Core 0,
+cujo top-half deve somente drenar/registrar pending e acordar o consumidor. Não
+se deve executar BTstack no vetor nem depender de o loop infinito do JIT chamar
+periodicamente o reactor.
+
+## Forma mínima da integração IRQ Bluetooth
+
+O slot SPx IRQ precisa primeiro identificar a fonte física. Para PL011, o
+caminho Bellatrix deverá:
+
+1. preservar o contexto adicional exigido pelo JIT, com layout e tamanho de
+   slot verificados no ELF;
+2. confirmar `UART0/MIS`, mascarar RX/RT e drenar uma quantidade limitada para
+   o ring;
+3. limpar/reconhecer apenas a fonte atendida, publicar pending e emitir `SEV`;
+4. restaurar o contexto e retornar sem escrever `INT.ARM`;
+5. para uma fonte PiStorm/Emu68, manter o comportamento original de nível 6;
+6. para fonte desconhecida, contar e conter a fonte sem fabricar IRQ Amiga.
+
+O dispatcher deve ser discriminador, não substituto do vetor Emu68. O primeiro
+protótipo pode usar um trampoline assembly com save completo demonstrável; uma
+chamada C só é aceitável depois dessa preservação. FIQ permanece intocada pelo
+Bluetooth.
 
 # Decisão arquitetural vigente
 
@@ -172,20 +301,20 @@ selecionáveis depois que o baseline conservador estiver provado.
 
 ## P0 — Congelar decisões divergentes
 
-- [ ] Não promover ISSUE-0057 nem a topologia Core1=Emu68.
-- [ ] Não integrar a branch Bluetooth antes da auditoria de startup/IRQ.
-- [ ] Preservar imagens, logs e commits conhecidos para A/B e rollback.
+- [x] Não promover ISSUE-0057 nem a topologia Core1=Emu68.
+- [x] Não integrar a branch Bluetooth antes da auditoria de startup/IRQ.
+- [x] Preservar imagens, logs e commits conhecidos para A/B e rollback.
 
 ## P1 — Auditoria do contrato Emu68 original
 
-- [ ] Comparar sempre `git show HEAD:src/aarch64/start.c` com o arquivo patchado.
-- [ ] Mapear `_start`, `_secondary_start`, `secondary_boot`, `boot` e
+- [x] Comparar sempre `git show HEAD:src/aarch64/start.c` com o arquivo patchado.
+- [x] Mapear `_start`, `_secondary_start`, `secondary_boot`, `boot` e
   `M68K_StartEmu` por core.
-- [ ] Mapear por core: EL, MMU/TTBR, caches, stack, VBAR, TPIDR, PMU, timers,
+- [x] Mapear por core: EL, MMU/TTBR, caches, stack, VBAR, TPIDR, PMU, timers,
   DAIF, IRQ/FIQ routing, mailbox, WFE/SEV e STOP.
-- [ ] Traçar todos os consumidores/produtores de `INT_shadow`, `INT.ARM`, IPL e
+- [x] Traçar todos os consumidores/produtores de `INT_shadow`, `INT.ARM`, IPL e
   os caminhos gerados que habilitam/mascaram IRQ ARM.
-- [ ] Documentar o que é requisito do JIT, requisito PiStorm físico ou código
+- [x] Documentar o que é requisito do JIT, requisito PiStorm físico ou código
   que o Bellatrix pode substituir com prova.
 
 ## P2 — Rebaseline funcional no Core 0
@@ -218,7 +347,7 @@ selecionáveis depois que o baseline conservador estiver provado.
 
 # Critérios de aceite
 
-- [ ] Documento de contrato original-versus-patch completo e revisável.
+- [x] Documento de contrato original-versus-patch completo e revisável.
 - [ ] Emu68 Core 0 + fault handler boota de forma repetível em hardware.
 - [ ] Data Abort/MMIO, STOP, IPL/IRQ, FPU, Fast RAM e código mutável validados.
 - [ ] Bluetooth funciona por IRQ normal sem corromper o Emu68 ou gerar IPL
@@ -251,3 +380,13 @@ houver conflito.
   Bellatrix e que o `HEAD` original mantém JIT, IRQ, PMU e timers no Core 0.
 - 2026-07-15: criada esta rebaseline; branches pública e Bluetooth colocadas em
   revisão arquitetural antes de integração.
+- 2026-07-15: auditoria P1 concluída. Confirmado que `0x4000000c` roteia GPU
+  IRQ ao Core 0 (não é um mask global), que o slot IRQ SPx original faz parte
+  da entrega `INT.ARM=6`, e que o patch `0007` separou JIT e roteamento físico.
+- 2026-07-15: branch Bluetooth classificada para reuso seletivo. Ring, reactor,
+  state machine, telemetria e gate de offsets dos vetores são aproveitáveis;
+  FIQ para PL011, substituição dos vetores e mask preventivo de PMU/timers não
+  são compatíveis com a rebaseline.
+- 2026-07-15: topologia provisória registrada: Emu68/Core 0, Rigel/Core 2 e
+  reactor físico/Core 3; Core 1 permanece auxiliar até haver necessidade
+  medida.
