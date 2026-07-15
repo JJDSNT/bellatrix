@@ -50,7 +50,8 @@ apply_patch_if_needed() {
     fi
 
     if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
-        if grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c &&
+        if { grep -Fq '#include "cpu/emu68/vectors.inc"' src/aarch64/vectors.c ||
+             grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c; } &&
            grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
@@ -258,7 +259,8 @@ check_emu68_patch_applied() {
     fi
 
     if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
-        if grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c &&
+        if { grep -Fq '#include "cpu/emu68/vectors.inc"' src/aarch64/vectors.c ||
+             grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c; } &&
            grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0

@@ -23,9 +23,10 @@ related_files:
 # Objetivo
 
 Reduzir a integração Emu68 ao menor delta compatível com seu desenho nativo e
-definir uma fronteira única de memória/MMIO que possa ser consumida por Emu68,
-Musashi e futuros backends. Core 0 é a baseline provisória de estabilização; o
-contrato não pode depender de placement.
+definir uma classificação esparsa de memória/MMIO consumida por Emu68, Musashi
+e futuros backends. A meta não é uma `machine box`: cada região deve alcançar
+diretamente o owner de sua semântica ARM. Core 0 é a baseline provisória de
+estabilização; o contrato não pode depender de placement.
 
 # Evidência atual
 
@@ -37,8 +38,9 @@ contrato não pode depender de placement.
 - O seam desejado é um adapter de plataforma pequeno, estático e selecionado em
   compile time, chamado pelo caminho nativo; não uma tabela de function pointers
   nem um novo loop cooperativo.
-- Musashi deve chamar diretamente o mesmo serviço de transação externa, sem
-  fabricar Data Abort ARM.
+- O adapter classifica a região e chama seu owner semântico;
+  `BellatrixMachine`/`bellatrix_bus_access()` são pontes transitórias, não ABI.
+- Musashi deve compartilhar classificação e owners, sem fabricar Data Abort ARM.
 - Rigel é owner dos dispositivos e de seu tempo; não deve virar intermediário
   de RAM `DIRECT`.
 
@@ -75,9 +77,9 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 1. Preservar `SYSHandler` e a semântica de fault/retomada do Emu68.
 2. Classificar endereço CPU de 32 bits em `DIRECT`, `EXTERNAL` ou `UNMAPPED`.
 3. Mapear `DIRECT` pelo backend (MMU/bank), sem hook no steady state.
-4. Encaminhar `EXTERNAL` a um serviço Bellatrix síncrono, sem alocação e sem
-   function pointer no hot path Emu68.
-5. Fazer Musashi chamar a mesma implementação de serviço.
+4. Encaminhar `EXTERNAL` diretamente ao owner semântico da região, sem alocação
+   e sem function pointer no hot path Emu68.
+5. Fazer Musashi compartilhar classificação e owners, não uma caixa de máquina.
 6. Definir lifecycle transacional `map/unmap/reset/shutup` antes da primeira
    board Z3.
 7. Não implementar o hook definitivo antes de fixar descritores, ownership,
@@ -87,10 +89,14 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 
 - [x] Retirar patches `0025`–`0034` da sequência padrão.
 - [x] Corrigir detecção cumulativa de `0022`/`0023` no setup.
-- [ ] Gerar checkout limpo somente com o fechamento atual e comparar o delta.
-- [ ] Inventariar cada branch Bellatrix em `SYSReadValFromAddr()` e
+- [x] Gerar checkout limpo somente com o fechamento atual e comparar o delta.
+- [x] Inventariar cada branch Bellatrix em `SYSReadValFromAddr()` e
   `SYSWriteValToAddr()` contra o HEAD original.
-- [ ] Especificar a ABI interna do adapter e matriz completa do mapa.
+- [x] Especificar a primeira matriz esparsa região -> owner na SPEC-0001.
+- [x] Fixar semântica de endereço, width, endian e resultados do dispatcher.
+- [ ] Materializar assinaturas mínimas após remover a normalização universal.
+- [ ] Decompor gradualmente `bellatrix_bus_access()`/`BellatrixMachine` em
+  rotas diretas; mantê-los apenas como compatibilidade durante a migração.
 - [ ] Reconciliar base Z3, Autoconfig e Super Buster.
 - [ ] Implementar Z3 Fast RAM `DIRECT` como primeiro caso, primeiro no contrato
   de backend e depois em Emu68/Musashi.
@@ -101,7 +107,18 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - Um setup limpo reproduz exatamente o fechamento documentado.
 - O fault handler e a retomada JIT permanecem semanticamente nativos.
 - Endereço CPU não sofre máscara global de 24 bits.
-- Emu68 e Musashi compartilham classificação e serviço externo, sem compartilhar
-  detalhes de exceção ARM.
+- Emu68 e Musashi compartilham classificação e owners semânticos, sem
+  compartilhar detalhes de exceção ARM ou depender de uma machine box.
 - Z2 não regride e a primeira Z3 Fast RAM é invisível antes de Autoconfig.
 - Nenhuma interface pública ou interna fixa Emu68 no Core 0.
+
+# Log
+
+- 2026-07-15: os 12 patches vigentes aplicaram limpos sobre um worktree do HEAD
+  original, sem `0025`–`0034`.
+- 2026-07-15: `0002` foi reduzido de um bloco Bellatrix de 174 linhas em
+  `vectors.c` para um include de adapter mantido no Bellatrix. O adapter é
+  compilado na mesma translation unit, preservando o call shape nativo e sem
+  function pointers.
+- 2026-07-15: direção corrigida para arquitetura esparsa. `BellatrixMachine` e
+  `bellatrix_bus_access()` são pontes de migração, não o contrato final.

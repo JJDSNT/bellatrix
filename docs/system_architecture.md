@@ -56,6 +56,11 @@ Bellatrix adds:
 * observable hardware behavior
 * compatibility semantics
 
+Bellatrix is being migrated toward a sparse ARM architecture. CPU accesses do
+not target a closed `BellatrixMachine` box: direct memory remains mapped and
+external regions reach their semantic owners directly. `BellatrixMachine` is
+currently a transitional composition object, not the target CPU-facing ABI.
+
 ---
 
 # 2. Architectural Principle
@@ -72,7 +77,7 @@ The machine is composed of:
 
 ---
 
-# 3. BellatrixMachine
+# 3. Sparse composition and transitional BellatrixMachine
 
 ## Current stabilization structure
 
@@ -110,11 +115,21 @@ BellatrixMachine is NOT:
 the owner of time
 ```
 
-BellatrixMachine IS:
+or:
+
+```text
+the universal CPU/MMIO gateway
+```
+
+While retained during migration, BellatrixMachine IS:
 
 ```text id="u2jlwm"
 the explicit composition and coordination point
 ```
+
+The target access path is sparse: classification dispatches directly to RAM,
+CIA, custom-chip, Autoconfig or board owners. Coordination remains local to the
+regions that require timing or cross-core synchronization.
 
 ---
 

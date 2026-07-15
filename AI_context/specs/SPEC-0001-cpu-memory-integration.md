@@ -19,9 +19,10 @@ related_files:
 
 # Objetivo
 
-Definir uma única arquitetura de memória e MMIO que preserve o caminho nativo
-do Emu68, permita Musashi e outros backends e mantenha Rigel como dono do
-chipset. Esta spec descreve contratos; não declara suporte Z3 existente.
+Definir uma arquitetura esparsa de memória e MMIO que preserve o caminho nativo
+do Emu68, permita Musashi e outros backends e entregue cada região diretamente
+ao owner de sua semântica. Esta spec descreve contratos; não declara suporte Z3
+existente nem define uma `machine box` central.
 
 # Princípios normativos
 
@@ -31,8 +32,8 @@ chipset. Esta spec descreve contratos; não declara suporte Z3 existente.
    para páginas externas/MMIO.
 3. Memória armazenável configurada **deve** usar o caminho direto do backend e
    **não deve** ser despachada por acesso através de Rigel ou `vectors.c`.
-4. Musashi **deve** chamar diretamente a mesma implementação de transação
-   externa usada pelo hook de `vectors.c`; não deve simular Data Abort ARM.
+4. Musashi **deve** usar a mesma classificação esparsa e os mesmos owners
+   semânticos usados pelo hook de `vectors.c`; não deve simular Data Abort ARM.
 5. Rigel **deve** continuar dono do estado e da evolução temporal do chipset.
 6. Normalização de barramento de 24 bits **não deve** truncar o endereço CPU
    universal. Wrap deve ser aplicado somente no perfil/região que o exige.
@@ -40,6 +41,31 @@ chipset. Esta spec descreve contratos; não declara suporte Z3 existente.
    `UNMAPPED`.
 8. O contrato de memória/MMIO **não deve** codificar número de core. Emu68 no
    Core 0 é a baseline provisória de estabilização, não uma propriedade da ABI.
+9. O dispatcher **não deve** transformar Bellatrix numa máquina opaca que recebe
+   todo acesso. Ele deve ser uma classificação esparsa que chega diretamente ao
+   owner da região.
+
+# Arquitetura esparsa
+
+`BellatrixMachine`, enquanto ainda existir no código, é somente composição e
+compatibilidade transitória. Não é a fronteira arquitetural do CPU. O caminho
+alvo é:
+
+```text
+endereço CPU
+    -> classificação da região
+       -> RAM/ROM DIRECT: mapping/bank do backend
+       -> CIA EXTERNAL: semântica CIA
+       -> custom EXTERNAL: semântica do bloco correspondente
+       -> Autoconfig EXTERNAL: sequenciador Zorro
+       -> board EXTERNAL: owner da board
+       -> UNMAPPED: open bus ou bus error conforme região/perfil
+```
+
+Não deve haver callback universal de “máquina”. Pode existir um dispatcher
+estático compartilhado entre backends, mas seus ramos chamam diretamente os
+owners semânticos. Sincronização com outro core é propriedade do owner/região,
+não motivo para encapsular toda a máquina atrás de uma caixa única.
 
 # Placement da CPU
 
@@ -78,6 +104,55 @@ Esta spec não escolhe entre as constantes Z3 atuais `0x10000000` e
 de Autoconfig, Super Buster e o perfil de máquina desejado.
 
 # Tipos de região
+
+## Matriz esparsa inicial
+
+Esta matriz define o destino arquitetural, não afirma que o código atual já
+esteja decomposto dessa forma:
+
+| Região lógica | Classe | Owner/rota alvo |
+|---|---|---|
+| Chip RAM e RAM armazenável | `DIRECT` | mapping Emu68 ou bank/buffer Musashi; Rigel apenas observa DMA/tempo |
+| ROM e Extended ROM | `DIRECT` | mapping/bank read-only do backend |
+| CIA A/B | `EXTERNAL` | semântica CIA, com sincronização local quando necessária |
+| Custom registers | `EXTERNAL` | bloco Rigel correspondente, não gateway genérico de máquina |
+| `$E80000` Autoconfig | `EXTERNAL` | sequenciador Zorro compartilhado |
+| RAM/ROM/VRAM de board configurada | `DIRECT` | região instalada pelo backend no fim do Autoconfig |
+| Registradores de board | `EXTERNAL` | owner da board/página |
+| Endereço sem região | `UNMAPPED` | open bus ou bus error definido pelo perfil |
+
+O fault adapter do Emu68 só recebe páginas que não são `DIRECT`; portanto seu
+hot path deve despachar `EXTERNAL` diretamente. Musashi classifica primeiro os
+banks diretos e usa o mesmo dispatcher esparso somente para o restante.
+
+Callbacks de `map/unmap` são permitidos no lifecycle de Autoconfig, fora do hot
+path. Function pointers por acesso MMIO não são parte do contrato alvo.
+
+## Semântica da transação externa
+
+O classificador recebe o endereço CPU integral antes de qualquer wrap, a
+direção e a largura. Para o barramento Amiga baixo, valores de 16 e 32 bits são
+representados em ordem numérica big-endian: o byte no menor endereço ocupa os
+bits mais altos, igual aos helpers Zorro atuais e ao host big-endian do Emu68.
+
+As primitivas externas obrigatórias são 8, 16 e 32 bits. Acessos faultados de
+64/128 bits existem no decoder AArch64 do Emu68, mas não podem ser truncados
+para 32 bits como ocorre na ponte transitória atual. O adapter só poderá
+decompô-los em lanes menores quando a região declarar que isso preserva seus
+efeitos e sua atomicidade; caso contrário o owner retorna comportamento
+`UNMAPPED`/bus error definido pelo perfil.
+
+O resultado lógico possui três estados, mesmo que a primeira implementação os
+codifique de forma compacta:
+
+- `HANDLED`: owner concluiu a transação e, em read, produziu o valor;
+- `OPEN_BUS`: região responde sem owner, com valor definido pelo perfil/largura;
+- `BUS_ERROR`: acesso arquiteturalmente inválido, entregue ao backend como
+  exceção 68k, não como crash ARM.
+
+Normalização de mirrors de 24 bits ocorre somente depois que o endereço foi
+classificado como barramento Amiga baixo. Endereços Z3 nunca passam por
+`bellatrix_bridge_normalize_addr()`.
 
 ## `DIRECT`
 
