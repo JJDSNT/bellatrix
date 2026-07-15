@@ -109,7 +109,7 @@ static void bt_draw_scan_chrome(void)
             build_tag, COL_TEXT, COL_STATUS_BG);
     fb_puts_centred(0, W, H - lui_status_h + (lui_status_h - lui_char) / 2u,
                     s_bt_runtime_active
-                        ? "UP/DOWN=select  ENTER=confirm/close  ESC=cancel"
+                        ? "mouse=auto-connect  ENTER=select  ESC=cancel"
                         : "UP/DOWN=select  ENTER=pair/unpair  ESC=boot",
                     COL_TEXT, COL_STATUS_BG);
 }
@@ -533,6 +533,27 @@ bool btscan_runtime_step(void)
         unsigned count = bt_scan_count();
         if (count > 0u && s_bt_cursor >= count)
             s_bt_cursor = count - 1u;
+
+        /* F11 is an explicit pairing operation. As soon as inquiry identifies
+         * a HID mouse, stop discovery and begin the proven pairing sequence;
+         * waiting for ENTER loses the device's short pairing window. */
+        for (unsigned i = 0u; i < count; i++) {
+            const BTScanResult *r = bt_scan_get(i);
+            if (!r || !r->hid ||
+                bt_pairs_classify(r) != BT_PAIRS_TYPE_MOUSE)
+                continue;
+            s_bt_cursor = i;
+            if (!bt_pairs_is_known(r->addr))
+                (void)bt_pairs_add(r);
+            memcpy(s_bt_runtime_selected_addr, r->addr,
+                   sizeof(s_bt_runtime_selected_addr));
+            s_bt_runtime_connect_selected = true;
+            bt_diag_log("[BT] F11 discovered pairing mouse %s; "
+                        "connecting immediately\n",
+                        r->name[0] ? r->name : "(no name)");
+            btscan_runtime_close(true);
+            return false;
+        }
         redraw = true;
     }
 
@@ -589,6 +610,7 @@ void btscan_screen(bool force_scan)
     uint32_t budget   = working ? 720000u : 96000u;   // ≈90 s / ≈12 s
     bool needs_redraw = false;
     bool mouse_selected = false;
+    uint8_t selected_mouse_addr[6] = {0};
 
     for (uint32_t iter = 0u; iter < budget && !mouse_selected; iter++) {
         bellatrix_launcher_pump_bt();
@@ -672,6 +694,8 @@ void btscan_screen(bool force_scan)
                     s_bt_cursor = i;
                     if (!bt_pairs_is_known(r->addr))
                         (void)bt_pairs_add(r);
+                    memcpy(selected_mouse_addr, r->addr,
+                           sizeof(selected_mouse_addr));
                     bt_diag_log("[BT] auto-selected discovered HID mouse %s\n",
                                 r->name[0] ? r->name : "(no name)");
                     mouse_selected = true;
@@ -691,11 +715,31 @@ void btscan_screen(bool force_scan)
 
     if (working) {
         bt_scan_stop();
-        // Let the stack flush the inquiry/scan-stop commands before moving on.
-        for (uint32_t i = 0u; i < 200u; i++) {
+    }
+
+    if (working && mouse_selected) {
+        /* Inquiry cancel is asynchronous. Preserve the hardware-proven order:
+         * stop scan, retain the explicit pairing window, then page the mouse
+         * before FAT/media work can consume its short pairing interval. */
+        bellatrix_launcher_bt_prepare_pairing(selected_mouse_addr);
+    }
+
+    if (working) {
+        uint64_t cancel_started = PAL_Time_ReadCounter();
+        while (launcher_ms_since(cancel_started) < 200u)
             bellatrix_launcher_pump_bt();
-            for (volatile uint32_t d = 0u; d < 50000u; d++) asm volatile("nop");
-        }
+    }
+
+    if (working && mouse_selected) {
+        bellatrix_launcher_bt_connect_now();
+        uint64_t connect_started = PAL_Time_ReadCounter();
+        while (!bellatrix_launcher_bt_mouse_connected() &&
+               launcher_ms_since(connect_started) < 5000u)
+            bellatrix_launcher_pump_bt();
+        bt_diag_log("[BT] immediate pairing connect ended: connected=%u "
+                    "elapsed=%u ms\n",
+                    bellatrix_launcher_bt_mouse_connected() ? 1u : 0u,
+                    (unsigned)launcher_ms_since(connect_started));
     }
 
     if (sd_ok)

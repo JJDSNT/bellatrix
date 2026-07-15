@@ -593,7 +593,7 @@ static bool bt_host_connect_pairs_now(BTHost *bt)
 
 void bt_host_connect_pairs(BTHost *bt)
 {
-    if (!bt || bt_pairs_count() == 0u)
+    if (!bt || bt->mouse_connected || bt_pairs_count() == 0u)
         return;
     bt->reconnect_attempts = 0u;
     bt->reconnect_due_ms = bt_now_ms();

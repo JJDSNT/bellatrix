@@ -62,6 +62,11 @@ static uint8_t type_from_cod(uint32_t cod)
     return BT_PAIRS_TYPE_UNKNOWN;
 }
 
+uint8_t bt_pairs_classify(const BTScanResult *r)
+{
+    return r ? type_from_cod(r->cod) : BT_PAIRS_TYPE_UNKNOWN;
+}
+
 static uint8_t type_char_to_val(char c)
 {
     switch (c) {

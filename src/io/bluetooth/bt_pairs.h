@@ -35,6 +35,7 @@ void          bt_pairs_load(const char *text, uint32_t len);
 unsigned      bt_pairs_count(void);
 const BTPair *bt_pairs_get(unsigned i);
 bool          bt_pairs_is_known(const uint8_t addr[6]);
+uint8_t       bt_pairs_classify(const BTScanResult *r);
 
 /* Add/update from a scan result.  Returns true if the list changed. */
 bool          bt_pairs_add(const BTScanResult *r);

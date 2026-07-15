@@ -33,6 +33,10 @@ as premissas arquiteturais superadas daquela branch. A autoridade permanece:
   a apresentação de frame pelo Core 2 sobrescreva a abertura da tela.
 - F11 abre scan/pairing sem bloquear o reactor; conexão e persistência da nova
   link key continuam em background depois do fechamento da tela.
+- Ao identificar um mouse HID durante um scan de pareamento, o fluxo padrão
+  encerra inquiry e inicia a conexão imediatamente. No boot preserva a ordem
+  comprovada `scan_stop -> 200 ms -> connect`; no F11 a mesma sequência avança
+  assincronamente no Core 3, sem aguardar `Enter`.
 - Reconexão HID tem tentativas assíncronas e limitadas. Pares conhecidos podem
   autenticar fora da janela; dispositivos desconhecidos continuam negados.
 - Relatórios HID de erro `0x01..0x03` são ignorados em USB e BT.
