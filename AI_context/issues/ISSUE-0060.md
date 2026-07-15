@@ -97,6 +97,8 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - [ ] Materializar assinaturas mínimas após remover a normalização universal.
 - [ ] Decompor gradualmente `bellatrix_bus_access()`/`BellatrixMachine` em
   rotas diretas; mantê-los apenas como compatibilidade durante a migração.
+- [x] Remover a máscara 24-bit redundante do backend Musashi de produto; o
+  `CPU_ADDRESS_MASK` do próprio Musashi continua definindo 24/32 bits por CPU.
 - [ ] Reconciliar base Z3, Autoconfig e Super Buster.
 - [ ] Implementar Z3 Fast RAM `DIRECT` como primeiro caso, primeiro no contrato
   de backend e depois em Emu68/Musashi.
@@ -122,3 +124,6 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   function pointers.
 - 2026-07-15: direção corrigida para arquitetura esparsa. `BellatrixMachine` e
   `bellatrix_bus_access()` são pontes de migração, não o contrato final.
+- 2026-07-15: removida a máscara global adicional do adapter Musashi. CPUs
+  24-bit continuam mascaradas no core Musashi; 68020+/68040 chegam ao bridge
+  com 32 bits e recebem open bus enquanto Z3 não estiver implementada.

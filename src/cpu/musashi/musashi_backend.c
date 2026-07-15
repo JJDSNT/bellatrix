@@ -110,7 +110,9 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
     BellatrixMachine *m = bellatrix_machine_get();
     BellatrixMemory *mem = &m->memory;
 
-    addr &= 0x00FFFFFFu;
+    /* Musashi applies CPU_ADDRESS_MASK before invoking the memory callback:
+     * 68000/68010/68EC020 remain 24-bit, while 68020+/68040 preserve 32 bits.
+     * A second mask here would alias Z3 into low Amiga memory. */
 
     if (musashi_overlay_enabled() &&
         mem->rom &&
@@ -159,7 +161,8 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
     BellatrixMachine *m = bellatrix_machine_get();
     BellatrixMemory *mem = &m->memory;
 
-    addr &= 0x00FFFFFFu;
+    /* Keep the CPU-model address width selected by Musashi. The bridge still
+     * returns open bus for unimplemented 32-bit regions, without low aliases. */
 
     if ((mem->rom &&
          addr >= BELLATRIX_ROM_BASE &&
