@@ -16,6 +16,7 @@ related_files:
   - emu68/src/aarch64/start.c
   - src/cpu/emu68/bellatrix.c
   - src/cpu/cpu_bridge.c
+  - src/machine/bus/zorro_autoconfig.c
   - src/machine/bus/zorro3/zorro3.c
   - scripts/setup.sh
 ---
@@ -72,6 +73,10 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - Não há board Z3 Bellatrix funcional de ponta a ponta.
 - Boards nativas do Emu68 podem mapear Z3 pelo callback próprio; isso é um
   domínio separado e precisa convergir no lifecycle comum de regiões.
+- A janela `$E80000` agora possui um owner compartilhado: apresenta as boards
+  Z2 pendentes e depois as Z3, sem transformar o restante do mapa numa machine
+  box. A atribuição Z3 por palavra em `$E80044` chama `map()` e só publica a
+  board como configurada após sucesso; falha preserva a board pendente.
 
 # Contrato alvo
 
@@ -102,6 +107,10 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   `CPU_ADDRESS_MASK` do próprio Musashi continua definindo 24/32 bits por CPU.
 - [x] Confirmar no Emu68 que a base Z3 é atribuída pelo guest e entregue a
   `board->map()`, sem janela fixa no host.
+- [x] Unificar o owner da janela de Autoconfig Z2/Z3 e reproduzir a atribuição
+  Z3 por palavra em `$E80044`.
+- [x] Introduzir o primeiro lifecycle transacional Z3 `map/unmap/reset`, com
+  rollback de falha, ainda sem definir o mapping específico de cada backend.
 - [ ] Definir descoberta e validação de faixa por perfil, sem promover o mapa
   específico do AROS a contrato universal.
 - [ ] Implementar Z3 Fast RAM `DIRECT` como primeiro caso, primeiro no contrato
@@ -136,3 +145,8 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   pelo guest em `$E80044` e a board faz `mmu_map()` diretamente. AROS permanece
   apenas como caso de compatibilidade. `BELLATRIX_Z3_BASE=0x10000000` e
   `s_next_base` continuam removidos por não participarem desse mecanismo.
+- 2026-07-15: a janela baixa de Autoconfig passou a ter um sequenciador comum
+  que mantém Z2 primeiro e apresenta Z3 em seguida. O contrato Z3 agora usa a
+  palavra escrita em `$E80044`, chama `map()` fora do hot path e desfaz mapping
+  em reset/remoção. O teste de contrato cobre ordem, base guest-assigned,
+  rollback de `map()` e `unmap()`; ainda não existe uma board Z3 Fast RAM.

@@ -190,6 +190,7 @@ set(BELLATRIX_SOURCES
 
     # Autoconfig + bus fabric
     ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro_autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
     ${SRC}/machine/bus/zorro3/zorro3.c
     ${SRC}/machine/bus/superbuster/superbuster.c
@@ -367,6 +368,21 @@ target_compile_options(bellatrix_unit_memory PRIVATE
 
 add_test(NAME bellatrix_unit_memory
          COMMAND bellatrix_unit_memory)
+
+add_executable(bellatrix_unit_zorro_autoconfig
+    ${ROOT}/tests/unit/test_zorro_autoconfig.c
+    ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro_autoconfig.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/bus/zorro3/zorro3.c
+)
+target_include_directories(bellatrix_unit_zorro_autoconfig PRIVATE
+    ${SRC}/host/posix
+    ${SRC}
+)
+target_compile_options(bellatrix_unit_zorro_autoconfig PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_zorro_autoconfig
+         COMMAND bellatrix_unit_zorro_autoconfig)
 
 # Pure host-testable protocol modules (no PAL, no machine dependencies).
 add_executable(bellatrix_unit_timeline

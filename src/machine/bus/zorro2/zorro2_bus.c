@@ -160,6 +160,11 @@ int bellatrix_zorro2_in_config_window(uint32_t addr)
     return (addr >= Z2_CONFIG_BASE && addr <= Z2_CONFIG_END);
 }
 
+int bellatrix_zorro2_has_pending_board(void)
+{
+    return current_board() != NULL;
+}
+
 int bellatrix_zorro2_in_board_window(uint32_t addr)
 {
     return board_for_addr(addr) != NULL;

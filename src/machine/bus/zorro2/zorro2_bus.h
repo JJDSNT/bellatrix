@@ -50,6 +50,7 @@ int  bellatrix_zorro2_unregister_board(const char *id);
 
 /* Returns 1 if address falls in the autoconfig config window */
 int bellatrix_zorro2_in_config_window(uint32_t addr);
+int bellatrix_zorro2_has_pending_board(void);
 
 /* Returns 1 if address falls inside a configured board window */
 int bellatrix_zorro2_in_board_window(uint32_t addr);

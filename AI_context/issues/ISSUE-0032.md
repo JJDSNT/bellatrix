@@ -61,9 +61,22 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 - a antiga constante sem uso `BELLATRIX_Z3_BASE=0x10000000` foi removida;
   `0x40000000..0x7fffffff` é política observada no AROS, não requisito Emu68;
   descoberta e faixa válida precisam ser definidas pelo contrato de perfil;
-- a conclusão da Autoconfig não possui callback comum de map/unmap por backend;
+- o callback comum de lifecycle Z3 `map/unmap` existe, mas ainda não há
+  implementação de mapping `DIRECT` específica para Emu68 ou Musashi;
 - callbacks byte a byte atuais não distinguem memória direta de registradores;
 - ainda não existe board Z3 funcional registrada no runtime Bellatrix.
+
+# Avanço de infraestrutura (2026-07-15)
+
+- `$E80000` agora é atendido por um owner comum que apresenta Z2 antes de Z3;
+- a atribuição Z3 segue o Emu68: palavra em `$E80044`, base `value << 16`;
+- `map()` é chamado antes de publicar a board; falha faz rollback e a mantém
+  pendente;
+- reset, re-registro e remoção chamam `unmap()`;
+- teste host cobre a cadeia Z2→Z3, base escolhida pelo guest, rollback e reset.
+
+Isso fecha o sequenciamento e o esqueleto de lifecycle, mas não constitui
+suporte Z3: falta a primeira board Fast RAM e o mapping direto nos backends.
 
 # Objetivo revisado
 

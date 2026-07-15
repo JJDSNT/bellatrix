@@ -194,6 +194,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/machine/expansion.c
     # Bus fabric and CD-ROM expansion
     ${CMAKE_SOURCE_DIR}/../src/machine/autoconfig/autoconfig.c
+    ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro_autoconfig.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro2/zorro2_bus.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro3/zorro3.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/superbuster/superbuster.c

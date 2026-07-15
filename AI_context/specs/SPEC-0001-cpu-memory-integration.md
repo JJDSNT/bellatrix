@@ -304,6 +304,11 @@ Com Rigel em outro core:
 
 # Lifecycle de Autoconfig e boards
 
+A janela `$E80000` tem um owner esparso compartilhado. A ordem inicial é todas
+as boards Z2 pendentes, seguidas pelas Z3 pendentes, refletindo a composição
+vigente do Emu68. Essa ordem é política do sequenciador, não do dispatcher geral
+de memória.
+
 1. No reset, a board ainda não responde em sua futura janela.
 2. A janela baixa de Autoconfig responde como `EXTERNAL`.
 3. Ao receber a atribuição completa de base, o sequenciador valida alinhamento,
@@ -314,6 +319,13 @@ Com Rigel em outro core:
 
 O contrato deve suportar rollback se uma região não puder ser instalada. Não
 deve existir estado parcialmente configurado visível ao guest.
+
+O primeiro corte desse lifecycle já está materializado para Z3: a palavra em
+`$E80044` entrega a base guest-assigned a `map(base, size)`; somente retorno com
+sucesso marca a board configurada. Falha mantém a board pendente, e reset,
+re-registro ou remoção chamam `unmap`. Validação de alinhamento, sobreposição e
+capacidade pertence ao `map()` do backend/descritor e ainda precisa ser
+implementada junto da primeira board `DIRECT`.
 
 # Ordem de implementação
 
