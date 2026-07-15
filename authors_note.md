@@ -32,6 +32,21 @@ Em particular, deve ser analisada a parte em assembly responsável por preparar 
 
 Esse código é relevante para entender como os cores são configurados antes da execução normal do Emu68.
 
+## Esclarecimento posterior: housekeeper, IPL e serviços ARM
+
+O Emu68 não possui por si uma ISR de dispositivo. No PiStorm, o housekeeper é
+um loop que observa o IPL físico do Amiga e encaminha suas mudanças ao lado
+68k.
+
+O caminho de interrupção ARM para o lado Amiga deve ser usado apenas quando há
+um serviço no lado ARM que precisa deliberadamente notificar o AmigaOS. Uma IRQ
+de periférico do host, como Bluetooth, deve ser atendida no lado ARM e não deve
+ser convertida automaticamente em IRQ do guest.
+
+Para Bellatrix, o equivalente ao housekeeper é publicar no Emu68 o IPL
+persistente produzido pelo Rigel. Uma futura notificação ARM -> AmigaOS deve ter
+contrato explícito e separado dessa publicação.
+
 ## `vectors.c` e roteamento de hardware
 
 O arquivo `vectors.c` contém grande parte da lógica de interface entre o Emu68 e o PiStorm.

@@ -9,6 +9,7 @@ created_at: 2026-07-15
 updated_at: 2026-07-15
 tags: [emu68, pistorm, core0, irq, bluetooth, fault-handler, vectors, multicore]
 related_files:
+  - AI_context/specs/SPEC-0001-cpu-memory-integration.md
   - authors_note.md
   - uae_references.md
   - emu68/src/aarch64/start.c
@@ -383,6 +384,14 @@ chipset.
 A fronteira é usada somente para acessos que exigem semântica externa ou efeito
 colateral. RAM/ROM já mapeada não atravessa o serviço por byte/palavra.
 
+A forma de manutenção desejada não é continuar acrescentando blocos
+`#elif BELLATRIX` extensos ao arquivo. Deve-se preparar uma alteração mínima e
+upstreamável que faça `vectors.c` expor/chamar uma interface de plataforma. O
+PiStorm permanece um adapter dessa interface; Bellatrix implementa Rigel em
+arquivo próprio; Musashi usa diretamente a implementação Bellatrix. Símbolos
+diretos resolvidos no link são preferíveis a function pointers/registries no
+hot path.
+
 ### Contrato de custo do hook
 
 O caminho normal não deve adicionar uma API genérica pesada sobre o handler:
@@ -404,6 +413,69 @@ runtime no entry, normalização em mais de uma camada, atravessa
 esperar o Core 2 em acessos críticos. Alguns desses custos são instrumentação
 ou correção temporal legítima; a tarefa é medi-los e especializar o caminho,
 não remover sincronização por suposição.
+
+`bellatrix_emu68_report_jit_progress()` não é parte conhecida do contrato
+original. Foi introduzida no refactor multicore Bellatrix e modificada depois
+para tentar manter o chipset vivo. No baseline fault-driven atual, o report
+periódico do `ExecutionLoop` é compilado fora e o chamado restante ocorre
+dentro de `vectors.c`, portanto somente quando já houve Data Abort. Não há prova
+de que esse mecanismo tenha produzido um clock funcional do Rigel. Ele deve ser
+tratado como experimento substituível, não requisito do fault handler.
+
+## 3.1.1. Fonte de tempo do Rigel — questão P1 aberta
+
+O número de faults não pode ser a fonte fundamental de tempo: um loop em RAM ou
+STOP pode não tocar MMIO e ainda assim VBL, CIA, Paula e IPL precisam avançar.
+A orientação de scheduler mínimo + timer torna prioritário avaliar um Rigel
+dirigido por timer em seu core de serviço, independente do hot path do Emu68.
+
+O fault hook então precisa, no máximo, sincronizar/capturar o estado até o
+instante observável da transação; não deve dirigir todo o chipset por efeito
+colateral. Antes de mudar código, comparar os modos `CPU_DRIVEN`, `REALTIME` e
+`HYBRID` já presentes no runtime, identificar por que os baselines anteriores
+funcionaram somente pelo Data Abort e separar:
+
+- relógio contínuo do chipset;
+- ordenação de MMIO no instante do acesso;
+- entrega de IPL/IRQ ao Emu68;
+- pacing de frame/áudio e serviços físicos.
+
+### Resultado da auditoria do runtime atual
+
+A observação do usuário foi confirmada pelo código. `bellatrix_core0_supervise()`
+é quem inicializa e atualiza a timeline `REALTIME`/`HYBRID`, porém esse loop
+pertence à topologia anterior Core0=supervisor/Core1=CPU e não executa quando o
+baseline coloca `M68K_StartEmu()` diretamente no Core 0.
+
+O Core 2 possui event stream de aproximadamente 250 kHz, mas
+`bellatrix_runtime_host_step()` só pode avançar até `s_chipset_horizon`. No
+rebaseline Core 0 esse horizonte começa em zero e, em `CPU_DRIVEN`, cresce
+somente quando o CPU publica ciclos. Como o report periódico do `ExecutionLoop`
+é compilado fora em modo fault-driven, a publicação restante ocorre no hook de
+`vectors.c`, depois de um Data Abort. Assim:
+
+```text
+timer acorda Core 2
+  -> horizonte continua zero: não avança
+
+Data Abort
+  -> report Bellatrix publica delta
+  -> horizonte cresce
+  -> Core 2 finalmente avança Rigel
+```
+
+Esse comportamento não é requisito do Emu68; é uma dependência residual da
+topologia abandonada. A direção conservadora é:
+
+1. manter Emu68/fault handler no Core 0;
+2. dar ao Rigel uma timeline baseada em timer que continue sem faults;
+3. manter o hook de `vectors.c` apenas como integração/sincronização da
+   transação MMIO;
+4. tratar progress reports do CPU como telemetria, pacing opcional ou limite de
+   política — nunca como única fonte de VBL/CIA/Paula/IPL;
+5. decidir o owner da timeline entre Core 2 e um scheduler mínimo de serviço
+   somente depois de verificar custo e races. O timer de Core 2 já existe; o
+   Core 3 já hospeda o reactor BT/USB e é a outra opção natural.
 
 ## 3.2. Matriz provisória do mapa de memória
 
@@ -470,6 +542,96 @@ Bluetooth deve usar IRQ ARM normal. Antes de habilitá-la é obrigatório entend
 FIQ não será usada para Bluetooth. USB/DWC2/SOF é apenas o candidato preferível
 caso uma necessidade futura de FIQ seja demonstrada; isso não autoriza
 implementá-la agora.
+
+## 4.1. Housekeeper PiStorm versus IRQ/FIQ física
+
+A auditoria inicial do protocolo original mostra dois canais distintos:
+
+```text
+Core 2: ps_housekeeper()
+  -> event stream + WFE
+  -> polling dos pinos IPL do Amiga
+  -> filtro (PiStorm32: duas amostras iguais)
+  -> M68KState.INT.IPL
+  -> SEV quando IPL != 0
+
+Core 0: slot IRQ/FIQ de vectors.c
+  -> INT_shadow.ARMPending
+  -> M68KState.INT.ARM
+  -> EXTER / nível 6 quando INTENA permite
+```
+
+O housekeeper não é um handler IRQ ARM: ele é polling periódico em core
+auxiliar. No PiStorm clássico lê `PIN_IPL_ZERO`; no PiStorm32 lê os três bits
+IPL e filtra skew entre amostras.
+
+### Esclarecimento do autor do PiStorm/Emu68
+
+Segundo a resposta encaminhada pelo usuário em 2026-07-15, o Emu68 não possui
+uma ISR de dispositivo própria. O housekeeper é um loop que encaminha as
+mudanças de IRQ/IPL do Amiga para o lado 68k. O canal ARM -> AmigaOS deve ser
+usado somente quando existe algo no lado ARM que precisa ser deliberadamente
+propagado ao lado AmigaOS.
+
+Isso fixa três contratos separados:
+
+```text
+Rigel muda IPL do Amiga
+  -> publica M68KState.INT.IPL
+  -> SEV/wakeup do Emu68
+
+PL011/USB/outro periférico do host
+  -> ISR/top-half da plataforma ARM
+  -> serviço ARM deferido
+  -> não altera IPL/INT.ARM do guest por padrão
+
+serviço ARM que precisa notificar AmigaOS
+  -> injeção explícita no canal INT.ARM/EXTER
+  -> somente por contrato conhecido com o software guest
+```
+
+No Bellatrix, a publicação de IPL do Rigel é o equivalente arquitetural do
+housekeeper PiStorm. Ela deve observar o nível persistente do chipset, não ser
+modelada como um pulso IRQ ARM.
+
+Ainda está aberta a origem concreta que dispara o slot IRQ/FIQ físico no
+produto PiStorm. O `start.c` roteia GPU IRQ, PMU e timers ao Core 0, mas:
+
+- rotear uma classe de interrupção não habilita por si uma fonte;
+- PMU interrupt é programada somente no modo diagnóstico `debug_cnt`;
+- não foi encontrada nessa primeira passagem a configuração de GPIO edge IRQ
+  ou timer compare que identifique o produtor normal de `INT.ARM`;
+- `INT2_ENABLED` aparece definido no protocolo clássico, mas sem consumidor no
+  HEAD analisado.
+
+O histórico Git dá contexto adicional: o campo/caminho que se tornou
+`INT.ARM` nasceu no commit `6275529` como suporte genérico a interrupções
+assíncronas AArch64, antes do protocolo PiStorm atual. Os commits posteriores
+mapearam IRQ/FIQ ARM para uma interrupção 68k e `37dd583` introduziu as sombras
+`INTENA`/`INTREQ` para apresentá-la como `EXTER`. Logo, esse canal não é por
+origem "a IRQ do housekeeper"; ele converte uma exceção ARM que chegou ao core
+do JIT. A fonte física concreta continua sendo responsabilidade da plataforma.
+
+Consequentemente, preservar o mecanismo disponível continua conservador, mas
+o fallback que converte toda IRQ física não reconhecida em `INT.ARM` não é uma
+política Bellatrix válida. O próximo passo é traçar produtor, acknowledge e
+mask/unmask de cada fonte física Bellatrix e expor uma injeção guest separada e
+explícita para futuros serviços ARM que realmente precisem notificar AmigaOS.
+
+Para Bellatrix, o dispatcher deve decidir antes da injeção:
+
+- PL011 Bluetooth: reconhecer/consumir como IRQ física do host, sem escrever
+  `INT.ARM`;
+- Rigel: publicar o nível Amiga persistente em `INT.IPL`, como o housekeeper;
+- fontes ARM explicitamente destinadas ao guest: usar a semântica Emu68 de
+  `INT.ARM`/EXTER somente por solicitação explícita;
+- fontes desconhecidas: conter e diagnosticar, nunca fabricar `EXTER` por
+  padrão sem identificar acknowledge e ownership.
+
+O protótipo atual ainda preserva byte a byte o fallback original para toda
+fonte não-PL011. Isso foi correto para o primeiro A/B conservador, mas fica
+agora marcado como dívida arquitetural: deve ser substituído por dispatch de
+fontes conhecidas antes de habilitar outras IRQs físicas Bellatrix.
 
 # Impacto nas branches existentes
 
