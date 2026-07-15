@@ -248,6 +248,8 @@ os oito slots nos offsets arquiteturais `+0x000`, `+0x080`, `+0x100`,
 - verificação de reprodução: patches `0003`, `0020` e `0025` passam
   `git apply --reverse --check` sobre o checkout configurado;
 - QEMU `raspi3b` + DiagROM: PASS até OVL, UDS/LDS e detecção/teste de Chip RAM;
+- QEMU `raspi3b` + AROS 1 MiB por 60 s: alcança JIT, OVL e as instruções
+  `FNOP`/`FSAVE`; ainda não é boot AROS nem gate de FPU concluído;
 - o log confirma `core=0`, `native fault-driven execution selected`, Core 2 a
   244140 Hz e Core 3 a 953 Hz;
 - imagem do gate: SHA-256
@@ -372,7 +374,8 @@ selecionáveis depois que o baseline conservador estiver provado.
   Emu68 antes das medições.
 - [ ] Validar DiagROM, KS1.3, KS3.1 e AROS, incluindo STOP/IRQ/MMIO/FPU/Fast RAM.
   - [x] DiagROM em QEMU: OVL, UDS/LDS e Chip RAM alcançados.
-  - [ ] KS1.3, KS3.1 e AROS em QEMU.
+  - [ ] AROS em QEMU (smoke chega a `FNOP`/`FSAVE`, boot ainda não provado).
+  - [ ] KS1.3 e KS3.1 em QEMU (ROMs não presentes neste worktree).
   - [ ] STOP/IRQ/FPU/Fast RAM e código mutável em testes dedicados.
 - [ ] Congelar essa imagem como referência de hardware Raspberry Pi 3B.
 
@@ -444,3 +447,5 @@ houver conflito.
   com `WFE`, preserva `INT.ARM` e entrega o IPL Rigel ao contexto nativo.
 - 2026-07-15: build cruzado e unit tests passaram; QEMU/DiagROM alcançou OVL,
   UDS/LDS e teste de Chip RAM com Core0=Emu68, Core2=Rigel e Core3=IO.
+- 2026-07-15: smoke AROS 1 MiB de 60 s alcançou JIT, OVL e `FNOP`/`FSAVE`;
+  mantido como resultado parcial, não como boot ou validação de FPU.
