@@ -33,7 +33,6 @@ static bool s_bt_runtime_sd_ok;
 static bool s_bt_runtime_connect_selected;
 static uint32_t s_bt_runtime_last_gen;
 static uint64_t s_bt_runtime_started;
-static uint64_t s_bt_runtime_connect_started;
 static bool s_bt_runtime_connect_pending;
 static uint8_t s_bt_runtime_selected_addr[6];
 static Fat32State s_bt_runtime_fs;
@@ -445,7 +444,6 @@ void btscan_runtime_close(bool confirmed)
          * authentication after the framebuffer modal has closed. */
         bellatrix_launcher_bt_prepare_pairing(
             s_bt_runtime_selected_addr);
-        s_bt_runtime_connect_started = PAL_Time_ReadCounter();
         s_bt_runtime_connect_pending = true;
     } else {
         bellatrix_launcher_bt_close_pairing();
@@ -468,10 +466,8 @@ void btscan_runtime_background_step(void)
             bt_pairs_save_to_sd(&s_bt_runtime_fs);
         return;
     }
-    /* Inquiry cancel is asynchronous. Preserve the proven ordering without
-     * keeping the modal open or spinning Core 3 waiting for HCI completion. */
-    if (launcher_ms_since(s_bt_runtime_connect_started) < 200u)
-        return;
+    /* Connect on the next Core-3 reactor pass. This preserves the observed
+     * immediate-on-discovery behavior without doing HCI work in a callback. */
     s_bt_runtime_connect_pending = false;
     bellatrix_launcher_bt_connect_now();
 }
@@ -535,8 +531,8 @@ bool btscan_runtime_step(void)
             s_bt_cursor = count - 1u;
 
         /* F11 is an explicit pairing operation. As soon as inquiry identifies
-         * a HID mouse, stop discovery and begin the proven pairing sequence;
-         * waiting for ENTER loses the device's short pairing window. */
+         * a HID mouse, stop discovery and request the observed immediate
+         * connection; waiting for ENTER loses the short pairing window. */
         for (unsigned i = 0u; i < count; i++) {
             const BTScanResult *r = bt_scan_get(i);
             if (!r || !r->hid ||
@@ -718,19 +714,9 @@ void btscan_screen(bool force_scan)
     }
 
     if (working && mouse_selected) {
-        /* Inquiry cancel is asynchronous. Preserve the hardware-proven order:
-         * stop scan, retain the explicit pairing window, then page the mouse
-         * before FAT/media work can consume its short pairing interval. */
+        /* The observed working behavior is immediate connection on discovery.
+         * Keep the explicit pairing window and page before FAT/media work. */
         bellatrix_launcher_bt_prepare_pairing(selected_mouse_addr);
-    }
-
-    if (working) {
-        uint64_t cancel_started = PAL_Time_ReadCounter();
-        while (launcher_ms_since(cancel_started) < 200u)
-            bellatrix_launcher_pump_bt();
-    }
-
-    if (working && mouse_selected) {
         bellatrix_launcher_bt_connect_now();
         uint64_t connect_started = PAL_Time_ReadCounter();
         while (!bellatrix_launcher_bt_mouse_connected() &&
