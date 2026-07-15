@@ -38,6 +38,20 @@ chipset. Esta spec descreve contratos; não declara suporte Z3 existente.
    universal. Wrap deve ser aplicado somente no perfil/região que o exige.
 7. A política de uma região **deve** ser explícita: `DIRECT`, `EXTERNAL` ou
    `UNMAPPED`.
+8. O contrato de memória/MMIO **não deve** codificar número de core. Emu68 no
+   Core 0 é a baseline provisória de estabilização, não uma propriedade da ABI.
+
+# Placement da CPU
+
+O placement é ortogonal à classificação de memória. Durante a estabilização,
+Emu68 permanece no Core 0 para preservar o ambiente original de vetores,
+faults, timers, IRQ e contexto JIT. Um backend Musashi, uma futura migração do
+Emu68 ou outra composição multicore deve consumir o mesmo descritor de regiões
+e o mesmo serviço externo.
+
+Mover a CPU só é permitido depois de demonstrar equivalência em Data Abort,
+MMIO, IPL/IRQ, STOP/wakeup, PMU/timers e preservação do contexto. Nenhum hook,
+descritor ou owner de board pode assumir afinidade fixa com Core 0.
 
 # Espaços de endereço
 

@@ -37,8 +37,8 @@ PiStorm/Emu68, é:
 1. não substituir nem redesenhar o fault handler como pré-requisito;
 2. estudar o `start.c` original e satisfazer no Bellatrix o contrato de core,
    exceções, timers e IRQ do Emu68;
-3. manter/restaurar o Emu68 no Core 0 como baseline até provar equivalência em
-   outro core;
+3. manter/restaurar o Emu68 no Core 0 como baseline provisória de estabilização,
+   não como topologia final, até provar equivalência em outro core;
 4. usar IRQ ARM normal para Bluetooth; não gastar FIQ com Bluetooth;
 5. considerar FIQ para USB/DWC2/SOF somente se necessidade e medição futuras o
    justificarem;
@@ -180,6 +180,11 @@ hardware entrar no meio do slot anterior — permanece uma lição e um gate de
 build obrigatório para qualquer nova integração de `vectors.c`.
 
 ## Topologia conservadora provisória
+
+Esta tabela descreve uma arquitetura de estabilização. Ela reduz a quantidade
+de premissas alteradas em relação ao Emu68 original, mas não decide onde a CPU
+deverá permanecer no produto final. Nenhuma ABI de memória, MMIO, IRQ ou backend
+pode depender de `Core 0`; placement é uma política de runtime posterior.
 
 | Core | Papel inicial | Contrato |
 |---|---|---|
@@ -787,3 +792,6 @@ houver conflito.
   `INT.ARM=6`; IRQ desconhecida agora é contida, contada e nunca chega ao guest.
 - 2026-07-15: consolidado ownership sem handoff: miniUART=log desde o início,
   PL011=Bluetooth desde o início. QEMU/DiagROM repetido pela segunda UART.
+- 2026-07-15: explicitado que Emu68/Core 0 é somente a baseline conservadora de
+  estabilização. A topologia final permanece aberta e deverá ser decidida por
+  equivalência funcional e medições, sem contaminar o contrato de integração.

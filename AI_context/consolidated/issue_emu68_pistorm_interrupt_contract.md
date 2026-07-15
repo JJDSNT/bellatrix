@@ -5,7 +5,8 @@
 > pode ser movido ao Core 1 apenas por software, ou que IRQ de host deve sempre
 > ficar fora do domínio/vector Emu68. Este texto permanece como hipótese e
 > histórico. A nova regra é preservar Emu68 no Core 0 e auditar o contrato
-> original antes de separar IRQ, vectors ou placement.
+> original antes de separar IRQ, vectors ou placement. Core 0 é uma baseline
+> provisória de estabilização, não a topologia final do Bellatrix.
 
 > Decisão 2026-07-11: IRQs físicas e I/O pertencem ao Core 0 supervisor;
 > Core 1 observa apenas IPL 68k emulado, Core 2 possui Rigel e Core 3 fica
