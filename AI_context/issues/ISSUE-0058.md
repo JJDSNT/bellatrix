@@ -243,6 +243,7 @@ os oito slots nos offsets arquiteturais `+0x000`, `+0x080`, `+0x100`,
 ## Validação inicial do baseline
 
 - build cruzado Emu68/multicore/fault, USB/BT/launcher desligados: PASS;
+- build de rollback `public` + topologia multicore anterior: PASS;
 - `tests/unit/run_emu68_machine.sh`: PASS, preservando o A/B público;
 - verificação de reprodução: patches `0003`, `0020` e `0025` passam
   `git apply --reverse --check` sobre o checkout configurado;
