@@ -729,13 +729,15 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
         if (now_ms - last_beat_ms >= 1000u) {
             last_beat_ms = now_ms;
             bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u "
-                        "hci=%u irq=%u irq_bytes=%u ring=%u budget=%u ovf=%u\n",
+                        "hci=%u irq=%u unknown_irq=%u irq_bytes=%u ring=%u "
+                        "budget=%u ovf=%u\n",
                         (unsigned)bt->bootstrap_state, (unsigned)now_ms,
                         (unsigned)bt->bootstrap_deadline_ms,
                         (unsigned)bt->init_deadline_ms,
                         (unsigned)bt->phase1_complete,
                         (unsigned)bt->hci_ready,
                         (unsigned)bellatrix_physical_bt_irq_count(),
+                        (unsigned)bellatrix_physical_unknown_irq_count(),
                         (unsigned)bt_hal_raspi3_irq_rx_bytes(),
                         (unsigned)bt_hal_raspi3_rx_ring_used(),
                         (unsigned)bt_hal_raspi3_irq_rx_budget_hits(),

@@ -45,14 +45,23 @@ done
 irq_dump=$($objdump -d --no-show-raw-insn --disassemble=curr_el_spx_irq "$elf")
 trampoline_dump=$($objdump -d --no-show-raw-insn \
     --disassemble=bellatrix_spx_bt_irq "$elf")
+unknown_dump=$($objdump -d --no-show-raw-insn \
+    --disassemble=bellatrix_spx_unknown_irq "$elf")
 fiq_dump=$($objdump -d --no-show-raw-insn --disassemble=curr_el_spx_fiq "$elf")
 
 grep -q 'tbnz.*#25.*bellatrix_spx_bt_irq' <<<"$irq_dump"
-grep -q 'strb.*#200' <<<"$irq_dump"
+grep -q 'bellatrix_spx_unknown_irq' <<<"$irq_dump"
+if grep -q 'strb.*#200' <<<"$irq_dump"; then
+    echo "[BT-IRQ-ABI] physical IRQ still injects Emu68 INT.ARM" >&2
+    exit 1
+fi
+grep -qi 'orr.*#0x80' <<<"$unknown_dump"
+grep -qi 'msr.*spsr_el1' <<<"$unknown_dump"
 grep -q 'stp.*q30.*q31' <<<"$trampoline_dump"
 grep -qi 'mrs.*fpcr' <<<"$trampoline_dump"
 grep -qi 'mrs.*fpsr' <<<"$trampoline_dump"
-grep -q 'bellatrix_physical_bt_irq_handler' <<<"$trampoline_dump"
+grep -q 'mov.*x0.*x2' <<<"$trampoline_dump"
+grep -q 'bellatrix_physical_irq_handler' <<<"$trampoline_dump"
 grep -qi 'msr.*fpcr' <<<"$trampoline_dump"
 grep -qi 'msr.*fpsr' <<<"$trampoline_dump"
 grep -q 'eret' <<<"$trampoline_dump"
@@ -63,4 +72,4 @@ if grep -q 'bellatrix_physical' <<<"$fiq_dump"; then
 fi
 grep -q 'strb.*#200' <<<"$fiq_dump"
 
-echo "[BT-IRQ-ABI] slots, Emu68 fallback, full trampoline and untouched FIQ verified"
+echo "[BT-IRQ-ABI] slots, host-only IRQ dispatch, containment, full trampoline and untouched FIQ verified"

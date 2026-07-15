@@ -1,0 +1,72 @@
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -94,7 +94,7 @@ struct INT_shadow {
+ } INT_shadow;
+ 
+ #ifdef BELLATRIX
+-extern void bellatrix_physical_bt_irq_handler(void);
++extern void bellatrix_physical_irq_handler(uint32_t source);
+ #endif
+ 
+ void  __attribute__((used)) __stub_vectors()
+@@ -145,13 +145,14 @@ void  __attribute__((used)) __stub_vectors()
+ "       stp x0, x1, [sp, -16]!          \n" // the current EL using the current SP.
+ #ifdef BELLATRIX
+ /* GPU IRQ 57 is UART0/BT. Discriminate it with only x0/x1 already saved;
+- * every other source continues through the byte-for-byte Emu68 path below. */
++ * no host IRQ is implicitly propagated to AmigaOS. */
+ "       movz x0, #0xb208                \n"
+ "       movk x0, #0xf200, lsl #16       \n"
+ "       ldr w1, [x0]                    \n"
+ "       rev w1, w1                      \n"
+ "       tbnz w1, #25, bellatrix_spx_bt_irq \n"
+-#endif
++"       b bellatrix_spx_unknown_irq      \n"
++#else
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
+@@ -168,6 +169,7 @@ void  __attribute__((used)) __stub_vectors()
+ "       strb w0, [x1, #%[pint]]         \n"
+ "1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
++#endif
+ "                                       \n"
+ "       .balign 0x80                    \n"
+ "curr_el_spx_fiq:                       \n" // The exception handler for an FIQ from 
+@@ -270,10 +272,21 @@ void  __attribute__((used)) __stub_vectors()
+ "       eret                            \n"
+ "                                       \n"
+ #ifdef BELLATRIX
+-/* Out-of-line UART0 trampoline. Preserve the complete integer and SIMD
+- * context used by the JIT before entering a general C top half. x0/x1 were
+- * saved by the architectural slot; this frame covers x2-x30 and q0-q31. */
++/* Unknown sources have no guest meaning. Mask IRQ on exception return so an
++ * unacknowledged level source cannot storm, count it, and never set INT.ARM. */
++"bellatrix_spx_unknown_irq:             \n"
++"       mrs x0, SPSR_EL1                \n"
++"       orr x0, x0, #0x080              \n"
++"       msr SPSR_EL1, x0                \n"
++"       mov w0, #0                      \n"
++"       b 2f                            \n"
++/* Out-of-line physical-IRQ trampoline. Preserve the complete integer and
++ * SIMD context used by the JIT before entering a general C top half. x0/x1
++ * were saved by the architectural slot; this frame covers x2-x30 and q0-q31. */
+ "bellatrix_spx_bt_irq:                  \n"
++"       mov w0, #1                      \n"
++"2:                                     \n"
+ "       sub sp, sp, #768                 \n"
+ "       stp x2, x3, [sp, #0]            \n"
++"       mov x2, x0                       \n"
+ "       stp x4, x5, [sp, #16]           \n"
+@@ -310,7 +323,8 @@ void  __attribute__((used)) __stub_vectors()
+ "       mrs x1, FPSR                     \n"
+ "       str x0, [sp, #752]              \n"
+ "       str x1, [sp, #760]              \n"
++"       mov x0, x2                       \n"
+-"       bl bellatrix_physical_bt_irq_handler \n"
++"       bl bellatrix_physical_irq_handler \n"
+ "       ldr x0, [sp, #752]              \n"
+ "       ldr x1, [sp, #760]              \n"
+ "       msr FPCR, x0                     \n"

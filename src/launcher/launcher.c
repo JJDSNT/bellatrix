@@ -948,7 +948,7 @@ static void bt_scan_screen(void)
             uint32_t rxq_filled, rxq_wanted;
             bt_hal_raspi3_rx_pending(&rxq_filled, &rxq_wanted);
             bt_diag_log("[SCAN] hb iter=%u tx=%u rx=%u rxq=%u/%u ring=%u "
-                        "irq=%u irq_bytes=%u budget=%u overflow=%u "
+                        "irq=%u unknown_irq=%u irq_bytes=%u budget=%u overflow=%u "
                         "status=%s found=%u\n",
                         (unsigned)iter,
                         (unsigned)bt_hal_raspi3_io_tx(),
@@ -956,6 +956,7 @@ static void bt_scan_screen(void)
                         (unsigned)rxq_filled, (unsigned)rxq_wanted,
                         (unsigned)bt_hal_raspi3_rx_ring_used(),
                         (unsigned)bellatrix_physical_bt_irq_count(),
+                        (unsigned)bellatrix_physical_unknown_irq_count(),
                         (unsigned)bt_hal_raspi3_irq_rx_bytes(),
                         (unsigned)bt_hal_raspi3_irq_rx_budget_hits(),
                         (unsigned)bt_hal_raspi3_rx_overflow(),

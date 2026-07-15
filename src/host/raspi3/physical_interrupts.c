@@ -1,7 +1,7 @@
 /* BCM2837 physical IRQ ownership for Bellatrix.
  *
- * The original Emu68 IRQ path remains authoritative for non-UART sources.
- * UART0 (GPU IRQ 57) is the sole source diverted to this host top half. */
+ * UART0 (GPU IRQ 57) is the sole enabled source. Unknown sources are counted
+ * and contained by vectors.c; they are never converted into guest EXTER. */
 
 #include "host/raspi3/physical_interrupts.h"
 
@@ -20,6 +20,7 @@ static _Atomic bool s_bt_irq_route_enabled;
 #endif
 static _Atomic bool s_bt_irq_armed;
 static _Atomic uint32_t s_bt_irq_count;
+static _Atomic uint32_t s_unknown_irq_count;
 
 static inline void irq_wr32(uintptr_t addr, uint32_t value)
 {
@@ -67,8 +68,14 @@ bool bellatrix_physical_bt_irq_is_armed(void)
 }
 
 void __attribute__((target("general-regs-only")))
-bellatrix_physical_bt_irq_handler(void)
+bellatrix_physical_irq_handler(uint32_t source)
 {
+    if (source != BELLATRIX_PHYSICAL_IRQ_UART0) {
+        atomic_fetch_add_explicit(&s_unknown_irq_count, 1u,
+                                  memory_order_relaxed);
+        return;
+    }
+
     /* UART RX/RT is level-sensitive. Contain the controller route before
      * touching the FIFO; the Core 3 reactor rearms it after consuming work. */
     irq_wr32(ARM_IRQ_DISABLE2, ARM_IRQ_UART0_BIT);
@@ -83,4 +90,9 @@ bellatrix_physical_bt_irq_handler(void)
 uint32_t bellatrix_physical_bt_irq_count(void)
 {
     return atomic_load_explicit(&s_bt_irq_count, memory_order_relaxed);
+}
+
+uint32_t bellatrix_physical_unknown_irq_count(void)
+{
+    return atomic_load_explicit(&s_unknown_irq_count, memory_order_relaxed);
 }
