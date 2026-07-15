@@ -15,6 +15,7 @@ tags:
   - musashi
   - emu68
 related_files:
+  - AI_context/specs/SPEC-0001-cpu-memory-integration.md
   - tools/harness/musashi_backend.c
   - src/machine/bus/superbuster/superbuster.c
   - src/machine/bus/zorro3/zorro3.c
