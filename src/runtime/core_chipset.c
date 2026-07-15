@@ -6,15 +6,15 @@
 // Runs on Core 2 in multicore mode; driven from the single-core poll path
 // via bellatrix_runtime_host_step() when multicore is disabled.
 //
-// Synchronisation with Core 1 (CPU):
-//   - Core 1 calls bellatrix_runtime_publish_cpu_cycles() after each JIT
-//     block (or Musashi quantum), publishing M68K cycles converted to CCK
-//     into s_cpu_cck_target.
+// Synchronisation with the CPU owner (Core 0 in the Emu68 rebaseline, Core 1
+// in the legacy multicore topology):
+//   - the CPU path publishes M68K cycles converted to CCK into
+//     s_cpu_cck_target after observable JIT/bus progress;
 //   - Core 2 wakes on SEV, drains cycles until caught up, then WFEs again.
-//   - IPL changes and frame events are published atomically back to Core 1.
+//   - IPL changes and frame events are published atomically back to the CPU.
 //
 // core_chipset_lock_acquire/release() guard chipset state from concurrent
-// CPU-side bus access (called from cpu_bridge.c, not from this core).
+// CPU-side bus access (called from cpu_bridge.c, not from the Rigel owner).
 
 #include "runtime/core_chipset.h"
 #include "runtime/cpu_progress.h"
@@ -69,8 +69,8 @@ static RuntimeTimeline s_timeline; /* Core 0 owner */
 /* Aggregated CCK not yet added to s_cpu_cck_target. Core 1 local. */
 static uint32_t s_pending_cck = 0;
 
-/* Advanced by Core 2 (chipset); read cross-core by Core 1 (backpressure) and
- * Core 0 (supervisor), so it must be atomic. */
+/* Advanced by Core 2 (chipset); read cross-core by the CPU/backpressure and
+ * supervisor paths, so it must be atomic. */
 static _Atomic uint64_t s_chipset_cck = 0;
 static _Atomic uint8_t s_pending_ipl = 0;
 static _Atomic uint32_t s_pending_frames = 0;
@@ -345,8 +345,15 @@ uint8_t core_chipset_get_pending_ipl(void)
 
 void core_chipset_set_pending_ipl(uint8_t ipl)
 {
-    atomic_store_explicit(&s_pending_ipl, (uint8_t)(ipl & 7u),
+    ipl &= 7u;
+    atomic_store_explicit(&s_pending_ipl, ipl,
                           memory_order_release);
+#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
+    BELLATRIX_EMU68_CORE0_REBASELINE
+    /* There is no managed CPU quantum on Core 0 to pull s_pending_ipl.
+     * Publish into Emu68's native context and wake STOP/WFE directly. */
+    PAL_IPL_Set(ipl);
+#endif
 }
 
 /* Caller must hold the chipset access lock (or be the only Rigel user). */

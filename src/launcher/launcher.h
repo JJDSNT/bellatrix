@@ -18,7 +18,8 @@
 // Call after framebuffer is ready and before the main emulation loop.
 bool launcher_run(void);
 
-/* Write BTSCAN.TXT to SD with current scan results + bt_diag snapshot.
- * Safe to call more than once — overwrites in place each time.
- * Used by bellatrix.c to capture post-connection-attempt diagnostics. */
-void launcher_save_bt_report(void);
+/* launcher_save_bt_report() (BTSCAN.TXT diagnostics) now lives in btscan.h. */
+// Core-3 runtime dispatcher. HID callbacks only publish actions; this step
+// owns modal lifecycle after the normal host-reactor pass.
+void launcher_runtime_step(void);
+bool launcher_runtime_modal_active(void);

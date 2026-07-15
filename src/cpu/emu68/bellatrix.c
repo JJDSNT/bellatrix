@@ -70,7 +70,13 @@ static void bellatrix_runtime_poll_from_emu68(void)
 
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    /* The conservative path enters M68K_StartEmu directly. The public machine
+     * driver remains compiled only as an A/B rollback option. */
+    return 0;
+#else
     return cpu_backend_owns_execution_loop();
+#endif
 }
 
 void bellatrix_run_selected_cpu_backend(void)
@@ -399,6 +405,15 @@ void bellatrix_launch_cpu_and_park(void (*entry)(void))
 {
     if (!entry)
         return;
+
+#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
+    BELLATRIX_EMU68_CORE0_REBASELINE
+    /* Preserve Emu68's native topology: the boot PE owns the JIT, VBAR,
+     * TPIDRRO context and physical interrupt routing as one contract. The
+     * selected entry does not return in fault-driven mode. */
+    entry();
+    return;
+#endif
 
     if (!PAL_Core_IsMulticoreEnabled()) {
         entry();
@@ -1050,9 +1065,8 @@ void bellatrix_init(void)
 #ifdef BELLATRIX_ENABLE_MULTICORE
     /* Enable secondary chipset cores only after host-side services are ready. */
     PAL_Core_SetMulticoreEnabled(1);
-    /* Core 0 owns physical IO in launcher and runtime. Core 3 remains parked
-     * for future RTG/AHI work. The launcher cooperatively calls the same Host
-     * Reactor used later by the supervisor.
+    /* Core 0 owns physical IO during the launcher. Core 3 owns the same
+     * reactor after CPU launch; only bounded IRQ top halves remain on Core 0.
      *  - Core 2 (chipset) is deferred until after the launcher + chipset init
      *    (see below): with no M68K running yet it has no work during the
      *    launcher, and letting it run there raced shared state on real hardware. */
@@ -1123,11 +1137,22 @@ void bellatrix_init(void)
      * before the launcher) keeps the launcher phase free of a second core
      * touching shared state (ISSUE-0042/0044). */
     PAL_Core_LaunchChipset(NULL);   /* Core 2 — chipset */
+#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
+    BELLATRIX_EMU68_CORE0_REBASELINE
+    /* Core 0 enters the native Emu68 loop and cannot host the physical
+     * reactor. Reuse the already-defined bounded IO worker on Core 3. */
+    PAL_Core_LaunchIO();            /* Core 3 — physical IO reactor */
+#endif
 #endif
 
     kprintf("[BELA] build: " __DATE__ " " __TIME__ "\n");
     if (PAL_Core_IsMulticoreEnabled()) {
+#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
+    BELLATRIX_EMU68_CORE0_REBASELINE
+        kprintf("[BELA] Initialized (Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO)\n");
+#else
         kprintf("[BELA] Initialized (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)\n");
+#endif
     } else {
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }
@@ -1177,6 +1202,81 @@ int bellatrix_launcher_bt_ready(void)
     return bt_host_is_working(&g_runtime.bluetooth) ? 1 : 0;
 #else
     return 0;
+#endif
+}
+
+int bellatrix_launcher_bt_connect_pairs(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_connect_pairs(&g_runtime.bluetooth);
+    return bt_host_mouse_connected() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void bellatrix_launcher_bt_connect_now(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_connect_pairs(&g_runtime.bluetooth);
+#endif
+}
+
+int bellatrix_launcher_bt_mouse_connected(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    return bt_host_mouse_connected() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void bellatrix_launcher_bt_suspend_reconnect(int suspended)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_set_outgoing_reconnect_suspended(&g_runtime.bluetooth,
+                                              suspended != 0);
+#else
+    (void)suspended;
+#endif
+}
+
+int bellatrix_launcher_bt_recovery_discovery_active(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    return bt_host_recovery_discovery_active(&g_runtime.bluetooth) ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void bellatrix_launcher_bt_claim_recovery_discovery(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_claim_recovery_discovery(&g_runtime.bluetooth);
+#endif
+}
+
+void bellatrix_launcher_bt_prepare_pairing(const uint8_t addr[6])
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_prepare_explicit_pairing(&g_runtime.bluetooth, addr);
+#else
+    (void)addr;
+#endif
+}
+
+void bellatrix_launcher_bt_close_pairing(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_close_pairing_window(&g_runtime.bluetooth);
+#endif
+}
+
+void bellatrix_launcher_bt_open_pairing(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_open_pairing_window(&g_runtime.bluetooth);
 #endif
 }
 #endif

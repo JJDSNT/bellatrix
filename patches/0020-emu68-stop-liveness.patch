@@ -19,11 +19,13 @@ diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
 index 4ed0d5f..1fc2b84 100644
 --- a/src/M68k_LINE4.c
 +++ b/src/M68k_LINE4.c
-@@ -1535,6 +1535,22 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
+@@ -1535,6 +1535,24 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
      *ptr++ = b(2);
      *ptr++ = mov_simd_to_reg(sp, 31, TS_S, 2);  // Load ISP
  
-+#ifdef BELLATRIX
++#if defined(BELLATRIX) && \
++    (!defined(BELLATRIX_EMU68_FAULT_DRIVEN) || \
++     !BELLATRIX_EMU68_FAULT_DRIVEN)
 +    /* Bellatrix is embedded: STOP yields to its scheduler instead of sleeping
 +     * on a physical ARM interrupt. Retire STOP exactly once, leave PC at the
 +     * following instruction and publish explicit architectural state. */
@@ -42,11 +44,11 @@ index 4ed0d5f..1fc2b84 100644
      /* Now do what stop does - wait for interrupt */
      *ptr++ = add_immed(REG_PC, REG_PC, 4);
  
-@@ -1568,6 +1584,7 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
+@@ -1568,6 +1586,7 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
  
      RA_FreeARMRegister(&ptr, tmpreg);
  #endif
-+#endif /* BELLATRIX */
++#endif /* Bellatrix managed machine mode */
  
      *tmpptr = b(ptr - tmpptr);
  

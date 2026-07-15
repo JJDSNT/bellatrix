@@ -80,7 +80,12 @@ static struct BellatrixPalRuntime s_rt = {
     .runtime_running      = 0,
     .multicore_enabled    = 0,  // default: single-core mode
     .chipset_core_started = 0,
+#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
+    BELLATRIX_EMU68_CORE0_REBASELINE
+    .cpu_core_id          = 0,
+#else
     .cpu_core_id          = 1,
+#endif
     .chipset_core_id      = 2,
     .cpu_priority         = BELLATRIX_PRIO_HIGH,
     .chipset_priority     = BELLATRIX_PRIO_REALTIME,
@@ -207,6 +212,30 @@ static uint32_t pal_event_stream_enable(uint32_t target_hz)
     asm volatile("msr CNTKCTL_EL1, %0\n\tisb" :: "r"(ctl) : "memory");
     atomic_store_explicit(&s_event_stream_hz, actual, memory_order_release);
     return actual;
+}
+
+/* Enable a private architectural event stream on the calling PE without
+ * publishing it as the chipset event source. Core 3 uses this only to wake
+ * its deferred physical-IO reactor; the register is per-core. */
+static uint32_t pal_local_event_stream_enable(uint32_t target_hz)
+{
+    uint64_t freq = pal_read_cntfrq();
+    uint64_t ctl;
+    uint32_t bit = 0u;
+
+    if (target_hz == 0u || freq == 0u)
+        return 0u;
+    while (bit < 15u && freq / (1ull << (bit + 1u)) > target_hz)
+        bit++;
+
+    asm volatile("mrs %0, CNTKCTL_EL1" : "=r"(ctl));
+    ctl &= ~((uint64_t)0x0fu << 4u);
+    ctl |= (uint64_t)1u << 2u;
+    ctl |= (uint64_t)bit << 4u;
+    ctl &= ~((uint64_t)1u << 3u);
+    asm volatile("msr CNTKCTL_EL1, %0\n\tisb" ::
+                 "r"(ctl) : "memory");
+    return (uint32_t)(freq / (1ull << (bit + 1u)));
 }
 
 static void pal_event_stream_disable(void)
@@ -373,12 +402,18 @@ static void chipset_core_loop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Dormant Core 3 worker. Reserved for a future explicit RTG/AHI/IO migration.
+// Core 3 worker. Active as the physical IO reactor in the Emu68/Core0
+// rebaseline; otherwise dormant and available for an explicit migration.
 // ---------------------------------------------------------------------------
 static void chipset_io_loop(void)
 {
+    uint32_t event_hz;
+
     while (!atomic_load_explicit(&s_rt.runtime_ready, memory_order_acquire))
         pal_wfe();
+
+    event_hz = pal_local_event_stream_enable(1000u);
+    kprintf("[CORE3] IO event stream: %u Hz\n", (unsigned)event_hz);
 
     while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
         const uint64_t now = pal_read_cntpct();
@@ -423,8 +458,7 @@ void bellatrix_core2_entry(void)
 
 void bellatrix_core3_entry(void)
 {
-    /* Core 3 is reserved and parks unless a future PAL_Core_LaunchIO() user
-     * explicitly assigns the dormant worker. */
+    /* Core 3 parks until PAL_Core_LaunchIO() assigns the physical worker. */
     while (!s_io_entry)
         pal_wfe();
 

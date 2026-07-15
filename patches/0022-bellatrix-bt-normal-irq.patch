@@ -1,0 +1,119 @@
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -93,6 +93,10 @@ struct INT_shadow {
+     uint8_t  ARMPending;
+ } INT_shadow;
+ 
++#ifdef BELLATRIX
++extern void bellatrix_physical_bt_irq_handler(void);
++#endif
++
+ void  __attribute__((used)) __stub_vectors()
+ { asm volatile(
+ "       .section .vectors               \n"
+@@ -139,6 +143,15 @@ void  __attribute__((used)) __stub_vectors()
+ "curr_el_spx_irq:                       \n" // The exception handler for an IRQ exception from 
+ "       stp x0, x1, [sp, -16]!          \n" // the current EL using the current SP.
++#ifdef BELLATRIX
++/* GPU IRQ 57 is UART0/BT. Discriminate it with only x0/x1 already saved;
++ * every other source continues through the byte-for-byte Emu68 path below. */
++"       movz x0, #0xb208                \n"
++"       movk x0, #0xf200, lsl #16       \n"
++"       ldr w1, [x0]                    \n"
++"       rev w1, w1                      \n"
++"       tbnz w1, #25, bellatrix_spx_bt_irq \n"
++#endif
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
+ "       adrp x1, INT_shadow             \n" // Load INTENA shadow
+@@ -256,6 +269,88 @@ void  __attribute__((used)) __stub_vectors()
+         LOAD_CONTEXT
+ "       eret                            \n"
+ "                                       \n"
++#ifdef BELLATRIX
++/* Out-of-line UART0 trampoline. Preserve the complete integer and SIMD
++ * context used by the JIT before entering a general C top half. x0/x1 were
++ * saved by the architectural slot; this frame covers x2-x30 and q0-q31. */
++"bellatrix_spx_bt_irq:                  \n"
++"       sub sp, sp, #768                 \n"
++"       stp x2, x3, [sp, #0]            \n"
++"       stp x4, x5, [sp, #16]           \n"
++"       stp x6, x7, [sp, #32]           \n"
++"       stp x8, x9, [sp, #48]           \n"
++"       stp x10, x11, [sp, #64]         \n"
++"       stp x12, x13, [sp, #80]         \n"
++"       stp x14, x15, [sp, #96]         \n"
++"       stp x16, x17, [sp, #112]        \n"
++"       stp x18, x19, [sp, #128]        \n"
++"       stp x20, x21, [sp, #144]        \n"
++"       stp x22, x23, [sp, #160]        \n"
++"       stp x24, x25, [sp, #176]        \n"
++"       stp x26, x27, [sp, #192]        \n"
++"       stp x28, x29, [sp, #208]        \n"
++"       stp x30, xzr, [sp, #224]        \n"
++"       stp q0, q1, [sp, #240]          \n"
++"       stp q2, q3, [sp, #272]          \n"
++"       stp q4, q5, [sp, #304]          \n"
++"       stp q6, q7, [sp, #336]          \n"
++"       stp q8, q9, [sp, #368]          \n"
++"       stp q10, q11, [sp, #400]        \n"
++"       stp q12, q13, [sp, #432]        \n"
++"       stp q14, q15, [sp, #464]        \n"
++"       stp q16, q17, [sp, #496]        \n"
++"       stp q18, q19, [sp, #528]        \n"
++"       stp q20, q21, [sp, #560]        \n"
++"       stp q22, q23, [sp, #592]        \n"
++"       stp q24, q25, [sp, #624]        \n"
++"       stp q26, q27, [sp, #656]        \n"
++"       stp q28, q29, [sp, #688]        \n"
++"       stp q30, q31, [sp, #720]        \n"
++"       mrs x0, FPCR                     \n"
++"       mrs x1, FPSR                     \n"
++"       str x0, [sp, #752]              \n"
++"       str x1, [sp, #760]              \n"
++"       bl bellatrix_physical_bt_irq_handler \n"
++"       ldr x0, [sp, #752]              \n"
++"       ldr x1, [sp, #760]              \n"
++"       msr FPCR, x0                     \n"
++"       msr FPSR, x1                     \n"
++"       ldp q0, q1, [sp, #240]          \n"
++"       ldp q2, q3, [sp, #272]          \n"
++"       ldp q4, q5, [sp, #304]          \n"
++"       ldp q6, q7, [sp, #336]          \n"
++"       ldp q8, q9, [sp, #368]          \n"
++"       ldp q10, q11, [sp, #400]        \n"
++"       ldp q12, q13, [sp, #432]        \n"
++"       ldp q14, q15, [sp, #464]        \n"
++"       ldp q16, q17, [sp, #496]        \n"
++"       ldp q18, q19, [sp, #528]        \n"
++"       ldp q20, q21, [sp, #560]        \n"
++"       ldp q22, q23, [sp, #592]        \n"
++"       ldp q24, q25, [sp, #624]        \n"
++"       ldp q26, q27, [sp, #656]        \n"
++"       ldp q28, q29, [sp, #688]        \n"
++"       ldp q30, q31, [sp, #720]        \n"
++"       ldp x2, x3, [sp, #0]            \n"
++"       ldp x4, x5, [sp, #16]           \n"
++"       ldp x6, x7, [sp, #32]           \n"
++"       ldp x8, x9, [sp, #48]           \n"
++"       ldp x10, x11, [sp, #64]         \n"
++"       ldp x12, x13, [sp, #80]         \n"
++"       ldp x14, x15, [sp, #96]         \n"
++"       ldp x16, x17, [sp, #112]        \n"
++"       ldp x18, x19, [sp, #128]        \n"
++"       ldp x20, x21, [sp, #144]        \n"
++"       ldp x22, x23, [sp, #160]        \n"
++"       ldp x24, x25, [sp, #176]        \n"
++"       ldp x26, x27, [sp, #192]        \n"
++"       ldp x28, x29, [sp, #208]        \n"
++"       ldr x30, [sp, #224]             \n"
++"       add sp, sp, #768                 \n"
++"       ldp x0, x1, [sp], #16           \n"
++"       eret                             \n"
++"                                       \n"
++#endif
+ "       .section .text                  \n"
+ :
+ :[pint]"i"(__builtin_offsetof(struct M68KState, INT.ARM)),

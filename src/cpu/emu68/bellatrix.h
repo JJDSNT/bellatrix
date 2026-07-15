@@ -23,9 +23,9 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
                                          uint64_t instructions,
                                          uint32_t pc);
 
-// Single-core: calls entry() directly, forever, on the boot core (today's
-// behavior). Multicore: launches entry() on Core 1 and parks the boot core
-// (Core 0) as the light Machine/scheduler arbiter — it never returns.
+// Single-core and the conservative Emu68 rebaseline call entry() directly on
+// the boot core. The legacy multicore topology launches it on Core 1 and parks
+// Core 0 as the Machine/scheduler arbiter.
 void bellatrix_launch_cpu_and_park(void (*entry)(void));
 
 // Sync the host MMU overlay mapping with the logical CIA-A PRA OVL bit.

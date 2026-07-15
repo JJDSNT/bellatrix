@@ -682,6 +682,11 @@ int emu68_machine_instruction_fetch_allowed(uint32_t address, uint8_t width)
 {
     const struct emu68_machine_region *region;
 
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    (void)address;
+    (void)width;
+    return 1;
+#endif
     if (!machine_cpu.active)
         return 1;
     if ((address & 1u) != 0u) {
@@ -748,7 +753,11 @@ int emu68_machine_dispatch_quantum_progress(uint64_t retired_instructions,
 
 int emu68_machine_runtime_active(void)
 {
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    return 0;
+#else
     return machine_cpu.active;
+#endif
 }
 
 emu68_status_t emu68_machine_get_pending_access(

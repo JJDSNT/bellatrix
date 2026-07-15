@@ -366,13 +366,43 @@ void bellatrix_emu68_backend_init(void)
         return;
     }
     s_backend.ready = 1;
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    kprintf("[EMU68-MACHINE] native fault-driven execution selected\n");
+#else
     kprintf("[EMU68-MACHINE] public machine API active\n");
+#endif
+}
+
+int bellatrix_emu68_backend_prepare_topology(void)
+{
+    /* Direct mappings update the host MMU and must be installed by the boot
+     * core after Bellatrix has finished using the low bootstrap pages, but
+     * before the CPU and chipset cores are launched. */
+    if (!s_backend.ready)
+        return 0;
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    kprintf("[EMU68-MACHINE] diagnostic fault-driven access mode active\n");
+    return 1;
+#endif
+    if (s_backend.topology_ready)
+        return 1;
+    if (!configure_topology()) {
+        kprintf("[EMU68-MACHINE] topology setup failed; no legacy fallback is permitted\n");
+        s_backend.ready = 0;
+        return 0;
+    }
+    kprintf("[EMU68-MACHINE] topology installed on boot core\n");
+    return 1;
 }
 
 int bellatrix_emu68_backend_set_overlay(int enabled)
 {
     enabled = enabled != 0;
     s_backend.overlay = enabled;
+#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+    /* Let bellatrix.c install the legacy low-memory MMU mapping. */
+    return 0;
+#endif
     if (!s_backend.ready || !s_backend.topology_ready)
         return 0;
     s_backend.overlay_pending = 1;

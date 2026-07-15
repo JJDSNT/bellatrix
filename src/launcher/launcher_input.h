@@ -17,12 +17,11 @@
 #define LAUNCHER_KEY_KPENTER 0x58u
 #define LAUNCHER_KEY_DEL     0x4Cu  /* HID Delete (forward delete) */
 #define LAUNCHER_KEY_BKSP    0x2Au  /* HID Backspace */
-
 void launcher_input_init(void);
 void launcher_input_set_active(bool active);
 bool launcher_input_is_active(void);
 
-// Called from USB HID callback (interrupt context on bare-metal)
+// Low-level queue used by the active launcher/modal screen.
 void launcher_input_push(uint8_t usage);
 
 // Returns 0 if queue is empty

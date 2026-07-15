@@ -29,6 +29,8 @@
 #include "io/bluetooth/bt_link_key_db_sd.h"
 #include "mmu.h"
 #include "host/raspi3/vc_mailbox.h"
+#include "host/raspi3/physical_interrupts.h"
+#include "io/bluetooth/bt_hal_raspi3.h"
 
 // HAL declarations
 void bt_hal_raspi3_poll_uart(void);
@@ -41,6 +43,8 @@ const btstack_uart_block_t * btstack_uart_block_embedded_instance(void);
 bool pl011_backend_route_bluetooth_pi3(void);
 void pl011_backend_wait_idle(void);
 uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div);
+uint32_t pl011_backend_flag_register(void);
+uint32_t pl011_backend_irq_mask(void);
 
 void btstack_chipset_bcm_set_device_name(const char * device_name) {
     (void)device_name;
@@ -80,7 +84,12 @@ static uint8_t s_hid_descriptor_storage[BT_HID_DESCRIPTOR_STORAGE_SIZE];
 
 /* cid → device-type table for routing HID reports in hid_packet_handler */
 #define BT_HID_CID_TABLE_MAX 4u
-typedef struct { uint16_t cid; uint8_t dtype; } BTHIDCIDEntry;
+typedef struct {
+    uint16_t cid;
+    uint8_t dtype;
+    uint8_t protocol_mode;
+    bool descriptor_available;
+} BTHIDCIDEntry;
 static BTHIDCIDEntry s_hid_cid_table[BT_HID_CID_TABLE_MAX];
 static unsigned      s_hid_cid_count;
 
@@ -89,13 +98,20 @@ static void hid_cid_register(uint16_t cid, uint8_t dtype)
     if (s_hid_cid_count >= BT_HID_CID_TABLE_MAX) return;
     s_hid_cid_table[s_hid_cid_count].cid   = cid;
     s_hid_cid_table[s_hid_cid_count].dtype = dtype;
+    s_hid_cid_table[s_hid_cid_count].protocol_mode = HID_PROTOCOL_MODE_BOOT;
+    s_hid_cid_table[s_hid_cid_count].descriptor_available = false;
     s_hid_cid_count++;
+}
+static BTHIDCIDEntry *hid_cid_entry(uint16_t cid)
+{
+    for (unsigned i = 0u; i < s_hid_cid_count; i++)
+        if (s_hid_cid_table[i].cid == cid) return &s_hid_cid_table[i];
+    return NULL;
 }
 static uint8_t hid_cid_type(uint16_t cid)
 {
-    for (unsigned i = 0u; i < s_hid_cid_count; i++)
-        if (s_hid_cid_table[i].cid == cid) return s_hid_cid_table[i].dtype;
-    return BT_PAIRS_TYPE_UNKNOWN;
+    BTHIDCIDEntry *entry = hid_cid_entry(cid);
+    return entry ? entry->dtype : BT_PAIRS_TYPE_UNKNOWN;
 }
 static void hid_cid_unregister(uint16_t cid)
 {
@@ -109,9 +125,36 @@ static void hid_cid_unregister(uint16_t cid)
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void hid_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void bt_pairing_window_close(BTHost *bt);
+static uint32_t bt_now_ms(void);
 static void bt_phase2_start(int status);
 static void bt_setup_hci_main(BTHost *bt);
 static void bt_hardware_error_callback(uint8_t error_code);
+static void bt_connection_step(BTHost *bt);
+
+static const char *bt_connection_state_name(uint8_t state)
+{
+    switch (state) {
+        case BT_CONNECTION_WAIT_STACK:  return "wait-stack";
+        case BT_CONNECTION_PASSIVE:     return "passive";
+        case BT_CONNECTION_CONNECTING:  return "connecting";
+        case BT_CONNECTION_DISCOVERING: return "discovering";
+        case BT_CONNECTION_ACTIVE:      return "active";
+        case BT_CONNECTION_BACKOFF:     return "backoff";
+        default:                        return "invalid";
+    }
+}
+
+static void bt_connection_set(BTHost *bt, uint8_t state, uint32_t delay_ms)
+{
+    if (!bt)
+        return;
+    if (bt->connection_state != state)
+        bt_diag_log("[BT-CM] %s -> %s\n",
+                    bt_connection_state_name(bt->connection_state),
+                    bt_connection_state_name(state));
+    bt->connection_state = state;
+    bt->connection_deadline_ms = delay_ms ? bt_now_ms() + delay_ms : 0u;
+}
 
 /* kprintf already lives permanently on the mini-UART by the time BT exists
  * (bellatrix_early_console_init(), called at the very start of boot) — PL011
@@ -128,6 +171,8 @@ static void bt_hardware_error_callback(uint8_t error_code);
 #define BELLATRIX_BT_BOOT_ROM_SETTLE_MS 250u
 #define BELLATRIX_BT_INIT_TIMEOUT_MS 15000u
 #define BELLATRIX_BT_MAX_POWER_CYCLE_ATTEMPTS 2u
+#define BELLATRIX_BT_PAIRING_DIRECT_RETRIES 6u
+#define BELLATRIX_BT_PAIRING_RETRY_MS 5000u
 #define VC_FIRMWARE_STATUS_REQUEST 0u
 #define VC_FIRMWARE_STATUS_SUCCESS 0x80000000u
 #define VC_FIRMWARE_PROPERTY_END 0u
@@ -142,6 +187,25 @@ typedef enum BTBootstrapState {
     BT_BOOTSTRAP_WORKING,
     BT_BOOTSTRAP_FAILED
 } BTBootstrapState;
+
+typedef enum BTLinkRecoveryState {
+    BT_LINK_RECOVERY_IDLE = 0,
+    BT_LINK_RECOVERY_REQUESTED,
+    BT_LINK_RECOVERY_FORCE_INITIALIZING,
+    BT_LINK_RECOVERY_FORCE_OFF,
+    BT_LINK_RECOVERY_PHYSICAL_RESET,
+} BTLinkRecoveryState;
+
+typedef enum BTLinkRecoveryReason {
+    BT_LINK_RECOVERY_REASON_NONE = 0,
+    BT_LINK_RECOVERY_REASON_HARDWARE_ERROR,
+    BT_LINK_RECOVERY_REASON_TRANSPORT_ERROR,
+    BT_LINK_RECOVERY_REASON_CONTROLLER_SILENCE,
+    BT_LINK_RECOVERY_REASON_H4_DESYNC,
+    BT_LINK_RECOVERY_REASON_CONTROLLER_MUTE,
+} BTLinkRecoveryReason;
+
+static uint32_t s_link_recoveries;
 
 #define VC_MBOX_CH_PROP 8u
 
@@ -449,6 +513,42 @@ static void bt_pairing_window_open(BTHost *bt)
     kprintf("[BT] pairing window open for %u ms\n", (unsigned)bt->pairing_window_ms);
 }
 
+void bt_host_close_pairing_window(BTHost *bt)
+{
+    bt_pairing_window_close(bt);
+}
+
+void bt_host_open_pairing_window(BTHost *bt)
+{
+    bt_pairing_window_open(bt);
+}
+
+void bt_host_set_outgoing_reconnect_suspended(BTHost *bt, bool suspended)
+{
+    if (!bt)
+        return;
+    bt->outgoing_reconnect_suspended = suspended;
+    bt_diag_log("[BT-CM] outgoing reconnect %s\n",
+                suspended ? "suspended" : "resumed");
+}
+
+void bt_host_prepare_explicit_pairing(BTHost *bt, const uint8_t addr[6])
+{
+    bd_addr_t pairing_addr;
+    if (!bt || !addr)
+        return;
+    memcpy(pairing_addr, addr, sizeof(pairing_addr));
+    gap_drop_link_key_for_bd_addr(pairing_addr);
+    bt_pairing_window_open(bt);
+    bt_diag_log("[BT] explicit pairing: old key removed for %s\n",
+                bd_addr_to_str(pairing_addr));
+}
+
+bool bt_host_mouse_connected(void)
+{
+    return s_bt_host && s_bt_host->mouse_connected;
+}
+
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     bd_addr_t event_addr;
 
@@ -470,24 +570,11 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
                         s_bt_host->init_deadline_ms = 0;
                     }
                     bt_diag_log("[BT] stack up and running, BD_ADDR=%s\n", bd_addr_to_str(local_addr));
-                    bt_pairing_window_open(s_bt_host);
-                    /* bt_pairs is populated only after launcher_run() reads BTPAIRS.TXT.
-                     * Recovery-triggered WORKING events fire during emulation when bt_pairs
-                     * is already in memory — reconnect then.  Initial connect is done by
-                     * bt_host_connect_pairs() called from bellatrix.c after launcher_run(). */
-                    if (bt_pairs_count() > 0u) {
-                        for (unsigned i = 0u; i < bt_pairs_count(); i++) {
-                            const BTPair *p = bt_pairs_get(i);
-                            if (!p) continue;
-                            bd_addr_t addr;
-                            memcpy(addr, p->addr, 6u);
-                            uint16_t cid = 0u;
-                            int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
-                            bt_diag_log("[BT] hid_host_connect (recovery) pair[%u] %s type=%u -> cid=0x%04x ret=%d\n",
-                                        i, bd_addr_to_str(addr),
-                                        (unsigned)p->device_type, (unsigned)cid, ret);
-                        }
-                    }
+                    gap_connectable_control(1);
+                    if (s_bt_host)
+                        s_bt_host->recovery_direct_attempts = 0u;
+                    bt_connection_set(s_bt_host, BT_CONNECTION_PASSIVE,
+                                      2000u);
                     break;
                 }
                 case HCI_STATE_INITIALIZING:
@@ -514,21 +601,31 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             break;
         case HCI_EVENT_PIN_CODE_REQUEST:
             hci_event_pin_code_request_get_bd_addr(packet, event_addr);
-            if (s_bt_host && s_bt_host->pairing_window_open) {
-                kprintf("[BT] pin code request from %s -> using 0000\n", bd_addr_to_str(event_addr));
+            if ((s_bt_host && s_bt_host->pairing_window_open) ||
+                bt_pairs_is_known(event_addr)) {
+                kprintf("[BT] pin code request from %s -> using 0000%s\n",
+                        bd_addr_to_str(event_addr),
+                        bt_pairs_is_known(event_addr) ? " (saved pair)" : "");
                 hci_send_cmd(&hci_pin_code_request_reply, &event_addr, 4, "0000");
             } else {
-                kprintf("[BT] pin code request from %s denied (pairing window closed)\n", bd_addr_to_str(event_addr));
+                kprintf("[BT] pin code request from %s denied "
+                        "(unknown device, pairing window closed)\n",
+                        bd_addr_to_str(event_addr));
                 hci_send_cmd(&hci_pin_code_request_negative_reply, &event_addr);
             }
             break;
         case HCI_EVENT_USER_CONFIRMATION_REQUEST:
             hci_event_user_confirmation_request_get_bd_addr(packet, event_addr);
-            if (s_bt_host && s_bt_host->pairing_window_open) {
-                kprintf("[BT] user confirmation request from %s -> accepted\n", bd_addr_to_str(event_addr));
+            if ((s_bt_host && s_bt_host->pairing_window_open) ||
+                bt_pairs_is_known(event_addr)) {
+                kprintf("[BT] user confirmation request from %s -> accepted%s\n",
+                        bd_addr_to_str(event_addr),
+                        bt_pairs_is_known(event_addr) ? " (saved pair)" : "");
                 hci_send_cmd(&hci_user_confirmation_request_reply, &event_addr);
             } else {
-                kprintf("[BT] user confirmation request from %s denied (pairing window closed)\n", bd_addr_to_str(event_addr));
+                kprintf("[BT] user confirmation request from %s denied "
+                        "(unknown device, pairing window closed)\n",
+                        bd_addr_to_str(event_addr));
                 hci_send_cmd(&hci_user_confirmation_request_negative_reply, &event_addr);
             }
             break;
@@ -539,23 +636,50 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 
 void bt_host_connect_pairs(BTHost *bt)
 {
-    if (!bt || !bt_host_is_working(bt)) return;
+    const BTPair *selected = NULL;
+    unsigned selected_index = 0u;
+
+    if (!bt || !bt_host_is_working(bt) || bt->mouse_connected ||
+        bt->hid_connect_pending)
+        return;
     unsigned n = bt_pairs_count();
     if (n == 0u) {
         bt_diag_log("[BT] connect_pairs: no pairs saved\n");
         return;
     }
+
+    /* BTstack's embedded SDP client has one query context. Select one saved
+     * device, with mouse priority, rather than starting concurrent queries. */
     for (unsigned i = 0u; i < n; i++) {
         const BTPair *p = bt_pairs_get(i);
-        if (!p) continue;
-        bd_addr_t addr;
-        memcpy(addr, p->addr, 6u);
-        uint16_t cid = 0u;
-        int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
-        bt_diag_log("[BT] connect_pairs[%u] %s type=%u -> cid=0x%04x ret=%d\n",
-                    i, bd_addr_to_str(addr),
-                    (unsigned)p->device_type, (unsigned)cid, ret);
+        if (!p)
+            continue;
+        if (!selected || p->device_type == BT_PAIRS_TYPE_MOUSE) {
+            selected = p;
+            selected_index = i;
+        }
+        if (p->device_type == BT_PAIRS_TYPE_MOUSE)
+            break;
     }
+    if (!selected)
+        return;
+
+    bd_addr_t addr;
+    memcpy(addr, selected->addr, sizeof(addr));
+    uint16_t cid = 0u;
+    int ret = hid_host_connect(addr, HID_PROTOCOL_MODE_BOOT, &cid);
+    bt->mouse_connected = false;
+    bt->hid_connect_pending = (ret == ERROR_CODE_SUCCESS);
+    bt->pending_hid_cid = bt->hid_connect_pending ? cid : 0u;
+    bt->last_hid_status = (uint8_t)ret;
+    if (ret == ERROR_CODE_SUCCESS)
+        bt_connection_set(bt, BT_CONNECTION_CONNECTING, 15000u);
+    else
+        bt_connection_set(bt, BT_CONNECTION_BACKOFF, 5000u);
+    bt_diag_log("[BT] connect priority pair[%u] %s type=%u "
+                "-> cid=0x%04x ret=%d\n",
+                selected_index, bd_addr_to_str(addr),
+                (unsigned)selected->device_type, (unsigned)cid, ret);
 }
 
 static void hid_packet_handler(uint8_t packet_type, uint16_t channel,
@@ -572,12 +696,78 @@ static void hid_packet_handler(uint8_t packet_type, uint16_t channel,
     uint8_t  status;
 
     switch (hci_event_hid_meta_get_subevent_code(packet)) {
+        case HID_SUBEVENT_INCOMING_CONNECTION:
+            hid_cid = hid_subevent_incoming_connection_get_hid_cid(packet);
+            status = hid_subevent_incoming_connection_get_status(packet);
+            bt_diag_log("[BT] HID incoming: cid=0x%04x status=0x%02x\n",
+                        (unsigned)hid_cid, (unsigned)status);
+            if (status == ERROR_CODE_SUCCESS) {
+                status = hid_host_accept_connection(hid_cid,
+                                                    HID_PROTOCOL_MODE_BOOT);
+                if (status == ERROR_CODE_SUCCESS) {
+                    if (s_bt_host) {
+                        s_bt_host->hid_connect_pending = true;
+                        s_bt_host->pending_hid_cid = hid_cid;
+                        bt_connection_set(s_bt_host,
+                                          BT_CONNECTION_CONNECTING, 15000u);
+                    }
+                    bt_diag_log("[BT] HID incoming accepted: cid=0x%04x "
+                                "boot protocol\n", (unsigned)hid_cid);
+                } else {
+                    bt_diag_log("[BT] HID incoming accept failed: "
+                                "cid=0x%04x status=0x%02x\n",
+                                (unsigned)hid_cid, (unsigned)status);
+                }
+            }
+            break;
+
         case HID_SUBEVENT_CONNECTION_OPENED:
             hid_cid = hid_subevent_connection_opened_get_hid_cid(packet);
             status  = hid_subevent_connection_opened_get_status(packet);
             if (status != ERROR_CODE_SUCCESS) {
-                bt_diag_log("[BT] HID connect failed: cid=0x%04x status=0x%02x\n",
+                if (s_bt_host) {
+                    s_bt_host->hid_connect_pending = false;
+                    s_bt_host->pending_hid_cid = 0u;
+                    s_bt_host->last_hid_status = status;
+                }
+                bt_diag_log("[BT] HID connect failed: cid=0x%04x "
+                            "status=0x%02x\n",
                             (unsigned)hid_cid, (unsigned)status);
+
+                if (s_bt_host && bt_pairs_count() != 0u &&
+                    s_bt_host->recovery_direct_attempts <
+                        BELLATRIX_BT_PAIRING_DIRECT_RETRIES) {
+                    const BTPair *mouse = NULL;
+                    for (unsigned i = 0u; i < bt_pairs_count(); i++) {
+                        const BTPair *candidate = bt_pairs_get(i);
+                        if (candidate &&
+                            candidate->device_type == BT_PAIRS_TYPE_MOUSE) {
+                            mouse = candidate;
+                            break;
+                        }
+                    }
+                    if (mouse) {
+                        bool key_rejected =
+                            status == ERROR_CODE_AUTHENTICATION_FAILURE ||
+                            status == ERROR_CODE_PIN_OR_KEY_MISSING;
+                        if (key_rejected) {
+                            bd_addr_t known_addr;
+                            memcpy(known_addr, mouse->addr,
+                                   sizeof(known_addr));
+                            gap_drop_link_key_for_bd_addr(known_addr);
+                            bt_pairing_window_open(s_bt_host);
+                            bt_diag_log("[BT-CM] rejected key 0x%02x dropped "
+                                        "for %s; re-pair armed\n",
+                                        (unsigned)status,
+                                        bd_addr_to_str(known_addr));
+                        }
+                        s_bt_host->recovery_direct_attempts++;
+                        bt_connection_set(s_bt_host, BT_CONNECTION_PASSIVE,
+                                          BELLATRIX_BT_PAIRING_RETRY_MS);
+                        break;
+                    }
+                }
+                bt_connection_set(s_bt_host, BT_CONNECTION_DISCOVERING, 0u);
                 break;
             }
             hid_subevent_connection_opened_get_bd_addr(packet, addr);
@@ -591,8 +781,27 @@ static void hid_packet_handler(uint8_t packet_type, uint16_t channel,
                     }
                 }
                 hid_cid_register(hid_cid, dtype);
+                if (s_bt_host) {
+                    if (dtype == BT_PAIRS_TYPE_MOUSE)
+                        s_bt_host->mouse_connected = true;
+                    s_bt_host->hid_connect_pending = false;
+                    s_bt_host->pending_hid_cid = 0u;
+                    s_bt_host->recovery_direct_attempts = 0u;
+                    s_bt_host->last_hid_status = ERROR_CODE_SUCCESS;
+                    if (s_bt_host->discovery_started) {
+                        bt_scan_stop();
+                        s_bt_host->discovery_started = false;
+                    }
+                    bt_pairing_window_close(s_bt_host);
+                }
+                bt_connection_set(s_bt_host, BT_CONNECTION_ACTIVE, 0u);
                 bt_diag_log("[BT] HID connected: %s type=%u cid=0x%04x\n",
                             bd_addr_to_str(addr), (unsigned)dtype, (unsigned)hid_cid);
+                if (dtype == BT_PAIRS_TYPE_MOUSE && s_bt_host) {
+                    s_bt_host->mouse_input_ready = false;
+                    s_bt_host->hid_activation_cid = hid_cid;
+                    s_bt_host->hid_activation_stage = 1u;
+                }
             }
             break;
 
@@ -601,6 +810,21 @@ static void hid_packet_handler(uint8_t packet_type, uint16_t channel,
             const uint8_t *data = hid_subevent_report_get_report(packet);
             uint16_t len = (uint16_t)hid_subevent_report_get_report_len(packet);
             uint8_t rtype = hid_cid_type(hid_cid);
+            if (s_bt_host) {
+                s_bt_host->hid_reports_received++;
+                if (rtype == BT_PAIRS_TYPE_MOUSE &&
+                    !s_bt_host->mouse_input_ready) {
+                    s_bt_host->mouse_input_ready = true;
+                    bt_diag_log("[BT] mouse input ready cid=0x%04x\n",
+                                (unsigned)hid_cid);
+                }
+            }
+            /* BTstack preserves the HIDP DATA/Input prefix. The actual boot
+             * or report-protocol payload begins after 0xA1. */
+            if (len != 0u && data[0] == 0xA1u) {
+                data++;
+                len--;
+            }
             switch (rtype) {
                 case BT_PAIRS_TYPE_KEYBOARD:
                     bt_hid_handle_keyboard_report(hid_cid, data, len);
@@ -622,16 +846,88 @@ static void hid_packet_handler(uint8_t packet_type, uint16_t channel,
             break;
         }
 
+        case HID_SUBEVENT_DESCRIPTOR_AVAILABLE: {
+            hid_cid = hid_subevent_descriptor_available_get_hid_cid(packet);
+            status = hid_subevent_descriptor_available_get_status(packet);
+            BTHIDCIDEntry *entry = hid_cid_entry(hid_cid);
+            if (entry)
+                entry->descriptor_available = status == ERROR_CODE_SUCCESS;
+            bt_diag_log("[BT-HID] descriptor cid=0x%04x status=0x%02x "
+                        "len=%u\n", (unsigned)hid_cid, (unsigned)status,
+                        (unsigned)hid_descriptor_storage_get_descriptor_len(
+                            hid_cid));
+            break;
+        }
+
+        case HID_SUBEVENT_SET_PROTOCOL_RESPONSE: {
+            hid_cid = hid_subevent_set_protocol_response_get_hid_cid(packet);
+            status = hid_subevent_set_protocol_response_get_handshake_status(
+                packet);
+            uint8_t mode =
+                hid_subevent_set_protocol_response_get_protocol_mode(packet);
+            BTHIDCIDEntry *entry = hid_cid_entry(hid_cid);
+            if (entry && status == HID_HANDSHAKE_PARAM_TYPE_SUCCESSFUL)
+                entry->protocol_mode = mode;
+            bt_diag_log("[BT-HID] protocol cid=0x%04x status=0x%02x "
+                        "mode=%u\n", (unsigned)hid_cid, (unsigned)status,
+                        (unsigned)mode);
+            break;
+        }
+
+        case HID_SUBEVENT_GET_PROTOCOL_RESPONSE:
+            hid_cid = hid_subevent_get_protocol_response_get_hid_cid(packet);
+            status = hid_subevent_get_protocol_response_get_handshake_status(
+                packet);
+            bt_diag_log("[BT-HID] get protocol cid=0x%04x status=0x%02x "
+                        "mode=%u\n", (unsigned)hid_cid, (unsigned)status,
+                        (unsigned)hid_subevent_get_protocol_response_get_protocol_mode(
+                            packet));
+            break;
+
         case HID_SUBEVENT_CONNECTION_CLOSED:
             hid_cid = hid_subevent_connection_closed_get_hid_cid(packet);
             bt_diag_log("[BT] HID disconnected: cid=0x%04x\n", (unsigned)hid_cid);
             bt_hid_release_all(hid_cid);
             hid_cid_unregister(hid_cid);
+            if (s_bt_host) {
+                s_bt_host->mouse_connected = false;
+                s_bt_host->mouse_input_ready = false;
+                s_bt_host->hid_connect_pending = false;
+                s_bt_host->pending_hid_cid = 0u;
+                if (s_bt_host->hid_activation_cid == hid_cid) {
+                    s_bt_host->hid_activation_cid = 0u;
+                    s_bt_host->hid_activation_stage = 0u;
+                }
+            }
+            if (s_bt_host &&
+                s_bt_host->connection_state != BT_CONNECTION_DISCOVERING &&
+                s_bt_host->connection_state != BT_CONNECTION_BACKOFF)
+                bt_connection_set(s_bt_host, BT_CONNECTION_PASSIVE, 2000u);
             break;
 
         default:
             break;
     }
+}
+
+uint8_t bt_host_last_hid_status(void)
+{
+    return s_bt_host ? s_bt_host->last_hid_status : 0u;
+}
+
+bool bt_host_recovery_discovery_active(const BTHost *bt)
+{
+    return bt && bt->connection_state == BT_CONNECTION_DISCOVERING &&
+           bt->discovery_started;
+}
+
+void bt_host_claim_recovery_discovery(BTHost *bt)
+{
+    if (!bt_host_recovery_discovery_active(bt))
+        return;
+    bt->discovery_started = false;
+    bt_connection_set(bt, BT_CONNECTION_PASSIVE, 0u);
+    bt_diag_log("[BT-CM] F11 claimed recovery discovery session\n");
 }
 
 bool bt_host_init(BTHost *bt) {
@@ -680,6 +976,23 @@ bool bt_host_init(BTHost *bt) {
     bt->pairing_window_open = false;
     bt->phase1_complete = false;
     bt->hci_ready = false;
+    bt->connection_deadline_ms = 0u;
+    bt->pending_hid_cid = 0u;
+    bt->connection_state = BT_CONNECTION_WAIT_STACK;
+    bt->recovery_direct_attempts = 0u;
+    bt->hid_activation_stage = 0u;
+    bt->hid_activation_cid = 0u;
+    bt->discovery_started = false;
+    bt->mouse_connected = false;
+    bt->mouse_input_ready = false;
+    bt->hid_connect_pending = false;
+    bt->outgoing_reconnect_suspended = false;
+    bt->link_recovery_state = BT_LINK_RECOVERY_IDLE;
+    bt->link_recovery_reason = BT_LINK_RECOVERY_REASON_NONE;
+    bt->link_recovery_error_code = 0u;
+    bt->last_hid_status = 0u;
+    bt->hid_reports_received = 0u;
+    s_link_recoveries = 0u;
     bt->pairing_window_ms = BELLATRIX_BT_PAIRING_WINDOW_MS;
     bt->bootstrap_state = BT_BOOTSTRAP_IDLE;
     bt->power_cycle_attempts = 0;
@@ -709,9 +1022,8 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
     bt_diag_log("[BT] waiting for bootstrap window (%u ms)\n",
             (unsigned)(timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS));
 
-    /* 1s heartbeat with raw state-machine values — survives in the bt_diag
-     * RAM ring even when the console is handed to the controller, and is
-     * the primary clue when the bootstrap silently stalls. */
+    /* 1s heartbeat with state-machine and normal-IRQ telemetry. It is kept
+     * both in the RAM report and on the independent miniUART log. */
     uint32_t last_beat_ms = start_ms;
     uint32_t last_activity = bt_hal_raspi3_io_activity();
 
@@ -727,12 +1039,22 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
         }
         if (now_ms - last_beat_ms >= 1000u) {
             last_beat_ms = now_ms;
-            bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u hci=%u\n",
+            bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u "
+                        "hci=%u irq=%u unknown_irq=%u irq_bytes=%u ring=%u "
+                        "high=%u budget=%u ovf=%u uart_err=%u\n",
                         (unsigned)bt->bootstrap_state, (unsigned)now_ms,
                         (unsigned)bt->bootstrap_deadline_ms,
                         (unsigned)bt->init_deadline_ms,
                         (unsigned)bt->phase1_complete,
-                        (unsigned)bt->hci_ready);
+                        (unsigned)bt->hci_ready,
+                        (unsigned)bellatrix_physical_bt_irq_count(),
+                        (unsigned)bellatrix_physical_unknown_irq_count(),
+                        (unsigned)bt_hal_raspi3_irq_rx_bytes(),
+                        (unsigned)bt_hal_raspi3_rx_ring_used(),
+                        (unsigned)bt_hal_raspi3_rx_high_water(),
+                        (unsigned)bt_hal_raspi3_irq_rx_budget_hits(),
+                        (unsigned)bt_hal_raspi3_rx_overflow(),
+                        (unsigned)bt_hal_raspi3_uart_rx_errors());
         }
         if ((int32_t)(now_ms - deadline_ms) >= 0) {
             bt_diag_log("[BT] bootstrap wait timed out after %u ms\n",
@@ -760,47 +1082,102 @@ bool bt_host_is_working(const BTHost *bt)
 #define BT_LINK_STALL_MS 3000u
 #define BT_LINK_MAX_RECOVERIES 8u
 
-static uint32_t s_link_recoveries;
-
-static void bt_link_recover(BTHost *bt, const char *reason)
+static const char *bt_link_recovery_reason_name(const BTHost *bt)
 {
+    if (!bt)
+        return "unknown recovery";
+    switch ((BTLinkRecoveryReason)bt->link_recovery_reason) {
+        case BT_LINK_RECOVERY_REASON_HARDWARE_ERROR:
+            return "controller hardware error";
+        case BT_LINK_RECOVERY_REASON_TRANSPORT_ERROR:
+            return "transport overrun/error";
+        case BT_LINK_RECOVERY_REASON_CONTROLLER_SILENCE:
+            return "controller/device silence mid-H4";
+        case BT_LINK_RECOVERY_REASON_H4_DESYNC:
+            return "H4 protocol desync";
+        case BT_LINK_RECOVERY_REASON_CONTROLLER_MUTE:
+            return "controller mute (no HCI response)";
+        default:
+            return "unspecified link failure";
+    }
+}
+
+static void bt_link_recovery_request(BTHost *bt, BTLinkRecoveryReason reason,
+                                     uint8_t error_code)
+{
+    if (!bt || bt->link_recovery_state != BT_LINK_RECOVERY_IDLE)
+        return;
     if (s_link_recoveries >= BT_LINK_MAX_RECOVERIES) {
         bt_diag_log("[BT] %s, but recovery budget exhausted (%u)\n",
-                    reason, (unsigned)s_link_recoveries);
+                    bt_link_recovery_reason_name(bt),
+                    (unsigned)s_link_recoveries);
         return;
     }
+
+    bt->link_recovery_reason = (uint8_t)reason;
+    bt->link_recovery_error_code = error_code;
+    bt->link_recovery_state = BT_LINK_RECOVERY_REQUESTED;
     s_link_recoveries++;
-    bt_diag_log("[BT] %s - full power cycle %u/%u\n", reason,
-                (unsigned)s_link_recoveries, (unsigned)BT_LINK_MAX_RECOVERIES);
+    if (reason == BT_LINK_RECOVERY_REASON_HARDWARE_ERROR)
+        bt_diag_log("[BT] recovery requested: %s 0x%02x (%u/%u)\n",
+                    bt_link_recovery_reason_name(bt), (unsigned)error_code,
+                    (unsigned)s_link_recoveries,
+                    (unsigned)BT_LINK_MAX_RECOVERIES);
+    else
+        bt_diag_log("[BT] recovery requested: %s (%u/%u)\n",
+                    bt_link_recovery_reason_name(bt),
+                    (unsigned)s_link_recoveries,
+                    (unsigned)BT_LINK_MAX_RECOVERIES);
+}
 
-    /* Park the scan phase machine before touching the stack: its watchdog and
-     * LE timers would otherwise fire gap_inquiry_stop()/gap_stop_scan() during
-     * HCI re-initialisation, corrupting the init sequence and preventing the
-     * stack from ever reaching WORKING after the power cycle. */
-    bt_scan_notify_recovery();
+static void bt_link_recovery_step(BTHost *bt)
+{
+    if (!bt)
+        return;
 
-    /* Force the stack to OFF *synchronously*.  A single POWER_OFF from
-     * WORKING enters the graceful HALTING path, which needs answers from
-     * the (dead) chip and closes the transport asynchronously — last
-     * round that close landed mid PatchRAM upload and killed phase 1.
-     * Public-API workaround using btstack's own state machine:
-     *   OFF: WORKING → HALTING        (async, don't wait for it)
-     *   ON : HALTING → INITIALIZING   (immediate; resets num_cmd_packets,
-     *                                  freeing the stuck command slot)
-     *   OFF: INITIALIZING → OFF       (hci_power_control_off(): closes
-     *                                  the transport right here, sync)
-     * Same off/on pattern btstack itself uses on HCI_EVENT_HARDWARE_ERROR. */
-    hci_power_control(HCI_POWER_OFF);
-    hci_power_control(HCI_POWER_ON);
-    hci_power_control(HCI_POWER_OFF);
+    switch ((BTLinkRecoveryState)bt->link_recovery_state) {
+        case BT_LINK_RECOVERY_REQUESTED:
+            bt_scan_notify_recovery();
+            bt_pairing_window_close(bt);
+            bt->mouse_connected = false;
+            bt->mouse_input_ready = false;
+            bt->hid_connect_pending = false;
+            bt->pending_hid_cid = 0u;
+            bt->hid_activation_stage = 0u;
+            bt->hid_activation_cid = 0u;
+            bt_connection_set(bt, BT_CONNECTION_WAIT_STACK, 0u);
+            bt_diag_log("[BT-RECOVERY] phase 1/4: request HCI off\n");
+            hci_power_control(HCI_POWER_OFF);
+            bt->link_recovery_state = BT_LINK_RECOVERY_FORCE_INITIALIZING;
+            return;
 
-    bt_hal_raspi3_flush_rx();
-    /* Force phase 1 to run again and rewind the chipset init script so
-     * the PatchRAM upload starts from record zero. */
-    bt->phase1_complete = false;
-    bt->power_cycle_attempts = 0;
-    btstack_chipset_bcm_instance()->init(&bt_transport_config);
-    bt_begin_power_cycle(bt, "link recovery");
+        case BT_LINK_RECOVERY_FORCE_INITIALIZING:
+            bt_diag_log("[BT-RECOVERY] phase 2/4: release halted HCI state\n");
+            hci_power_control(HCI_POWER_ON);
+            bt->link_recovery_state = BT_LINK_RECOVERY_FORCE_OFF;
+            return;
+
+        case BT_LINK_RECOVERY_FORCE_OFF:
+            bt_diag_log("[BT-RECOVERY] phase 3/4: close HCI transport\n");
+            hci_power_control(HCI_POWER_OFF);
+            bt->link_recovery_state = BT_LINK_RECOVERY_PHYSICAL_RESET;
+            return;
+
+        case BT_LINK_RECOVERY_PHYSICAL_RESET:
+            bt_diag_log("[BT] recovery: reset controller and reload firmware\n");
+            bt_hal_raspi3_flush_rx();
+            bt->phase1_complete = false;
+            bt->power_cycle_attempts = 0u;
+            btstack_chipset_bcm_instance()->init(&bt_transport_config);
+            bt->link_recovery_state = BT_LINK_RECOVERY_IDLE;
+            bt->link_recovery_reason = BT_LINK_RECOVERY_REASON_NONE;
+            bt->link_recovery_error_code = 0u;
+            bt_begin_power_cycle(bt, "deferred link recovery");
+            return;
+
+        default:
+            return;
+    }
 }
 
 /* The chip can also confess on its own: HCI Hardware Error (evt 0x10).
@@ -808,24 +1185,19 @@ static void bt_link_recover(BTHost *bt, const char *reason)
  * PatchRAM upload — route it to the full recovery instead. */
 static void bt_hardware_error_callback(uint8_t error_code)
 {
-    char reason[48];
-    unsigned i = 0u;
-    static const char prefix[] = "hardware error 0x";
-    static const char hexd[] = "0123456789abcdef";
-
-    for (; prefix[i]; i++) reason[i] = prefix[i];
-    reason[i++] = hexd[(error_code >> 4) & 0xF];
-    reason[i++] = hexd[error_code & 0xF];
-    reason[i] = '\0';
-
     if (s_bt_host)
-        bt_link_recover(s_bt_host, reason);
+        bt_link_recovery_request(s_bt_host,
+                                 BT_LINK_RECOVERY_REASON_HARDWARE_ERROR,
+                                 error_code);
 }
 
 static void bt_link_watchdog(BTHost *bt)
 {
     static uint32_t stall_filled;
     static uint32_t stall_since_ms;
+    static uint32_t stall_overflow;
+    static uint32_t stall_uart_errors;
+    static uint32_t stall_activity;
     uint32_t filled, wanted, now_ms;
 
     if (bt->bootstrap_state != BT_BOOTSTRAP_WORKING || !bt->hci_ready)
@@ -841,30 +1213,253 @@ static void bt_link_watchdog(BTHost *bt)
     if (stall_since_ms == 0u || filled != stall_filled) {
         stall_filled = filled;
         stall_since_ms = now_ms;
+        stall_overflow = bt_hal_raspi3_rx_overflow();
+        stall_uart_errors = bt_hal_raspi3_uart_rx_errors();
+        stall_activity = bt_hal_raspi3_io_activity();
         return;
     }
     if (now_ms - stall_since_ms < BT_LINK_STALL_MS)
         return;
 
     stall_since_ms = 0u;
-    bt_diag_log("[BT] link stalled (rxq=%u/%u for %u ms)\n",
-                (unsigned)filled, (unsigned)wanted, (unsigned)BT_LINK_STALL_MS);
-    bt_link_recover(bt, "link stalled");
+    uint32_t overflow_delta = bt_hal_raspi3_rx_overflow() - stall_overflow;
+    uint32_t error_delta =
+        bt_hal_raspi3_uart_rx_errors() - stall_uart_errors;
+    uint32_t activity_delta = bt_hal_raspi3_io_activity() - stall_activity;
+    BTLinkRecoveryReason reason;
+    if (overflow_delta || error_delta)
+        reason = BT_LINK_RECOVERY_REASON_TRANSPORT_ERROR;
+    else if (activity_delta == 0u)
+        reason = BT_LINK_RECOVERY_REASON_CONTROLLER_SILENCE;
+    else
+        reason = BT_LINK_RECOVERY_REASON_H4_DESYNC;
+    bt_diag_log("[BT] link stalled class=%s rxq=%u/%u overflow+%u "
+                "uart_error+%u activity+%u\n",
+                reason == BT_LINK_RECOVERY_REASON_TRANSPORT_ERROR
+                    ? "transport" : reason == BT_LINK_RECOVERY_REASON_CONTROLLER_SILENCE
+                        ? "silence" : "H4 desync",
+                (unsigned)filled, (unsigned)wanted,
+                (unsigned)overflow_delta, (unsigned)error_delta,
+                (unsigned)activity_delta);
+    bt_link_recovery_request(bt, reason, 0u);
+}
+
+/* A complete controller mute leaves no partial H4 packet for the watchdog
+ * above. HCI traffic transmitted with no RX response for three seconds is a
+ * controller failure, unless PL011 still has bytes waiting in its FIFO (which
+ * instead proves a host-side IRQ/drain failure). */
+#define BT_CONTROLLER_MUTE_MS 3000u
+
+static void bt_controller_liveness(BTHost *bt)
+{
+    static uint32_t last_rx_total;
+    static uint32_t tx_at_last_rx;
+    static uint32_t mute_since_ms;
+
+    if (bt->bootstrap_state != BT_BOOTSTRAP_WORKING || !bt->hci_ready) {
+        last_rx_total = bt_hal_raspi3_io_rx();
+        tx_at_last_rx = bt_hal_raspi3_io_tx();
+        mute_since_ms = 0u;
+        return;
+    }
+
+    uint32_t rx = bt_hal_raspi3_io_rx();
+    uint32_t tx = bt_hal_raspi3_io_tx();
+    if (rx != last_rx_total) {
+        last_rx_total = rx;
+        tx_at_last_rx = tx;
+        mute_since_ms = 0u;
+        return;
+    }
+    if (tx == tx_at_last_rx) {
+        mute_since_ms = 0u;
+        return;
+    }
+
+    uint32_t now = bt_now_ms();
+    if (mute_since_ms == 0u) {
+        mute_since_ms = now;
+        return;
+    }
+    if (now - mute_since_ms < BT_CONTROLLER_MUTE_MS)
+        return;
+    mute_since_ms = 0u;
+
+    uint32_t fr = pl011_backend_flag_register();
+    bt_diag_log("[BT] controller mute: tx+%u rx=%u FR=%08x rxfe=%u "
+                "imsc=%08x irq_armed=%u irq_entries=%u\n",
+                (unsigned)(tx - tx_at_last_rx), (unsigned)rx, (unsigned)fr,
+                (unsigned)((fr >> 4) & 1u),
+                (unsigned)pl011_backend_irq_mask(),
+                bellatrix_physical_bt_irq_is_armed() ? 1u : 0u,
+                (unsigned)bellatrix_physical_bt_irq_count());
+    if ((fr & (1u << 4)) == 0u) {
+        bt_diag_log("[BT] RX FIFO non-empty during mute: host IRQ/drain "
+                    "fault; controller recovery suppressed\n");
+        return;
+    }
+    bt_link_recovery_request(bt, BT_LINK_RECOVERY_REASON_CONTROLLER_MUTE, 0u);
+}
+
+static void bt_connection_step(BTHost *bt)
+{
+    if (!bt || bt->bootstrap_state != BT_BOOTSTRAP_WORKING)
+        return;
+
+    uint32_t now = bt_now_ms();
+
+    switch (bt->connection_state) {
+        case BT_CONNECTION_WAIT_STACK:
+            return;
+
+        case BT_CONNECTION_ACTIVE:
+            /* Advance at most one HID control request per normal Core-3 tick,
+             * never from the connection event callback. */
+            if (bt->hid_activation_stage == 1u) {
+                uint8_t status =
+                    hid_host_send_exit_suspend(bt->hid_activation_cid);
+                bt_diag_log("[BT-HID] exit suspend cid=0x%04x "
+                            "status=0x%02x\n",
+                            (unsigned)bt->hid_activation_cid,
+                            (unsigned)status);
+                bt->hid_activation_stage = 2u;
+                return;
+            }
+            if (bt->hid_activation_stage == 2u) {
+                uint8_t status =
+                    hid_host_send_get_protocol(bt->hid_activation_cid);
+                bt_diag_log("[BT-HID] get protocol request cid=0x%04x "
+                            "status=0x%02x\n",
+                            (unsigned)bt->hid_activation_cid,
+                            (unsigned)status);
+                bt->hid_activation_stage = 0u;
+            }
+            return;
+
+        case BT_CONNECTION_PASSIVE:
+            if (bt->mouse_connected) {
+                bt_connection_set(bt, BT_CONNECTION_ACTIVE, 0u);
+                return;
+            }
+            if (bt->outgoing_reconnect_suspended ||
+                bt_pairs_count() == 0u ||
+                bt->connection_deadline_ms == 0u ||
+                (int32_t)(now - bt->connection_deadline_ms) < 0)
+                return;
+            bt_host_connect_pairs(bt);
+            return;
+
+        case BT_CONNECTION_CONNECTING:
+            if (bt->connection_deadline_ms != 0u &&
+                (int32_t)(now - bt->connection_deadline_ms) >= 0) {
+                uint16_t cid = bt->pending_hid_cid;
+                bt->pending_hid_cid = 0u;
+                bt->hid_connect_pending = false;
+                if (cid != 0u)
+                    hid_host_disconnect(cid);
+                bt_diag_log("[BT-CM] HID connection timed out: "
+                            "cid=0x%04x\n", (unsigned)cid);
+                bt_connection_set(bt, BT_CONNECTION_DISCOVERING, 0u);
+            }
+            return;
+
+        case BT_CONNECTION_DISCOVERING:
+            if (!bt->discovery_started) {
+                bt->discovery_started = true;
+                bt_pairing_window_open(bt);
+                bt_scan_start();
+                bt_connection_set(bt, BT_CONNECTION_DISCOVERING, 30000u);
+                bt_diag_log("[BT-CM] recovery discovery started\n");
+            }
+            for (unsigned i = 0u; i < bt_scan_count(); i++) {
+                const BTScanResult *r = bt_scan_get(i);
+                if (!r || !r->hid || !bt_pairs_is_known(r->addr) ||
+                    bt_pairs_classify(r) != BT_PAIRS_TYPE_MOUSE)
+                    continue;
+                bt_diag_log("[BT-CM] saved mouse rediscovered: %s\n",
+                            r->name[0] ? r->name : "(no name)");
+                bt_scan_stop();
+                bt->discovery_started = false;
+                bt_pairing_window_close(bt);
+                bt_connection_set(bt, BT_CONNECTION_PASSIVE, 1u);
+                return;
+            }
+            if (bt->connection_deadline_ms != 0u &&
+                (int32_t)(now - bt->connection_deadline_ms) >= 0) {
+                bt_scan_stop();
+                bt->discovery_started = false;
+                bt_pairing_window_close(bt);
+                bt_connection_set(bt, BT_CONNECTION_BACKOFF, 60000u);
+                bt_diag_log("[BT-CM] recovery discovery expired; passive "
+                            "reconnect remains armed\n");
+            }
+            return;
+
+        case BT_CONNECTION_BACKOFF:
+            if (bt->connection_deadline_ms != 0u &&
+                (int32_t)(now - bt->connection_deadline_ms) >= 0)
+                bt_connection_set(bt, BT_CONNECTION_PASSIVE, 2000u);
+            return;
+
+        default:
+            bt_connection_set(bt, BT_CONNECTION_WAIT_STACK, 0u);
+            return;
+    }
 }
 
 void bt_host_step(BTHost *bt) {
+    static uint32_t transport_diag_at_ms;
+    static uint32_t last_reactor_rx_bytes;
+    static uint32_t last_reactor_rx_completions;
+    static uint32_t last_reactor_rx_budget_hits;
     if (!bt || !bt->enabled) return;
 
-    bt_bootstrap_step(bt);
+    if (bt->link_recovery_state != BT_LINK_RECOVERY_IDLE)
+        bt_link_recovery_step(bt);
+    else
+        bt_bootstrap_step(bt);
 
-    // Poll UART HAL (simulates interrupts)
+    // Drain/rearm the normal-IRQ-owned UART transport from Core 3.
     bt_hal_raspi3_poll_uart();
 
     // Execute run loop tasks
     btstack_run_loop_embedded_execute_once();
 
-    // Detect and recover a desynced/dead H4 link
-    bt_link_watchdog(bt);
+    if (bt->link_recovery_state == BT_LINK_RECOVERY_IDLE) {
+        bt_link_watchdog(bt);
+        bt_controller_liveness(bt);
+        if (bt->link_recovery_state == BT_LINK_RECOVERY_IDLE)
+            bt_connection_step(bt);
+    }
+
+    if (transport_diag_at_ms == 0u ||
+        (int32_t)(bt_now_ms() - transport_diag_at_ms) >= 0) {
+        uint32_t rx_bytes = bt_hal_raspi3_reactor_rx_bytes();
+        uint32_t rx_completions = bt_hal_raspi3_reactor_rx_completions();
+        uint32_t rx_budget_hits = bt_hal_raspi3_reactor_rx_budget_hits();
+        transport_diag_at_ms = bt_now_ms() + 10000u;
+        bt_diag_log("[BT-IRQ] entries=%u bytes=%u budget_hit=%u ring=%u "
+                    "high=%u overflow=%u uart_err=%u(fe=%u pe=%u be=%u "
+                    "oe=%u)\n",
+                    (unsigned)bellatrix_physical_bt_irq_count(),
+                    (unsigned)bt_hal_raspi3_irq_rx_bytes(),
+                    (unsigned)bt_hal_raspi3_irq_rx_budget_hits(),
+                    (unsigned)bt_hal_raspi3_rx_ring_used(),
+                    (unsigned)bt_hal_raspi3_rx_high_water(),
+                    (unsigned)bt_hal_raspi3_rx_overflow(),
+                    (unsigned)bt_hal_raspi3_uart_rx_errors(),
+                    (unsigned)bt_hal_raspi3_uart_rx_framing_errors(),
+                    (unsigned)bt_hal_raspi3_uart_rx_parity_errors(),
+                    (unsigned)bt_hal_raspi3_uart_rx_break_errors(),
+                    (unsigned)bt_hal_raspi3_uart_rx_overrun_errors());
+        bt_diag_log("[BT-REACTOR-RX] bytes=%u completions=%u budget_hit=%u\n",
+                    (unsigned)(rx_bytes - last_reactor_rx_bytes),
+                    (unsigned)(rx_completions - last_reactor_rx_completions),
+                    (unsigned)(rx_budget_hits - last_reactor_rx_budget_hits));
+        last_reactor_rx_bytes = rx_bytes;
+        last_reactor_rx_completions = rx_completions;
+        last_reactor_rx_budget_hits = rx_budget_hits;
+    }
 }
 
 void bt_host_shutdown(BTHost *bt) {
@@ -879,6 +1474,10 @@ void bt_host_shutdown(BTHost *bt) {
     bt->bootstrap_deadline_ms = 0;
     bt->init_deadline_ms = 0;
     bt->hci_ready = false;
+    bt->mouse_connected = false;
+    bt->mouse_input_ready = false;
+    bt->hid_connect_pending = false;
+    bt->link_recovery_state = BT_LINK_RECOVERY_IDLE;
     s_bt_host = NULL;
 }
 #else
@@ -892,6 +1491,22 @@ bool bt_host_init(BTHost *bt) {
     bt->pairing_window_open = false;
     bt->phase1_complete = false;
     bt->hci_ready = false;
+    bt->connection_deadline_ms = 0u;
+    bt->pending_hid_cid = 0u;
+    bt->connection_state = BT_CONNECTION_WAIT_STACK;
+    bt->recovery_direct_attempts = 0u;
+    bt->hid_activation_stage = 0u;
+    bt->hid_activation_cid = 0u;
+    bt->discovery_started = false;
+    bt->mouse_connected = false;
+    bt->mouse_input_ready = false;
+    bt->hid_connect_pending = false;
+    bt->outgoing_reconnect_suspended = false;
+    bt->link_recovery_state = BT_LINK_RECOVERY_IDLE;
+    bt->link_recovery_reason = BT_LINK_RECOVERY_REASON_NONE;
+    bt->link_recovery_error_code = 0u;
+    bt->last_hid_status = 0u;
+    bt->hid_reports_received = 0u;
     bt->baudrate = 0;
     bt->pairing_window_ms = 0;
     bt->bootstrap_state = 0;
@@ -915,6 +1530,27 @@ bool bt_host_is_working(const BTHost *bt) {
 void bt_host_connect_pairs(BTHost *bt) {
     (void)bt;
 }
+
+void bt_host_close_pairing_window(BTHost *bt) { (void)bt; }
+void bt_host_open_pairing_window(BTHost *bt) { (void)bt; }
+void bt_host_set_outgoing_reconnect_suspended(BTHost *bt, bool suspended)
+{
+    (void)bt;
+    (void)suspended;
+}
+void bt_host_prepare_explicit_pairing(BTHost *bt, const uint8_t addr[6])
+{
+    (void)bt;
+    (void)addr;
+}
+bool bt_host_mouse_connected(void) { return false; }
+uint8_t bt_host_last_hid_status(void) { return 0u; }
+bool bt_host_recovery_discovery_active(const BTHost *bt)
+{
+    (void)bt;
+    return false;
+}
+void bt_host_claim_recovery_discovery(BTHost *bt) { (void)bt; }
 
 void bt_host_step(BTHost *bt) {
     (void)bt;

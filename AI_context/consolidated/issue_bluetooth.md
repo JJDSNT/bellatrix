@@ -1,5 +1,10 @@
 # Issue: Bluetooth — BCM43430A1 (Pi 3B On-Board)
 
+> Nota arquitetural (2026-07-15): a topologia descrita abaixo é histórica.
+> `ISSUE-0058` prevalece: Emu68 permanece no Core 0; Bluetooth usa IRQ normal,
+> nunca FIQ; AUX miniUART é log desde o primeiro estágio e PL011 é Bluetooth
+> desde o primeiro estágio, sem route switching ou handoff de console.
+
 ## Status: EM PROGRESSO (2026-06-26)
 
 Scanning HID funcionando em hardware (launcher exibe dispositivos). Pairing e
@@ -23,8 +28,8 @@ para uso como canal de input alternativo. Investigado no Sprint 30.
   3. H5 main transport setup
 - Migração de mini-UART para **PL011** (UART0) como transport Bluetooth
   (evidência de que mini-UART não é a seleção correta para Pi 3B BT)
-- PL011 route switching: console header ↔ BT internal path
-- UART trace dump em memória (para observar fase 1 mesmo com console handoff)
+- PL011 dedicado ao caminho BT interno; AUX miniUART dedicado ao log
+- UART trace dump em memória para diagnóstico persistente
 - `BT_REG_EN` reset + settle
 
 ### Observações em Hardware
@@ -38,7 +43,7 @@ para uso como canal de input alternativo. Investigado no Sprint 30.
 ### Hipóteses Não Validadas
 
 - Pi 3B Bluetooth pode precisar de handling adicional de clock ou routing interno
-  além do simples pin mux PL011 handoff
+  além do pin mux PL011 dedicado
 - Clocking assumptions da firmware RPi vs DT (`/chosen/...`) podem diferir da
   configuração Bellatrix bare-metal
 - H5 transport setup (fase 3) não foi alcançado
@@ -61,5 +66,5 @@ requer o protocolo propietário BCM.
 
 ## Arquivos Relevantes
 - `src/io/bluetooth/` — stack BTstack port
-- `src/host/raspi3/pl011_backend.c` — PL011 com route switching BT/console
+- `src/host/raspi3/pl011_backend.c` — PL011 dedicado ao Bluetooth
 - Script de build: `BELLATRIX_BT=1` (toggle, se existir)

@@ -37,8 +37,7 @@ void bt_diag_log(const char *fmt, ...)
     if (line[n - 1] != '\n')
         ring_put("\n", 1u);
 
-    /* Mirror to the console while it is still ours (kprintf no-ops once the
-     * PL011 is handed to the BT controller). */
+    /* The log owns AUX miniUART throughout boot; PL011 ownership is unrelated. */
     kprintf("%s", line);
 }
 

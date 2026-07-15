@@ -17,7 +17,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL="$ROOT/emu68/install-bellatrix"
+INSTALL="$ROOT/emu68/install-bellatrix-rigel"
 IMAGE="$INSTALL/Emu68.img"
 DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
 TIMEOUT="${TIMEOUT:-10}"
@@ -42,9 +42,12 @@ QEMU_ARGS=(
     -M raspi3b
     -kernel "$IMAGE"
     -dtb "$DTB"
+    # PL011/UART0 is owned by Bluetooth from the first stage. QEMU exposes
+    # AUX miniUART as the second serial device, which is Bellatrix's log.
+    -serial null
     -serial stdio
     -display none
-    -append "console=ttyAMA0"
+    -append "console=ttyS0"
 )
 
 if [ -n "${KICKSTART:-}" ]; then

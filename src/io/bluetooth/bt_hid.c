@@ -1,5 +1,7 @@
 #include "io/bluetooth/bt_hid.h"
+#include "io/bluetooth/bt_diag.h"
 #include "io/hid/hid_amiga_map.h"
+#include "io/hid/hid_router.h"
 #include "machine/machine.h"
 #include <string.h>
 
@@ -11,7 +13,14 @@ typedef struct {
     uint8_t  modifiers;
     uint8_t  keys[6];
     uint8_t  mouse_buttons;
+    uint8_t  mouse_report_layout;
 } BTHIDConn;
+
+enum {
+    BT_MOUSE_LAYOUT_UNKNOWN = 0,
+    BT_MOUSE_LAYOUT_BOOT_8,
+    BT_MOUSE_LAYOUT_ID1_16LE,
+};
 
 static BTHIDConn s_conns[BT_HID_MAX_CONNS];
 static unsigned  s_conn_count;
@@ -49,14 +58,12 @@ static void free_conn(uint16_t hid_cid)
     }
 }
 
-static void emit_key(uint8_t usage, bool pressed)
+static void emit_key(uint16_t hid_cid, uint8_t usage, bool pressed)
 {
-    uint8_t rawkey;
-    if (!hid_usage_to_amiga_raw(usage, &rawkey)) return;
-    bellatrix_machine_keyboard_rawkey(rawkey, pressed ? 1 : 0);
+    hid_router_key(HID_INPUT_BLUETOOTH, hid_cid, usage, pressed);
 }
 
-static void emit_modifier_changes(uint8_t prev, uint8_t cur)
+static void emit_modifier_changes(uint16_t hid_cid, uint8_t prev, uint8_t cur)
 {
     static const struct { uint8_t mask; uint8_t usage; } mods[] = {
         { HID_AMIGA_MOD_LCTRL,  0xE0u }, { HID_AMIGA_MOD_LSHIFT, 0xE1u },
@@ -67,7 +74,7 @@ static void emit_modifier_changes(uint8_t prev, uint8_t cur)
     for (unsigned i = 0u; i < 8u; i++) {
         bool was = (prev & mods[i].mask) != 0u;
         bool is  = (cur  & mods[i].mask) != 0u;
-        if (was != is) emit_key(mods[i].usage, is);
+        if (was != is) emit_key(hid_cid, mods[i].usage, is);
     }
 }
 
@@ -89,41 +96,95 @@ void bt_hid_handle_keyboard_report(uint16_t hid_cid,
     uint8_t modifier = data[0];
     const uint8_t *keys = data + 2u; /* skip reserved byte */
 
-    emit_modifier_changes(c->modifiers, modifier);
+    /* Boot-protocol error report (ErrorRollOver/POSTFail/ErrorUndefined in
+     * the key array): ignore instead of diffing phantom key events. */
+    for (unsigned i = 0u; i < 6u; i++)
+        if (keys[i] >= 0x01u && keys[i] <= 0x03u) return;
+
+    emit_modifier_changes(hid_cid, c->modifiers, modifier);
 
     for (unsigned i = 0u; i < 6u; i++) {
         uint8_t u = c->keys[i];
-        if (u && !report_contains(keys, u)) emit_key(u, false);
+        if (u && !report_contains(keys, u)) emit_key(hid_cid, u, false);
     }
     for (unsigned i = 0u; i < 6u; i++) {
         uint8_t u = keys[i];
-        if (u && !report_contains(c->keys, u)) emit_key(u, true);
+        if (u && !report_contains(c->keys, u)) emit_key(hid_cid, u, true);
     }
 
     c->modifiers = modifier;
     memcpy(c->keys, keys, 6u);
 }
 
-/* Boot protocol mouse report: byte0=buttons, byte1=xdisp(signed), byte2=ydisp(signed) */
+static bool decode_mouse_report(BTHIDConn *c, const uint8_t *data, uint16_t len,
+                                uint8_t *buttons_out, int *dx_out, int *dy_out)
+{
+    if (!c || !data || !buttons_out || !dx_out || !dy_out)
+        return false;
+
+    uint8_t layout = c->mouse_report_layout;
+    if (layout == BT_MOUSE_LAYOUT_UNKNOWN) {
+        if (len >= 7u && data[0] == 0x01u)
+            layout = BT_MOUSE_LAYOUT_ID1_16LE;
+        else if (len >= 3u)
+            layout = BT_MOUSE_LAYOUT_BOOT_8;
+        else
+            return false;
+        c->mouse_report_layout = layout;
+        bt_diag_log("[BT] mouse report layout: %s\n",
+                    layout == BT_MOUSE_LAYOUT_ID1_16LE
+                        ? "id1/buttons/x16le/y16le"
+                        : "boot/buttons/x8/y8");
+    }
+
+    if (layout == BT_MOUSE_LAYOUT_ID1_16LE) {
+        if (len < 7u || data[0] != 0x01u)
+            return false;
+        uint16_t x_raw = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+        uint16_t y_raw = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+        *buttons_out = data[1] & 0x07u;
+        *dx_out = (int)(int16_t)x_raw;
+        *dy_out = (int)(int16_t)y_raw;
+        return true;
+    }
+
+    if (len < 3u)
+        return false;
+    *buttons_out = data[0] & 0x07u;
+    *dx_out = (int)(int8_t)data[1];
+    *dy_out = (int)(int8_t)data[2];
+    return true;
+}
+
+/* Decode boot reports and the report-ID/16-bit layout observed on Classic
+ * HID mice whose descriptor is unavailable. */
 void bt_hid_handle_mouse_report(uint16_t hid_cid,
                                 const uint8_t *data, uint16_t len)
 {
-    if (!data || len < 3u) return;
+    if (!data || len == 0u) return;
     BTHIDConn *c = find_or_alloc_conn(hid_cid);
     if (!c) return;
 
-    uint8_t buttons = data[0] & 0x07u;
-    int dx = (int)(int8_t)data[1];
-    int dy = (int)(int8_t)data[2];
+    uint8_t buttons;
+    int dx;
+    int dy;
+    if (!decode_mouse_report(c, data, len, &buttons, &dx, &dy)) {
+        bt_diag_log("[BT-HID] ignored mouse report cid=0x%04x len=%u "
+                    "id=0x%02x layout=%u\n",
+                    (unsigned)hid_cid, (unsigned)len, (unsigned)data[0],
+                    (unsigned)c->mouse_report_layout);
+        return;
+    }
 
     if (dx || dy)
-        bellatrix_machine_mouse_motion(0u, dx, dy);
+        hid_router_mouse_motion(HID_INPUT_BLUETOOTH, hid_cid, dx, dy);
 
     for (unsigned btn = 0u; btn < 3u; btn++) {
         int was = (c->mouse_buttons >> btn) & 1;
         int is  = (buttons >> btn) & 1;
         if (was != is)
-            bellatrix_machine_mouse_button(0u, btn, is);
+            hid_router_mouse_button(HID_INPUT_BLUETOOTH, hid_cid,
+                                    btn, is != 0);
     }
 
     c->mouse_buttons = buttons;
@@ -165,13 +226,15 @@ void bt_hid_release_all(uint16_t hid_cid)
     BTHIDConn *c = find_conn(hid_cid);
     if (!c) return;
 
-    emit_modifier_changes(c->modifiers, 0u);
+    emit_modifier_changes(hid_cid, c->modifiers, 0u);
     for (unsigned i = 0u; i < 6u; i++)
-        if (c->keys[i]) emit_key(c->keys[i], false);
+        if (c->keys[i]) emit_key(hid_cid, c->keys[i], false);
 
     for (unsigned btn = 0u; btn < 3u; btn++)
         if ((c->mouse_buttons >> btn) & 1u)
-            bellatrix_machine_mouse_button(0u, btn, 0);
+            hid_router_mouse_button(HID_INPUT_BLUETOOTH, hid_cid,
+                                    btn, false);
 
+    hid_router_device_disconnected(HID_INPUT_BLUETOOTH, hid_cid);
     free_conn(hid_cid);
 }

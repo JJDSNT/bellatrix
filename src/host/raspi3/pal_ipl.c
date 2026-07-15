@@ -6,8 +6,8 @@
 // before MainLoop() runs.  This is the same pointer used by ps32_protocol.c
 // in the PiStorm housekeeper (__m68k_state->INT.IPL = ...).
 //
-// Safe to call from Core 1 because __m68k_state always points to Core 0's
-// M68KState regardless of which core calls PAL_IPL_Set.
+// Safe for the Rigel owner on Core 2 to publish because __m68k_state points to
+// the Core 0 M68KState and the fields are observed asynchronously by MainLoop.
 //
 // PAL_IPL_Set also issues SEV so that Core 0 exits WFE (STOP instruction)
 // immediately when an interrupt becomes pending.
@@ -23,10 +23,13 @@ void PAL_IPL_Set(uint8_t ipl_level)
     struct M68KState *ctx = __m68k_state;
     if (!ctx) return;
     ctx->INT.IPL = ipl_level;
-    // ARM field is only for PiStorm GPIO async signal.
-    // Bellatrix reads INT.IPL directly; INT32 != 0 when IPL != 0, so the JIT
-    // loop wakes up without needing ARM to be set.
+#if !defined(BELLATRIX_EMU68_CORE0_REBASELINE) || \
+    !BELLATRIX_EMU68_CORE0_REBASELINE
+    /* Legacy Bellatrix treated ARM as an unused PiStorm signal. The Core 0
+     * rebaseline preserves it because a physical IRQ may have published
+     * level 6 concurrently with this software IPL update. */
     ctx->INT.ARM = 0;
+#endif
     asm volatile("dmb ish" ::: "memory");
     // SEV wakes Core 0 from WFE (STOP) so it sees the new IPL immediately.
     asm volatile("dsb sy\n\t" "sev\n" ::: "memory");
@@ -36,7 +39,10 @@ void PAL_IPL_Clear(void)
 {
     struct M68KState *ctx = __m68k_state;
     if (!ctx) return;
+#if !defined(BELLATRIX_EMU68_CORE0_REBASELINE) || \
+    !BELLATRIX_EMU68_CORE0_REBASELINE
     ctx->INT.ARM = 0;
+#endif
     ctx->INT.IPL = 0;
     asm volatile("dmb ish" ::: "memory");
 }

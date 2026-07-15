@@ -1,10 +1,11 @@
 // src/runtime/core_io.c
 //
-// Core 0 — supervisor and physical peripherals domain.
+// Physical peripherals reactor.
 //
 // Owns: USB host stack, Bluetooth host stack, physical UART and console drain.
 // Core 2 remains the sole owner of Rigel/Paula and exchanges serial bytes with
-// Core 0 through two SPSC queues. Core 3 is reserved for future RTG/AHI.
+// the reactor through two SPSC queues. In the conservative topology the
+// reactor runs on Core 3; Core 0 only executes bounded physical IRQ top halves.
 
 #include "runtime/core_io.h"
 #include "runtime/runtime.h"
@@ -16,6 +17,9 @@
 #include "debug/core_log.h"
 #include "host/pal.h"
 #include "host/raspi3/console_log.h"
+#ifdef BELLATRIX_LAUNCHER
+#include "launcher/launcher.h"
+#endif
 
 #define CORE_IO_SERIAL_QUEUE_SIZE 1024u
 #define CORE_IO_SERIAL_QUEUE_MASK (CORE_IO_SERIAL_QUEUE_SIZE - 1u)
@@ -140,7 +144,7 @@ static bool core_io_step_serial(RuntimeCoreIO *core)
         return true;
 
     /* Paula has strict priority over console logs. Peek first so FIFO-full
-     * leaves the byte queued for the next Core 0 pass. */
+     * leaves the byte queued for the next reactor pass. */
     while (serial_queue_peek(&s_serial_tx, &byte)) {
         if (!uart_host_send_byte(&core->machine->uart_host, byte)) {
             tx_empty = false;
@@ -196,7 +200,7 @@ bool core_io_open_debug_serial(RuntimeCoreIO *core)
     return false;
 }
 
-/* Called by Core 0's supervisor via bellatrix_runtime_io_step(). */
+/* Called by the currently assigned physical-I/O reactor core. */
 void core_io_step(RuntimeCoreIO *core, uint64_t now, uint64_t freq)
 {
     if (!core || !core->running) {
@@ -231,8 +235,10 @@ void core_io_step(RuntimeCoreIO *core, uint64_t now, uint64_t freq)
         update_max_u64(&core->usb_max_ticks, PAL_Time_ReadCounter() - start);
     }
 
-    /* Physical mini-UART belongs to Core 0 at runtime. Service Paula first;
-     * logs are lowest priority and only drain when no Paula byte is waiting. */
+    /* Physical mini-UART remains the diagnostic/Paula serial endpoint from
+     * early boot onward. Core 3 services it at runtime; logs are lowest
+     * priority and drain only when no Paula byte is waiting. PL011 is never
+     * handed over from Bluetooth. */
     bool serial_empty = true;
     if (pending & CORE_IO_EVENT_SERIAL) {
         uint64_t start = PAL_Time_ReadCounter();
@@ -288,10 +294,12 @@ void core_io_reactor_reset_stats(RuntimeCoreIO *core)
     core->dispatch_over_budget = 0u;
 }
 
-/* Strong definition — overrides the weak stub in pal_core.c. Called from
- * Core 0's supervisor (multicore) or PAL_Runtime_Poll (single-core). */
+/* Strong definition — overrides the weak stub in pal_core.c. */
 void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
     extern BellatrixRuntime g_runtime;
     core_io_step(&g_runtime.io, now, freq);
+#ifdef BELLATRIX_LAUNCHER
+    launcher_runtime_step();
+#endif
 }

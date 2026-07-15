@@ -21,6 +21,8 @@ option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellat
 set(BELLATRIX_MUSASHI_CPU "68040" CACHE STRING "Musashi CPU model for Bellatrix bare-metal: 68000, 68010, 68ec020, 68020, 68030, 68040")
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
 option(BELLATRIX_ENABLE_MULTICORE "Enable multicore runtime (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)" OFF)
+option(BELLATRIX_EMU68_CORE0_REBASELINE
+    "Keep the Emu68 JIT and its native exception contract on Core 0" ON)
 option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO]" OFF)
 option(BELLATRIX_PROFILE "Enable MMIO profiling instrumentation (zero cost when OFF)" OFF)
 option(BELLATRIX_COARSE_OBSERVABLE_DEADLINES
@@ -50,8 +52,15 @@ if(BELLATRIX_COARSE_OBSERVABLE_DEADLINES)
 endif()
 if(BELLATRIX_ENABLE_MULTICORE)
     add_compile_definitions(BELLATRIX_ENABLE_MULTICORE)
-    message(STATUS "[BUILD] Multicore: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved")
+    if(BELLATRIX_EMU68_CORE0_REBASELINE AND NOT BELLATRIX_USE_MUSASHI_CPU)
+        add_compile_definitions(BELLATRIX_EMU68_CORE0_REBASELINE=1)
+        message(STATUS "[BUILD] Multicore rebaseline: Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO")
+    else()
+        add_compile_definitions(BELLATRIX_EMU68_CORE0_REBASELINE=0)
+        message(STATUS "[BUILD] Multicore legacy: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved")
+    endif()
 else()
+    add_compile_definitions(BELLATRIX_EMU68_CORE0_REBASELINE=0)
     message(STATUS "[BUILD] Multicore: disabled (single-core mode)")
 endif()
 if(BELLATRIX_CORE_LOG)
@@ -64,6 +73,9 @@ list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src
     ${CMAKE_SOURCE_DIR}/../src/cpu
     ${CMAKE_SOURCE_DIR}/../src/host
+)
+list(APPEND BELLATRIX_SOURCES
+    ${CMAKE_SOURCE_DIR}/../src/io/hid/hid_router.c
 )
 # Rigel is THE Bellatrix chipset backend — not an option.
 # (BELLATRIX_USE_RIGEL_CHIPSET=1 stays defined because sources still #if on it.)
@@ -210,6 +222,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/audio/output.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/miniuart_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pl011_backend.c
+    ${CMAKE_SOURCE_DIR}/../src/host/raspi3/physical_interrupts.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/vc_mailbox.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/hdmi_audio.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/console_log.c
@@ -404,6 +417,9 @@ if(BELLATRIX_LAUNCHER)
     add_compile_definitions(BELLATRIX_LAUNCHER=1)
     list(APPEND BELLATRIX_SOURCES
         ${CMAKE_SOURCE_DIR}/../src/launcher/launcher.c
+        ${CMAKE_SOURCE_DIR}/../src/launcher/launcher_ui.c
+        ${CMAKE_SOURCE_DIR}/../src/launcher/media_selection.c
+        ${CMAKE_SOURCE_DIR}/../src/launcher/btscan.c
         ${CMAKE_SOURCE_DIR}/../src/launcher/launcher_input.c
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32.c
         ${CMAKE_SOURCE_DIR}/../src/storage/fat/fat32_lfn.c
