@@ -67,8 +67,8 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - `src/machine/bus/zorro3/zorro3.c` existe e Rigel o inicializa.
 - O bridge de CPU ainda trata endereços acima de `0x00ffffff` como open bus.
 - O caminho Musashi ainda mascara globalmente o endereço para 24 bits.
-- A base de boards foi reconciliada em `0x40000000`; `0x10000000` era uma
-  constante sem uso. A descoberta em `0xff000000` continua separada.
+- Emu68 não fixa base de board: usa o high word atribuído pelo guest e chama
+  `map()`. `0x40000000` é política AROS; `0x10000000` era constante sem uso.
 - Não há board Z3 Bellatrix funcional de ponta a ponta.
 - Boards nativas do Emu68 podem mapear Z3 pelo callback próprio; isso é um
   domínio separado e precisa convergir no lifecycle comum de regiões.
@@ -100,9 +100,10 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   rotas diretas; mantê-los apenas como compatibilidade durante a migração.
 - [x] Remover a máscara 24-bit redundante do backend Musashi de produto; o
   `CPU_ADDRESS_MASK` do próprio Musashi continua definindo 24/32 bits por CPU.
-- [x] Reconciliar a faixa de boards Z3 com a expansion.library AROS local.
-- [ ] Integrar a janela de descoberta `0xff000000` e o Super Buster ao
-  classificador esparso.
+- [x] Confirmar no Emu68 que a base Z3 é atribuída pelo guest e entregue a
+  `board->map()`, sem janela fixa no host.
+- [ ] Definir descoberta e validação de faixa por perfil, sem promover o mapa
+  específico do AROS a contrato universal.
 - [ ] Implementar Z3 Fast RAM `DIRECT` como primeiro caso, primeiro no contrato
   de backend e depois em Emu68/Musashi.
 - [ ] Medir antes de otimizar o hook; não validar em hardware sem autorização.
@@ -130,6 +131,8 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - 2026-07-15: removida a máscara global adicional do adapter Musashi. CPUs
   24-bit continuam mascaradas no core Musashi; 68020+/68040 chegam ao bridge
   com 32 bits e recebem open bus enquanto Z3 não estiver implementada.
-- 2026-07-15: referência AROS confirmou boards Z3 em
-  `0x40000000..0x7fffffff`, slots de 16 MiB, e descoberta em `0xff000000`.
-  Removidos `BELLATRIX_Z3_BASE=0x10000000` e `s_next_base`, ambos sem uso.
+- 2026-07-15: AROS foi inicialmente usado para concluir uma faixa fixa, mas a
+  revisão pelo Emu68 corrigiu essa interpretação. Emu68 aceita a base escrita
+  pelo guest em `$E80044` e a board faz `mmu_map()` diretamente. AROS permanece
+  apenas como caso de compatibilidade. `BELLATRIX_Z3_BASE=0x10000000` e
+  `s_next_base` continuam removidos por não participarem desse mecanismo.

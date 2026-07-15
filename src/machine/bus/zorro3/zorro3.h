@@ -12,15 +12,13 @@ extern "C" {
 
 /*
  * Zorro 3 boards use the same $E80000 config window as Z2 but with
- * er_Type bits 7-6 = 10. The base address is assigned via two writes:
+ * er_Type bits 7-6 = 10. The guest assigns the base through two writes:
  *   offset 0x44 (AC_OFF_Z3_HI): board_base[31:24]
  *   offset 0x48 (AC_OFF_BASE_HI): board_base[23:16]  (also triggers assignment)
- * Board windows live at $40000000–$7FFFFFFF.
+ *
+ * Do not impose an OS-specific allocation window here. Emu68 accepts the
+ * assigned 16-bit high word and lets the board map that address directly.
  */
-
-#define Z3_WINDOW_BASE  0x40000000u
-#define Z3_WINDOW_END   0x7FFFFFFFu
-#define Z3_SLOT_SIZE    0x01000000u
 
 typedef struct BellatrixZorro3BoardOps {
     void    (*reset)(void *userdata);

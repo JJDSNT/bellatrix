@@ -517,9 +517,9 @@ feita no momento do mapeamento da placa, não por uma máscara global de endere�
 Bellatrix ainda não possui suporte Z3 funcional. O código existente é
 infraestrutura parcial e contraditória, não um contrato a preservar:
 
-- a divergência de base foi resolvida em 2026-07-15: boards usam
-  `0x40000000..0x7fffffff`; a constante sem uso de `0x10000000` foi removida e
-  a descoberta Z3 em `0xff000000` permanece um domínio separado;
+- a constante sem uso de `0x10000000` foi removida, mas Emu68 não fixa uma
+  faixa de board: aceita o high word escrito em `$E80044` e chama `map()`;
+  `0x40000000..0x7fffffff` é apenas política observada no AROS local;
 - `memory_map_decode()` reduz o endereço a 24 bits antes da classificação;
 - `cpu_bridge.c` rejeita todo endereço acima de `0x00ffffff` como open bus;
 - a state machine Z3 atual oferece callbacks byte a byte, mas não instala o

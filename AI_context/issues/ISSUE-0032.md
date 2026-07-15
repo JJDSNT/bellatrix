@@ -58,9 +58,9 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 
 - `memory_map_decode()` e backends possuem normalização global de 24 bits;
 - `cpu_bridge.c` classifica todo endereço de 32 bits como Z3 não implementada;
-- a antiga constante sem uso `BELLATRIX_Z3_BASE=0x10000000` foi removida; a
-  faixa de boards foi reconciliada em `0x40000000..0x7fffffff`, mas a janela de
-  descoberta `0xff000000` ainda precisa entrar no classificador;
+- a antiga constante sem uso `BELLATRIX_Z3_BASE=0x10000000` foi removida;
+  `0x40000000..0x7fffffff` é política observada no AROS, não requisito Emu68;
+  descoberta e faixa válida precisam ser definidas pelo contrato de perfil;
 - a conclusão da Autoconfig não possui callback comum de map/unmap por backend;
 - callbacks byte a byte atuais não distinguem memória direta de registradores;
 - ainda não existe board Z3 funcional registrada no runtime Bellatrix.

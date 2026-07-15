@@ -178,7 +178,7 @@ void bellatrix_zorro3_config_write8(uint32_t addr, uint8_t value)
     } else if (off == AC_OFF_BASE_HI) {
         b->base       = ((uint32_t)b->hi_byte << 24) | ((uint32_t)value << 16);
         b->configured = 1;
-        if (b->base == 0 || b->base < Z3_WINDOW_BASE) {
+        if (b->base == 0) {
             /* Kickstart shuts up boards it can't map by writing 0 */
             b->shutup = 1;
             kprintf("[Z3] board '%s' shutup (base=0)\n",

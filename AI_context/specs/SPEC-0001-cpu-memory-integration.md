@@ -99,11 +99,17 @@ aplicada neste domínio, depois que a região foi classificada.
 contígua, inclusive uma região direta de RAM/ROM/VRAM e páginas externas de
 registradores.
 
-A faixa canônica de boards Z3 é `0x40000000..0x7fffffff`, em slots de 16 MiB,
-coerente com `EZ3_CONFIGAREA`, `EZ3_CONFIGAREAEND` e o allocator da
-expansion.library AROS local. `0x10000000` era uma constante Bellatrix sem uso e
-foi removida. A janela especial de descoberta Z3 em `0xff000000` é um domínio
-de Autoconfig, não a base de uma board configurada.
+O Emu68 não fixa uma faixa canônica de boards Z3. `vectors.c` recebe em
+`$E80044` o high word escolhido pelo guest, calcula `map_base = value << 16` e
+chama `board->map()`. As boards então instalam ROM/dados diretamente com
+`mmu_map()`. Portanto Bellatrix não deve impor a política de alocação de uma
+expansion.library específica.
+
+O AROS local escolhe `0x40000000..0x7fffffff` em slots de 16 MiB e conhece uma
+janela em `0xff000000`; isso é evidência de compatibilidade, não fonte
+normativa. A antiga constante Bellatrix `0x10000000`, sem uso, continua
+removida. A faixa aceita será consequência dos descritores, alinhamento,
+ausência de sobreposição e capacidade de `map()` do backend.
 
 # Tipos de região
 
