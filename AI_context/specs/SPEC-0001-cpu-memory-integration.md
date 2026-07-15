@@ -186,7 +186,9 @@ consultado pelo callback de memória; ele não é copiado nem roteado por Rigel.
 
 A reserva deve ocorrer antes de qualquer `mmu_map()` que possa pedir novas
 páginas de tabela, porque o allocator do Emu68 também reduz o topo de
-`sys_memory`. Falha de reserva ou mapping não pode avançar o Autoconfig.
+`sys_memory`. Falha de reserva ou mapping não pode avançar o Autoconfig. Essa
+reserva grande só é necessária se uma futura board RAM for escolhida; a primeira
+prova Z3 ROM usa backing já existente no binário.
 
 ## `EXTERNAL`
 
@@ -341,19 +343,19 @@ re-registro ou remoção chamam `unmap`. Validação de alinhamento, sobreposiç
 capacidade pertence ao `map()` do backend/descritor e ainda precisa ser
 implementada junto da primeira board `DIRECT`.
 
-Para uma Z3 Fast RAM de 128 MiB, o ROM de Autoconfig precisa declarar a forma
-Z3 estendida (tamanho base em `er_Type` e `ERFF_EXTENDED` em `er_Flags`). Os
-códigos Z2 de 64 KiB–8 MiB não podem ser reutilizados isoladamente para inferir
-esse tamanho.
+Uma eventual Z3 Fast RAM de 128 MiB precisaria declarar a forma Z3 estendida
+(tamanho base em `er_Type` e `ERFF_EXTENDED` em `er_Flags`). Isso permanece
+pesquisa, não objetivo atual. O baseline segue o Emu68 e mantém Fast RAM Z2.
 
 # Ordem de implementação
 
 1. Separar endereço CPU 32-bit de normalização do barramento baixo.
 2. Definir descritor de região e callbacks backend `map/unmap`.
 3. Adaptar Z2 existente sem mudar seu comportamento observável.
-4. Implementar Z3 Fast RAM como primeiro caso `DIRECT`.
-5. Implementar regiões mistas somente após o caso RAM estar provado.
-6. Afinar o hot path `vectors.c -> hook -> Rigel` com perfil, preservando
+4. Provar uma Z3 ROM mínima/read-only como primeiro caso `DIRECT`.
+5. Preservar Fast RAM Z2 e só implementar Z3 RAM mediante requisito explícito.
+6. Implementar regiões mistas somente após o caso ROM estar provado.
+7. Afinar o hot path `vectors.c -> hook -> Rigel` com perfil, preservando
    sincronização temporal.
 
 # Critérios para tornar a spec `active`

@@ -16,6 +16,7 @@ related_files:
   - emu68/src/aarch64/start.c
   - src/cpu/emu68/bellatrix.c
   - src/cpu/cpu_bridge.c
+  - src/cpu/direct_region.c
   - src/machine/bus/zorro_autoconfig.c
   - src/machine/bus/zorro3/zorro3.c
   - scripts/setup.sh
@@ -111,10 +112,14 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   Z3 por palavra em `$E80044`.
 - [x] Introduzir o primeiro lifecycle transacional Z3 `map/unmap/reset`, com
   rollback de falha, ainda sem definir o mapping específico de cada backend.
+- [x] Materializar o registro esparso de regiões `DIRECT` usado somente no
+  lifecycle/Musashi, com validação de página, overlap e rollback do backend.
 - [ ] Definir descoberta e validação de faixa por perfil, sem promover o mapa
   específico do AROS a contrato universal.
-- [ ] Implementar Z3 Fast RAM `DIRECT` como primeiro caso, primeiro no contrato
-  de backend e depois em Emu68/Musashi.
+- [ ] Provar o contrato `DIRECT` com uma board Z3 ROM mínima/read-only inspirada
+  nas boards nativas do Emu68, sem torná-la requisito do perfil de produto.
+- [ ] Preservar Fast RAM como Z2 no baseline Emu68; só reconsiderar Z3 RAM se
+  surgir um requisito independente de capacidade ou perfil.
 - [ ] Medir antes de otimizar o hook; não validar em hardware sem autorização.
 
 # Critérios de aceite
@@ -124,7 +129,8 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - Endereço CPU não sofre máscara global de 24 bits.
 - Emu68 e Musashi compartilham classificação e owners semânticos, sem
   compartilhar detalhes de exceção ARM ou depender de uma machine box.
-- Z2 não regride e a primeira Z3 Fast RAM é invisível antes de Autoconfig.
+- Z2 Fast RAM não regride e qualquer board Z3 de prova permanece invisível
+  antes de Autoconfig.
 - Nenhuma interface pública ou interna fixa Emu68 no Core 0.
 
 # Log
@@ -149,9 +155,19 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   que mantém Z2 primeiro e apresenta Z3 em seguida. O contrato Z3 agora usa a
   palavra escrita em `$E80044`, chama `map()` fora do hot path e desfaz mapping
   em reset/remoção. O teste de contrato cobre ordem, base guest-assigned,
-  rollback de `map()` e `unmap()`; ainda não existe uma board Z3 Fast RAM.
+  rollback de `map()` e `unmap()`; ainda não existe uma board Z3 Bellatrix
+  funcional de ponta a ponta.
 - 2026-07-15: a auditoria do primeiro `DIRECT` separou reserva de backing de
   mapping guest. Z3 RAM deve retirar backing do topo de `sys_memory` (e refletir
   a redução no device tree) antes de instalar MMU/bank. O heap TLSF local não é
   apropriado para dezenas de MiB, e o allocator de page tables precisa dividir
   o mesmo topo de forma ordenada.
+- 2026-07-15: prioridade corrigida após rever as boards nativas. O Emu68 usa
+  Z2 para Fast RAM; suas boards Z3 são ROMs read-only mapeadas diretamente.
+  Portanto Z3 Fast RAM deixou de ser objetivo presumido. A primeira prova Z3
+  deve ser uma ROM mínima e descartável, usada para validar o contrato sem
+  decidir a composição final do produto.
+- 2026-07-15: criado `cpu/direct_region` como contrato neutro de lifecycle.
+  Emu68 o usará somente para instalar/remover MMU; seu steady state não consulta
+  a tabela. Musashi poderá consultá-la nos callbacks. O teste cobre ROM
+  read-only, alinhamento, overlap, fronteira e rollback map/unmap.

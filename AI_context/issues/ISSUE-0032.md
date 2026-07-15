@@ -63,9 +63,6 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
   descoberta e faixa válida precisam ser definidas pelo contrato de perfil;
 - o callback comum de lifecycle Z3 `map/unmap` existe, mas ainda não há
   implementação de mapping `DIRECT` específica para Emu68 ou Musashi;
-- uma Fast RAM grande não cabe no TLSF local: falta reservar backing do topo de
-  `sys_memory`, atualizar o bloco/device tree e coordenar essa reserva com o
-  allocator de páginas MMU, que consome o mesmo topo;
 - callbacks byte a byte atuais não distinguem memória direta de registradores;
 - ainda não existe board Z3 funcional registrada no runtime Bellatrix.
 
@@ -77,16 +74,20 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
   pendente;
 - reset, re-registro e remoção chamam `unmap()`;
 - teste host cobre a cadeia Z2→Z3, base escolhida pelo guest, rollback e reset.
+- o registro `cpu/direct_region` valida mapping page-aligned, impede overlap e
+  só publica a região após sucesso do backend; falhas de unmap preservam estado.
 
 Isso fecha o sequenciamento e o esqueleto de lifecycle, mas não constitui
-suporte Z3: falta a primeira board Fast RAM e o mapping direto nos backends.
+suporte Z3: falta a board ROM de prova e o mapping direto nos backends.
 
-A auditoria do backing também confirmou que a identidade física criada por
-`start.c` não concede `MMU_ALLOW_EL0`. Isso permite manter a reserva acessível
-ao ARM e invisível ao 68k até Autoconfig; o `map()` da board instala a tradução
-guest com permissão EL0. Musashi deve registrar o mesmo buffer como região
+A auditoria de uma eventual board RAM também confirmou que a identidade física
+criada por `start.c` não concede `MMU_ALLOW_EL0`. Isso permite manter a reserva
+acessível ao ARM e invisível ao 68k até Autoconfig; o `map()` da board instala
+a tradução guest com permissão EL0. Musashi deve registrar o mesmo buffer como região
 direta. A API pública antiga já contém uma primitiva MMU semelhante, mas ela
 deve ser extraída para uma fronteira esparsa, não reutilizada como machine box.
+Esse trabalho de reserva não bloqueia a prova ROM atual; só volta à prioridade
+se uma Z3 RAM for escolhida explicitamente.
 
 # Objetivo revisado
 
@@ -95,8 +96,8 @@ deve ser extraída para uma fronteira esparsa, não reutilizada como machine box
 2. Definir lifecycle de board (`configure`, `map`, `unmap`, `reset`) e regiões
    declarativas (`DIRECT`, `EXTERNAL`, `UNMAPPED`).
 3. Fazer Autoconfig atribuir a base e pedir ao backend que instale as regiões.
-4. Implementar primeiro uma board Z3 Fast RAM direta; nenhum dispatch Rigel por
-   byte no steady state.
+4. Implementar primeiro uma board Z3 ROM mínima/read-only como prova do mapping
+   direto observado no Emu68; nenhum dispatch Rigel por byte no steady state.
 5. Espelhar a semântica no Musashi com bank/buffer 32-bit e no Emu68 com MMU.
 6. Só então implementar regiões mistas de RTG/VRAM e registradores.
 7. Validar futuramente KS3.1/AROS e cenário Z2+Z3; 68000 continua 24-bit.
@@ -109,5 +110,21 @@ deve ser extraída para uma fronteira esparsa, não reutilizada como machine box
 - Não rotear toda Z3 por `vectors.c` ou Rigel. Apenas páginas externas/MMIO.
 - Não chamar a infraestrutura atual de suporte Z3 antes de haver ao menos uma
   board registrada, configurada e mapeada de ponta a ponta.
-- Preset alvo (memory_model.md): AROS "moderno" = chip 2MB + Z3 128MB
-  (+ RTG, ver [[ISSUE-0033]])
+- Fast RAM do baseline permanece Z2, como em `emu68/src/boards/z2ram.c`.
+- O antigo preset AROS com Z3 128 MiB é cenário de pesquisa, não arquitetura
+  escolhida nem requisito para fechar esta issue.
+
+# Escolha do primeiro caso `DIRECT`
+
+As referências nativas do Emu68 separam claramente os casos:
+
+- `z2ram.c`: Fast RAM Z2, mapping identidade, read/write;
+- `sdcard.c`, `68040.c`, `emmc.c` e `unicam.c`: ROM Z3 read-only;
+- `devicetree.c`: ROM Z3 e dados adicionais, também read-only.
+
+Assim, a primeira prova Bellatrix deve usar uma ROM Z3 mínima e sem dependência
+funcional do sistema. Ela serve para provar Autoconfig, base escolhida pelo
+guest, `map/unmap`, proteção read-only e acesso direto nos dois backends. Depois
+da prova ela pode ser removida ou substituída por uma board realmente desejada.
+Não se deve reservar uma grande região de `sys_memory` antes de existir uma
+decisão explícita por Z3 RAM.

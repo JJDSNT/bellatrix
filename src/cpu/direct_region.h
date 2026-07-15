@@ -1,0 +1,66 @@
+#ifndef BELLATRIX_CPU_DIRECT_REGION_H
+#define BELLATRIX_CPU_DIRECT_REGION_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifndef BELLATRIX_DIRECT_REGION_CAPACITY
+#define BELLATRIX_DIRECT_REGION_CAPACITY 16u
+#endif
+
+#define BELLATRIX_DIRECT_PAGE_SIZE 0x1000u
+
+enum {
+    BELLATRIX_DIRECT_READ      = 1u << 0,
+    BELLATRIX_DIRECT_WRITE     = 1u << 1,
+    BELLATRIX_DIRECT_EXECUTE   = 1u << 2,
+    BELLATRIX_DIRECT_CACHEABLE = 1u << 3
+};
+
+typedef struct BellatrixDirectRegion {
+    uint32_t guest_base;
+    uint32_t size;
+    void *host_base;
+    uint32_t flags;
+} BellatrixDirectRegion;
+
+typedef struct BellatrixDirectRegionBackendOps {
+    int (*map)(void *opaque, const BellatrixDirectRegion *region);
+    int (*unmap)(void *opaque, const BellatrixDirectRegion *region);
+} BellatrixDirectRegionBackendOps;
+
+typedef struct BellatrixDirectRegionSlot {
+    BellatrixDirectRegion region;
+    uint8_t used;
+} BellatrixDirectRegionSlot;
+
+typedef struct BellatrixDirectRegionMap {
+    const BellatrixDirectRegionBackendOps *ops;
+    void *opaque;
+    BellatrixDirectRegionSlot slots[BELLATRIX_DIRECT_REGION_CAPACITY];
+} BellatrixDirectRegionMap;
+
+/* Lifecycle registry only. Emu68 installs these regions in its MMU and does
+ * not call find() for steady-state loads/stores. Musashi may use find() from
+ * its memory callbacks because it has no host MMU translation path. */
+
+void bellatrix_direct_region_map_init(
+    BellatrixDirectRegionMap *map,
+    const BellatrixDirectRegionBackendOps *ops,
+    void *opaque);
+
+int bellatrix_direct_region_install(
+    BellatrixDirectRegionMap *map,
+    const BellatrixDirectRegion *region);
+
+int bellatrix_direct_region_remove(
+    BellatrixDirectRegionMap *map,
+    uint32_t guest_base,
+    uint32_t size);
+
+const BellatrixDirectRegion *bellatrix_direct_region_find(
+    const BellatrixDirectRegionMap *map,
+    uint32_t address,
+    uint32_t access_size);
+
+#endif

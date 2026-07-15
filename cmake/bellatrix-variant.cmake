@@ -189,6 +189,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_bridge.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/direct_region.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/mmio_policy.c
     ${BELLATRIX_MACHINE_SOURCE}
     ${CMAKE_SOURCE_DIR}/../src/machine/expansion.c

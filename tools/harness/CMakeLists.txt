@@ -185,6 +185,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/machine_rigel_step.c
     ${SRC}/machine/expansion.c
     ${SRC}/cpu/cpu_bridge.c
+    ${SRC}/cpu/direct_region.c
     ${SRC}/plugin/plugin_loader.c
     ${SRC}/plugin/plugin_manifest.c
 
@@ -383,6 +384,15 @@ target_include_directories(bellatrix_unit_zorro_autoconfig PRIVATE
 target_compile_options(bellatrix_unit_zorro_autoconfig PRIVATE -Wall -Wextra -Werror)
 add_test(NAME bellatrix_unit_zorro_autoconfig
          COMMAND bellatrix_unit_zorro_autoconfig)
+
+add_executable(bellatrix_unit_direct_region
+    ${ROOT}/tests/unit/test_direct_region.c
+    ${SRC}/cpu/direct_region.c
+)
+target_include_directories(bellatrix_unit_direct_region PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_direct_region PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_direct_region
+         COMMAND bellatrix_unit_direct_region)
 
 # Pure host-testable protocol modules (no PAL, no machine dependencies).
 add_executable(bellatrix_unit_timeline
