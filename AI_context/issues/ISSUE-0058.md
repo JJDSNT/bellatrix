@@ -240,6 +240,13 @@ O fault handler e os slots de `vectors.c` não foram substituídos. O ELF manté
 os oito slots nos offsets arquiteturais `+0x000`, `+0x080`, `+0x100`,
 `+0x180`, `+0x200`, `+0x280`, `+0x300` e `+0x380`.
 
+## Escopo de validação vigente
+
+Por decisão do usuário em 2026-07-15, não executar validação em hardware real
+por enquanto. Os gates desta fase são exclusivamente build, inspeção do ELF,
+testes automatizados e QEMU. Imagem para Raspberry Pi 3B e testes físicos
+permanecem adiados até autorização explícita futura.
+
 ## Validação inicial do baseline
 
 - build cruzado Emu68/multicore/fault, USB/BT/launcher desligados: PASS;
@@ -377,7 +384,8 @@ selecionáveis depois que o baseline conservador estiver provado.
   - [ ] AROS em QEMU (smoke chega a `FNOP`/`FSAVE`, boot ainda não provado).
   - [ ] KS1.3 e KS3.1 em QEMU (ROMs não presentes neste worktree).
   - [ ] STOP/IRQ/FPU/Fast RAM e código mutável em testes dedicados.
-- [ ] Congelar essa imagem como referência de hardware Raspberry Pi 3B.
+- [ ] Hardware Raspberry Pi 3B: adiado por decisão do usuário; não executar
+  sem nova autorização explícita.
 
 ## P3 — IRQ Bluetooth alinhada
 
@@ -449,3 +457,5 @@ houver conflito.
   UDS/LDS e teste de Chip RAM com Core0=Emu68, Core2=Rigel e Core3=IO.
 - 2026-07-15: smoke AROS 1 MiB de 60 s alcançou JIT, OVL e `FNOP`/`FSAVE`;
   mantido como resultado parcial, não como boot ou validação de FPU.
+- 2026-07-15: validação em hardware real explicitamente retirada do escopo
+  atual pelo usuário; continuar somente com build, testes e QEMU.
