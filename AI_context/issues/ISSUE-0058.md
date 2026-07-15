@@ -133,6 +133,102 @@ Lógica interna de Agnus, Paula, CIA, Denise, scheduler, vídeo ou stacks físic
 não deve morar no vetor. Musashi e outros backends não devem fabricar Data
 Abort: chamam diretamente o mesmo serviço comum que o final de `vectors.c` usa.
 
+## 3.1. `vectors.c` como hook oficial Emu68 -> Bellatrix
+
+Para o Emu68, `vectors.c` é o ponto oficial de integração com a arquitetura
+Bellatrix. O hook substitui o destino PiStorm do fault handler pelo serviço
+síncrono do barramento emulado, sem substituir o mecanismo de fault nem mover
+o chipset para dentro do vetor:
+
+```text
+Emu68/JIT em página externa
+  -> Data Abort -> vectors.c -----------+
+                                         |
+Musashi/outro backend                    +-> bellatrix_external_bus_access()
+  -> classificação explícita ----------+       -> Rigel/chipset owner
+```
+
+O hook é a fronteira comum de transação externa. `vectors.c` é seu adaptador
+específico para Emu68; Musashi não deve simular um Data Abort nem depender da
+vector table ARM, chamando diretamente a implementação final do mesmo hook.
+Rigel permanece dono do estado de Agnus, Paula, Denise, CIA e demais
+dispositivos; o hook não duplica esse estado e não transforma `vectors.c` num
+chipset.
+
+A fronteira é usada somente para acessos que exigem semântica externa ou efeito
+colateral. RAM/ROM já mapeada não atravessa o serviço por byte/palavra.
+
+### Contrato de custo do hook
+
+O caminho normal não deve adicionar uma API genérica pesada sobre o handler:
+
+- uma chamada direta e com ABI pequena a partir de `SYSReadValFromAddr()` ou
+  `SYSWriteValToAddr()`;
+- classificação curta/especializada para as regiões que realmente faultam;
+- nenhum allocator, logger, BT/USB poll, scheduler ou dispatch de dispositivo
+  físico no hot path;
+- nenhum rendezvous cross-core para reads publicados ou writes seguramente
+  postáveis; sincronização permanece apenas onde a semântica observável exige;
+- tracing e profiling compilados fora do produto normal;
+- nenhuma passagem de Chip/Fast/Z3 RAM pelo hook.
+
+O código atual já possui a ligação direta `vectors.c -> bellatrix_bus_access`,
+mas ainda precisa ser afinado antes de virar contrato estável: faz poll de
+runtime no entry, normalização em mais de uma camada, atravessa
+`bellatrix_bus_access -> cpu_bridge -> machine_dispatch` e pode tomar lock ou
+esperar o Core 2 em acessos críticos. Alguns desses custos são instrumentação
+ou correção temporal legítima; a tarefa é medi-los e especializar o caminho,
+não remover sincronização por suposição.
+
+## 3.2. Matriz provisória do mapa de memória
+
+A leitura do Emu68 original estabelece uma distinção mais precisa que
+"24 bits versus 32 bits": páginas de memória podem ser diretas mesmo dentro do
+espaço baixo; páginas externas permanecem ausentes/protegidas para causar o
+fault.
+
+| Região após configuração | Caminho Emu68 | Caminho Musashi | Owner/serviço |
+|---|---|---|---|
+| Chip RAM e Fast RAM Z2 | `mmu_map`, load/store ARM | buffer direto | memória da máquina |
+| ROM/overlay | `mmu_map`/remapeamento | buffer/bank direto | memória da máquina |
+| custom, CIA e MMIO Amiga baixo | Data Abort + `vectors.c` | chamada explícita | Rigel |
+| janela `$E80000` de Autoconfig | Data Abort + `vectors.c` | chamada explícita | sequenciador Zorro |
+| RAM, ROM e VRAM Z3 configuradas | `mmu_map`, load/store ARM | região 32-bit direta | memória/board |
+| registradores Z3 com efeitos colaterais | política explícita por board; não presumir RAM | chamada explícita | dispositivo/board |
+| endereço não mapeado | open bus/bus error conforme perfil | mesma semântica comum | política da máquina |
+
+No Emu68 original, a escrita final de Autoconfig chama `board->map(board)` e
+as placas Z3 fornecidas chamam `mmu_map()` para expor diretamente sua ROM ou
+memória. Consequentemente, uma Z3 configurada normalmente não chega a
+`vectors.c`. O tratamento original de faults acima de `0x00ffffff` como
+open bus é evidência desse contrato: trata um fault inesperado, não implementa
+o datapath normal da Z3.
+
+Dispositivos Z3 não podem ser generalizados todos como RAM. Uma janela
+puramente armazenável deve ser direta; páginas de registradores com efeitos
+colaterais precisam de uma política por board (fault fino no Emu68 e serviço
+comum, ou outra representação explicitamente demonstrada). A decisão deve ser
+feita no momento do mapeamento da placa, não por uma máscara global de endereço.
+
+## 3.3. Estado real do suporte Z3 Bellatrix
+
+Bellatrix ainda não possui suporte Z3 funcional. O código existente é
+infraestrutura parcial e contraditória, não um contrato a preservar:
+
+- `zorro3.h` declara janela a partir de `0x40000000`, enquanto `memory.h`
+  ainda declara `BELLATRIX_Z3_BASE=0x10000000`;
+- `memory_map_decode()` reduz o endereço a 24 bits antes da classificação;
+- `cpu_bridge.c` rejeita todo endereço acima de `0x00ffffff` como open bus;
+- a state machine Z3 atual oferece callbacks byte a byte, mas não instala o
+  mapeamento direto ao concluir Autoconfig;
+- não há board Z3 funcional registrada pelo runtime atual.
+
+Portanto ISSUE-0032 deve primeiro definir o contrato de mapping/unmapping de
+boards e separar espaços de endereço, antes de completar a state machine ou
+adicionar Fast RAM/RTG. Não se deve simplesmente retirar a máscara de 24 bits:
+ela ainda expressa wrap válido do perfil 68000/barramento baixo, mas está no
+nível errado para um decoder universal de 32 bits.
+
 ## 4. IRQ Bluetooth e FIQ
 
 Bluetooth deve usar IRQ ARM normal. Antes de habilitá-la é obrigatório entender:
