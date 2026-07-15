@@ -24,6 +24,9 @@ void pl011_backend_close(PL011Backend *b);
 bool pl011_backend_is_open(const PL011Backend *b);
 
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out);
+/* Read DR once and expose PL011 DR[11:8] as FE/PE/BE/OE in bits [0:3]. */
+bool pl011_backend_read_byte_ex(PL011Backend *b, uint8_t *byte_out,
+                                uint8_t *error_out);
 void pl011_backend_rx_irq_enable(bool enable);
 bool pl011_backend_write_byte(PL011Backend *b, uint8_t byte);
 bool pl011_backend_route_header_console(void);

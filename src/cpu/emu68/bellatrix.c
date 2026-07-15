@@ -1231,6 +1231,32 @@ int bellatrix_launcher_bt_mouse_connected(void)
 #endif
 }
 
+void bellatrix_launcher_bt_suspend_reconnect(int suspended)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_set_outgoing_reconnect_suspended(&g_runtime.bluetooth,
+                                              suspended != 0);
+#else
+    (void)suspended;
+#endif
+}
+
+int bellatrix_launcher_bt_recovery_discovery_active(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    return bt_host_recovery_discovery_active(&g_runtime.bluetooth) ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void bellatrix_launcher_bt_claim_recovery_discovery(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_claim_recovery_discovery(&g_runtime.bluetooth);
+#endif
+}
+
 void bellatrix_launcher_bt_prepare_pairing(const uint8_t addr[6])
 {
 #if BELLATRIX_ENABLE_BTSTACK

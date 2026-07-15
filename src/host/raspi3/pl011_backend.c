@@ -302,9 +302,19 @@ uint32_t pl011_backend_irq_mask(void)
 
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out)
 {
+    return pl011_backend_read_byte_ex(b, byte_out, NULL);
+}
+
+bool pl011_backend_read_byte_ex(PL011Backend *b, uint8_t *byte_out,
+                                uint8_t *error_out)
+{
+    uint32_t dr;
     if (!b || !b->open || !byte_out) return false;
     if (pl_rd32(PL011_FR) & FR_RXFE) return false;
-    *byte_out = (uint8_t)(pl_rd32(PL011_DR) & 0xFFu);
+    dr = pl_rd32(PL011_DR);
+    *byte_out = (uint8_t)(dr & 0xFFu);
+    if (error_out)
+        *error_out = (uint8_t)((dr >> 8) & 0x0fu);
     return true;
 }
 
@@ -367,6 +377,14 @@ uint32_t pl011_backend_irq_mask(void) { return 0u; }
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out)
 {
     (void)b; (void)byte_out;
+    return false;
+}
+
+bool pl011_backend_read_byte_ex(PL011Backend *b, uint8_t *byte_out,
+                                uint8_t *error_out)
+{
+    (void)b; (void)byte_out;
+    if (error_out) *error_out = 0u;
     return false;
 }
 

@@ -40,6 +40,22 @@ as premissas arquiteturais superadas daquela branch. A autoridade permanece:
   sem passagem intermediária do modal e sem aguardar `Enter`.
 - Reconexão HID tem tentativas assíncronas e limitadas. Pares conhecidos podem
   autenticar fora da janela; dispositivos desconhecidos continuam negados.
+- O manager aceita conexões HID iniciadas pelo próprio mouse e mantém o host
+  connectable; conexão outbound seleciona somente um par por vez, com prioridade
+  para mouse, porque o cliente SDP embarcado possui um único contexto.
+- O prefixo HIDP DATA/Input `0xA1` é removido antes do decoder. Eventos de
+  descriptor, SET_PROTOCOL e GET_PROTOCOL atualizam/registram o estado da
+  sessão em vez de cair no caso desconhecido.
+- Depois de conectar um mouse, Core 3 envia EXIT_SUSPEND e GET_PROTOCOL em
+  passos separados do reactor; nenhuma API de controle HID roda no callback.
+- Falha direta preserva link keys quando o dispositivo está apenas ausente;
+  somente AUTHENTICATION_FAILURE/PIN_OR_KEY_MISSING prova chave rejeitada. Após
+  tentativas limitadas, o manager faz discovery do par salvo e depois backoff,
+  mantendo a reconexão inbound passiva.
+- F11 coordena ownership com o discovery automático: se o manager já estiver
+  procurando, a UI empresta a sessão sem reiniciá-la. `Esc` devolve scan e
+  pairing intactos; confirmação/auto-detecção reivindica a sessão antes de
+  parar inquiry e publicar a conexão imediata.
 - Relatórios HID de erro `0x01..0x03` são ignorados em USB e BT.
 - Mouse Classic HID com Report ID 1 e deslocamentos signed-16 little-endian é
   decodificado sem confundir outros report IDs com movimento.
@@ -47,6 +63,15 @@ as premissas arquiteturais superadas daquela branch. A autoridade permanece:
   não vazio denuncia o caminho IRQ/host e suprime power-cycle mascarador.
 - Hardware Error recebido dentro de callback BTstack apenas publica recovery;
   a mutação de HCI/transporte ocorre depois, no reactor Core 3.
+- Recovery avança em quatro ticks (`request off`, `force initializing`,
+  `force off`, `physical reset/PatchRAM`), impedindo transições HCI reentrantes
+  e um power-cycle monolítico dentro do reactor.
+- O top-half de IRQ normal preserva os bits FE/PE/BE/OE de cada leitura do
+  PL011. Overflow, erros UART e marca d'água do ring ficam observáveis; erro
+  de linha também classifica stall H4 como falha de transporte.
+- O consumo RX no reactor Core 3 tem orçamento por tick de bytes e de
+  callbacks H4, atravessa completions que armam o bloco seguinte e publica
+  contadores de bytes, completions e budget hits no log mini-UART.
 - O antigo atraso de dois bilhões de `nop` após BTSCAN foi removido; mini-UART
   permanece a fonte primária de diagnóstico e BTSCAN.TXT segue opcional.
 

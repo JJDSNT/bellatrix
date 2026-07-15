@@ -24,13 +24,17 @@ void bellatrix_launcher_bt_open_pairing(void);
 void bellatrix_launcher_bt_close_pairing(void);
 int  bellatrix_launcher_bt_ready(void);
 void bellatrix_launcher_bt_connect_now(void);
+void bellatrix_launcher_bt_suspend_reconnect(int suspended);
 void bellatrix_launcher_bt_prepare_pairing(const uint8_t addr[6]);
 int  bellatrix_launcher_bt_mouse_connected(void);
+int  bellatrix_launcher_bt_recovery_discovery_active(void);
+void bellatrix_launcher_bt_claim_recovery_discovery(void);
 
 static bool s_bt_runtime_active;
 static bool s_bt_runtime_working;
 static bool s_bt_runtime_sd_ok;
 static bool s_bt_runtime_connect_selected;
+static bool s_bt_runtime_borrowed_discovery;
 static uint32_t s_bt_runtime_last_gen;
 static uint64_t s_bt_runtime_started;
 static uint8_t s_bt_runtime_selected_addr[6];
@@ -402,6 +406,7 @@ bool btscan_runtime_open(void)
     s_bt_runtime_active = true;
     s_bt_runtime_working = bellatrix_launcher_bt_ready() != 0;
     s_bt_runtime_connect_selected = false;
+    s_bt_runtime_borrowed_discovery = false;
     memset(s_bt_runtime_selected_addr, 0,
            sizeof(s_bt_runtime_selected_addr));
     s_bt_cursor = 0u;
@@ -417,8 +422,15 @@ bool btscan_runtime_open(void)
         fat32_set_writer(&s_bt_runtime_fs, sd_write_block_cb, NULL);
 
     if (s_bt_runtime_working) {
-        bellatrix_launcher_bt_open_pairing();
-        bt_scan_start();
+        s_bt_runtime_borrowed_discovery =
+            bellatrix_launcher_bt_recovery_discovery_active() != 0;
+        bellatrix_launcher_bt_suspend_reconnect(1);
+        if (!s_bt_runtime_borrowed_discovery) {
+            bellatrix_launcher_bt_open_pairing();
+            bt_scan_start();
+        } else {
+            bt_diag_log("[BT] F11 borrowed active recovery discovery\n");
+        }
     }
 
     bt_draw_scan_chrome();
@@ -435,20 +447,32 @@ void btscan_runtime_close(bool confirmed)
     if (!s_bt_runtime_active)
         return;
 
-    if (s_bt_runtime_working)
+    if (s_bt_runtime_working &&
+        (!s_bt_runtime_borrowed_discovery || confirmed)) {
+        if (s_bt_runtime_borrowed_discovery)
+            bellatrix_launcher_bt_claim_recovery_discovery();
         bt_scan_stop();
+    }
 
     if (confirmed && s_bt_runtime_connect_selected) {
         /* Pairing and connection outlive the screen. The reactor advances
          * authentication after the framebuffer modal has closed. */
         bellatrix_launcher_bt_prepare_pairing(
             s_bt_runtime_selected_addr);
+        bellatrix_launcher_bt_suspend_reconnect(0);
         /* This function runs after the normal BTstack pass, not in its HID
          * callback. Publish reconnect immediately; Core 3 submits it on the
          * next normal reactor pass. */
         bellatrix_launcher_bt_connect_now();
-    } else {
+    } else if (!s_bt_runtime_borrowed_discovery) {
+        bellatrix_launcher_bt_suspend_reconnect(0);
         bellatrix_launcher_bt_close_pairing();
+    } else {
+        /* Esc returns a borrowed manager-owned scan unchanged. A confirmed
+         * non-connect action claimed it above, so close that pairing window. */
+        bellatrix_launcher_bt_suspend_reconnect(0);
+        if (confirmed)
+            bellatrix_launcher_bt_close_pairing();
     }
 
     if (s_bt_runtime_sd_ok)
@@ -566,6 +590,9 @@ void btscan_screen(bool force_scan)
 {
     bool working = bellatrix_launcher_bt_ready() != 0;
 
+    if (working)
+        bellatrix_launcher_bt_suspend_reconnect(1);
+
     /* Mount SD early so we can load BTPAIRS.TXT before the scan starts. */
     static Fat32State s_sd_fs_scan;
     bool sd_ok = bcm_emmc_init() &&
@@ -579,6 +606,7 @@ void btscan_screen(bool force_scan)
 
     if (!force_scan && working && btscan_has_saved_mouse()) {
         bt_diag_log("[BT] saved mouse present; skipping discovery and connecting directly\n");
+        bellatrix_launcher_bt_suspend_reconnect(0);
         return;
     }
 
@@ -712,6 +740,7 @@ void btscan_screen(bool force_scan)
         /* The observed working behavior is immediate connection on discovery.
          * Keep the explicit pairing window and page before FAT/media work. */
         bellatrix_launcher_bt_prepare_pairing(selected_mouse_addr);
+        bellatrix_launcher_bt_suspend_reconnect(0);
         bellatrix_launcher_bt_connect_now();
         uint64_t connect_started = PAL_Time_ReadCounter();
         while (!bellatrix_launcher_bt_mouse_connected() &&
@@ -721,6 +750,8 @@ void btscan_screen(bool force_scan)
                     "elapsed=%u ms\n",
                     bellatrix_launcher_bt_mouse_connected() ? 1u : 0u,
                     (unsigned)launcher_ms_since(connect_started));
+    } else if (working) {
+        bellatrix_launcher_bt_suspend_reconnect(0);
     }
 
     if (sd_ok)

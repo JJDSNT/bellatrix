@@ -82,25 +82,26 @@ static _Atomic uint32_t bt_uart_io_activity;
 static _Atomic uint32_t bt_uart_tx_total;
 static _Atomic uint32_t bt_uart_rx_total;
 
-/* Software RX ring buffer — decouples hardware FIFO drain from the btstack
- * H4 parser.  bt_hal_raspi3_drain_fifo() can be called from anywhere (e.g.
- * framebuffer fill loops) without touching btstack state; the poll path
- * consumes bytes from the ring at its normal cadence.
- *
- * Future improvement: replace the drain call sites with a FIQ handler that
- * routes UART0 IRQ (BCM2835 source 57) via the FIQ control register
- * (ARM_PERI_VIRT_BASE+0xB20C, value 0x80|57=0xB9) and drains the FIFO in
- * the curr_el_spx_fiq vector (currently a redundant copy of the IRQ handler).
- * That would eliminate all pump-gap overruns without polling overhead.
- * Requires a patch to emu68/src/aarch64/vectors.c — deferred pending
- * architecture review. */
+/* Software RX ring buffer — the bounded normal-IRQ top half drains the PL011
+ * FIFO here without entering BTstack. Core 3 consumes it at its own bounded
+ * cadence. bt_hal_raspi3_drain_fifo() is the polling fallback while physical
+ * IRQ ownership is temporarily disabled during reconfiguration/recovery. */
 #define BT_RX_RING_SIZE 4096u   /* power of 2; fits ~35 ms of max-rate LE adverts */
 static uint8_t  s_rx_ring[BT_RX_RING_SIZE];
-static _Atomic uint32_t s_rx_ring_head; /* producer: Core 0 IRQ/poll */
+static _Atomic uint32_t s_rx_ring_head; /* producer: physical IRQ/poll */
 static _Atomic uint32_t s_rx_ring_tail; /* consumer: Core 3 reactor */
 static _Atomic uint32_t s_rx_ring_overflow;
 static _Atomic uint32_t s_irq_rx_bytes;
 static _Atomic uint32_t s_irq_rx_budget_hits;
+static _Atomic uint32_t s_rx_ring_high_water;
+static _Atomic uint32_t s_uart_rx_errors;
+static _Atomic uint32_t s_uart_rx_framing_errors;
+static _Atomic uint32_t s_uart_rx_parity_errors;
+static _Atomic uint32_t s_uart_rx_break_errors;
+static _Atomic uint32_t s_uart_rx_overrun_errors;
+static uint32_t s_reactor_rx_bytes;
+static uint32_t s_reactor_rx_completions;
+static uint32_t s_reactor_rx_budget_hits;
 /* wire tap: dump the next N raw rx/tx bytes into the bt_diag ring so the SD
  * report shows what is actually on the line (armed by bt_scan_start) */
 static uint32_t bt_diag_tap_rx_remaining = 0;
@@ -151,6 +152,62 @@ uint32_t bt_hal_raspi3_rx_overflow(void) {
     return atomic_load_explicit(&s_rx_ring_overflow, memory_order_relaxed);
 }
 
+uint32_t bt_hal_raspi3_rx_high_water(void) {
+    return atomic_load_explicit(&s_rx_ring_high_water, memory_order_relaxed);
+}
+
+uint32_t bt_hal_raspi3_uart_rx_errors(void) {
+    return atomic_load_explicit(&s_uart_rx_errors, memory_order_relaxed);
+}
+
+uint32_t bt_hal_raspi3_uart_rx_framing_errors(void) {
+    return atomic_load_explicit(&s_uart_rx_framing_errors, memory_order_relaxed);
+}
+
+uint32_t bt_hal_raspi3_uart_rx_parity_errors(void) {
+    return atomic_load_explicit(&s_uart_rx_parity_errors, memory_order_relaxed);
+}
+
+uint32_t bt_hal_raspi3_uart_rx_break_errors(void) {
+    return atomic_load_explicit(&s_uart_rx_break_errors, memory_order_relaxed);
+}
+
+uint32_t bt_hal_raspi3_uart_rx_overrun_errors(void) {
+    return atomic_load_explicit(&s_uart_rx_overrun_errors, memory_order_relaxed);
+}
+
+uint32_t bt_hal_raspi3_reactor_rx_bytes(void) {
+    return s_reactor_rx_bytes;
+}
+
+uint32_t bt_hal_raspi3_reactor_rx_completions(void) {
+    return s_reactor_rx_completions;
+}
+
+uint32_t bt_hal_raspi3_reactor_rx_budget_hits(void) {
+    return s_reactor_rx_budget_hits;
+}
+
+static inline void bt_uart_record_rx_error(uint8_t error)
+{
+    if (!error)
+        return;
+    atomic_fetch_add_explicit(&s_uart_rx_errors, 1u, memory_order_relaxed);
+    /* PL011 DR[11:8] is returned in error[3:0]: FE, PE, BE, OE. */
+    if (error & 0x1u)
+        atomic_fetch_add_explicit(&s_uart_rx_framing_errors, 1u,
+                                  memory_order_relaxed);
+    if (error & 0x2u)
+        atomic_fetch_add_explicit(&s_uart_rx_parity_errors, 1u,
+                                  memory_order_relaxed);
+    if (error & 0x4u)
+        atomic_fetch_add_explicit(&s_uart_rx_break_errors, 1u,
+                                  memory_order_relaxed);
+    if (error & 0x8u)
+        atomic_fetch_add_explicit(&s_uart_rx_overrun_errors, 1u,
+                                  memory_order_relaxed);
+}
+
 static bool bt_rx_ring_push(uint8_t byte)
 {
     uint32_t head = atomic_load_explicit(&s_rx_ring_head, memory_order_relaxed);
@@ -163,6 +220,14 @@ static bool bt_rx_ring_push(uint8_t byte)
     }
     s_rx_ring[head] = byte;
     atomic_store_explicit(&s_rx_ring_head, next, memory_order_release);
+    uint32_t used = (next - tail) & (BT_RX_RING_SIZE - 1u);
+    uint32_t high = atomic_load_explicit(&s_rx_ring_high_water,
+                                         memory_order_relaxed);
+    while (used > high &&
+           !atomic_compare_exchange_weak_explicit(&s_rx_ring_high_water,
+                                                   &high, used,
+                                                   memory_order_relaxed,
+                                                   memory_order_relaxed)) { }
     return true;
 }
 
@@ -374,11 +439,14 @@ void hal_uart_dma_set_sleep(uint8_t sleep) {
 void bt_hal_raspi3_drain_fifo(void)
 {
     uint8_t byte;
+    uint8_t error;
     uint32_t budget = 256u;
     if (!pl011_backend_is_open(&bt_uart) ||
         bellatrix_physical_bt_irq_is_armed())
         return;
-    while (budget-- && pl011_backend_read_byte(&bt_uart, &byte)) {
+    while (budget-- &&
+           pl011_backend_read_byte_ex(&bt_uart, &byte, &error)) {
+        bt_uart_record_rx_error(error);
         (void)bt_rx_ring_push(byte);
         atomic_fetch_add_explicit(&bt_uart_io_activity, 1u,
                                   memory_order_relaxed);
@@ -412,6 +480,8 @@ void bt_hal_raspi3_flush_rx(void) {
 }
 
 void bt_hal_raspi3_poll_uart(void) {
+    uint32_t rx_budget = 256u;
+    uint32_t completion_budget = 32u;
     if (!pl011_backend_is_open(&bt_uart)) {
         return;
     }
@@ -422,13 +492,20 @@ void bt_hal_raspi3_poll_uart(void) {
     bt_hal_raspi3_drain_fifo();
 
     if (uart_rx_buffer && uart_rx_pos < uart_rx_size) {
-        for (;;) {
+        while (rx_budget != 0u) {
+            /* A completion callback normally arms the next H4 block. Keep
+             * consuming across those boundaries, but cap both bytes and
+             * callbacks so RX cannot monopolise the Core-3 reactor. */
+            if (!uart_rx_buffer || uart_rx_pos >= uart_rx_size ||
+                completion_budget == 0u)
+                break;
             uint32_t tail = atomic_load_explicit(&s_rx_ring_tail,
                                                  memory_order_relaxed);
             uint32_t head = atomic_load_explicit(&s_rx_ring_head,
                                                  memory_order_acquire);
             if (tail == head)
                 break;
+            rx_budget--;
             uint8_t byte = s_rx_ring[tail];
             atomic_store_explicit(&s_rx_ring_tail,
                                   (tail + 1u) & (BT_RX_RING_SIZE - 1u),
@@ -440,15 +517,20 @@ void bt_hal_raspi3_poll_uart(void) {
                 bt_uart_rx_bytes_logged++;
             }
             uart_rx_buffer[uart_rx_pos++] = byte;
+            s_reactor_rx_bytes++;
             if (uart_rx_pos == uart_rx_size) {
                 void (*cb)(void) = uart_block_received_cb;
                 bt_uart_trace_add(BT_TRACE_RX_COMPLETE, 0, uart_rx_size, 0);
                 kprintf("[BT-HAL] rx block complete len=%u\n", (unsigned)uart_rx_size);
                 uart_rx_buffer = NULL;
+                completion_budget--;
+                s_reactor_rx_completions++;
                 if (cb) cb();
-                break;
             }
         }
+        if (bt_hal_raspi3_rx_ring_used() != 0u && uart_rx_buffer &&
+            (rx_budget == 0u || completion_budget == 0u))
+            s_reactor_rx_budget_hits++;
     }
 
     if (uart_tx_buffer && uart_tx_pos < uart_tx_size) {
@@ -492,13 +574,15 @@ void bt_hal_raspi3_poll_uart(void) {
 void __attribute__((target("general-regs-only"))) bt_hal_raspi3_irq_rx(void)
 {
     uint8_t byte;
+    uint8_t error;
     uint32_t drained = 0u;
     const uint32_t budget = 64u;
 
     /* No BTstack, callback, allocation or logging is allowed here. */
     pl011_backend_rx_irq_enable(false);
     while (drained < budget && pl011_backend_is_open(&bt_uart) &&
-           pl011_backend_read_byte(&bt_uart, &byte)) {
+           pl011_backend_read_byte_ex(&bt_uart, &byte, &error)) {
+        bt_uart_record_rx_error(error);
         (void)bt_rx_ring_push(byte);
         atomic_fetch_add_explicit(&bt_uart_io_activity, 1u,
                                   memory_order_relaxed);
