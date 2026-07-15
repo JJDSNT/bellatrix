@@ -40,9 +40,9 @@ typedef struct BellatrixDirectRegionMap {
     BellatrixDirectRegionSlot slots[BELLATRIX_DIRECT_REGION_CAPACITY];
 } BellatrixDirectRegionMap;
 
-/* Lifecycle registry only. Emu68 installs these regions in its MMU and does
- * not call find() for steady-state loads/stores. Musashi may use find() from
- * its memory callbacks because it has no host MMU translation path. */
+/* Shared control-plane registry. Emu68 uses install/remove to manage its MMU
+ * and MUST NOT call find() for steady-state loads/stores or Data Abort. Musashi
+ * may use find() from its memory callbacks because it has no host-MMU datapath. */
 
 void bellatrix_direct_region_map_init(
     BellatrixDirectRegionMap *map,

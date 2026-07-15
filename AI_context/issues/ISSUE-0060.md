@@ -171,3 +171,9 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   Emu68 o usará somente para instalar/remover MMU; seu steady state não consulta
   a tabela. Musashi poderá consultá-la nos callbacks. O teste cobre ROM
   read-only, alinhamento, overlap, fronteira e rollback map/unmap.
+- 2026-07-15: escolhida `emu68/src/boards/68040.c` como referência da prova no
+  harness POSIX. Ela é uma ROM Z3 de 4 KiB, read-only/executable, em janela de
+  64 KiB e não depende de FDT ou de serviços AArch64. A prova não copia o
+  conteúdo real, não substitui os adapters MMU/Musashi e não habilita uma board
+  no produto. `devicetree.c` permanece referência futura para múltiplas regiões
+  no backend Emu68, não para o harness.

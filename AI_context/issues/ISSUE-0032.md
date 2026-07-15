@@ -76,6 +76,8 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 - teste host cobre a cadeia Z2→Z3, base escolhida pelo guest, rollback e reset.
 - o registro `cpu/direct_region` valida mapping page-aligned, impede overlap e
   só publica a região após sucesso do backend; falhas de unmap preservam estado.
+- a prova host modela a board `68040` nativa como ROM Z3 read-only/executável e
+  verifica rollback, invisibilidade antes/depois e base escolhida pelo guest.
 
 Isso fecha o sequenciamento e o esqueleto de lifecycle, mas não constitui
 suporte Z3: falta a board ROM de prova e o mapping direto nos backends.
@@ -122,9 +124,10 @@ As referências nativas do Emu68 separam claramente os casos:
 - `sdcard.c`, `68040.c`, `emmc.c` e `unicam.c`: ROM Z3 read-only;
 - `devicetree.c`: ROM Z3 e dados adicionais, também read-only.
 
-Assim, a primeira prova Bellatrix deve usar uma ROM Z3 mínima e sem dependência
-funcional do sistema. Ela serve para provar Autoconfig, base escolhida pelo
-guest, `map/unmap`, proteção read-only e acesso direto nos dois backends. Depois
-da prova ela pode ser removida ou substituída por uma board realmente desejada.
-Não se deve reservar uma grande região de `sys_memory` antes de existir uma
-decisão explícita por Z3 RAM.
+Assim, a primeira prova Bellatrix usa `68040.c` como referência porque o harness
+é POSIX e executa Musashi 68040: uma ROM Z3 simples não depende da plataforma
+AArch64. Ela prova Autoconfig, base escolhida pelo guest, `map/unmap`, rollback e
+permissão read-only sem copiar o conteúdo ou habilitar a board no produto.
+`devicetree.c` permanece referência para uma futura prova multi-região no Emu68.
+Não se deve reservar uma grande região de `sys_memory` antes de existir decisão
+explícita por Z3 RAM.

@@ -2,6 +2,18 @@
 
 #include <string.h>
 
+/*
+ * Sparse DIRECT-region control plane shared by CPU backends.
+ *
+ * Emu68 uses install/remove only: the backend turns them into MMU mappings,
+ * then normal 68k loads/stores bypass this table entirely. Do not call find()
+ * from vectors.c or the Emu68 Data Abort path.
+ *
+ * Musashi has no equivalent host-MMU datapath, so its memory callbacks may use
+ * find() to locate the already-installed bank/buffer. The lookup cost is thus
+ * specific to Musashi, not imposed on Emu68.
+ */
+
 #define DIRECT_KNOWN_FLAGS (BELLATRIX_DIRECT_READ | BELLATRIX_DIRECT_WRITE | \
                             BELLATRIX_DIRECT_EXECUTE |                       \
                             BELLATRIX_DIRECT_CACHEABLE)

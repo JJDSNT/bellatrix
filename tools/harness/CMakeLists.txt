@@ -372,6 +372,7 @@ add_test(NAME bellatrix_unit_memory
 
 add_executable(bellatrix_unit_zorro_autoconfig
     ${ROOT}/tests/unit/test_zorro_autoconfig.c
+    ${SRC}/cpu/direct_region.c
     ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/zorro_autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
