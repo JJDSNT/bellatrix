@@ -184,6 +184,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_emit.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_platform.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_backend.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_direct_region.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/mainloop_window.S
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c

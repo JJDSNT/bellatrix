@@ -15,6 +15,8 @@ related_files:
   - emu68/src/aarch64/vectors.c
   - emu68/src/aarch64/start.c
   - src/cpu/emu68/bellatrix.c
+  - src/cpu/emu68/emu68_direct_region.c
+  - src/cpu/musashi/musashi_backend.c
   - src/cpu/cpu_bridge.c
   - src/cpu/direct_region.c
   - src/machine/bus/zorro_autoconfig.c
@@ -116,7 +118,7 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   lifecycle/Musashi, com validação de página, overlap e rollback do backend.
 - [ ] Definir descoberta e validação de faixa por perfil, sem promover o mapa
   específico do AROS a contrato universal.
-- [ ] Provar o contrato `DIRECT` com uma board Z3 ROM mínima/read-only inspirada
+- [x] Provar no harness o contrato `DIRECT` com uma board Z3 ROM mínima/read-only inspirada
   nas boards nativas do Emu68, sem torná-la requisito do perfil de produto.
 - [ ] Preservar Fast RAM como Z2 no baseline Emu68; só reconsiderar Z3 RAM se
   surgir um requisito independente de capacidade ou perfil.
@@ -177,3 +179,10 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   conteúdo real, não substitui os adapters MMU/Musashi e não habilita uma board
   no produto. `devicetree.c` permanece referência futura para múltiplas regiões
   no backend Emu68, não para o harness.
+- 2026-07-15: o contrato foi ligado aos backends. Emu68 traduz install em
+  `mmu_map`; remove restaura um mapeamento sem `MMU_ALLOW_EL0`, devolvendo acessos
+  68k ao Data Abort nativo sem depender do `mmu_unmap()` upstream, que é um stub.
+  Nenhuma lookup foi adicionada a `vectors.c` ou ao fault path. Musashi e o
+  harness consultam o bank esparso antes do fallback/open bus e preservam
+  endian big-endian e ROM read-only.
+  Ainda não há board Z3 registrada no perfil de produto.

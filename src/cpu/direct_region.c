@@ -129,3 +129,64 @@ const BellatrixDirectRegion *bellatrix_direct_region_find(
     }
     return NULL;
 }
+
+int bellatrix_direct_region_read(
+    const BellatrixDirectRegionMap *map,
+    uint32_t address,
+    unsigned int size,
+    uint32_t *value_out)
+{
+    const BellatrixDirectRegion *region;
+    const uint8_t *data;
+    uint32_t offset;
+
+    if (!value_out || (size != 1u && size != 2u && size != 4u))
+        return 0;
+    region = bellatrix_direct_region_find(map, address, size);
+    if (!region || (region->flags & BELLATRIX_DIRECT_READ) == 0u)
+        return 0;
+    offset = address - region->guest_base;
+    data = (const uint8_t *)region->host_base + offset;
+    if (size == 1u)
+        *value_out = data[0];
+    else if (size == 2u)
+        *value_out = ((uint32_t)data[0] << 8) | data[1];
+    else
+        *value_out = ((uint32_t)data[0] << 24) |
+                     ((uint32_t)data[1] << 16) |
+                     ((uint32_t)data[2] << 8) | data[3];
+    return 1;
+}
+
+int bellatrix_direct_region_write(
+    const BellatrixDirectRegionMap *map,
+    uint32_t address,
+    unsigned int size,
+    uint32_t value)
+{
+    const BellatrixDirectRegion *region;
+    uint8_t *data;
+    uint32_t offset;
+
+    if (size != 1u && size != 2u && size != 4u)
+        return 0;
+    region = bellatrix_direct_region_find(map, address, size);
+    if (!region)
+        return 0;
+    if ((region->flags & BELLATRIX_DIRECT_WRITE) == 0u)
+        return 1;
+    offset = address - region->guest_base;
+    data = (uint8_t *)region->host_base + offset;
+    if (size == 1u) {
+        data[0] = (uint8_t)value;
+    } else if (size == 2u) {
+        data[0] = (uint8_t)(value >> 8);
+        data[1] = (uint8_t)value;
+    } else {
+        data[0] = (uint8_t)(value >> 24);
+        data[1] = (uint8_t)(value >> 16);
+        data[2] = (uint8_t)(value >> 8);
+        data[3] = (uint8_t)value;
+    }
+    return 1;
+}

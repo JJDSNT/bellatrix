@@ -310,6 +310,7 @@ target_link_options(harness PRIVATE -rdynamic)
 
 target_compile_definitions(harness PRIVATE
     BELLATRIX_HARNESS=1
+    BELLATRIX_USE_MUSASHI_CPU=1
     BELLATRIX_ENABLE_PTY_BACKEND=1
     ODFS_PLATFORM_HOST=1
     BELLATRIX_ENABLE_ODFS=1

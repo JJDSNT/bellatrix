@@ -293,6 +293,16 @@ UNMAPPED -> política comum de open bus/bus error
 O decoder comum pode compartilhar descritores e política com Emu68, mas não
 deve obrigar o hot path direto do Emu68 a fazer lookup por acesso.
 
+O corte atual implementa isso em `cpu/direct_region`: ambos os backends usam o
+registro para lifecycle e overlap. Emu68 converte install em MMU; no remove,
+substitui a tradução por um mapeamento EL1-only que devolve o endereço ao Data
+Abort nativo para o 68k, pois o `mmu_unmap()` upstream não remove páginas. Ele
+nunca chama `find()` no steady state. Musashi usa `find()` nos callbacks,
+lê/escreve o buffer em big-endian e considera write em região read-only atendido
+e ignorado.
+Esse registro ainda atende somente regiões dinâmicas e não substitui a matriz
+completa de memória fixa do perfil.
+
 # Integração Rigel
 
 Rigel recebe apenas transações `EXTERNAL` do chipset. Fast RAM e VRAM direta

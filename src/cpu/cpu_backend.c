@@ -48,6 +48,22 @@ int cpu_backend_run(CpuBackend *backend, uint32_t cycles)
     return used;
 }
 
+int cpu_backend_map_direct(CpuBackend *backend,
+                           const BellatrixDirectRegion *region)
+{
+    if (!backend || !backend->map_direct)
+        return -1;
+    return backend->map_direct(backend->ctx, region);
+}
+
+int cpu_backend_unmap_direct(CpuBackend *backend,
+                             uint32_t guest_base, uint32_t size)
+{
+    if (!backend || !backend->unmap_direct)
+        return -1;
+    return backend->unmap_direct(backend->ctx, guest_base, size);
+}
+
 CpuBackend *cpu_backend_selected(void)
 {
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
@@ -104,8 +120,12 @@ void cpu_backend_run_selected(void)
         if (PAL_Core_IsMulticoreEnabled()) {
             bellatrix_bridge_publish_cpu_cycles(cycles);
         } else {
+#if defined(BELLATRIX_HARNESS) && BELLATRIX_HARNESS
+            bellatrix_bridge_publish_cpu_cycles(cycles);
+#else
             bellatrix_machine_advance_cpu_cycles(cycles);
             PAL_Runtime_Poll();
+#endif
         }
     }
 }

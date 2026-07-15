@@ -1,5 +1,6 @@
 #include "cpu/emu68/bellatrix.h"
 #include "cpu/emu68/emu68_backend.h"
+#include "cpu/emu68/emu68_direct_region.h"
 #include "cpu/emu68/emu68_machine.h"
 #include "cpu/cpu_backend.h"
 #include "machine/memory/memory.h"
@@ -329,12 +330,26 @@ static int backend_run(void *ctx, uint32_t cycles)
     return (int)result.cycles_executed;
 }
 
+static int backend_map_direct(void *ctx, const BellatrixDirectRegion *region)
+{
+    (void)ctx;
+    return bellatrix_emu68_direct_region_install(region);
+}
+
+static int backend_unmap_direct(void *ctx, uint32_t guest_base, uint32_t size)
+{
+    (void)ctx;
+    return bellatrix_emu68_direct_region_remove(guest_base, size);
+}
+
 static CpuBackend s_cpu_backend = {
     .ctx = NULL,
     .get_pc = backend_get_pc,
     .set_ipl = backend_set_ipl,
     .reset = backend_reset,
     .run = backend_run,
+    .map_direct = backend_map_direct,
+    .unmap_direct = backend_unmap_direct,
     .progress_in_run = 1,
 };
 
@@ -360,6 +375,7 @@ void bellatrix_emu68_backend_init(void)
     };
 
     memset(&s_backend, 0, sizeof(s_backend));
+    bellatrix_emu68_direct_region_init();
     s_backend.overlay = 1;
     if (emu68_machine_create(&config, &s_backend.cpu) != EMU68_OK) {
         kprintf("[EMU68-MACHINE] create failed; no legacy fallback is permitted\n");

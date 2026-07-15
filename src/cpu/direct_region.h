@@ -63,4 +63,18 @@ const BellatrixDirectRegion *bellatrix_direct_region_find(
     uint32_t address,
     uint32_t access_size);
 
+/* Musashi-style callback helpers. Return 1 when a DIRECT region owns the
+ * access. Writes to read-only regions are handled and intentionally ignored. */
+int bellatrix_direct_region_read(
+    const BellatrixDirectRegionMap *map,
+    uint32_t address,
+    unsigned int size,
+    uint32_t *value_out);
+
+int bellatrix_direct_region_write(
+    const BellatrixDirectRegionMap *map,
+    uint32_t address,
+    unsigned int size,
+    uint32_t value);
+
 #endif

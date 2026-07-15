@@ -17,6 +17,7 @@
 
 #include "musashi_backend.h"
 #include "cpu/cpu_bridge.h"
+#include "cpu/direct_region.h"
 #include "machine/machine.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/memory/memory.h"
@@ -36,6 +37,7 @@
 #define HARNESS_ROM_MAX   (1024u * 1024u)
 
 static uint8_t  s_rom[HARNESS_ROM_MAX];
+static BellatrixDirectRegionMap s_direct_regions;
 static uint32_t s_rom_size  = 0;
 static unsigned int s_cpu_type = M68K_CPU_TYPE_68000;
 static uint32_t s_boot_trace_until_pc = 0;
@@ -2568,6 +2570,12 @@ static void harness_instr_hook(unsigned int pc)
 
 static uint32_t harness_read(uint32_t addr, int size)
 {
+    uint32_t direct_value;
+
+    if (bellatrix_direct_region_read(&s_direct_regions, addr,
+                                     (unsigned int)size, &direct_value))
+        return direct_value;
+
     /* Zorro III / 32-bit space is unimplemented (ISSUE-0032) — must read
      * as open bus, not alias into 24-bit space. AROS's Z3 autoconfig
      * probe (0xFF000000+) was previously masking onto live chip RAM and
@@ -2663,6 +2671,10 @@ static uint32_t harness_read(uint32_t addr, int size)
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+
+    if (bellatrix_direct_region_write(&s_direct_regions, addr,
+                                      (unsigned int)size, value))
+        return;
 
     /* Zorro III / 32-bit space open bus — see harness_read. */
     if (addr > 0x00FFFFFFu) {
@@ -2876,18 +2888,64 @@ static int musashi_run(void *ctx, uint32_t cycles)
     return used;
 }
 
+static int harness_direct_backend_map(
+    void *opaque, const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static int harness_direct_backend_unmap(
+    void *opaque, const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static int musashi_map_direct(void *ctx,
+                              const BellatrixDirectRegion *region)
+{
+    (void)ctx;
+    return bellatrix_direct_region_install(&s_direct_regions, region);
+}
+
+static int musashi_unmap_direct(void *ctx, uint32_t guest_base, uint32_t size)
+{
+    (void)ctx;
+    return bellatrix_direct_region_remove(&s_direct_regions, guest_base, size);
+}
+
 static CpuBackend g_musashi_backend = {
     .ctx     = NULL,
     .get_pc  = musashi_get_pc,
     .set_ipl = musashi_set_ipl,
     .reset   = musashi_reset,
     .run     = musashi_run,
+    .map_direct = musashi_map_direct,
+    .unmap_direct = musashi_unmap_direct,
     .progress_in_run = 1,
 };
 
 CpuBackend *musashi_backend_get(void)
 {
     return &g_musashi_backend;
+}
+
+/* Generic CpuBackend selector aliases used by shared runtime code. */
+CpuBackend *bellatrix_musashi_backend_get(void)
+{
+    return musashi_backend_get();
+}
+
+const char *bellatrix_musashi_cpu_model(void)
+{
+    return s_cpu_type == M68K_CPU_TYPE_68040 ? "68040" :
+           s_cpu_type == M68K_CPU_TYPE_68030 ? "68030" :
+           s_cpu_type == M68K_CPU_TYPE_68020 ? "68020" :
+           s_cpu_type == M68K_CPU_TYPE_68EC020 ? "68ec020" :
+           s_cpu_type == M68K_CPU_TYPE_68010 ? "68010" : "68000";
 }
 
 /* ---------------------------------------------------------------------------
@@ -2897,6 +2955,12 @@ CpuBackend *musashi_backend_get(void)
 void musashi_backend_init(void)
 {
     const char *cpu = getenv("HARNESS_CPU");
+    static const BellatrixDirectRegionBackendOps direct_ops = {
+        .map = harness_direct_backend_map,
+        .unmap = harness_direct_backend_unmap,
+    };
+
+    bellatrix_direct_region_map_init(&s_direct_regions, &direct_ops, NULL);
 
     /* Default is 68040 (with FPU) — see ISSUE-0034. Explicit HARNESS_CPU
      * still selects any other type, including plain "68000". */
@@ -2925,4 +2989,9 @@ void musashi_backend_init(void)
     m68k_set_instr_hook_callback(harness_instr_hook);
     if (harness_ipl_trace_enabled())
         m68k_set_int_ack_callback(harness_int_ack);
+}
+
+void bellatrix_musashi_backend_init(void)
+{
+    musashi_backend_init();
 }

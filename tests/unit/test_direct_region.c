@@ -54,6 +54,7 @@ int main(void)
     BellatrixDirectRegion overlap = region;
     BellatrixDirectRegion unaligned = region;
     BackendProbe probe;
+    uint32_t value;
 
     memset(&probe, 0, sizeof(probe));
     bellatrix_direct_region_map_init(&map, &ops, &probe);
@@ -70,6 +71,18 @@ int main(void)
           bellatrix_direct_region_find(&map, 0x45670004u, 4u) != NULL);
     check("reject crossing access",
           bellatrix_direct_region_find(&map, 0x4567ffffu, 2u) == NULL);
+
+    rom[4] = 0x12u;
+    rom[5] = 0x34u;
+    rom[6] = 0x56u;
+    rom[7] = 0x78u;
+    check("read direct ROM long",
+          bellatrix_direct_region_read(&map, 0x45670004u, 4u, &value));
+    check("direct ROM is big endian", value == 0x12345678u);
+    check("readonly write is handled",
+          bellatrix_direct_region_write(&map, 0x45670004u, 4u,
+                                        0xaabbccddu));
+    check("readonly write is ignored", rom[4] == 0x12u && rom[7] == 0x78u);
 
     overlap.guest_base += 0x8000u;
     check("reject overlap",

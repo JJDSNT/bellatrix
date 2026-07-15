@@ -61,9 +61,10 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 - a antiga constante sem uso `BELLATRIX_Z3_BASE=0x10000000` foi removida;
   `0x40000000..0x7fffffff` é política observada no AROS, não requisito Emu68;
   descoberta e faixa válida precisam ser definidas pelo contrato de perfil;
-- o callback comum de lifecycle Z3 `map/unmap` existe, mas ainda não há
-  implementação de mapping `DIRECT` específica para Emu68 ou Musashi;
-- callbacks byte a byte atuais não distinguem memória direta de registradores;
+- os adapters `DIRECT` específicos agora existem: mapping EL0 no Emu68, com
+  remoção restaurando a proteção EL1-only, e bank/buffer nos callbacks Musashi;
+- páginas mistas de boards futuras ainda precisam separar backing direto de
+  registradores externos com efeitos colaterais;
 - ainda não existe board Z3 funcional registrada no runtime Bellatrix.
 
 # Avanço de infraestrutura (2026-07-15)
@@ -78,16 +79,19 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
   só publica a região após sucesso do backend; falhas de unmap preservam estado.
 - a prova host modela a board `68040` nativa como ROM Z3 read-only/executável e
   verifica rollback, invisibilidade antes/depois e base escolhida pelo guest.
+- o harness e o backend Musashi consultam `direct_region` antes do open bus de
+  32 bits; o adapter Emu68 instala MMU e não consulta a tabela por acesso.
 
-Isso fecha o sequenciamento e o esqueleto de lifecycle, mas não constitui
-suporte Z3: falta a board ROM de prova e o mapping direto nos backends.
+Isso fecha sequenciamento, lifecycle e adapters, mas não constitui suporte Z3
+de produto: a board 68040 é apenas modelada no teste e nenhuma board Z3
+Bellatrix está registrada no runtime.
 
 A auditoria de uma eventual board RAM também confirmou que a identidade física
 criada por `start.c` não concede `MMU_ALLOW_EL0`. Isso permite manter a reserva
 acessível ao ARM e invisível ao 68k até Autoconfig; o `map()` da board instala
-a tradução guest com permissão EL0. Musashi deve registrar o mesmo buffer como região
-direta. A API pública antiga já contém uma primitiva MMU semelhante, mas ela
-deve ser extraída para uma fronteira esparsa, não reutilizada como machine box.
+a tradução guest com permissão EL0. Musashi deve registrar o mesmo buffer como
+região direta. O adapter atual isola essa primitiva MMU na fronteira esparsa,
+sem ressuscitar a antiga API de machine box.
 Esse trabalho de reserva não bloqueia a prova ROM atual; só volta à prioridade
 se uma Z3 RAM for escolhida explicitamente.
 

@@ -1,6 +1,7 @@
 #include "cpu/musashi/musashi_backend.h"
 
 #include "cpu/cpu_bridge.h"
+#include "cpu/direct_region.h"
 #include "machine/machine.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "rigel/rigel_cia.h"
@@ -15,6 +16,24 @@
 #ifndef BELLATRIX_MUSASHI_LOW_RAM_SIZE
 #define BELLATRIX_MUSASHI_LOW_RAM_SIZE BELLATRIX_CHIP_RAM_SIZE
 #endif
+
+static BellatrixDirectRegionMap s_direct_regions;
+
+static int musashi_direct_map(void *opaque,
+                              const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static int musashi_direct_unmap(void *opaque,
+                                const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
 
 static uint32_t musashi_rom_read_at(const BellatrixMemory *mem,
                                     uint32_t offset,
@@ -109,6 +128,7 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
 {
     BellatrixMachine *m = bellatrix_machine_get();
     BellatrixMemory *mem = &m->memory;
+    uint32_t direct_value;
 
     /* Musashi applies CPU_ADDRESS_MASK before invoking the memory callback:
      * 68000/68010/68EC020 remain 24-bit, while 68020+/68040 preserve 32 bits.
@@ -153,6 +173,10 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
         return musashi_fast_read(mem, addr, size);
     }
 
+    if (bellatrix_direct_region_read(&s_direct_regions, addr, size,
+                                     &direct_value))
+        return direct_value;
+
     return bellatrix_bridge_cpu_read(addr, size);
 }
 
@@ -190,6 +214,9 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
         musashi_fast_write(mem, addr, value, size);
         return;
     }
+
+    if (bellatrix_direct_region_write(&s_direct_regions, addr, size, value))
+        return;
 
     bellatrix_bridge_cpu_write(addr, value, size);
 }
@@ -263,12 +290,27 @@ static int musashi_run(void *ctx, uint32_t cycles)
     return m68k_execute((int)cycles);
 }
 
+static int musashi_map_direct(void *ctx,
+                              const BellatrixDirectRegion *region)
+{
+    (void)ctx;
+    return bellatrix_direct_region_install(&s_direct_regions, region);
+}
+
+static int musashi_unmap_direct(void *ctx, uint32_t guest_base, uint32_t size)
+{
+    (void)ctx;
+    return bellatrix_direct_region_remove(&s_direct_regions, guest_base, size);
+}
+
 static CpuBackend g_musashi_backend = {
     .ctx = NULL,
     .get_pc = musashi_get_pc,
     .set_ipl = musashi_set_ipl,
     .reset = musashi_reset,
     .run = musashi_run,
+    .map_direct = musashi_map_direct,
+    .unmap_direct = musashi_unmap_direct,
 };
 
 const char *bellatrix_musashi_cpu_model(void)
@@ -293,6 +335,11 @@ const char *bellatrix_musashi_cpu_model(void)
 
 void bellatrix_musashi_backend_init(void)
 {
+    static const BellatrixDirectRegionBackendOps direct_ops = {
+        .map = musashi_direct_map,
+        .unmap = musashi_direct_unmap,
+    };
+    bellatrix_direct_region_map_init(&s_direct_regions, &direct_ops, NULL);
     m68k_init();
     m68k_set_cpu_type(BELLATRIX_MUSASHI_CPU_MODEL);
 }
