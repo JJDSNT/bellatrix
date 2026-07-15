@@ -67,8 +67,8 @@ static uint32_t s_runtime_scroll;
 static uint64_t s_runtime_started;
 static uint32_t s_runtime_apply_index;
 static uint32_t s_runtime_apply_drive;
-static uint32_t s_runtime_loaded;
 #if BELLATRIX_ENABLE_USBSTACK
+static uint32_t s_runtime_loaded;
 static char s_runtime_names[MAX_FILES][FAT32_NAME_MAX];
 static Fat32File s_runtime_adf_file;
 #endif
@@ -259,7 +259,9 @@ static void draw_frame(uint32_t count, uint32_t cursor, uint32_t scroll,
 // ---------------------------------------------------------------------------
 
 static uint8_t s_adf_buf[MAX_ADF_SELECTIONS][ADF_BUF_SIZE] __attribute__((aligned(512)));
+#if BELLATRIX_ENABLE_USBSTACK
 static uint8_t s_adf_stage[ADF_BUF_SIZE] __attribute__((aligned(512)));
+#endif
 
 #if BELLATRIX_ENABLE_USBSTACK
 static Fat32State s_fat32;
@@ -294,10 +296,10 @@ static int fat32_hdf_read_cb(void *ctx, uint32_t lba, uint32_t count, uint8_t *d
 }
 #endif /* BELLATRIX_ENABLE_USBSTACK */
 
+#if BELLATRIX_ENABLE_USBSTACK
 static uint32_t media_runtime_scan_adfs(void)
 {
     s_runtime_count = 0u;
-#if BELLATRIX_ENABLE_USBSTACK
     if (!usb_msc_is_ready() || !fat32_init_usb(&s_fat32))
         return 0u;
 
@@ -313,9 +315,9 @@ static uint32_t media_runtime_scan_adfs(void)
     sort_media_entries(s_runtime_entries, s_runtime_count);
     kprintf("[LAUNCHER] runtime media: %u files, %u ADFs\n",
             (unsigned)n_files, (unsigned)s_runtime_count);
-#endif
     return s_runtime_count;
 }
+#endif
 
 bool media_selection_runtime_open(void)
 {
