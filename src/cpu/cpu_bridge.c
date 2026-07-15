@@ -98,16 +98,16 @@ static void cpu_bridge_profile_critical_mmio(uint32_t addr, unsigned int size,
 }
 #endif
 
-/* Zorro III / 32-bit space (addr > 0x00FFFFFF, e.g. autoconfig at
- * 0xFF000000 — EZ3_EXPANSIONBASE) is not implemented (ISSUE-0032). This
- * MUST read as open bus, not alias into 24-bit space: AROS's Z3 probe
+/* Unowned 32-bit space (addr > 0x00FFFFFF, e.g. a probe at 0xFF000000)
+ * MUST read as open bus, not alias into 24-bit space. Configured DIRECT Z3
+ * regions are consumed by the CPU backend before this fallback: AROS's probe
  * during boot reads 0xFF000000+, and masking it down previously landed
  * on live chip RAM (0x000000+) and the RTG board's own DiagArea
  * (0x000100+) — the probe was reading mutable, run-to-run-varying state
  * instead of "nothing here", which produced non-deterministic boot
  * behavior (found 2026-07-03 chasing a boot hang that resolved
  * differently across runs of the same build). */
-static inline int addr_is_unimplemented_z3(uint32_t addr)
+static inline int addr_is_unmapped_32bit(uint32_t addr)
 {
     if (addr <= 0x00FFFFFFu)
         return 0;
@@ -115,7 +115,7 @@ static inline int addr_is_unimplemented_z3(uint32_t addr)
         static int s_hits = 0;
         if (s_hits < 20) {
             s_hits++;
-            kprintf("[Z3-OPENBUS] addr=%08x (unimplemented — see ISSUE-0032)\n",
+            kprintf("[Z3-OPENBUS] addr=%08x (unmapped 32-bit fallback)\n",
                     (unsigned)addr);
         }
     }
@@ -146,7 +146,7 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
 #endif
     uint32_t result;
 
-    if (addr_is_unimplemented_z3(addr))
+    if (addr_is_unmapped_32bit(addr))
         return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
 
 #if defined(BELLATRIX_ENABLE_MULTICORE)
@@ -184,7 +184,14 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
 #if BELLATRIX_PROFILE_ENABLED
     uint64_t _t = bprof_now();
 #endif
-    if (addr_is_unimplemented_z3(addr))
+    /* Emu68's native 68040 support ROM uses this byte-wide diagnostic port.
+     * The original vectors.c owns it for the JIT/fault path; Musashi reaches
+     * the same ARM-side semantic through the sparse bridge instead. */
+    if (addr == 0xdeadbeefu && size == 1u) {
+        kprintf("%c", (int)(value & 0xffu));
+        return;
+    }
+    if (addr_is_unmapped_32bit(addr))
         return;
 
 #if defined(BELLATRIX_CORE_LOG)

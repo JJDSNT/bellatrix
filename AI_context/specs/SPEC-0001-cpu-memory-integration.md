@@ -353,6 +353,14 @@ re-registro ou remoção chamam `unmap`. Validação de alinhamento, sobreposiç
 capacidade pertence ao `map()` do backend/descritor e ainda precisa ser
 implementada junto da primeira board `DIRECT`.
 
+A primeira board concreta é `emu68.68040`: Bellatrix reutiliza sem copiar a ROM
+de 4 KiB de `emu68/src/boards/68040.h`, apresenta sua janela de 64 KiB e instala
+a página read-only/executável na base escolhida pelo guest. O build habilita a
+board automaticamente para Emu68 e Musashi 68040; `BELLATRIX_Z3_68040=0` a
+desabilita. O Emu68 usa seu MMU e o handler original permanece intacto. Musashi
+usa o bank `DIRECT`; o único MMIO auxiliar da ROM, o putchar `$DEADBEEF`, passa
+pelo bridge e reproduz a semântica que o `vectors.c` original já oferece.
+
 Uma eventual Z3 Fast RAM de 128 MiB precisaria declarar a forma Z3 estendida
 (tamanho base em `er_Type` e `ERFF_EXTENDED` em `er_Flags`). Isso permanece
 pesquisa, não objetivo atual. O baseline segue o Emu68 e mantém Fast RAM Z2.

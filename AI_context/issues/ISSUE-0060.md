@@ -119,7 +119,9 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
 - [ ] Definir descoberta e validação de faixa por perfil, sem promover o mapa
   específico do AROS a contrato universal.
 - [x] Provar no harness o contrato `DIRECT` com uma board Z3 ROM mínima/read-only inspirada
-  nas boards nativas do Emu68, sem torná-la requisito do perfil de produto.
+    nas boards nativas do Emu68, sem torná-la requisito do perfil de produto.
+- [x] Registrar a ROM `68040` nativa pelo lifecycle Bellatrix e validar no QEMU
+  com Emu68 e Musashi 68040, sem alterar o fault handler original.
 - [ ] Preservar Fast RAM como Z2 no baseline Emu68; só reconsiderar Z3 RAM se
   surgir um requisito independente de capacidade ou perfil.
 - [ ] Medir antes de otimizar o hook; não validar em hardware sem autorização.
@@ -186,3 +188,11 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   harness consultam o bank esparso antes do fallback/open bus e preservam
   endian big-endian e ROM read-only.
   Ainda não há board Z3 registrada no perfil de produto.
+- 2026-07-15: a ROM nativa `68040` passou a ser a primeira board Z3 real do
+  perfil, habilitada automaticamente para Emu68 e Musashi 68040. KS3.1 no QEMU
+  atribuiu `$40000000` em ambos. Emu68 instalou a página pelo MMU; Musashi pelo
+  bank `DIRECT`. A prova também revelou e corrigiu um toggle falso: o define
+  fault-driven fazia o build Musashi entrar em `M68K_StartEmu()`. Agora Musashi
+  possui o loop e não emite `[JIT]`/`[EMU68-LIVE]`. O console `$DEADBEEF` usado
+  pela DiagArea preserva a semântica original de `vectors.c` via bridge apenas
+  no backend Musashi; o handler Emu68 não foi modificado.

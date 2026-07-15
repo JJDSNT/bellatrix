@@ -17,6 +17,8 @@ set(BELLATRIX_SOURCES "")
 enable_language(ASM)
 
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
+option(BELLATRIX_ENABLE_Z3_68040
+    "Register Emu68's native 68040 support ROM through Bellatrix Z3" OFF)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 set(BELLATRIX_MUSASHI_CPU "68040" CACHE STRING "Musashi CPU model for Bellatrix bare-metal: 68000, 68010, 68ec020, 68020, 68030, 68040")
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
@@ -73,6 +75,7 @@ list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src
     ${CMAKE_SOURCE_DIR}/../src/cpu
     ${CMAKE_SOURCE_DIR}/../src/host
+    ${CMAKE_SOURCE_DIR}/src
 )
 list(APPEND BELLATRIX_SOURCES
     ${CMAKE_SOURCE_DIR}/../src/io/hid/hid_router.c
@@ -244,6 +247,15 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
     ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 )
+if(BELLATRIX_ENABLE_Z3_68040)
+    list(APPEND BASE_FILES
+        ${CMAKE_SOURCE_DIR}/../src/machine/expansions/z3_68040/z3_68040.c)
+    add_compile_definitions(BELLATRIX_ENABLE_Z3_68040=1)
+    message(STATUS "[BUILD] Bellatrix Z3 68040 support ROM: enabled")
+else()
+    add_compile_definitions(BELLATRIX_ENABLE_Z3_68040=0)
+    message(STATUS "[BUILD] Bellatrix Z3 68040 support ROM: disabled")
+endif()
 if(BELLATRIX_USE_MUSASHI_CPU)
     list(APPEND BASE_FILES
         ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_backend.c

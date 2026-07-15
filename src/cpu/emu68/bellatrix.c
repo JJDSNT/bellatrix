@@ -20,6 +20,9 @@
 #include "rigel/rigel_irq.h"
 #include "rigel/rigel_mmio.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
+#if defined(BELLATRIX_ENABLE_Z3_68040) && BELLATRIX_ENABLE_Z3_68040
+#include "machine/expansions/z3_68040/z3_68040.h"
+#endif
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
 #include "host/raspi3/hdmi_audio.h"
@@ -70,7 +73,11 @@ static void bellatrix_runtime_poll_from_emu68(void)
 
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
-#if defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
+#if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
+    /* Musashi must own the loop even when a stale Emu68 access-mode define is
+     * present in an incremental build. It never enters M68K_StartEmu(). */
+    return cpu_backend_owns_execution_loop();
+#elif defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
     /* The conservative path enters M68K_StartEmu directly. The public machine
      * driver remains compiled only as an A/B rollback option. */
     return 0;
@@ -803,6 +810,13 @@ void bellatrix_init(void)
     bellatrix_emu68_boards_reset();
     cpu_backend = cpu_backend_selected();
     cpu_backend_init_selected();
+
+#if defined(BELLATRIX_ENABLE_Z3_68040) && BELLATRIX_ENABLE_Z3_68040
+    if (bellatrix_z3_68040_register(cpu_backend) != 0)
+        kprintf("[Z3-68040] registration failed\n");
+    else
+        kprintf("[Z3-68040] registered through shared Bellatrix lifecycle\n");
+#endif
 
 #if !BELLATRIX_ENABLE_EMU68_BOARDS
     /* Legacy non-boards path: Bellatrix owns the Zorro II protocol when

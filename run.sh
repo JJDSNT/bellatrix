@@ -66,6 +66,10 @@ Common options (env vars):
   BELLATRIX_Z2_RAM_SIZE=<off|1|2|4|8>
                       Append Emu68 Zorro II RAM board size to BOOTARGS for
                       Bellatrix/QEMU testing (default: off)
+  BELLATRIX_Z3_68040=<auto|0|1>
+                      Register Emu68's native 68040 support ROM through the
+                      shared Bellatrix Z3 lifecycle (default: auto; enabled
+                      for Emu68 and Musashi 68040)
   BELLATRIX_BT_FIRMWARE_FILE=<path>
                       Use a local BCM PatchRAM .hcd file during build
   BELLATRIX_BT_FIRMWARE_FETCH=1
