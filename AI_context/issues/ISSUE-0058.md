@@ -293,6 +293,10 @@ permanecem adiados até autorização explícita futura.
   valida a IRQ Bluetooth real;
 - QEMU/AROS 1 MiB com BT habilitado: após o mesmo timeout controlado alcança
   JIT, OVL, `FNOP` e `FSAVE`, igualando o smoke anterior sem provar boot/FPU;
+- QEMU com PL011 ligado a socket e resposta HCI Reset sintética: sete bytes
+  atravessam IRQ 57, trampoline, ring e parser; o parser solicita o bloco
+  seguinte e transmite `Read Local Version`. Como o polling não drena enquanto
+  a rota está armada, esse resultado exercita efetivamente o novo top-half;
 - QEMU `raspi3b` + AROS 1 MiB por 60 s: alcança JIT, OVL e as instruções
   `FNOP`/`FSAVE`; ainda não é boot AROS nem gate de FPU concluído;
 - o log confirma `core=0`, `native fault-driven execution selected`, Core 2 a

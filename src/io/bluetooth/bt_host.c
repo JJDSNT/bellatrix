@@ -29,6 +29,8 @@
 #include "io/bluetooth/bt_link_key_db_sd.h"
 #include "mmu.h"
 #include "host/raspi3/vc_mailbox.h"
+#include "host/raspi3/physical_interrupts.h"
+#include "io/bluetooth/bt_hal_raspi3.h"
 
 // HAL declarations
 void bt_hal_raspi3_poll_uart(void);
@@ -709,9 +711,8 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
     bt_diag_log("[BT] waiting for bootstrap window (%u ms)\n",
             (unsigned)(timeout_ms ? timeout_ms : BELLATRIX_BT_BOOTSTRAP_WAIT_MS));
 
-    /* 1s heartbeat with raw state-machine values — survives in the bt_diag
-     * RAM ring even when the console is handed to the controller, and is
-     * the primary clue when the bootstrap silently stalls. */
+    /* 1s heartbeat with state-machine and normal-IRQ telemetry. It is kept
+     * both in the RAM report and on the independent miniUART log. */
     uint32_t last_beat_ms = start_ms;
     uint32_t last_activity = bt_hal_raspi3_io_activity();
 
@@ -727,12 +728,18 @@ bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms)
         }
         if (now_ms - last_beat_ms >= 1000u) {
             last_beat_ms = now_ms;
-            bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u hci=%u\n",
+            bt_diag_log("[BT] wait: state=%u now=%u bdl=%u idl=%u p1=%u "
+                        "hci=%u irq=%u irq_bytes=%u ring=%u budget=%u ovf=%u\n",
                         (unsigned)bt->bootstrap_state, (unsigned)now_ms,
                         (unsigned)bt->bootstrap_deadline_ms,
                         (unsigned)bt->init_deadline_ms,
                         (unsigned)bt->phase1_complete,
-                        (unsigned)bt->hci_ready);
+                        (unsigned)bt->hci_ready,
+                        (unsigned)bellatrix_physical_bt_irq_count(),
+                        (unsigned)bt_hal_raspi3_irq_rx_bytes(),
+                        (unsigned)bt_hal_raspi3_rx_ring_used(),
+                        (unsigned)bt_hal_raspi3_irq_rx_budget_hits(),
+                        (unsigned)bt_hal_raspi3_rx_overflow());
         }
         if ((int32_t)(now_ms - deadline_ms) >= 0) {
             bt_diag_log("[BT] bootstrap wait timed out after %u ms\n",
