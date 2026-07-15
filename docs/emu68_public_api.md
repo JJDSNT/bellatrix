@@ -1,5 +1,12 @@
 # Emu68 Public Machine Integration API
 
+> **Architectural hold (2026-07-15):** this document is not the current
+> Bellatrix product direction. Its rule that normal guest MMIO must never use
+> Data Abort is superseded by ISSUE-0058. The conservative baseline preserves
+> Emu68's fault-driven external-bus path and direct MMU mappings. This API
+> remains an experimental A/B design until measurements and compatibility
+> evidence justify revisiting it.
+
 This document defines the public contract through which a machine host uses
 Emu68 as a 68k CPU engine. Bellatrix is the immediate consumer, but no public
 type or operation is Bellatrix-, Rigel-, Amiga-, PiStorm-, or ARM-platform-

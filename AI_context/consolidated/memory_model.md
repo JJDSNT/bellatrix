@@ -2,6 +2,13 @@
 
 Consolidado em 2026-07-03 após a sessão de fast RAM (ISSUE-0031).
 
+> **Rebaseline em andamento (2026-07-15):** a parte Z3 abaixo descreve apenas
+> intenção histórica. Bellatrix ainda não possui suporte Z3 funcional. A
+> arquitetura vigente está em ISSUE-0058 e o trabalho de implementação em
+> ISSUE-0032: Autoconfig é externo, mas RAM/ROM/VRAM configurada deve ser
+> mapeada diretamente por backend; somente páginas MMIO passam pelo serviço do
+> Rigel. Este arquivo só será reconsolidado após implementação e prova.
+
 ## Harness (Musashi)
 
 | Região | Faixa | Tamanho | Como |
@@ -18,10 +25,9 @@ expansion.library duplica a faixa → "Sanity check on memory list failed".
 Gate: `bellatrix_zorro2_fast_ram_configured()` (zorro2_bus.c), consultado
 pelos dois backends Musashi (tools/harness e src/cpu/musashi).
 
-**Z3 no harness:** não suportado hoje porque o backend mascara todo acesso
-com `addr & 0x00FFFFFF` (barramento 24-bit). Musashi 020+ endereça 32-bit;
-para Z3 bastaria não mascarar em 020+, mapear a faixa Z3 (>= 0x10000000) e
-implementar autoconfig Z3. Viável, não prioritário.
+**Z3 no harness:** não suportado hoje. Não basta retirar a máscara de 24 bits:
+há bases conflitantes, ausência de lifecycle map/unmap e falta separar memória
+direta de MMIO com efeitos colaterais. Ver ISSUE-0032.
 
 ## Emu68 (hardware)
 
