@@ -1,4 +1,8 @@
 ---
+
+> **Correção arquitetural posterior (2026-07-15):** Core0=I/O e Core1=Emu68 não
+> deve orientar a branch Bluetooth. ISSUE-0058 prevalece: Emu68/Core 0 primeiro,
+> auditoria do roteamento/vectors, depois Bluetooth por IRQ normal.
 id: ISSUE-0045
 title: "Plataforma multicore: owner único de I/O, IRQs físicas e integração com o árbitro"
 status: superseded

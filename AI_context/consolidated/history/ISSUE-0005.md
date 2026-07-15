@@ -1,4 +1,9 @@
 ---
+
+> **Correção arquitetural posterior (2026-07-15):** o irqfabric proposto aqui
+> não deve ser implementado sobre a topologia Core1=Emu68. ISSUE-0058 primeiro
+> restaura/audita o contrato Core 0, fault handler, vectors e IRQ física; só
+> depois a IRQ normal de Bluetooth pode ser integrada.
 id: ISSUE-0005
 title: "ARM interrupt normalization (bellatrix_irqfabric)"
 status: superseded

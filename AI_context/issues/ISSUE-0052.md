@@ -6,7 +6,7 @@ priority: critical
 type: task
 owner: agent
 created_at: 2026-07-12
-updated_at: 2026-07-12
+updated_at: 2026-07-15
 parent: ISSUE-0051
 tags: [execution, aros, ks31, multicore, emu68, performance]
 ---
@@ -23,15 +23,21 @@ necessárias para o objetivo novo. Checklist histórico não é backlog implíci
 
 # Ordem corrente
 
+- [ ] **P0/P1: executar ISSUE-0058 — congelar branches divergentes e auditar o
+  contrato original `start.c`/`vectors.c`/IRQ por core.**
+- [ ] **P2: reestabelecer Emu68 Core 0 + fault handler como baseline de
+  hardware antes de qualquer otimização multicore.**
 - [ ] Congelar baseline AROS Musashi 68040 multicore: milestones wall + SysInfo.
 - [ ] Congelar baseline KS3.1 Musashi 68040 multicore com o mesmo protocolo.
 - [ ] A/B Bellatrix lock wake-on-waiter e event-stream/empty-step.
-- [ ] Construir/validar Emu68 multicore AROS no Pi.
-- [ ] Medir bus/MMIO/STOP/IRQ do Emu68 e atacar o domínio dominante.
+- [ ] Depois de ISSUE-0058, construir/validar a topologia Emu68 que respeite o
+  contrato provado; Core 1 não é mais premissa.
+- [ ] Medir bus/MMIO/STOP/IRQ do baseline fault-driven e atacar o domínio dominante.
 - Otimização do Rigel está fora desta fila e pertence somente à ISSUE-0053.
 
 # Gates permanentes
 
+- ISSUE-0058 é o primeiro gate e prevalece sobre a fila anterior.
 - AROS/KS3.1 acelerados não regridem silenciosamente.
 - Core 0 nunca throttla CPU para melhorar RT%.
 - Nenhuma métrica de frame/presenter representa velocidade geral.

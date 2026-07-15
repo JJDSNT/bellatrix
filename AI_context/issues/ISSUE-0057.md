@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0057
 title: "Implement the fault-independent Emu68 public machine API"
-status: in_progress
-priority: high
+status: blocked
+priority: low
 type: architecture
 owner: unassigned
 created_at: 2026-07-12
-updated_at: 2026-07-13
+updated_at: 2026-07-15
 tags: [emu68, jit, bus-api, exceptions, fault-handler, architecture]
 related_files:
   - docs/emu68_public_api.md
@@ -21,7 +21,15 @@ related_files:
   - emu68/src/M68k_EA.c
 ---
 
-# Current result
+> **ARCHITECTURAL HOLD — superseded as product direction by ISSUE-0058
+> (2026-07-15).** Preserve the implementation, fixes, diagnostics and A/B
+> evidence, but do not promote the fault-independent API or this branch as the
+> required Bellatrix architecture. The conservative baseline is Emu68 on Core 0
+> with its native fault path while the original startup/IRQ/vector contract is
+> audited. Resume only as optional research after ISSUE-0058 establishes that
+> baseline.
+
+# Current result preserved in main
 
 The public types, lifecycle, topology, synchronous/cooperative descriptors,
 bounded execution, reset, stop, IPL, invalidation, JIT classifier and native

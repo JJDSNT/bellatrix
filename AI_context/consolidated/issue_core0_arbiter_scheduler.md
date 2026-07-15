@@ -1,5 +1,10 @@
 # Issue: Árbitro/Scheduler temporal no Core 0
 
+> **SUPERSEDED novamente em 2026-07-15 por ISSUE-0058.** A rejeição abaixo a
+> devolver o JIT ao Core 0 baseou-se no entendimento agora superado de que o
+> Emu68 era um worker independente de sua topologia original de IRQ/startup.
+> Core 0 + fault handler volta a ser o baseline conservador até prova contrária.
+
 > **DOCUMENTO HISTÓRICO — SUPERSEDED em 2026-07-12.** O Core 0 não agenda nem
 > limita periodicamente a CPU. A arquitetura canônica está na ISSUE-0051:
 > Core 1 livre, Core 2 self-paced e sincronização apenas em contatos reais.

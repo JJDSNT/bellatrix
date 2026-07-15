@@ -1,4 +1,9 @@
 ---
+
+> **Correção arquitetural posterior (2026-07-15):** a topologia Core0=árbitro,
+> Core1=Emu68 deste histórico foi superada por ISSUE-0058. O baseline conservador
+> volta a colocar Emu68 no Core 0 e preservar o fault handler até auditoria do
+> contrato original.
 id: ISSUE-0007
 title: "Multicore runtime — Core 0 arbiter, MMIO critical barrier, deadline scheduling"
 status: superseded

@@ -6,7 +6,7 @@ priority: critical
 type: architecture
 owner: agent
 created_at: 2026-07-12
-updated_at: 2026-07-12
+updated_at: 2026-07-15
 tags: [performance, aros, ks31, multicore, emu68, 68040, pistorm]
 related_files:
   - src/cpu/emu68
@@ -14,6 +14,13 @@ related_files:
   - src/runtime/core_chipset.c
   - src/cpu/cpu_bridge.c
 ---
+
+> **EMENDA ARQUITETURAL 2026-07-15 — ISSUE-0058 prevalece.** O objetivo de
+> computação rápida permanece, mas a colocação Core1=Emu68, a independência de
+> IRQ física e a substituição do fault handler não são mais decisões
+> não-negociáveis. O baseline conservador volta a ser Emu68 no Core 0, com o
+> contrato original de `start.c`/`vectors.c` auditado antes de qualquer nova
+> topologia. Toda frente Emu68 desta issue fica subordinada à ISSUE-0058.
 
 # Objetivo canônico
 
@@ -33,16 +40,18 @@ KS1.3/Battle/68000 deixam de dirigir a arquitetura. Permanecem cargas de
 compatibilidade secundária e regressão do chipset, nunca razão para reduzir a
 potência do sistema moderno.
 
-# Decisões não negociáveis
+# Decisões não negociáveis (corrigidas por ISSUE-0058)
 
-- Core 1 executa a CPU à máxima capacidade. Core 0 não throttla CPU por wall
-  clock, horizon, FPS, VBL ou throughput atual do Rigel.
-- Core 0 é control plane/Host Reactor e publica permissão de trabalho para o
-  chipset; não transforma a CPU em worker lockstep por epochs.
-- Core 2 possui Rigel e progride autonomamente. Sincronização CPU↔chipset ocorre
-  apenas em contatos que exigem coerência.
+- Emu68 executa inicialmente no Core 0, preservando o placement e o ambiente do
+  desenho original. Outro placement exige prova de equivalência completa.
+- Core 0 não throttla a CPU por wall clock, FPS, VBL ou throughput do Rigel;
+  isso não implica separar o Host Reactor do core do JIT.
+- Rigel mantém ownership único. Seu core e o placement dos serviços físicos
+  serão confirmados depois da auditoria de startup/IRQ, não por inércia da
+  topologia atual.
 - A propriedade PiStorm é preservada: CPU rápida, writes postados, estado quente
   publicado, IPL push e barreiras raras.
+- O fault handler nativo permanece baseline. API explícita é A/B opcional.
 - AROS/KS3.1 chegando rapidamente ao desktop é gate de produto e não pode
   regredir silenciosamente por uma correção temporal.
 - Métricas não são intercambiáveis: potência CPU, tempo até milestone,
@@ -91,7 +100,8 @@ Rigel pertence exclusivamente à ISSUE-0053.
 
 ## B — Emu68 como backend primário rápido
 
-- [ ] Provar Emu68 multicore no Pi com AROS/KS3.1 além do desktop.
+- [ ] Concluir primeiro a auditoria e o rebaseline Core 0 de ISSUE-0058.
+- [ ] Provar Emu68 no Pi com AROS/KS3.1 além do desktop no baseline fault-driven.
 - [ ] Fechar liveness STOP/IRQ/MMIO sem janela periódica imposta pelo Core 0.
 - [ ] Medir fault/callback bus e otimizar hot paths um a um.
 - [ ] Validar código mutável, cache/JIT invalidation, FPU e memória longa.
@@ -99,6 +109,7 @@ Rigel pertence exclusivamente à ISSUE-0053.
 
 ## C — Bellatrix multicore/bus sem frear CPU
 
+- [ ] Não mover o JIT para Core 1 antes do gate de equivalência de ISSUE-0058.
 - [ ] Medir wakeups reais, cache-line bouncing, locks e publicações efetivas.
 - [ ] Eliminar SEV/barreiras/republicações sem consumidor ou mudança de estado.
 - [ ] Manter/expandir MMIO snapshot/postado e contatos explícitos.

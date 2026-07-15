@@ -1,4 +1,9 @@
 ---
+
+> **Correção arquitetural posterior (2026-07-15):** esta auditoria assumia a
+> topologia Bellatrix já patchada e tratava a ausência atual de IRQ como prova
+> suficiente de independência. ISSUE-0058 exige comparação com o `HEAD` original
+> e rebaseline do Emu68 no Core 0 antes de habilitar Bluetooth IRQ.
 id: ISSUE-0004
 title: "Interrupt model audit — Phase 0"
 status: superseded

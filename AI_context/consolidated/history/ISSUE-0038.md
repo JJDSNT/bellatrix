@@ -1,4 +1,8 @@
 ---
+
+> **Correção arquitetural posterior (2026-07-15):** a afirmação abaixo de que o
+> Emu68 não precisa de IRQ ARM física no Bellatrix e deve permanecer no Core 1
+> foi superada por ISSUE-0058. Preservar como histórico da hipótese anterior.
 id: ISSUE-0038
 title: "Emu68 JIT: regressao de liveness do chipset + corrupcao do vetor 0x6C no boot KS13"
 status: superseded

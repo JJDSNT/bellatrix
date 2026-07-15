@@ -1,5 +1,12 @@
 # Issue: Contrato de interrupção Emu68 (PiStorm-cêntrico) vs Bellatrix multicore
 
+> **ENTENDIMENTO SUPERADO em 2026-07-15 por ISSUE-0058.** Em particular, não é
+> mais válido assumir sem prova que a IRQ física do Emu68 está morta, que o JIT
+> pode ser movido ao Core 1 apenas por software, ou que IRQ de host deve sempre
+> ficar fora do domínio/vector Emu68. Este texto permanece como hipótese e
+> histórico. A nova regra é preservar Emu68 no Core 0 e auditar o contrato
+> original antes de separar IRQ, vectors ou placement.
+
 > Decisão 2026-07-11: IRQs físicas e I/O pertencem ao Core 0 supervisor;
 > Core 1 observa apenas IPL 68k emulado, Core 2 possui Rigel e Core 3 fica
 > reservado. IRQ ARM continua sem passar pelos vectors PiStorm/INT6.

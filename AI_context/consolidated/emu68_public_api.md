@@ -1,5 +1,11 @@
 # Emu68 Public Machine API — Working Context
 
+> **DIREÇÃO DE PRODUTO SUPERADA em 2026-07-15 por ISSUE-0058.** Este arquivo
+> preserva pesquisa, correções de JIT, testes e resultados A/B úteis. Não usar
+> sua premissa fault-independent como arquitetura obrigatória. O baseline atual
+> é Emu68 no Core 0 com fault handler nativo enquanto o contrato original de
+> startup, IRQ e vectors é auditado.
+
 The normative, high-level contract is
 [`docs/emu68_public_api.md`](../../docs/emu68_public_api.md). This file records
 implementation and validation state; those details do not belong in the public
