@@ -56,8 +56,6 @@
 #define BELLATRIX_Z2_CONFIG_BASE 0x00E80000u
 #define BELLATRIX_Z2_CONFIG_END  0x00EFFFFFu
 
-#define BELLATRIX_Z3_BASE        0x10000000u
-
 /* ------------------------------------------------------------------------- */
 /* address helpers                                                           */
 /* ------------------------------------------------------------------------- */

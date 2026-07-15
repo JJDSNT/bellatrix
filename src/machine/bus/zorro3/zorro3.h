@@ -20,6 +20,7 @@ extern "C" {
 
 #define Z3_WINDOW_BASE  0x40000000u
 #define Z3_WINDOW_END   0x7FFFFFFFu
+#define Z3_SLOT_SIZE    0x01000000u
 
 typedef struct BellatrixZorro3BoardOps {
     void    (*reset)(void *userdata);

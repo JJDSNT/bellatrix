@@ -33,9 +33,6 @@ static Zorro3Board s_boards[BELLATRIX_MAX_ZORRO3_BOARDS];
 static size_t      s_count;
 static int         s_current;
 
-/* Next available Z3 base address (64MB aligned) */
-static uint32_t    s_next_base = Z3_WINDOW_BASE;
-
 static int find_slot(const char *id)
 {
     size_t i;
@@ -89,7 +86,6 @@ void bellatrix_zorro3_init(void)
         s_boards[i].base       = 0;
         s_boards[i].hi_byte    = 0;
     }
-    s_next_base = Z3_WINDOW_BASE;
     refresh_current();
 }
 

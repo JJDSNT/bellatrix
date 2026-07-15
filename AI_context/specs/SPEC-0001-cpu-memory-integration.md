@@ -99,9 +99,11 @@ aplicada neste domínio, depois que a região foi classificada.
 contígua, inclusive uma região direta de RAM/ROM/VRAM e páginas externas de
 registradores.
 
-Esta spec não escolhe entre as constantes Z3 atuais `0x10000000` e
-`0x40000000`. A base e os limites serão fixados após reconciliar a codificação
-de Autoconfig, Super Buster e o perfil de máquina desejado.
+A faixa canônica de boards Z3 é `0x40000000..0x7fffffff`, em slots de 16 MiB,
+coerente com `EZ3_CONFIGAREA`, `EZ3_CONFIGAREAEND` e o allocator da
+expansion.library AROS local. `0x10000000` era uma constante Bellatrix sem uso e
+foi removida. A janela especial de descoberta Z3 em `0xff000000` é um domínio
+de Autoconfig, não a base de uma board configurada.
 
 # Tipos de região
 
