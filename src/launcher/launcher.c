@@ -73,21 +73,25 @@ static void launcher_runtime_step_impl(void)
 
     if (action == HID_HOST_ACTION_BTSCAN) {
 #if BELLATRIX_ENABLE_BTSTACK
+        atomic_store_explicit(&s_runtime_modal, LAUNCHER_MODAL_BTSCAN,
+                              memory_order_release);
         if (btscan_runtime_open()) {
-            atomic_store_explicit(&s_runtime_modal, LAUNCHER_MODAL_BTSCAN,
-                                  memory_order_release);
             kprintf("[LAUNCHER] F11 opened Bluetooth scan\n");
             return;
         }
+        atomic_store_explicit(&s_runtime_modal, LAUNCHER_MODAL_NONE,
+                              memory_order_release);
 #endif
         kprintf("[LAUNCHER] F11 unavailable\n");
     } else if (action == HID_HOST_ACTION_MEDIA) {
+        atomic_store_explicit(&s_runtime_modal, LAUNCHER_MODAL_MEDIA,
+                              memory_order_release);
         if (media_selection_runtime_open()) {
-            atomic_store_explicit(&s_runtime_modal, LAUNCHER_MODAL_MEDIA,
-                                  memory_order_release);
             kprintf("[LAUNCHER] F12 opened media selection\n");
             return;
         }
+        atomic_store_explicit(&s_runtime_modal, LAUNCHER_MODAL_NONE,
+                              memory_order_release);
         kprintf("[LAUNCHER] F12 unavailable\n");
     }
 

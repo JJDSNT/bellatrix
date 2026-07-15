@@ -1204,6 +1204,55 @@ int bellatrix_launcher_bt_ready(void)
     return 0;
 #endif
 }
+
+int bellatrix_launcher_bt_connect_pairs(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_connect_pairs(&g_runtime.bluetooth);
+    return bt_host_mouse_connected() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void bellatrix_launcher_bt_connect_now(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_connect_pairs(&g_runtime.bluetooth);
+#endif
+}
+
+int bellatrix_launcher_bt_mouse_connected(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    return bt_host_mouse_connected() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void bellatrix_launcher_bt_prepare_pairing(const uint8_t addr[6])
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_prepare_explicit_pairing(&g_runtime.bluetooth, addr);
+#else
+    (void)addr;
+#endif
+}
+
+void bellatrix_launcher_bt_close_pairing(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_close_pairing_window(&g_runtime.bluetooth);
+#endif
+}
+
+void bellatrix_launcher_bt_open_pairing(void)
+{
+#if BELLATRIX_ENABLE_BTSTACK
+    bt_host_open_pairing_window(&g_runtime.bluetooth);
+#endif
+}
 #endif
 
 void bellatrix_sync_overlay_from_ciaa(void)

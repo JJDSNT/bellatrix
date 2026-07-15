@@ -10,6 +10,14 @@ typedef struct BTHost {
     bool pairing_window_open;
     bool phase1_complete;
     bool hci_ready;
+    bool mouse_connected;
+    bool reconnect_pending;
+    bool hid_connect_pending;
+    uint8_t reconnect_attempts;
+    uint32_t reconnect_due_ms;
+    uint32_t hid_connect_deadline_ms;
+    bool recovery_pending;
+    uint8_t recovery_error_code;
     uint32_t baudrate;
     uint32_t pairing_window_ms;
     uint8_t bootstrap_state;
@@ -30,6 +38,10 @@ bool bt_host_is_working(const BTHost *bt);
 
 /* Connect to all pairs currently in bt_pairs (call after launcher loads BTPAIRS.TXT). */
 void bt_host_connect_pairs(BTHost *bt);
+void bt_host_close_pairing_window(BTHost *bt);
+void bt_host_open_pairing_window(BTHost *bt);
+void bt_host_prepare_explicit_pairing(BTHost *bt, const uint8_t addr[6]);
+bool bt_host_mouse_connected(void);
 
 /**
  * Process Bluetooth stack events and timers.

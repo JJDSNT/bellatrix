@@ -1,8 +1,8 @@
 // src/launcher/btscan.h
 // Bluetooth scan / pairing front-end for the launcher.
 //
-// The serial console is dark while BTStack owns the PL011, so discovery
-// results are shown on the framebuffer here. This screen only observes BT
+// BTStack owns PL011 while the independent mini-UART keeps diagnostics alive.
+// Discovery results are also shown on the framebuffer. This screen observes BT
 // state and drives pairing through bt_pairs / bt_scan; it never owns the
 // BTstack lifecycle (see ISSUE-0058).
 #pragma once

@@ -707,6 +707,14 @@ selecionáveis depois que o baseline conservador estiver provado.
   byte UART, regressão de boot e starvation.
 - [x] Reaproveitar seletivamente ring SPSC, budgets e defer da branch
   Bluetooth, sem trazer FIQ nem a substituição dos vetores.
+- [x] Incorporar o roteador HID comum USB/BT e consumir F11/F12 somente no
+  host, sem gerar rawkey, botão ou IPL no Amiga.
+- [x] Executar os modais F11/F12 no reactor Core 3; Core 0 permanece dedicado
+  ao Emu68 e o handler físico continua sendo apenas um top half limitado.
+- [x] Preservar mini-UART como log desde o boot e PL011 como UART exclusiva do
+  Bluetooth, sem handoff entre elas.
+- [ ] Validar os modais e a reconexão em hardware somente quando houver nova
+  autorização explícita.
 
 ## P4 — Otimização posterior
 

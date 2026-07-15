@@ -144,7 +144,7 @@ static bool core_io_step_serial(RuntimeCoreIO *core)
         return true;
 
     /* Paula has strict priority over console logs. Peek first so FIFO-full
-     * leaves the byte queued for the next Core 0 pass. */
+     * leaves the byte queued for the next reactor pass. */
     while (serial_queue_peek(&s_serial_tx, &byte)) {
         if (!uart_host_send_byte(&core->machine->uart_host, byte)) {
             tx_empty = false;
@@ -235,8 +235,10 @@ void core_io_step(RuntimeCoreIO *core, uint64_t now, uint64_t freq)
         update_max_u64(&core->usb_max_ticks, PAL_Time_ReadCounter() - start);
     }
 
-    /* Physical mini-UART belongs to Core 0 at runtime. Service Paula first;
-     * logs are lowest priority and only drain when no Paula byte is waiting. */
+    /* Physical mini-UART remains the diagnostic/Paula serial endpoint from
+     * early boot onward. Core 3 services it at runtime; logs are lowest
+     * priority and drain only when no Paula byte is waiting. PL011 is never
+     * handed over from Bluetooth. */
     bool serial_empty = true;
     if (pending & CORE_IO_EVENT_SERIAL) {
         uint64_t start = PAL_Time_ReadCounter();

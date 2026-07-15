@@ -36,5 +36,7 @@ bool pl011_backend_route_header_to_miniuart(void);
  * CM_GP2CTL value and reports the previous CTL/DIV through the pointers. */
 uint32_t pl011_backend_setup_bt_lpo(uint32_t *old_ctl, uint32_t *old_div);
 void pl011_backend_wait_idle(void);
+uint32_t pl011_backend_flag_register(void);
+uint32_t pl011_backend_irq_mask(void);
 
 #endif

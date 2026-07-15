@@ -290,6 +290,16 @@ void pl011_backend_rx_irq_enable(bool enable)
     __asm__ volatile("dsb sy" ::: "memory");
 }
 
+uint32_t pl011_backend_flag_register(void)
+{
+    return pl_rd32(PL011_FR);
+}
+
+uint32_t pl011_backend_irq_mask(void)
+{
+    return pl_rd32(PL011_IMSC);
+}
+
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out)
 {
     if (!b || !b->open || !byte_out) return false;
@@ -350,6 +360,9 @@ void pl011_backend_rx_irq_enable(bool enable)
 {
     (void)enable;
 }
+
+uint32_t pl011_backend_flag_register(void) { return 1u << 4; }
+uint32_t pl011_backend_irq_mask(void) { return 0u; }
 
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out)
 {

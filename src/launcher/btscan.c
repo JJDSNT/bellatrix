@@ -23,6 +23,9 @@ void bellatrix_launcher_pump_bt(void);
 void bellatrix_launcher_bt_open_pairing(void);
 void bellatrix_launcher_bt_close_pairing(void);
 int  bellatrix_launcher_bt_ready(void);
+void bellatrix_launcher_bt_connect_now(void);
+void bellatrix_launcher_bt_prepare_pairing(const uint8_t addr[6]);
+int  bellatrix_launcher_bt_mouse_connected(void);
 
 static bool s_bt_runtime_active;
 static bool s_bt_runtime_working;
@@ -456,10 +459,17 @@ void btscan_runtime_close(bool confirmed)
 
 void btscan_runtime_background_step(void)
 {
-    if (!s_bt_runtime_connect_pending)
+    if (!s_bt_runtime_connect_pending) {
+        /* A new link key is produced asynchronously after the modal closes.
+         * Persist it only once the HID link is live, from the reactor owner. */
+        if (s_bt_runtime_sd_ok &&
+            bellatrix_launcher_bt_mouse_connected() &&
+            bt_link_key_db_sd_dirty())
+            bt_pairs_save_to_sd(&s_bt_runtime_fs);
         return;
+    }
     /* Inquiry cancel is asynchronous. Preserve the proven ordering without
-     * keeping the modal open or spinning Core 0 waiting for HCI completion. */
+     * keeping the modal open or spinning Core 3 waiting for HCI completion. */
     if (launcher_ms_since(s_bt_runtime_connect_started) < 200u)
         return;
     s_bt_runtime_connect_pending = false;
@@ -538,9 +548,8 @@ bool btscan_runtime_step(void)
 }
 
 // Run the scan screen until the user continues or ~90 s elapse.
-// Shown even when the controller bootstrap failed, so the failure is
-// visible (the serial console is dark during BT operation) and the
-// diagnostics still get saved to the SD card.
+// Shown even when controller bootstrap failed so the failure remains visible
+// on the framebuffer as well as the independent mini-UART log.
 void btscan_screen(bool force_scan)
 {
     bool working = bellatrix_launcher_bt_ready() != 0;
@@ -551,6 +560,8 @@ void btscan_screen(bool force_scan)
                  fat32_init_with_reader(&s_sd_fs_scan, sd_read_block_cb, NULL);
     if (sd_ok) {
         fat32_set_writer(&s_sd_fs_scan, sd_write_block_cb, NULL);
+        s_bt_runtime_fs = s_sd_fs_scan;
+        s_bt_runtime_sd_ok = true;
         bt_pairs_load_from_sd(&s_sd_fs_scan);
     }
 
@@ -569,7 +580,7 @@ void btscan_screen(bool force_scan)
     bt_draw_scan_chrome();
     if (!working)
         fb_puts(lui_margin_x, lui_title_h + 4u,
-                "controller bootstrap FAILED - report goes to BTSCAN.TXT",
+                "controller bootstrap FAILED - inspect mini-UART log",
                 COL_CURSOR_BG, COL_BG);
 
     uint32_t last_gen = working ? 0xFFFFFFFFu : bt_scan_generation();
@@ -690,13 +701,6 @@ void btscan_screen(bool force_scan)
     if (sd_ok)
         bt_pairs_save_to_sd(&s_sd_fs_scan);
 
-    int saved = bt_save_report_to_sd();
-    const char *msg =
-        (saved == 1) ? "Report saved to SD:BTSCAN.TXT" :
-        (saved == 0) ? "Create BTSCAN.TXT (any size, e.g. 16KB) on the SD card to save reports"
-                     : "SD write failed - report not saved";
-    draw_message(msg, (saved == 1) ? COL_STATUS_BG : COL_TITLE_BG);
-    for (volatile uint32_t d = 0u; d < 2000000000u; d++) asm volatile("nop");
 }
 
 #endif // BELLATRIX_ENABLE_BTSTACK
