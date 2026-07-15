@@ -347,6 +347,7 @@ cmake "$EMU68" \
     -DBELLATRIX_TIMELINE_MODE="$TIMELINE_MODE"
 
 make -j"$(nproc)"
+"$ROOT/scripts/check_bt_irq_abi.sh" "$BUILD/Emu68.elf"
 make install
 
 hide_modified_files

@@ -1065,9 +1065,8 @@ void bellatrix_init(void)
 #ifdef BELLATRIX_ENABLE_MULTICORE
     /* Enable secondary chipset cores only after host-side services are ready. */
     PAL_Core_SetMulticoreEnabled(1);
-    /* Core 0 owns physical IO in launcher and runtime. Core 3 remains parked
-     * for future RTG/AHI work. The launcher cooperatively calls the same Host
-     * Reactor used later by the supervisor.
+    /* Core 0 owns physical IO during the launcher. Core 3 owns the same
+     * reactor after CPU launch; only bounded IRQ top halves remain on Core 0.
      *  - Core 2 (chipset) is deferred until after the launcher + chipset init
      *    (see below): with no M68K running yet it has no work during the
      *    launcher, and letting it run there raced shared state on real hardware. */

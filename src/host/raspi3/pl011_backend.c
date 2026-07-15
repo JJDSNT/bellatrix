@@ -3,7 +3,7 @@
 #if defined(BELLATRIX_ENABLE_PL011_BACKEND)
 
 /*
- * BCM2835 PL011 (UART0) — bidirectional Amiga serial backend.
+ * BCM2835 PL011 (UART0) — dedicated Pi 3 Bluetooth transport.
  *
  * Emu68 runs in big-endian AArch64; peripheral registers are little-endian.
  * Use self-contained bswap helpers — no support.h dependency.
@@ -16,9 +16,8 @@
  * Clock: 48 MHz (BCM2837 PL011 UART clock, set by firmware via mailbox).
  * 115200 baud: IBRD = 26, FBRD = 3  (error < 0.04 %).
  *
- * The same PL011 can be routed either to the 40-pin header (GPIO 14/15) or to
- * the Pi 3B's on-board Bluetooth path (GPIO 32/33 plus GPCLK2 on GPIO 43).
- * Bellatrix switches between those routes explicitly depending on ownership.
+ * Bellatrix assigns PL011 to the on-board Bluetooth path from the beginning.
+ * Logging independently owns AUX miniUART; there is no runtime UART handoff.
  */
 
 #include <stdint.h>
@@ -52,6 +51,9 @@ static inline uint32_t pl_rd32(uintptr_t a)             { return *(volatile uint
 #define PL011_CR      (PL011_BASE + 0x030UL)  /* control                  */
 #define PL011_IMSC    (PL011_BASE + 0x038UL)  /* interrupt mask           */
 #define PL011_ICR     (PL011_BASE + 0x044UL)  /* interrupt clear          */
+
+#define PL011_INT_RX  (1u << 4)
+#define PL011_INT_RT  (1u << 6)
 
 /* FR bits */
 #define FR_BUSY  (1u << 3)
@@ -276,6 +278,18 @@ bool pl011_backend_is_open(const PL011Backend *b)
     return b && b->open;
 }
 
+void pl011_backend_rx_irq_enable(bool enable)
+{
+    if (enable) {
+        pl_wr32(PL011_ICR, PL011_INT_RX | PL011_INT_RT);
+        pl_wr32(PL011_IMSC, PL011_INT_RX | PL011_INT_RT);
+    } else {
+        pl_wr32(PL011_IMSC, 0u);
+        pl_wr32(PL011_ICR, PL011_INT_RX | PL011_INT_RT);
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out)
 {
     if (!b || !b->open || !byte_out) return false;
@@ -330,6 +344,11 @@ void pl011_backend_close(PL011Backend *b)
 bool pl011_backend_is_open(const PL011Backend *b)
 {
     return b && b->open;
+}
+
+void pl011_backend_rx_irq_enable(bool enable)
+{
+    (void)enable;
 }
 
 bool pl011_backend_read_byte(PL011Backend *b, uint8_t *byte_out)

@@ -1,10 +1,11 @@
 // src/runtime/core_io.c
 //
-// Core 0 — supervisor and physical peripherals domain.
+// Physical peripherals reactor.
 //
 // Owns: USB host stack, Bluetooth host stack, physical UART and console drain.
 // Core 2 remains the sole owner of Rigel/Paula and exchanges serial bytes with
-// Core 0 through two SPSC queues. Core 3 is reserved for future RTG/AHI.
+// the reactor through two SPSC queues. In the conservative topology the
+// reactor runs on Core 3; Core 0 only executes bounded physical IRQ top halves.
 
 #include "runtime/core_io.h"
 #include "runtime/runtime.h"
@@ -196,7 +197,7 @@ bool core_io_open_debug_serial(RuntimeCoreIO *core)
     return false;
 }
 
-/* Called by Core 0's supervisor via bellatrix_runtime_io_step(). */
+/* Called by the currently assigned physical-I/O reactor core. */
 void core_io_step(RuntimeCoreIO *core, uint64_t now, uint64_t freq)
 {
     if (!core || !core->running) {
@@ -288,8 +289,7 @@ void core_io_reactor_reset_stats(RuntimeCoreIO *core)
     core->dispatch_over_budget = 0u;
 }
 
-/* Strong definition — overrides the weak stub in pal_core.c. Called from
- * Core 0's supervisor (multicore) or PAL_Runtime_Poll (single-core). */
+/* Strong definition — overrides the weak stub in pal_core.c. */
 void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
     extern BellatrixRuntime g_runtime;

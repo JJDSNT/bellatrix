@@ -4,8 +4,8 @@
 /* Dual-mode (Classic inquiry + LE active scan) device discovery.
  *
  * Diagnostic/pairing front-end: collects nearby devices so the launcher can
- * show them on the framebuffer — the serial console is dark while BTStack
- * owns the PL011, so the screen is the only place these results can go.
+ * show them on the framebuffer and preserve them in the diagnostic report.
+ * Logging remains available independently on AUX miniUART.
  *
  * Phases alternate (inquiry ≈5s → remote-name requests → LE scan 5s → …)
  * because the CYW43438 shares one radio between BR/EDR and LE.

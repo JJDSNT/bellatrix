@@ -26,6 +26,8 @@
 #include "io/bluetooth/bt_pairs.h"
 #include "io/bluetooth/bt_diag.h"
 #include "io/bluetooth/bt_link_key_db_sd.h"
+#include "io/bluetooth/bt_hal_raspi3.h"
+#include "host/raspi3/physical_interrupts.h"
 #include "storage/sdcard/bcm_emmc.h"
 #endif
 
@@ -578,8 +580,8 @@ static void wait_ack(void)
 // ---------------------------------------------------------------------------
 // Bluetooth scan screen (diagnostic / pairing front-end)
 //
-// The serial console is dark while BTStack owns the PL011, so discovery
-// results can only be shown here, on the framebuffer.
+// Discovery is shown on the framebuffer and mirrored to the independent
+// miniUART/diagnostic report.
 // ---------------------------------------------------------------------------
 
 #if BELLATRIX_ENABLE_BTSTACK
@@ -929,8 +931,8 @@ static void bt_scan_screen(void)
                 COL_CURSOR_BG, COL_BG);
 
     uint32_t last_gen = working ? 0xFFFFFFFFu : bt_scan_generation();
-    // Outer iteration ≈ 0.125 ms — tight cadence keeps the 16-byte PL011
-    // FIFO drained during LE advert floods (~10KB/s at 115200).
+    // IRQ drains PL011 into the SPSC ring; this cadence services BTstack and
+    // the UI outside exception context.
     uint32_t budget   = working ? 720000u : 96000u;   // ≈90 s / ≈12 s
     bool needs_redraw = false;
 
@@ -945,11 +947,18 @@ static void bt_scan_screen(void)
         if (working && iter != 0u && (iter & 16383u) == 0u) {
             uint32_t rxq_filled, rxq_wanted;
             bt_hal_raspi3_rx_pending(&rxq_filled, &rxq_wanted);
-            bt_diag_log("[SCAN] hb iter=%u tx=%u rx=%u rxq=%u/%u status=%s found=%u\n",
+            bt_diag_log("[SCAN] hb iter=%u tx=%u rx=%u rxq=%u/%u ring=%u "
+                        "irq=%u irq_bytes=%u budget=%u overflow=%u "
+                        "status=%s found=%u\n",
                         (unsigned)iter,
                         (unsigned)bt_hal_raspi3_io_tx(),
                         (unsigned)bt_hal_raspi3_io_rx(),
                         (unsigned)rxq_filled, (unsigned)rxq_wanted,
+                        (unsigned)bt_hal_raspi3_rx_ring_used(),
+                        (unsigned)bellatrix_physical_bt_irq_count(),
+                        (unsigned)bt_hal_raspi3_irq_rx_bytes(),
+                        (unsigned)bt_hal_raspi3_irq_rx_budget_hits(),
+                        (unsigned)bt_hal_raspi3_rx_overflow(),
                         bt_scan_status(), bt_scan_count());
         }
 

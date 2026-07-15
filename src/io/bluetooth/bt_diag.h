@@ -3,9 +3,8 @@
 
 /* RAM text ring for Bluetooth bring-up diagnostics.
  *
- * The PL011 console is muxed away (and kprintf disabled) while BTStack owns
- * the UART, so bootstrap breadcrumbs must survive in RAM until the launcher
- * can flush them to BTSCAN.TXT on the SD card.  Entries are plain text lines.
+ * Bootstrap breadcrumbs remain in RAM for BTSCAN.TXT in addition to being
+ * mirrored to the independent AUX miniUART log. PL011 always belongs to BT.
  */
 
 #include <stdint.h>

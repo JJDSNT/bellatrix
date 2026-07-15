@@ -219,6 +219,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/audio/output.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/miniuart_backend.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pl011_backend.c
+    ${CMAKE_SOURCE_DIR}/../src/host/raspi3/physical_interrupts.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/vc_mailbox.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/hdmi_audio.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/console_log.c

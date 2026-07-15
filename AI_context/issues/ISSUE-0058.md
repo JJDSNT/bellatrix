@@ -240,6 +240,36 @@ O fault handler e os slots de `vectors.c` não foram substituídos. O ELF manté
 os oito slots nos offsets arquiteturais `+0x000`, `+0x080`, `+0x100`,
 `+0x180`, `+0x200`, `+0x280`, `+0x300` e `+0x380`.
 
+## Invariante de ownership das UARTs
+
+Por decisão explícita do usuário, não existe handoff de console:
+
+- AUX miniUART pertence ao log desde o primeiro estágio de boot;
+- PL011/UART0 pertence ao Bluetooth desde o primeiro estágio;
+- no QEMU, o log deve ser capturado pela segunda UART (`-serial null -serial
+  stdio`), nunca reaproveitando PL011 como console.
+
+## Primeiro protótipo de IRQ Bluetooth alinhada
+
+O protótipo preserva o slot SPx IRQ original. Dentro do limite de `0x80`, um
+discriminador lê `IRQ_PENDING_2` e desvia somente UART0/GPU IRQ 57. Todas as
+outras fontes continuam byte a byte pelo caminho Emu68 que publica
+`INT_shadow`/`INT.ARM=6`.
+
+O desvio UART entra num trampoline fora da vector table que salva e restaura
+`x0-x30`, `q0-q31`, `FPCR` e `FPSR`. O top-half então:
+
+- desabilita somente a rota UART0 no controlador BCM2837;
+- mascara RX/RT no PL011;
+- drena no máximo 64 bytes para o ring SPSC;
+- publica `CORE_IO_EVENT_BLUETOOTH` e emite `SEV`;
+- nunca chama BTstack, logger ou alocador dentro da exceção.
+
+O reactor normal no Core 3 consome o ring e rearma PL011 + controlador. FIQ e
+o fault handler não foram modificados. O gate `scripts/check_bt_irq_abi.sh`
+verifica offsets, fallback Emu68, contexto completo e FIQ intocada em todo
+build.
+
 ## Escopo de validação vigente
 
 Por decisão do usuário em 2026-07-15, não executar validação em hardware real
@@ -255,6 +285,14 @@ permanecem adiados até autorização explícita futura.
 - verificação de reprodução: patches `0003`, `0020` e `0025` passam
   `git apply --reverse --check` sobre o checkout configurado;
 - QEMU `raspi3b` + DiagROM: PASS até OVL, UDS/LDS e detecção/teste de Chip RAM;
+- QEMU com o novo vetor, BT desabilitado e log na segunda UART: PASS até OVL,
+  UDS/LDS e teste de Chip RAM;
+- QEMU com BT habilitado e log na segunda UART: após o timeout esperado do
+  controlador inexistente, libera Core0/JIT e alcança OVL, UDS/LDS e Chip RAM;
+  isso não é gate do transporte, pois o modelo não oferece um BCM4343x e não
+  valida a IRQ Bluetooth real;
+- QEMU/AROS 1 MiB com BT habilitado: após o mesmo timeout controlado alcança
+  JIT, OVL, `FNOP` e `FSAVE`, igualando o smoke anterior sem provar boot/FPU;
 - QEMU `raspi3b` + AROS 1 MiB por 60 s: alcança JIT, OVL e as instruções
   `FNOP`/`FSAVE`; ainda não é boot AROS nem gate de FPU concluído;
 - o log confirma `core=0`, `native fault-driven execution selected`, Core 2 a
@@ -389,13 +427,14 @@ selecionáveis depois que o baseline conservador estiver provado.
 
 ## P3 — IRQ Bluetooth alinhada
 
-- [ ] Auditar o roteamento BCM2837 e as fontes PL011/DWC2.
-- [ ] Projetar IRQ normal para Bluetooth compatível com o Core 0/Emu68.
-- [ ] Handler mínimo: identificar e reconhecer o hardware, registrar pending e
+- [x] Auditar o roteamento BCM2837 e as fontes PL011/DWC2.
+- [x] Projetar IRQ normal para Bluetooth compatível com o Core 0/Emu68.
+- [x] Handler mínimo: identificar e reconhecer o hardware, registrar pending e
   retornar; executar BTStack fora da exceção.
 - [ ] Provar ausência de corrupção de contexto JIT, IRQ Amiga espúria, perda de
   byte UART, regressão de boot e starvation.
-- [ ] Reaproveitar seletivamente a branch Bluetooth depois desses gates.
+- [x] Reaproveitar seletivamente ring SPSC, budgets e defer da branch
+  Bluetooth, sem trazer FIQ nem a substituição dos vetores.
 
 ## P4 — Otimização posterior
 
@@ -459,3 +498,8 @@ houver conflito.
   mantido como resultado parcial, não como boot ou validação de FPU.
 - 2026-07-15: validação em hardware real explicitamente retirada do escopo
   atual pelo usuário; continuar somente com build, testes e QEMU.
+- 2026-07-15: implementado primeiro protótipo de Bluetooth por IRQ normal.
+  UART0 é discriminada dentro do slot SPx e desviada para trampoline completo;
+  demais IRQs mantêm a semântica Emu68 e FIQ permanece intocada.
+- 2026-07-15: consolidado ownership sem handoff: miniUART=log desde o início,
+  PL011=Bluetooth desde o início. QEMU/DiagROM repetido pela segunda UART.

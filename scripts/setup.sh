@@ -180,6 +180,7 @@ EMU68_PATCHES=(
     "$PATCHES/0010-bellatrix-z2ram-fixes.patch"
     "$PATCHES/0019-emu68-tlsf-hardening.patch"
     "$PATCHES/0020-emu68-stop-liveness.patch"
+    "$PATCHES/0022-bellatrix-bt-normal-irq.patch"
     "$PATCHES/0025-emu68-machine-continuation.patch"
     "$PATCHES/0026-emu68-mmu-unmap.patch"
     "$PATCHES/0027-emu68-explicit-ea-access.patch"
