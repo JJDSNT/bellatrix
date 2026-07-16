@@ -21,7 +21,8 @@ progress" report call intended to synchronize chipset time.
   direction itself was abandoned architecturally.
 - The goal was never to replace the fault handler (which only does
   address dispatch/routing) — it was meant to synchronize chipset
-  progress. That got conflated: the API's progress-sync call
+  progress. See `AI_context/consolidated/emu68_routing_vs_synchronization.md`
+  for the full writeup of this conceptual mix-up. That got conflated: the API's progress-sync call
   (`emu68_machine_dispatch_quantum_progress`) was gated behind the same
   `BELLATRIX_EMU68_FAULT_DRIVEN` switch used for the (separate, and
   ultimately abandoned) access-routing question, and in the process the

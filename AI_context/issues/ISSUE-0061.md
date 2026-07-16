@@ -10,6 +10,7 @@ updated_at: 2026-07-16
 tags: [emu68, jit, executionloop, stop, liveness, regression, public-api]
 related_files:
   - AI_context/archive/emu68-public-machine-api-2026-07.md
+  - AI_context/consolidated/emu68_routing_vs_synchronization.md
   - AI_context/consolidated/history/ISSUE-0038.md
   - AI_context/issues/ISSUE-0058.md
   - patches/0003-bellatrix-execution-loop.patch
