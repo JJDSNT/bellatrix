@@ -974,7 +974,12 @@ void bellatrix_init(void)
      * fault-driven path. It is not equivalent in cost: Exec's romtag scan
      * (RTC_MATCHWORD sweep) walks the window a word at a time, which without
      * MMU_ACCESS costs 262144 data aborts that each return the same constant.
-     * Reads now resolve in the MMU; writes still fault and are ignored. */
+     * Reads now resolve in the MMU; writes still fault and are ignored.
+     *
+     * Note when instrumenting this: the [EMU68-LIVE]/[DIAG] checkpoints hang
+     * off bellatrix_emu68_report_jit_progress(), which vectors.inc calls from
+     * the fault path. Removing faults here also removes those prints, so their
+     * absence is not a stall -- do not read it as one. */
     memset((void *)EXP_ROM_PROBE_KVIRT, 0, 0x80000);
     mmu_map(0xF00000, 0xF00000, 0x80000,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY |
