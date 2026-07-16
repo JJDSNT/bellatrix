@@ -1,22 +1,22 @@
 // src/runtime/core_chipset.c
 //
-// Core 2 — Rigel chipset domain.
+// Rigel chipset role.
 //
 // Owns the full chipset tick (Agnus, Denise, Paula, CIA) via rigel_step().
-// Runs on Core 2 in multicore mode; driven from the single-core poll path
-// via bellatrix_runtime_host_step() when multicore is disabled.
+// Runs on BELLATRIX_CORE_CHIPSET in multicore; driven by the single-core path
+// via bellatrix_runtime_chipset_step() when multicore is disabled.
 //
-// Synchronisation with the CPU owner (Core 0 in the Emu68 rebaseline, Core 1
-// in the legacy multicore topology):
+// Synchronisation with the CPU role:
 //   - the CPU path publishes M68K cycles converted to CCK into
 //     s_cpu_cck_target after observable JIT/bus progress;
-//   - Core 2 wakes on SEV, drains cycles until caught up, then WFEs again.
+//   - the chipset role wakes on SEV, drains until caught up, then WFEs again;
 //   - IPL changes and frame events are published atomically back to the CPU.
 //
 // core_chipset_lock_acquire/release() guard chipset state from concurrent
 // CPU-side bus access (called from cpu_bridge.c, not from the Rigel owner).
 
 #include "runtime/core_chipset.h"
+#include "runtime/topology.h"
 #include "runtime/cpu_progress.h"
 #include "runtime/posted_writes.h"
 #include "cpu/emu68/bellatrix_profile.h"
@@ -32,8 +32,8 @@
 #include "debug/core_log.h"
 #include "host/pal.h"
 
-/* Max CCK the CPU (Core 1) may run ahead of the chipset (Core 2) before it
- * blocks and lets Core 2 catch up. Without this bound the target diverges
+/* Max CCK the CPU may run ahead of the chipset before it blocks and lets the
+ * chipset catch up. Without this bound the target diverges
  * without limit (observed: chipset >400M CCK behind), making the emulated
  * machine's sense of time meaningless. ~36 scanlines; tunable. First
  * correctness increment of the Core-0 arbiter (issue_core0_arbiter_scheduler.md). */
@@ -51,7 +51,7 @@
  * cross-core stores for <=64 us of target lag. */
 #define CHIPSET_PUBLISH_MIN_CCK 227u
 
-/* Published by Core 1 (CPU); consumed by Core 2 (chipset). */
+/* Published by the CPU role; consumed by the chipset role. */
 static _Atomic uint64_t s_cpu_cck_target = 0;
 static _Atomic uint64_t s_chipset_horizon = 0;
 static _Atomic uint32_t s_timeline_mode = RUNTIME_TIMELINE_CPU_DRIVEN;
@@ -64,12 +64,12 @@ enum {
 };
 static _Atomic uint32_t s_timeline_pause_request = TIMELINE_PAUSE_NONE;
 static _Atomic uint32_t s_timeline_mode_request = TIMELINE_MODE_NONE;
-static RuntimeTimeline s_timeline; /* Core 0 owner */
+static RuntimeTimeline s_timeline; /* host-reactor owner */
 
-/* Aggregated CCK not yet added to s_cpu_cck_target. Core 1 local. */
+/* Aggregated CCK not yet added to s_cpu_cck_target. CPU-role local. */
 static uint32_t s_pending_cck = 0;
 
-/* Advanced by Core 2 (chipset); read cross-core by the CPU/backpressure and
+/* Advanced by chipset; read cross-core by CPU/backpressure and
  * supervisor paths, so it must be atomic. */
 static _Atomic uint64_t s_chipset_cck = 0;
 static _Atomic uint8_t s_pending_ipl = 0;
@@ -79,10 +79,10 @@ static _Atomic uint64_t s_frames_presented = 0;
 static _Atomic uint64_t s_frames_coalesced = 0;
 
 /* Hot read-only registers, published by the Rigel owner and served lock-free
- * to Core 1 poll loops (blit-busy, interrupt waits) without the critical-MMIO
+ * to CPU poll loops (blit-busy, interrupt waits) without critical-MMIO
  * rendezvous. Same pattern as s_pending_ipl; conceptually the PiStorm
  * housekeeper, which pushes hot bus state to the CPU instead of letting the
- * CPU fetch it. Refreshed on every Core 2 drain iteration and, for
+ * CPU fetch it. Refreshed on every chipset drain iteration and, for
  * read-own-write consistency, right after critical CPU writes (both under
  * the chipset access lock). VPOSR/VHPOSR stay on the slow path: they change
  * every CCK, so they are derived from a published beam geometry snapshot at
@@ -93,7 +93,7 @@ static _Atomic uint16_t s_pub_intreqr = 0;
 
 /* Beam snapshot seqlock. Every payload field is atomic as C does not permit
  * concurrent non-atomic reads even when a sequence counter detects tearing.
- * The Rigel owner is the writer; Core 1 retries if publication overlaps. */
+ * The Rigel owner is the writer; the CPU retries if publication overlaps. */
 static _Atomic uint32_t s_pub_beam_seq = 0;
 static _Atomic uint64_t s_pub_beam_time = 0;
 static _Atomic uint16_t s_pub_beam_vpos = 0;
@@ -109,8 +109,8 @@ static _Atomic uint8_t s_pub_beam_lol_toggle = 0;
 /* -----------------------------------------------------------------------
  * Posted-write queue (PiStorm wb_push/wb_task pattern, with timestamps).
  *
- * Non-critical custom-register writes from Core 1 are queued with the CPU's
- * emulated time and applied by Core 2 exactly when the Rigel reaches that
+ * Non-critical custom-register writes from CPU are queued with its emulated
+ * time and applied by the chipset exactly when Rigel reaches that
  * stamp — no lock, no rendezvous on the CPU side, and better temporal
  * fidelity than the old inline apply (which landed at the chipset's stale
  * time). Ordering rules that keep this safe:
@@ -118,14 +118,14 @@ static _Atomic uint8_t s_pub_beam_lol_toggle = 0;
  *     before acting, so program order is preserved where it is observable;
  *   - wait_caught_up (chip == target) already implies every posted stamp
  *     has been consumed, since stamps never exceed the published target.
- * Single producer (Core 1); consumers (Core 2 at stamps, Core 1 forced
+ * Single CPU producer; consumers (chipset at stamps, CPU forced
  * drain) always hold the chipset access lock while applying.
  *
  * The ring itself lives in runtime/posted_writes.[ch] (pure SPSC, host
  * unit-tested); this file owns only the wait/fallback policy around it. */
 static PostedWriteQueue s_pw_queue;
 
-/* Remainder for M68K→CCK conversion (local to Core 1 call site). */
+/* Remainder for M68K→CCK conversion (CPU-role local). */
 static uint32_t s_m68k_rem = 0;
 
 static _Atomic(RuntimeCoreChipset *) s_core = NULL;
@@ -238,7 +238,7 @@ uint64_t core_chipset_get_horizon(void)
 void core_chipset_get_timeline_snapshot(RuntimeTimeline *snapshot)
 {
     if (snapshot != NULL)
-        *snapshot = s_timeline; /* Core 0 is the sole caller/owner. */
+        *snapshot = s_timeline; /* host reactor is the sole caller/owner */
 }
 
 void core_chipset_drain_host_completions(void)
@@ -304,7 +304,7 @@ void core_chipset_lock_release(void)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
     atomic_flag_clear_explicit(&s_chipset_access_lock, memory_order_release);
-    /* Most releases are Core 2 finishing an uncontended Rigel step.  The old
+    /* Most releases are chipset finishing an uncontended Rigel step. The old
      * unconditional `dsb sy; sev` broadcast woke every PE and converted work
      * completions into empty host-loop iterations.  A release store is the
      * lock's ordering contract; only publish an event when a waiter actually
@@ -348,9 +348,8 @@ void core_chipset_set_pending_ipl(uint8_t ipl)
     ipl &= 7u;
     atomic_store_explicit(&s_pending_ipl, ipl,
                           memory_order_release);
-#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
-    BELLATRIX_EMU68_CORE0_REBASELINE
-    /* There is no managed CPU quantum on Core 0 to pull s_pending_ipl.
+#if BELLATRIX_NATIVE_EMU68_INTEGRATION
+    /* Native Emu68 has no managed CPU quantum to pull s_pending_ipl.
      * Publish into Emu68's native context and wake STOP/WFE directly. */
     PAL_IPL_Set(ipl);
 #endif
@@ -586,11 +585,10 @@ bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value)
 #endif
 }
 
-/* MMIO-critical barrier. The CPU (Core 1) may run up to CHIPSET_MAX_BACKLOG_CCK
- * ahead of the chipset (Core 2); before a critical register access it must let
- * Core 2 catch up so it reads/writes fresh state. Mirrors the single-core
- * path's "flush partial cycles on bus access" (machine_rigel_step.c). Core 2
- * SEVs after each host_step, waking this WFE. */
+/* MMIO-critical barrier. CPU may run up to CHIPSET_MAX_BACKLOG_CCK ahead; a
+ * critical access lets chipset catch up for fresh state. This mirrors the
+ * single-core "flush partial cycles on bus access" path. The chipset role
+ * emits SEV after each host step, waking this WFE. */
 void core_chipset_wait_caught_up(void)
 {
 #if defined(BELLATRIX_ENABLE_MULTICORE)
@@ -654,7 +652,7 @@ bool core_chipset_init(RuntimeCoreChipset *core,
     atomic_store_explicit(&s_pub_beam_seq, 0u, memory_order_release);
     core_chipset_publish_hot_regs();
 
-    CORE2_LOG("chipset init (Rigel)");
+    CHIPSET_LOG("init (Rigel)");
     return true;
 }
 
@@ -665,7 +663,7 @@ void core_chipset_shutdown(RuntimeCoreChipset *core)
     atomic_store_explicit(&s_pub_beam_seq, 0u, memory_order_release);
     PAL_Runtime_WakeupChipset(); /* release queue-full/backpressure waiters */
     atomic_store_explicit(&s_core, NULL, memory_order_release);
-    CORE2_LOG("chipset shutdown cck=%llu", (unsigned long long)core->local_cycles);
+    CHIPSET_LOG("shutdown cck=%llu", (unsigned long long)core->local_cycles);
 }
 
 void core_chipset_reset(RuntimeCoreChipset *core)
@@ -691,11 +689,11 @@ void core_chipset_reset(RuntimeCoreChipset *core)
     posted_writes_reset(&s_pw_queue);
     atomic_store_explicit(&s_pub_beam_seq, 0u, memory_order_release);
     core_chipset_publish_hot_regs();
-    CORE2_LOG("chipset reset");
+    CHIPSET_LOG("reset");
 }
 
 /* Backpressure: block until Core 2 drains the backlog below the bound, so
- * the CPU (Core 1) cannot run unbounded ahead of the chipset (Core 2).
+ * the CPU role cannot run unbounded ahead of the chipset role.
  * Core 2 SEVs after every drain iteration, waking this WFE. */
 static void core_chipset_apply_backpressure(void)
 {
@@ -766,7 +764,7 @@ static void core_chipset_publish_flush(void)
 }
 
 /* ---------------------------------------------------------------------------
- * Called by Core 1 (CPU / JIT or Musashi) after each advance quantum.
+ * Called by the selected CPU backend after each advance quantum.
  * Converts M68K cycles → CCK, aggregates locally, and signals Core 2 once
  * at least CHIPSET_PUBLISH_MIN_CCK accumulated.
  * ------------------------------------------------------------------------- */
@@ -795,7 +793,7 @@ void bellatrix_runtime_publish_cpu_cycles(uint32_t m68k_cycles)
  * Called by Core 2 from chipset_core_loop() in pal_core.c.
  * Advances Rigel until caught up with the CPU target.
  * ------------------------------------------------------------------------- */
-void bellatrix_runtime_host_step(uint64_t now, uint64_t freq)
+void bellatrix_runtime_chipset_step(uint64_t now, uint64_t freq)
 {
     RuntimeCoreChipset *core = atomic_load_explicit(&s_core,
                                                     memory_order_acquire);

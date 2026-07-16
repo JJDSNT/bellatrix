@@ -16,6 +16,7 @@
 #include "musashi_backend.h"
 #include "screenshot.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
+#include "machine/expansions/z2_fast_ram/z2_fast_ram.h"
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
 #include "machine/expansions/rtg/rtg.h"
 
@@ -1127,9 +1128,9 @@ int main(int argc, char **argv)
         bellatrix_machine_eject_df0();
     }
 
-    /* Announce the 8MB Zorro II fast RAM via autoconfig so the OS adds it
-     * to the memory list.  The Musashi backend already backs the
-     * 0x200000-0x9FFFFF window; HARNESS_FASTRAM=0 disables the board.
+    /* Announce Fast RAM through Zorro II Autoconfig. Its host backing is
+     * reserved already, but the Musashi direct region is installed only
+     * after the guest assigns the board base. HARNESS_FASTRAM=0 disables it.
      * With HARNESS_RTG=1 the RTG board takes a 4MB window out of the
      * Zorro II space, so fast RAM drops to 4MB. */
     const char *rtg_env = getenv("HARNESS_RTG");
@@ -1137,7 +1138,12 @@ int main(int argc, char **argv)
     const char *fastram_env = getenv("HARNESS_FASTRAM");
     if (!(fastram_env && fastram_env[0] == '0')) {
         uint32_t fast_mb = rtg_enabled ? 4u : 8u;
-        bellatrix_zorro2_enable_fast_ram(fast_mb * 1024u * 1024u);
+        if (bellatrix_z2_fast_ram_register(
+                musashi_backend_get(), &m->memory,
+                fast_mb * 1024u * 1024u) != 0) {
+            fprintf(stderr, "[HARNESS] Fast RAM registration failed\n");
+            return 1;
+        }
         printf("[HARNESS] Fast RAM: %uMB Zorro II board registered\n",
                (unsigned)fast_mb);
     }

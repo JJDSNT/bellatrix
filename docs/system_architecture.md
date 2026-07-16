@@ -3,6 +3,13 @@
 ````md id="ayulnk"
 # Bellatrix — System Architecture and Runtime Organization
 
+> **Architectural rebaseline (2026-07-15):** the fixed Core0-supervisor /
+> Core1-CPU topology below was superseded by ISSUE-0058. During stabilization,
+> Emu68 remains on Core 0 with its native vector/fault/IRQ environment, Rigel
+> owns Core 2, physical I/O runs on Core 3, and Core 1 is auxiliary. This
+> placement is provisional, not the final product topology; integration
+> contracts must remain independent of core number.
+
 ## Purpose
 
 Define the canonical structural architecture of Bellatrix.
@@ -49,6 +56,11 @@ Bellatrix adds:
 * observable hardware behavior
 * compatibility semantics
 
+Bellatrix is being migrated toward a sparse ARM architecture. CPU accesses do
+not target a closed `BellatrixMachine` box: direct memory remains mapped and
+external regions reach their semantic owners directly. `BellatrixMachine` is
+currently a transitional composition object, not the target CPU-facing ABI.
+
 ---
 
 # 2. Architectural Principle
@@ -65,17 +77,17 @@ The machine is composed of:
 
 ---
 
-# 3. BellatrixMachine
+# 3. Sparse composition and transitional BellatrixMachine
 
-## Canonical Structure
+## Current stabilization structure
 
 ```text id="w2jlwm"
 BellatrixMachine
  ├── Runtime
- │    ├── Core 0 — Control Plane / Host Reactor (supervisor + physical IO)
-│    ├── Core 1 — CPU Runtime (Emu68 JIT or Musashi)
+ │    ├── Core 0 — CPU Runtime (provisional Emu68 native baseline)
+│    ├── Core 1 — Auxiliary / parked during stabilization
 │    ├── Core 2 — Chipset Runtime (Rigel: CIA+Agnus+Paula+Denise)
- │    └── Core 3 — Acceleration Plane (parked; future RTG/AHI jobs)
+ │    └── Core 3 — Physical I/O reactor (USB/Bluetooth)
  │
  ├── CPU
  │    └── Emu68 backend
@@ -103,11 +115,21 @@ BellatrixMachine is NOT:
 the owner of time
 ```
 
-BellatrixMachine IS:
+or:
+
+```text
+the universal CPU/MMIO gateway
+```
+
+While retained during migration, BellatrixMachine IS:
 
 ```text id="u2jlwm"
 the explicit composition and coordination point
 ```
+
+The target access path is sparse: classification dispatches directly to RAM,
+CIA, custom-chip, Autoconfig or board owners. Coordination remains local to the
+regions that require timing or cross-core synchronization.
 
 ---
 
@@ -249,30 +271,27 @@ Denise consumes visual timeline state.
 
 # 7. Runtime Organization
 
-## Core 0 — Control Plane / Host Reactor
+## Core 0 — CPU Runtime (provisional)
 
 Responsibilities:
 
-* boot (`bellatrix_init()`)
-* launching Core 1 and Core 2; Core 3 remains parked
-* sole ownership of USB, Bluetooth, physical UART and console drain
-* 1 kHz event/poll dispatch and runtime supervision
-* future physical IRQ acknowledgement and pending-event publication
+* Emu68 JIT and native execution environment
+* `VBAR_EL1`, `TPIDRRO_EL0`, Data Abort and fault-driven external bus
+* native IRQ/STOP/timer assumptions retained until audited
+* bounded physical-IRQ top half; no BTstack work in the vector
 
-Launcher and runtime call the same Host Reactor service path. Core 0 never
-routes physical ARM device IRQs into the Emu68 PiStorm INT6 path.
+Core 0 is a conservative stabilization choice. It is not a permanent ownership
+claim and must not leak into the CPU/bus ABI.
 
 ---
 
-## Core 1 — CPU Runtime
+## Core 1 — Auxiliary Runtime
 
 Responsibilities:
 
-* Emu68 JIT or Musashi (whichever backend is selected)
-* CPU execution
-* memory access
-* bus dispatch
-* host integration
+* parked in the current baseline
+* available for a measured service or a future CPU placement
+* any future migration requires equivalence with the Core 0 baseline
 
 ---
 
@@ -288,14 +307,14 @@ Responsibilities:
 
 ---
 
-## Core 3 — Acceleration Runtime (reserved)
+## Core 3 — Physical I/O Reactor (provisional)
 
 Responsibilities:
 
-* parked in the current baseline
-* future RTG conversion/compositing jobs
-* future AHI mixing/resampling jobs
-* no physical-device ownership by default
+* Bluetooth and USB deferred work outside exception context
+* PL011 belongs to Bluetooth from boot
+* AUX miniUART belongs to logging from boot
+* may be reassigned only after the stabilized topology is measured
 
 ---
 

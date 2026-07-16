@@ -185,12 +185,15 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/machine_rigel_step.c
     ${SRC}/machine/expansion.c
     ${SRC}/cpu/cpu_bridge.c
+    ${SRC}/cpu/direct_region.c
     ${SRC}/plugin/plugin_loader.c
     ${SRC}/plugin/plugin_manifest.c
 
     # Autoconfig + bus fabric
     ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro_autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
     ${SRC}/machine/bus/zorro3/zorro3.c
     ${SRC}/machine/bus/superbuster/superbuster.c
 
@@ -308,6 +311,7 @@ target_link_options(harness PRIVATE -rdynamic)
 
 target_compile_definitions(harness PRIVATE
     BELLATRIX_HARNESS=1
+    BELLATRIX_USE_MUSASHI_CPU=1
     BELLATRIX_ENABLE_PTY_BACKEND=1
     ODFS_PLATFORM_HOST=1
     BELLATRIX_ENABLE_ODFS=1
@@ -367,6 +371,47 @@ target_compile_options(bellatrix_unit_memory PRIVATE
 
 add_test(NAME bellatrix_unit_memory
          COMMAND bellatrix_unit_memory)
+
+add_executable(bellatrix_unit_zorro_autoconfig
+    ${ROOT}/tests/unit/test_zorro_autoconfig.c
+    ${SRC}/cpu/direct_region.c
+    ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro_autoconfig.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/bus/zorro3/zorro3.c
+)
+target_include_directories(bellatrix_unit_zorro_autoconfig PRIVATE
+    ${SRC}/host/posix
+    ${SRC}
+)
+target_compile_options(bellatrix_unit_zorro_autoconfig PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_zorro_autoconfig
+         COMMAND bellatrix_unit_zorro_autoconfig)
+
+add_executable(bellatrix_unit_z2_fast_ram
+    ${ROOT}/tests/unit/test_z2_fast_ram.c
+    ${SRC}/cpu/direct_region.c
+    ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/zorro2/zorro2_bus.c
+    ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
+)
+target_include_directories(bellatrix_unit_z2_fast_ram PRIVATE
+    ${SRC}/host/posix
+    ${SRC}
+)
+target_compile_options(bellatrix_unit_z2_fast_ram PRIVATE
+    -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_z2_fast_ram
+         COMMAND bellatrix_unit_z2_fast_ram)
+
+add_executable(bellatrix_unit_direct_region
+    ${ROOT}/tests/unit/test_direct_region.c
+    ${SRC}/cpu/direct_region.c
+)
+target_include_directories(bellatrix_unit_direct_region PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_direct_region PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_direct_region
+         COMMAND bellatrix_unit_direct_region)
 
 # Pure host-testable protocol modules (no PAL, no machine dependencies).
 add_executable(bellatrix_unit_timeline

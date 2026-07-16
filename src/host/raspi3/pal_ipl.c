@@ -14,6 +14,7 @@
 
 #include "pal.h"
 #include "M68k.h"   // struct M68KState, INT fields
+#include "runtime/topology.h"
 
 // Defined in emu68/src/aarch64/start.c; set before MainLoop() runs.
 extern struct M68KState *__m68k_state;
@@ -23,8 +24,7 @@ void PAL_IPL_Set(uint8_t ipl_level)
     struct M68KState *ctx = __m68k_state;
     if (!ctx) return;
     ctx->INT.IPL = ipl_level;
-#if !defined(BELLATRIX_EMU68_CORE0_REBASELINE) || \
-    !BELLATRIX_EMU68_CORE0_REBASELINE
+#if !BELLATRIX_NATIVE_EMU68_INTEGRATION
     /* Legacy Bellatrix treated ARM as an unused PiStorm signal. The Core 0
      * rebaseline preserves it because a physical IRQ may have published
      * level 6 concurrently with this software IPL update. */
@@ -39,8 +39,7 @@ void PAL_IPL_Clear(void)
 {
     struct M68KState *ctx = __m68k_state;
     if (!ctx) return;
-#if !defined(BELLATRIX_EMU68_CORE0_REBASELINE) || \
-    !BELLATRIX_EMU68_CORE0_REBASELINE
+#if !BELLATRIX_NATIVE_EMU68_INTEGRATION
     ctx->INT.ARM = 0;
 #endif
     ctx->INT.IPL = 0;

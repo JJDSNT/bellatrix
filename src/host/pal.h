@@ -102,11 +102,10 @@ uint64_t PAL_Time_GetFrequency(void);
 
 /* ---- Dedicated ARM core ---- */
 
-/* Active topology: Core 0 = supervisor/IO, Core 1 = CPU, Core 2 = chipset,
-   Core 3 = reserved. PAL_Core_LaunchIO remains for a future migration. */
-void PAL_Core_LaunchCpu(void (*entry)(void));
+/* Launch runtime roles according to runtime/topology.h. The selected CPU owns
+   Core 0, Rigel Core 2 and the host reactor Core 3. */
 void PAL_Core_LaunchChipset(void (*entry)(void));
-void PAL_Core_LaunchIO(void);
+void PAL_Core_LaunchHostReactor(void);
 void PAL_Core_SetMulticoreEnabled(int enabled);
 int  PAL_Core_IsMulticoreEnabled(void);
 void PAL_Core_Sync(void);

@@ -32,6 +32,16 @@ Em particular, deve ser analisada a parte em assembly responsável por preparar 
 
 Esse código é relevante para entender como os cores são configurados antes da execução normal do Emu68.
 
+### Core 0 como baseline provisória
+
+Manter o Emu68 no Core 0 é a opção conservadora para estabilização, pois
+preserva a co-localização original entre JIT, contexto M68K, vetores, Data
+Abort, timers e IRQ física. Isso **não** torna o Core 0 a topologia final do
+Bellatrix. A posição definitiva só deve ser escolhida depois que memória,
+MMIO, IPL/IRQ, STOP e timing estiverem estáveis e houver prova de equivalência
+para qualquer migração. O contrato de integração não deve codificar um número
+de core.
+
 ## Esclarecimento posterior: housekeeper, IPL e serviços ARM
 
 O Emu68 não possui por si uma ISR de dispositivo. No PiStorm, o housekeeper é

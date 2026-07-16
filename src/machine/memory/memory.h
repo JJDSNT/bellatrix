@@ -14,13 +14,15 @@
 #define BELLATRIX_CHIP_RAM_END  (BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_RAM_SIZE - 1u)
 #define BELLATRIX_CHIP_RAM_MASK 0x000FFFFFu
 
-/*
- * Phase 1 AROS boot target:
- * static Zorro II-style Fast RAM.
- */
-#define BELLATRIX_FAST_RAM_BASE 0x00200000u
+/* OCS/ECS CPU aperture. With 1 MiB fitted, A20 is ignored and the second
+ * MiB mirrors the same backing; this is not additional Chip RAM. */
+#define BELLATRIX_CHIP_CPU_APERTURE_SIZE 0x00200000u
+#define BELLATRIX_CHIP_CPU_APERTURE_END  \
+    (BELLATRIX_CHIP_CPU_APERTURE_SIZE - 1u)
+
+/* Maximum/default backing capacity. The guest base is assigned by Z2
+ * Autoconfig and lives in BellatrixMemory.fast_ram_base. */
 #define BELLATRIX_FAST_RAM_SIZE 0x00800000u
-#define BELLATRIX_FAST_RAM_END  0x009FFFFFu
 #define BELLATRIX_FAST_RAM_MASK 0x007FFFFFu
 
 /*
@@ -47,16 +49,13 @@
 #define BELLATRIX_CUSTOM_BASE   0x00DFF000u
 #define BELLATRIX_CUSTOM_END    0x00DFFFFFu
 
-#define BELLATRIX_CIAB_BASE     0x00BFD000u
-#define BELLATRIX_CIAB_END      0x00BFDFFFu
-
-#define BELLATRIX_CIAA_BASE     0x00BFE000u
-#define BELLATRIX_CIAA_END      0x00BFEFFFu
+#define BELLATRIX_CIAB_PRIMARY_BASE 0x00BFD000u
+#define BELLATRIX_CIAB_PRIMARY_END  0x00BFDF00u
+#define BELLATRIX_CIA_SHARED_BASE   0x00BFE000u
+#define BELLATRIX_CIA_SHARED_END    0x00BFEF01u
 
 #define BELLATRIX_Z2_CONFIG_BASE 0x00E80000u
-#define BELLATRIX_Z2_CONFIG_END  0x00EFFFFFu
-
-#define BELLATRIX_Z3_BASE        0x10000000u
+#define BELLATRIX_Z2_CONFIG_END  0x00E8FFFFu
 
 /* ------------------------------------------------------------------------- */
 /* address helpers                                                           */
@@ -73,6 +72,47 @@ static inline int bellatrix_chip_addr_contains_range(uint32_t addr, uint32_t siz
            size <= (BELLATRIX_CHIP_RAM_SIZE - addr);
 }
 
+static inline int bellatrix_chip_cpu_addr_contains(uint32_t addr)
+{
+    return addr < BELLATRIX_CHIP_CPU_APERTURE_SIZE;
+}
+
+static inline int bellatrix_chip_cpu_addr_contains_range(uint32_t addr,
+                                                          uint32_t size)
+{
+    return addr < BELLATRIX_CHIP_CPU_APERTURE_SIZE &&
+           size <= (BELLATRIX_CHIP_CPU_APERTURE_SIZE - addr);
+}
+
+static inline int bellatrix_custom_addr_contains(uint32_t addr)
+{
+    return addr >= BELLATRIX_CUSTOM_BASE && addr <= BELLATRIX_CUSTOM_END;
+}
+
+/* CIA registers are sparse: CIA-A owns odd addresses in the shared page;
+ * CIA-B owns even addresses in both its primary and shared pages. */
+static inline int bellatrix_ciaa_addr_contains(uint32_t addr)
+{
+    return (addr & 1u) && addr >= BELLATRIX_CIA_SHARED_BASE &&
+           addr <= BELLATRIX_CIA_SHARED_END;
+}
+
+static inline int bellatrix_ciab_addr_contains(uint32_t addr)
+{
+    if (addr & 1u)
+        return 0;
+    return (addr >= BELLATRIX_CIAB_PRIMARY_BASE &&
+            addr <= BELLATRIX_CIAB_PRIMARY_END) ||
+           (addr >= BELLATRIX_CIA_SHARED_BASE &&
+            addr <= BELLATRIX_CIA_SHARED_END);
+}
+
+static inline int bellatrix_z2_config_addr_contains(uint32_t addr)
+{
+    return addr >= BELLATRIX_Z2_CONFIG_BASE &&
+           addr <= BELLATRIX_Z2_CONFIG_END;
+}
+
 /* ------------------------------------------------------------------------- */
 /* memory backing                                                            */
 /* ------------------------------------------------------------------------- */
@@ -86,6 +126,8 @@ typedef struct BellatrixMemory
     uint8_t *fast_ram;
     size_t   fast_ram_size;
     uint32_t fast_ram_mask;
+    uint32_t fast_ram_base;
+    uint8_t  fast_ram_configured;
 
     uint8_t *slow_ram;
     size_t   slow_ram_size;

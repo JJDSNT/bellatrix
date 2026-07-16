@@ -41,7 +41,7 @@ bool core_cpu_init(RuntimeCoreCPU *core,
     core->halted = false;
     core->last_ipl = 0;
 
-    CORE1_LOG("init");
+    CPU_LOG("init");
     return true;
 }
 
@@ -51,7 +51,7 @@ void core_cpu_shutdown(RuntimeCoreCPU *core)
         return;
     }
 
-    CORE1_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
+    CPU_LOG("shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->base.state = RUNTIME_CORE_STOPPED;
     core->halted = true;
 }
@@ -62,7 +62,7 @@ void core_cpu_reset(RuntimeCoreCPU *core)
         return;
     }
 
-    CORE1_LOG("reset");
+    CPU_LOG("reset");
     core->local_cycles = 0;
     core->last_ipl = 0;
     core->halted = false;
@@ -89,8 +89,10 @@ void core_cpu_step(RuntimeCoreCPU *core,
     core_cpu_publish_interrupts(core);
 
     if (core->machine->cpu_backend && core->machine->cpu_backend->run) {
-        core->local_cycles += (uint64_t)cpu_backend_run(core->machine->cpu_backend,
-                                                        cycles);
+        int used = cpu_backend_run(core->machine->cpu_backend, cycles);
+        core->local_cycles += (uint64_t)used;
+        if (used > 0 && !core->machine->cpu_backend->progress_in_run)
+            bellatrix_bridge_publish_cpu_cycles((uint32_t)used);
         return;
     }
 

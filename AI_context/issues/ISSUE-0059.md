@@ -69,7 +69,7 @@ as premissas arquiteturais superadas daquela branch. A autoridade permanece:
 - O top-half de IRQ normal preserva os bits FE/PE/BE/OE de cada leitura do
   PL011. Overflow, erros UART e marca d'água do ring ficam observáveis; erro
   de linha também classifica stall H4 como falha de transporte.
-- O consumo RX no reactor Core 3 tem orçamento por tick de bytes e de
+- O consumo RX no host reactor (Core 3 no rebaseline) tem orçamento por tick de bytes e de
   callbacks H4, atravessa completions que armam o bloco seguinte e publica
   contadores de bytes, completions e budget hits no log mini-UART.
 - O antigo atraso de dois bilhões de `nop` após BTSCAN foi removido; mini-UART
@@ -86,8 +86,8 @@ as premissas arquiteturais superadas daquela branch. A autoridade permanece:
 ## Verificação desta etapa
 
 - [x] Conflitos de merge removidos e `git diff --check` limpo.
-- [x] Comentários/ownership revisados para Core0=Emu68, Core2=Rigel,
-  Core3=reactor/modal.
+- [x] Comentários/ownership revisados por papel: CPU=Core0, chipset=Core2,
+  host reactor=Core3 no rebaseline.
 - [x] Caminho F11/F12 não chama guest keyboard/mouse nem `INT.ARM`.
 - [x] Caminho de ADF usa staging e lock apenas no commit.
 - [x] PL011 permanece BT e mini-UART permanece log/Paula.

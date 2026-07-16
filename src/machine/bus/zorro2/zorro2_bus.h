@@ -25,6 +25,8 @@ extern "C" {
 #define BELLATRIX_ZORRO2_CD_BOARD_WINDOW  BELLATRIX_ZORRO2_WIN_64KB
 
 typedef struct BellatrixZorro2BoardOps {
+    int     (*map)(void *userdata, uint32_t base, uint32_t size);
+    void    (*unmap)(void *userdata, uint32_t base, uint32_t size);
     void    (*reset)(void *userdata);
     void    (*destroy)(void *userdata);
     uint8_t (*read8)(void *userdata, uint32_t offset);
@@ -50,6 +52,7 @@ int  bellatrix_zorro2_unregister_board(const char *id);
 
 /* Returns 1 if address falls in the autoconfig config window */
 int bellatrix_zorro2_in_config_window(uint32_t addr);
+int bellatrix_zorro2_has_pending_board(void);
 
 /* Returns 1 if address falls inside a configured board window */
 int bellatrix_zorro2_in_board_window(uint32_t addr);
@@ -75,19 +78,18 @@ void bellatrix_zorro2_board_write32(uint32_t addr, uint32_t value);
 int      bellatrix_zorro2_board_configured(const char *id);
 uint32_t bellatrix_zorro2_board_base(const char *id);
 
-/* Register a Zorro2 Fast RAM board for the legacy (non-boards) path.
- * size_bytes is clamped to the nearest supported AC size (max 8 MB). */
-void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes);
-
-/* Fast RAM board state: registered = enable_fast_ram() was called;
+/* Fast RAM board state: registered = the expansion adapter was registered;
  * configured = autoconfig assigned it a base (RAM may respond). */
 int bellatrix_zorro2_fast_ram_registered(void);
 int bellatrix_zorro2_fast_ram_configured(void);
 
 /* Configured fast RAM window (base/size); returns 0 while unconfigured.
- * Use this instead of assuming the whole 0x200000-0x9FFFFF range — other
- * Zorro II boards (e.g. bellatrix.rtg) may own part of that space. */
+ * Never infer this range from the typical first Z2 allocation; other boards
+ * may be assigned before it. */
 int bellatrix_zorro2_fast_ram_window(uint32_t *base, uint32_t *size);
+
+/* Used by the Fast RAM expansion adapter; not a guest-facing operation. */
+void bellatrix_zorro2_publish_fast_ram(uint32_t window_size, int registered);
 
 #ifdef __cplusplus
 }

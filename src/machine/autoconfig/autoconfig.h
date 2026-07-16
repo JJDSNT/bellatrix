@@ -21,7 +21,8 @@
 #define AC_TYPE_DIAGVALID  0x10u  /* ERTF_DIAGVALID: DiagArea ROM present  */
 #define AC_TYPE_CHAIN      0x08u  /* ERTF_CHAINEDCONFIG                    */
 
-/* Size codes for er_Type bits 2-0 */
+/* Base size codes for er_Type bits 2-0. Z3 may extend these through er_Flags;
+ * keep that policy in the board descriptor rather than assuming Z2 sizes. */
 #define AC_SIZE_8MB    0x00u
 #define AC_SIZE_64KB   0x01u
 #define AC_SIZE_128KB  0x02u
@@ -37,11 +38,11 @@
  * The nibble-wide config space encodes logical byte N at physical offset N*4.
  * WriteExpansionByte(board, N, v) writes to board + N*4.
  *
- *   index 17 → offset 0x44 → Z3 high byte (bits 31-24) only
- *   index 18 → offset 0x48 → ec_BaseAddress (bits 23-16); triggers assignment
+ *   index 17 → offset 0x44 → Z3 base high word (bits 31-16), word write
+ *   index 18 → offset 0x48 → Z2 ec_BaseAddress (bits 23-16)
  *   index 19 → offset 0x4C → ec_Shutup
  */
-#define AC_OFF_Z3_HI    0x44u  /* Z3 only: latch bits 31-24 of base address */
+#define AC_OFF_Z3_HI    0x44u  /* Z3 only: write base[31:16] as one word      */
 #define AC_OFF_BASE_HI  0x48u  /* ec_BaseAddress: write board base >> 16    */
 #define AC_OFF_SHUTUP   0x4Cu  /* ec_Shutup: tell board to go away          */
 

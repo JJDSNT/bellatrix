@@ -163,10 +163,14 @@ No component may duplicate:
 
 | Region       | Address Range     |
 | ------------ | ----------------- |
-| Chip RAM     | 0x000000–0x1FFFFF |
-| Fast RAM     | 0x200000–0x9FFFFF |
+| Chip RAM backing | 0x000000–0x0FFFFF |
+| Chip RAM CPU mirror | 0x100000–0x1FFFFF |
+| Fast RAM | guest-assigned Z2 window |
+| CIA-B | even addresses in 0xBFD000–0xBFDF00 and 0xBFE000–0xBFEF00 |
+| CIA-A | odd addresses in 0xBFE001–0xBFEF01 |
 | Custom Chips | 0xDFF000–0xDFFFFF |
-| ROM          | 0xF80000–0xFFFFFF |
+| Extended ROM | 0xE00000–0xE7FFFF when present |
+| Standard ROM | 0xF80000–0xFFFFFF |
 
 ---
 
@@ -174,7 +178,7 @@ No component may duplicate:
 
 | Region            | Purpose                                |
 | ----------------- | -------------------------------------- |
-| 0xE80000–0xEFFFFF | AutoConfig                             |
+| 0xE80000–0xE8FFFF | Z2/Z3 AutoConfig                      |
 | >0x10000000       | extended memory / RTG / future runtime |
 
 ---
@@ -451,13 +455,13 @@ Access visibility may depend on:
 ## Reserved Region
 
 ```text id="b1jlwm"
-0xE80000–0xEFFFFF
+0xE80000–0xE8FFFF
 ```
 
-Future behavior:
+Current behavior:
 
 * board descriptors
-* dynamic configuration
+* dynamic configuration and board `map()` lifecycle
 * Zorro II devices
 * expansion boards
 

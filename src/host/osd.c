@@ -71,7 +71,7 @@ static uint8_t osd_char_idx(char c)
 static uint64_t osd_machine_frame = 0;
 static uint32_t osd_realtime_percent = 0;
 
-/* Written by the Core 0 heartbeat, read here on the same core (flip path). */
+/* Written by the host heartbeat and read by the host presentation path. */
 static uint32_t osd_throttled = 0;
 
 void osd_set_power_alert(uint32_t throttled_flags)

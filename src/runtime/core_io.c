@@ -1,11 +1,11 @@
 // src/runtime/core_io.c
 //
-// Physical peripherals reactor.
+// Host reactor: physical peripherals, timeline authority and presentation.
 //
 // Owns: USB host stack, Bluetooth host stack, physical UART and console drain.
 // Core 2 remains the sole owner of Rigel/Paula and exchanges serial bytes with
-// the reactor through two SPSC queues. In the conservative topology the
-// reactor runs on Core 3; Core 0 only executes bounded physical IRQ top halves.
+// the reactor through two SPSC queues. Its numbered core is selected by the
+// canonical role map in runtime/topology.h.
 
 #include "runtime/core_io.h"
 #include "runtime/runtime.h"
@@ -17,6 +17,7 @@
 #include "debug/core_log.h"
 #include "host/pal.h"
 #include "host/raspi3/console_log.h"
+#include "runtime/core_chipset.h"
 #ifdef BELLATRIX_LAUNCHER
 #include "launcher/launcher.h"
 #endif
@@ -176,7 +177,7 @@ bool core_io_init(RuntimeCoreIO *core, BellatrixMachine *machine)
                           memory_order_release);
     usb_host_init(&core->usb_host);
 
-    CORE0_LOG("io init");
+    HOST_LOG("io init");
     return true;
 }
 
@@ -190,7 +191,7 @@ void core_io_shutdown(RuntimeCoreIO *core)
     bt_host_shutdown(&g_runtime.bluetooth);
     usb_host_shutdown(&core->usb_host);
 
-    CORE0_LOG("io shutdown cycles=%llu", (unsigned long long)core->local_cycles);
+    HOST_LOG("io shutdown cycles=%llu", (unsigned long long)core->local_cycles);
     core->running = false;
 }
 
@@ -236,7 +237,7 @@ void core_io_step(RuntimeCoreIO *core, uint64_t now, uint64_t freq)
     }
 
     /* Physical mini-UART remains the diagnostic/Paula serial endpoint from
-     * early boot onward. Core 3 services it at runtime; logs are lowest
+     * early boot onward. The host reactor services it at runtime; logs are lowest
      * priority and drain only when no Paula byte is waiting. PL011 is never
      * handed over from Bluetooth. */
     bool serial_empty = true;
@@ -302,4 +303,9 @@ void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 #ifdef BELLATRIX_LAUNCHER
     launcher_runtime_step();
 #endif
+    /* Presentation is a host-reactor responsibility, independent of which
+     * numbered core owns the CPU backend. Core 2 only publishes completed
+     * Rigel frames; the active reactor consumes and presents the newest one. */
+    (void)core_chipset_timeline_update(now);
+    core_chipset_drain_host_completions();
 }

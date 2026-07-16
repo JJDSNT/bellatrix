@@ -146,9 +146,12 @@ USBSTACK_ENABLED="${BELLATRIX_USBSTACK:-0}"
 USB_MSC_ENABLED="${BELLATRIX_USB_MSC:-1}"
 HDMI_AUDIO_ENABLED="${BELLATRIX_HDMI_AUDIO:-0}"
 EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
+# The shared Z3 lifecycle and 68040 ROM board are still experimental. Do not
+# insert an unvalidated Autoconfig responder into every normal 68040 boot.
+Z3_68040_ENABLED="${BELLATRIX_Z3_68040:-0}"
 OSD_ENABLED="${BELLATRIX_OSD:-1}"
 LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
-TIMELINE_MODE="${BELLATRIX_TIMELINE_MODE:-cpu}"
+TIMELINE_MODE="${BELLATRIX_TIMELINE_MODE:-realtime}"
 COARSE_DEADLINES_ENABLED="${BELLATRIX_COARSE_OBSERVABLE_DEADLINES:-0}"
 
 echo "[BUILD] cpu backend: $CPU_BACKEND"
@@ -162,11 +165,7 @@ echo "[BUILD] coarse observable deadlines: $COARSE_DEADLINES_ENABLED"
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
     MULTICORE_FLAG="ON"
-    if [ "$CPU_BACKEND" = "emu68" ] && [ "$EMU68_CORE0_REBASELINE" = "1" ]; then
-        echo "[BUILD] multicore rebaseline: Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO"
-    else
-        echo "[BUILD] multicore legacy: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved"
-    fi
+    echo "[BUILD] topology: irq=Core0 cpu=Core0 chipset=Core2 host=Core3 aux=Core1"
 fi
 
 if [ "$MULTICORE_BUILD" != "1" ]; then
@@ -239,6 +238,31 @@ case "$EMU68_BOARDS_MODE" in
         ;;
 esac
 
+case "$Z3_68040_ENABLED" in
+    1)
+        Z3_68040_FLAG="ON"
+        echo "[BUILD] Bellatrix Z3 68040 support ROM: enabled"
+        ;;
+    0|"")
+        Z3_68040_FLAG="OFF"
+        echo "[BUILD] Bellatrix Z3 68040 support ROM: disabled"
+        ;;
+    auto)
+        if [ "$CPU_BACKEND" = "emu68" ] || [ "$MUSASHI_CPU" = "68040" ]; then
+            Z3_68040_FLAG="ON"
+            echo "[BUILD] Bellatrix Z3 68040 support ROM: enabled (auto)"
+        else
+            Z3_68040_FLAG="OFF"
+            echo "[BUILD] Bellatrix Z3 68040 support ROM: disabled (CPU=$MUSASHI_CPU)"
+        fi
+        ;;
+    *)
+        echo "ERROR: invalid BELLATRIX_Z3_68040: $Z3_68040_ENABLED"
+        echo "Valid values: auto, 0, 1"
+        exit 1
+        ;;
+esac
+
 # BELLATRIX_SERIAL_LOOPBACK=1      → full internal TX->RX echo
 # BELLATRIX_SERIAL_LOOPBACK=probe  → short detection echo, then disable
 #
@@ -293,20 +317,24 @@ if [ "${BELLATRIX_EMU68_API_AUTODUMP:-0}" = "1" ]; then
 fi
 
 EMU68_ACCESS_MODE="${BELLATRIX_EMU68_ACCESS_MODE:-fault}"
-case "$EMU68_ACCESS_MODE" in
-    public)
-        echo "[BUILD] Emu68 access mode: public machine API"
-        ;;
-    fault)
-        EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_FAULT_DRIVEN=1"
-        echo "[BUILD] Emu68 access mode: diagnostic fault-driven"
-        ;;
-    *)
-        echo "ERROR: invalid BELLATRIX_EMU68_ACCESS_MODE: $EMU68_ACCESS_MODE"
-        echo "       expected: public or fault"
-        exit 1
-        ;;
-esac
+if [ "$CPU_BACKEND" = "musashi" ]; then
+    echo "[BUILD] CPU access mode: Musashi callbacks"
+else
+    case "$EMU68_ACCESS_MODE" in
+        public)
+            echo "[BUILD] Emu68 access mode: public machine API"
+            ;;
+        fault)
+            EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_FAULT_DRIVEN=1"
+            echo "[BUILD] Emu68 access mode: native fault-driven"
+            ;;
+        *)
+            echo "ERROR: invalid BELLATRIX_EMU68_ACCESS_MODE: $EMU68_ACCESS_MODE"
+            echo "       expected: public or fault"
+            exit 1
+            ;;
+    esac
+fi
 
 PROFILE_FLAG="OFF"
 if [ "${BELLATRIX_PROFILE:-0}" = "1" ]; then
@@ -330,6 +358,7 @@ cmake "$EMU68" \
     -DCMAKE_C_FLAGS="$EXTRA_DEFINES" \
     -DCMAKE_CXX_FLAGS="$EXTRA_DEFINES" \
     -DBELLATRIX_ENABLE_EMU68_BOARDS="$EMU68_BOARDS_ENABLED" \
+    -DBELLATRIX_ENABLE_Z3_68040="$Z3_68040_FLAG" \
     -DBELLATRIX_USE_MUSASHI_CPU="$MUSASHI_CPU_FLAG" \
     -DBELLATRIX_MUSASHI_CPU="$MUSASHI_CPU" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \

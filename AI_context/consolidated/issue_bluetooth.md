@@ -3,7 +3,8 @@
 > Nota arquitetural (2026-07-15): a topologia descrita abaixo é histórica.
 > `ISSUE-0058` prevalece: Emu68 permanece no Core 0; Bluetooth usa IRQ normal,
 > nunca FIQ; AUX miniUART é log desde o primeiro estágio e PL011 é Bluetooth
-> desde o primeiro estágio, sem route switching ou handoff de console.
+> desde o primeiro estágio, sem route switching ou handoff de console. Emu68
+> no Core 0 é provisório até os contratos nativos estarem estáveis e mensuráveis.
 
 ## Status: EM PROGRESSO (2026-06-26)
 

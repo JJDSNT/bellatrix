@@ -39,7 +39,7 @@ void hid_router_mouse_button(HIDInputSource source, uint16_t device,
                              unsigned button, bool pressed);
 void hid_router_device_disconnected(HIDInputSource source, uint16_t device);
 
-/* F11/F12 publish intent only. Core 3 consumes it after the current host
+/* F11/F12 publish intent only. The host reactor consumes it after the current host
  * reactor pass; no UI or storage work runs inside a HID callback. */
 HIDHostAction hid_router_take_host_action(void);
 

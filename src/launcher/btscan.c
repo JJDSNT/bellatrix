@@ -461,7 +461,7 @@ void btscan_runtime_close(bool confirmed)
             s_bt_runtime_selected_addr);
         bellatrix_launcher_bt_suspend_reconnect(0);
         /* This function runs after the normal BTstack pass, not in its HID
-         * callback. Publish reconnect immediately; Core 3 submits it on the
+ * callback. Publish reconnect immediately; the host reactor submits it on the
          * next normal reactor pass. */
         bellatrix_launcher_bt_connect_now();
     } else if (!s_bt_runtime_borrowed_discovery) {

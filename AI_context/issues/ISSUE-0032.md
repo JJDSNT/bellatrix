@@ -58,10 +58,44 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 
 - `memory_map_decode()` e backends possuem normalização global de 24 bits;
 - `cpu_bridge.c` classifica todo endereço de 32 bits como Z3 não implementada;
-- `Z3_WINDOW_BASE=0x40000000` conflita com `BELLATRIX_Z3_BASE=0x10000000`;
-- a conclusão da Autoconfig não possui callback comum de map/unmap por backend;
-- callbacks byte a byte atuais não distinguem memória direta de registradores;
-- ainda não existe board Z3 funcional registrada no runtime Bellatrix.
+- a antiga constante sem uso `BELLATRIX_Z3_BASE=0x10000000` foi removida;
+  `0x40000000..0x7fffffff` é política observada no AROS, não requisito Emu68;
+  descoberta e faixa válida precisam ser definidas pelo contrato de perfil;
+- os adapters `DIRECT` específicos agora existem: mapping EL0 no Emu68, com
+  remoção restaurando a proteção EL1-only, e bank/buffer nos callbacks Musashi;
+- páginas mistas de boards futuras ainda precisam separar backing direto de
+  registradores externos com efeitos colaterais;
+- ainda não existem regiões mistas Z3 nem uma política geral de boards; a
+  primeira board ROM `emu68.68040` cobre somente o caso `DIRECT` read-only.
+
+# Avanço de infraestrutura (2026-07-15)
+
+- `$E80000` agora é atendido por um owner comum que apresenta Z2 antes de Z3;
+- a atribuição Z3 segue o Emu68: palavra em `$E80044`, base `value << 16`;
+- `map()` é chamado antes de publicar a board; falha faz rollback e a mantém
+  pendente;
+- reset, re-registro e remoção chamam `unmap()`;
+- teste host cobre a cadeia Z2→Z3, base escolhida pelo guest, rollback e reset.
+- o registro `cpu/direct_region` valida mapping page-aligned, impede overlap e
+  só publica a região após sucesso do backend; falhas de unmap preservam estado.
+- a prova host modela a board `68040` nativa como ROM Z3 read-only/executável e
+  verifica rollback, invisibilidade antes/depois e base escolhida pelo guest.
+- o harness e o backend Musashi consultam `direct_region` antes do open bus de
+  32 bits; o adapter Emu68 instala MMU e não consulta a tabela por acesso.
+
+Isso fecha sequenciamento, lifecycle e adapters para o primeiro caso real. A
+board `emu68.68040` reutiliza a ROM nativa do Emu68 e é registrada
+automaticamente nos perfis Emu68 e Musashi 68040. Isso ainda não constitui
+suporte Z3 geral: não há páginas mistas, RAM Z3 nem alocação própria de faixa.
+
+A auditoria de uma eventual board RAM também confirmou que a identidade física
+criada por `start.c` não concede `MMU_ALLOW_EL0`. Isso permite manter a reserva
+acessível ao ARM e invisível ao 68k até Autoconfig; o `map()` da board instala
+a tradução guest com permissão EL0. Musashi deve registrar o mesmo buffer como
+região direta. O adapter atual isola essa primitiva MMU na fronteira esparsa,
+sem ressuscitar a antiga API de machine box.
+Esse trabalho de reserva não bloqueia a prova ROM atual; só volta à prioridade
+se uma Z3 RAM for escolhida explicitamente.
 
 # Objetivo revisado
 
@@ -70,8 +104,8 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
 2. Definir lifecycle de board (`configure`, `map`, `unmap`, `reset`) e regiões
    declarativas (`DIRECT`, `EXTERNAL`, `UNMAPPED`).
 3. Fazer Autoconfig atribuir a base e pedir ao backend que instale as regiões.
-4. Implementar primeiro uma board Z3 Fast RAM direta; nenhum dispatch Rigel por
-   byte no steady state.
+4. Manter a board Z3 ROM 68040 read-only como prova do mapping direto observado
+   no Emu68; nenhum dispatch Rigel por byte no steady state.
 5. Espelhar a semântica no Musashi com bank/buffer 32-bit e no Emu68 com MMU.
 6. Só então implementar regiões mistas de RTG/VRAM e registradores.
 7. Validar futuramente KS3.1/AROS e cenário Z2+Z3; 68000 continua 24-bit.
@@ -82,7 +116,24 @@ justamente para permitir os dois cenários (Z2 e Z3) na mesma máquina.
   correto em perfis e transações específicas; deve apenas sair do decoder
   universal.
 - Não rotear toda Z3 por `vectors.c` ou Rigel. Apenas páginas externas/MMIO.
-- Não chamar a infraestrutura atual de suporte Z3 antes de haver ao menos uma
-  board registrada, configurada e mapeada de ponta a ponta.
-- Preset alvo (memory_model.md): AROS "moderno" = chip 2MB + Z3 128MB
-  (+ RTG, ver [[ISSUE-0033]])
+- Não chamar a infraestrutura atual de suporte Z3 geral: existe uma board ROM
+  direta de ponta a ponta, mas ainda não existem regiões mistas ou RAM Z3.
+- Fast RAM do baseline permanece Z2, como em `emu68/src/boards/z2ram.c`.
+- O antigo preset AROS com Z3 128 MiB é cenário de pesquisa, não arquitetura
+  escolhida nem requisito para fechar esta issue.
+
+# Escolha do primeiro caso `DIRECT`
+
+As referências nativas do Emu68 separam claramente os casos:
+
+- `z2ram.c`: Fast RAM Z2, mapping identidade, read/write;
+- `sdcard.c`, `68040.c`, `emmc.c` e `unicam.c`: ROM Z3 read-only;
+- `devicetree.c`: ROM Z3 e dados adicionais, também read-only.
+
+Assim, a primeira prova Bellatrix usa `68040.c` como referência porque o harness
+é POSIX e executa Musashi 68040: uma ROM Z3 simples não depende da plataforma
+AArch64. Ela prova Autoconfig, base escolhida pelo guest, `map/unmap`, rollback e
+permissão read-only sem copiar o conteúdo ou habilitar a board no produto.
+`devicetree.c` permanece referência para uma futura prova multi-região no Emu68.
+Não se deve reservar uma grande região de `sys_memory` antes de existir decisão
+explícita por Z3 RAM.

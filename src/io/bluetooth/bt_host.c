@@ -1419,7 +1419,7 @@ void bt_host_step(BTHost *bt) {
     else
         bt_bootstrap_step(bt);
 
-    // Drain/rearm the normal-IRQ-owned UART transport from Core 3.
+    // Host reactor drains/rearms the normal-IRQ-owned UART transport.
     bt_hal_raspi3_poll_uart();
 
     // Execute run loop tasks
@@ -1502,8 +1502,10 @@ bool bt_host_init(BTHost *bt) {
     bt->mouse_input_ready = false;
     bt->hid_connect_pending = false;
     bt->outgoing_reconnect_suspended = false;
-    bt->link_recovery_state = BT_LINK_RECOVERY_IDLE;
-    bt->link_recovery_reason = BT_LINK_RECOVERY_REASON_NONE;
+    /* Recovery enums belong to the BTstack-enabled implementation. Their
+     * disabled-state representation is deliberately zero/idle. */
+    bt->link_recovery_state = 0u;
+    bt->link_recovery_reason = 0u;
     bt->link_recovery_error_code = 0u;
     bt->last_hid_status = 0u;
     bt->hid_reports_received = 0u;

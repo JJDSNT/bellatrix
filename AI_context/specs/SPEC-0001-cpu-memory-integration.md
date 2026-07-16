@@ -19,9 +19,10 @@ related_files:
 
 # Objetivo
 
-Definir uma única arquitetura de memória e MMIO que preserve o caminho nativo
-do Emu68, permita Musashi e outros backends e mantenha Rigel como dono do
-chipset. Esta spec descreve contratos; não declara suporte Z3 existente.
+Definir uma arquitetura esparsa de memória e MMIO que preserve o caminho nativo
+do Emu68, permita Musashi e outros backends e entregue cada região diretamente
+ao owner de sua semântica. Esta spec descreve contratos; não declara suporte Z3
+existente nem define uma `machine box` central.
 
 # Princípios normativos
 
@@ -31,13 +32,52 @@ chipset. Esta spec descreve contratos; não declara suporte Z3 existente.
    para páginas externas/MMIO.
 3. Memória armazenável configurada **deve** usar o caminho direto do backend e
    **não deve** ser despachada por acesso através de Rigel ou `vectors.c`.
-4. Musashi **deve** chamar diretamente a mesma implementação de transação
-   externa usada pelo hook de `vectors.c`; não deve simular Data Abort ARM.
+4. Musashi **deve** usar a mesma classificação esparsa e os mesmos owners
+   semânticos usados pelo hook de `vectors.c`; não deve simular Data Abort ARM.
 5. Rigel **deve** continuar dono do estado e da evolução temporal do chipset.
 6. Normalização de barramento de 24 bits **não deve** truncar o endereço CPU
    universal. Wrap deve ser aplicado somente no perfil/região que o exige.
 7. A política de uma região **deve** ser explícita: `DIRECT`, `EXTERNAL` ou
    `UNMAPPED`.
+8. O contrato de memória/MMIO **não deve** codificar número de core. Emu68 no
+   Core 0 é a baseline provisória de estabilização, não uma propriedade da ABI.
+9. O dispatcher **não deve** transformar Bellatrix numa máquina opaca que recebe
+   todo acesso. Ele deve ser uma classificação esparsa que chega diretamente ao
+   owner da região.
+
+# Arquitetura esparsa
+
+`BellatrixMachine`, enquanto ainda existir no código, é somente composição e
+compatibilidade transitória. Não é a fronteira arquitetural do CPU. O caminho
+alvo é:
+
+```text
+endereço CPU
+    -> classificação da região
+       -> RAM/ROM DIRECT: mapping/bank do backend
+       -> CIA EXTERNAL: semântica CIA
+       -> custom EXTERNAL: semântica do bloco correspondente
+       -> Autoconfig EXTERNAL: sequenciador Zorro
+       -> board EXTERNAL: owner da board
+       -> UNMAPPED: open bus ou bus error conforme região/perfil
+```
+
+Não deve haver callback universal de “máquina”. Pode existir um dispatcher
+estático compartilhado entre backends, mas seus ramos chamam diretamente os
+owners semânticos. Sincronização com outro core é propriedade do owner/região,
+não motivo para encapsular toda a máquina atrás de uma caixa única.
+
+# Placement da CPU
+
+O placement é ortogonal à classificação de memória. Durante a estabilização,
+Emu68 permanece no Core 0 para preservar o ambiente original de vetores,
+faults, timers, IRQ e contexto JIT. Um backend Musashi, uma futura migração do
+Emu68 ou outra composição multicore deve consumir o mesmo descritor de regiões
+e o mesmo serviço externo.
+
+Mover a CPU só é permitido depois de demonstrar equivalência em Data Abort,
+MMIO, IPL/IRQ, STOP/wakeup, PMU/timers e preservação do contexto. Nenhum hook,
+descritor ou owner de board pode assumir afinidade fixa com Core 0.
 
 # Espaços de endereço
 
@@ -59,11 +99,68 @@ aplicada neste domínio, depois que a região foi classificada.
 contígua, inclusive uma região direta de RAM/ROM/VRAM e páginas externas de
 registradores.
 
-Esta spec não escolhe entre as constantes Z3 atuais `0x10000000` e
-`0x40000000`. A base e os limites serão fixados após reconciliar a codificação
-de Autoconfig, Super Buster e o perfil de máquina desejado.
+O Emu68 não fixa uma faixa canônica de boards Z3. `vectors.c` recebe em
+`$E80044` o high word escolhido pelo guest, calcula `map_base = value << 16` e
+chama `board->map()`. As boards então instalam ROM/dados diretamente com
+`mmu_map()`. Portanto Bellatrix não deve impor a política de alocação de uma
+expansion.library específica.
+
+O AROS local escolhe `0x40000000..0x7fffffff` em slots de 16 MiB e conhece uma
+janela em `0xff000000`; isso é evidência de compatibilidade, não fonte
+normativa. A antiga constante Bellatrix `0x10000000`, sem uso, continua
+removida. A faixa aceita será consequência dos descritores, alinhamento,
+ausência de sobreposição e capacidade de `map()` do backend.
 
 # Tipos de região
+
+## Matriz esparsa inicial
+
+Esta matriz define o destino arquitetural, não afirma que o código atual já
+esteja decomposto dessa forma:
+
+| Região lógica | Classe | Owner/rota alvo |
+|---|---|---|
+| Chip RAM e RAM armazenável | `DIRECT` | mapping Emu68 ou bank/buffer Musashi; Rigel apenas observa DMA/tempo |
+| ROM e Extended ROM | `DIRECT` | mapping/bank read-only do backend |
+| CIA A/B | `EXTERNAL` | semântica CIA, com sincronização local quando necessária |
+| Custom registers | `EXTERNAL` | bloco Rigel correspondente, não gateway genérico de máquina |
+| `$E80000` Autoconfig | `EXTERNAL` | sequenciador Zorro compartilhado |
+| RAM/ROM/VRAM de board configurada | `DIRECT` | região instalada pelo backend no fim do Autoconfig |
+| Registradores de board | `EXTERNAL` | owner da board/página |
+| Endereço sem região | `UNMAPPED` | open bus ou bus error definido pelo perfil |
+
+O fault adapter do Emu68 só recebe páginas que não são `DIRECT`; portanto seu
+hot path deve despachar `EXTERNAL` diretamente. Musashi classifica primeiro os
+banks diretos e usa o mesmo dispatcher esparso somente para o restante.
+
+Callbacks de `map/unmap` são permitidos no lifecycle de Autoconfig, fora do hot
+path. Function pointers por acesso MMIO não são parte do contrato alvo.
+
+## Semântica da transação externa
+
+O classificador recebe o endereço CPU integral antes de qualquer wrap, a
+direção e a largura. Para o barramento Amiga baixo, valores de 16 e 32 bits são
+representados em ordem numérica big-endian: o byte no menor endereço ocupa os
+bits mais altos, igual aos helpers Zorro atuais e ao host big-endian do Emu68.
+
+As primitivas externas obrigatórias são 8, 16 e 32 bits. Acessos faultados de
+64/128 bits existem no decoder AArch64 do Emu68, mas não podem ser truncados
+para 32 bits como ocorre na ponte transitória atual. O adapter só poderá
+decompô-los em lanes menores quando a região declarar que isso preserva seus
+efeitos e sua atomicidade; caso contrário o owner retorna comportamento
+`UNMAPPED`/bus error definido pelo perfil.
+
+O resultado lógico possui três estados, mesmo que a primeira implementação os
+codifique de forma compacta:
+
+- `HANDLED`: owner concluiu a transação e, em read, produziu o valor;
+- `OPEN_BUS`: região responde sem owner, com valor definido pelo perfil/largura;
+- `BUS_ERROR`: acesso arquiteturalmente inválido, entregue ao backend como
+  exceção 68k, não como crash ARM.
+
+Normalização de mirrors de 24 bits ocorre somente depois que o endereço foi
+classificado como barramento Amiga baixo. Endereços Z3 nunca passam por
+`bellatrix_bridge_normalize_addr()`.
 
 ## `DIRECT`
 
@@ -76,6 +173,22 @@ Memória sem efeitos colaterais por acesso:
 - não há chamada ao hook no steady state.
 
 Exemplos: Chip RAM, Fast RAM Z2/Z3, ROM, VRAM armazenável e dados de uma board.
+
+Backing e mapping têm lifecycles distintos. A board reserva backing uma vez e
+o mantém invisível ao guest; Autoconfig apenas instala/remove a tradução desse
+backing na base escolhida. No Emu68, uma Fast RAM grande não pode vir do heap
+TLSF local do kernel: deve ser retirada de um bloco de `sys_memory`, com a mesma
+atualização atômica do bloco/device tree usada pelo allocator de páginas MMU.
+Só depois `mmu_map(phys, guest, size, ... | MMU_ALLOW_EL0)` torna a região
+visível. O alias físico alto continua disponível ao ARM para inicialização e
+para owners de DMA. No Musashi, o mesmo backing é registrado como bank/buffer e
+consultado pelo callback de memória; ele não é copiado nem roteado por Rigel.
+
+A reserva deve ocorrer antes de qualquer `mmu_map()` que possa pedir novas
+páginas de tabela, porque o allocator do Emu68 também reduz o topo de
+`sys_memory`. Falha de reserva ou mapping não pode avançar o Autoconfig. Essa
+reserva grande só é necessária se uma futura board RAM for escolhida; a primeira
+prova Z3 ROM usa backing já existente no binário.
 
 ## `EXTERNAL`
 
@@ -180,6 +293,16 @@ UNMAPPED -> política comum de open bus/bus error
 O decoder comum pode compartilhar descritores e política com Emu68, mas não
 deve obrigar o hot path direto do Emu68 a fazer lookup por acesso.
 
+O corte atual implementa isso em `cpu/direct_region`: ambos os backends usam o
+registro para lifecycle e overlap. Emu68 converte install em MMU; no remove,
+substitui a tradução por um mapeamento EL1-only que devolve o endereço ao Data
+Abort nativo para o 68k, pois o `mmu_unmap()` upstream não remove páginas. Ele
+nunca chama `find()` no steady state. Musashi usa `find()` nos callbacks,
+lê/escreve o buffer em big-endian e considera write em região read-only atendido
+e ignorado.
+Esse registro ainda atende somente regiões dinâmicas e não substitui a matriz
+completa de memória fixa do perfil.
+
 # Integração Rigel
 
 Rigel recebe apenas transações `EXTERNAL` do chipset. Fast RAM e VRAM direta
@@ -192,10 +315,11 @@ sugerido nas notas do autor, com catch-up síncrono apenas quando um acesso
 observável exigir. O modelo atual de progresso publicado pelo CPU permanece
 evidência experimental, não decisão normativa.
 
-No baseline Core0=Emu68 atual, a timeline wall-clock ainda pertence ao antigo
-loop Core0=supervisor e não é atualizada. O event stream do Core 2 apenas o
-acorda; não aumenta seu horizonte. Essa dependência deve ser removida antes de
-considerar o modelo temporal assimilado.
+No baseline atual, a timeline foi movida para o host reactor no Core 3, comum
+a Musashi e Emu68. Isso elimina a dependência do antigo loop Core0=supervisor.
+STOP usa `WFE` tanto no Emu68 fault-driven quanto no shell Musashi. Realtime é
+o default para que Core 2 continue até o próximo IPL enquanto a CPU dorme;
+`timeline=cpu` permanece disponível para testes determinísticos explícitos.
 
 Com Rigel em outro core:
 
@@ -206,6 +330,11 @@ Com Rigel em outro core:
   mas qualquer acesso concorrente deve obedecer ao contrato de lock/snapshot.
 
 # Lifecycle de Autoconfig e boards
+
+A janela `$E80000` tem um owner esparso compartilhado. A ordem inicial é todas
+as boards Z2 pendentes, seguidas pelas Z3 pendentes, refletindo a composição
+vigente do Emu68. Essa ordem é política do sequenciador, não do dispatcher geral
+de memória.
 
 1. No reset, a board ainda não responde em sua futura janela.
 2. A janela baixa de Autoconfig responde como `EXTERNAL`.
@@ -218,14 +347,38 @@ Com Rigel em outro core:
 O contrato deve suportar rollback se uma região não puder ser instalada. Não
 deve existir estado parcialmente configurado visível ao guest.
 
+O primeiro corte desse lifecycle já está materializado para Z3: a palavra em
+`$E80044` entrega a base guest-assigned a `map(base, size)`; somente retorno com
+sucesso marca a board configurada. Falha mantém a board pendente, e reset,
+re-registro ou remoção chamam `unmap`. Validação de alinhamento, sobreposição e
+capacidade pertence ao `map()` do backend/descritor e ainda precisa ser
+implementada junto da primeira board `DIRECT`.
+
+A primeira board concreta experimental é `emu68.68040`: Bellatrix reutiliza
+sem copiar a ROM de 4 KiB de `emu68/src/boards/68040.h`, apresenta sua janela
+de 64 KiB e instala a página read-only/executável na base escolhida pelo guest.
+Ela não integra o baseline de boot e fica desabilitada por padrão; somente
+`BELLATRIX_Z3_68040=1` (ou o modo explícito `auto`) a habilita para ensaios. O
+último log normal antes de o sequenciador passar da Z2 para essa board é
+`[Z2] all boards configured`, portanto um stall nesse ponto não valida Z2 Fast
+RAM nem a board Z3. O Emu68 usa seu MMU e o handler original permanece
+intacto. Musashi usa o bank `DIRECT`; o único MMIO auxiliar da ROM, o putchar
+`$DEADBEEF`, passa pelo bridge e reproduz a semântica que o `vectors.c`
+original já oferece.
+
+Uma eventual Z3 Fast RAM de 128 MiB precisaria declarar a forma Z3 estendida
+(tamanho base em `er_Type` e `ERFF_EXTENDED` em `er_Flags`). Isso permanece
+pesquisa, não objetivo atual. O baseline segue o Emu68 e mantém Fast RAM Z2.
+
 # Ordem de implementação
 
 1. Separar endereço CPU 32-bit de normalização do barramento baixo.
 2. Definir descritor de região e callbacks backend `map/unmap`.
 3. Adaptar Z2 existente sem mudar seu comportamento observável.
-4. Implementar Z3 Fast RAM como primeiro caso `DIRECT`.
-5. Implementar regiões mistas somente após o caso RAM estar provado.
-6. Afinar o hot path `vectors.c -> hook -> Rigel` com perfil, preservando
+4. Provar uma Z3 ROM mínima/read-only como primeiro caso `DIRECT`.
+5. Preservar Fast RAM Z2 e só implementar Z3 RAM mediante requisito explícito.
+6. Implementar regiões mistas somente após o caso ROM estar provado.
+7. Afinar o hot path `vectors.c -> hook -> Rigel` com perfil, preservando
    sincronização temporal.
 
 # Critérios para tornar a spec `active`

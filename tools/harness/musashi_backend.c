@@ -4,10 +4,11 @@
 // and provides the memory read/write callbacks that Musashi requires.
 //
 // Address map served by this dispatcher:
-//   0x000000–BELLATRIX_CHIP_RAM_END  chip RAM (or ROM overlay at boot)
+//   0x000000–0x1FFFFF  1 MiB chip backing + 1 MiB CPU mirror
 //   0xC00000–0xD7FFFF  slow RAM via shared Bellatrix memory map
 //   0xE00000–0xEFFFFF  extended ROM (1 MB ROMs only — first 512 KB)
 //   0xF80000–0xFFFFFF  standard ROM (Kickstart / AROS second 512 KB)
+//   expansion RAM/ROM  dynamic DIRECT regions installed by board map()
 //   everything else    delegated to bellatrix_machine_read/write (chipset/CIA/RTC)
 //
 // ROM size → layout:
@@ -17,8 +18,8 @@
 
 #include "musashi_backend.h"
 #include "cpu/cpu_bridge.h"
+#include "cpu/direct_region.h"
 #include "machine/machine.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/memory/memory.h"
 #include "rigel/rigel_cia.h"
 
@@ -36,6 +37,7 @@
 #define HARNESS_ROM_MAX   (1024u * 1024u)
 
 static uint8_t  s_rom[HARNESS_ROM_MAX];
+static BellatrixDirectRegionMap s_direct_regions;
 static uint32_t s_rom_size  = 0;
 static unsigned int s_cpu_type = M68K_CPU_TYPE_68000;
 static uint32_t s_boot_trace_until_pc = 0;
@@ -818,7 +820,7 @@ static uint32_t harness_cpu_ram_read(uint32_t addr, int size)
 
     addr &= 0x00FFFFFFu;
 
-    if (bellatrix_chip_addr_contains(addr))
+    if (bellatrix_chip_cpu_addr_contains_range(addr, (uint32_t)size))
         return harness_chip_read(addr, size);
 
     if (bellatrix_slow_contains(mem, addr, (unsigned int)size)) {
@@ -1889,7 +1891,7 @@ static void harness_write_ram32(uint32_t addr, uint32_t value)
     BellatrixMemory *mem = &bellatrix_machine_get()->memory;
 
     addr &= 0x00FFFFFFu;
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (bellatrix_chip_cpu_addr_contains_range(addr, 4u)) {
         bellatrix_chip_write32(mem, addr, value);
         return;
     }
@@ -1901,7 +1903,7 @@ static int harness_ram_addr_valid(uint32_t addr, unsigned int size)
     BellatrixMemory *mem = &bellatrix_machine_get()->memory;
 
     addr &= 0x00FFFFFFu;
-    if (bellatrix_chip_addr_contains(addr))
+    if (bellatrix_chip_cpu_addr_contains_range(addr, size))
         return 1;
     return bellatrix_slow_contains(mem, addr, size);
 }
@@ -2568,6 +2570,12 @@ static void harness_instr_hook(unsigned int pc)
 
 static uint32_t harness_read(uint32_t addr, int size)
 {
+    uint32_t direct_value;
+
+    if (bellatrix_direct_region_read(&s_direct_regions, addr,
+                                     (unsigned int)size, &direct_value))
+        return direct_value;
+
     /* Zorro III / 32-bit space is unimplemented (ISSUE-0032) — must read
      * as open bus, not alias into 24-bit space. AROS's Z3 autoconfig
      * probe (0xFF000000+) was previously masking onto live chip RAM and
@@ -2606,12 +2614,17 @@ static uint32_t harness_read(uint32_t addr, int size)
     }
 
     /* Chip RAM window */
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (bellatrix_chip_cpu_addr_contains_range(addr, (uint32_t)size)) {
         /* Overlay: reads from low page redirect to standard ROM */
         if (harness_overlay() && addr < BELLATRIX_CHIP_BOOT_SIZE && s_rom_std_size) {
-            uint32_t rom_off = s_rom_std_off + (addr & (s_rom_std_size - 1u));
+            uint32_t overlay_off = s_rom_ext_size ? s_rom_ext_off : s_rom_std_off;
+            uint32_t overlay_size = s_rom_ext_size ? s_rom_ext_size : s_rom_std_size;
+            uint32_t rom_off = overlay_off + (addr & (overlay_size - 1u));
             ret = rom_read_at(rom_off, size);
-            harness_watch_rom_read(pc, s_rom_std_base + (addr & (s_rom_std_size - 1u)), size, ret);
+            harness_watch_rom_read(pc,
+                                   (s_rom_ext_size ? s_rom_ext_base : s_rom_std_base) +
+                                       (addr & (overlay_size - 1u)),
+                                   size, ret);
             return ret;
         }
         harness_sync_cpu_progress();
@@ -2623,21 +2636,6 @@ static uint32_t harness_read(uint32_t addr, int size)
         aros_gfxbase_lof_check(pc, addr, ret, 0);
         aros_bpl_dump_check(pc);
         return ret;
-    }
-
-    /* Zorro II fast RAM: respond only after autoconfig assigned the board
-     * a base, so early memory probes do not find RAM before AddMemList.
-     * Bounded to the configured window: other Zorro II boards (RTG) can
-     * own part of the 0x200000-0x9FFFFF space. */
-    {
-        uint32_t fr_base, fr_size;
-        int fr_ok = bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size);
-        if (fr_ok && addr >= fr_base && addr < fr_base + fr_size) {
-            const BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
-            if (size == 1) return bellatrix_fast_read8(fmem, addr);
-            if (size == 2) return bellatrix_fast_read16(fmem, addr);
-            return bellatrix_fast_read32(fmem, addr);
-        }
     }
 
     if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
@@ -2663,6 +2661,10 @@ static uint32_t harness_read(uint32_t addr, int size)
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+
+    if (bellatrix_direct_region_write(&s_direct_regions, addr,
+                                      (unsigned int)size, value))
+        return;
 
     /* Zorro III / 32-bit space open bus — see harness_read. */
     if (addr > 0x00FFFFFFu) {
@@ -2694,7 +2696,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     if (s_rom_ext_size && addr >= s_rom_ext_base && addr < s_rom_ext_base + s_rom_ext_size) return;
 
     /* Chip RAM */
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (bellatrix_chip_cpu_addr_contains_range(addr, (uint32_t)size)) {
         BellatrixMemory *mem = &bellatrix_machine_get()->memory;
         uint32_t wend = addr + (uint32_t)size - 1u;
         harness_sync_cpu_progress();
@@ -2735,19 +2737,6 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
                    (unsigned)pc, (unsigned)addr, size, (unsigned)value, (unsigned)b92);
         }
         return;
-    }
-
-    /* Zorro II fast RAM (see harness_read) */
-    {
-        uint32_t fr_base, fr_size;
-        if (bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size) &&
-            addr >= fr_base && addr < fr_base + fr_size) {
-            BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
-            if (size == 1)      bellatrix_fast_write8(fmem, addr, (uint8_t)value);
-            else if (size == 2) bellatrix_fast_write16(fmem, addr, (uint16_t)value);
-            else                bellatrix_fast_write32(fmem, addr, value);
-            return;
-        }
     }
 
     /* Chipset / CIA / RTC */
@@ -2876,18 +2865,64 @@ static int musashi_run(void *ctx, uint32_t cycles)
     return used;
 }
 
+static int harness_direct_backend_map(
+    void *opaque, const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static int harness_direct_backend_unmap(
+    void *opaque, const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static int musashi_map_direct(void *ctx,
+                              const BellatrixDirectRegion *region)
+{
+    (void)ctx;
+    return bellatrix_direct_region_install(&s_direct_regions, region);
+}
+
+static int musashi_unmap_direct(void *ctx, uint32_t guest_base, uint32_t size)
+{
+    (void)ctx;
+    return bellatrix_direct_region_remove(&s_direct_regions, guest_base, size);
+}
+
 static CpuBackend g_musashi_backend = {
     .ctx     = NULL,
     .get_pc  = musashi_get_pc,
     .set_ipl = musashi_set_ipl,
     .reset   = musashi_reset,
     .run     = musashi_run,
+    .map_direct = musashi_map_direct,
+    .unmap_direct = musashi_unmap_direct,
     .progress_in_run = 1,
 };
 
 CpuBackend *musashi_backend_get(void)
 {
     return &g_musashi_backend;
+}
+
+/* Generic CpuBackend selector aliases used by shared runtime code. */
+CpuBackend *bellatrix_musashi_backend_get(void)
+{
+    return musashi_backend_get();
+}
+
+const char *bellatrix_musashi_cpu_model(void)
+{
+    return s_cpu_type == M68K_CPU_TYPE_68040 ? "68040" :
+           s_cpu_type == M68K_CPU_TYPE_68030 ? "68030" :
+           s_cpu_type == M68K_CPU_TYPE_68020 ? "68020" :
+           s_cpu_type == M68K_CPU_TYPE_68EC020 ? "68ec020" :
+           s_cpu_type == M68K_CPU_TYPE_68010 ? "68010" : "68000";
 }
 
 /* ---------------------------------------------------------------------------
@@ -2897,6 +2932,12 @@ CpuBackend *musashi_backend_get(void)
 void musashi_backend_init(void)
 {
     const char *cpu = getenv("HARNESS_CPU");
+    static const BellatrixDirectRegionBackendOps direct_ops = {
+        .map = harness_direct_backend_map,
+        .unmap = harness_direct_backend_unmap,
+    };
+
+    bellatrix_direct_region_map_init(&s_direct_regions, &direct_ops, NULL);
 
     /* Default is 68040 (with FPU) — see ISSUE-0034. Explicit HARNESS_CPU
      * still selects any other type, including plain "68000". */
@@ -2925,4 +2966,9 @@ void musashi_backend_init(void)
     m68k_set_instr_hook_callback(harness_instr_hook);
     if (harness_ipl_trace_enabled())
         m68k_set_int_ack_callback(harness_int_ack);
+}
+
+void bellatrix_musashi_backend_init(void)
+{
+    musashi_backend_init();
 }

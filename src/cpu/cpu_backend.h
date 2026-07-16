@@ -7,6 +7,8 @@
 //
 #pragma once
 
+#include "cpu/direct_region.h"
+
 #include <stdint.h>
 
 typedef struct CpuBackend {
@@ -15,6 +17,8 @@ typedef struct CpuBackend {
     void     (*set_ipl)(void *ctx, int level);
     void     (*reset)(void *ctx);
     int      (*run)(void *ctx, uint32_t cycles);
+    int      (*map_direct)(void *ctx, const BellatrixDirectRegion *region);
+    int      (*unmap_direct)(void *ctx, uint32_t guest_base, uint32_t size);
     int      progress_in_run;
 } CpuBackend;
 
@@ -22,6 +26,10 @@ uint32_t cpu_backend_get_pc(CpuBackend *backend);
 void     cpu_backend_set_ipl(CpuBackend *backend, int level);
 void     cpu_backend_reset(CpuBackend *backend);
 int      cpu_backend_run(CpuBackend *backend, uint32_t cycles);
+int      cpu_backend_map_direct(CpuBackend *backend,
+                                const BellatrixDirectRegion *region);
+int      cpu_backend_unmap_direct(CpuBackend *backend,
+                                  uint32_t guest_base, uint32_t size);
 
 /* Build-selected backend ownership. This generic layer, not an Emu68 source
  * file, selects and drives Emu68 or Musashi. */

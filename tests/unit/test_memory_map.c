@@ -1,5 +1,7 @@
 #include "machine/memory/memory.h"
 #include "machine/memory/memory_map.h"
+#include "machine/autoconfig/autoconfig.h"
+#include "machine/bus/zorro2/zorro2_bus.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -12,6 +14,17 @@ uint32_t bellatrix_debug_cpu_pc(void)
 }
 
 static uint8_t s_chip_ram[BELLATRIX_CHIP_RAM_SIZE];
+static uint8_t test_fast_read8(void *userdata, uint32_t offset)
+{
+    BellatrixMemory *mem = (BellatrixMemory *)userdata;
+    return mem->fast_ram[offset];
+}
+
+static void test_fast_write8(void *userdata, uint32_t offset, uint8_t value)
+{
+    BellatrixMemory *mem = (BellatrixMemory *)userdata;
+    mem->fast_ram[offset] = value;
+}
 
 static void failf(const char *expr, const char *file, int line,
                   uint32_t expected, uint32_t actual)
@@ -34,14 +47,34 @@ static void failf(const char *expr, const char *file, int line,
 static void test_decode_regions(void)
 {
     CHECK_EQ("chip decode", MEM_REGION_CHIP_RAM, memory_map_decode(0x000100u));
-    CHECK_EQ("fast decode lo", MEM_REGION_FAST, memory_map_decode(BELLATRIX_FAST_RAM_BASE));
-    CHECK_EQ("fast decode hi", MEM_REGION_FAST, memory_map_decode(BELLATRIX_FAST_RAM_END));
+    CHECK_EQ("chip mirror decode lo", MEM_REGION_CHIP_RAM,
+             memory_map_decode(0x00100000u));
+    CHECK_EQ("chip mirror decode hi", MEM_REGION_CHIP_RAM,
+             memory_map_decode(0x001fffffu));
+    CHECK_EQ("unconfigured fast backing is invisible", MEM_REGION_UNKNOWN,
+             memory_map_decode(0x00200000u));
     CHECK_EQ("slow decode lo", MEM_REGION_SLOW, memory_map_decode(BELLATRIX_SLOW_RAM_BASE));
     CHECK_EQ("slow decode hi", MEM_REGION_SLOW, memory_map_decode(BELLATRIX_SLOW_RAM_END));
     CHECK_EQ("slow decode cxf mirror-looking address",
              MEM_REGION_SLOW,
              memory_map_decode(0x00C1FA68u));
     CHECK_EQ("z2 decode", MEM_REGION_Z2, memory_map_decode(0x00e80000u));
+    CHECK_EQ("z2 decode end", MEM_REGION_Z2,
+             memory_map_decode(BELLATRIX_Z2_CONFIG_END));
+    CHECK_EQ("after z2 aperture is not config", MEM_REGION_UNKNOWN,
+             memory_map_decode(BELLATRIX_Z2_CONFIG_END + 1u));
+    CHECK_EQ("CIA-B primary even", MEM_REGION_CIAB,
+             memory_map_decode(0x00bfd000u));
+    CHECK_EQ("CIA-B primary odd hole", MEM_REGION_UNKNOWN,
+             memory_map_decode(0x00bfd001u));
+    CHECK_EQ("CIA-B shared even", MEM_REGION_CIAB,
+             memory_map_decode(0x00bfe000u));
+    CHECK_EQ("CIA-A shared odd", MEM_REGION_CIAA,
+             memory_map_decode(0x00bfe001u));
+    CHECK_EQ("CIA shared page hole", MEM_REGION_UNKNOWN,
+             memory_map_decode(0x00bfefffu));
+    CHECK_EQ("custom aperture", MEM_REGION_CUSTOM,
+             memory_map_decode(BELLATRIX_CUSTOM_BASE));
     CHECK_EQ("exp rom check decode", MEM_REGION_EXP_ROM_CHECK, memory_map_decode(0x00f00000u));
     CHECK_EQ("rom decode", MEM_REGION_ROM, memory_map_decode(0x00f80000u));
 }
@@ -75,13 +108,18 @@ static void test_overlay_reads_and_chip_writes(void)
     bellatrix_memory_attach_rom(&mem, rom, sizeof(rom));
 
     bellatrix_mem_write32(&mem, 0x000000u, 0xdeadbeefu);
+    bellatrix_mem_write32(&mem, 0x00100004u, 0x01020304u);
 
     CHECK_EQ("overlay low read32", 0x11223344u, bellatrix_mem_read32(&mem, 0x000000u));
     CHECK_EQ("chip backing kept writes", 0xdeadbeefu, bellatrix_chip_read32(&mem, 0x000000u));
+    CHECK_EQ("upper CPU aperture mirrors fitted chip backing", 0x01020304u,
+             bellatrix_chip_read32(&mem, 0x000004u));
 
     bellatrix_memory_set_overlay(&mem, 0);
 
     CHECK_EQ("overlay off low read32", 0xdeadbeefu, bellatrix_mem_read32(&mem, 0x000000u));
+    CHECK_EQ("mirror read uses same backing", 0x01020304u,
+             bellatrix_mem_read32(&mem, 0x00100004u));
     CHECK_EQ("rom window read32", 0x11223344u, bellatrix_mem_read32(&mem, 0x00f80000u));
     CHECK_EQ("rom window read16", 0xaabbu, bellatrix_mem_read16(&mem, 0x00f80004u));
 }
@@ -89,16 +127,43 @@ static void test_overlay_reads_and_chip_writes(void)
 static void test_fast_ram_big_endian(void)
 {
     BellatrixMemory mem;
+    static uint8_t config[AUTOCONFIG_DATA_SIZE];
+    BellatrixZorro2BoardDesc desc;
+    BellatrixZorro2BoardOps ops;
+    const uint32_t assigned_base = 0x00400000u;
 
     test_memory_init(&mem);
+    memset(config, 0, sizeof(config));
+    memset(&desc, 0, sizeof(desc));
+    memset(&ops, 0, sizeof(ops));
+    ops.read8 = test_fast_read8;
+    ops.write8 = test_fast_write8;
+    desc.id = "test.dynamic-fast";
+    desc.config_data = config;
+    desc.config_size = sizeof(config);
+    desc.window_size = (uint32_t)mem.fast_ram_size;
+    desc.userdata = &mem;
+    desc.ops = &ops;
+    CHECK_EQ("register dynamic fast", 0u,
+             bellatrix_zorro2_register_board(&desc));
+    bellatrix_zorro2_init();
 
-    bellatrix_mem_write32(&mem, BELLATRIX_FAST_RAM_BASE, 0x12345678u);
+    CHECK_EQ("dynamic fast hidden before assignment", MEM_REGION_UNKNOWN,
+             memory_map_decode(assigned_base));
+    CHECK_EQ("hidden fast reads open bus", 0xffffffffu,
+             bellatrix_mem_read32(&mem, assigned_base));
+    bellatrix_zorro2_config_write8(0x00e80048u,
+                                   (uint8_t)(assigned_base >> 16));
+    CHECK_EQ("assigned fast decodes as board", MEM_REGION_Z2_BOARD,
+             memory_map_decode(assigned_base));
 
-    CHECK_EQ("fast read32", 0x12345678u, bellatrix_mem_read32(&mem, BELLATRIX_FAST_RAM_BASE));
-    CHECK_EQ("fast read16 hi", 0x1234u, bellatrix_mem_read16(&mem, BELLATRIX_FAST_RAM_BASE));
-    CHECK_EQ("fast read16 lo", 0x5678u, bellatrix_mem_read16(&mem, BELLATRIX_FAST_RAM_BASE + 2u));
-    CHECK_EQ("fast read8 b0", 0x12u, bellatrix_mem_read8(&mem, BELLATRIX_FAST_RAM_BASE));
-    CHECK_EQ("fast read8 b3", 0x78u, bellatrix_mem_read8(&mem, BELLATRIX_FAST_RAM_BASE + 3u));
+    bellatrix_mem_write32(&mem, assigned_base, 0x12345678u);
+
+    CHECK_EQ("fast read32", 0x12345678u, bellatrix_mem_read32(&mem, assigned_base));
+    CHECK_EQ("fast read16 hi", 0x1234u, bellatrix_mem_read16(&mem, assigned_base));
+    CHECK_EQ("fast read16 lo", 0x5678u, bellatrix_mem_read16(&mem, assigned_base + 2u));
+    CHECK_EQ("fast read8 b0", 0x12u, bellatrix_mem_read8(&mem, assigned_base));
+    CHECK_EQ("fast read8 b3", 0x78u, bellatrix_mem_read8(&mem, assigned_base + 3u));
 }
 
 static void test_slow_ram_big_endian_and_no_custom_alias(void)
@@ -243,6 +308,30 @@ static void test_chip_ram_wrap_helper_and_overlay_probe_visibility(void)
              bellatrix_mem_read32(&mem, 0x000000u));
 }
 
+static void test_one_meg_rom_overlay_uses_extended_half(void)
+{
+    BellatrixMemory mem;
+    uint8_t standard[4] = { 0x11u, 0x22u, 0x33u, 0x44u };
+    uint8_t extended[4] = { 0xaau, 0xbbu, 0xccu, 0xddu };
+
+    test_memory_init(&mem);
+    bellatrix_memory_attach_rom(&mem, standard, sizeof(standard));
+    bellatrix_memory_attach_ext_rom(&mem, extended, sizeof(extended));
+
+    CHECK_EQ("1MB ROM low overlay follows Emu68 extended half",
+             0xaabbccddu, bellatrix_mem_read32(&mem, 0x000000u));
+    CHECK_EQ("standard ROM aperture remains second half",
+             0x11223344u,
+             bellatrix_mem_read32(&mem, BELLATRIX_ROM_BASE));
+
+    bellatrix_mem_write32(&mem, 0x000000u, 0x55667788u);
+    CHECK_EQ("overlay write reaches underlying chip backing",
+             0x55667788u, bellatrix_chip_read32(&mem, 0x000000u));
+    bellatrix_memory_set_overlay(&mem, 0);
+    CHECK_EQ("overlay-off exposes underlying write",
+             0x55667788u, bellatrix_mem_read32(&mem, 0x000000u));
+}
+
 int main(void)
 {
     test_decode_regions();
@@ -254,6 +343,7 @@ int main(void)
     test_chip_ram_bank_independence();
     test_chip_ram_top_boundary_wrap();
     test_chip_ram_wrap_helper_and_overlay_probe_visibility();
+    test_one_meg_rom_overlay_uses_extended_half();
 
     puts("bellatrix_unit_memory: ok");
     return 0;

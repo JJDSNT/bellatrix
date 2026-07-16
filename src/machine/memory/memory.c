@@ -27,7 +27,9 @@
 #define BELLATRIX_FAST_RAM_SIZE 0x00800000u
 #define BELLATRIX_FAST_RAM_MASK 0x007FFFFFu
 
-static uint8_t g_fast_ram[BELLATRIX_FAST_RAM_SIZE];
+/* DIRECT regions require page-aligned host backing on every CPU backend. */
+static uint8_t g_fast_ram[BELLATRIX_FAST_RAM_SIZE]
+    __attribute__((aligned(0x1000)));
 static uint8_t g_slow_ram[BELLATRIX_SLOW_RAM_SIZE];
 #endif
 

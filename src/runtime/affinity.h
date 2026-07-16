@@ -3,10 +3,12 @@
 
 #include <stdbool.h>
 
+/* POSIX harness affinity is intentionally separate from the bare-metal
+ * role-to-core contract in topology.h. These values select host CPUs only. */
 typedef enum RuntimeAffinityCore {
-    RUNTIME_AFFINITY_CPU     = 0,   /* Core 0 — Emu68 JIT (boot core, fixed) */
-    RUNTIME_AFFINITY_CHIPSET = 1,   /* Core 1 — Rigel chipset (full domain)  */
-    RUNTIME_AFFINITY_IO      = 3    /* Core 3 — USB / Bluetooth              */
+    RUNTIME_AFFINITY_CPU     = 0,
+    RUNTIME_AFFINITY_CHIPSET = 1,
+    RUNTIME_AFFINITY_IO      = 3
 } RuntimeAffinityCore;
 
 bool runtime_affinity_set_current_thread(RuntimeAffinityCore core);

@@ -50,7 +50,8 @@ apply_patch_if_needed() {
     fi
 
     if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
-        if grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c &&
+        if { grep -Fq '#include "cpu/emu68/vectors.inc"' src/aarch64/vectors.c ||
+             grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c; } &&
            grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
@@ -58,8 +59,9 @@ apply_patch_if_needed() {
     fi
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
-        if grep -Fq 'bellatrix_emu68_report_jit_progress(_v30_now' src/ExecutionLoop.c &&
-           grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c; then
+        if grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c &&
+           grep -Fq 'defined(BELLATRIX_EMU68_FAULT_DRIVEN)' src/ExecutionLoop.c &&
+           grep -Fq 'if (ctx->INT.ARM_err) {' src/ExecutionLoop.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
         fi
@@ -89,6 +91,19 @@ apply_patch_if_needed() {
            grep -Fq 'kprintf("[TLSF] ERROR! Double-free detected' src/tlsf.c &&
            grep -Fq 'uintptr_t old_size = GET_SIZE(b);' src/tlsf.c; then
             echo "Patch already applied (TLSF hardening detected): $name"
+            return 0
+        fi
+    fi
+
+    # 0023 deliberately refines 0022 in the same vectors.c hunk. Once the
+    # cumulative host-only IRQ policy is present, neither individual reverse
+    # check is guaranteed to reconstruct its immediate predecessor.
+    if [ "$name" = "0022-bellatrix-bt-normal-irq.patch" ] ||
+       [ "$name" = "0023-bellatrix-host-only-irq.patch" ]; then
+        if grep -Fq 'bellatrix_spx_bt_irq:' src/aarch64/vectors.c &&
+           grep -Fq 'bellatrix_spx_unknown_irq:' src/aarch64/vectors.c &&
+           grep -Fq 'bl bellatrix_physical_irq_handler' src/aarch64/vectors.c; then
+            echo "Patch already applied (cumulative IRQ integration detected): $name"
             return 0
         fi
     fi
@@ -182,17 +197,15 @@ EMU68_PATCHES=(
     "$PATCHES/0020-emu68-stop-liveness.patch"
     "$PATCHES/0022-bellatrix-bt-normal-irq.patch"
     "$PATCHES/0023-bellatrix-host-only-irq.patch"
-    "$PATCHES/0025-emu68-machine-continuation.patch"
-    "$PATCHES/0026-emu68-mmu-unmap.patch"
-    "$PATCHES/0027-emu68-explicit-ea-access.patch"
-    "$PATCHES/0028-emu68-explicit-fetch-and-exception.patch"
-    "$PATCHES/0029-emu68-explicit-special-access.patch"
-    "$PATCHES/0030-emu68-explicit-stack-movem.patch"
-    "$PATCHES/0031-emu68-explicit-line0-access.patch"
-    "$PATCHES/0032-emu68-explicit-bitfield-access.patch"
-    "$PATCHES/0033-emu68-explicit-fpu-access.patch"
-"$PATCHES/0034-emu68-explicit-paired-move.patch"
-"$PATCHES/0035-emu68-modeled-cycles.patch"
+    # 0025-0034 belonged to the retired "public machine API" experiment
+    # (explicit JIT access classification). Removed 2026-07-16; full content
+    # archived at AI_context/archive/emu68-public-machine-api-2026-07.md.
+    # 0035 (modeled-cycles) is kept: removing it during cleanup correlated
+    # with a real, reproducible boot regression (see the archive doc's notes
+    # and AI_context memory) -- suspected JIT code-layout sensitivity
+    # (same class as the x12/v28 clobber bug in ISSUE-0038), not confirmed.
+    # Do not remove without re-testing carefully.
+    "$PATCHES/0035-emu68-modeled-cycles.patch"
 )
 
 CHERRYUSB_PATCHES=(
@@ -250,7 +263,8 @@ check_emu68_patch_applied() {
     fi
 
     if [ "$name" = "0002-add-bellatrix-bus-hook.patch" ]; then
-        if grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c &&
+        if { grep -Fq '#include "cpu/emu68/vectors.inc"' src/aarch64/vectors.c ||
+             grep -Fq 'bellatrix_bus_access((uint32_t)far, 0, size, BUS_READ);' src/aarch64/vectors.c; } &&
            grep -Fq 'bellatrix_init();' src/aarch64/start.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
@@ -258,8 +272,9 @@ check_emu68_patch_applied() {
     fi
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
-        if grep -Fq 'bellatrix_emu68_report_jit_progress(_v30_now' src/ExecutionLoop.c &&
-           grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c; then
+        if grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c &&
+           grep -Fq 'defined(BELLATRIX_EMU68_FAULT_DRIVEN)' src/ExecutionLoop.c &&
+           grep -Fq 'if (ctx->INT.ARM_err) {' src/ExecutionLoop.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0
         fi
@@ -281,6 +296,16 @@ check_emu68_patch_applied() {
            grep -Fq 'kprintf("[TLSF] ERROR! Double-free detected' src/tlsf.c &&
            grep -Fq 'uintptr_t old_size = GET_SIZE(b);' src/tlsf.c; then
             echo "  OK  $name  [content match; whitespace normalized in patch]"
+            return 0
+        fi
+    fi
+
+    if [ "$name" = "0022-bellatrix-bt-normal-irq.patch" ] ||
+       [ "$name" = "0023-bellatrix-host-only-irq.patch" ]; then
+        if grep -Fq 'bellatrix_spx_bt_irq:' src/aarch64/vectors.c &&
+           grep -Fq 'bellatrix_spx_unknown_irq:' src/aarch64/vectors.c &&
+           grep -Fq 'bl bellatrix_physical_irq_handler' src/aarch64/vectors.c; then
+            echo "  OK  $name  [cumulative IRQ integration]"
             return 0
         fi
     fi

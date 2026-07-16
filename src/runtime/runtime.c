@@ -6,6 +6,7 @@
 
 #include "debug/core_log.h"
 #include "host/pal.h"
+#include "runtime/topology.h"
 #include "support.h"
 
 extern RigelContext *bellatrix_machine_rigel_ctx(void);
@@ -41,7 +42,10 @@ bool bellatrix_runtime_init(
     rt->running = true;
 
     if (PAL_Core_IsMulticoreEnabled()) {
-        kprintf("[RUNTIME] init OK: Core0=SUP+IO Core1=CPU Core2=CHIPSET Core3=RESERVED\n");
+        kprintf("[RUNTIME] init OK: cpu=%u chipset=%u host=%u\n",
+                (unsigned)BELLATRIX_CORE_CPU,
+                (unsigned)BELLATRIX_CORE_CHIPSET,
+                (unsigned)BELLATRIX_CORE_HOST_REACTOR);
         PAL_Core_LaunchChipset(NULL);
     } else {
         kprintf("[RUNTIME] init OK: single-core mode\n");
@@ -88,9 +92,8 @@ void bellatrix_runtime_run(
     rt->running = true;
 
     /*
-     * In multicore mode the chipset and IO cores run independently.
-     * Core 0 only drives the CPU; PAL_Runtime_Poll() services the
-     * single-core fallback path.
+     * In multicore mode the chipset and host-reactor roles run independently
+     * of the CPU role. PAL_Runtime_Poll() services the single-core fallback.
      */
     while (rt->running) {
         core_cpu_step(&rt->cpu, rt->cycles_per_step);

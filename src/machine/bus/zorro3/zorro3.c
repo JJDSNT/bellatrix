@@ -10,14 +10,9 @@
 #endif
 
 /*
- * Zorro 3 shares the $E80000 config window with Z2.  The actual config-window
- * reads/writes for Z3 boards go through bellatrix_zorro3_config_* which the
- * shared autoconfig sequencer (zorro2_bus.c) calls once it detects er_Type
- * bits 7-6 = 10.
- *
- * For now the Z3 state machine is standalone: it tracks its own current board
- * pointer and expects the machine to pick either Z2 or Z3 routing based on
- * the er_Type of the current board.
+ * Zorro 3 shares the $E80000 config window with Z2. The sparse Autoconfig
+ * owner in zorro_autoconfig.c presents pending Z2 boards first, followed by
+ * pending Z3 boards, while each bus keeps its own registration state.
  */
 
 typedef struct Zorro3Board {
@@ -26,15 +21,11 @@ typedef struct Zorro3Board {
     uint8_t  configured;
     uint8_t  shutup;
     uint32_t base;
-    uint8_t  hi_byte;   /* latched from AC_OFF_Z3_HI write */
 } Zorro3Board;
 
 static Zorro3Board s_boards[BELLATRIX_MAX_ZORRO3_BOARDS];
 static size_t      s_count;
 static int         s_current;
-
-/* Next available Z3 base address (64MB aligned) */
-static uint32_t    s_next_base = Z3_WINDOW_BASE;
 
 static int find_slot(const char *id)
 {
@@ -74,7 +65,7 @@ static Zorro3Board *board_for_addr(uint32_t addr)
         Zorro3Board *b = &s_boards[i];
         if (!b->enabled || !b->configured || !b->base || !b->desc.window_size)
             continue;
-        if (addr >= b->base && addr < b->base + b->desc.window_size)
+        if (addr >= b->base && addr - b->base < b->desc.window_size)
             return b;
     }
     return NULL;
@@ -84,12 +75,16 @@ void bellatrix_zorro3_init(void)
 {
     size_t i;
     for (i = 0; i < s_count; ++i) {
+        if (s_boards[i].configured && !s_boards[i].shutup &&
+            s_boards[i].desc.ops && s_boards[i].desc.ops->unmap) {
+            s_boards[i].desc.ops->unmap(s_boards[i].desc.userdata,
+                                        s_boards[i].base,
+                                        s_boards[i].desc.window_size);
+        }
         s_boards[i].configured = 0;
         s_boards[i].shutup     = 0;
         s_boards[i].base       = 0;
-        s_boards[i].hi_byte    = 0;
     }
-    s_next_base = Z3_WINDOW_BASE;
     refresh_current();
 }
 
@@ -115,12 +110,14 @@ int bellatrix_zorro3_register_board(const BellatrixZorro3BoardDesc *desc)
     slot = find_slot(desc->id);
     if (slot >= 0) {
         b = &s_boards[slot];
+        if (b->configured && !b->shutup && b->desc.ops && b->desc.ops->unmap)
+            b->desc.ops->unmap(b->desc.userdata, b->base,
+                               b->desc.window_size);
         b->desc       = *desc;
         b->enabled    = 1;
         b->configured = 0;
         b->shutup     = 0;
         b->base       = 0;
-        b->hi_byte    = 0;
         refresh_current();
         return 0;
     }
@@ -147,6 +144,12 @@ int bellatrix_zorro3_unregister_board(const char *id)
     int slot = find_slot(id);
     if (slot < 0) return -1;
 
+    if (s_boards[slot].configured && !s_boards[slot].shutup &&
+        s_boards[slot].desc.ops && s_boards[slot].desc.ops->unmap) {
+        s_boards[slot].desc.ops->unmap(s_boards[slot].desc.userdata,
+                                       s_boards[slot].base,
+                                       s_boards[slot].desc.window_size);
+    }
     if (s_boards[slot].desc.ops && s_boards[slot].desc.ops->destroy)
         s_boards[slot].desc.ops->destroy(s_boards[slot].desc.userdata);
 
@@ -162,39 +165,102 @@ int bellatrix_zorro3_unregister_board(const char *id)
 }
 
 /*
- * Config window writes for Z3 boards (WriteExpansionWord(board, 17, addr>>16)):
- *   AC_OFF_Z3_HI  (0x44): latch bits 31-24 of base address
- *   AC_OFF_BASE_HI (0x48): bits 23-16 of base address; triggers assignment
- *   AC_OFF_SHUTUP  (0x4C): shut up the board
+ * Emu68's contract for a Z3 board is WriteExpansionWord(board, 17,
+ * base >> 16): a 16-bit value at offset 0x44 completes assignment and map().
+ * Offset 0x4c shuts the board up.
  */
-void bellatrix_zorro3_config_write8(uint32_t addr, uint8_t value)
+int bellatrix_zorro3_has_pending_board(void)
 {
-    Zorro3Board *b;
+    return current_board() != NULL;
+}
+
+uint8_t bellatrix_zorro3_config_read8(uint32_t addr)
+{
+    Zorro3Board *b = current_board();
     uint32_t off;
 
-    b = current_board();
-    if (!b) return;
+    if (!b)
+        return 0xffu;
+    off = addr & 0xffffu;
+    if (off >= b->desc.config_size)
+        return 0xffu;
+    return b->desc.config_data[off];
+}
 
-    off = addr & 0xFFFFu;
+uint16_t bellatrix_zorro3_config_read16(uint32_t addr)
+{
+    return (uint16_t)(((uint16_t)bellatrix_zorro3_config_read8(addr) << 8) |
+                      bellatrix_zorro3_config_read8(addr + 1u));
+}
 
-    if (off == AC_OFF_Z3_HI) {
-        b->hi_byte = value;
-    } else if (off == AC_OFF_BASE_HI) {
-        b->base       = ((uint32_t)b->hi_byte << 24) | ((uint32_t)value << 16);
+uint32_t bellatrix_zorro3_config_read32(uint32_t addr)
+{
+    return ((uint32_t)bellatrix_zorro3_config_read8(addr) << 24) |
+           ((uint32_t)bellatrix_zorro3_config_read8(addr + 1u) << 16) |
+           ((uint32_t)bellatrix_zorro3_config_read8(addr + 2u) << 8) |
+           (uint32_t)bellatrix_zorro3_config_read8(addr + 3u);
+}
+
+static void configure_current_board(uint32_t base)
+{
+    Zorro3Board *b = current_board();
+    int rc = 0;
+
+    if (!b)
+        return;
+    if (base == 0u) {
+        b->base = 0u;
         b->configured = 1;
-        if (b->base == 0 || b->base < Z3_WINDOW_BASE) {
-            /* Kickstart shuts up boards it can't map by writing 0 */
-            b->shutup = 1;
-            kprintf("[Z3] board '%s' shutup (base=0)\n",
-                    b->desc.id ? b->desc.id : "?");
-        } else {
-            kprintf("[Z3] board '%s' assigned base=%08x size=%08x\n",
-                    b->desc.id ? b->desc.id : "?",
-                    (unsigned)b->base,
+        b->shutup = 1;
+        kprintf("[Z3] board '%s' shutup (base=0)\n",
+                b->desc.id ? b->desc.id : "?");
+    } else {
+        if (b->desc.ops && b->desc.ops->map)
+            rc = b->desc.ops->map(b->desc.userdata, base,
+                                  b->desc.window_size);
+        if (rc != 0) {
+            kprintf("[Z3] board '%s' map failed rc=%d base=%08x size=%08x\n",
+                    b->desc.id ? b->desc.id : "?", rc, (unsigned)base,
                     (unsigned)b->desc.window_size);
+            b->base = 0u;
+            b->configured = 0;
+            return;
         }
-        refresh_current();
+        b->base = base;
+        b->configured = 1;
+        kprintf("[Z3] board '%s' assigned base=%08x size=%08x\n",
+                b->desc.id ? b->desc.id : "?", (unsigned)b->base,
+                (unsigned)b->desc.window_size);
     }
+    refresh_current();
+}
+
+void bellatrix_zorro3_config_write8(uint32_t addr, uint8_t value)
+{
+    uint32_t off;
+
+    if (!current_board()) return;
+    off = addr & 0xFFFFu;
+    if (off == AC_OFF_Z3_HI) {
+        configure_current_board((uint32_t)value << 16);
+    } else if (off == AC_OFF_SHUTUP) {
+        configure_current_board(0u);
+    }
+}
+
+void bellatrix_zorro3_config_write16(uint32_t addr, uint16_t value)
+{
+    uint32_t off = addr & 0xffffu;
+    if (off == AC_OFF_Z3_HI)
+        configure_current_board((uint32_t)value << 16);
+    else if (off == AC_OFF_SHUTUP)
+        configure_current_board(0u);
+}
+
+void bellatrix_zorro3_config_write32(uint32_t addr, uint32_t value)
+{
+    /* Match Emu68: only the low 16 bits of the value form base[31:16]. */
+    bellatrix_zorro3_config_write16(addr, (uint16_t)value);
 }
 
 int bellatrix_zorro3_in_board_window(uint32_t addr)

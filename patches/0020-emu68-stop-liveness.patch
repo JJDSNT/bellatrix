@@ -1,4 +1,5 @@
 diff --git a/include/M68k.h b/include/M68k.h
+index 7372256..3763beb 100644
 --- a/include/M68k.h
 +++ b/include/M68k.h
 @@ -116,6 +116,13 @@ struct M68KState
@@ -16,26 +17,52 @@ diff --git a/include/M68k.h b/include/M68k.h
      uint32_t JIT_UNIT_COUNT;
      uint32_t JIT_CACHE_TOTAL;
 diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
-index 4ed0d5f..1fc2b84 100644
+index 4ed0d5f..86f28f5 100644
 --- a/src/M68k_LINE4.c
 +++ b/src/M68k_LINE4.c
-@@ -1535,6 +1535,24 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
+@@ -1535,6 +1535,50 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
      *ptr++ = b(2);
      *ptr++ = mov_simd_to_reg(sp, 31, TS_S, 2);  // Load ISP
  
-+#if defined(BELLATRIX) && \
-+    (!defined(BELLATRIX_EMU68_FAULT_DRIVEN) || \
-+     !BELLATRIX_EMU68_FAULT_DRIVEN)
-+    /* Bellatrix is embedded: STOP yields to its scheduler instead of sleeping
-+     * on a physical ARM interrupt. Retire STOP exactly once, leave PC at the
-+     * following instruction and publish explicit architectural state. */
++#ifdef BELLATRIX
++    /* Bellatrix: chipset time is CPU-driven -- the MainLoop BELLATRIX block
++     * advances the chipset between units. Sleeping on wfi/wfe here would
++     * deadlock: single-core Emu68 only advances Rigel's clock (and
++     * therefore VBL, and therefore any interrupt that could wake a real
++     * sleep) from the JIT's own progress hook and the bus-fault path, both
++     * of which require the CPU to still be retiring instructions. This
++     * must stay unconditional -- NOT excluded for
++     * BELLATRIX_EMU68_FAULT_DRIVEN; a later revision added that exclusion
++     * and fell through to the raw wfi() below, which nothing can ever wake.
++     *
++     * While INT is clear, end the unit without advancing PC (leave the
++     * guest still logically stopped) but account this pass as 8 retired
++     * instructions (64 M68K cycles) so the JIT insn counter (v30) -- and
++     * with it Bellatrix chipset time -- keeps flowing at a useful rate: on
++     * real STOP hardware idle time is wall-clock, so any reasonable rate is
++     * semantically fine, but crediting only the true 0 retired instructions
++     * per pass made a QEMU TCG idle frame take minutes. The STOP unit is
++     * simply re-dispatched next MainLoop pass. Once INT is pending, retire
++     * STOP normally and let MainLoop deliver the interrupt -- same
++     * observable semantics as the PiStorm wfe loop, minus the sleep.
++     *
++     * This is byte-for-byte the original ISSUE-0038 fix (0e113d2) -- kept
++     * unmodified rather than hand-patched to also toggle STOPPED, since
++     * getting one of these hardcoded branch offsets wrong would silently
++     * corrupt control flow. STOPPED is set true elsewhere for the
++     * (now-retired) public-API path; the only other consumer
++     * (patches/0003) ORs it with a spin counter that already fires every
++     * pass regardless, so leaving STOPPED unset here is inert, not wrong. */
 +    {
 +        uint8_t tmpreg = RA_AllocARMRegister(&ptr);
 +        uint8_t ctx = RA_GetCTX(&ptr);
 +
-+        *ptr++ = mov_immed_u16(tmpreg, 1, 0);
-+        *ptr++ = str_offset(ctx, tmpreg,
-+                            __builtin_offsetof(struct M68KState, STOPPED));
++        *ptr++ = ldr_offset(ctx, tmpreg, __builtin_offsetof(struct M68KState, INT));
++        *ptr++ = cbnz(tmpreg, 5);
++        *ptr++ = mov_immed_u16(tmpreg, 8, 0);
++        *ptr++ = fmov_from_reg(0, tmpreg);
++        *ptr++ = vadd_2d(30, 30, 0);
++        *ptr++ = b(2);
 +        *ptr++ = add_immed(REG_PC, REG_PC, 4);
 +
 +        RA_FreeARMRegister(&ptr, tmpreg);
@@ -44,7 +71,7 @@ index 4ed0d5f..1fc2b84 100644
      /* Now do what stop does - wait for interrupt */
      *ptr++ = add_immed(REG_PC, REG_PC, 4);
  
-@@ -1568,6 +1586,7 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
+@@ -1568,6 +1612,7 @@ static uint32_t *EMIT_STOP(uint32_t *ptr, uint16_t opcode, uint16_t **m68k_ptr,
  
      RA_FreeARMRegister(&ptr, tmpreg);
  #endif

@@ -11,17 +11,15 @@ extern "C" {
 #endif
 
 /*
- * Zorro 3 boards use the same $E80000 config window as Z2 but with
- * er_Type bits 7-6 = 10. The base address is assigned via two writes:
- *   offset 0x44 (AC_OFF_Z3_HI): board_base[31:24]
- *   offset 0x48 (AC_OFF_BASE_HI): board_base[23:16]  (also triggers assignment)
- * Board windows live at $40000000–$7FFFFFFF.
+ * Zorro 3 boards share the $E80000 Autoconfig window with Z2. Following the
+ * Emu68 vectors contract, a write at offset 0x44 supplies board_base[31:16]
+ * and completes assignment. Do not impose an OS-specific allocation window:
+ * the board/backend decides whether it can map the guest-assigned base.
  */
 
-#define Z3_WINDOW_BASE  0x40000000u
-#define Z3_WINDOW_END   0x7FFFFFFFu
-
 typedef struct BellatrixZorro3BoardOps {
+    int     (*map)(void *userdata, uint32_t base, uint32_t size);
+    void    (*unmap)(void *userdata, uint32_t base, uint32_t size);
     void    (*reset)(void *userdata);
     void    (*destroy)(void *userdata);
     uint8_t (*read8)(void *userdata, uint32_t offset);
@@ -42,6 +40,16 @@ void bellatrix_zorro3_reset(void);
 
 int  bellatrix_zorro3_register_board(const BellatrixZorro3BoardDesc *desc);
 int  bellatrix_zorro3_unregister_board(const char *id);
+
+int bellatrix_zorro3_has_pending_board(void);
+
+uint8_t  bellatrix_zorro3_config_read8 (uint32_t addr);
+uint16_t bellatrix_zorro3_config_read16(uint32_t addr);
+uint32_t bellatrix_zorro3_config_read32(uint32_t addr);
+
+void bellatrix_zorro3_config_write8 (uint32_t addr, uint8_t value);
+void bellatrix_zorro3_config_write16(uint32_t addr, uint16_t value);
+void bellatrix_zorro3_config_write32(uint32_t addr, uint32_t value);
 
 int bellatrix_zorro3_in_board_window(uint32_t addr);
 

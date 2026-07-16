@@ -1,8 +1,8 @@
 #include "cpu/musashi/musashi_backend.h"
 
 #include "cpu/cpu_bridge.h"
+#include "cpu/direct_region.h"
 #include "machine/machine.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 #include "rigel/rigel_cia.h"
 #include "machine/memory/memory.h"
 
@@ -13,14 +13,32 @@
 #endif
 
 #ifndef BELLATRIX_MUSASHI_LOW_RAM_SIZE
-#define BELLATRIX_MUSASHI_LOW_RAM_SIZE BELLATRIX_CHIP_RAM_SIZE
+#define BELLATRIX_MUSASHI_LOW_RAM_SIZE BELLATRIX_CHIP_CPU_APERTURE_SIZE
 #endif
 
-static uint32_t musashi_rom_read_at(const BellatrixMemory *mem,
+static BellatrixDirectRegionMap s_direct_regions;
+
+static int musashi_direct_map(void *opaque,
+                              const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static int musashi_direct_unmap(void *opaque,
+                                const BellatrixDirectRegion *region)
+{
+    (void)opaque;
+    (void)region;
+    return 0;
+}
+
+static uint32_t musashi_rom_read_at(const uint8_t *rom_base,
                                     uint32_t offset,
                                     unsigned int size)
 {
-    const uint8_t *rom = mem->rom + offset;
+    const uint8_t *rom = rom_base + offset;
 
     if (size == 1u) {
         return rom[0];
@@ -38,17 +56,6 @@ static int musashi_overlay_enabled(void)
 {
     BellatrixMachine *m = bellatrix_machine_get();
     return m ? bellatrix_memory_overlay_enabled(&m->memory) : 1;
-}
-
-/* When the fast RAM autoconfig board is registered, the RAM window must
- * stay silent until the OS assigns it a base — otherwise early memory
- * probes find RAM at 0x200000 and the later AddMemList duplicates the
- * range, corrupting the exec memory list. Without a registered board the
- * window responds unconditionally (legacy harness behaviour). */
-static int musashi_fast_ram_visible(void)
-{
-    if (!bellatrix_zorro2_fast_ram_registered()) return 1;
-    return bellatrix_zorro2_fast_ram_configured();
 }
 
 static uint32_t musashi_chip_read(const BellatrixMemory *mem,
@@ -78,53 +85,32 @@ static void musashi_chip_write(BellatrixMemory *mem,
     }
 }
 
-static uint32_t musashi_fast_read(const BellatrixMemory *mem,
-                                  uint32_t addr,
-                                  unsigned int size)
-{
-    if (size == 1u) {
-        return bellatrix_fast_read8(mem, addr);
-    }
-    if (size == 2u) {
-        return bellatrix_fast_read16(mem, addr);
-    }
-    return bellatrix_fast_read32(mem, addr);
-}
-
-static void musashi_fast_write(BellatrixMemory *mem,
-                               uint32_t addr,
-                               uint32_t value,
-                               unsigned int size)
-{
-    if (size == 1u) {
-        bellatrix_fast_write8(mem, addr, (uint8_t)value);
-    } else if (size == 2u) {
-        bellatrix_fast_write16(mem, addr, (uint16_t)value);
-    } else {
-        bellatrix_fast_write32(mem, addr, value);
-    }
-}
-
 static uint32_t musashi_read(uint32_t addr, unsigned int size)
 {
     BellatrixMachine *m = bellatrix_machine_get();
     BellatrixMemory *mem = &m->memory;
+    uint32_t direct_value;
 
-    addr &= 0x00FFFFFFu;
+    /* Musashi applies CPU_ADDRESS_MASK before invoking the memory callback:
+     * 68000/68010/68EC020 remain 24-bit, while 68020+/68040 preserve 32 bits.
+     * A second mask here would alias Z3 into low Amiga memory. */
 
     if (musashi_overlay_enabled() &&
         mem->rom &&
         mem->rom_size &&
         addr < BELLATRIX_CHIP_BOOT_SIZE) {
-        return musashi_rom_read_at(mem,
-                                   addr & (uint32_t)(mem->rom_size - 1u),
-                                   size);
+        const uint8_t *overlay_rom = mem->rom_ext && mem->rom_ext_size
+            ? mem->rom_ext : mem->rom;
+        size_t overlay_size = mem->rom_ext && mem->rom_ext_size
+            ? mem->rom_ext_size : mem->rom_size;
+        return musashi_rom_read_at(
+            overlay_rom, addr & (uint32_t)(overlay_size - 1u), size);
     }
 
     if (mem->rom &&
         addr >= BELLATRIX_ROM_BASE &&
         addr <= BELLATRIX_ROM_END) {
-        return musashi_rom_read_at(mem, addr - BELLATRIX_ROM_BASE, size);
+        return musashi_rom_read_at(mem->rom, addr - BELLATRIX_ROM_BASE, size);
     }
 
     if (mem->rom_ext &&
@@ -143,13 +129,9 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
         return musashi_chip_read(mem, addr, size);
     }
 
-    if (mem->fast_ram &&
-        mem->fast_ram_size &&
-        addr >= BELLATRIX_FAST_RAM_BASE &&
-        addr <= BELLATRIX_FAST_RAM_END &&
-        musashi_fast_ram_visible()) {
-        return musashi_fast_read(mem, addr, size);
-    }
+    if (bellatrix_direct_region_read(&s_direct_regions, addr, size,
+                                     &direct_value))
+        return direct_value;
 
     return bellatrix_bridge_cpu_read(addr, size);
 }
@@ -159,16 +141,15 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
     BellatrixMachine *m = bellatrix_machine_get();
     BellatrixMemory *mem = &m->memory;
 
-    addr &= 0x00FFFFFFu;
+    /* Keep the CPU-model address width selected by Musashi. The bridge still
+     * returns open bus for unimplemented 32-bit regions, without low aliases. */
 
     if ((mem->rom &&
          addr >= BELLATRIX_ROM_BASE &&
          addr <= BELLATRIX_ROM_END) ||
         (mem->rom_ext &&
          addr >= BELLATRIX_EXT_ROM_BASE &&
-         addr <= BELLATRIX_EXT_ROM_END) ||
-        (musashi_overlay_enabled() &&
-         addr < BELLATRIX_CHIP_BOOT_SIZE)) {
+         addr <= BELLATRIX_EXT_ROM_END)) {
         return;
     }
 
@@ -179,14 +160,8 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
         return;
     }
 
-    if (mem->fast_ram &&
-        mem->fast_ram_size &&
-        addr >= BELLATRIX_FAST_RAM_BASE &&
-        addr <= BELLATRIX_FAST_RAM_END &&
-        musashi_fast_ram_visible()) {
-        musashi_fast_write(mem, addr, value, size);
+    if (bellatrix_direct_region_write(&s_direct_regions, addr, size, value))
         return;
-    }
 
     bellatrix_bridge_cpu_write(addr, value, size);
 }
@@ -260,12 +235,27 @@ static int musashi_run(void *ctx, uint32_t cycles)
     return m68k_execute((int)cycles);
 }
 
+static int musashi_map_direct(void *ctx,
+                              const BellatrixDirectRegion *region)
+{
+    (void)ctx;
+    return bellatrix_direct_region_install(&s_direct_regions, region);
+}
+
+static int musashi_unmap_direct(void *ctx, uint32_t guest_base, uint32_t size)
+{
+    (void)ctx;
+    return bellatrix_direct_region_remove(&s_direct_regions, guest_base, size);
+}
+
 static CpuBackend g_musashi_backend = {
     .ctx = NULL,
     .get_pc = musashi_get_pc,
     .set_ipl = musashi_set_ipl,
     .reset = musashi_reset,
     .run = musashi_run,
+    .map_direct = musashi_map_direct,
+    .unmap_direct = musashi_unmap_direct,
 };
 
 const char *bellatrix_musashi_cpu_model(void)
@@ -290,6 +280,11 @@ const char *bellatrix_musashi_cpu_model(void)
 
 void bellatrix_musashi_backend_init(void)
 {
+    static const BellatrixDirectRegionBackendOps direct_ops = {
+        .map = musashi_direct_map,
+        .unmap = musashi_direct_unmap,
+    };
+    bellatrix_direct_region_map_init(&s_direct_regions, &direct_ops, NULL);
     m68k_init();
     m68k_set_cpu_type(BELLATRIX_MUSASHI_CPU_MODEL);
 }

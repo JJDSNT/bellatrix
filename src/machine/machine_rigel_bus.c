@@ -9,6 +9,7 @@
 #include "machine/memory/fast_ram.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/bus/zorro3/zorro3.h"
+#include "machine/bus/zorro_autoconfig.h"
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/expansion.h"
 #include "machine/memory/slow_ram.h"
@@ -53,20 +54,17 @@ uint32_t g_machine_intreq_vertb_clear_count;
 
 static inline bool is_custom_addr(uint32_t addr)
 {
-    return (addr >= 0x00dff000u && addr <= 0x00dfffffu);
+    return bellatrix_custom_addr_contains(addr) != 0;
 }
 
 static inline bool is_cia_a_addr(uint32_t addr)
 {
-    return (addr & 1u) && (addr >= 0x00bfe001u && addr <= 0x00bfef01u);
+    return bellatrix_ciaa_addr_contains(addr) != 0;
 }
 
 static inline bool is_cia_b_addr(uint32_t addr)
 {
-    if (addr & 1u)
-        return false;
-    return (addr >= 0x00bfd000u && addr <= 0x00bfdf00u) ||
-           (addr >= 0x00bfe000u && addr <= 0x00bfef00u);
+    return bellatrix_ciab_addr_contains(addr) != 0;
 }
 
 static inline bool is_rtc_addr(uint32_t addr)
@@ -76,7 +74,7 @@ static inline bool is_rtc_addr(uint32_t addr)
 
 static inline bool is_autoconfig_addr(uint32_t addr)
 {
-    return (addr >= 0x00E80000u && addr <= 0x00E8FFFFu);
+    return bellatrix_zorro_autoconfig_in_window(addr);
 }
 
 static inline bool is_z2_board_addr(uint32_t addr)
@@ -100,9 +98,11 @@ static uint32_t machine_trace_read32_no_side_effect(uint32_t addr)
     BellatrixMemory *mem = &g_machine.memory;
 
     addr &= 0x00ffffffu;
-    if (addr < BELLATRIX_CHIP_RAM_SIZE)
+    if (bellatrix_chip_cpu_addr_contains_range(addr, 4u))
         return bellatrix_chip_read32(mem, addr);
-    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END)
+    if (mem->fast_ram_configured && addr >= mem->fast_ram_base &&
+        (uint64_t)addr + 4u <=
+            (uint64_t)mem->fast_ram_base + mem->fast_ram_size)
         return bellatrix_fast_read32(mem, addr);
     if (slow_ram_contains(mem, addr, 4u))
         return slow_ram_read32(mem, addr);
@@ -541,9 +541,9 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
         value = rigel_rtc_read_reg(g_rigel, reg);
     } else if (is_autoconfig_addr(addr)) {
         switch (size) {
-        case 1: value = bellatrix_zorro2_config_read8(addr); break;
-        case 2: value = bellatrix_zorro2_config_read16(addr); break;
-        case 4: value = bellatrix_zorro2_config_read32(addr); break;
+        case 1: value = bellatrix_zorro_autoconfig_read8(addr); break;
+        case 2: value = bellatrix_zorro_autoconfig_read16(addr); break;
+        case 4: value = bellatrix_zorro_autoconfig_read32(addr); break;
         default: break;
         }
     } else if (is_z2_board_addr(addr)) {
@@ -648,9 +648,9 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
         rigel_rtc_write_reg(g_rigel, reg, (uint8_t)(value & 0x0Fu));
     } else if (is_autoconfig_addr(addr)) {
         switch (size) {
-        case 1: bellatrix_zorro2_config_write8(addr, (uint8_t)value); break;
-        case 2: bellatrix_zorro2_config_write16(addr, (uint16_t)value); break;
-        case 4: bellatrix_zorro2_config_write32(addr, (uint32_t)value); break;
+        case 1: bellatrix_zorro_autoconfig_write8(addr, (uint8_t)value); break;
+        case 2: bellatrix_zorro_autoconfig_write16(addr, (uint16_t)value); break;
+        case 4: bellatrix_zorro_autoconfig_write32(addr, (uint32_t)value); break;
         default: break;
         }
     } else if (is_z2_board_addr(addr)) {

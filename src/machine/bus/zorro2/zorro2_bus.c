@@ -1,5 +1,6 @@
 #include "machine/bus/zorro2/zorro2_bus.h"
 
+#include "machine/memory/memory.h"
 #include "support.h"
 
 #include <string.h>
@@ -9,8 +10,6 @@
 #endif
 
 /* $E80000–$E8FFFF: autoconfig config window */
-#define Z2_CONFIG_BASE  0x00E80000u
-#define Z2_CONFIG_END   0x00E8FFFFu
 #define Z2_CONFIG_MASK  0x0000FFFFu   /* offset within config window */
 
 typedef struct Zorro2Board {
@@ -79,6 +78,12 @@ void bellatrix_zorro2_init(void)
 {
     size_t i;
     for (i = 0; i < s_count; ++i) {
+        if (s_boards[i].configured && !s_boards[i].shutup &&
+            s_boards[i].desc.ops && s_boards[i].desc.ops->unmap) {
+            s_boards[i].desc.ops->unmap(s_boards[i].desc.userdata,
+                                        s_boards[i].base,
+                                        s_boards[i].desc.window_size);
+        }
         s_boards[i].configured = 0;
         s_boards[i].shutup     = 0;
         s_boards[i].base       = 0;
@@ -108,6 +113,11 @@ int bellatrix_zorro2_register_board(const BellatrixZorro2BoardDesc *desc)
     slot = find_slot(desc->id);
     if (slot >= 0) {
         b = &s_boards[slot];
+        if (b->configured && !b->shutup && b->desc.ops &&
+            b->desc.ops->unmap) {
+            b->desc.ops->unmap(b->desc.userdata, b->base,
+                               b->desc.window_size);
+        }
         b->desc       = *desc;
         b->enabled    = 1;
         b->configured = 0;
@@ -139,6 +149,12 @@ int bellatrix_zorro2_unregister_board(const char *id)
     int slot = find_slot(id);
     if (slot < 0) return -1;
 
+    if (s_boards[slot].configured && !s_boards[slot].shutup &&
+        s_boards[slot].desc.ops && s_boards[slot].desc.ops->unmap) {
+        s_boards[slot].desc.ops->unmap(s_boards[slot].desc.userdata,
+                                       s_boards[slot].base,
+                                       s_boards[slot].desc.window_size);
+    }
     if (s_boards[slot].desc.ops && s_boards[slot].desc.ops->destroy)
         s_boards[slot].desc.ops->destroy(s_boards[slot].desc.userdata);
 
@@ -157,7 +173,12 @@ int bellatrix_zorro2_unregister_board(const char *id)
 
 int bellatrix_zorro2_in_config_window(uint32_t addr)
 {
-    return (addr >= Z2_CONFIG_BASE && addr <= Z2_CONFIG_END);
+    return bellatrix_z2_config_addr_contains(addr);
+}
+
+int bellatrix_zorro2_has_pending_board(void)
+{
+    return current_board() != NULL;
 }
 
 int bellatrix_zorro2_in_board_window(uint32_t addr)
@@ -209,7 +230,21 @@ void bellatrix_zorro2_config_write8(uint32_t addr, uint8_t value)
     off = addr & Z2_CONFIG_MASK;
 
     if (off == AC_OFF_BASE_HI) {
-        b->base       = (uint32_t)value << 16;
+        uint32_t base = (uint32_t)value << 16;
+        int rc = 0;
+
+        if (b->desc.ops && b->desc.ops->map)
+            rc = b->desc.ops->map(b->desc.userdata, base,
+                                  b->desc.window_size);
+        if (rc != 0) {
+            kprintf("[Z2] board '%s' map failed rc=%d base=%08x size=%08x\n",
+                    b->desc.id ? b->desc.id : "?", rc, (unsigned)base,
+                    (unsigned)b->desc.window_size);
+            b->base = 0u;
+            b->configured = 0;
+            return;
+        }
+        b->base       = base;
         b->configured = 1;
         kprintf("[Z2] board '%s' assigned base=%08x size=%08x\n",
                 b->desc.id ? b->desc.id : "?",
@@ -315,36 +350,8 @@ uint32_t bellatrix_zorro2_board_base(const char *id)
 
 /* ----------------------------------------------------------------------- */
 
-static uint8_t s_fast_ram_config[AUTOCONFIG_DATA_SIZE];
-static BellatrixZorro2BoardDesc s_fast_ram_board_desc;
-
-static uint8_t bytes_to_ac_size(uint32_t size)
-{
-    if (size >= 8u * 1024u * 1024u) return AC_SIZE_8MB;
-    if (size >= 4u * 1024u * 1024u) return AC_SIZE_4MB;
-    if (size >= 2u * 1024u * 1024u) return AC_SIZE_2MB;
-    if (size >= 1u * 1024u * 1024u) return AC_SIZE_1MB;
-    if (size >= 512u * 1024u)       return AC_SIZE_512KB;
-    if (size >= 256u * 1024u)       return AC_SIZE_256KB;
-    if (size >= 128u * 1024u)       return AC_SIZE_128KB;
-    return AC_SIZE_64KB;
-}
-
-static uint32_t ac_size_to_bytes(uint8_t code)
-{
-    switch (code) {
-        case AC_SIZE_8MB:   return 8u * 1024u * 1024u;
-        case AC_SIZE_4MB:   return 4u * 1024u * 1024u;
-        case AC_SIZE_2MB:   return 2u * 1024u * 1024u;
-        case AC_SIZE_1MB:   return 1u * 1024u * 1024u;
-        case AC_SIZE_512KB: return 512u * 1024u;
-        case AC_SIZE_256KB: return 256u * 1024u;
-        case AC_SIZE_128KB: return 128u * 1024u;
-        default:            return 64u * 1024u;
-    }
-}
-
-static int s_fast_ram_registered = 0;
+static uint32_t s_fast_ram_window_size;
+static int s_fast_ram_registered;
 
 int bellatrix_zorro2_fast_ram_registered(void)
 {
@@ -362,30 +369,12 @@ int bellatrix_zorro2_fast_ram_window(uint32_t *base, uint32_t *size)
     if (!bellatrix_zorro2_fast_ram_configured())
         return 0;
     if (base) *base = bellatrix_zorro2_board_base("bellatrix.fastram");
-    if (size) *size = s_fast_ram_board_desc.window_size;
+    if (size) *size = s_fast_ram_window_size;
     return 1;
 }
 
-void bellatrix_zorro2_enable_fast_ram(uint32_t size_bytes)
+void bellatrix_zorro2_publish_fast_ram(uint32_t window_size, int registered)
 {
-    uint8_t sz  = bytes_to_ac_size(size_bytes);
-    uint8_t raw[AUTOCONFIG_ROM_BYTES];
-
-    memset(raw, 0, sizeof(raw));
-    raw[0]  = (uint8_t)(AC_TYPE_Z2 | AC_TYPE_MEMLIST | sz);
-    raw[1]  = 0x01u;               /* product ID */
-    raw[4]  = 0x07u;               /* manufacturer 0x07DB high */
-    raw[5]  = 0xDBu;               /* manufacturer 0x07DB low  */
-    raw[9]  = 0x01u;               /* serial 1 */
-
-    autoconfig_build(s_fast_ram_config, raw);
-
-    memset(&s_fast_ram_board_desc, 0, sizeof(s_fast_ram_board_desc));
-    s_fast_ram_board_desc.id          = "bellatrix.fastram";
-    s_fast_ram_board_desc.config_data = s_fast_ram_config;
-    s_fast_ram_board_desc.config_size = sizeof(s_fast_ram_config);
-    s_fast_ram_board_desc.window_size = ac_size_to_bytes(sz);
-
-    bellatrix_zorro2_register_board(&s_fast_ram_board_desc);
-    s_fast_ram_registered = 1;
+    s_fast_ram_window_size = registered ? window_size : 0u;
+    s_fast_ram_registered = registered != 0;
 }

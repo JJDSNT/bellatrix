@@ -1,22 +1,18 @@
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
-index 732a176..9f55465 100644
+index 732a176..ae70814 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -1,4 +1,13 @@
+@@ -1,6 +1,9 @@
  #include <M68k.h>
  #include <support.h>
  #include <config.h>
 +#ifdef BELLATRIX
-+extern int emu68_machine_prepare_native_resume(void);
-+extern int emu68_machine_native_access_pending(void);
-+extern int emu68_machine_native_bus_error_pending(void);
-+extern int emu68_machine_enter_bus_error(void);
-+extern int emu68_machine_instruction_fetch_allowed(uint32_t, uint8_t);
-+extern int emu68_machine_dispatch_quantum_progress(uint64_t, uint32_t);
-+extern void emu68_machine_resume_native(void);
++extern void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc);
 +#endif
  #ifdef PISTORM
-@@ -138,11 +147,86 @@ void MainLoop()
+ #ifndef PISTORM32
+ #define PS_PROTOCOL_IMPL
+@@ -138,11 +141,72 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -27,56 +23,45 @@ index 732a176..9f55465 100644
          LastPC = getLastPC();
          ctx = getCTX();
  
-+#if defined(BELLATRIX) && \
-+    (!defined(BELLATRIX_EMU68_FAULT_DRIVEN) || \
-+     !BELLATRIX_EMU68_FAULT_DRIVEN)
-+        if (!emu68_machine_instruction_fetch_allowed((uint32_t)(uintptr_t)PC,
-+                                                      2u)) {
-+            M68K_SaveContext(ctx);
-+            if (emu68_machine_enter_bus_error()) {
-+                M68K_LoadContext(ctx);
-+                continue;
-+            }
-+            return;
-+        }
-+        if (emu68_machine_prepare_native_resume()) {
-+            emu68_machine_resume_native();
-+            continue;
-+        }
-+        if (emu68_machine_native_access_pending()) {
-+            M68K_SaveContext(ctx);
-+            return;
-+        }
-+        if (emu68_machine_native_bus_error_pending()) {
-+            M68K_SaveContext(ctx);
-+            if (emu68_machine_enter_bus_error()) {
-+                M68K_LoadContext(ctx);
-+                continue;
-+            }
-+            return;
-+        }
-+
-+        /* Report every modeled instruction boundary through the public
-+         * machine integration. The host decides whether and how that progress
-+         * advances its environment; this loop has no host-specific callback.
++#ifdef BELLATRIX
++        /* Advance the Bellatrix chipset on every pass through the loop, not
++         * only on MMIO faults. Without this, guest phases that touch no
++         * unmapped address (RAM-only loops, Wait/STOP idling) freeze
++         * chipset time: no VBL, no CIA, no IPL -- hard deadlock. This must
++         * stay unconditional -- NOT excluded for
++         * BELLATRIX_EMU68_FAULT_DRIVEN. A later "public machine API"
++         * revision gated this whole block behind that exclusion and
++         * replaced the call below with an API dispatch that was never
++         * proven to drive Rigel forward the same way; for fault-driven
++         * builds (the default) that left NOTHING advancing chipset time
++         * once a guest phase stopped touching unmapped memory, e.g. any
++         * tight RAM-only polling loop. Restored to the last version proven
++         * to work (pre "public machine API").
++         *
++         * Uses the same absolute-v30 accumulator as the vectors.c fault
++         * hook, so the two report paths never double-count.
 +         *
 +         * The report path is ordinary-ABI C: it clobbers the pinned M68K
 +         * registers (x13-x17 are caller-saved) and the JIT SIMD state
 +         * (v28-v31 hold INSN_COUNT/CACR/FP flags and are not callee-saved).
 +         * Wrap the call in a full context spill/reload, exactly like the
 +         * translation-miss path below does around M68K_GetTranslationUnit. */
-+        /* Machine mode returns at every modeled instruction boundary so the
-+         * public cycle budget can overshoot by at most that instruction. */
++        /* The spill/reload is too expensive to pay on every unit dispatch,
++         * so gate it: report once at least 64 instructions retired since the
++         * last report (~512 M68K cycles, about two scanlines of IRQ latency
++         * -- the vectors.c fault hook still syncs precisely before MMIO), or
++         * after 64 dispatches without progress (translation misses; a
++         * re-dispatched STOP retires instructions each pass, so idle time
++         * keeps flowing through the delta path). */
 +        {
-+            enum { BELA_REPORT_DELTA = 1 };
++            enum { BELA_REPORT_DELTA = 64 };
 +            static uint64_t bela_insn_prev;
 +            static uint32_t bela_spins;
 +            uint64_t _v30_now, _pc_now, _x12_save;
-+            int _return_to_host;
 +            asm volatile("mov %0, v30.d[0]" : "=r"(_v30_now));
 +            if (ctx->STOPPED ||
 +                (_v30_now - bela_insn_prev) >= (uint64_t)BELA_REPORT_DELTA ||
-+                ++bela_spins >= 1u) {
++                ++bela_spins >= 64u) {
 +                bela_insn_prev = _v30_now;
 +                bela_spins = 0u;
 +                asm volatile("mov %0, x18" : "=r"(_pc_now));
@@ -91,13 +76,10 @@ index 732a176..9f55465 100644
 +                 * entry. */
 +                asm volatile("mov %0, x12" : "=r"(_x12_save));
 +                M68K_SaveContext(ctx);
-+                _return_to_host = emu68_machine_dispatch_quantum_progress(
-+                    _v30_now, (uint32_t)_pc_now);
++                bellatrix_emu68_report_jit_progress(_v30_now, (uint32_t)_pc_now);
 +                M68K_LoadContext(getCTX());
 +                asm volatile("mov x12, %0" :: "r"(_x12_save));
 +                asm volatile("mov v28.d[0], xzr");
-+                if (_return_to_host)
-+                    return;
 +            }
 +        }
 +#endif
@@ -105,7 +87,7 @@ index 732a176..9f55465 100644
          /* If (unlikely) there was interrupt pending, check if it needs to be processed */
          if (unlikely(ctx->INT32 != 0))
          {
-@@ -152,6 +227,19 @@ void MainLoop()
+@@ -152,6 +216,19 @@ void MainLoop()
              uint32_t vbr;
  
              /* Find out requested IPL level based on ARM state and real IPL line */
@@ -125,7 +107,7 @@ index 732a176..9f55465 100644
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +257,7 @@ void MainLoop()
+@@ -169,7 +246,7 @@ void MainLoop()
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
@@ -134,7 +116,7 @@ index 732a176..9f55465 100644
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +278,10 @@ void MainLoop()
+@@ -190,9 +267,10 @@ void MainLoop()
                      {
                          level = ipl_level;
                      }
@@ -146,7 +128,7 @@ index 732a176..9f55465 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +325,65 @@ void MainLoop()
+@@ -236,6 +314,65 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
@@ -212,7 +194,7 @@ index 732a176..9f55465 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +396,8 @@ void MainLoop()
+@@ -248,7 +385,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */

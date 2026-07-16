@@ -17,17 +17,19 @@ set(BELLATRIX_SOURCES "")
 enable_language(ASM)
 
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
+option(BELLATRIX_ENABLE_Z3_68040
+    "Register Emu68's native 68040 support ROM through Bellatrix Z3" OFF)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 set(BELLATRIX_MUSASHI_CPU "68040" CACHE STRING "Musashi CPU model for Bellatrix bare-metal: 68000, 68010, 68ec020, 68020, 68030, 68040")
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
-option(BELLATRIX_ENABLE_MULTICORE "Enable multicore runtime (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)" OFF)
+option(BELLATRIX_ENABLE_MULTICORE "Enable unified runtime (Core0=CPU Core1=Aux Core2=Chipset Core3=Host)" OFF)
 option(BELLATRIX_EMU68_CORE0_REBASELINE
-    "Keep the Emu68 JIT and its native exception contract on Core 0" ON)
-option(BELLATRIX_CORE_LOG "Enable per-core log tags [CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO]" OFF)
+    "Keep native Emu68 JIT/exception integration on the common CPU Core 0" ON)
+option(BELLATRIX_CORE_LOG "Enable runtime-role log tags [HOST] [CPU] [CHIPSET]" OFF)
 option(BELLATRIX_PROFILE "Enable MMIO profiling instrumentation (zero cost when OFF)" OFF)
 option(BELLATRIX_COARSE_OBSERVABLE_DEADLINES
     "Experimental: let Rigel process observable deadlines internally in Core-2 drains" OFF)
-set(BELLATRIX_TIMELINE_MODE "cpu" CACHE STRING
+set(BELLATRIX_TIMELINE_MODE "realtime" CACHE STRING
     "Timeline policy: cpu, realtime, or hybrid")
 set_property(CACHE BELLATRIX_TIMELINE_MODE PROPERTY STRINGS cpu realtime hybrid)
 if(BELLATRIX_TIMELINE_MODE STREQUAL "cpu")
@@ -54,18 +56,21 @@ if(BELLATRIX_ENABLE_MULTICORE)
     add_compile_definitions(BELLATRIX_ENABLE_MULTICORE)
     if(BELLATRIX_EMU68_CORE0_REBASELINE AND NOT BELLATRIX_USE_MUSASHI_CPU)
         add_compile_definitions(BELLATRIX_EMU68_CORE0_REBASELINE=1)
-        message(STATUS "[BUILD] Multicore rebaseline: Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO")
+        message(STATUS "[BUILD] native Emu68/Core0 integration enabled")
     else()
         add_compile_definitions(BELLATRIX_EMU68_CORE0_REBASELINE=0)
-        message(STATUS "[BUILD] Multicore legacy: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved")
+        message(STATUS "[BUILD] native Emu68 integration disabled (selected CPU still owns Core0)")
     endif()
 else()
     add_compile_definitions(BELLATRIX_EMU68_CORE0_REBASELINE=0)
     message(STATUS "[BUILD] Multicore: disabled (single-core mode)")
 endif()
+if(BELLATRIX_ENABLE_MULTICORE)
+    message(STATUS "[BUILD] topology: irq=Core0 cpu=Core0 chipset=Core2 host=Core3 aux=Core1")
+endif()
 if(BELLATRIX_CORE_LOG)
     add_compile_definitions(BELLATRIX_CORE_LOG)
-    message(STATUS "[BUILD] Core log: enabled ([CORE0-HOST] [CORE1-CPU] [CORE2-CHIPSET] [CORE3-IO] [XCORE-*])")
+    message(STATUS "[BUILD] Role log: enabled ([HOST] [CPU] [CHIPSET] [XCORE-*])")
 else()
     message(STATUS "[BUILD] Core log: disabled")
 endif()
@@ -73,6 +78,7 @@ list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src
     ${CMAKE_SOURCE_DIR}/../src/cpu
     ${CMAKE_SOURCE_DIR}/../src/host
+    ${CMAKE_SOURCE_DIR}/src
 )
 list(APPEND BELLATRIX_SOURCES
     ${CMAKE_SOURCE_DIR}/../src/io/hid/hid_router.c
@@ -184,19 +190,23 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_emit.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_platform.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_backend.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_direct_region.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/mainloop_window.S
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_bridge.c
+    ${CMAKE_SOURCE_DIR}/../src/cpu/direct_region.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/mmio_policy.c
     ${BELLATRIX_MACHINE_SOURCE}
     ${CMAKE_SOURCE_DIR}/../src/machine/expansion.c
     # Bus fabric and CD-ROM expansion
     ${CMAKE_SOURCE_DIR}/../src/machine/autoconfig/autoconfig.c
+    ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro_autoconfig.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro2/zorro2_bus.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro3/zorro3.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/superbuster/superbuster.c
+    ${CMAKE_SOURCE_DIR}/../src/machine/expansions/z2_fast_ram/z2_fast_ram.c
     ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/lide_cdrom.c
     ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/ata_ide.c
     ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/atapi_cdrom.c
@@ -241,6 +251,15 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
     ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 )
+if(BELLATRIX_ENABLE_Z3_68040)
+    list(APPEND BASE_FILES
+        ${CMAKE_SOURCE_DIR}/../src/machine/expansions/z3_68040/z3_68040.c)
+    add_compile_definitions(BELLATRIX_ENABLE_Z3_68040=1)
+    message(STATUS "[BUILD] Bellatrix Z3 68040 support ROM: enabled")
+else()
+    add_compile_definitions(BELLATRIX_ENABLE_Z3_68040=0)
+    message(STATUS "[BUILD] Bellatrix Z3 68040 support ROM: disabled")
+endif()
 if(BELLATRIX_USE_MUSASHI_CPU)
     list(APPEND BASE_FILES
         ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_backend.c

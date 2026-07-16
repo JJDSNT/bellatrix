@@ -6,6 +6,9 @@
 > Emu68's fault-driven external-bus path and direct MMU mappings. This API
 > remains an experimental A/B design until measurements and compatibility
 > evidence justify revisiting it.
+> The former API branch and patches 0025-0034 are retired from the product
+> patch sequence. Core 0 is only the provisional native stabilization baseline;
+> a future portable API must remain independent of core placement.
 
 This document defines the public contract through which a machine host uses
 Emu68 as a 68k CPU engine. Bellatrix is the immediate consumer, but no public

@@ -82,14 +82,14 @@ static _Atomic uint32_t bt_uart_io_activity;
 static _Atomic uint32_t bt_uart_tx_total;
 static _Atomic uint32_t bt_uart_rx_total;
 
-/* Software RX ring buffer — the bounded normal-IRQ top half drains the PL011
- * FIFO here without entering BTstack. Core 3 consumes it at its own bounded
+/* Software RX ring buffer — the bounded normal-IRQ top half drains PL011
+ * without entering BTstack. The host reactor consumes it at its bounded
  * cadence. bt_hal_raspi3_drain_fifo() is the polling fallback while physical
  * IRQ ownership is temporarily disabled during reconfiguration/recovery. */
 #define BT_RX_RING_SIZE 4096u   /* power of 2; fits ~35 ms of max-rate LE adverts */
 static uint8_t  s_rx_ring[BT_RX_RING_SIZE];
 static _Atomic uint32_t s_rx_ring_head; /* producer: physical IRQ/poll */
-static _Atomic uint32_t s_rx_ring_tail; /* consumer: Core 3 reactor */
+static _Atomic uint32_t s_rx_ring_tail; /* consumer: host reactor */
 static _Atomic uint32_t s_rx_ring_overflow;
 static _Atomic uint32_t s_irq_rx_bytes;
 static _Atomic uint32_t s_irq_rx_budget_hits;

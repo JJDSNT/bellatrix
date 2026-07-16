@@ -19,6 +19,8 @@ related_files:
   - src/cpu/emu68/bellatrix.c
   - src/cpu/cpu_bridge.c
   - src/runtime/core_io.c
+  - src/runtime/topology.h
+  - AI_context/consolidated/multicore_topology.md
   - AI_context/issues/ISSUE-0051.md
   - AI_context/issues/ISSUE-0052.md
   - AI_context/issues/ISSUE-0057.md
@@ -37,8 +39,8 @@ PiStorm/Emu68, é:
 1. não substituir nem redesenhar o fault handler como pré-requisito;
 2. estudar o `start.c` original e satisfazer no Bellatrix o contrato de core,
    exceções, timers e IRQ do Emu68;
-3. manter/restaurar o Emu68 no Core 0 como baseline até provar equivalência em
-   outro core;
+3. manter/restaurar o Emu68 no Core 0 como baseline provisória de estabilização,
+   não como topologia final, até provar equivalência em outro core;
 4. usar IRQ ARM normal para Bluetooth; não gastar FIQ com Bluetooth;
 5. considerar FIQ para USB/DWC2/SOF somente se necessidade e medição futuras o
    justificarem;
@@ -181,6 +183,11 @@ build obrigatório para qualquer nova integração de `vectors.c`.
 
 ## Topologia conservadora provisória
 
+Esta tabela descreve uma arquitetura de estabilização. Ela reduz a quantidade
+de premissas alteradas em relação ao Emu68 original, mas não decide onde a CPU
+deverá permanecer no produto final. Nenhuma ABI de memória, MMIO, IRQ ou backend
+pode depender de `Core 0`; placement é uma política de runtime posterior.
+
 | Core | Papel inicial | Contrato |
 |---|---|---|
 | 0 | Emu68/JIT | boot original, fault handler, `VBAR`, `TPIDRRO`, DAIF e IRQ física preservados |
@@ -230,12 +237,49 @@ No modo conservador:
 - Core 3 executa o reactor físico e recebe event stream local de ~953 Hz;
 - Core 1 permanece estacionado;
 - o `MainLoop` compilado não chama helpers `emu68_machine_*`;
-- STOP volta ao caminho PiStorm original com `WFE`, em vez de yield gerenciado;
+- STOP volta ao caminho nativo em vez de yield gerenciado. A variante
+  Bellatrix agora seleciona o mesmo loop `WFE` com predicado agregado usado no
+  PiStorm; Musashi também expõe seu estado STOP ao shell comum, que estaciona
+  Core 0 em `WFE` até `SEV`;
 - a entrega de interrupção combina `INT.ARM`/níveis 6-7 originais com o IPL
   publicado pelo Rigel, sem descartar a IRQ física;
 - mudanças de IPL no Core 2 atualizam o `M68KState` nativo via `PAL_IPL_Set()` e
   emitem `SEV`, pois não existe mais um quantum gerenciado no Core 1 para puxar
   `s_pending_ipl`.
+
+### Contrato por função, não por número de core
+
+A topologia provisória deve atribuir explicitamente quatro funções: owner do
+Emu68/JIT, owner único do Rigel, host reactor/presenter e core auxiliar. Código
+comum não pode pressupor que "Core 0" significa supervisor ou presenter.
+
+Esse requisito deixou de ser apenas preventivo em 2026-07-15: no rebaseline,
+Core 2 publicava frames normalmente, mas o drain/presenter continuava dentro do
+loop supervisor usado pelo Musashi. Como Core 0 estava ocupado pelo loop nativo
+do Emu68, ninguém consumia `s_pending_frames` e o framebuffer permanecia no logo
+Emu68. O drain passou a fazer parte de `bellatrix_runtime_io_step()`, isto é, do
+contrato do host reactor. Com a topologia finalmente unificada, esse serviço
+roda no Core 3 tanto com Musashi quanto com Emu68.
+
+O contrato foi centralizado em `src/runtime/topology.h`: Emu68 e Musashi usam
+o mesmo placement `CPU0/AUX1/Rigel2/HOST3`; código de launch, timeline e logs
+deixa de repetir condicionais ou mapas locais. A matriz
+canônica e seus invariantes estão em
+`AI_context/consolidated/multicore_topology.md`.
+
+O A/B QEMU confirmou a fronteira: antes da correção, o framebuffer ainda era o
+logo Emu68 mesmo após OVL/Autoconfig/FPU no serial; depois, o framebuffer passou
+a receber o frame claro produzido pelo Rigel. Isso prova o reparo da
+apresentação, mas ainda não constitui boot visual da Kickstart.
+
+### Destino da public machine API
+
+A API explícita ampla não é mais uma direção arquitetural do Bellatrix. Seus
+patches permanecem como evidência histórica e fonte seletiva de testes ou
+contratos, mas nenhum trabalho novo deve depender dela. A direção vigente é o
+Emu68 original, com Data Abort e `vectors.c` preservados, mais um hook Bellatrix
+fino para bus/MMIO. Depois que esse desenho estiver completamente assimilado,
+a API experimental poderá ser removida em vez de mantida como segundo runtime.
 
 O fault handler e os slots de `vectors.c` não foram substituídos. O ELF mantém
 os oito slots nos offsets arquiteturais `+0x000`, `+0x080`, `+0x100`,
@@ -304,6 +348,14 @@ permanecem adiados até autorização explícita futura.
   244140 Hz e Core 3 a 953 Hz;
 - imagem do gate: SHA-256
   `d055e3f1b1078d750109dcdc54b2a29cb5b76f4f944af29fc50aa9d5548c8206`.
+
+## Gate da topologia unificada
+
+Em 2026-07-15 o placement deixou de variar com o backend. Emu68 e Musashi
+68040 foram compilados e executados em QEMU com o mesmo banner efetivo:
+`irq=0 cpu=0 chipset=2 host=3 aux=1`. Nos dois casos Core 2 iniciou seu event
+stream e Core 3 iniciou o reactor a ~953 Hz; Core 1 permaneceu auxiliar. O
+smoke sem ROM valida bootstrap/placement, não boot do guest.
 
 O download de firmware do CMake produziu um DTB vazio neste worktree isolado;
 o smoke QEMU usou o DTB válido do checkout principal, do mesmo modelo/commit.
@@ -512,8 +564,9 @@ feita no momento do mapeamento da placa, não por uma máscara global de endere�
 Bellatrix ainda não possui suporte Z3 funcional. O código existente é
 infraestrutura parcial e contraditória, não um contrato a preservar:
 
-- `zorro3.h` declara janela a partir de `0x40000000`, enquanto `memory.h`
-  ainda declara `BELLATRIX_Z3_BASE=0x10000000`;
+- a constante sem uso de `0x10000000` foi removida, mas Emu68 não fixa uma
+  faixa de board: aceita o high word escrito em `$E80044` e chama `map()`;
+  `0x40000000..0x7fffffff` é apenas política observada no AROS local;
 - `memory_map_decode()` reduz o endereço a 24 bits antes da classificação;
 - `cpu_bridge.c` rejeita todo endereço acima de `0x00ffffff` como open bus;
 - a state machine Z3 atual oferece callbacks byte a byte, mas não instala o
@@ -685,6 +738,8 @@ selecionáveis depois que o baseline conservador estiver provado.
 - [x] Manter `vectors.c` e o fault handler no caminho de MMIO.
 - [ ] Afinar o adaptador e eliminar apenas duplicação Bellatrix comprovada,
   depois dos gates funcionais.
+- [x] Tornar o host reactor owner explícito do drain/presenter, independente do
+  core ocupado pelo backend de CPU.
 - [x] Definir placement provisório de Rigel e serviços sem alterar o contrato
   Emu68 antes das medições.
 - [ ] Validar DiagROM, KS1.3, KS3.1 e AROS, incluindo STOP/IRQ/MMIO/FPU/Fast RAM.
@@ -766,14 +821,15 @@ houver conflito.
   state machine, telemetria e gate de offsets dos vetores são aproveitáveis;
   FIQ para PL011, substituição dos vetores e mask preventivo de PMU/timers não
   são compatíveis com a rebaseline.
-- 2026-07-15: topologia provisória registrada: Emu68/Core 0, Rigel/Core 2 e
-  reactor físico/Core 3; Core 1 permanece auxiliar até haver necessidade
-  medida.
+- 2026-07-15: topologia provisória registrada por papéis: ingresso IRQ/Core 0,
+  Emu68/Core 0, Rigel/Core 2 e host reactor/Core 3; Core 1 permanece auxiliar.
 - 2026-07-15: primeiro baseline Core0/fault implementado com rollback por flags.
   O caminho fault remove do `MainLoop` os hooks da API explícita, restaura STOP
-  com `WFE`, preserva `INT.ARM` e entrega o IPL Rigel ao contexto nativo.
+  pelo caminho nativo (`WFI` na variante Bellatrix), preserva `INT.ARM` e
+  entrega o IPL Rigel ao contexto nativo. A diferença para o `WFE` PiStorm
+  permanece um gate aberto.
 - 2026-07-15: build cruzado e unit tests passaram; QEMU/DiagROM alcançou OVL,
-  UDS/LDS e teste de Chip RAM com Core0=Emu68, Core2=Rigel e Core3=IO.
+  UDS/LDS e teste de Chip RAM com CPU/Core0, chipset/Core2 e host/Core3.
 - 2026-07-15: smoke AROS 1 MiB de 60 s alcançou JIT, OVL e `FNOP`/`FSAVE`;
   mantido como resultado parcial, não como boot ou validação de FPU.
 - 2026-07-15: validação em hardware real explicitamente retirada do escopo
@@ -787,3 +843,31 @@ houver conflito.
   `INT.ARM=6`; IRQ desconhecida agora é contida, contada e nunca chega ao guest.
 - 2026-07-15: consolidado ownership sem handoff: miniUART=log desde o início,
   PL011=Bluetooth desde o início. QEMU/DiagROM repetido pela segunda UART.
+- 2026-07-15: explicitado que Emu68/Core 0 é somente a baseline conservadora de
+  estabilização. A topologia final permanece aberta e deverá ser decidida por
+  equivalência funcional e medições, sem contaminar o contrato de integração.
+- 2026-07-15: trabalho multicore congelado no estado provisório acima por
+  decisão do usuário. Próxima sessão multicore retomará seus gates; a prioridade
+  imediata passou a ser fechar RAM/Autoconfig/memory map.
+- 2026-07-15: auditadas as aperturas fixas em
+  `consolidated/fixed_memory_apertures.md`. Uniformizados mirror de Chip RAM,
+  writes sob overlay, fonte do overlay de ROM de 1 MiB, decoder esparso CIA e
+  limite de 64 KiB do Autoconfig. CIA/custom/Autoconfig permanecem fault/MMIO;
+  RAM/ROM permanecem diretas.
+- 2026-07-15: revertida a tentativa comum de `is_stopped/WFE`. O laço passou a
+  interpretar `run() == 0` como nenhum tempo transcorrido e podia dormir antes
+  que o produtor correspondente avançasse Rigel até VBL/CIA/IPL. Isso quebrou
+  o boot real; DiagROM continuando não era evidência suficiente e foi
+  inicialmente interpretado de forma incorreta. Restaurado exatamente o
+  contrato anterior: retorno zero representa um quantum idle de 454 ciclos;
+  single-core avança Rigel sincronicamente e multicore publica esse quantum ao
+  Core 2. Não há `WFE` no laço comum até existir um protocolo idle comprovado
+  separadamente para Musashi e Emu68. A validação decisiva continua sendo o
+  boot screen, não apenas OVL/DiagROM.
+- 2026-07-15: retirada também a board experimental `emu68.68040` do default.
+  Ela era inserida automaticamente depois da Z2 Fast RAM em todo perfil 68040;
+  portanto `[Z2] all boards configured` era apenas o ponto de transição para
+  a próxima resposta em `$E80000`, não prova de falha no backing Z2. Enquanto
+  seu Autoconfig Z3 não alcançar boot screen, somente
+  `BELLATRIX_Z3_68040=1` deve habilitá-la. O baseline normal volta a não expor
+  essa board.

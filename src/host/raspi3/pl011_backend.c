@@ -20,6 +20,7 @@
  * Logging independently owns AUX miniUART; there is no runtime UART handoff.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 int kprintf(const char *fmt, ...);
