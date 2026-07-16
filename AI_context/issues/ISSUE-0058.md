@@ -21,10 +21,29 @@ related_files:
   - src/runtime/core_io.c
   - src/runtime/topology.h
   - AI_context/consolidated/multicore_topology.md
+  - AI_context/consolidated/emu68_routing_vs_synchronization.md
   - AI_context/issues/ISSUE-0051.md
   - AI_context/issues/ISSUE-0052.md
   - AI_context/issues/ISSUE-0057.md
+  - AI_context/issues/ISSUE-0061.md
 ---
+
+> **Atualização (2026-07-16, ISSUE-0061):** a "questão P1 aberta" da seção
+> 3.1.1 abaixo (fonte de tempo do Rigel) foi respondida em parte: um refactor
+> subsequente (a "public machine API" que esta issue já classificava como
+> não-prioritária) tinha de fato deletado a chamada de
+> `bellatrix_emu68_report_jit_progress()` do `MainLoop` e a excluído por
+> `BELLATRIX_EMU68_FAULT_DRIVEN` — exatamente o erro que a seção 3.1.1 abaixo
+> preveniu ("progress reports do CPU... nunca como única fonte de
+> VBL/CIA/Paula/IPL"). A ISSUE-0061 restaurou a chamada incondicional
+> (`patches/0003`) e confirmou empiricamente `frame_counter` avançando de 0
+> até 500+ com IPL/interrupção real. Isso NÃO fecha a pergunta arquitetural
+> mais ampla de 3.1.1 (CPU-progress-driven vs. timer-driven Rigel), que
+> continua aberta — ver `docs/fault_handler.md`. Também não fecha os
+> checklists P2/P3 abaixo (validação em hardware real permanece adiada por
+> decisão explícita do usuário). Ver `AI_context/issues/ISSUE-0061.md` para o
+> relato completo e `AI_context/consolidated/emu68_routing_vs_synchronization.md`
+> para a lição conceitual extraída.
 
 # Resumo executivo
 

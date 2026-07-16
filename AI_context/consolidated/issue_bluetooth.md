@@ -6,7 +6,21 @@
 > desde o primeiro estágio, sem route switching ou handoff de console. Emu68
 > no Core 0 é provisório até os contratos nativos estarem estáveis e mensuráveis.
 
-## Status: EM PROGRESSO (2026-06-26)
+> **Status atual (2026-07-16, corrige a seção abaixo):** Bluetooth HID está
+> **funcional** — scan, pairing e reconexão automática, e input de
+> teclado/mouse/joystick chegando ao Amiga, todos comprovados. A seção
+> "Status: EM PROGRESSO (2026-06-26)" logo abaixo é histórica e está errada
+> sobre o estado atual (dizia "pairing e conexão HID ainda não funcionam").
+> O trabalho que fechou isso está em `AI_context/issues/ISSUE-0059.md`
+> ("Assimilação dos avanços Bluetooth no rebaseline Core0") e nos commits
+> `bluetooth: connect pairing mouse on discovery`,
+> `bluetooth: publish pairing reconnect without delay`,
+> `bluetooth: assimilate normal-irq session manager`. `README.md` e
+> `docs/irq_and_interrupts.md` refletem o estado atual. Único item
+> genuinamente pendente: validação em hardware real (adiada por decisão do
+> usuário, não por trabalho incompleto).
+
+## Status: EM PROGRESSO (2026-06-26) — histórico, ver nota acima
 
 Scanning HID funcionando em hardware (launcher exibe dispositivos). Pairing e
 conexão HID ainda não funcionam — próximo passo é o fluxo de pareamento

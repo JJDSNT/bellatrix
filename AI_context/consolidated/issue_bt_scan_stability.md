@@ -1,6 +1,16 @@
 # BT Scan + Pairing + HID Host — BCM43430A1
 
-## Status: EM PROGRESSO (2026-06-26)
+> **Status atual (2026-07-16, corrige a seção abaixo):** pairing e conexão
+> HID estão implementados e comprovados (scan, pareamento, reconexão
+> automática, input chegando ao Amiga) — ver
+> `AI_context/issues/ISSUE-0059.md` e `AI_context/consolidated/issue_bluetooth.md`.
+> A descrição de `src/launcher/launcher.c` como dono da UI de scan também é
+> histórica: o launcher foi reduzido a coordenador e as telas de scan/mídia
+> foram separadas em `btscan.c`/`media_selection.c`/`launcher_ui.c`
+> (commit `450c183`). Único item pendente: validação em hardware real,
+> adiada por decisão do usuário.
+
+## Status: EM PROGRESSO (2026-06-26) — histórico, ver nota acima
 
 Scanning funcionando em hardware. HID host implementado e compilando. Pairing
 e conexão HID ainda não validados em hardware — esse é o próximo passo do

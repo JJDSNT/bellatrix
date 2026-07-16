@@ -100,7 +100,14 @@ Rigel pertence exclusivamente à ISSUE-0053.
 
 ## B — Emu68 como backend primário rápido
 
-- [ ] Concluir primeiro a auditoria e o rebaseline Core 0 de ISSUE-0058.
+- [x] Concluir primeiro a auditoria e o rebaseline Core 0 de ISSUE-0058
+  (P0/P1 completos 2026-07-15).
+- [x] Raiz-causar e corrigir a regressão que travava todo build Emu68 após
+  `[JIT] Let it go...` — ISSUE-0061 (2026-07-16): o progress driver do
+  `MainLoop` tinha sido deletado por um refactor e excluído por
+  `BELLATRIX_EMU68_FAULT_DRIVEN`; restaurado incondicional. Confirmado em
+  QEMU (`frame_counter` 0→500+, IPL/interrupção real). Ainda não provado em
+  hardware Pi real.
 - [ ] Provar Emu68 no Pi com AROS/KS3.1 além do desktop no baseline fault-driven.
 - [ ] Fechar liveness STOP/IRQ/MMIO sem janela periódica imposta pelo Core 0.
 - [ ] Medir fault/callback bus e otimizar hot paths um a um.

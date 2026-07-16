@@ -1,5 +1,19 @@
 # Issue: Emu68 JIT Integration — CACR_IE, v30, ExecutionLoop, Bridge
 
+> **Nota de precisão (2026-07-16):** `src/bridge/bellatrix_bridge.h/.c`,
+> citado nas seções abaixo, não existe mais — o código moveu para
+> `src/cpu/cpu_bridge.h/.c` (função `bellatrix_bridge_cpu_progress()` ainda
+> existe, só o arquivo mudou de lugar) e `src/cpu/emu68/bellatrix.c`. O
+> ponto de entrada em `ExecutionLoop.c` também evoluiu de nome desde então:
+> a chamada atual é `bellatrix_emu68_report_jit_progress()`, mantida
+> incondicional no `MainLoop` — ver `docs/fault_handler.md` e
+> `docs/emu68_internals.md` para a arquitetura atual, e
+> `AI_context/issues/ISSUE-0061.md` para a regressão mais recente nesse
+> exato mecanismo (uma reintrodução do mesmo tipo de bug descrito abaixo,
+> anos de sprint depois). O conteúdo histórico abaixo (bugs de CACR_IE, v30,
+> Fast RAM) permanece correto como registro do que foi corrigido em cada
+> sprint; só os caminhos de arquivo/nomes de função mudaram.
+
 ## Contexto
 
 A integração profunda entre Bellatrix e o JIT do Emu68 envolveu vários bugs não

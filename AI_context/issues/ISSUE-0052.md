@@ -23,10 +23,17 @@ necessárias para o objetivo novo. Checklist histórico não é backlog implíci
 
 # Ordem corrente
 
-- [ ] **P0/P1: executar ISSUE-0058 — congelar branches divergentes e auditar o
-  contrato original `start.c`/`vectors.c`/IRQ por core.**
+- [x] **P0/P1: executar ISSUE-0058 — congelar branches divergentes e auditar o
+  contrato original `start.c`/`vectors.c`/IRQ por core.** Concluído
+  2026-07-15 (ISSUE-0058 P0/P1 totalmente `[x]`).
 - [ ] **P2: reestabelecer Emu68 Core 0 + fault handler como baseline de
-  hardware antes de qualquer otimização multicore.**
+  hardware antes de qualquer otimização multicore.** Baseline QEMU
+  funcionando desde a ISSUE-0061 (2026-07-16): a regressão de boot que travava
+  todo build Emu68 foi raiz-causada (progress driver do `MainLoop` deletado
+  por um refactor) e corrigida; `frame_counter` avança normalmente com
+  IPL/interrupção real em teste multicore. Ainda não fechado: validação em
+  hardware real (adiada por decisão do usuário) e a auditoria fina do
+  adaptador (ISSUE-0058 P2 remanescente).
 - [ ] Congelar baseline AROS Musashi 68040 multicore: milestones wall + SysInfo.
 - [ ] Congelar baseline KS3.1 Musashi 68040 multicore com o mesmo protocolo.
 - [ ] A/B Bellatrix lock wake-on-waiter e event-stream/empty-step.
@@ -34,6 +41,9 @@ necessárias para o objetivo novo. Checklist histórico não é backlog implíci
   contrato provado; Core 1 não é mais premissa.
 - [ ] Medir bus/MMIO/STOP/IRQ do baseline fault-driven e atacar o domínio dominante.
 - Otimização do Rigel está fora desta fila e pertence somente à ISSUE-0053.
+
+Ver `AI_context/issues/ISSUE-0061.md` para o detalhe do fix de regressão que
+desbloqueou o item P2 acima.
 
 # Gates permanentes
 

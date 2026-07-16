@@ -3,6 +3,15 @@
 Status: implementação integrada; revisão estática concluída; build e hardware
 deliberadamente não executados nesta etapa.
 
+> **Consolidado (2026-07-16):** o conteúdo funcional deste documento (seções
+> "Funcionalidade assimilada" e "O que não foi trazido") foi promovido para
+> `AI_context/consolidated/issue_bluetooth.md` e
+> `AI_context/consolidated/issue_bt_scan_stability.md`, que estavam
+> desatualizados (diziam "pairing não funciona"). `README.md` também já
+> reflete o estado atual (Bluetooth HID funcional). O único trabalho
+> genuinamente pendente desta issue é validação em hardware real — ver
+> "Próximos gates" abaixo, que não muda.
+
 ## Objetivo
 
 Assimilar os ganhos funcionais de `issue-0054-bt-physical-irq` sem restaurar

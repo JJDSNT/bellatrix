@@ -54,7 +54,7 @@ estabilização; o contrato não pode depender de placement.
 |---|---|
 | `0001` | manter variant Bellatrix |
 | `0002` | manter provisoriamente; extrair/reduzir o adapter e remover duplicação |
-| `0003` | separar preservação nativa de IPL do loop da API; fault mode exclui loop gerenciado |
+| `0003` | **CORRIGIDO (ISSUE-0061, 2026-07-16):** esta linha descrevia originalmente "fault mode exclui loop gerenciado" — essa é exatamente a causa raiz da regressão de boot documentada na ISSUE-0061. O relatório de progresso do chipset (`bellatrix_emu68_report_jit_progress()`) deve ser **incondicional** no `MainLoop`, nunca excluído por `BELLATRIX_EMU68_FAULT_DRIVEN` ou qualquer outra flag de modo de roteamento. O patch `0003` atual reflete isso; ver `docs/fault_handler.md` para a distinção roteamento-vs-sincronização. |
 | `0007` | manter para o baseline, auditando cada diferença de startup |
 | `0008`–`0010` | manter, sujeitos à auditoria de console/config/Z2 |
 | `0019` | manter como hardening independente |
