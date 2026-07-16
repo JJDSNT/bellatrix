@@ -8,6 +8,8 @@ owner: unassigned
 created_at: 2026-07-12
 updated_at: 2026-07-15
 tags: [emu68, jit, bus-api, exceptions, fault-handler, architecture]
+blockers:
+  - "não é mais direção de produto (ISSUE-0058); só retomaria se a questão de sincronização do fault handler exigir uma API explícita, comprovado por medição"
 related_files:
   - docs/emu68_public_api.md
   - AI_context/consolidated/emu68_public_api.md

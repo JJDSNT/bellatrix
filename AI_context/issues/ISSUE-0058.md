@@ -8,6 +8,8 @@ owner: agent
 created_at: 2026-07-15
 updated_at: 2026-07-15
 tags: [emu68, pistorm, core0, irq, bluetooth, fault-handler, vectors, multicore]
+blockers:
+  - "validação em hardware real (Pi 3B) para P2/P3 — adiada por decisão do usuário até nova autorização"
 related_files:
   - AI_context/specs/SPEC-0001-cpu-memory-integration.md
   - docs/authors_note.md

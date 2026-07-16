@@ -48,6 +48,26 @@ Documentation Update
 
 `feature`, `bug`, `refactor`, `research`, `docs`, `infra`
 
+## Bloqueios (`blockers`)
+
+Campo opcional no frontmatter, mesmo formato de `tags` (lista simples de
+strings):
+
+```yaml
+blockers:
+  - "validação em hardware real (Pi 3B) — aguardando autorização do usuário"
+```
+
+`status: blocked` é grosso demais para o padrão mais comum no projeto: uma
+issue segue `doing` (trabalho de software real avançando), mas um ou mais
+itens específicos do checklist ficam represados esperando algo pontual —
+tipicamente autorização de teste em hardware real. `blockers` existe para
+isso: não substitui `status`, é uma lista curta e legível do que está
+represado e por quê, visível independente do status da issue (uma issue
+`doing` com `blockers` não-vazio ainda é trabalho ativo, só tem uma ponta
+represada). Use texto livre curto, não um enum — o motivo importa mais que
+a categoria.
+
 ## Visão rápida do estado
 
 Sem precisar de UI, API ou MCP — `grep` direto nos arquivos já responde

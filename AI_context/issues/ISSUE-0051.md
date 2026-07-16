@@ -8,6 +8,8 @@ owner: agent
 created_at: 2026-07-12
 updated_at: 2026-07-15
 tags: [performance, aros, ks31, multicore, emu68, 68040, pistorm]
+blockers:
+  - "provar Emu68 em hardware Pi real além do desktop — adiado por decisão do usuário"
 related_files:
   - src/cpu/emu68
   - src/cpu/musashi

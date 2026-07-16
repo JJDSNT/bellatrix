@@ -8,6 +8,8 @@ owner: agent
 created_at: 2026-07-15
 updated_at: 2026-07-15
 tags: [emu68, vectors, mmio, zorro3, musashi, rigel, patches]
+blockers:
+  - "medição antes de otimizar o hook de vectors.c — não validar em hardware sem autorização"
 related_files:
   - AI_context/issues/ISSUE-0058.md
   - AI_context/issues/ISSUE-0032.md

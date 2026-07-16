@@ -1,3 +1,24 @@
+---
+id: ISSUE-0059
+title: "Assimilação dos avanços Bluetooth no rebaseline Core0"
+status: review
+priority: low
+type: feature
+owner: agent
+created_at: 2026-07-15
+updated_at: 2026-07-16
+tags: [bluetooth, btstack, core0, irq, hid, rebaseline]
+blockers:
+  - "build e teste funcional F11/F12 em hardware real — proibido até nova autorização do usuário"
+related_files:
+  - AI_context/issues/ISSUE-0058.md
+  - AI_context/consolidated/issue_bluetooth.md
+  - AI_context/consolidated/issue_bt_scan_stability.md
+  - src/launcher/btscan.c
+  - src/launcher/media_selection.c
+  - src/io/bluetooth/bt_host.c
+---
+
 # ISSUE-0059 — Assimilação dos avanços Bluetooth no rebaseline Core0
 
 Status: implementação integrada; revisão estática concluída; build e hardware
