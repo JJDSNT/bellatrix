@@ -44,12 +44,16 @@ versão original do ISSUE-0038 (0e113d2: checa INT, credita ciclos falsos no
 v30 se INT==0, sem dormir em wfi/wfe).
 
 **Resultado verificado:** de "trava total, frame_counter nunca sai de 0"
-pra "avança até frame=100 (checkpoint [EMU68-LIVE])". Progresso real,
-reproduzido de forma determinística em múltiplos rebuilds.
+pra progresso real. Progresso reproduzido de forma determinística em
+múltiplos rebuilds.
 
-**AINDA NÃO É O FIX COMPLETO:** depois do frame=100, algo trava de novo
-(`ipl=0 int32=0` persistente, sem novos checkpoints em até 900s reais).
-Não investigado ainda — próxima frente.
+**CORRIGIDO (mesmo dia):** o "trava depois do frame=100" registrado antes
+NÃO é um stall de verdade — era só o teste single-core não ter rodado
+tempo suficiente pra passar do primeiro checkpoint. Um teste multicore
+emu68 no mesmo dia mostrou `frame=100 → frame=500` avançando normalmente,
+com `int32`/`ipl` mudando de estado (interrupção real chegando). O fix do
+progress driver está funcionando; não há bloqueio conhecido remanescente
+por trás desse sintoma específico.
 
 ## 2. Limpeza da "public machine API" (parcialmente feita)
 
@@ -84,13 +88,13 @@ Mantido (por necessidade empírica, não por preferência):
 
 # Próximos passos
 
-1. **Investigar o que trava depois do frame=100.** `ipl=0 int32=0`
-   persistente — VBL não está chegando, ou o próprio frame_counter para de
-   incrementar por outro motivo. Usar QEMU monitor externo (`info
-   registers`, técnica já validada e documentada no ISSUE-0038) em vez de
-   kprintf/trace — `BELLATRIX_RIGEL_TRACE_BUILD=1` é PERIGOSO em emu68
-   (corrompe D0-D3 via os prints `[EXC-REQ]`/`[EXC-PC]` de
-   `ExecutionLoop.c`, já documentado, redescoberto nesta sessão).
+1. ~~Investigar o que trava depois do frame=100~~ — descartado, não era
+   stall de verdade (ver correção acima). Lembrar em investigações futuras:
+   `BELLATRIX_RIGEL_TRACE_BUILD=1` continua PERIGOSO em emu68 (corrompe
+   D0-D3 via os prints `[EXC-REQ]`/`[EXC-PC]` de `ExecutionLoop.c`, já
+   documentado, redescoberto nesta sessão) — usar QEMU monitor externo
+   (`info registers`, técnica validada no ISSUE-0038) em vez de kprintf/trace
+   quando precisar de visibilidade sem contaminar o guest.
 2. **Confirmar ou descartar a hipótese do patch 0035** antes de tentar
    removê-la de novo — comparar o disassembly compilado de `EmitINSN` com
    e sem o patch.
