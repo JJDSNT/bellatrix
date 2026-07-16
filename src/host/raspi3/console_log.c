@@ -65,7 +65,7 @@ static bool ring_push_line(unsigned core, const char *line, uint32_t length)
  * several cores log concurrently their characters interleave and garble the
  * output (and ring_push()'s head RMW races). Buffer each core's current line
  * separately and publish it to that core's SPSC ring. No producer contends on
- * a global lock; Core 3 preserves line boundaries while draining. */
+ * a global lock; the host reactor preserves line boundaries while draining. */
 #define CONSOLE_LOG_LINE_MAX 256u
 static char     s_line[4][CONSOLE_LOG_LINE_MAX];
 static uint32_t s_line_len[4];

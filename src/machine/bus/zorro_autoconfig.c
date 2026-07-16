@@ -1,11 +1,12 @@
 #include "machine/bus/zorro_autoconfig.h"
+#include "machine/memory/memory.h"
 
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/bus/zorro3/zorro3.h"
 
 int bellatrix_zorro_autoconfig_in_window(uint32_t addr)
 {
-    return addr >= 0x00e80000u && addr <= 0x00e8ffffu;
+    return bellatrix_z2_config_addr_contains(addr);
 }
 
 uint8_t bellatrix_zorro_autoconfig_read8(uint32_t addr)

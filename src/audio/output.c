@@ -31,9 +31,9 @@ enum {
     BELLATRIX_AUDIO_DRC_MAX_ADJ  = 192u,    /* ±0.4 % of 48 kHz */
 };
 
-/* SPSC across cores since frame/HDMI completions moved to Core 0
- * (ISSUE-0049 Fase 7): the producer (chipset owner, Core 2 in multicore)
- * owns `tail`; the consumer (Core 0 HDMI DMA poll) owns `head`. Cursors are
+/* SPSC across roles: the chipset producer owns `tail`; the host-reactor HDMI
+ * consumer owns `head`. Their numbered cores come from runtime/topology.h.
+ * Cursors are
  * free-running and masked on use (QUEUE_SIZE is a power of two); depth is
  * derived as tail - head. Stats fields are written by one side each. */
 typedef struct BellatrixAudioOutput {

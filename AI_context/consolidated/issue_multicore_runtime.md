@@ -1,6 +1,8 @@
 # Issue: Multicore Runtime — RPi3 Bare-Metal
 
-> **TOPOLOGIA SUPERADA em 2026-07-15 por ISSUE-0058.** Core0=Host Reactor e
+> **DOCUMENTO HISTÓRICO.** A topologia canônica vigente está em
+> `AI_context/consolidated/multicore_topology.md` e `src/runtime/topology.h`.
+> Core0=Host Reactor e
 > Core1=Emu68 não é mais baseline. O placement conservador devolve Emu68 ao
 > Core 0 até que startup, IRQ física, vectors, timers e contexto por core sejam
 > entendidos e reproduzidos com prova de equivalência.
@@ -9,7 +11,7 @@
 > e seus próximos gates são definidos pelas ISSUE-0051/0052. Planos antigos de
 > epoch/worker não devem ser reintroduzidos por este texto.
 
-## Status: ACTIVE BASELINE (updated 2026-07-11)
+## Status: SUPERADO (updated 2026-07-15)
 
 Arquitetura ativa: Core0=Host Reactor, Core1=CPU, Core2=Rigel e Core3 reservado.
 Musashi multicore, launcher, USB HID e HDMI foram validados em Raspberry Pi 3B.

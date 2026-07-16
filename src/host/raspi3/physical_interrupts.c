@@ -76,8 +76,8 @@ bellatrix_physical_irq_handler(uint32_t source)
         return;
     }
 
-    /* UART RX/RT is level-sensitive. Contain the controller route before
-     * touching the FIFO; the Core 3 reactor rearms it after consuming work. */
+    /* UART RX/RT is level-sensitive. Contain the route before touching FIFO;
+     * the host reactor rearms it after consuming the published work. */
     irq_wr32(ARM_IRQ_DISABLE2, ARM_IRQ_UART0_BIT);
     __asm__ volatile("dsb sy" ::: "memory");
     atomic_store_explicit(&s_bt_irq_armed, false, memory_order_release);

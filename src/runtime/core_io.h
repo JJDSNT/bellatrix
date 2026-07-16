@@ -72,9 +72,9 @@ void core_io_reactor_reset_stats(RuntimeCoreIO *core);
 
 bool core_io_open_debug_serial(RuntimeCoreIO *core);
 
-/* Cross-core serial bridge. Core 2 owns Paula and produces TX bytes; Core 0
- * alone touches the physical UART. RX travels in the opposite direction so
- * Core 0 never needs to access the Rigel context. All operations are
+/* Cross-core serial bridge. The chipset role owns Paula and produces TX;
+ * only the host-reactor role touches the physical UART. RX travels in the
+ * opposite direction, so the reactor never accesses Rigel internals. All are
  * non-blocking; overflow is counted explicitly. */
 bool core_io_serial_enqueue_tx(uint8_t byte);
 bool core_io_serial_dequeue_rx(uint8_t *byte_out);

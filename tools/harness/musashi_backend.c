@@ -4,10 +4,11 @@
 // and provides the memory read/write callbacks that Musashi requires.
 //
 // Address map served by this dispatcher:
-//   0x000000–BELLATRIX_CHIP_RAM_END  chip RAM (or ROM overlay at boot)
+//   0x000000–0x1FFFFF  1 MiB chip backing + 1 MiB CPU mirror
 //   0xC00000–0xD7FFFF  slow RAM via shared Bellatrix memory map
 //   0xE00000–0xEFFFFF  extended ROM (1 MB ROMs only — first 512 KB)
 //   0xF80000–0xFFFFFF  standard ROM (Kickstart / AROS second 512 KB)
+//   expansion RAM/ROM  dynamic DIRECT regions installed by board map()
 //   everything else    delegated to bellatrix_machine_read/write (chipset/CIA/RTC)
 //
 // ROM size → layout:
@@ -19,7 +20,6 @@
 #include "cpu/cpu_bridge.h"
 #include "cpu/direct_region.h"
 #include "machine/machine.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/memory/memory.h"
 #include "rigel/rigel_cia.h"
 
@@ -820,7 +820,7 @@ static uint32_t harness_cpu_ram_read(uint32_t addr, int size)
 
     addr &= 0x00FFFFFFu;
 
-    if (bellatrix_chip_addr_contains(addr))
+    if (bellatrix_chip_cpu_addr_contains_range(addr, (uint32_t)size))
         return harness_chip_read(addr, size);
 
     if (bellatrix_slow_contains(mem, addr, (unsigned int)size)) {
@@ -1891,7 +1891,7 @@ static void harness_write_ram32(uint32_t addr, uint32_t value)
     BellatrixMemory *mem = &bellatrix_machine_get()->memory;
 
     addr &= 0x00FFFFFFu;
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (bellatrix_chip_cpu_addr_contains_range(addr, 4u)) {
         bellatrix_chip_write32(mem, addr, value);
         return;
     }
@@ -1903,7 +1903,7 @@ static int harness_ram_addr_valid(uint32_t addr, unsigned int size)
     BellatrixMemory *mem = &bellatrix_machine_get()->memory;
 
     addr &= 0x00FFFFFFu;
-    if (bellatrix_chip_addr_contains(addr))
+    if (bellatrix_chip_cpu_addr_contains_range(addr, size))
         return 1;
     return bellatrix_slow_contains(mem, addr, size);
 }
@@ -2614,12 +2614,17 @@ static uint32_t harness_read(uint32_t addr, int size)
     }
 
     /* Chip RAM window */
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (bellatrix_chip_cpu_addr_contains_range(addr, (uint32_t)size)) {
         /* Overlay: reads from low page redirect to standard ROM */
         if (harness_overlay() && addr < BELLATRIX_CHIP_BOOT_SIZE && s_rom_std_size) {
-            uint32_t rom_off = s_rom_std_off + (addr & (s_rom_std_size - 1u));
+            uint32_t overlay_off = s_rom_ext_size ? s_rom_ext_off : s_rom_std_off;
+            uint32_t overlay_size = s_rom_ext_size ? s_rom_ext_size : s_rom_std_size;
+            uint32_t rom_off = overlay_off + (addr & (overlay_size - 1u));
             ret = rom_read_at(rom_off, size);
-            harness_watch_rom_read(pc, s_rom_std_base + (addr & (s_rom_std_size - 1u)), size, ret);
+            harness_watch_rom_read(pc,
+                                   (s_rom_ext_size ? s_rom_ext_base : s_rom_std_base) +
+                                       (addr & (overlay_size - 1u)),
+                                   size, ret);
             return ret;
         }
         harness_sync_cpu_progress();
@@ -2631,21 +2636,6 @@ static uint32_t harness_read(uint32_t addr, int size)
         aros_gfxbase_lof_check(pc, addr, ret, 0);
         aros_bpl_dump_check(pc);
         return ret;
-    }
-
-    /* Zorro II fast RAM: respond only after autoconfig assigned the board
-     * a base, so early memory probes do not find RAM before AddMemList.
-     * Bounded to the configured window: other Zorro II boards (RTG) can
-     * own part of the 0x200000-0x9FFFFF space. */
-    {
-        uint32_t fr_base, fr_size;
-        int fr_ok = bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size);
-        if (fr_ok && addr >= fr_base && addr < fr_base + fr_size) {
-            const BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
-            if (size == 1) return bellatrix_fast_read8(fmem, addr);
-            if (size == 2) return bellatrix_fast_read16(fmem, addr);
-            return bellatrix_fast_read32(fmem, addr);
-        }
     }
 
     if (bellatrix_slow_contains(&bellatrix_machine_get()->memory,
@@ -2706,7 +2696,7 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
     if (s_rom_ext_size && addr >= s_rom_ext_base && addr < s_rom_ext_base + s_rom_ext_size) return;
 
     /* Chip RAM */
-    if (bellatrix_chip_addr_contains(addr)) {
+    if (bellatrix_chip_cpu_addr_contains_range(addr, (uint32_t)size)) {
         BellatrixMemory *mem = &bellatrix_machine_get()->memory;
         uint32_t wend = addr + (uint32_t)size - 1u;
         harness_sync_cpu_progress();
@@ -2747,19 +2737,6 @@ static void harness_write(uint32_t addr, uint32_t value, int size)
                    (unsigned)pc, (unsigned)addr, size, (unsigned)value, (unsigned)b92);
         }
         return;
-    }
-
-    /* Zorro II fast RAM (see harness_read) */
-    {
-        uint32_t fr_base, fr_size;
-        if (bellatrix_zorro2_fast_ram_window(&fr_base, &fr_size) &&
-            addr >= fr_base && addr < fr_base + fr_size) {
-            BellatrixMemory *fmem = &bellatrix_machine_get()->memory;
-            if (size == 1)      bellatrix_fast_write8(fmem, addr, (uint8_t)value);
-            else if (size == 2) bellatrix_fast_write16(fmem, addr, (uint16_t)value);
-            else                bellatrix_fast_write32(fmem, addr, value);
-            return;
-        }
     }
 
     /* Chipset / CIA / RTC */

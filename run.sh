@@ -68,8 +68,7 @@ Common options (env vars):
                       Bellatrix/QEMU testing (default: off)
   BELLATRIX_Z3_68040=<auto|0|1>
                       Register Emu68's native 68040 support ROM through the
-                      shared Bellatrix Z3 lifecycle (default: auto; enabled
-                      for Emu68 and Musashi 68040)
+                      shared Bellatrix Z3 lifecycle (experimental; default: 0)
   BELLATRIX_BT_FIRMWARE_FILE=<path>
                       Use a local BCM PatchRAM .hcd file during build
   BELLATRIX_BT_FIRMWARE_FETCH=1

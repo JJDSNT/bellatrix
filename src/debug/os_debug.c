@@ -40,13 +40,15 @@ static int is_ram_ptr(BellatrixMachine *m, uint32_t a)
     if (!m || a < 0x400u) {
         return 0;
     }
-    if (bellatrix_chip_addr_contains(a)) {
+    if (bellatrix_chip_cpu_addr_contains(a)) {
         return 1;
     }
 #if defined(BELLATRIX_HARNESS)
     /* AROS relocates ExecBase and most OS structures into Z2 fast RAM. */
     if (m->memory.fast_ram &&
-        a >= BELLATRIX_FAST_RAM_BASE && a <= BELLATRIX_FAST_RAM_END) {
+        (m->memory.fast_ram_configured && a >= m->memory.fast_ram_base &&
+         (uint64_t)a + 4u <=
+             (uint64_t)m->memory.fast_ram_base + m->memory.fast_ram_size)) {
         return 1;
     }
 #endif

@@ -10,7 +10,7 @@
 
 static inline uint32_t fast_addr(const BellatrixMemory *m, uint32_t addr)
 {
-    return (addr - BELLATRIX_FAST_RAM_BASE) & m->fast_ram_mask;
+    return (addr - m->fast_ram_base) & m->fast_ram_mask;
 }
 
 /* ------------------------------------------------------------------------- */

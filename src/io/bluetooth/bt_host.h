@@ -45,7 +45,7 @@ enum {
 
 /**
  * Initialize Bluetooth host subsystem.
- * Called during system boot (Core 3 initialization).
+ * Called during system boot before the host-reactor cutover.
  */
 bool bt_host_init(BTHost *bt);
 bool bt_host_wait_for_bootstrap(BTHost *bt, uint32_t timeout_ms);
@@ -66,7 +66,7 @@ void bt_host_claim_recovery_discovery(BTHost *bt);
 
 /**
  * Process Bluetooth stack events and timers.
- * Should be called periodically from Core 3 step.
+ * Called periodically by the host-reactor step.
  */
 void bt_host_step(BTHost *bt);
 

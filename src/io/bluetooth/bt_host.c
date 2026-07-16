@@ -1419,7 +1419,7 @@ void bt_host_step(BTHost *bt) {
     else
         bt_bootstrap_step(bt);
 
-    // Drain/rearm the normal-IRQ-owned UART transport from Core 3.
+    // Host reactor drains/rearms the normal-IRQ-owned UART transport.
     bt_hal_raspi3_poll_uart();
 
     // Execute run loop tasks

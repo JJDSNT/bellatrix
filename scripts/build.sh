@@ -146,10 +146,12 @@ USBSTACK_ENABLED="${BELLATRIX_USBSTACK:-0}"
 USB_MSC_ENABLED="${BELLATRIX_USB_MSC:-1}"
 HDMI_AUDIO_ENABLED="${BELLATRIX_HDMI_AUDIO:-0}"
 EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
-Z3_68040_ENABLED="${BELLATRIX_Z3_68040:-auto}"
+# The shared Z3 lifecycle and 68040 ROM board are still experimental. Do not
+# insert an unvalidated Autoconfig responder into every normal 68040 boot.
+Z3_68040_ENABLED="${BELLATRIX_Z3_68040:-0}"
 OSD_ENABLED="${BELLATRIX_OSD:-1}"
 LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
-TIMELINE_MODE="${BELLATRIX_TIMELINE_MODE:-cpu}"
+TIMELINE_MODE="${BELLATRIX_TIMELINE_MODE:-realtime}"
 COARSE_DEADLINES_ENABLED="${BELLATRIX_COARSE_OBSERVABLE_DEADLINES:-0}"
 
 echo "[BUILD] cpu backend: $CPU_BACKEND"
@@ -163,11 +165,7 @@ echo "[BUILD] coarse observable deadlines: $COARSE_DEADLINES_ENABLED"
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
     MULTICORE_FLAG="ON"
-    if [ "$CPU_BACKEND" = "emu68" ] && [ "$EMU68_CORE0_REBASELINE" = "1" ]; then
-        echo "[BUILD] multicore rebaseline: Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO"
-    else
-        echo "[BUILD] multicore legacy: Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved"
-    fi
+    echo "[BUILD] topology: irq=Core0 cpu=Core0 chipset=Core2 host=Core3 aux=Core1"
 fi
 
 if [ "$MULTICORE_BUILD" != "1" ]; then

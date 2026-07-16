@@ -38,12 +38,12 @@ void core_chipset_reset(RuntimeCoreChipset *core);
 void core_chipset_lock_acquire(void);
 void core_chipset_lock_release(void);
 
-/* Snapshot of the CPU-published target and Core 2 drained chipset time.
+/* Snapshot of CPU-published target and chipset-role drained time.
  * Returns false when the separate chipset core is not active/available. */
 bool core_chipset_get_progress(uint64_t *chipset_cck, uint64_t *target_cck);
 
-/* Latest IPL published by the chipset core.  The CPU core consumes this at a
- * backend boundary; Core 2 must never mutate Musashi/Emu68 CPU state itself. */
+/* Latest IPL published by the chipset role. The CPU consumes this at a
+ * backend boundary; the chipset never mutates backend state itself. */
 uint8_t core_chipset_get_pending_ipl(void);
 void core_chipset_set_pending_ipl(uint8_t ipl);
 
@@ -67,13 +67,13 @@ bool core_chipset_read_hot_reg(uint32_t normalized_addr, uint32_t *value);
 bool core_chipset_post_write(uint32_t addr, uint32_t value, uint32_t size);
 void core_chipset_drain_posted_writes(void);
 
-/* Core 0 timeline authority. CPU-driven remains the default; realtime and
- * hybrid publish wall-clock-derived horizons consumed by Core 2. */
+/* Host-reactor timeline authority. Realtime and hybrid publish
+ * wall-clock-derived horizons consumed by the chipset role. */
 void core_chipset_timeline_init(uint64_t host_counter, uint64_t host_frequency,
                                 RuntimeTimelineMode mode);
 uint64_t core_chipset_timeline_update(uint64_t host_counter);
-/* Cross-core lifecycle requests. The caller only publishes intent; Core 0
- * applies it on its next supervisor tick and remains the sole timeline owner. */
+/* Cross-core lifecycle requests. The caller only publishes intent; the host
+ * reactor applies it on its next tick and remains the sole timeline owner. */
 void core_chipset_timeline_request_pause(bool paused);
 void core_chipset_timeline_request_mode(RuntimeTimelineMode mode);
 RuntimeTimelineMode core_chipset_timeline_mode(void);

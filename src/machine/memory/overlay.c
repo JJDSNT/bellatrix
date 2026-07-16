@@ -57,6 +57,33 @@ static inline uint8_t rom_read8(const BellatrixMemory *m, uint32_t addr)
     return m->rom[off];
 }
 
+static inline uint8_t overlay_rom_read8(const BellatrixMemory *m,
+                                        uint32_t addr)
+{
+    const uint8_t *source = m->rom_ext ? m->rom_ext : m->rom;
+    size_t source_size = m->rom_ext ? m->rom_ext_size : m->rom_size;
+
+    if (!source || addr >= source_size)
+        return 0xffu;
+    return source[addr];
+}
+
+static inline uint16_t overlay_rom_read16(const BellatrixMemory *m,
+                                          uint32_t addr)
+{
+    return ((uint16_t)overlay_rom_read8(m, addr) << 8) |
+           overlay_rom_read8(m, addr + 1u);
+}
+
+static inline uint32_t overlay_rom_read32(const BellatrixMemory *m,
+                                          uint32_t addr)
+{
+    return ((uint32_t)overlay_rom_read8(m, addr) << 24) |
+           ((uint32_t)overlay_rom_read8(m, addr + 1u) << 16) |
+           ((uint32_t)overlay_rom_read8(m, addr + 2u) << 8) |
+           overlay_rom_read8(m, addr + 3u);
+}
+
 static inline uint16_t rom_read16(const BellatrixMemory *m, uint32_t addr)
 {
     return ((uint16_t)rom_read8(m, addr) << 8) |
@@ -91,7 +118,9 @@ int overlay_enabled(const BellatrixMemory *m)
 
 uint8_t overlay_read8(const BellatrixMemory *m, uint32_t addr)
 {
-    if ((overlay_enabled(m) && in_low_memory(addr)) || in_rom_window(addr))
+    if (overlay_enabled(m) && in_low_memory(addr))
+        return overlay_rom_read8(m, addr);
+    if (in_rom_window(addr))
         return rom_read8(m, addr);
 
     return chip_ram_read8(m, addr);
@@ -99,7 +128,9 @@ uint8_t overlay_read8(const BellatrixMemory *m, uint32_t addr)
 
 uint16_t overlay_read16(const BellatrixMemory *m, uint32_t addr)
 {
-    if ((overlay_enabled(m) && in_low_memory(addr)) || in_rom_window(addr))
+    if (overlay_enabled(m) && in_low_memory(addr))
+        return overlay_rom_read16(m, addr);
+    if (in_rom_window(addr))
         return rom_read16(m, addr);
 
     return chip_ram_read16(m, addr);
@@ -107,7 +138,9 @@ uint16_t overlay_read16(const BellatrixMemory *m, uint32_t addr)
 
 uint32_t overlay_read32(const BellatrixMemory *m, uint32_t addr)
 {
-    if ((overlay_enabled(m) && in_low_memory(addr)) || in_rom_window(addr))
+    if (overlay_enabled(m) && in_low_memory(addr))
+        return overlay_rom_read32(m, addr);
+    if (in_rom_window(addr))
         return rom_read32(m, addr);
 
     return chip_ram_read32(m, addr);

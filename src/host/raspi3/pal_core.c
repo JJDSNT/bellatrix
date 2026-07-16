@@ -15,7 +15,7 @@
 //
 // Expected next steps elsewhere in the project:
 //   - implement bellatrix_runtime_host_init()
-//   - implement bellatrix_runtime_host_step()
+//   - implement bellatrix_runtime_chipset_step()
 //   - implement bellatrix_runtime_publish_cpu_cycles()
 //   - implement bellatrix_runtime_get_pending_ipl()
 //   - wire single-core polling into the CPU/JIT side when multicore is disabled
@@ -28,6 +28,7 @@
 #include "host/osd.h"
 #include "runtime/core_chipset.h"
 #include "runtime/cpu_progress.h"
+#include "runtime/topology.h"
 #include "support.h"
 
 // ---------------------------------------------------------------------------
@@ -80,13 +81,8 @@ static struct BellatrixPalRuntime s_rt = {
     .runtime_running      = 0,
     .multicore_enabled    = 0,  // default: single-core mode
     .chipset_core_started = 0,
-#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
-    BELLATRIX_EMU68_CORE0_REBASELINE
-    .cpu_core_id          = 0,
-#else
-    .cpu_core_id          = 1,
-#endif
-    .chipset_core_id      = 2,
+    .cpu_core_id          = BELLATRIX_CORE_CPU,
+    .chipset_core_id      = BELLATRIX_CORE_CHIPSET,
     .cpu_priority         = BELLATRIX_PRIO_HIGH,
     .chipset_priority     = BELLATRIX_PRIO_REALTIME,
     .pending_ipl          = 0,
@@ -111,7 +107,7 @@ void bellatrix_runtime_host_shutdown(void)
 }
 
 __attribute__((weak))
-void bellatrix_runtime_host_step(uint64_t host_now, uint64_t host_freq)
+void bellatrix_runtime_chipset_step(uint64_t host_now, uint64_t host_freq)
 {
     (void)host_now;
     (void)host_freq;
@@ -215,8 +211,8 @@ static uint32_t pal_event_stream_enable(uint32_t target_hz)
 }
 
 /* Enable a private architectural event stream on the calling PE without
- * publishing it as the chipset event source. Core 3 uses this only to wake
- * its deferred physical-IO reactor; the register is per-core. */
+ * publishing it as the chipset event source. The host-reactor role uses this
+ * to wake deferred services; the register is per-core. */
 static uint32_t pal_local_event_stream_enable(uint32_t target_hz)
 {
     uint64_t freq = pal_read_cntfrq();
@@ -335,9 +331,9 @@ void PAL_Runtime_Poll(void)
         return;
 
     const uint64_t now = pal_read_cntpct();
-    bellatrix_runtime_host_step(now, s_rt.host_counter_freq);
+    bellatrix_runtime_chipset_step(now, s_rt.host_counter_freq);
 
-    // Single-core has no independent Core 0 supervisor, so physical IO must
+    // Single-core has no independent host reactor, so physical IO must
     // be serviced here. Throttle to ~1ms: usb_host_step pumps the whole
     // CherryUSB event chain and is far too heavy for every MMIO access.
     if (!PAL_Core_IsMulticoreEnabled()) {
@@ -383,7 +379,7 @@ static void chipset_core_loop(void)
     while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
         const uint64_t now = pal_read_cntpct();
 
-        bellatrix_runtime_host_step(now, s_rt.host_counter_freq);
+        bellatrix_runtime_chipset_step(now, s_rt.host_counter_freq);
 
         // Publish latest IPL snapshot so the CPU side can observe it cheaply.
         atomic_store_explicit(&s_rt.pending_ipl,
@@ -402,10 +398,11 @@ static void chipset_core_loop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Core 3 worker. Active as the physical IO reactor in the Emu68/Core0
-// rebaseline; otherwise dormant and available for an explicit migration.
+// Core 3 host-reactor worker, active in every multicore backend selection.
+// bellatrix_runtime_io_step() owns both physical IO and host presentation, so
+// Backend-specific code must not duplicate or replace this service contract.
 // ---------------------------------------------------------------------------
-static void chipset_io_loop(void)
+static void host_reactor_loop(void)
 {
     uint32_t event_hz;
 
@@ -413,7 +410,8 @@ static void chipset_io_loop(void)
         pal_wfe();
 
     event_hz = pal_local_event_stream_enable(1000u);
-    kprintf("[CORE3] IO event stream: %u Hz\n", (unsigned)event_hz);
+    kprintf("[HOST] Core %u reactor event stream: %u Hz\n",
+            (unsigned)BELLATRIX_CORE_HOST_REACTOR, (unsigned)event_hz);
 
     while (atomic_load_explicit(&s_rt.runtime_running, memory_order_acquire)) {
         const uint64_t now = pal_read_cntpct();
@@ -425,21 +423,15 @@ static void chipset_io_loop(void)
 // ---------------------------------------------------------------------------
 // Secondary core bootstrap entries
 //
-// Each is called by secondary_boot() in start.c for the matching cpu_id.
-// The entry spins on its function pointer until PAL_Core_Launch*() sets it.
+// Each is called by secondary_boot() for its physical PE. Core 1 parks as the
+// auxiliary role; Core 2/3 wait for their chipset/reactor assignments.
 // ---------------------------------------------------------------------------
-static void (*volatile s_cpu_entry)(void)     = NULL;
 static void (*volatile s_chipset_entry)(void) = NULL;
-static void (*volatile s_io_entry)(void)      = NULL;
+static void (*volatile s_host_entry)(void)    = NULL;
 
 void bellatrix_core1_entry(void)
 {
-    /* Core 1 — CPU (Emu68 JIT or Musashi). Parks until PAL_Core_LaunchCpu(). */
-    while (!s_cpu_entry)
-        pal_wfe();
-
-    s_cpu_entry();
-
+    /* Core 1 is the unified topology's auxiliary PE. */
     while (1)
         pal_wfe();
 }
@@ -458,11 +450,11 @@ void bellatrix_core2_entry(void)
 
 void bellatrix_core3_entry(void)
 {
-    /* Core 3 parks until PAL_Core_LaunchIO() assigns the physical worker. */
-    while (!s_io_entry)
+    /* Core 3 parks until assigned the secondary host-reactor role. */
+    while (!s_host_entry)
         pal_wfe();
 
-    s_io_entry();
+    s_host_entry();
 
     while (1)
         pal_wfe();
@@ -498,26 +490,6 @@ void PAL_ChipsetTimer_Stop(void)
 }
 
 // ---------------------------------------------------------------------------
-// Launch the CPU backend (Emu68 JIT or Musashi).
-//
-// If multicore is disabled, this is a no-op — the caller (bellatrix.c) runs
-// entry() inline on the boot core instead, exactly like before this existed.
-// If multicore is enabled, core 1 is woken and runs entry() forever.
-// ---------------------------------------------------------------------------
-void PAL_Core_LaunchCpu(void (*entry)(void))
-{
-    pal_runtime_init_once();
-
-    if (!atomic_load_explicit(&s_rt.multicore_enabled, memory_order_acquire))
-        return;
-
-    s_cpu_entry = entry;
-
-    pal_dsb_sy();
-    pal_sev();
-}
-
-// ---------------------------------------------------------------------------
 // Launch chipset execution.
 //
 // If multicore is disabled, no secondary core is launched and the caller is
@@ -541,14 +513,14 @@ void PAL_Core_LaunchChipset(void (*entry)(void))
     pal_sev();
 }
 
-void PAL_Core_LaunchIO(void)
+void PAL_Core_LaunchHostReactor(void)
 {
     pal_runtime_init_once();
 
     if (!atomic_load_explicit(&s_rt.multicore_enabled, memory_order_acquire))
         return;
 
-    s_io_entry = chipset_io_loop;
+    s_host_entry = host_reactor_loop;
 
     pal_dsb_sy();
     pal_sev();

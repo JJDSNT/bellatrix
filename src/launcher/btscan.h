@@ -20,7 +20,7 @@ bool btscan_has_saved_mouse(void);
 // Write BTSCAN.TXT (scan results + bt_diag snapshot) to SD, overwriting in
 // place. Also flushes any newly created link keys. Safe to call repeatedly.
 void launcher_save_bt_report(void);
-// Runtime modal lifecycle. Core 3 calls step after its normal host-reactor
+// Runtime modal lifecycle. The host reactor calls step after its normal
 // pass; discovery/pairing progress remains owned by BTstack.
 bool btscan_runtime_open(void);
 bool btscan_runtime_step(void); // true while the modal remains active

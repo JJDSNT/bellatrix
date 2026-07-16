@@ -349,13 +349,12 @@ void machine_present_frame_from_rigel(void)
     if (!g_rigel || !framebuffer || !pitch)
         return;
 
-    /* The presenter runs on Core 0 while the Rigel owner steps: fetch the
-     * frame descriptor under the chipset lock so width/height/pitch/pixels
-     * are mutually coherent (a torn mix could walk past the buffer in the
-     * copy below). The pixel copy itself stays outside the lock: racing
-     * the next frame's composition can only tear the image, never the
-     * memory bounds, and holding the lock for a full-frame copy would
-     * stall the chipset for hundreds of microseconds per frame. */
+    /* The Core 3 host presenter fetches the frame descriptor under chipset lock
+     * so width/height/pitch/pixels are mutually coherent (a torn mix could
+     * walk past the buffer in the copy below). The pixel copy itself stays
+     * outside the lock: racing the next frame's composition can only tear the
+     * image, never the memory bounds, and holding the lock for a full-frame
+     * copy would stall the chipset for hundreds of microseconds per frame. */
     {
         bool frame_ok;
 
@@ -522,8 +521,8 @@ void machine_step_host_serial_rigel(void)
         /* The harness has no IO core: core_io.c is not part of its build,
          * and PAL_Core_IsMulticoreEnabled() is always false there. */
         if (PAL_Core_IsMulticoreEnabled()) {
-            /* Core 2 owns Rigel: move bytes only through SPSC queues. Core 3
-             * owns the physical UART and never accesses g_rigel. */
+            /* Chipset owns Rigel and moves bytes only through SPSC queues.
+             * Host reactor owns the physical UART and never accesses g_rigel. */
             while (rigel_serial_tx_available(g_rigel) &&
                    rigel_serial_pop_tx_byte(g_rigel, &byte))
                 (void)core_io_serial_enqueue_tx(byte);
@@ -545,8 +544,8 @@ void machine_step_host_serial_rigel(void)
         }
     }
 
-    /* Single-core fallback owns physical IO locally. In multicore, only Core 3
-     * drains the console after servicing Paula's queue. */
+    /* Single-core fallback owns physical IO locally. In multicore, only the
+     * host reactor drains the console after servicing Paula's queue. */
     if (!PAL_Core_IsMulticoreEnabled())
         console_log_drain();
 }
@@ -854,7 +853,7 @@ void bellatrix_machine_on_frame_ready(void)
     osd_set_machine_frame(g_machine.frame_counter);
     /* Runtime launcher screens share the physical framebuffer with Rigel.
      * Keep CPU/chipset/frame accounting alive, but preserve the modal until
-     * Core 3 closes it; the next completed frame restores the guest image. */
+     * host reactor closes it; the next frame restores the guest image. */
 #ifdef BELLATRIX_LAUNCHER
     if (launcher_runtime_modal_active())
         return;
@@ -862,7 +861,8 @@ void bellatrix_machine_on_frame_ready(void)
     machine_present_frame_from_rigel();
 
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
-    if ((g_machine.frame_counter % 100u) == 0u) {
+    if (g_machine.frame_counter == 1u ||
+        (g_machine.frame_counter % 25u) == 0u) {
         extern struct M68KState *__m68k_state;
         uint32_t pc = __m68k_state ? BE32(__m68k_state->PC) : 0u;
         uint8_t guest_ipl = __m68k_state ? __m68k_state->INT.IPL : 0u;

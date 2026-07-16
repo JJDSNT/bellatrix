@@ -8,6 +8,7 @@
 #include "cpu/emu68/bellatrix_profile.h"
 #include "cpu/cpu_bridge.h"
 #include "runtime/runtime.h"
+#include "runtime/topology.h"
 #ifdef BELLATRIX_LAUNCHER
 #include "launcher/launcher.h"
 #endif
@@ -20,6 +21,7 @@
 #include "rigel/rigel_irq.h"
 #include "rigel/rigel_mmio.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
+#include "machine/expansions/z2_fast_ram/z2_fast_ram.h"
 #if defined(BELLATRIX_ENABLE_Z3_68040) && BELLATRIX_ENABLE_Z3_68040
 #include "machine/expansions/z3_68040/z3_68040.h"
 #endif
@@ -94,32 +96,37 @@ void bellatrix_run_selected_cpu_backend(void)
 /* ---------------------------------------------------------------------------
  * Multicore runtime state.
  *
- * Cycle/MMIO synchronisation between the CPU core (Core 1) and the chipset
- * core (Core 2) is handled by core_chipset.c (cycle target + access lock) —
+ * Cycle/MMIO synchronisation between the CPU and chipset roles is handled by
+ * core_chipset.c (cycle target + access lock) —
  * see core_chipset_lock_acquire/release(), called from cpu_bridge.c.
  * ------------------------------------------------------------------------- */
 
-/* Per-core runtime objects — advanced by Core 2 via bellatrix_runtime_host_step(). */
+/* Runtime objects; the chipset role advances Rigel independently. */
 BellatrixRuntime g_runtime;
 
+/* Fault-window census. Bounds the guest address range actually reaching the
+ * fault handler, which is what separates a stalled boot from one crawling
+ * through a wide region a word at a time (see the romtag sweep of
+ * MEM_REGION_EXP_ROM_CHECK). Read by the liveness checkpoints below. */
+volatile uint64_t g_diag_fault_count;
+volatile uint32_t g_diag_fault_min = 0xffffffffu;
+volatile uint32_t g_diag_fault_max;
+volatile uint32_t g_diag_fault_last;
+
 /* ---------------------------------------------------------------------------
- * Core 0 (boot/Machine) → Core 1 (CPU) handoff.
+ * Boot-core → CPU-role handoff.
  *
  * Single-core: entry() runs forever inline on the boot core, unchanged from
  * the pre-multicore boot path.
- * Multicore: Core 1 is launched to run entry(); Core 0 parks as the light
- * Machine/scheduler arbiter described in multicore.md — it has no recurring
- * work of its own because the CPU<->chipset protocol already lives inside
- * the CPU's MMIO fault path and the chipset's step function.
+ * Both CPU backends run on Core 0. Backend selection never changes placement;
+ * Core 3 remains the host reactor in every multicore build.
  * ------------------------------------------------------------------------- */
-/* Core 0 supervisor — replaces the idle wfe park in multicore builds.
+/* Legacy host diagnostics retained while their bounded heartbeat is migrated
+ * to the common Core 3 reactor. It is not an active topology or scheduler.
  *
- * Debug scaffold and first increment of the Core-0 arbiter: instead of sleeping
- * forever after launching Core 1, Core 0 periodically reports whether the CPU
- * (Core 1) is publishing cycles (cpu_target) and the chipset (Core 2) is
- * draining them (chipset), so a silent-but-running boot can be told apart from a
- * stalled/deadlocked one. It does not schedule anything yet — see
- * AI_context/consolidated/issue_core0_arbiter_scheduler.md. */
+ * This old loop reported whether CPU was publishing cycles and chipset was
+ * draining them, distinguishing progress from a silent deadlock. It remains
+ * compiled only until equivalent bounded diagnostics live in the reactor. */
 /* Boot-time timeline selection: the build default (BELLATRIX_TIMELINE_MODE)
  * can be overridden per boot with `timeline=cpu|realtime|hybrid` in the
  * kernel bootargs (cmdline.txt on SD, BOOTARGS/-append in QEMU) — the Fase 0
@@ -168,7 +175,7 @@ static RuntimeTimelineMode bellatrix_timeline_boot_mode(RuntimeTimelineMode fall
     return fallback;
 }
 
-static void bellatrix_core0_supervise(void)
+static void __attribute__((unused)) bellatrix_legacy_host_diagnostics(void)
 {
     extern bool core_chipset_get_progress(uint64_t *chipset_cck,
                                           uint64_t *target_cck);
@@ -188,20 +195,6 @@ static void bellatrix_core0_supervise(void)
     BellatrixAudioOutputStats last_audio = {0};
     RuntimeFrameCompletionStats last_frame_stats = {0};
 
-#ifndef BELLATRIX_TIMELINE_DEFAULT
-#define BELLATRIX_TIMELINE_DEFAULT 0
-#endif
-    RuntimeTimelineMode timeline_mode = bellatrix_timeline_boot_mode(
-        (RuntimeTimelineMode)BELLATRIX_TIMELINE_DEFAULT);
-
-    kprintf("[CORE0] timeline mode: %s (%s)\n",
-            timeline_mode == RUNTIME_TIMELINE_CPU_DRIVEN ? "cpu-driven" :
-            timeline_mode == RUNTIME_TIMELINE_REALTIME   ? "realtime" :
-                                                           "hybrid",
-            s_timeline_mode_source);
-
-    core_chipset_timeline_init(last_io, freq, timeline_mode);
-
     for (;;) {
         uint64_t now = PAL_Time_ReadCounter();
 
@@ -209,8 +202,6 @@ static void bellatrix_core0_supervise(void)
         if (now - last_io >= io_interval) {
             last_io = now;
             bellatrix_runtime_io_step(now, freq);
-            (void)core_chipset_timeline_update(now);
-            core_chipset_drain_host_completions();
         }
 
         if (now - last_heartbeat < heartbeat_interval) {
@@ -248,7 +239,7 @@ static void bellatrix_core0_supervise(void)
             osd_set_realtime_percent(realtime_pct);
         }
 
-        kprintf("[CORE0-SUP] beat=%u mode=%u cpu_target=%llu(+%llu) "
+        kprintf("[HOST-SUP] beat=%u mode=%u cpu_target=%llu(+%llu) "
                 "horizon=%llu chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x "
                 "uart_tx=%u/%u drop=%u uart_rx=%u/%u drop=%u\n",
                 (unsigned)beat,
@@ -266,7 +257,7 @@ static void bellatrix_core0_supervise(void)
                 (unsigned)serial_stats.rx_depth,
                 (unsigned)serial_stats.rx_max_depth,
                 (unsigned)serial_stats.rx_dropped);
-        kprintf("[CORE0-TIME] realtime=%llu horizon=%llu rigel=%llu drift=%lld "
+        kprintf("[HOST-TIME] realtime=%llu horizon=%llu rigel=%llu drift=%lld "
                 "clamp=%u generation=%llu\n",
                 (unsigned long long)timeline.realtime_target_cck,
                 (unsigned long long)timeline.horizon_cck,
@@ -275,7 +266,7 @@ static void bellatrix_core0_supervise(void)
                             (int64_t)chipset_cck),
                 timeline.clamp_active ? 1u : 0u,
                 (unsigned long long)timeline.generation);
-        kprintf("[CORE0-FRAME] produced=%llu(+%llu) presented=%llu(+%llu) "
+        kprintf("[HOST-FRAME] produced=%llu(+%llu) presented=%llu(+%llu) "
                 "coalesced=%llu(+%llu)\n",
                 (unsigned long long)frame_stats.produced,
                 (unsigned long long)(frame_stats.produced -
@@ -295,7 +286,7 @@ static void bellatrix_core0_supervise(void)
          * cost exactly 2x. Feed the OSD so the user sees UV! on screen. */
         {
             uint32_t throttled = vc_get_throttled();
-            kprintf("[CORE0-HW] arm_mhz=%u throttled=%08x\n",
+            kprintf("[HOST-HW] arm_mhz=%u throttled=%08x\n",
                     (unsigned)(vc_get_arm_clock_hz() / 1000000u),
                     (unsigned)throttled);
             osd_set_power_alert(throttled == 0xFFFFFFFFu ? 0u : throttled);
@@ -359,7 +350,7 @@ static void bellatrix_core0_supervise(void)
 
         uint64_t io_avg_ticks = io_stats.dispatch_calls
             ? io_stats.total_ticks / io_stats.dispatch_calls : 0u;
-        kprintf("[CORE0-IO] calls=%llu pending=%02x budget_miss=%u "
+        kprintf("[HOST-IO] calls=%llu pending=%02x budget_miss=%u "
                 "avg=%lluus max=%lluus late_max=%lluus "
                 "usb=%lluus bt=%lluus serial=%lluus console=%lluus\n",
                 (unsigned long long)io_stats.dispatch_calls,
@@ -387,7 +378,7 @@ static void bellatrix_core0_supervise(void)
             unsigned realtime_pct = expected
                 ? (unsigned)(produced * 100u / expected) : 0u;
 
-            kprintf("[CORE0-AUDIO] expected=%llu produced=%llu consumed=%llu "
+            kprintf("[HOST-AUDIO] expected=%llu produced=%llu consumed=%llu "
                     "realtime=%u%% underrun=%llu dropped=%llu depth=%u "
                     "prime=%u primed=%u\n",
                     (unsigned long long)expected,
@@ -413,23 +404,9 @@ void bellatrix_launch_cpu_and_park(void (*entry)(void))
     if (!entry)
         return;
 
-#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
-    BELLATRIX_EMU68_CORE0_REBASELINE
-    /* Preserve Emu68's native topology: the boot PE owns the JIT, VBAR,
-     * TPIDRRO context and physical interrupt routing as one contract. The
-     * selected entry does not return in fault-driven mode. */
+    /* The boot PE owns the selected CPU and physical interrupt ingress.
+     * Emu68 additionally keeps JIT, VBAR and TPIDRRO context co-located. */
     entry();
-    return;
-#endif
-
-    if (!PAL_Core_IsMulticoreEnabled()) {
-        entry();
-        return;
-    }
-
-    PAL_Core_LaunchCpu(entry);
-
-    bellatrix_core0_supervise();   /* never returns */
 }
 
 /* ---------------------------------------------------------------------------
@@ -516,6 +493,17 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
                     (unsigned)(__m68k_state ? __m68k_state->INT32 : 0u),
                     (unsigned)(__m68k_state ? __m68k_state->INT.IPL : 0u),
                     (unsigned long long)insn_count);
+            kprintf("[DIAG] faults=%llu min=%08x max=%08x last=%08x "
+                    "A4=%08x A5=%08x D0=%08x D2=%08x D4=%08x\n",
+                    (unsigned long long)g_diag_fault_count,
+                    (unsigned)g_diag_fault_min,
+                    (unsigned)g_diag_fault_max,
+                    (unsigned)g_diag_fault_last,
+                    (unsigned)(__m68k_state ? BE32(__m68k_state->A[4].u32) : 0u),
+                    (unsigned)(__m68k_state ? BE32(__m68k_state->A[5].u32) : 0u),
+                    (unsigned)(__m68k_state ? BE32(__m68k_state->D[0].u32) : 0u),
+                    (unsigned)(__m68k_state ? BE32(__m68k_state->D[2].u32) : 0u),
+                    (unsigned)(__m68k_state ? BE32(__m68k_state->D[4].u32) : 0u));
             checkpoint_index++;
         }
     }
@@ -612,8 +600,8 @@ void bellatrix_emu68_publish_idle_cycles(uint32_t cycles)
 /* ---------------------------------------------------------------------------
  * Strong overrides: per-core chipset advance steps.
  *
- * bellatrix_runtime_host_step  — Core 1, full chipset.
- * bellatrix_runtime_io_step    — Core 0, physical IO.
+ * bellatrix_runtime_chipset_step — Rigel owner.
+ * bellatrix_runtime_io_step      — host reactor.
  * ------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
@@ -750,10 +738,12 @@ static void set_overlay(int new_overlay)
  * here can observe stale/divergent data due to aliasing, while ICache fetches
  * are performed from the low 32-bit mapping.
  */
-#define FAST_RAM_KVIRT  0x0000000000200000ULL
+#define FAST_RAM_BACKING_KVIRT 0x0000000000200000ULL
 #define ROM_KVIRT       0xffffff9000f80000ULL
 /* Extended ROM: first 512 KB of 1 MB ROMs (AROS modules) at physical 0xe00000 */
 #define ROM_EXT_KVIRT   0xffffff9000e00000ULL
+/* Ext-ROM probe window (MEM_REGION_EXP_ROM_CHECK), physical 0xf00000 */
+#define EXP_ROM_PROBE_KVIRT 0xffffff9000f00000ULL
 
 static inline uint32_t read_be32(const uint8_t *p)
 {
@@ -818,19 +808,23 @@ void bellatrix_init(void)
         kprintf("[Z3-68040] registered through shared Bellatrix lifecycle\n");
 #endif
 
+    bellatrix_machine_init(cpu_backend);
 #if !BELLATRIX_ENABLE_EMU68_BOARDS
-    /* Legacy non-boards path: Bellatrix owns the Zorro II protocol when
-     * Emu68 board support is not compiled in. Configure Z2 RAM before
-     * machine_init() so the board is present from the first bus reset. */
+    /* Bellatrix owns the Z2 protocol in the non-native-boards path. Register
+     * the board now, but map no guest RAM: its map() callback is invoked only
+     * when the guest assigns a base through Autoconfig. */
 #ifndef BELLATRIX_LEGACY_Z2_RAM_MB
 #define BELLATRIX_LEGACY_Z2_RAM_MB 8u
 #endif
-    bellatrix_zorro2_enable_fast_ram((uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u);
-    kprintf("[BELA] legacy non-boards: Z2 RAM %uMB via Bellatrix autoconfig\n",
-            (unsigned)(BELLATRIX_LEGACY_Z2_RAM_MB));
+    if (bellatrix_z2_fast_ram_register(
+            cpu_backend, bellatrix_machine_memory(),
+            (uint32_t)BELLATRIX_LEGACY_Z2_RAM_MB * 1024u * 1024u) != 0) {
+        kprintf("[BELA] Z2 Fast RAM registration failed\n");
+    } else {
+        kprintf("[BELA] Z2 Fast RAM %uMB registered; awaiting guest base\n",
+                (unsigned)BELLATRIX_LEGACY_Z2_RAM_MB);
+    }
 #endif
-
-    bellatrix_machine_init(cpu_backend);
 #ifdef BELLATRIX_CORE_LOG
     kprintf("[BUILD] BELLATRIX_CORE_LOG: ON\n");
 #else
@@ -876,7 +870,7 @@ void bellatrix_init(void)
      * confuses the Kickstart's early VBL handler into computing a wrong
      * exec dispatch address and installing a bad vector at 0x6c. */
     memset(m->memory.chip_ram, 0, m->memory.chip_ram_size);
-    m->memory.fast_ram = (uint8_t *)FAST_RAM_KVIRT;
+    m->memory.fast_ram = (uint8_t *)FAST_RAM_BACKING_KVIRT;
     m->memory.fast_ram_size = BELLATRIX_FAST_RAM_SIZE;
     m->memory.fast_ram_mask = BELLATRIX_FAST_RAM_MASK;
     memset(m->memory.fast_ram, 0, m->memory.fast_ram_size);
@@ -934,14 +928,8 @@ void bellatrix_init(void)
         }
     }
 
-    /* Chip RAM: map exactly the real chip RAM size. 0x100000-0x1FFFFF must
-     * NOT be presented to the CPU as anonymous low RAM: the chipset/DMA side
-     * only treats BELLATRIX_CHIP_RAM_SIZE as chip RAM, so a wider CPU window
-     * makes Kickstart size chip as 2MB and place the supervisor stack and
-     * exec structures in memory the chipset cannot see (runaway boot,
-     * ISSUE-0037 — same divergence removed from the Musashi backend).
-     * Accesses to 0x100000-0x1FFFFF fall through to the fault handler and
-     * read as open bus, matching the harness memory map. */
+    /* Map the fitted 1 MiB backing first. The CPU aperture is 2 MiB, but its
+     * upper half is an alias installed below, never anonymous extra RAM. */
     mmu_map(0x000000, 0x000000, BELLATRIX_CHIP_RAM_SIZE,
             MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 
@@ -957,9 +945,9 @@ void bellatrix_init(void)
      *    exec structures where the chipset cannot see them, ISSUE-0037).
      * Emu68's generic 1:1 map would otherwise back this range with raw
      * DRAM, so the alias must be mapped explicitly. */
-    if (BELLATRIX_CHIP_RAM_SIZE < 0x00200000u) {
+    if (BELLATRIX_CHIP_RAM_SIZE < BELLATRIX_CHIP_CPU_APERTURE_SIZE) {
         uintptr_t mirror_virt = BELLATRIX_CHIP_RAM_SIZE;
-        while (mirror_virt < 0x00200000u) {
+        while (mirror_virt < BELLATRIX_CHIP_CPU_APERTURE_SIZE) {
             mmu_map(0x000000, mirror_virt, BELLATRIX_CHIP_RAM_SIZE,
                     MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
             mirror_virt += BELLATRIX_CHIP_RAM_SIZE;
@@ -980,8 +968,17 @@ void bellatrix_init(void)
 
     mmu_map(0xC00000, 0xC00000, 0x200000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+    /* Ext-ROM probe window. memory_map decodes 0xf00000-0xf7ffff as
+     * MEM_REGION_EXP_ROM_CHECK and answers a constant 0x0000, so backing it
+     * with a zeroed read-only page is observationally identical to the
+     * fault-driven path. It is not equivalent in cost: Exec's romtag scan
+     * (RTC_MATCHWORD sweep) walks the window a word at a time, which without
+     * MMU_ACCESS costs 262144 data aborts that each return the same constant.
+     * Reads now resolve in the MMU; writes still fault and are ignored. */
+    memset((void *)EXP_ROM_PROBE_KVIRT, 0, 0x80000);
     mmu_map(0xF00000, 0xF00000, 0x80000,
-            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY |
+            MMU_ATTR_CACHED, 0);
 
 #if BELLATRIX_ENABLE_EMU68_BOARDS
     /* AutoConfig belongs to Emu68 boards on the real target. Force the
@@ -997,18 +994,6 @@ void bellatrix_init(void)
     mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 
-    /* Pre-map the full Z2 Fast RAM range with full R/W access.
-     * The JIT can access it directly after the OS assigns the base via
-     * autoconfig.  We always map at BELLATRIX_FAST_RAM_BASE (0x200000)
-     * because Kickstart/AROS assigns the first Z2 board there. */
-    mmu_map(BELLATRIX_FAST_RAM_BASE,
-            BELLATRIX_FAST_RAM_BASE,
-            (uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u,
-            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
-    kprintf("[BELA] legacy non-boards MMU: Z2 Fast RAM %08x-%08x mapped\n",
-            (unsigned)BELLATRIX_FAST_RAM_BASE,
-            (unsigned)(BELLATRIX_FAST_RAM_BASE +
-                       (uint32_t)(BELLATRIX_LEGACY_Z2_RAM_MB) * 1024u * 1024u - 1u));
 #endif
 
     /* Overlay sanity-check */
@@ -1112,7 +1097,7 @@ void bellatrix_init(void)
         CoreIOReactorStats launcher_io;
         uint64_t freq = PAL_Time_GetFrequency();
         core_io_reactor_get_stats(&g_runtime.io, &launcher_io);
-        kprintf("[CORE0-IO-LAUNCHER] calls=%llu budget_miss=%u max=%lluus "
+        kprintf("[HOST-IO-LAUNCHER] calls=%llu budget_miss=%u max=%lluus "
                 "late_max=%lluus usb=%lluus\n",
                 (unsigned long long)launcher_io.dispatch_calls,
                 (unsigned)launcher_io.over_budget,
@@ -1145,28 +1130,44 @@ void bellatrix_init(void)
                       bellatrix_machine_rigel_ctx(),
                       g_runtime.machine);
 
+    /* Initialise the machine timeline before any worker starts. The active
+     * host reactor updates it later, regardless of its numbered core. Keeping
+     * this outside either core-specific loop makes
+     * STOP/IRQ progress and presentation independent of CPU placement. */
+    {
+#ifndef BELLATRIX_TIMELINE_DEFAULT
+#define BELLATRIX_TIMELINE_DEFAULT 0
+#endif
+        uint64_t now = PAL_Time_ReadCounter();
+        uint64_t freq = PAL_Time_GetFrequency();
+        RuntimeTimelineMode mode = bellatrix_timeline_boot_mode(
+            (RuntimeTimelineMode)BELLATRIX_TIMELINE_DEFAULT);
+        kprintf("[HOST] timeline mode: %s (%s)\n",
+                mode == RUNTIME_TIMELINE_CPU_DRIVEN ? "cpu-driven" :
+                mode == RUNTIME_TIMELINE_REALTIME   ? "realtime" : "hybrid",
+                s_timeline_mode_source);
+        core_chipset_timeline_init(now, freq, mode);
+    }
+
 #ifdef BELLATRIX_ENABLE_MULTICORE
     /* Runtime phase begins: the launcher is done and the chipset context is
      * initialised, so bring up Core 2 (chipset) now. Deferring it to here (from
      * before the launcher) keeps the launcher phase free of a second core
      * touching shared state (ISSUE-0042/0044). */
     PAL_Core_LaunchChipset(NULL);   /* Core 2 — chipset */
-#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
-    BELLATRIX_EMU68_CORE0_REBASELINE
-    /* Core 0 enters the native Emu68 loop and cannot host the physical
-     * reactor. Reuse the already-defined bounded IO worker on Core 3. */
-    PAL_Core_LaunchIO();            /* Core 3 — physical IO reactor */
-#endif
+    /* Core 0 enters the selected CPU loop; Core 3 owns the common reactor. */
+    PAL_Core_LaunchHostReactor();
 #endif
 
     kprintf("[BELA] build: " __DATE__ " " __TIME__ "\n");
     if (PAL_Core_IsMulticoreEnabled()) {
-#if defined(BELLATRIX_EMU68_CORE0_REBASELINE) && \
-    BELLATRIX_EMU68_CORE0_REBASELINE
-        kprintf("[BELA] Initialized (Core0=Emu68 Core1=Aux Core2=Chipset Core3=IO)\n");
-#else
-        kprintf("[BELA] Initialized (Core0=Supervisor/IO Core1=CPU Core2=Chipset Core3=Reserved)\n");
-#endif
+        kprintf("[BELA] topology: boot=%u cpu=%u chipset=%u host=%u aux=%u%s\n",
+                (unsigned)BELLATRIX_CORE_BOOT,
+                (unsigned)BELLATRIX_CORE_CPU,
+                (unsigned)BELLATRIX_CORE_CHIPSET,
+                (unsigned)BELLATRIX_CORE_HOST_REACTOR,
+                (unsigned)BELLATRIX_CORE_AUXILIARY,
+                " (unified CPU placement)");
     } else {
         kprintf("[BELA] Initialized (single-core mode: Core0 runs CPU+Chipset+IO)\n");
     }
@@ -1189,8 +1190,8 @@ void bellatrix_init(void)
 #ifdef BELLATRIX_LAUNCHER
 void bellatrix_launcher_pump_usb(void)
 {
-    /* Compatibility service point for launcher.c. It no longer drives USB
-     * directly: launcher and runtime share the sole Core 0 Host Reactor. */
+    /* Compatibility service point for launcher.c. During boot Core 0 owns the
+     * service; after cutover the same reactor contract runs on Core 3. */
     static uint64_t last_tick;
     uint64_t now = PAL_Time_ReadCounter();
     uint64_t freq = PAL_Time_GetFrequency();
@@ -1320,6 +1321,11 @@ void bellatrix_sync_overlay_from_ciaa(void)
 
 uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
 {
+    g_diag_fault_count++;
+    if (addr < g_diag_fault_min) g_diag_fault_min = addr;
+    if (addr > g_diag_fault_max) g_diag_fault_max = addr;
+    g_diag_fault_last = addr;
+
 #if BELLATRIX_PROFILE_ENABLED
     uint64_t _t0 = bprof_now();
     uint64_t _t1 = _t0;
@@ -1448,7 +1454,7 @@ uint32_t bellatrix_bus_access(uint32_t addr, uint32_t value, int size, int dir)
         /*
          * core_chipset_lock_acquire/release() (held inside
          * bellatrix_bridge_cpu_write itself) prevents concurrent
-         * rigel_step() on Core 2 while Core 1 writes.
+         * rigel_step() on the chipset role while the CPU writes.
          */
 #if BELLATRIX_PROFILE_ENABLED
         { uint64_t _td = bprof_now(); bellatrix_bridge_cpu_write(addr, value, (unsigned)size); bprof_record(&g_bprof.dispatch_write, bprof_now() - _td); }

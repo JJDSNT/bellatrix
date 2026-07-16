@@ -3,7 +3,6 @@
 #include "cpu/cpu_bridge.h"
 #include "cpu/direct_region.h"
 #include "machine/machine.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 #include "rigel/rigel_cia.h"
 #include "machine/memory/memory.h"
 
@@ -14,7 +13,7 @@
 #endif
 
 #ifndef BELLATRIX_MUSASHI_LOW_RAM_SIZE
-#define BELLATRIX_MUSASHI_LOW_RAM_SIZE BELLATRIX_CHIP_RAM_SIZE
+#define BELLATRIX_MUSASHI_LOW_RAM_SIZE BELLATRIX_CHIP_CPU_APERTURE_SIZE
 #endif
 
 static BellatrixDirectRegionMap s_direct_regions;
@@ -35,11 +34,11 @@ static int musashi_direct_unmap(void *opaque,
     return 0;
 }
 
-static uint32_t musashi_rom_read_at(const BellatrixMemory *mem,
+static uint32_t musashi_rom_read_at(const uint8_t *rom_base,
                                     uint32_t offset,
                                     unsigned int size)
 {
-    const uint8_t *rom = mem->rom + offset;
+    const uint8_t *rom = rom_base + offset;
 
     if (size == 1u) {
         return rom[0];
@@ -57,17 +56,6 @@ static int musashi_overlay_enabled(void)
 {
     BellatrixMachine *m = bellatrix_machine_get();
     return m ? bellatrix_memory_overlay_enabled(&m->memory) : 1;
-}
-
-/* When the fast RAM autoconfig board is registered, the RAM window must
- * stay silent until the OS assigns it a base — otherwise early memory
- * probes find RAM at 0x200000 and the later AddMemList duplicates the
- * range, corrupting the exec memory list. Without a registered board the
- * window responds unconditionally (legacy harness behaviour). */
-static int musashi_fast_ram_visible(void)
-{
-    if (!bellatrix_zorro2_fast_ram_registered()) return 1;
-    return bellatrix_zorro2_fast_ram_configured();
 }
 
 static uint32_t musashi_chip_read(const BellatrixMemory *mem,
@@ -97,33 +85,6 @@ static void musashi_chip_write(BellatrixMemory *mem,
     }
 }
 
-static uint32_t musashi_fast_read(const BellatrixMemory *mem,
-                                  uint32_t addr,
-                                  unsigned int size)
-{
-    if (size == 1u) {
-        return bellatrix_fast_read8(mem, addr);
-    }
-    if (size == 2u) {
-        return bellatrix_fast_read16(mem, addr);
-    }
-    return bellatrix_fast_read32(mem, addr);
-}
-
-static void musashi_fast_write(BellatrixMemory *mem,
-                               uint32_t addr,
-                               uint32_t value,
-                               unsigned int size)
-{
-    if (size == 1u) {
-        bellatrix_fast_write8(mem, addr, (uint8_t)value);
-    } else if (size == 2u) {
-        bellatrix_fast_write16(mem, addr, (uint16_t)value);
-    } else {
-        bellatrix_fast_write32(mem, addr, value);
-    }
-}
-
 static uint32_t musashi_read(uint32_t addr, unsigned int size)
 {
     BellatrixMachine *m = bellatrix_machine_get();
@@ -138,15 +99,18 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
         mem->rom &&
         mem->rom_size &&
         addr < BELLATRIX_CHIP_BOOT_SIZE) {
-        return musashi_rom_read_at(mem,
-                                   addr & (uint32_t)(mem->rom_size - 1u),
-                                   size);
+        const uint8_t *overlay_rom = mem->rom_ext && mem->rom_ext_size
+            ? mem->rom_ext : mem->rom;
+        size_t overlay_size = mem->rom_ext && mem->rom_ext_size
+            ? mem->rom_ext_size : mem->rom_size;
+        return musashi_rom_read_at(
+            overlay_rom, addr & (uint32_t)(overlay_size - 1u), size);
     }
 
     if (mem->rom &&
         addr >= BELLATRIX_ROM_BASE &&
         addr <= BELLATRIX_ROM_END) {
-        return musashi_rom_read_at(mem, addr - BELLATRIX_ROM_BASE, size);
+        return musashi_rom_read_at(mem->rom, addr - BELLATRIX_ROM_BASE, size);
     }
 
     if (mem->rom_ext &&
@@ -163,14 +127,6 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
         addr < BELLATRIX_MUSASHI_LOW_RAM_SIZE &&
         size <= (BELLATRIX_MUSASHI_LOW_RAM_SIZE - addr)) {
         return musashi_chip_read(mem, addr, size);
-    }
-
-    if (mem->fast_ram &&
-        mem->fast_ram_size &&
-        addr >= BELLATRIX_FAST_RAM_BASE &&
-        addr <= BELLATRIX_FAST_RAM_END &&
-        musashi_fast_ram_visible()) {
-        return musashi_fast_read(mem, addr, size);
     }
 
     if (bellatrix_direct_region_read(&s_direct_regions, addr, size,
@@ -193,9 +149,7 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
          addr <= BELLATRIX_ROM_END) ||
         (mem->rom_ext &&
          addr >= BELLATRIX_EXT_ROM_BASE &&
-         addr <= BELLATRIX_EXT_ROM_END) ||
-        (musashi_overlay_enabled() &&
-         addr < BELLATRIX_CHIP_BOOT_SIZE)) {
+         addr <= BELLATRIX_EXT_ROM_END)) {
         return;
     }
 
@@ -203,15 +157,6 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
         addr < BELLATRIX_MUSASHI_LOW_RAM_SIZE &&
         size <= (BELLATRIX_MUSASHI_LOW_RAM_SIZE - addr)) {
         musashi_chip_write(mem, addr, value, size);
-        return;
-    }
-
-    if (mem->fast_ram &&
-        mem->fast_ram_size &&
-        addr >= BELLATRIX_FAST_RAM_BASE &&
-        addr <= BELLATRIX_FAST_RAM_END &&
-        musashi_fast_ram_visible()) {
-        musashi_fast_write(mem, addr, value, size);
         return;
     }
 

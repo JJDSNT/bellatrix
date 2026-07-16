@@ -86,6 +86,7 @@ int main(void)
     static uint8_t z2_config[AUTOCONFIG_DATA_SIZE];
     static uint8_t z3_config[AUTOCONFIG_DATA_SIZE];
     BellatrixZorro2BoardDesc z2;
+    BellatrixZorro2BoardOps z2_ops;
     BellatrixZorro3BoardDesc z3;
     BellatrixZorro3BoardOps z3_ops;
     static const BellatrixDirectRegionBackendOps direct_ops = {
@@ -103,10 +104,15 @@ int main(void)
     z3_config[2] = 0x10u;
 
     memset(&z2, 0, sizeof(z2));
+    memset(&z2_ops, 0, sizeof(z2_ops));
+    z2_ops.map = board_map;
+    z2_ops.unmap = board_unmap;
     z2.id = "test.z2";
     z2.config_data = z2_config;
     z2.config_size = sizeof(z2_config);
     z2.window_size = 0x00010000u;
+    z2.userdata = &probe;
+    z2.ops = &z2_ops;
 
     memset(&z3, 0, sizeof(z3));
     memset(&z3_ops, 0, sizeof(z3_ops));
@@ -128,18 +134,24 @@ int main(void)
 
     check_eq("z2 is first", 0xc0u,
              bellatrix_zorro_autoconfig_read8(0x00e80000u));
+    check_eq("z2 mapping invisible before autoconfig", 0u,
+             bellatrix_direct_region_find(&probe.direct_map, 0x00200000u,
+                                          1u) != NULL);
     bellatrix_zorro_autoconfig_write8(0x00e80048u, 0x20u);
     check_eq("z2 configured", 1u,
              (uint32_t)bellatrix_zorro2_board_configured("test.z2"));
     check_eq("z2 base", 0x00200000u,
              bellatrix_zorro2_board_base("test.z2"));
+    check_eq("z2 map callback published direct region", 1u,
+             bellatrix_direct_region_find(&probe.direct_map, 0x00200000u,
+                                          1u) != NULL);
 
     check_eq("z3 follows z2", 0x90u,
              bellatrix_zorro_autoconfig_read8(0x00e80000u));
     check_eq("z3 ROM invisible before autoconfig", 0u,
              bellatrix_direct_region_find(&probe.direct_map, 0x45670000u,
                                           1u) != NULL);
-    probe.fail_at_map_count = 1u;
+    probe.fail_at_map_count = probe.map_count + 1u;
     bellatrix_zorro_autoconfig_write16(0x00e80044u, 0x4567u);
     check_eq("failed map rolls back configured", 0u,
              (uint32_t)bellatrix_zorro3_board_configured("test.z3"));
@@ -156,7 +168,7 @@ int main(void)
              (uint32_t)bellatrix_zorro3_board_configured("test.z3"));
     check_eq("z3 guest-assigned base", 0x45670000u,
              bellatrix_zorro3_board_base("test.z3"));
-    check_eq("z3 backend maps attempted", 2u, probe.map_count);
+    check_eq("z2 plus two z3 backend maps attempted", 3u, probe.map_count);
     check_eq("z3 ROM direct after autoconfig", 1u,
              bellatrix_direct_region_find(&probe.direct_map, 0x45670000u,
                                           1u) != NULL);
@@ -170,6 +182,11 @@ int main(void)
     check_eq("z3 reset unmaps ROM", 1u, probe.unmap_count);
     check_eq("z3 ROM invisible after reset", 0u,
              bellatrix_direct_region_find(&probe.direct_map, 0x45670000u,
+                                          1u) != NULL);
+    bellatrix_zorro2_reset();
+    check_eq("z2 reset unmaps RAM", 2u, probe.unmap_count);
+    check_eq("z2 RAM invisible after reset", 0u,
+             bellatrix_direct_region_find(&probe.direct_map, 0x00200000u,
                                           1u) != NULL);
     puts("zorro autoconfig tests passed");
     return 0;

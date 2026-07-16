@@ -324,9 +324,8 @@ int PAL_HarnessSerial_ReadByte(uint8_t *byte)
     return 0;
 }
 
-void PAL_Core_LaunchCpu(void (*entry)(void)) { (void)entry; }
 void PAL_Core_LaunchChipset(void (*entry)(void)) { (void)entry; }
-void PAL_Core_LaunchIO(void) {}
+void PAL_Core_LaunchHostReactor(void) {}
 void PAL_Core_SetMulticoreEnabled(int enabled) { (void)enabled; }
 int PAL_Core_IsMulticoreEnabled(void) { return 0; }
 void PAL_Core_Sync(void) {}

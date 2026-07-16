@@ -16,7 +16,6 @@
 #endif
 
 #define EMU68_CHIP_HOST_BASE ((void *)(uintptr_t)UINT64_C(0xffffff9000000000))
-#define EMU68_FAST_HOST_BASE ((void *)(uintptr_t)UINT64_C(0x0000000000200000))
 #define EMU68_EXT_ROM_HOST_BASE ((void *)(uintptr_t)UINT64_C(0xffffff9000e00000))
 #define EMU68_ROM_HOST_BASE ((void *)(uintptr_t)UINT64_C(0xffffff9000f80000))
 
@@ -91,8 +90,6 @@ static int configure_topology(void)
                    (uint8_t *)EMU68_CHIP_HOST_BASE + 0x00080000u,
                    ram_flags) != EMU68_OK ||
         map_direct(0x00100000u, 0x00100000u, EMU68_CHIP_HOST_BASE,
-                   ram_flags) != EMU68_OK ||
-        map_direct(0x00200000u, 0x00800000u, EMU68_FAST_HOST_BASE,
                    ram_flags) != EMU68_OK ||
         map_external(0x00a00000u, 0x00400000u) != EMU68_OK ||
         map_direct(0x00e00000u, 0x00080000u, EMU68_EXT_ROM_HOST_BASE,

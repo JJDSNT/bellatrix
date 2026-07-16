@@ -315,10 +315,11 @@ sugerido nas notas do autor, com catch-up síncrono apenas quando um acesso
 observável exigir. O modelo atual de progresso publicado pelo CPU permanece
 evidência experimental, não decisão normativa.
 
-No baseline Core0=Emu68 atual, a timeline wall-clock ainda pertence ao antigo
-loop Core0=supervisor e não é atualizada. O event stream do Core 2 apenas o
-acorda; não aumenta seu horizonte. Essa dependência deve ser removida antes de
-considerar o modelo temporal assimilado.
+No baseline atual, a timeline foi movida para o host reactor no Core 3, comum
+a Musashi e Emu68. Isso elimina a dependência do antigo loop Core0=supervisor.
+STOP usa `WFE` tanto no Emu68 fault-driven quanto no shell Musashi. Realtime é
+o default para que Core 2 continue até o próximo IPL enquanto a CPU dorme;
+`timeline=cpu` permanece disponível para testes determinísticos explícitos.
 
 Com Rigel em outro core:
 
@@ -353,13 +354,17 @@ re-registro ou remoção chamam `unmap`. Validação de alinhamento, sobreposiç
 capacidade pertence ao `map()` do backend/descritor e ainda precisa ser
 implementada junto da primeira board `DIRECT`.
 
-A primeira board concreta é `emu68.68040`: Bellatrix reutiliza sem copiar a ROM
-de 4 KiB de `emu68/src/boards/68040.h`, apresenta sua janela de 64 KiB e instala
-a página read-only/executável na base escolhida pelo guest. O build habilita a
-board automaticamente para Emu68 e Musashi 68040; `BELLATRIX_Z3_68040=0` a
-desabilita. O Emu68 usa seu MMU e o handler original permanece intacto. Musashi
-usa o bank `DIRECT`; o único MMIO auxiliar da ROM, o putchar `$DEADBEEF`, passa
-pelo bridge e reproduz a semântica que o `vectors.c` original já oferece.
+A primeira board concreta experimental é `emu68.68040`: Bellatrix reutiliza
+sem copiar a ROM de 4 KiB de `emu68/src/boards/68040.h`, apresenta sua janela
+de 64 KiB e instala a página read-only/executável na base escolhida pelo guest.
+Ela não integra o baseline de boot e fica desabilitada por padrão; somente
+`BELLATRIX_Z3_68040=1` (ou o modo explícito `auto`) a habilita para ensaios. O
+último log normal antes de o sequenciador passar da Z2 para essa board é
+`[Z2] all boards configured`, portanto um stall nesse ponto não valida Z2 Fast
+RAM nem a board Z3. O Emu68 usa seu MMU e o handler original permanece
+intacto. Musashi usa o bank `DIRECT`; o único MMIO auxiliar da ROM, o putchar
+`$DEADBEEF`, passa pelo bridge e reproduz a semântica que o `vectors.c`
+original já oferece.
 
 Uma eventual Z3 Fast RAM de 128 MiB precisaria declarar a forma Z3 estendida
 (tamanho base em `er_Type` e `ERFF_EXTENDED` em `er_Flags`). Isso permanece

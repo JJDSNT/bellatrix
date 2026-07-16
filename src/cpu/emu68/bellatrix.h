@@ -23,9 +23,8 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
                                          uint64_t instructions,
                                          uint32_t pc);
 
-// Single-core and the conservative Emu68 rebaseline call entry() directly on
-// the boot core. The legacy multicore topology launches it on Core 1 and parks
-// Core 0 as the Machine/scheduler arbiter.
+// Every CPU backend runs on the boot core. Backend selection does not change
+// the multicore topology defined by runtime/topology.h.
 void bellatrix_launch_cpu_and_park(void (*entry)(void));
 
 // Sync the host MMU overlay mapping with the logical CIA-A PRA OVL bit.

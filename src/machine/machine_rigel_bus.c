@@ -54,20 +54,17 @@ uint32_t g_machine_intreq_vertb_clear_count;
 
 static inline bool is_custom_addr(uint32_t addr)
 {
-    return (addr >= 0x00dff000u && addr <= 0x00dfffffu);
+    return bellatrix_custom_addr_contains(addr) != 0;
 }
 
 static inline bool is_cia_a_addr(uint32_t addr)
 {
-    return (addr & 1u) && (addr >= 0x00bfe001u && addr <= 0x00bfef01u);
+    return bellatrix_ciaa_addr_contains(addr) != 0;
 }
 
 static inline bool is_cia_b_addr(uint32_t addr)
 {
-    if (addr & 1u)
-        return false;
-    return (addr >= 0x00bfd000u && addr <= 0x00bfdf00u) ||
-           (addr >= 0x00bfe000u && addr <= 0x00bfef00u);
+    return bellatrix_ciab_addr_contains(addr) != 0;
 }
 
 static inline bool is_rtc_addr(uint32_t addr)
@@ -101,9 +98,11 @@ static uint32_t machine_trace_read32_no_side_effect(uint32_t addr)
     BellatrixMemory *mem = &g_machine.memory;
 
     addr &= 0x00ffffffu;
-    if (addr < BELLATRIX_CHIP_RAM_SIZE)
+    if (bellatrix_chip_cpu_addr_contains_range(addr, 4u))
         return bellatrix_chip_read32(mem, addr);
-    if (addr >= BELLATRIX_FAST_RAM_BASE && addr <= BELLATRIX_FAST_RAM_END)
+    if (mem->fast_ram_configured && addr >= mem->fast_ram_base &&
+        (uint64_t)addr + 4u <=
+            (uint64_t)mem->fast_ram_base + mem->fast_ram_size)
         return bellatrix_fast_read32(mem, addr);
     if (slow_ram_contains(mem, addr, 4u))
         return slow_ram_read32(mem, addr);
