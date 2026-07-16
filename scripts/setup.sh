@@ -197,10 +197,14 @@ EMU68_PATCHES=(
     "$PATCHES/0020-emu68-stop-liveness.patch"
     "$PATCHES/0022-bellatrix-bt-normal-irq.patch"
     "$PATCHES/0023-bellatrix-host-only-irq.patch"
-    # 0025-0034 belong to the retired public-machine-API experiment. They
-    # deliberately rewrote broad JIT access generation and are not part of
-    # the native vectors.c/Data-Abort baseline. Keep the patch files as
-    # historical evidence, but never apply them in the product setup.
+    # 0025-0034 belonged to the retired "public machine API" experiment
+    # (explicit JIT access classification). Removed 2026-07-16; full content
+    # archived at AI_context/archive/emu68-public-machine-api-2026-07.md.
+    # 0035 (modeled-cycles) is kept: removing it during cleanup correlated
+    # with a real, reproducible boot regression (see the archive doc's notes
+    # and AI_context memory) -- suspected JIT code-layout sensitivity
+    # (same class as the x12/v28 clobber bug in ISSUE-0038), not confirmed.
+    # Do not remove without re-testing carefully.
     "$PATCHES/0035-emu68-modeled-cycles.patch"
 )
 
