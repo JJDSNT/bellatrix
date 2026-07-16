@@ -3,6 +3,13 @@
 ````md id="0v8ehv"
 # Bellatrix — Regression Prevention and Validation Strategy
 
+> **Core numbering below is the target architecture** (Core 0 = Host
+> Reactor, Core 1 = CPU/Rigel as laid out further down, Core 3 = IO), not the
+> current placement. During Emu68 stabilization the CPU temporarily runs on
+> Core 0 instead and Rigel owns Core 2, not Core 1; see
+> `docs/runtime_and_timing.md` and `AI_context/issues/ISSUE-0058.md` for the
+> current, temporary mapping.
+
 ## Purpose
 
 Define the canonical strategy for preventing architectural regressions in Bellatrix.

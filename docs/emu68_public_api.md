@@ -1,14 +1,36 @@
 # Emu68 Public Machine Integration API
 
-> **Architectural hold (2026-07-15):** this document is not the current
-> Bellatrix product direction. Its rule that normal guest MMIO must never use
-> Data Abort is superseded by ISSUE-0058. The conservative baseline preserves
-> Emu68's fault-driven external-bus path and direct MMU mappings. This API
-> remains an experimental A/B design until measurements and compatibility
-> evidence justify revisiting it.
-> The former API branch and patches 0025-0034 are retired from the product
-> patch sequence. Core 0 is only the provisional native stabilization baseline;
-> a future portable API must remain independent of core placement.
+> **Retired premise, kept document (2026-07-15, corrected 2026-07-16):** this
+> API's central motivation — that normal guest MMIO must stop using Data
+> Abort, because the fault handler was standing in for a synchronization
+> mechanism it never actually provided — is now known to be **wrong**, not
+> just superseded. `docs/fault_handler.md` has the full correction: the fault
+> handler was always only a router, was never involved in advancing chipset
+> time, and removing it fixed nothing (the actual 2026-07-16 regression was
+> caused by *this API's own refactor* deleting the real synchronization call
+> from `MainLoop`, then gating its replacement behind the same flag that
+> selected routing mode). The conservative baseline (ISSUE-0058) restores and
+> keeps Emu68's fault-driven external-bus path and direct MMU mappings;
+> `patches/0025-0034` (the explicit access-classification half of this API)
+> are retired and archived at
+> `AI_context/archive/emu68-public-machine-api-2026-07.md`.
+>
+> This document is **not deleted**, because retiring the routing rationale
+> does not resolve the deeper question the API was also, separately, reaching
+> for: chipset-clock synchronization is a CPU-progress-driven stopgap today
+> (`bellatrix_emu68_report_jit_progress()`, restored unconditionally in
+> `patches/0003`), and whether that is the right long-term model — versus a
+> timer-driven Rigel clock independent of CPU progress — is explicitly open
+> (`AI_context/issues/ISSUE-0058.md` §3.1.1). Section 3's `progress()`
+> callback below (host-neutral cycle/instruction deltas reported at safe JIT
+> boundaries) is architecturally close to what the current stopgap does by
+> hand, and is worth re-reading if that design work resumes. Read this
+> document as a *candidate reference for the unsolved synchronization
+> question*, not as a description of current or planned routing. See
+> `docs/fault_handler.md`, `docs/emu68_internals.md`, and
+> `docs/irq_and_interrupts.md` for what is actually implemented today. Core 0
+> is only the provisional native stabilization baseline; any future placement
+> or synchronization design must remain independent of core placement.
 
 This document defines the public contract through which a machine host uses
 Emu68 as a 68k CPU engine. Bellatrix is the immediate consumer, but no public

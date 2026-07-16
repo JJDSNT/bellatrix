@@ -3,6 +3,15 @@
 ````md id="2m1b4h"
 # Bellatrix — Runtime Core Testing Strategy
 
+> **Core numbering below is the target architecture** (Core 0 = Host
+> Reactor, Core 1 = CPU, Core 2 = Rigel, Core 3 = reserved/acceleration), not
+> the current placement. During Emu68 stabilization the CPU temporarily runs
+> on Core 0 instead (to reduce integration variables) and the host reactor
+> temporarily runs on Core 3; Core 1 is auxiliary/parked in the meantime. See
+> `docs/runtime_and_timing.md` and `AI_context/issues/ISSUE-0058.md` for the
+> current mapping and why it's temporary. Translate core numbers below to
+> current roles before writing new tests against the live runtime.
+
 ## Purpose
 
 Define the canonical testing strategy for the Bellatrix multicore runtime.

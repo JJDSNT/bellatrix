@@ -8,7 +8,7 @@ related_issues:
   - ISSUE-0032
   - ISSUE-0058
 related_files:
-  - authors_note.md
+  - docs/authors_note.md
   - emu68/src/aarch64/vectors.c
   - emu68/src/aarch64/mmu.c
   - src/cpu/emu68/bellatrix.c

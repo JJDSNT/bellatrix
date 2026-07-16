@@ -3,12 +3,15 @@
 ````md id="ayulnk"
 # Bellatrix — System Architecture and Runtime Organization
 
-> **Architectural rebaseline (2026-07-15):** the fixed Core0-supervisor /
-> Core1-CPU topology below was superseded by ISSUE-0058. During stabilization,
-> Emu68 remains on Core 0 with its native vector/fault/IRQ environment, Rigel
-> owns Core 2, physical I/O runs on Core 3, and Core 1 is auxiliary. This
-> placement is provisional, not the final product topology; integration
-> contracts must remain independent of core number.
+> **Architectural rebaseline (2026-07-15):** the target architecture keeps
+> Core 0 as Control (host reactor/supervisor) — the fixed Core0-supervisor /
+> Core1-CPU topology this document originally described. During Emu68
+> stabilization, that is temporarily inverted: Emu68 sits on Core 0 with its
+> native vector/fault/IRQ environment (to minimize stabilization variables),
+> Rigel owns Core 2, physical I/O runs on Core 3, and Core 1 is auxiliary.
+> Once Emu68's integration is proven stable, the CPU is expected to move off
+> Core 0 and Core 0 reverts to Control, per the original target. Integration
+> contracts must remain independent of core number regardless.
 
 ## Purpose
 
@@ -281,7 +284,9 @@ Responsibilities:
 * bounded physical-IRQ top half; no BTstack work in the vector
 
 Core 0 is a conservative stabilization choice. It is not a permanent ownership
-claim and must not leak into the CPU/bus ABI.
+claim and must not leak into the CPU/bus ABI. The target architecture keeps
+Core 0 as Control; the CPU is expected to move off it once the Emu68
+integration is proven stable.
 
 ---
 

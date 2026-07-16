@@ -126,6 +126,17 @@ CPU / DMA / Chipset
  region handler
 ```
 
+For Emu68, the CPU's own path to this model is Emu68's native fault-driven
+external-bus dispatch, not a direct call: an address without a direct MMU
+mapping (custom-chip registers, CIA, Autoconfig) produces a Data Abort,
+decoded by `vectors.c` into `bellatrix_bus_access()`, which normalizes the
+address and reaches the same region handlers as any other backend. Musashi
+calls into the equivalent `bellatrix_chip_read*/write*()` accessors
+explicitly instead, with no fault involved. Both paths converge on the same
+semantic ownership described in this document — see
+[`fault_handler.md`](fault_handler.md) for why that routing mechanism is not,
+and must not become, a stand-in for chipset-clock synchronization.
+
 ---
 
 # 6. Memory Subsystem Components

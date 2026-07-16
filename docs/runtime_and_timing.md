@@ -3,6 +3,19 @@
 ````md
 # Bellatrix — Runtime, Timing and Temporal Architecture
 
+> **Architectural rebaseline (2026-07-15):** the target architecture keeps
+> Core 0 as the control plane/host reactor. Section 6 below instead describes
+> the *current, temporary* stabilization placement
+> (`AI_context/issues/ISSUE-0058.md`, `AI_context/consolidated/
+> multicore_topology.md`): Core 0 = CPU/boot/IRQ ingress, Core 1 = auxiliary
+> (parked), Core 2 = chipset (Rigel), Core 3 = host reactor. The CPU sits on
+> Core 0 only to reduce stabilization variables for the Emu68 integration; it
+> is expected to move off Core 0 once that integration is stable, at which
+> point Core 0 reverts to Control and the host reactor is expected to move
+> back with it. The host reactor and the `BELLATRIX_TIMELINE_MODE` policies
+> below are both recent additions from this same rebaseline — treat them as
+> actively evolving, not as long-settled architecture.
+
 ## Timeline policies
 
 Multicore builds select `BELLATRIX_TIMELINE_MODE=cpu|realtime|hybrid`:
@@ -194,29 +207,36 @@ Machine/runtime coordinate propagation only.
 
 ---
 
-# 6. Current Multicore Runtime
+# 6. Current Multicore Runtime (temporary stabilization placement)
 
-## Core 0 — Control Plane / Host Reactor
+This section describes where things run *today*, while Emu68 integration is
+being stabilized. It is not the target architecture — see the note at the
+top of this document.
+
+## Core 0 — CPU Runtime *(temporary)*
 
 Responsibilities:
 
-* boot (`bellatrix_init()`)
-* launching the CPU (Core 1) and chipset (Core 2)
-* physical host-I/O ownership and event dispatch
-* supervisor heartbeat and future event/deadline arbitration
-* Core 3 remains parked until an acceleration workload is justified
+* boot (`bellatrix_init()`), including launching the chipset (Core 2) and
+  host reactor (Core 3) roles
+* Emu68 JIT or Musashi (whichever backend is selected)
+* instruction execution, bus access, memory access, host integration
+* physical ARM IRQ/FIQ ingress — see
+  [`irq_and_interrupts.md`](irq_and_interrupts.md)
+
+Emu68's native JIT/vector/IRQ environment stays co-located here only to
+minimize stabilization variables. Once that integration is proven stable,
+the CPU is expected to move off Core 0, and Core 0 reverts to owning Control
+(host reactor) duties.
 
 ---
 
-## Core 1 — CPU Runtime
+## Core 1 — Auxiliary Runtime (parked)
 
 Responsibilities:
 
-* Emu68 JIT or Musashi (whichever backend is selected)
-* instruction execution
-* bus access
-* memory access
-* host integration
+* parked until a measured service or future acceleration job justifies moving
+  it here — see `host_reactor.md`'s "Core 1 policy"
 
 ---
 
@@ -232,16 +252,17 @@ Responsibilities:
 
 ---
 
-## Core 3 — Acceleration Runtime (reserved)
+## Core 3 — Host Reactor *(temporary location; target home is Core 0)*
 
 Responsibilities:
 
-* initially no recurring work
-* future RTG conversion/blit jobs
-* future AHI mixing/resampling jobs
-* other measured, bounded asynchronous compute jobs
+* physical host-I/O ownership and event dispatch (USB, Bluetooth, miniUART,
+  console)
+* presentation/timeline drain
+* supervisor heartbeat and future event/deadline arbitration
 
-Physical I/O remains owned by Core 0. See `host_reactor.md`.
+See [`host_reactor.md`](host_reactor.md) for the full ownership and
+concurrency contract.
 
 ---
 

@@ -10,8 +10,8 @@ updated_at: 2026-07-15
 tags: [emu68, pistorm, core0, irq, bluetooth, fault-handler, vectors, multicore]
 related_files:
   - AI_context/specs/SPEC-0001-cpu-memory-integration.md
-  - authors_note.md
-  - uae_references.md
+  - docs/authors_note.md
+  - docs/uae_references.md
   - emu68/src/aarch64/start.c
   - emu68/src/aarch64/vectors.c
   - emu68/src/ExecutionLoop.c
@@ -47,7 +47,7 @@ PiStorm/Emu68, é:
 6. usar `vectors.c` como ponto de entrada do barramento Emu68 para o chipset,
    convergindo num serviço comum que outros backends de CPU chamam diretamente.
 
-`authors_note.md` preserva a orientação recebida. `uae_references.md` é
+`docs/authors_note.md` preserva a orientação recebida. `docs/uae_references.md` é
 referência de simplificação e desempenho, não base substituta do Rigel.
 
 # Evidência local já estabelecida
@@ -808,8 +808,8 @@ houver conflito.
 
 # Log de execução
 
-- 2026-07-15: orientação externa preservada em `authors_note.md`; referência
-  UAE preservada em `uae_references.md`.
+- 2026-07-15: orientação externa preservada em `docs/authors_note.md`; referência
+  UAE preservada em `docs/uae_references.md`.
 - 2026-07-15: comparação local confirmou que `start.c` no disco contém o patch
   Bellatrix e que o `HEAD` original mantém JIT, IRQ, PMU e timers no Core 0.
 - 2026-07-15: criada esta rebaseline; branches pública e Bluetooth colocadas em

@@ -1,9 +1,14 @@
 # Rigel Integration Notes
 
-> **Status (current):** The multicore architecture recommended in this document
-> has been implemented. Core 0 = CPU (Emu68), Core 1 = full Rigel chipset domain,
-> Core 3 = IO (USB + Bluetooth). The `CPU core + chipset core` shape described
-> in "A better Bellatrix multicore shape" is the current production layout.
+> **Status (superseded core mapping, kept for the Rigel-integration content
+> below):** the `CPU core + chipset core` shape this document recommended has
+> been implemented, but the specific core numbers above are stale. The
+> current, temporary stabilization placement is Core 0 = CPU (Emu68 or
+> Musashi), Core 2 = full Rigel chipset domain, Core 3 = host I/O (USB +
+> Bluetooth), Core 1 = auxiliary/parked — see
+> [`runtime_and_timing.md`](runtime_and_timing.md) and
+> `AI_context/issues/ISSUE-0058.md`. The target architecture keeps Core 0 as
+> Control, with the CPU moving elsewhere once Emu68 stabilizes.
 
 ## Context
 

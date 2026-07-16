@@ -10,27 +10,40 @@ Musashi 68040, and Emu68, each in single-core and multicore form. Their names
 are `bellatrix_musashi_68000.img`, `bellatrix_musashi_68040.img`,
 `bellatrix_emu68.img`, plus the corresponding `_multicore.img` files. Every
 image includes a `.sha256` checksum. The Musashi builds are the stable ones —
-Kickstart 1.3/Workbench 1.3, AROS, and USB HID are functional on the Pi. Six
-areas remain in progress:
+Kickstart 1.3/Workbench 1.3, AROS, USB HID, and Bluetooth HID are functional
+on the Pi. Five areas remain in progress:
 
-- **Emu68 JIT integration** — the current experimental Bellatrix adapter reaches
-  the AROS boot screen, but its bus callbacks still run downstream of Data Abort.
-  The fault-independent public machine API defined in
-  [`docs/emu68_public_api.md`](docs/emu68_public_api.md) is not implemented.
-  Musashi 68040 remains the recommended path.
+- **Emu68 JIT integration** — the Bellatrix adapter reaches the AROS boot
+  screen and boots Kickstart with its bus dispatched through Emu68's native
+  fault-driven external-bus path (Data Abort as MMIO router, not a limitation
+  to remove — see [`docs/fault_handler.md`](docs/fault_handler.md)). Chipset
+  time advances every `MainLoop` pass independently of that routing, so
+  RAM-only code paths (idle loops) don't stall the emulated clock — see
+  [`docs/emu68_internals.md`](docs/emu68_internals.md). Musashi 68040 remains
+  the recommended path for stability; Emu68 is where active integration work
+  happens.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
 - **RTG support** — `bellatrix.rtg` and the P96 `bellatrix.card` path are in progress; DiagArea/CardLoader residency is confirmed, but p96gfx discovery, live RTG output, and the VC4 bare-metal backend still need validation/completion.
-- **Bluetooth HID** — device scan works; pairing and connection not yet functional.
 - **HDMI audio** — the bare-metal HDMI output path is believed to be working:
   the DMA test clip/WAV plays on real Pi hardware. The remaining work is to
   get Amiga/Paula emulation fast enough on hardware to validate real Amiga
   audio through that path.
 
-The Musashi multicore runtime is functional: Core 0 is the Host Reactor and
-owns supervision plus physical I/O, Core 1 runs the M68K CPU, Core 2
-exclusively owns and advances Rigel, and Core 3 is parked for future RTG/AHI
-acceleration jobs. Launcher and runtime share one USB/CherryUSB owner and
+Bluetooth HID (BTStack host on the Pi 3B's onboard BCM43430A1) is functional:
+device scan, pairing, and keyboard/mouse/joystick input all work end-to-end.
+Refinements to pairing robustness and reconnection are ongoing.
+
+The multicore runtime is functional and, as of the 2026-07-15 topology
+rebaseline, identical for both CPU backends: selecting Emu68 or Musashi only
+swaps which implementation runs on the CPU core. The **target** architecture
+keeps Core 0 as the Host Reactor (supervision plus physical I/O); the
+**current, temporary** stabilization placement instead runs the CPU on
+Core 0 (to minimize Emu68 integration variables), the Host Reactor on Core 3,
+and leaves Core 1 auxiliary/parked, while Core 2 exclusively owns and
+advances Rigel either way. See [`docs/runtime_and_timing.md`](docs/runtime_and_timing.md)
+and [`docs/host_reactor.md`](docs/host_reactor.md) for the full mapping and
+why it's temporary. Launcher and runtime share one USB/CherryUSB owner and
 service path. CPU/chipset backpressure, critical-MMIO
 rendezvous, atomic IPL publication, deadline scheduling, and non-blocking
 cross-core serial queues are implemented. Remaining multicore work is hardware
@@ -82,6 +95,15 @@ Pass it the same way as a Kickstart ROM (`initramfs aros.rom` in `config.txt`, o
 The Musashi builds include a bare-metal launcher UI that runs before the emulator starts. It reads ADF and ISO files from a FAT32-formatted USB drive and lets you select which one to boot. Insert the USB drive before powering the Pi; the launcher lists available files and waits for input via USB keyboard or HID joystick.
 
 The USB drive must be formatted as FAT32. Place `.adf` files (floppy disk images) or `.iso` files (CD-ROM images) in the root directory or any subdirectory. The launcher also reads from the SD boot partition if no USB drive is present.
+
+### Keyboard shortcuts
+
+These work both in the launcher and while the emulated machine is running:
+
+| Key | Action |
+| --- | --- |
+| **F11** | Open the Bluetooth scan screen |
+| **F12** | Open the media (ADF/ISO) selection screen |
 
 ---
 

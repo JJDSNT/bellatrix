@@ -451,14 +451,28 @@ Future cores may evolve toward capability runtimes.
 
 ---
 
-## Current Direction
+## Target Direction
 
-| Core | Current Runtime                              |
+This table is the target architecture, not the current placement — see
+`docs/runtime_and_timing.md` for why. Emu68 currently sits on Core 0
+temporarily, to minimize stabilization variables during integration; the
+plan is to vacate it back to Machine/Host once that integration is stable.
+
+| Core | Target Runtime                              |
 | ---- | -------------------------------------------- |
 | 0    | Machine/Host — arbiter, parks in wfe after init |
 | 1    | CPU Runtime (Emu68 JIT or Musashi)           |
 | 2    | Chipset Runtime — full Rigel domain (CIA + Agnus + Paula + Denise) |
 | 3    | IO Runtime (USB + Bluetooth)                 |
+
+### Current (temporary) stabilization placement
+
+| Core | Current Runtime                                   |
+| ---- | -------------------------------------------------- |
+| 0    | CPU Runtime (Emu68 JIT or Musashi) — temporary      |
+| 1    | Auxiliary — parked                                  |
+| 2    | Chipset Runtime — full Rigel domain                 |
+| 3    | Host Reactor (USB + Bluetooth + miniUART + presentation) |
 
 ---
 
