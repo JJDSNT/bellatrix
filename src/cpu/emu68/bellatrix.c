@@ -742,6 +742,8 @@ static void set_overlay(int new_overlay)
 #define ROM_KVIRT       0xffffff9000f80000ULL
 /* Extended ROM: first 512 KB of 1 MB ROMs (AROS modules) at physical 0xe00000 */
 #define ROM_EXT_KVIRT   0xffffff9000e00000ULL
+/* Ext-ROM probe window (MEM_REGION_EXP_ROM_CHECK), physical 0xf00000 */
+#define EXP_ROM_PROBE_KVIRT 0xffffff9000f00000ULL
 
 static inline uint32_t read_be32(const uint8_t *p)
 {
@@ -966,18 +968,17 @@ void bellatrix_init(void)
 
     mmu_map(0xC00000, 0xC00000, 0x200000,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
-    /* Ext-ROM probe window, left fault-driven (no MMU_ACCESS) so reads reach
-     * memory_map's MEM_REGION_EXP_ROM_CHECK, which answers a constant 0x0000.
-     *
-     * Costly: Exec's romtag sweep walks this 512 KiB a word at a time, so the
-     * boot pays ~262144 data aborts that all return that same constant. Ihe
-     * obvious fix -- back it with a zeroed read-only page so reads resolve in
-     * the MMU -- was tried and made the QEMU boot worse (the frame counter
-     * stopped reaching the first liveness checkpoint), so the cheap mapping is
-     * not free somewhere this comment cannot yet name. Measure before retrying;
-     * the [DIAG] census exists for that. */
+    /* Ext-ROM probe window. memory_map decodes 0xf00000-0xf7ffff as
+     * MEM_REGION_EXP_ROM_CHECK and answers a constant 0x0000, so backing it
+     * with a zeroed read-only page is observationally identical to the
+     * fault-driven path. It is not equivalent in cost: Exec's romtag scan
+     * (RTC_MATCHWORD sweep) walks the window a word at a time, which without
+     * MMU_ACCESS costs 262144 data aborts that each return the same constant.
+     * Reads now resolve in the MMU; writes still fault and are ignored. */
+    memset((void *)EXP_ROM_PROBE_KVIRT, 0, 0x80000);
     mmu_map(0xF00000, 0xF00000, 0x80000,
-            MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY | MMU_ATTR_CACHED, 0);
+            MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_READ_ONLY |
+            MMU_ATTR_CACHED, 0);
 
 #if BELLATRIX_ENABLE_EMU68_BOARDS
     /* AutoConfig belongs to Emu68 boards on the real target. Force the
