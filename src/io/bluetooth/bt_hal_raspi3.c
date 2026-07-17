@@ -6,8 +6,8 @@
 #include "host/raspi3/time.h"
 #include "host/raspi3/pl011_backend.h"
 #include "host/raspi3/physical_interrupts.h"
-#include "io/bluetooth/bt_diag.h"
 #include "io/bluetooth/bt_hal_raspi3.h"
+#include "io/bluetooth/bt_trace_log.h"
 #include "runtime/core_io.h"
 #include "support.h"
 
@@ -344,13 +344,16 @@ static void bt_uart_log_preview(const char *tag, const uint8_t *buffer, uint16_t
 {
     uint16_t preview;
 
+    (void)tag;
+
     if (!buffer || length == 0) {
-        kprintf("[BT-HAL] %s len=0\n", tag);
+        BT_TRACE_LOG("[BT-HAL] %s len=0", tag);
         return;
     }
 
     preview = length < 8 ? length : 8;
-    kprintf("[BT-HAL] %s len=%u data=%02x %02x %02x %02x %02x %02x %02x %02x%s\n",
+    (void)preview;
+    BT_TRACE_LOG("[BT-HAL] %s len=%u data=%02x %02x %02x %02x %02x %02x %02x %02x%s",
             tag,
             (unsigned)length,
             preview > 0 ? buffer[0] : 0,
@@ -417,7 +420,7 @@ void hal_uart_dma_send_block(const uint8_t *buffer, uint16_t length) {
 void hal_uart_dma_receive_block(uint8_t *buffer, uint16_t len) {
     bt_uart_rx_blocks++;
     bt_uart_trace_add(BT_TRACE_RX_REQUEST, 0, len, bt_uart_rx_blocks);
-    kprintf("[BT-HAL] rx block request #%u len=%u\n",
+    BT_TRACE_LOG("[BT-HAL] rx block request #%u len=%u",
             (unsigned)bt_uart_rx_blocks, (unsigned)len);
     uart_rx_buffer = buffer;
     uart_rx_size = len;
@@ -454,7 +457,7 @@ void bt_hal_raspi3_drain_fifo(void)
                                   memory_order_relaxed);
         if (bt_diag_tap_rx_remaining) {
             bt_diag_tap_rx_remaining--;
-            bt_diag_log("[BT-RX] %02x\n", (unsigned)byte);
+            BT_TRACE_LOG("[BT-RX] %02x", (unsigned)byte);
         }
     }
 }
@@ -512,7 +515,7 @@ void bt_hal_raspi3_poll_uart(void) {
                                   memory_order_release);
             bt_uart_trace_add(BT_TRACE_RX_BYTE, byte, 0, bt_uart_rx_bytes_logged);
             if (bt_uart_rx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
-                kprintf("[BT-HAL] rx byte[%u]=%02x\n",
+                BT_TRACE_LOG("[BT-HAL] rx byte[%u]=%02x",
                         (unsigned)bt_uart_rx_bytes_logged, (unsigned)byte);
                 bt_uart_rx_bytes_logged++;
             }
@@ -521,7 +524,7 @@ void bt_hal_raspi3_poll_uart(void) {
             if (uart_rx_pos == uart_rx_size) {
                 void (*cb)(void) = uart_block_received_cb;
                 bt_uart_trace_add(BT_TRACE_RX_COMPLETE, 0, uart_rx_size, 0);
-                kprintf("[BT-HAL] rx block complete len=%u\n", (unsigned)uart_rx_size);
+                BT_TRACE_LOG("[BT-HAL] rx block complete len=%u", (unsigned)uart_rx_size);
                 uart_rx_buffer = NULL;
                 completion_budget--;
                 s_reactor_rx_completions++;
@@ -544,11 +547,11 @@ void bt_hal_raspi3_poll_uart(void) {
                                       memory_order_relaxed);
             if (bt_diag_tap_tx_remaining) {
                 bt_diag_tap_tx_remaining--;
-                bt_diag_log("[BT-TX] %02x\n", (unsigned)uart_tx_buffer[uart_tx_pos]);
+                BT_TRACE_LOG("[BT-TX] %02x", (unsigned)uart_tx_buffer[uart_tx_pos]);
             }
             bt_uart_trace_add(BT_TRACE_TX_BYTE, uart_tx_buffer[uart_tx_pos], 0, bt_uart_tx_bytes_logged);
             if (bt_uart_tx_bytes_logged < BT_UART_LOG_BYTES_MAX) {
-                kprintf("[BT-HAL] tx byte[%u]=%02x\n",
+                BT_TRACE_LOG("[BT-HAL] tx byte[%u]=%02x",
                         (unsigned)bt_uart_tx_bytes_logged,
                         (unsigned)uart_tx_buffer[uart_tx_pos]);
                 bt_uart_tx_bytes_logged++;
@@ -558,7 +561,7 @@ void bt_hal_raspi3_poll_uart(void) {
         if (uart_tx_pos == uart_tx_size) {
             void (*cb)(void) = uart_block_sent_cb;
             bt_uart_trace_add(BT_TRACE_TX_COMPLETE, 0, uart_tx_size, 0);
-            kprintf("[BT-HAL] tx block complete len=%u\n", (unsigned)uart_tx_size);
+            BT_TRACE_LOG("[BT-HAL] tx block complete len=%u", (unsigned)uart_tx_size);
             uart_tx_buffer = NULL;
             if (cb) cb();
         }

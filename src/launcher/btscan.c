@@ -14,6 +14,7 @@
 #include "io/bluetooth/bt_diag.h"
 #include "io/bluetooth/bt_hal_raspi3.h"
 #include "io/bluetooth/bt_link_key_db_sd.h"
+#include "host/pal.h"
 
 #include <string.h>
 #include <stdint.h>
