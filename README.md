@@ -164,7 +164,7 @@ docs/               architecture documentation
 
 ## Acknowledgement
 
-Special thanks to Claude for the support and guidance throughout the development of Bellatrix.
+Special thanks to Claude for the guidance and support throughout the development of Bellatrix.
 
 ## Credits
 
