@@ -373,6 +373,53 @@ depois de remover a regressão comum, resta uma segunda falha realmente
 específica da entrega STOP/IPL do Emu68. As duas causas não devem voltar a ser
 misturadas.
 
+## Divergência exata do STOP entre as topologias
+
+A comparação correta é Emu68 multicore versus Emu68 single-core, sem disco.
+Os checkpoints posteriores corrigiram outra interpretação prematura:
+
+- single-core aceitou 28 interrupções até o frame 100 e 128 até o frame 200;
+  o incremento exato de 100 entregas em 100 frames prova que VBL não está
+  ausente nessa janela;
+- multicore já executa código de tarefa em Fast RAM no frame 200, enquanto
+  single-core continua em `STOP #$2000` em `$fc0f90`;
+- amostrar o PC no frame é topology-biased: Core 2 pode capturar o multicore
+  dentro do handler, enquanto o callback síncrono single-core normalmente o
+  captura depois do handler. O dado causal é o single-core não alcançar a
+  instrução posterior ao STOP, apesar das exceções aceitas.
+
+A leitura conjunta de `EMIT_STOP` e `ExecutionLoop.c` mostrou a janela que só
+existe em single-core:
+
+1. com `INT==0`, o bloco JIT devolve controle mantendo PC sobre o próprio
+   STOP;
+2. no multicore, IPL pode surgir assincronamente antes do próximo dispatch;
+   `EMIT_STOP` então vê `INT!=0`, avança PC em quatro bytes e o MainLoop monta
+   o frame correto;
+3. no single-core, IPL pode ser publicado pelo progress callback depois que o
+   bloco STOP já retornou. O MainLoop aceita a interrupção imediatamente, mas
+   o PC ainda aponta para STOP; RTE volta para STOP em vez da instrução
+   seguinte.
+
+### Correção implementada, validação visual pendente
+
+O estado `M68KState::STOPPED` deixou de ser tratado como inerte:
+
+- `EMIT_STOP` marca `STOPPED=1` quando aguarda com PC ainda sobre STOP;
+- se a interrupção já estiver pendente no emissor, ele limpa o marcador e
+  avança PC como antes;
+- se a IPL surgir no callback single-core, o bloco de aceitação limpa o
+  marcador e avança PC em quatro bytes **antes** de empilhar o return PC;
+- os dois caminhos são mutuamente exclusivos, evitando avanço duplo.
+
+Os patches canônicos `0003` e `0020` passam `git apply --check --reverse`
+contra a árvore gerada, e os builds Emu68 single-core e multicore completam.
+Isso valida integração e compilação nas duas topologias, não o comportamento
+do guest. Uma execução AROS de 60 segundos em QEMU permaneceu na tradução
+inicial, antes do primeiro STOP relevante (menos de 25 frames), portanto não
+constitui validação nem falha da correção. Não registrar boot restaurado até
+confirmação de boot screen com KS1.3 e regressão multicore em execução.
+
 # Observações
 
 Não commitar `emu68.txt` (arquivo de captura solto na raiz do repo,

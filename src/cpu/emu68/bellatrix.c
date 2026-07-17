@@ -528,7 +528,7 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
     {
         static unsigned checkpoint_index;
         static const uint32_t checkpoints[] = {
-            100u, 500u, 1000u, 1500u, 2000u
+            100u, 200u, 500u, 1000u, 1500u, 2000u
         };
         BellatrixMachine *machine = bellatrix_machine_get();
         uint64_t frame = machine ? machine->frame_counter : 0u;
@@ -555,6 +555,24 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
                     (unsigned)(__m68k_state ? BE32(__m68k_state->D[0].u32) : 0u),
                     (unsigned)(__m68k_state ? BE32(__m68k_state->D[2].u32) : 0u),
                     (unsigned)(__m68k_state ? BE32(__m68k_state->D[4].u32) : 0u));
+            {
+                RigelContext *rctx = bellatrix_machine_rigel_ctx();
+                uint32_t cop1lc = rctx ?
+                    ((uint32_t)rigel_custom_read16(rctx, 0x080u) << 16) |
+                    rigel_custom_read16(rctx, 0x082u) : 0u;
+                uint32_t bpl1pt = rctx ?
+                    ((uint32_t)rigel_custom_read16(rctx, 0x0e0u) << 16) |
+                    rigel_custom_read16(rctx, 0x0e2u) : 0u;
+                kprintf("[VIDEO-DIAG] DMACON=%04x BPLCON0=%04x "
+                        "DIW=%04x/%04x DDF=%04x/%04x COP1LC=%08x BPL1PT=%08x\n",
+                        (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_DMACON) : 0u),
+                        (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_BPLCON0) : 0u),
+                        (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_DIWSTRT) : 0u),
+                        (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_DIWSTOP) : 0u),
+                        (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_DDFSTRT) : 0u),
+                        (unsigned)(rctx ? rigel_custom_read16(rctx, RIGEL_REG_DDFSTOP) : 0u),
+                        (unsigned)cop1lc, (unsigned)bpl1pt);
+            }
             {
                 extern uint32_t g_ipl_publish_calls;
                 extern uint32_t g_ipl_publish_nonzero;

@@ -870,6 +870,24 @@ void bellatrix_machine_on_frame_ready(void)
         kprintf("[EMU68-LIVE] frame=%u pc=%08x guest_ipl=%u arm_irq=%u\n",
                 (unsigned)g_machine.frame_counter, (unsigned)pc,
                 (unsigned)guest_ipl, (unsigned)physical_arm);
+        {
+            const CIA_State *ca = &g_rigel->chipset.cia[0];
+            const CIA_State *cb = &g_rigel->chipset.cia[1];
+            kprintf("[CIA-DIAG] frame=%u "
+                    "A=%02x/%02x cra=%02x crb=%02x ta=%04x/%04x tb=%04x/%04x irq=%u "
+                    "B=%02x/%02x cra=%02x crb=%02x ta=%04x/%04x tb=%04x/%04x irq=%u\n",
+                    (unsigned)g_machine.frame_counter,
+                    (unsigned)ca->icr_data, (unsigned)ca->icr_mask,
+                    (unsigned)ca->cra, (unsigned)ca->crb,
+                    (unsigned)ca->ta_counter, (unsigned)ca->ta_latch,
+                    (unsigned)ca->tb_counter, (unsigned)ca->tb_latch,
+                    (unsigned)ca->irq_asserted,
+                    (unsigned)cb->icr_data, (unsigned)cb->icr_mask,
+                    (unsigned)cb->cra, (unsigned)cb->crb,
+                    (unsigned)cb->ta_counter, (unsigned)cb->ta_latch,
+                    (unsigned)cb->tb_counter, (unsigned)cb->tb_latch,
+                    (unsigned)cb->irq_asserted);
+        }
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
         {
             extern uint32_t g_machine_cia_w_counts[2][16];
