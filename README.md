@@ -162,6 +162,10 @@ docs/               architecture documentation
 
 ---
 
+## Acknowledgement
+
+Special thanks to Claude for the support and guidance throughout the development of Bellatrix.
+
 ## Credits
 
 - [Emu68](https://github.com/michalsc/Emu68) by Michal Schulz — M68K→AArch64 JIT
