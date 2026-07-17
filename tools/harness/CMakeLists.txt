@@ -435,6 +435,7 @@ add_executable(bellatrix_unit_board_registry
 target_include_directories(bellatrix_unit_board_registry PRIVATE
     ${SRC}/host/posix
     ${SRC}
+    ${ROOT}/emu68/include
 )
 target_compile_options(bellatrix_unit_board_registry PRIVATE -Wall -Wextra -Werror)
 add_test(NAME bellatrix_unit_board_registry

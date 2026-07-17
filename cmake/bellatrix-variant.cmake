@@ -17,8 +17,6 @@ set(BELLATRIX_SOURCES "")
 enable_language(ASM)
 
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
-option(BELLATRIX_ENABLE_Z3_68040
-    "Register Emu68's native 68040 support ROM through Bellatrix Z3" OFF)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 set(BELLATRIX_MUSASHI_CPU "68040" CACHE STRING "Musashi CPU model for Bellatrix bare-metal: 68000, 68010, 68ec020, 68020, 68030, 68040")
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
@@ -26,6 +24,7 @@ option(BELLATRIX_ENABLE_MULTICORE "Enable unified runtime (Core0=CPU Core1=Aux C
 option(BELLATRIX_EMU68_CORE0_REBASELINE
     "Keep native Emu68 JIT/exception integration on the common CPU Core 0" ON)
 option(BELLATRIX_CORE_LOG "Enable runtime-role log tags [HOST] [CPU] [CHIPSET]" OFF)
+option(BELLATRIX_BT_TRACE "Enable low-level BT HAL byte/block tracing (floods the log during scan/inquiry retries)" OFF)
 option(BELLATRIX_PROFILE "Enable MMIO profiling instrumentation (zero cost when OFF)" OFF)
 option(BELLATRIX_COARSE_OBSERVABLE_DEADLINES
     "Experimental: let Rigel process observable deadlines internally in Core-2 drains" OFF)
@@ -73,6 +72,12 @@ if(BELLATRIX_CORE_LOG)
     message(STATUS "[BUILD] Role log: enabled ([HOST] [CPU] [CHIPSET] [XCORE-*])")
 else()
     message(STATUS "[BUILD] Core log: disabled")
+endif()
+if(BELLATRIX_BT_TRACE)
+    add_compile_definitions(BELLATRIX_BT_TRACE)
+    message(STATUS "[BUILD] BT HAL trace: enabled ([BT-HAL] [BT-RX] [BT-TX] byte/block dumps)")
+else()
+    message(STATUS "[BUILD] BT HAL trace: disabled")
 endif()
 list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src
@@ -244,15 +249,6 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
     ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 )
-if(BELLATRIX_ENABLE_Z3_68040)
-    list(APPEND BASE_FILES
-        ${CMAKE_SOURCE_DIR}/../src/machine/expansions/z3_68040/z3_68040.c)
-    add_compile_definitions(BELLATRIX_ENABLE_Z3_68040=1)
-    message(STATUS "[BUILD] Bellatrix Z3 68040 support ROM: enabled")
-else()
-    add_compile_definitions(BELLATRIX_ENABLE_Z3_68040=0)
-    message(STATUS "[BUILD] Bellatrix Z3 68040 support ROM: disabled")
-endif()
 if(BELLATRIX_USE_MUSASHI_CPU)
     list(APPEND BASE_FILES
         ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_backend.c

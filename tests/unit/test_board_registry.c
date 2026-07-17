@@ -67,7 +67,7 @@ static uint8_t s_z2_ram[0x1000] __attribute__((aligned(0x1000)));
 static uint8_t s_z2_ac[AUTOCONFIG_DATA_SIZE];
 static int     s_z2_mapped;
 
-static void z2_ram_map(BellatrixBoard *board)
+static void z2_ram_map(struct ExpansionBoard *board)
 {
     BellatrixDirectRegion region = {
         .guest_base = board->map_base,
@@ -80,7 +80,7 @@ static void z2_ram_map(BellatrixBoard *board)
         s_z2_mapped = 1;
 }
 
-static BellatrixBoard s_z2_board = {
+static struct ExpansionBoard s_z2_board = {
     .rom_file = s_z2_ac,
     .rom_size = sizeof(s_z2_ram),
     .is_z3 = 0u,
@@ -95,7 +95,7 @@ static uint8_t s_z3_rom[0x1000] __attribute__((aligned(0x1000)));
 static uint8_t s_z3_ac[AUTOCONFIG_DATA_SIZE];
 static int     s_z3_mapped;
 
-static void z3_rom_map(BellatrixBoard *board)
+static void z3_rom_map(struct ExpansionBoard *board)
 {
     BellatrixDirectRegion region = {
         .guest_base = board->map_base,
@@ -108,7 +108,7 @@ static void z3_rom_map(BellatrixBoard *board)
         s_z3_mapped = 1;
 }
 
-static BellatrixBoard s_z3_board = {
+static struct ExpansionBoard s_z3_board = {
     .rom_file = s_z3_ac,
     .rom_size = sizeof(s_z3_rom),
     .is_z3 = 1u,

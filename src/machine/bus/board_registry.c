@@ -8,8 +8,8 @@
  * BELLATRIX_BOARDS_SECTION. Declared weak so a link with no registered board
  * resolves both to NULL (empty table) instead of failing to link.
  */
-extern BellatrixBoard *const __start_bellatrix_boards[] __attribute__((weak));
-extern BellatrixBoard *const __stop_bellatrix_boards[] __attribute__((weak));
+extern struct ExpansionBoard *const __start_bellatrix_boards[] __attribute__((weak));
+extern struct ExpansionBoard *const __stop_bellatrix_boards[] __attribute__((weak));
 
 size_t bellatrix_board_count(void)
 {
@@ -18,7 +18,7 @@ size_t bellatrix_board_count(void)
     return (size_t)(__stop_bellatrix_boards - __start_bellatrix_boards);
 }
 
-BellatrixBoard *bellatrix_board_at(size_t index)
+struct ExpansionBoard *bellatrix_board_at(size_t index)
 {
     if (index >= bellatrix_board_count())
         return NULL;
@@ -30,9 +30,9 @@ static size_t s_board_idx;
 
 /* Advance past disabled boards and return the board now under configuration,
  * or NULL when the table is exhausted (matches Emu68's read-side skip). */
-static BellatrixBoard *current_board(void)
+static struct ExpansionBoard *current_board(void)
 {
-    BellatrixBoard *board;
+    struct ExpansionBoard *board;
     while ((board = bellatrix_board_at(s_board_idx)) != NULL && !board->enabled)
         s_board_idx++;
     return board;
@@ -45,7 +45,7 @@ void bellatrix_boards_autoconfig_reset(void)
 
 uint8_t bellatrix_boards_autoconfig_read8(uint32_t addr)
 {
-    BellatrixBoard *board = current_board();
+    struct ExpansionBoard *board = current_board();
     uint32_t off;
 
     if (!board || !board->rom_file)
@@ -59,7 +59,7 @@ uint8_t bellatrix_boards_autoconfig_read8(uint32_t addr)
 void bellatrix_boards_autoconfig_write(uint32_t addr, uint32_t value,
                                        unsigned int size)
 {
-    BellatrixBoard *board = current_board();
+    struct ExpansionBoard *board = current_board();
     uint32_t off;
 
     (void)size;
