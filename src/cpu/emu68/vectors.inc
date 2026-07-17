@@ -91,7 +91,7 @@ static int bellatrix_emu68_handle_board_read(uint64_t *value, int size,
     if (!board)
         return 0;
 
-    *value = board->rom_file[far - 0x00e80000u];
+    *value = ((const uint8_t *)board->rom_file)[far - 0x00e80000u];
     return 1;
 }
 #else
