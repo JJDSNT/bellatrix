@@ -1,5 +1,17 @@
 # Bellatrix RTG — design
 
+> **⚠️ Superseded / lab notes (correction 2026-07-17).** This describes a
+> Bellatrix-specific P96 RTG board that **never reached a working state** — it
+> was a lab. The **target for RTG is Emu68's `VideoCore.card`**, not this board.
+> Nothing here is a live plan; the code under `src/machine/expansions/rtg/` is
+> dormant and slated for eventual removal (deletion deferred only because its
+> blast radius is large — harness `HARNESS_RTG`, `screenshot.c`, the
+> `rtg_rom_data` Docker ROM build, and the `cards/bellatrix.card` tree). This
+> document is **kept for design reference** in case RTG is ever revived on top of
+> `VideoCore.card`. For the current, English boards/expansions architecture see
+> [`expansions_and_boards.md`](expansions_and_boards.md). The status line below
+> is historical and no longer accurate.
+
 Status: fase 2 em andamento (2026-07-03). Issue: AI_context ISSUE-0033.
 DiagArea + CardLoader residência CONFIRMADA funcionando (host-side
 instrumentation); FindCard/p96gfx ainda não confirmado — ver ISSUE-0033
