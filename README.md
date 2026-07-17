@@ -1,5 +1,5 @@
 # Bellatrix
-> **An AI-generated project, inspired by the [Omega](https://github.com/h5n1xp/Omega) project by Bloodline.**
+> **An AI-generated project, inspired by Bloodline's [Omega](https://github.com/h5n1xp/Omega).**
 
 A bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/JJDSNT/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
 
