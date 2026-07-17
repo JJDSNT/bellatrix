@@ -105,9 +105,17 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   `SYSWriteValToAddr()` contra o HEAD original.
 - [x] Especificar a primeira matriz esparsa região -> owner na SPEC-0001.
 - [x] Fixar semântica de endereço, width, endian e resultados do dispatcher.
-- [ ] Materializar assinaturas mínimas após remover a normalização universal.
-- [ ] Decompor gradualmente `bellatrix_bus_access()`/`BellatrixMachine` em
-  rotas diretas; mantê-los apenas como compatibilidade durante a migração.
+- [x] Materializar a **decisão de roteamento** de 32 bits como classificação
+  explícita: `cpu_bridge_classify()` (`AMIGA_LOW`/`Z3_EXTERNAL`/`OPEN_BUS`)
+  substitui o antigo `addr_is_unmapped_32bit()` cru. A normalização de 24 bits
+  do domínio baixo (`bellatrix_bridge_normalize_addr`) segue local ao AMIGA_LOW;
+  removê-la do fast path multicore é o resíduo deste item.
+- [~] Decompor gradualmente `bellatrix_bus_access()`/`BellatrixMachine` em
+  rotas diretas. Primeiro corte feito para o espaço Z3: o **Super Buster** é
+  agora o owner de decode do espaço de 32 bits (`superbuster_decode_z3()`), e o
+  bridge roteia board Z3 EXTERNAL ao dono com endereço completo em vez de
+  open-bus cego. As rotas do domínio baixo (custom/CIA/autoconfig) seguem via
+  `machine_dispatch_*` como compatibilidade durante a migração.
 - [x] Remover a máscara 24-bit redundante do backend Musashi de produto; o
   `CPU_ADDRESS_MASK` do próprio Musashi continua definindo 24/32 bits por CPU.
 - [x] Confirmar no Emu68 que a base Z3 é atribuída pelo guest e entregue a
@@ -198,3 +206,26 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   possui o loop e não emite `[JIT]`/`[EMU68-LIVE]`. O console `$DEADBEEF` usado
   pela DiagArea preserva a semântica original de `vectors.c` via bridge apenas
   no backend Musashi; o handler Emu68 não foi modificado.
+- 2026-07-17: **caminho Z3 EXTERNAL ligado, com o Super Buster como owner do
+  decode** (o chip que arbitra o Zorro III no HW real). Antes, o bridge tratava
+  todo endereço `> 0x00FFFFFF` como open-bus, então uma board Z3 cujos
+  registradores são servidos por callback (EXTERNAL, não DIRECT/MMU) era
+  inalcançável e o `bellatrix_zorro3_board_read8/write8` estava morto.
+  Mudanças: (a) `superbuster_decode_z3()` classifica o espaço de 32 bits contra
+  os slots Z3, com gate no `NBSTAB` (bus Z3 disponível); (b) o bridge ganhou
+  `cpu_bridge_classify()` — `AMIGA_LOW`/`Z3_EXTERNAL`/`OPEN_BUS` — e roteia a
+  board EXTERNAL ao dono com o **endereço completo**, sob o lock do chipset,
+  sem mascarar para 24 bits (o mascaramento aliasava para chip RAM, bug
+  não-determinístico de 2026-07-03); (c) `bellatrix_machine_z3_external_owns()`
+  é a ponte fina cpu->machine (o bridge não inclui o Super Buster direto).
+  **Shared vs específico:** a classificação/roteamento é compartilhada pelos dois
+  backends via bridge; DIRECT (RAM/ROM) segue consumido antes, específico de
+  cada backend (Emu68 MMU / Musashi bank). Novo teste host
+  `bellatrix_unit_superbuster_z3` prova a cadeia Autoconfig->base->map->decode->
+  read/write EXTERNAL + gate NBSTAB + teardown no reset. Sem regressão: os 4
+  oráculos de ROM (KS1.3/KS2.0/KS3.1/AROS) + smoke/boot_adf/no_autoconfig
+  passam. Como nenhuma board Z3 EXTERNAL é registrada no produto por padrão, o
+  comportamento do perfil atual é idêntico (o novo caminho só ativa com uma
+  board EXTERNAL registrada). Resíduo: (1) tirar a normalização de 24 bits do
+  fast path multicore; (2) descoberta/validação de faixa Z3 por perfil — agora o
+  Super Buster é o lar natural dela.

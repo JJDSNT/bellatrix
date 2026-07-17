@@ -26,6 +26,38 @@ related_files:
   - AI_context/consolidated/memory_model.md
 ---
 
+# Avanço 2026-07-17: caminho Z3 EXTERNAL + Super Buster como decode owner
+
+O contrato **DIRECT** (board RAM/ROM mapeada pelo backend) já estava provado
+(ver 2026-07-15 abaixo). Faltava o segundo tipo de região: **EXTERNAL** — board
+Z3 cujos registradores são servidos por callback por acesso, não por backing de
+MMU/bank. Esse caminho estava morto: o bridge tratava todo endereço
+`> 0x00FFFFFF` como open-bus, então `bellatrix_zorro3_board_read8/write8` nunca
+era alcançado.
+
+Design escolhido (fiel ao HW, estilo Emu68): o **Super Buster** — o gate array
+que decodifica/arbitra o Zorro III no A3000/A4000 — passa a ser a autoridade
+única de decode do espaço Z3 de 32 bits, via `superbuster_decode_z3()`
+(consulta os slots Z3 + gate no bit `NBSTAB`). O CPU bridge, compartilhado
+pelos dois backends, ganhou `cpu_bridge_classify()`
+(`AMIGA_LOW`/`Z3_EXTERNAL`/`OPEN_BUS`) e roteia a board EXTERNAL ao dono com o
+endereço completo, sem nunca mascarar para 24 bits.
+
+**Separação shared/específica** (o ponto que travou no trabalho anterior de API):
+a classificação e o roteamento são compartilhados; o que é específico de cada
+backend é só o datapath DIRECT (Emu68 MMU / Musashi bank), consumido antes do
+bridge. Prova host nova: `bellatrix_unit_superbuster_z3` cobre a cadeia
+Autoconfig->base->map->decode->read/write EXTERNAL + gate NBSTAB + teardown. Sem
+regressão (KS1.3/KS2.0/KS3.1/AROS + smoke passam). Detalhe em ISSUE-0060
+(log 2026-07-17).
+
+Com isso, os dois tipos de região do contrato (`DIRECT` e `EXTERNAL`) existem e
+são testados de ponta a ponta. **O que resta desta issue** é só o item 6 do
+objetivo revisado — **páginas mistas** (RTG/VRAM: backing direto + registradores
+com efeito colateral na mesma board) — que é `enhancement` de baixa prioridade e
+deve virar issue separada opt-in, para não manter esta aberta esperando uma
+feature `low`. Ver [[bellatrix-rigel-perf-opt-in-only]].
+
 # Rebaseline arquitetural (2026-07-15)
 
 Esta issue não significa que Bellatrix já possua suporte Z3. Existem peças de

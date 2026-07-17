@@ -1,5 +1,7 @@
 #include "machine/bus/superbuster/superbuster.h"
 
+#include "machine/bus/zorro3/zorro3.h"
+
 void superbuster_init(SuperBusterState *s)
 {
     /* NBSTAB=1: report Z3 bus available; high nibble = revision 0xF */
@@ -29,4 +31,16 @@ void superbuster_write8(SuperBusterState *s, uint32_t addr, uint8_t value)
     uint32_t off = addr - SUPERBUSTER_BASE;
     if (off == 0)
         s->ctrl = value;
+}
+
+SuperBusterZ3Decode superbuster_decode_z3(const SuperBusterState *s,
+                                          uint32_t addr)
+{
+    /* The Z3 bus must be reported available (NBSTAB) for the Buster to answer
+     * for any slot. This is the chip's own state, not an address property. */
+    if (!s || (s->ctrl & SUPERBUSTER_NBSTAB) == 0u)
+        return SUPERBUSTER_Z3_UNMAPPED;
+    if (bellatrix_zorro3_in_board_window(addr))
+        return SUPERBUSTER_Z3_BOARD;
+    return SUPERBUSTER_Z3_UNMAPPED;
 }

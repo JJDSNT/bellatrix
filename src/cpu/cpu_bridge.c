@@ -98,28 +98,36 @@ static void cpu_bridge_profile_critical_mmio(uint32_t addr, unsigned int size,
 }
 #endif
 
-/* Unowned 32-bit space (addr > 0x00FFFFFF, e.g. a probe at 0xFF000000)
- * MUST read as open bus, not alias into 24-bit space. Configured DIRECT Z3
- * regions are consumed by the CPU backend before this fallback: AROS's probe
- * during boot reads 0xFF000000+, and masking it down previously landed
- * on live chip RAM (0x000000+) and the RTG board's own DiagArea
- * (0x000100+) — the probe was reading mutable, run-to-run-varying state
- * instead of "nothing here", which produced non-deterministic boot
- * behavior (found 2026-07-03 chasing a boot hang that resolved
- * differently across runs of the same build). */
-static inline int addr_is_unmapped_32bit(uint32_t addr)
+/*
+ * Routing of a 32-bit CPU-space access above the 24-bit Amiga bus.
+ *
+ *   DIRECT   - RAM/ROM board backing. Installed in the backend (Emu68 MMU /
+ *              Musashi bank) and consumed BEFORE the bridge, so it never
+ *              reaches here.
+ *   EXTERNAL - a configured Z3 board register window, decoded by the Super
+ *              Buster. Routed to its owner with the FULL address.
+ *   UNMAPPED - open bus. Never mask the address down to 24 bits: a probe at
+ *              0xFF000000+ masked to 0x000000+ aliased into live chip RAM and
+ *              the RTG DiagArea, producing non-deterministic boot behaviour
+ *              (found 2026-07-03 chasing a run-to-run-varying boot hang).
+ */
+enum cpu_bridge_route {
+    CPU_BRIDGE_ROUTE_AMIGA_LOW = 0, /* <= 0x00FFFFFF: normal machine dispatch */
+    CPU_BRIDGE_ROUTE_Z3_EXTERNAL,   /* configured Z3 board window (full addr) */
+    CPU_BRIDGE_ROUTE_OPEN_BUS       /* unmapped 32-bit space */
+};
+
+static inline enum cpu_bridge_route cpu_bridge_classify(uint32_t addr)
 {
     if (addr <= 0x00FFFFFFu)
-        return 0;
-    {
-        static int s_hits = 0;
-        if (s_hits < 20) {
-            s_hits++;
-            kprintf("[Z3-OPENBUS] addr=%08x (unmapped 32-bit fallback)\n",
-                    (unsigned)addr);
-        }
-    }
-    return 1;
+        return CPU_BRIDGE_ROUTE_AMIGA_LOW;
+    return bellatrix_machine_z3_external_owns(addr) ?
+               CPU_BRIDGE_ROUTE_Z3_EXTERNAL : CPU_BRIDGE_ROUTE_OPEN_BUS;
+}
+
+static inline uint32_t cpu_bridge_open_bus(unsigned int size)
+{
+    return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
 }
 
 uint32_t bellatrix_bridge_normalize_addr(uint32_t addr)
@@ -145,9 +153,23 @@ uint32_t bellatrix_bridge_cpu_read(uint32_t addr, unsigned int size)
     uint64_t _t = bprof_now();
 #endif
     uint32_t result;
+    enum cpu_bridge_route route = cpu_bridge_classify(addr);
 
-    if (addr_is_unmapped_32bit(addr))
-        return (size == 1) ? 0xFFu : (size == 2) ? 0xFFFFu : 0xFFFFFFFFu;
+    if (route != CPU_BRIDGE_ROUTE_AMIGA_LOW) {
+        if (route == CPU_BRIDGE_ROUTE_OPEN_BUS)
+            return cpu_bridge_open_bus(size);
+        /* Z3 EXTERNAL board register window: route the full address to its
+         * owner (Super Buster -> Z3 slot). No 24-bit normalisation; ordering
+         * with posted writes is preserved under the chipset lock. */
+        core_chipset_lock_acquire();
+        core_chipset_drain_posted_writes();
+        result = bellatrix_machine_read(addr, size);
+        core_chipset_lock_release();
+#if BELLATRIX_PROFILE_ENABLED
+        bprof_record(&g_bprof.bridge_ref_read, bprof_now() - _t);
+#endif
+        return result;
+    }
 
 #if defined(BELLATRIX_ENABLE_MULTICORE)
     /* Hot poll registers are served from Core 2 published state with no
@@ -191,8 +213,23 @@ void bellatrix_bridge_cpu_write(uint32_t addr, uint32_t value, unsigned int size
         kprintf("%c", (int)(value & 0xffu));
         return;
     }
-    if (addr_is_unmapped_32bit(addr))
-        return;
+    {
+        enum cpu_bridge_route route = cpu_bridge_classify(addr);
+        if (route != CPU_BRIDGE_ROUTE_AMIGA_LOW) {
+            if (route == CPU_BRIDGE_ROUTE_OPEN_BUS)
+                return;
+            /* Z3 EXTERNAL board register window: full-address write to its
+             * owner, drained under the chipset lock. */
+            core_chipset_lock_acquire();
+            core_chipset_drain_posted_writes();
+            bellatrix_machine_write(addr, value, size);
+            core_chipset_lock_release();
+#if BELLATRIX_PROFILE_ENABLED
+            bprof_record(&g_bprof.bridge_ref_write, bprof_now() - _t);
+#endif
+            return;
+        }
+    }
 
 #if defined(BELLATRIX_CORE_LOG)
     cpu_bridge_log_critical_write(addr, value);
