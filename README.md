@@ -1,6 +1,7 @@
 # Bellatrix
+> **An AI-generated project, inspired by the [Omega](https://github.com/h5n1xp/Omega) project by Bloodline.**
 
-Bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/JJDSNT/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
+A bare-metal Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/JJDSNT/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
 
 Bellatrix owns the machine: bus protocol, multicore runtime, USB HID input (CherryUSB), Bluetooth HID input (BTStack), SD storage, and a bare-metal launcher UI.
 The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
