@@ -2,17 +2,18 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 index 732a176..ae70814 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,10 @@
  #include <M68k.h>
  #include <support.h>
  #include <config.h>
 +#ifdef BELLATRIX
 +extern void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc);
++extern uint32_t g_bela_irq_deliver_count;
 +#endif
  #ifdef PISTORM
  #ifndef PISTORM32
  #define PS_PROTOCOL_IMPL
-@@ -138,11 +141,72 @@ void MainLoop()
+@@ -138,11 +142,72 @@ void MainLoop()
  
      /* The JIT loop is running forever */
      while(1)
@@ -87,7 +88,7 @@ index 732a176..ae70814 100644
          /* If (unlikely) there was interrupt pending, check if it needs to be processed */
          if (unlikely(ctx->INT32 != 0))
          {
-@@ -152,6 +216,19 @@ void MainLoop()
+@@ -152,6 +217,19 @@ void MainLoop()
              uint32_t vbr;
  
              /* Find out requested IPL level based on ARM state and real IPL line */
@@ -107,7 +108,7 @@ index 732a176..ae70814 100644
              if (ctx->INT.ARM_err)
              {
                  level = 7;
-@@ -169,7 +246,7 @@ void MainLoop()
+@@ -169,7 +247,7 @@ void MainLoop()
                  if (ctx->INT.IPL > level)
                  {
                      level = ctx->INT.IPL;
@@ -116,7 +117,7 @@ index 732a176..ae70814 100644
  #else
                  /* On classic pistorm we need to obtain IPL from PiStorm status register */
                  if (ctx->INT.IPL)
-@@ -190,9 +267,10 @@ void MainLoop()
+@@ -190,9 +268,10 @@ void MainLoop()
                      {
                          level = ipl_level;
                      }
@@ -128,7 +129,7 @@ index 732a176..ae70814 100644
  
              /* Get SR and test the IPL mask value */
              SR = getSR();
-@@ -236,6 +314,65 @@ void MainLoop()
+@@ -236,6 +315,66 @@ void MainLoop()
                  SR &= ~SR_IPL;
                  SR |= ((level & 7) << SRB_IPL);
  
@@ -175,6 +176,7 @@ index 732a176..ae70814 100644
 +
 +                    /* Load new PC from vector table */
 +                    asm volatile("ldr %w0, [%1, %2]":"=r"(PC):"r"(vbr),"r"(vector));
++                    g_bela_irq_deliver_count++;
 +
 +#if defined(BELLATRIX_RIGEL_TRACE_BUILD) && BELLATRIX_RIGEL_TRACE_BUILD
 +                    {
@@ -194,7 +196,7 @@ index 732a176..ae70814 100644
                  /* Push exception frame */
                  asm volatile("strh %w1, [%0, #-8]!":"=r"(sp):"r"(SRcopy),"0"(sp));
                  asm volatile("str %w1, [%0, #2]"::"r"(sp),"r"(PC));
-@@ -248,7 +385,8 @@ void MainLoop()
+@@ -248,7 +387,8 @@ void MainLoop()
                  vbr = ctx->VBR;
  
                  /* Load PC */

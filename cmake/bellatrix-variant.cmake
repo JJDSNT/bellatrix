@@ -185,13 +185,6 @@ else()
 endif()
 
 list(APPEND BASE_FILES
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine.c
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_bridge.S
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_emit.c
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_machine_platform.c
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_backend.c
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_direct_region.c
-    ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/mainloop_window.S
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/bellatrix_profile.c
     ${CMAKE_SOURCE_DIR}/../src/cpu/cpu_backend.c
@@ -275,6 +268,11 @@ if(BELLATRIX_USE_MUSASHI_CPU)
         ${CMAKE_SOURCE_DIR}/../external/musashi/softfloat/softfloat.c
         ${BELLATRIX_MUSASHI_GEN_DIR}/m68kops.c
         PROPERTIES COMPILE_OPTIONS "-w"
+    )
+else()
+    list(APPEND BASE_FILES
+        ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_native_backend.c
+        ${CMAKE_SOURCE_DIR}/../src/cpu/emu68/emu68_direct_region.c
     )
 endif()
 if(BELLATRIX_ENABLE_EMU68_BOARDS)

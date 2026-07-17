@@ -59,8 +59,8 @@ apply_patch_if_needed() {
     fi
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
-        if grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c &&
-           grep -Fq 'defined(BELLATRIX_EMU68_FAULT_DRIVEN)' src/ExecutionLoop.c &&
+        if grep -Fq 'bellatrix_emu68_report_jit_progress(' src/ExecutionLoop.c &&
+           grep -Fq 'g_bela_irq_deliver_count++' src/ExecutionLoop.c &&
            grep -Fq 'if (ctx->INT.ARM_err) {' src/ExecutionLoop.c; then
             echo "Patch already applied (built-in integration detected): $name"
             return 0
@@ -272,8 +272,8 @@ check_emu68_patch_applied() {
     fi
 
     if [ "$name" = "0003-bellatrix-execution-loop.patch" ]; then
-        if grep -Fq 'emu68_machine_dispatch_quantum_progress(' src/ExecutionLoop.c &&
-           grep -Fq 'defined(BELLATRIX_EMU68_FAULT_DRIVEN)' src/ExecutionLoop.c &&
+        if grep -Fq 'bellatrix_emu68_report_jit_progress(' src/ExecutionLoop.c &&
+           grep -Fq 'g_bela_irq_deliver_count++' src/ExecutionLoop.c &&
            grep -Fq 'if (ctx->INT.ARM_err) {' src/ExecutionLoop.c; then
             echo "  OK  $name  [content match; context drifted — regenerate patch]"
             return 0

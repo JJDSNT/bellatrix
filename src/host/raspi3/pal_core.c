@@ -331,11 +331,13 @@ void PAL_Runtime_Poll(void)
         return;
 
     const uint64_t now = pal_read_cntpct();
-    bellatrix_runtime_chipset_step(now, s_rt.host_counter_freq);
 
-    // Single-core has no independent host reactor, so physical IO must
-    // be serviced here. Throttle to ~1ms: usb_host_step pumps the whole
-    // CherryUSB event chain and is far too heavy for every MMIO access.
+    // Single-core advances Rigel synchronously from the selected CPU
+    // backend. Polling must service only the host reactor here: calling
+    // bellatrix_runtime_chipset_step() as well creates a second timeline
+    // authority and lets realtime run the chipset ahead of the guest CPU.
+    // Throttle physical IO to ~1ms: usb_host_step pumps the whole CherryUSB
+    // event chain and is far too heavy for every MMIO access.
     if (!PAL_Core_IsMulticoreEnabled()) {
         static uint64_t io_last;
         const uint64_t io_interval = s_rt.host_counter_freq / 1000u;

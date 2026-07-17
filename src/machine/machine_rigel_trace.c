@@ -815,10 +815,24 @@ void machine_rigel_trace_step(const rigel_step_result_t *r)
 uint32_t g_machine_ipl_rise_counts[8];
 #endif
 
+/* ISSUE-0064 single-core IPL diagnosis: count how often the chipset actually
+ * publishes a non-zero IPL toward the CPU. Distinguishes "IRQ never raised in
+ * Rigel" from "raised but not delivered to the guest". Read from the safe
+ * [DIAG] checkpoint in bellatrix.c; cheap unconditional counters. */
+uint32_t g_ipl_publish_calls;
+uint32_t g_ipl_publish_nonzero;
+uint8_t  g_ipl_publish_max;
+
 void machine_publish_ipl(BellatrixMachine *m, uint8_t ipl)
 {
     if (ipl > 7u)
         ipl = 7u;
+
+    g_ipl_publish_calls++;
+    if (ipl != 0u)
+        g_ipl_publish_nonzero++;
+    if (ipl > g_ipl_publish_max)
+        g_ipl_publish_max = ipl;
 
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
     if (ipl > m->current_ipl)

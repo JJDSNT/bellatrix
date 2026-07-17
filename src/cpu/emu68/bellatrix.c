@@ -11,6 +11,7 @@
 #include "runtime/topology.h"
 #ifdef BELLATRIX_LAUNCHER
 #include "launcher/launcher.h"
+#include "launcher/btscan.h"
 #endif
 #include <stdatomic.h>
 #include <limits.h>
@@ -47,10 +48,18 @@ uint32_t rom_mapped = 0;
 uint32_t bellatrix_reset_isp = 0;
 uint32_t bellatrix_reset_pc = 0;
 
+/* IRQ delivery counter, incremented by the MainLoop delivery block (plain
+ * store, no calls — safe in the pinned-register JIT context). ISSUE-0064:
+ * distinguishes "IPL published but exception never taken" from "taken". */
+uint32_t g_bela_irq_deliver_count;
+/* ISSUE-0064 report-hook diagnosis (see report_jit_progress). */
+uint32_t g_rjp_calls;
+uint32_t g_rjp_zero_cycles;
+uint64_t g_rjp_last_insn;
+uint64_t g_rjp_last_cyclecount;
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
 /* IRQ delivery observation ring, written by the MainLoop delivery block
  * (plain stores, no calls). Entry: pushed PC (low 24 bits) | level << 28. */
-uint32_t g_bela_irq_deliver_count;
 uint32_t g_bela_irq_deliver_ring[8];
 #endif
 
@@ -418,6 +427,12 @@ void bellatrix_launch_cpu_and_park(void (*entry)(void))
  * ------------------------------------------------------------------------- */
 void bellatrix_machine_advance_cpu_cycles(uint32_t cycles)
 {
+    static uint64_t s_singlecore_calls;
+    static uint64_t s_singlecore_cycles;
+    static uint32_t s_next_frame = 1u;
+
+    s_singlecore_calls++;
+    s_singlecore_cycles += cycles;
 #if BELLATRIX_PROFILE_ENABLED
     uint64_t t0 = bprof_now();
     bellatrix_machine_advance(cycles);
@@ -431,6 +446,27 @@ void bellatrix_machine_advance_cpu_cycles(uint32_t cycles)
 #else
     bellatrix_machine_advance(cycles);
 #endif
+
+    if (!PAL_Core_IsMulticoreEnabled()) {
+        BellatrixMachine *m = bellatrix_machine_get();
+        if (m && m->frame_counter >= s_next_frame) {
+            kprintf("[SC-PROGRESS] frame=%u calls=%llu cpu_cycles=%llu "
+                    "tick=%llu pc=%08x ipl=%u\n",
+                    (unsigned)m->frame_counter,
+                    (unsigned long long)s_singlecore_calls,
+                    (unsigned long long)s_singlecore_cycles,
+                    (unsigned long long)m->tick_count,
+                    (unsigned)cpu_backend_get_pc(cpu_backend_selected()),
+                    (unsigned)(bellatrix_machine_rigel_ctx() ?
+                        rigel_get_ipl(bellatrix_machine_rigel_ctx()) : 0u));
+            if (s_next_frame < 10u)
+                s_next_frame = 10u;
+            else if (s_next_frame < 100u)
+                s_next_frame = 100u;
+            else
+                s_next_frame += 100u;
+        }
+    }
 }
 
 void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
@@ -452,21 +488,36 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
 
 void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
 {
-    static uint64_t s_prev_cycle_count;
+    static uint64_t s_prev_insn_count;
 #if defined(BELLATRIX_TRACE_BUILD) && BELLATRIX_TRACE_BUILD
     static uint32_t s_last_pc;
     static uint32_t s_same_pc_reports;
 #endif
     uint32_t cycles = 0u;
 
+    if (!s_prev_insn_count || insn_count <= s_prev_insn_count) {
+        s_prev_insn_count = insn_count;
+        cycles = 8u;
+    } else {
+        uint64_t delta = insn_count - s_prev_insn_count;
+        s_prev_insn_count = insn_count;
+        cycles = delta > (UINT32_MAX / 8u) ?
+            UINT32_MAX : (uint32_t)delta * 8u;
+    }
+
+    /* ISSUE-0064 diagnosis: is the report hook firing during STOP, and does
+     * it advance the chipset? Counts calls and zero-cycle (no CYCLE_COUNT
+     * delta) calls; last insn/cycle values read at the [DIAG] checkpoint. */
     {
-        uint64_t cycle_count = __m68k_state ? __m68k_state->CYCLE_COUNT : 0u;
-        uint64_t delta;
-        if (cycle_count < s_prev_cycle_count)
-            s_prev_cycle_count = 0u;
-        delta = cycle_count - s_prev_cycle_count;
-        s_prev_cycle_count = cycle_count;
-        cycles = delta > UINT32_MAX ? UINT32_MAX : (uint32_t)delta;
+        extern uint32_t g_rjp_calls;
+        extern uint32_t g_rjp_zero_cycles;
+        extern uint64_t g_rjp_last_insn;
+        extern uint64_t g_rjp_last_cyclecount;
+        g_rjp_calls++;
+        if (cycles == 0u)
+            g_rjp_zero_cycles++;
+        g_rjp_last_insn = insn_count;
+        g_rjp_last_cyclecount = __m68k_state ? __m68k_state->CYCLE_COUNT : 0u;
     }
 
     bellatrix_emu68_publish_cpu_progress(cycles, insn_count, pc);
@@ -504,6 +555,25 @@ void bellatrix_emu68_report_jit_progress(uint64_t insn_count, uint32_t pc)
                     (unsigned)(__m68k_state ? BE32(__m68k_state->D[0].u32) : 0u),
                     (unsigned)(__m68k_state ? BE32(__m68k_state->D[2].u32) : 0u),
                     (unsigned)(__m68k_state ? BE32(__m68k_state->D[4].u32) : 0u));
+            {
+                extern uint32_t g_ipl_publish_calls;
+                extern uint32_t g_ipl_publish_nonzero;
+                extern uint8_t  g_ipl_publish_max;
+                kprintf("[IPL-DIAG] publish_calls=%u nonzero=%u max_ipl=%u "
+                        "cur_INT.IPL=%u delivered=%u\n",
+                        (unsigned)g_ipl_publish_calls,
+                        (unsigned)g_ipl_publish_nonzero,
+                        (unsigned)g_ipl_publish_max,
+                        (unsigned)(__m68k_state ? __m68k_state->INT.IPL : 0u),
+                        (unsigned)g_bela_irq_deliver_count);
+                kprintf("[RJP-DIAG] calls=%u zero_cycles=%u last_insn=%llu "
+                        "CYCLE_COUNT=%llu INSN_COUNT=%llu\n",
+                        (unsigned)g_rjp_calls,
+                        (unsigned)g_rjp_zero_cycles,
+                        (unsigned long long)g_rjp_last_insn,
+                        (unsigned long long)g_rjp_last_cyclecount,
+                        (unsigned long long)(__m68k_state ? __m68k_state->INSN_COUNT : 0u));
+            }
             checkpoint_index++;
         }
     }
@@ -642,8 +712,10 @@ static void __attribute__((unused)) update_ipl(void)
 
 static void apply_overlay_map(int overlay_enabled)
 {
+#if !defined(BELLATRIX_USE_MUSASHI_CPU) || !BELLATRIX_USE_MUSASHI_CPU
     if (bellatrix_emu68_backend_set_overlay(overlay_enabled))
         return;
+#endif
 
     if (overlay_enabled)
     {
