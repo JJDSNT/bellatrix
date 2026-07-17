@@ -229,3 +229,23 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   board EXTERNAL registrada). Resíduo: (1) tirar a normalização de 24 bits do
   fast path multicore; (2) descoberta/validação de faixa Z3 por perfil — agora o
   Super Buster é o lar natural dela.
+- 2026-07-17: **mecanismo de board auto-registrável estilo Emu68** (fundação da
+  convergência; a abordagem Emu68 é o ALVO, não legacy — o legacy é o memory-map
+  hardcoded da TUI do run.sh). Novo `src/machine/bus/board_registry.{h,c}`:
+  `BellatrixBoard` é layout-compatível com `struct ExpansionBoard` do Emu68
+  (rom_file, rom_size, map_base, is_z3, enabled, map()); a macro
+  `BELLATRIX_REGISTER_BOARD_Z2/Z3` dropa o descriptor numa seção de linker
+  ("dropar um .c e pronto", sem register_board() central); o walker de autoconfig
+  espelha o `vectors.c` (config read do rom_file; base em 0x44/0x48 dispara
+  `map()`; shutup 0x4C/0x4E pula). **Achados empíricos** (provados com gcc host):
+  seção com nome de identificador-C dá `__start_/__stop_` automáticos sem linker
+  script; funciona em qualquer ELF (host + AArch64). **Regra de disciplina:**
+  boards têm que ser objetos DIRETOS no link — dentro de `.a` o membro é
+  descartado (self-registration perdida, símbolos de fronteira somem). Harness e
+  produto já linkam board direto, então ok. **O harness TESTA o mecanismo de
+  produção:** novo `bellatrix_unit_board_registry` dropa 2 boards de teste e prova
+  descoberta->autoconfig->map->acesso de ponta a ponta. Lado produto (a fazer na
+  migração): backend Emu68 pode reusar as seções nativas `.boards.z2/.z3` + o
+  walker do próprio `vectors.c` (fidelidade máxima); backend Musashi usa este
+  walker. Nada foi ligado ainda ao bus vivo — é a fundação; a migração das boards
+  atuais (z3_68040 etc.) do registro direto para o auto-registro é o próximo passo.
