@@ -247,5 +247,26 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   descoberta->autoconfig->map->acesso de ponta a ponta. Lado produto (a fazer na
   migração): backend Emu68 pode reusar as seções nativas `.boards.z2/.z3` + o
   walker do próprio `vectors.c` (fidelidade máxima); backend Musashi usa este
-  walker. Nada foi ligado ainda ao bus vivo — é a fundação; a migração das boards
-  atuais (z3_68040 etc.) do registro direto para o auto-registro é o próximo passo.
+  walker. Nada foi ligado ainda ao bus vivo — é a fundação.
+- 2026-07-17 (cont.): convergência afinada + limpeza. `board_registry` passou a
+  incluir `emu68/include/boards.h` e caminhar o `struct ExpansionBoard` REAL do
+  Emu68 (sem espelho `BellatrixBoard` a manter em sincronia; Jaime OK com header
+  do Emu68 no harness por código mais limpo). **Deletado** o wrapper `z3_68040`
+  (reexpunha o ROM 68040 nativo do Emu68, OFF por padrão, redundante com a board
+  nativa) — fonte, registro guardado em `bellatrix.c` e opção/bloco CMake.
+  **Inventário de boards (alvo é sempre o Emu68):** nativas do Emu68 (z2ram,
+  68040, sdcard, emmc, unicam, devicetree, VideoCore.card=RTG) — mantidas, nunca
+  wrappar; `rtg` nosso é lab que NUNCA funcionou (Emu68 tem VideoCore.card) —
+  deleção adiada (raio grande: harness main/HARNESS_RTG, screenshot.c,
+  rtg_rom_data via Docker, cards/bellatrix.card); **lide** (external/lide.device)
+  é a ÚNICA board que o Emu68 não dá — suporte a **ISO e HDF**, board mista
+  (ROM + registradores ATA/IDE por acesso via `expansion.c` bus_ops). **É o único
+  motivo de a abordagem antiga (`expansion.c` + registries Zorro2/3) continuar
+  viva** — documentado no topo de `src/machine/expansion.h`. `expansion.c` NÃO é
+  órfão (usado por machine_rigel*, lide, plugin_loader). Aposentar a via antiga
+  espera o lide ser reexpresso como board DIRECT estilo Emu68 + janela EXTERNAL
+  (via Super Buster). Legacy real a retirar = memory-map hardcoded da TUI do
+  run.sh. Verificação: suíte host completa verde (18/18 que rodam, incl. 4
+  oráculos de ROM); o board_registry é provado por `bellatrix_unit_board_registry`;
+  ainda não há boot de guest enumerando board EXTERNAL (não há board EXTERNAL no
+  produto por padrão).
