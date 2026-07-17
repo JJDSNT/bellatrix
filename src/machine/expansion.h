@@ -1,6 +1,25 @@
 #ifndef BELLATRIX_MACHINE_EXPANSION_H
 #define BELLATRIX_MACHINE_EXPANSION_H
 
+/*
+ * Bellatrix expansion registry (the pre-Emu68-convergence path).
+ *
+ * The board mechanism we are converging on is Emu68's: a minimal
+ * `struct ExpansionBoard` that self-registers into a linker section and whose
+ * map() installs a DIRECT region (see machine/bus/board_registry.h). This
+ * registry — bellatrix_expansion_register() + bus_ops (owns_address/read/write)
+ * over the Zorro II/III registries — predates that and is the older approach.
+ *
+ * It is kept alive for exactly one reason: **lide** (external/lide.device),
+ * which provides ISO (CD-ROM) and HDF (hard-disk image) support and is the one
+ * expansion Emu68 does not give us. lide is a *mixed* board — a ROM plus
+ * side-effecting ATA/IDE registers served per-access through bus_ops — which
+ * the Emu68 DIRECT-only board model does not express. Retiring this path
+ * therefore waits on lide being re-expressed as an Emu68-style board (DIRECT
+ * ROM) plus an EXTERNAL register window (routed by the Super Buster / bus
+ * dispatch). Until then, do not delete this registry.
+ */
+
 #include <stdint.h>
 #include <stddef.h>
 

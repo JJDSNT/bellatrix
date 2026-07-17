@@ -710,6 +710,12 @@ uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size)
     return machine_dispatch_read(m, addr, size);
 }
 
+int bellatrix_machine_z3_external_owns(uint32_t addr)
+{
+    return superbuster_decode_z3(&g_machine.superbuster, addr) ==
+           SUPERBUSTER_Z3_BOARD;
+}
+
 void bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size)
 {
     BellatrixMachine *m = &g_machine;

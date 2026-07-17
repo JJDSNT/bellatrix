@@ -413,6 +413,34 @@ target_compile_options(bellatrix_unit_direct_region PRIVATE -Wall -Wextra -Werro
 add_test(NAME bellatrix_unit_direct_region
          COMMAND bellatrix_unit_direct_region)
 
+add_executable(bellatrix_unit_superbuster_z3
+    ${ROOT}/tests/unit/test_superbuster_z3.c
+    ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/superbuster/superbuster.c
+    ${SRC}/machine/bus/zorro3/zorro3.c
+)
+target_include_directories(bellatrix_unit_superbuster_z3 PRIVATE
+    ${SRC}/host/posix
+    ${SRC}
+)
+target_compile_options(bellatrix_unit_superbuster_z3 PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_superbuster_z3
+         COMMAND bellatrix_unit_superbuster_z3)
+
+add_executable(bellatrix_unit_board_registry
+    ${ROOT}/tests/unit/test_board_registry.c
+    ${SRC}/machine/bus/board_registry.c
+    ${SRC}/cpu/direct_region.c
+)
+target_include_directories(bellatrix_unit_board_registry PRIVATE
+    ${SRC}/host/posix
+    ${SRC}
+    ${ROOT}/emu68/include
+)
+target_compile_options(bellatrix_unit_board_registry PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_board_registry
+         COMMAND bellatrix_unit_board_registry)
+
 # Pure host-testable protocol modules (no PAL, no machine dependencies).
 add_executable(bellatrix_unit_timeline
     ${ROOT}/tests/unit/test_timeline.c

@@ -123,6 +123,12 @@ struct RigelContext *bellatrix_machine_rigel_ctx(void);
 uint32_t bellatrix_machine_read(uint32_t addr, unsigned int size);
 void     bellatrix_machine_write(uint32_t addr, uint32_t value, unsigned int size);
 
+/* Nonzero if a 32-bit CPU-space address (above the 24-bit Amiga bus) is owned
+ * by a configured Zorro III board, as decoded by the Super Buster. The CPU
+ * bridge routes such accesses to the machine with the full address; everything
+ * else above 24 bits is open bus. Must never mask the address to 24 bits. */
+int      bellatrix_machine_z3_external_owns(uint32_t addr);
+
 /* ------------------------------------------------------------------------- */
 /* raw access to owned components                                            */
 /* ------------------------------------------------------------------------- */
