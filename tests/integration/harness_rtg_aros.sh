@@ -12,7 +12,7 @@ fi
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
 
-HARNESS_RTG=1 "$HARNESS" "$ROM" --headless --frames 1000 >"$LOG" 2>&1
+HARNESS_RTG=1 "$HARNESS" "$ROM" --headless --frames 1600 >"$LOG" 2>&1
 
 grep -F "[HARNESS] Fast RAM: 8MB Zorro II board configured" "$LOG" >/dev/null
 grep -F "[RTG] board registered: Zorro III 8MB window, 8180 KB VRAM" "$LOG" >/dev/null
@@ -24,7 +24,9 @@ grep -F "[RTG] REG_ID probed (FindCard reached the board)" "$LOG" >/dev/null
 grep -F "[RTG-DBG] cafd0003" "$LOG" >/dev/null
 grep -F "[RTG] direct VRAM mapped: 40003000-407fffff" "$LOG" >/dev/null
 grep -F "[RTG-PROBE] FillRect count=1 size=640x480 fmt=1 arg=ff action=observed" "$LOG" >/dev/null
-grep -F "[RTG-ACCEL] FillRect count=1 CLUT 640x480 handled=host" "$LOG" >/dev/null
+grep -F "[RTG-ACCEL] FillRect count=1 fmt=1 640x480 handled=host" "$LOG" >/dev/null
+grep -F "[RTG-PROBE] BlitRectNoMaskComplete count=1 size=16x16 fmt=1 arg=0c action=observed" "$LOG" >/dev/null
+grep -F "[RTG-ACCEL] BlitCopy count=1 fmt=1 16x16 handled=host" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=14 value=00000280" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=18 value=000001e0" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=24 value=00000000" "$LOG" >/dev/null
@@ -36,4 +38,4 @@ if grep -F "addr=4000" "$LOG" | grep -F "[Z3-OPENBUS]" >/dev/null; then
     exit 1
 fi
 
-echo "AROS RTG chain passed: Z3 -> DiagArea -> card -> 640x480 scanout"
+echo "AROS RTG chain passed: Z3 -> card -> FillRect/BlitCopy -> 640x480 scanout"

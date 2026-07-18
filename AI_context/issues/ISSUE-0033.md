@@ -448,3 +448,14 @@ Uma screenshot sem mídia no frame 900 foi corretamente produzida como RTG
 `640x480`, mas estava preta/uniforme. Isso comprova seleção e captura do scanout,
 não ainda o critério final de conteúdo/desktop visível. O próximo alvo é bootar
 mídia adequada e obter frame RTG não uniforme; depois validar apresentação SDL.
+
+## Execução 2026-07-18 — primitivas diretas
+
+- `FillRect` agora cobre CLUT, R5G6B5 e A8R8G8B8 com máscara completa.
+- `BlitRectNoMaskComplete` trata o opcode `0x0c`; no AROS ele é
+  `modetable[vHidd_GC_DrawMode_Copy]`, portanto representa COPY.
+- A cópia host valida origem, destino, pitches, formato e limites e preserva
+  sobreposição tanto horizontal quanto vertical.
+- O boot de integração confirma duas cópias CLUT 16×16 tratadas pelo host.
+- `BlitRect` com máscara completa reutiliza o mesmo motor COPY overlap-safe.
+- Casos recusados continuam chamando os callbacks `Default` do P96.

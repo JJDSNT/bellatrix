@@ -20,6 +20,7 @@ static int      s_registered = 0;
 static uint32_t s_direct_vram_base;
 static struct {
     uint32_t dst, pitch, xy, wh, color, fmtmask, status;
+    uint32_t src, src_pitch, src_xy, opcode;
 } s_accel;
 
 static void rtg_ensure_direct_vram(void);
@@ -73,6 +74,10 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
     else if (reg == RTG_REG_ACCEL_WH) s_accel.wh = value;
     else if (reg == RTG_REG_ACCEL_COLOR) s_accel.color = value;
     else if (reg == RTG_REG_ACCEL_FMTMASK) s_accel.fmtmask = value;
+    else if (reg == RTG_REG_ACCEL_SRC) s_accel.src = value;
+    else if (reg == RTG_REG_ACCEL_SRC_PITCH) s_accel.src_pitch = value;
+    else if (reg == RTG_REG_ACCEL_SRC_XY) s_accel.src_xy = value;
+    else if (reg == RTG_REG_ACCEL_OPCODE) s_accel.opcode = value;
     else if (reg == RTG_REG_ACCEL_COMMAND) {
         s_accel.status = 0u;
         if (value == RTG_ACCEL_FILLRECT) {
@@ -86,8 +91,26 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 s_accel.fmtmask & 0xffu);
             if (s_accel.status && (++fill_count == 1u ||
                                    (fill_count & (fill_count - 1u)) == 0u))
-                kprintf("[RTG-ACCEL] FillRect count=%u CLUT %ux%u handled=host\n",
+                kprintf("[RTG-ACCEL] FillRect count=%u fmt=%u %ux%u handled=host\n",
                         (unsigned)fill_count,
+                        (unsigned)(s_accel.fmtmask >> 8),
+                        (unsigned)(s_accel.wh >> 16),
+                        (unsigned)(s_accel.wh & 0xffffu));
+        } else if (value == RTG_ACCEL_BLIT_COPY && s_accel.opcode == 0x0cu) {
+            static uint32_t blit_count;
+            s_accel.status = (uint32_t)bellatrix_rtg_accel_blit_copy(
+                s_rtg_vram, BELLATRIX_RTG_VRAM_SIZE,
+                s_accel.src, s_accel.src_pitch,
+                s_accel.src_xy >> 16, s_accel.src_xy & 0xffffu,
+                s_accel.dst, s_accel.pitch,
+                s_accel.xy >> 16, s_accel.xy & 0xffffu,
+                s_accel.wh >> 16, s_accel.wh & 0xffffu,
+                s_accel.fmtmask >> 8);
+            if (s_accel.status && (++blit_count == 1u ||
+                                   (blit_count & (blit_count - 1u)) == 0u))
+                kprintf("[RTG-ACCEL] BlitCopy count=%u fmt=%u %ux%u handled=host\n",
+                        (unsigned)blit_count,
+                        (unsigned)(s_accel.fmtmask >> 8),
                         (unsigned)(s_accel.wh >> 16),
                         (unsigned)(s_accel.wh & 0xffffu));
         }

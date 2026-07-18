@@ -146,7 +146,7 @@ static void test_argb_and_bounds(void)
     check_u32("short stride inactive", 0u, bellatrix_rtg_scanout_active(&s));
 }
 
-static void test_accel_fillrect_clut(void)
+static void test_accel_fillrect(void)
 {
     uint8_t vram[64];
 
@@ -163,10 +163,19 @@ static void test_accel_fillrect_clut(void)
               bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
                                            0u, 8u, 0u, 0u, 2u, 2u,
                                            0u, RTG_FMT_CLUT, 0x0fu));
-    check_u32("fillrect rejects format", 0u,
+    check_u32("fillrect rgb565 handled", 1u,
               bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
-                                           0u, 8u, 0u, 0u, 2u, 2u,
-                                           0u, RTG_FMT_R5G6B5, 0xffu));
+                                           0u, 8u, 1u, 0u, 2u, 1u,
+                                           0x1234u, RTG_FMT_R5G6B5, 0xffu));
+    check_u32("fillrect rgb565 byte0", 0x12u, vram[2]);
+    check_u32("fillrect rgb565 byte1", 0x34u, vram[3]);
+    check_u32("fillrect argb handled", 1u,
+              bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
+                                           0u, 8u, 1u, 1u, 1u, 1u,
+                                           0x11223344u,
+                                           RTG_FMT_A8R8G8B8, 0xffu));
+    check_u32("fillrect argb alpha", 0x11u, vram[12]);
+    check_u32("fillrect argb blue", 0x44u, vram[15]);
     check_u32("fillrect rejects row overflow", 0u,
               bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
                                            0u, 8u, 7u, 0u, 2u, 1u,
@@ -177,13 +186,50 @@ static void test_accel_fillrect_clut(void)
                                            0u, RTG_FMT_CLUT, 0xffu));
 }
 
+static void test_accel_blit_copy(void)
+{
+    uint8_t vram[64];
+    uint32_t i;
+
+    for (i = 0u; i < sizeof(vram); ++i)
+        vram[i] = (uint8_t)i;
+    check_u32("blit copy handled", 1u,
+              bellatrix_rtg_accel_blit_copy(vram, sizeof(vram),
+                                             0u, 8u, 1u, 0u,
+                                             0u, 8u, 2u, 2u,
+                                             3u, 2u, RTG_FMT_CLUT));
+    check_u32("blit copy row0", 1u, vram[18]);
+    check_u32("blit copy row1", 9u, vram[26]);
+
+    for (i = 0u; i < sizeof(vram); ++i)
+        vram[i] = (uint8_t)i;
+    check_u32("blit overlap down", 1u,
+              bellatrix_rtg_accel_blit_copy(vram, sizeof(vram),
+                                             0u, 8u, 0u, 0u,
+                                             0u, 8u, 0u, 1u,
+                                             8u, 3u, RTG_FMT_CLUT));
+    check_u32("blit overlap preserved", 0u, vram[8]);
+    check_u32("blit overlap last row", 16u, vram[24]);
+    check_u32("blit rgb565 handled", 1u,
+              bellatrix_rtg_accel_blit_copy(vram, sizeof(vram),
+                                             0u, 8u, 0u, 0u,
+                                             32u, 8u, 0u, 0u,
+                                             2u, 1u, RTG_FMT_R5G6B5));
+    check_u32("blit rejects row overflow", 0u,
+              bellatrix_rtg_accel_blit_copy(vram, sizeof(vram),
+                                             0u, 8u, 3u, 0u,
+                                             0u, 8u, 0u, 0u,
+                                             2u, 1u, RTG_FMT_R5G6B5));
+}
+
 int main(void)
 {
     test_register_contract();
     test_clut_stride_and_pan();
     test_rgb565();
     test_argb_and_bounds();
-    test_accel_fillrect_clut();
+    test_accel_fillrect();
+    test_accel_blit_copy();
     puts("rtg scanout tests passed");
     return 0;
 }

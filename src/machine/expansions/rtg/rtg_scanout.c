@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+static uint32_t format_bytes(uint32_t format);
+
 int bellatrix_rtg_accel_fillrect(uint8_t *vram, uint32_t vram_size,
                                  uint32_t dst, uint32_t pitch,
                                  uint32_t x, uint32_t y,
@@ -9,20 +11,81 @@ int bellatrix_rtg_accel_fillrect(uint8_t *vram, uint32_t vram_size,
                                  uint32_t color, uint32_t format,
                                  uint32_t mask)
 {
-    uint64_t first, last;
-    uint32_t row;
+    uint64_t first, last, row_bytes;
+    uint32_t row, col, pixel_bytes;
 
-    if (!vram || format != RTG_FMT_CLUT || mask != 0xffu ||
+    pixel_bytes = format_bytes(format);
+    if (!vram || pixel_bytes == 0u || mask != 0xffu ||
         width == 0u || height == 0u || pitch == 0u ||
-        x > pitch || width > pitch - x)
+        (uint64_t)x * pixel_bytes > pitch)
         return 0;
-    first = (uint64_t)dst + (uint64_t)y * pitch + x;
-    last = first + (uint64_t)(height - 1u) * pitch + width;
+    row_bytes = (uint64_t)width * pixel_bytes;
+    if (row_bytes > pitch - (uint64_t)x * pixel_bytes)
+        return 0;
+    first = (uint64_t)dst + (uint64_t)y * pitch +
+            (uint64_t)x * pixel_bytes;
+    last = first + (uint64_t)(height - 1u) * pitch + row_bytes;
     if (first >= vram_size || last > vram_size)
         return 0;
-    for (row = 0u; row < height; ++row)
-        memset(vram + (size_t)(first + (uint64_t)row * pitch),
-               (int)(uint8_t)color, width);
+    for (row = 0u; row < height; ++row) {
+        uint8_t *out = vram + (size_t)(first + (uint64_t)row * pitch);
+        if (pixel_bytes == 1u) {
+            memset(out, (int)(uint8_t)color, width);
+        } else {
+            for (col = 0u; col < width; ++col) {
+                if (pixel_bytes == 2u) {
+                    out[0] = (uint8_t)(color >> 8);
+                    out[1] = (uint8_t)color;
+                } else {
+                    out[0] = (uint8_t)(color >> 24);
+                    out[1] = (uint8_t)(color >> 16);
+                    out[2] = (uint8_t)(color >> 8);
+                    out[3] = (uint8_t)color;
+                }
+                out += pixel_bytes;
+            }
+        }
+    }
+    return 1;
+}
+
+int bellatrix_rtg_accel_blit_copy(uint8_t *vram, uint32_t vram_size,
+                                  uint32_t src, uint32_t src_pitch,
+                                  uint32_t src_x, uint32_t src_y,
+                                  uint32_t dst, uint32_t dst_pitch,
+                                  uint32_t dst_x, uint32_t dst_y,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t format)
+{
+    uint32_t pixel_bytes = format_bytes(format), row;
+    uint64_t row_bytes, src_first, src_last, dst_first, dst_last;
+    int backwards;
+
+    if (!vram || pixel_bytes == 0u || width == 0u || height == 0u ||
+        src_pitch == 0u || dst_pitch == 0u)
+        return 0;
+    row_bytes = (uint64_t)width * pixel_bytes;
+    if ((uint64_t)src_x * pixel_bytes > src_pitch ||
+        row_bytes > src_pitch - (uint64_t)src_x * pixel_bytes ||
+        (uint64_t)dst_x * pixel_bytes > dst_pitch ||
+        row_bytes > dst_pitch - (uint64_t)dst_x * pixel_bytes)
+        return 0;
+    src_first = (uint64_t)src + (uint64_t)src_y * src_pitch +
+                (uint64_t)src_x * pixel_bytes;
+    dst_first = (uint64_t)dst + (uint64_t)dst_y * dst_pitch +
+                (uint64_t)dst_x * pixel_bytes;
+    src_last = src_first + (uint64_t)(height - 1u) * src_pitch + row_bytes;
+    dst_last = dst_first + (uint64_t)(height - 1u) * dst_pitch + row_bytes;
+    if (src_first >= vram_size || dst_first >= vram_size ||
+        src_last > vram_size || dst_last > vram_size)
+        return 0;
+    backwards = dst_first > src_first && dst_first < src_last;
+    for (row = 0u; row < height; ++row) {
+        uint32_t r = backwards ? height - 1u - row : row;
+        memmove(vram + (size_t)(dst_first + (uint64_t)r * dst_pitch),
+                vram + (size_t)(src_first + (uint64_t)r * src_pitch),
+                (size_t)row_bytes);
+    }
     return 1;
 }
 

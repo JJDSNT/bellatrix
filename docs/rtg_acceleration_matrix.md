@@ -14,10 +14,10 @@ blitter 2D.
 | Operação | Estado | AROS 1600f | Escopo mínimo Bellatrix | Casos posteriores |
 |---|---:|---:|---|---|
 | `WaitBlitter` | parcial | barreira | no-op enquanto comandos forem síncronos | status/fence para async |
-| `FillRect` | parcial | ≥16; primeiro 640×480 | **implementado:** CLUT, máscara `ff`, bounds | RGB565/ARGB32, máscaras parciais |
+| `FillRect` | parcial | ≥16; primeiro 640×480 | **implementado:** CLUT, RGB565 e ARGB32, máscara `ff`, bounds | máscaras parciais |
 | `InvertRect` | probe | 0 | três formatos, máscara completa | máscaras CLUT parciais |
-| `BlitRect` | probe | 0 | mesma VRAM, COPY, overlap seguro | máscaras/minterms adicionais |
-| `BlitRectNoMaskComplete` | probe | ≥2, 16×16, minterm `0c` | COPY entre `RenderInfo` em VRAM | demais minterms |
+| `BlitRect` | parcial | 0 | **implementado:** mesma VRAM, COPY, overlap-safe, três formatos, máscara `ff` | máscaras parciais |
+| `BlitRectNoMaskComplete` | parcial | ≥2, 16×16, minterm `0c` | **implementado:** COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
 | `BlitTemplate` | probe | ≥1, 128×8 | expansão 1-bit, JAM1/JAM2, CLUT | complement/direct color/upload |
 | `BlitPattern` | probe | 0 | padrão 16×2, JAM1/JAM2 | alturas, complement, máscaras |
 | `DrawLine` | probe | 0 | sólida, COPY | padrões e draw modes |
@@ -47,7 +47,7 @@ argumento do callback, não deve ser inferido de `RenderInfo`.
 | Recurso | Estado | Decisão |
 |---|---:|---|
 | VRAM CPU direta | sim | `base+0x3000..+0x7fffff`, sem bridge byte a byte |
-| command ABI síncrona | parcial | FillRect usa validação e `STATUS`; `COMMAND` termina antes do retorno |
+| command ABI síncrona | parcial | FillRect e BlitCopy usam validação e `STATUS`; `COMMAND` termina antes do retorno |
 | command queue | não | somente após comandos síncronos e fences corretos |
 | async blits | futuro | requer `WaitBlitter`, status, ordering e proteção contra leitura prematura |
 | dirty rectangles | não | presenter/shadow remoto; VRAM direta exige marcação explícita |
@@ -55,9 +55,9 @@ argumento do callback, não deve ser inferido de `RenderInfo`.
 
 ## Ordem de implementação
 
-1. `FillRect` CLUT/full-mask, incluindo o clear 640×480 observado.
-2. `FillRect` RGB565 e ARGB32.
-3. `BlitRectNoMaskComplete` COPY e `BlitRect` COPY overlap-safe.
+1. ✅ `FillRect` CLUT/full-mask, incluindo o clear 640×480 observado.
+2. ✅ `FillRect` RGB565 e ARGB32.
+3. ✅ `BlitRectNoMaskComplete` e `BlitRect` COPY overlap-safe.
 4. `InvertRect`.
 5. `BlitTemplate`, já observado no boot.
 6. `BlitPattern` e `DrawLine` conforme workloads maiores.

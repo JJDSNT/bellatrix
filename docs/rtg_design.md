@@ -124,12 +124,15 @@ Isso evita fila, IRQ e condições de corrida enquanto o contrato é estabilizad
 5. Só depois avaliar `BlitTemplate`, `BlitPattern` e `DrawLine`, guiado pelas
    contagens da Fase A.
 
-**Primeiro item implementado:** `FillRect` CLUT com máscara `0xff` usa uma
-command ABI síncrona (`DST`, pitch, XY, WH, color, format/mask, `COMMAND` e
-`STATUS`). A `.card` valida ponteiro/formato/parâmetros, o host repete validação
-de overflow/pitch/bounds e somente `STATUS=1` mantém `AROSFlag` tratado. Qualquer
-rejeição chama `FillRectDefault`. RGB565, ARGB32 e máscaras parciais continuam
-explicitamente em software.
+**Primitivas implementadas:** `FillRect` CLUT, RGB565 e ARGB32 com máscara
+`0xff` usa uma command ABI síncrona (`DST`, pitch, XY, WH, color, format/mask,
+`COMMAND` e `STATUS`). `BlitRectNoMaskComplete` aceita o minterm `0x0c`, que o
+`modetable` do AROS confirma como `Copy`, e executa cópia overlap-safe entre
+`RenderInfo` em VRAM nos mesmos três formatos. A `.card` e o host validam
+ponteiros, formatos, pitches e bounds; qualquer rejeição chama o callback
+`Default`. Máscaras parciais de `FillRect` continuam explicitamente em software.
+`BlitRect` reutiliza o mesmo motor para COPY dentro de um único `RenderInfo`,
+com máscara `0xff`; sobreposição vertical e horizontal é preservada.
 
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve

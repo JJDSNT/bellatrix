@@ -27,6 +27,10 @@
 #define RTG_REG_ACCEL_FMTMASK 0x4Cu
 #define RTG_REG_ACCEL_COMMAND 0x50u
 #define RTG_REG_ACCEL_STATUS  0x54u
+#define RTG_REG_ACCEL_SRC     0x58u
+#define RTG_REG_ACCEL_SRC_PITCH 0x5Cu
+#define RTG_REG_ACCEL_SRC_XY  0x60u
+#define RTG_REG_ACCEL_OPCODE  0x64u
 
 #define RTG_ID_MAGIC       0x42525447u /* 'BRTG' */
 #define RTG_SPEC_VERSION   1u
@@ -36,6 +40,7 @@
 #define RTG_FMT_R5G6B5     10u
 
 #define RTG_ACCEL_FILLRECT 1u
+#define RTG_ACCEL_BLIT_COPY 2u
 
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
@@ -82,5 +87,12 @@ int bellatrix_rtg_accel_fillrect(uint8_t *vram, uint32_t vram_size,
                                  uint32_t width, uint32_t height,
                                  uint32_t color, uint32_t format,
                                  uint32_t mask);
+int bellatrix_rtg_accel_blit_copy(uint8_t *vram, uint32_t vram_size,
+                                  uint32_t src, uint32_t src_pitch,
+                                  uint32_t src_x, uint32_t src_y,
+                                  uint32_t dst, uint32_t dst_pitch,
+                                  uint32_t dst_x, uint32_t dst_y,
+                                  uint32_t width, uint32_t height,
+                                  uint32_t format);
 
 #endif

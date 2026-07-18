@@ -53,8 +53,13 @@
 #define RTG_REG_ACCEL_FMTMASK 0x4C
 #define RTG_REG_ACCEL_COMMAND 0x50
 #define RTG_REG_ACCEL_STATUS  0x54
+#define RTG_REG_ACCEL_SRC     0x58
+#define RTG_REG_ACCEL_SRC_PITCH 0x5C
+#define RTG_REG_ACCEL_SRC_XY  0x60
+#define RTG_REG_ACCEL_OPCODE  0x64
 
 #define RTG_ACCEL_FILLRECT 1
+#define RTG_ACCEL_BLIT_COPY 2
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -136,6 +141,8 @@ static void probe_report(struct BellatrixCardBase *base, UWORD op,
     reg_write(base, RTG_REG_DEBUG, 0xB9000000UL | (detail & 0x00ffffff));
 }
 
+static ULONG rtg_format(RGBFTYPE fmt);
+
 static void ProbeFillRect(__REGA0(struct BoardInfo *bi),
                           __REGA1(struct RenderInfo *ri),
                           __REGD0(WORD x), __REGD1(WORD y),
@@ -144,10 +151,11 @@ static void ProbeFillRect(__REGA0(struct BoardInfo *bi),
                           __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
-    ULONG dst;
+    ULONG dst, hostfmt;
     probe_report(base, PROBE_FILLRECT, w, h,
                  ((ULONG)fmt << 8) | mask);
-    if (fmt == RGBFB_CLUT && mask == 0xff && x >= 0 && y >= 0 &&
+    hostfmt = rtg_format(fmt);
+    if (hostfmt != 0 && mask == 0xff && x >= 0 && y >= 0 &&
         w > 0 && h > 0 && ri->BytesPerRow > 0 &&
         (UBYTE *)ri->Memory >= base->cb_VRAM &&
         (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
@@ -160,7 +168,7 @@ static void ProbeFillRect(__REGA0(struct BoardInfo *bi),
                   ((ULONG)(UWORD)w << 16) | (UWORD)h);
         reg_write(base, RTG_REG_ACCEL_COLOR, pen);
         reg_write(base, RTG_REG_ACCEL_FMTMASK,
-                  ((ULONG)RTG_FMT_CLUT << 8) | mask);
+                  (hostfmt << 8) | mask);
         reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_FILLRECT);
         if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
             return;
@@ -188,8 +196,31 @@ static void ProbeBlitRect(__REGA0(struct BoardInfo *bi),
                           __REGD6(UBYTE mask), __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, hostfmt;
     probe_report(base, PROBE_BLITRECT, w, h,
                  ((ULONG)fmt << 8) | mask);
+    hostfmt = rtg_format(fmt);
+    if (mask == 0xff && hostfmt != 0 && sx >= 0 && sy >= 0 &&
+        dx >= 0 && dy >= 0 && w > 0 && h > 0 && ri->BytesPerRow > 0 &&
+        (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_SRC, off);
+        reg_write(base, RTG_REG_ACCEL_SRC_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_SRC_XY,
+                  ((ULONG)(UWORD)sx << 16) | (UWORD)sy);
+        reg_write(base, RTG_REG_ACCEL_DST, off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY,
+                  ((ULONG)(UWORD)dx << 16) | (UWORD)dy);
+        reg_write(base, RTG_REG_ACCEL_WH,
+                  ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, hostfmt << 8);
+        reg_write(base, RTG_REG_ACCEL_OPCODE, 0x0c);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_BLIT_COPY);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->BlitRectDefault(bi, ri, sx, sy, dx, dy, w, h, mask, fmt);
 }
 
@@ -240,8 +271,35 @@ static void ProbeBlitComplete(__REGA0(struct BoardInfo *bi),
                               __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG src_off, dst_off, hostfmt;
     probe_report(base, PROBE_BLITCOMPLETE, w, h,
                  ((ULONG)fmt << 8) | opcode);
+    hostfmt = rtg_format(fmt);
+    if (opcode == 0x0c && hostfmt != 0 && sx >= 0 && sy >= 0 &&
+        dx >= 0 && dy >= 0 && w > 0 && h > 0 &&
+        src->BytesPerRow > 0 && dst->BytesPerRow > 0 &&
+        (UBYTE *)src->Memory >= base->cb_VRAM &&
+        (UBYTE *)src->Memory < base->cb_VRAM + base->cb_VRAMSize &&
+        (UBYTE *)dst->Memory >= base->cb_VRAM &&
+        (UBYTE *)dst->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        src_off = (ULONG)((UBYTE *)src->Memory - base->cb_VRAM);
+        dst_off = (ULONG)((UBYTE *)dst->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_SRC, src_off);
+        reg_write(base, RTG_REG_ACCEL_SRC_PITCH, (UWORD)src->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_SRC_XY,
+                  ((ULONG)(UWORD)sx << 16) | (UWORD)sy);
+        reg_write(base, RTG_REG_ACCEL_DST, dst_off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)dst->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY,
+                  ((ULONG)(UWORD)dx << 16) | (UWORD)dy);
+        reg_write(base, RTG_REG_ACCEL_WH,
+                  ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, hostfmt << 8);
+        reg_write(base, RTG_REG_ACCEL_OPCODE, opcode);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_BLIT_COPY);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->BlitRectNoMaskCompleteDefault(bi, src, dst, sx, sy, dx, dy,
                                       w, h, opcode, fmt);
 }
@@ -252,7 +310,7 @@ static ULONG rtg_format(RGBFTYPE fmt)
         case RGBFB_CLUT:     return RTG_FMT_CLUT;
         case RGBFB_R5G6B5:   return RTG_FMT_R5G6B5;
         case RGBFB_A8R8G8B8: return RTG_FMT_A8R8G8B8;
-        default:             return RTG_FMT_CLUT;
+        default:             return 0;
     }
 }
 
