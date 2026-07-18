@@ -1,6 +1,8 @@
 // Portable P96 linear-framebuffer board — see rtg.h and docs/rtg_design.md.
 
 #include "machine/expansions/rtg/rtg.h"
+#include "cpu/cpu_backend.h"
+#include "cpu/direct_region.h"
 #include "machine/bus/board_registry.h"
 #include "machine/autoconfig/autoconfig.h"
 #include "machine/expansion.h"
@@ -9,11 +11,16 @@
 
 #include <string.h>
 
-static uint8_t s_rtg_vram[BELLATRIX_RTG_VRAM_SIZE];
+static _Alignas(BELLATRIX_DIRECT_PAGE_SIZE)
+    uint8_t s_rtg_vram[BELLATRIX_RTG_VRAM_SIZE];
 static uint8_t s_rtg_frame[1920u * 1080u * 4u];
 static BellatrixRtgScanout s_rtg;
 static uint8_t  s_rtg_config[AUTOCONFIG_DATA_SIZE];
 static int      s_registered = 0;
+static uint32_t s_direct_vram_base;
+
+static void rtg_ensure_direct_vram(void);
+static void rtg_unmap_direct_vram(void);
 
 /* Boot ROM: DiagArea loader (CardLoader) + relocated bellatrix.card hunk,
  * built by cards/bellatrix.card/{Makefile,bootrom/} and embedded via
@@ -123,6 +130,7 @@ static void rtg_write8(void *userdata, uint32_t offset, uint8_t value)
 static void rtg_reset(void *userdata)
 {
     (void)userdata;
+    rtg_unmap_direct_vram();
     bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_ENABLE, 0u);
     bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_PAN, 0u);
     bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_PAL_INDEX, 0u);
@@ -150,6 +158,52 @@ BELLATRIX_REGISTER_BOARD_Z3(s_rtg_board);
 
 static uint32_t rtg_window_base(void) { return s_rtg_board.map_base; }
 
+/* The register/ROM prefix remains side-effecting MMIO.  On the first VRAM
+ * transaction, promote only the page-aligned framebuffer tail to a DIRECT
+ * CPU region.  That first transaction still completes through the slow path;
+ * subsequent accesses avoid the expansion bridge and byte-at-a-time loop. */
+static void rtg_ensure_direct_vram(void)
+{
+    CpuBackend *backend;
+    BellatrixDirectRegion region;
+    uint32_t board_base;
+
+    if (s_direct_vram_base != 0u)
+        return;
+    board_base = rtg_window_base();
+    backend = cpu_backend_selected();
+    if (board_base == 0u || !backend)
+        return;
+
+    region.guest_base = board_base + BELLATRIX_RTG_VRAM_OFF;
+    region.size = BELLATRIX_RTG_VRAM_SIZE;
+    region.host_base = s_rtg_vram;
+    region.flags = BELLATRIX_DIRECT_READ | BELLATRIX_DIRECT_WRITE |
+                   BELLATRIX_DIRECT_CACHEABLE;
+    if (cpu_backend_map_direct(backend, &region) != 0) {
+        kprintf("[RTG] warning: direct VRAM mapping failed; using MMIO path\n");
+        return;
+    }
+    s_direct_vram_base = region.guest_base;
+    kprintf("[RTG] direct VRAM mapped: %08x-%08x (%u KB)\n",
+            (unsigned)region.guest_base,
+            (unsigned)(region.guest_base + region.size - 1u),
+            (unsigned)(region.size / 1024u));
+}
+
+static void rtg_unmap_direct_vram(void)
+{
+    CpuBackend *backend;
+
+    if (s_direct_vram_base == 0u)
+        return;
+    backend = cpu_backend_selected();
+    if (backend)
+        (void)cpu_backend_unmap_direct(backend, s_direct_vram_base,
+                                       BELLATRIX_RTG_VRAM_SIZE);
+    s_direct_vram_base = 0u;
+}
+
 /* Per-access window serving (bus_ops). owns_address gates read/write, so both
  * assume addr lies in the window; bytes are assembled/split big-endian, which
  * feeds the byte-latch commit in rtg_write8. */
@@ -169,6 +223,8 @@ static uint32_t rtg_bus_read(BellatrixExpansion *exp, uint32_t addr,
     uint32_t v = 0u;
     unsigned i;
     (void)exp;
+    if (off >= BELLATRIX_RTG_VRAM_OFF)
+        rtg_ensure_direct_vram();
     for (i = 0; i < size; i++)
         v = (v << 8) | rtg_read8(NULL, off + i);
     return v;
@@ -180,6 +236,8 @@ static void rtg_bus_write(BellatrixExpansion *exp, uint32_t addr,
     uint32_t off = addr - rtg_window_base();
     unsigned i;
     (void)exp;
+    if (off >= BELLATRIX_RTG_VRAM_OFF)
+        rtg_ensure_direct_vram();
     for (i = 0; i < size; i++)
         rtg_write8(NULL, off + i, (uint8_t)(value >> ((size - 1u - i) * 8u)));
 }
@@ -204,6 +262,7 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
     uint8_t raw[AUTOCONFIG_ROM_BYTES];
     BellatrixExpansionDesc desc;
 
+    rtg_unmap_direct_vram();
     memset(s_rtg_vram, 0, sizeof(s_rtg_vram));
     bellatrix_rtg_scanout_init(&s_rtg,
                                s_rtg_vram, sizeof(s_rtg_vram),

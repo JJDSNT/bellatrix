@@ -24,6 +24,23 @@ Na TUI de `run.sh`, a opção aparece como
 `[R] Bellatrix RTG (P96 framebuffer)`; a tecla `R` alterna `ON/OFF` e a seleção
 é emitida como `BELLATRIX_RTG`, sendo convertida em `HARNESS_RTG` no harness.
 
+### Caminho rápido da VRAM no harness
+
+Depois que o guest atribui a base Z3, registradores e ROM continuam no caminho
+MMIO com efeitos colaterais. No primeiro acesso ao framebuffer, somente a faixa
+de VRAM alinhada a página é promovida a uma região direta do backend CPU:
+
+```
+40000000-40002fff  registradores + DiagArea/card ROM (MMIO)
+40003000-407fffff  VRAM linear (DIRECT)
+```
+
+Assim, clears, cópias e desenho do P96 deixam de atravessar o bridge e o loop
+byte a byte para cada acesso. O primeiro acesso ainda é concluído pelo caminho
+MMIO que instala o mapeamento; os seguintes usam a memória direta. Reset remove
+a região antes de uma nova enumeração. O log confirma a promoção com
+`[RTG] direct VRAM mapped: ...`.
+
 O RTG do Bellatrix será uma placa P96 de framebuffer linear, portátil entre os
 backends. O driver guest e o contrato de scanout não conhecerão SDL, VideoCore
 ou mailbox:

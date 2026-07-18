@@ -248,6 +248,15 @@ Não era outra branch nem falha do AutoConfig: sem `KICKSTART` explícito,
 esse valor a `HARNESS_RTG`, apagando a variável fornecida pelo usuário. A
 precedência foi corrigida: `HARNESS_RTG` explícito vence o perfil persistido.
 
+## Desempenho: VRAM direta
+
+A janela continua EXTERNAL para preservar os efeitos dos registradores e da
+ROM, mas o primeiro acesso ao framebuffer instala uma região DIRECT apenas em
+`base+0x3000 .. base+0x7fffff`. Isso elimina o bridge e a decomposição byte a
+byte dos acessos seguintes do P96. O mapeamento é alinhado a 4 KiB, removido no
+reset e coberto pela integração AROS, que exige o log
+`direct VRAM mapped: 40003000-407fffff` antes de aceitar o scanout.
+
 ## Correção de direção
 
 O backend VideoCore não é requisito do RTG atual. Ele é uma possível solução
