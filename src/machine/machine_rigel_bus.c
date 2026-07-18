@@ -80,7 +80,11 @@ static inline bool is_autoconfig_addr(uint32_t addr)
 
 static inline bool is_z2_board_addr(uint32_t addr)
 {
-    return bellatrix_zorro2_in_board_window(addr);
+    /* Legacy zorro2 registry (RTG lab) plus EXTERNAL boards configured through
+     * the self-registering board_registry (lide). Both resolve to the same
+     * per-access expansion bus dispatch below. */
+    return bellatrix_zorro2_in_board_window(addr) ||
+           bellatrix_boards_external_window_owner(addr) != NULL;
 }
 
 static inline bool is_z3_board_addr(uint32_t addr)

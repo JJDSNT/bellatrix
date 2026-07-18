@@ -281,10 +281,12 @@ void bellatrix_machine_reset(void)
     bellatrix_audio_output_reset();
 
     superbuster_reset(&m->superbuster);
-    /* Tear down DIRECT regions installed by self-registering boards and rewind
-     * the Autoconfig walk. struct ExpansionBoard has no unmap() (Emu68's model
-     * installs once), so removal is generic: every mapped board backs a DIRECT
-     * region, so drop it through the backend by (map_base, rom_size). */
+    /* Tear down regions installed by self-registering boards and rewind the
+     * Autoconfig walk. struct ExpansionBoard has no unmap() (Emu68's model
+     * installs once), so removal is generic: a DIRECT board (map != NULL) backs
+     * a region, dropped through the backend by (map_base, rom_size). An EXTERNAL
+     * board (map == NULL) installed nothing — only its latched base is cleared;
+     * unmapping it would mmu_unmap a window that was never mapped. */
     {
         CpuBackend *backend = cpu_backend_selected();
         size_t i, n = bellatrix_board_count();
@@ -292,7 +294,7 @@ void bellatrix_machine_reset(void)
             struct ExpansionBoard *b = bellatrix_board_at(i);
             if (!b || !b->map_base)
                 continue;
-            if (backend)
+            if (b->map && backend)
                 (void)cpu_backend_unmap_direct(backend, b->map_base,
                                                b->rom_size);
             b->map_base = 0u;

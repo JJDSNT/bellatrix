@@ -3,7 +3,8 @@
 #include "machine/expansions/lide_cdrom/ata_ide.h"
 #include "machine/expansions/lide_cdrom/atapi_cdrom.h"
 #include "machine/autoconfig/autoconfig.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
+#include "machine/bus/board_registry.h"
+#include "machine/bus/zorro2/zorro2_bus.h"   /* BELLATRIX_ZORRO2_WIN_128KB */
 #include "machine/expansion.h"
 #include "machine/machine.h"
 
@@ -166,83 +167,54 @@ typedef struct LideCdromState {
     /* Board ROM — points to embedded g_lide_rom_data (no ownership) */
     const uint8_t   *rom;
     size_t           rom_size;
-
-    BellatrixZorro2BoardDesc board_desc;
 } LideCdromState;
 
 /* Global singleton (one CD-ROM expansion per machine for now) */
 static LideCdromState *g_state;
 
-/* -----------------------------------------------------------------------
- * Zorro 2 board ops
- * --------------------------------------------------------------------- */
+/*
+ * Autoconfig / base assignment goes through the self-registering board_registry
+ * (the single Autoconfig authority), not the legacy zorro2 registry. lide is an
+ * EXTERNAL board: map == NULL, so map() is never called; the walker only latches
+ * the guest-assigned base into s_lide_board.map_base. The window is served per
+ * access by the ripple_bus_* ops below, routed through the machine bus dispatch
+ * (is_z2_board_addr -> bellatrix_boards_external_window_owner).
+ *
+ * The descriptor is always linked in; enabled flips to 1 in lide_cdrom_register
+ * so lide is presented only when a CD/HDF is actually attached.
+ */
+static uint8_t s_lide_config[AUTOCONFIG_DATA_SIZE];
 
-static uint8_t ripple_read8(void *ud, uint32_t offset)
-{
-    LideCdromState *s = (LideCdromState *)ud;
-    int reg;
-
-    /* ATA registers at CS1 (0x1000..0x1FFF) take priority */
-    reg = ata_ide_offset_to_reg(offset);
-    if (reg >= 0)
-        return ata_ide_read8(&s->ide, (uint8_t)reg);
-
-    /* ROM: header, nibble-bootldr, and BYTEWIDE device section */
-    if (s->rom)
-        return ripple_rom_byte(s->rom, s->rom_size, offset);
-
-    return 0xFFu;
-}
-
-static void ripple_write8(void *ud, uint32_t offset, uint8_t value)
-{
-    LideCdromState *s = (LideCdromState *)ud;
-    int reg;
-
-    reg = ata_ide_offset_to_reg(offset);
-    if (reg >= 0)
-        ata_ide_write8(&s->ide, (uint8_t)reg, value);
-}
-
-static void ripple_reset(void *ud)
-{
-    LideCdromState *s = (LideCdromState *)ud;
-    ata_ide_channel_reset(&s->ide);
-    atapi_cdrom_reset(&s->atapi);
-}
-
-static void ripple_destroy(void *ud)
-{
-    (void)ud;   /* lifetime managed by lide_cdrom_register caller */
-}
-
-static const BellatrixZorro2BoardOps g_ripple_ops = {
-    .reset   = ripple_reset,
-    .destroy = ripple_destroy,
-    .read8   = ripple_read8,
-    .write8  = ripple_write8,
+static struct ExpansionBoard s_lide_board = {
+    .rom_file = s_lide_config,
+    .rom_size = BELLATRIX_ZORRO2_WIN_128KB,
+    .map_base = 0u,
+    .is_z3    = 0u,
+    .enabled  = 0u,
+    .map      = NULL,
 };
+BELLATRIX_REGISTER_BOARD_Z2(s_lide_board);
+
+static uint32_t lide_window_base(void) { return s_lide_board.map_base; }
+static int      lide_configured(void)  { return s_lide_board.map_base != 0u; }
 
 /* -----------------------------------------------------------------------
  * Expansion bus ops (dispatched by expansion.c)
+ *
+ * lide owns exactly its assigned Zorro II window [base, base+128KB). The
+ * Autoconfig window is handled upstream by the board_registry walker, so it is
+ * not claimed here. owns_address gates read/write, so both may assume the
+ * address lies inside the window.
  * --------------------------------------------------------------------- */
 
 static int ripple_bus_owns(BellatrixExpansion *exp, uint32_t addr)
 {
-    uint32_t base;
+    uint32_t base = lide_window_base();
     (void)exp;
 
-    /* Must check THIS board's own window, not "some Z2 board is
-     * configured somewhere" — bellatrix_zorro2_in_board_window() is
-     * true for ANY registered board's window, and with more than one
-     * Z2 board present (fast RAM, RTG, lide) that wrongly steals reads
-     * belonging to a different board. */
-    if (!bellatrix_zorro2_board_configured("lide.cdrom"))
+    if (!lide_configured())
         return 0;
-    base = bellatrix_zorro2_board_base("lide.cdrom");
-    if (addr >= base && addr < base + BELLATRIX_ZORRO2_WIN_128KB)
-        return 1;
-    return bellatrix_zorro2_in_config_window(addr);
+    return addr >= base && addr < base + BELLATRIX_ZORRO2_WIN_128KB;
 }
 
 static uint32_t ripple_bus_read(BellatrixExpansion *exp,
@@ -250,18 +222,9 @@ static uint32_t ripple_bus_read(BellatrixExpansion *exp,
 {
     (void)exp;
 
-    if (bellatrix_zorro2_in_config_window(addr)) {
-        switch (size) {
-        case 1: return bellatrix_zorro2_config_read8(addr);
-        case 2: return bellatrix_zorro2_config_read16(addr);
-        case 4: return bellatrix_zorro2_config_read32(addr);
-        default: return 0xFFFFFFFFu;
-        }
-    }
-
-    if (bellatrix_zorro2_in_board_window(addr)) {
+    {
         LideCdromState *s = (LideCdromState *)exp->desc.userdata;
-        uint32_t base     = bellatrix_zorro2_board_base("lide.cdrom");
+        uint32_t base     = lide_window_base();
         uint32_t off      = addr - base;
         int      reg;
 
@@ -326,19 +289,9 @@ static void ripple_bus_write(BellatrixExpansion *exp,
 {
     (void)exp;
 
-    if (bellatrix_zorro2_in_config_window(addr)) {
-        switch (size) {
-        case 1: bellatrix_zorro2_config_write8(addr,  (uint8_t)value);         break;
-        case 2: bellatrix_zorro2_config_write16(addr, (uint16_t)value);        break;
-        case 4: bellatrix_zorro2_config_write32(addr, (uint32_t)value);        break;
-        default: break;
-        }
-        return;
-    }
-
-    if (bellatrix_zorro2_in_board_window(addr)) {
+    {
         LideCdromState *s = (LideCdromState *)exp->desc.userdata;
-        uint32_t base     = bellatrix_zorro2_board_base("lide.cdrom");
+        uint32_t base     = lide_window_base();
         uint32_t off      = addr - base;
         int      reg;
 
@@ -402,6 +355,9 @@ static void ripple_exp_destroy(BellatrixExpansion *exp)
     free(s);
     exp->desc.userdata = NULL;
     g_state = NULL;
+    /* Stop presenting the board in Autoconfig once torn down. */
+    s_lide_board.enabled  = 0u;
+    s_lide_board.map_base = 0u;
 }
 
 static const BellatrixExpansionOps g_ripple_exp_ops = {
@@ -446,8 +402,11 @@ int lide_cdrom_register(BellatrixMachine *machine)
     s->rom      = g_lide_rom_data;
     s->rom_size = g_lide_rom_size;
 
-    /* Build autoconfig nibble array */
+    /* Build the nibble-encoded Autoconfig image into the static board buffer.
+     * The board_registry walker answers the config window straight from
+     * s_lide_board.rom_file (= s_lide_config). */
     autoconfig_build(s->config_data, ac_bytes);
+    memcpy(s_lide_config, s->config_data, sizeof(s_lide_config));
 
     /* Init ATAPI and IDE layers */
     atapi_cdrom_init(&s->atapi, &g_iso_media_ops, &s->media);
@@ -460,42 +419,30 @@ int lide_cdrom_register(BellatrixMachine *machine)
     s->ide.atapi_exec  = atapi_cdrom_exec;
     s->ide.atapi_reset = (void (*)(void *))atapi_cdrom_reset;
 
-    /* Build Zorro 2 board descriptor */
-    memset(&s->board_desc, 0, sizeof(s->board_desc));
-    s->board_desc.id          = "lide.cdrom";
-    s->board_desc.config_data = s->config_data;
-    s->board_desc.config_size = sizeof(s->config_data);
-    /* 128 KB window: first 64 KB = lide.device ROM, second 64 KB = ODFileSystem */
-    s->board_desc.window_size = BELLATRIX_ZORRO2_WIN_128KB;
-    /* Do NOT set rom/rom_size — bellatrix_zorro2_board_read8 would bypass
-     * ripple_read8. All reads must go through ripple_read8 so that
-     * ripple_rom_byte can apply the A0-not-connected nibble remapping. */
-    s->board_desc.rom         = NULL;
-    s->board_desc.rom_size    = 0;
-    s->board_desc.userdata    = s;
-    s->board_desc.ops         = &g_ripple_ops;
+    /* Present the board through the self-registering board_registry: the
+     * static descriptor is already linked in; enable it and hand it the
+     * Autoconfig image. A guest base write latches s_lide_board.map_base.
+     * 128 KB window: first 64 KB = lide.device ROM, second 64 KB = ODFileSystem.
+     * All window reads go through ripple_bus_read so ripple_rom_byte can apply
+     * the A0-not-connected nibble remapping (no plain DIRECT ROM here). */
+    s_lide_board.map_base = 0u;
+    s_lide_board.enabled  = 1u;
 
-    /* Register with Zorro 2 autoconfig state machine */
-    rc = bellatrix_zorro2_register_board(&s->board_desc);
-    if (rc != 0) {
-        free(s);
-        return rc;
-    }
-
-    /* Register as expansion (for bus dispatching) */
+    /* Register as expansion (for per-access bus dispatch only — no legacy
+     * zorro2 autoconfig; zorro2_board stays NULL). */
     memset(&desc, 0, sizeof(desc));
     desc.id         = "lide.cdrom";
     desc.name       = "OAHR RIPPLE CD-ROM";
     desc.kind       = BELLATRIX_EXPANSION_BOARD;
     desc.priority   = 90;
     desc.userdata   = s;
-    desc.zorro2_board = &s->board_desc;
+    desc.zorro2_board = NULL;
     desc.bus_ops    = &g_ripple_bus_ops;
     desc.ops        = &g_ripple_exp_ops;
 
     rc = bellatrix_expansion_register(machine, &desc);
     if (rc != 0) {
-        bellatrix_zorro2_unregister_board("lide.cdrom");
+        s_lide_board.enabled = 0u;
         free(s);
         return rc;
     }

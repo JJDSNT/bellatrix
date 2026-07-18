@@ -290,3 +290,30 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   não entra nesse registro — reconciliar quando houver board Z3/EXTERNAL (hoje
   dormente, sem board Z3). test_z2_fast_ram removido (assunto migrado; cobertura em
   board_registry + rom_boot_aros).
+- 2026-07-18 (passo 2 da conclusão Z3): **lide REEXPRESSO e FUNCIONAL** pela via
+  board_registry (branch `z3-board-registry-live`). Correção de premissa: lide é
+  **Z2, não Z3** — logo o reconciliamento com o decode Z3 do Super Buster NÃO se
+  aplica (fica dormente até existir board Z3/EXTERNAL). Correção de altitude: o
+  ROM do lide é **address-transformed** (bootldr nibble, device binary BYTEWIDE
+  stride-2, endereço ímpar -> 0xFF) — não é ROM DIRECT plano; a board **inteira**
+  é EXTERNAL (servida por acesso). Design: distinguimos DIRECT vs EXTERNAL **sem
+  estender a struct do Emu68** — `map != NULL` = DIRECT (instala região; teardown
+  por `map_base`/`rom_size`); `map == NULL` = EXTERNAL (walker só trava `map_base`;
+  janela servida por acesso; NUNCA sofre unmap — evita `mmu_unmap` de janela nunca
+  mapeada). Novo `bellatrix_boards_external_window_owner(addr)`; `is_z2_board_addr`
+  passou a casar boards EXTERNAL do registry além do zorro2 legacy (agora só RTG).
+  lide: `struct ExpansionBoard s_lide_board` (map=NULL) auto-registrada,
+  `rom_file` = imagem AutoConfig; base lida de `s_lide_board.map_base` (fonte
+  única); removidos config-window handling e os ops zorro2 legacy mortos
+  (`ripple_read8/write8/reset/destroy`, `g_ripple_ops`, campo `board_desc`);
+  `desc.zorro2_board = NULL` (expansion.c não registra mais no zorro2). **Validado
+  no harness** (KS31 + ISO): `registered OAHR RIPPLE mfr=0x144a prod=7`, Fast RAM
+  DIRECT mapeia, guest lê a **janela** do lide (bank2 ODFS `0x10000`, trailer
+  `0x1fff8`), bootldr carrega **lide.device**, e a **janela de registradores ATA**
+  dispara (`[ATAPI] UNIT_ATTENTION`, cmd MODE SELECT chega à camada ATAPI). Suíte
+  17/17 verde, sem regressão. `expansion.h` atualizado: registry vive só para
+  servir a **janela** EXTERNAL do lide (AutoConfig agora é do board_registry).
+  MODULE plugin `.so` do lide compila (add emu68/include); seção de auto-registro
+  nele é inerte (não é varrida pelo host) — via plugin superseded pelo registro
+  estático. **Ambas as pendências Z3 (0032/0060) fechadas na prática**; legacy
+  real remanescente = memory-map hardcoded da TUI do run.sh (anotado, não urgente).

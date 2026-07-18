@@ -571,6 +571,12 @@ set_target_properties(lide_cdrom PROPERTIES
 target_include_directories(lide_cdrom PRIVATE
     ${SRC}/host/posix
     ${SRC}
+    # struct ExpansionBoard, via machine/bus/board_registry.h. In this MODULE
+    # (.so) build the board's self-registration section is inert — a plugin's
+    # section is not walked by the host executable — but lide still needs the
+    # shared descriptor type to compile. The plugin autoconfig path predates
+    # board_registry and is superseded by the static registration.
+    ${ROOT}/emu68/include
 )
 
 target_compile_definitions(lide_cdrom PRIVATE
