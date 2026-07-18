@@ -15,7 +15,7 @@ blitter 2D.
 |---|---:|---:|---|---|
 | `WaitBlitter` | parcial | barreira | no-op enquanto comandos forem síncronos | status/fence para async |
 | `FillRect` | parcial | ≥16; primeiro 640×480 | **implementado:** CLUT, RGB565 e ARGB32, máscara `ff`, bounds | máscaras parciais |
-| `InvertRect` | probe | 0 | três formatos, máscara completa | máscaras CLUT parciais |
+| `InvertRect` | parcial | 0 | **implementado:** três formatos, máscara completa | máscaras CLUT parciais |
 | `BlitRect` | parcial | 0 | **implementado:** mesma VRAM, COPY, overlap-safe, três formatos, máscara `ff` | máscaras parciais |
 | `BlitRectNoMaskComplete` | parcial | ≥2, 16×16, minterm `0c` | **implementado:** COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
 | `BlitTemplate` | probe | ≥1, 128×8 | expansão 1-bit, JAM1/JAM2, CLUT | complement/direct color/upload |

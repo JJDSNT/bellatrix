@@ -113,6 +113,13 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                         (unsigned)(s_accel.fmtmask >> 8),
                         (unsigned)(s_accel.wh >> 16),
                         (unsigned)(s_accel.wh & 0xffffu));
+        } else if (value == RTG_ACCEL_INVERTRECT) {
+            s_accel.status = (uint32_t)bellatrix_rtg_accel_invertrect(
+                s_rtg_vram, BELLATRIX_RTG_VRAM_SIZE,
+                s_accel.dst, s_accel.pitch,
+                s_accel.xy >> 16, s_accel.xy & 0xffffu,
+                s_accel.wh >> 16, s_accel.wh & 0xffffu,
+                s_accel.fmtmask >> 8, s_accel.fmtmask & 0xffu);
         }
     } else if (reg == RTG_REG_DEBUG) {
         static const char *const probe_names[] = {

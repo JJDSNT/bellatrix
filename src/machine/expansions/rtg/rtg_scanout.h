@@ -41,6 +41,7 @@
 
 #define RTG_ACCEL_FILLRECT 1u
 #define RTG_ACCEL_BLIT_COPY 2u
+#define RTG_ACCEL_INVERTRECT 3u
 
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
@@ -94,5 +95,10 @@ int bellatrix_rtg_accel_blit_copy(uint8_t *vram, uint32_t vram_size,
                                   uint32_t dst_x, uint32_t dst_y,
                                   uint32_t width, uint32_t height,
                                   uint32_t format);
+int bellatrix_rtg_accel_invertrect(uint8_t *vram, uint32_t vram_size,
+                                   uint32_t dst, uint32_t pitch,
+                                   uint32_t x, uint32_t y,
+                                   uint32_t width, uint32_t height,
+                                   uint32_t format, uint32_t mask);
 
 #endif

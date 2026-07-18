@@ -89,6 +89,33 @@ int bellatrix_rtg_accel_blit_copy(uint8_t *vram, uint32_t vram_size,
     return 1;
 }
 
+int bellatrix_rtg_accel_invertrect(uint8_t *vram, uint32_t vram_size,
+                                   uint32_t dst, uint32_t pitch,
+                                   uint32_t x, uint32_t y,
+                                   uint32_t width, uint32_t height,
+                                   uint32_t format, uint32_t mask)
+{
+    uint32_t bpp = format_bytes(format), row;
+    uint64_t first, last, row_bytes;
+    if (!vram || !bpp || mask != 0xffu || !width || !height || !pitch ||
+        (uint64_t)x * bpp > pitch)
+        return 0;
+    row_bytes = (uint64_t)width * bpp;
+    if (row_bytes > pitch - (uint64_t)x * bpp)
+        return 0;
+    first = (uint64_t)dst + (uint64_t)y * pitch + (uint64_t)x * bpp;
+    last = first + (uint64_t)(height - 1u) * pitch + row_bytes;
+    if (first >= vram_size || last > vram_size)
+        return 0;
+    for (row = 0; row < height; ++row) {
+        uint8_t *p = vram + first + (uint64_t)row * pitch;
+        uint64_t i;
+        for (i = 0; i < row_bytes; ++i)
+            p[i] = (uint8_t)~p[i];
+    }
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,

@@ -222,6 +222,23 @@ static void test_accel_blit_copy(void)
                                              2u, 1u, RTG_FMT_R5G6B5));
 }
 
+static void test_accel_invertrect(void)
+{
+    uint8_t vram[32];
+    memset(vram, 0x55, sizeof(vram));
+    check_u32("invert handled", 1u,
+              bellatrix_rtg_accel_invertrect(vram, sizeof(vram),
+                                              0u, 8u, 1u, 1u, 2u, 1u,
+                                              RTG_FMT_R5G6B5, 0xffu));
+    check_u32("invert first", 0xaau, vram[10]);
+    check_u32("invert last", 0xaau, vram[13]);
+    check_u32("invert neighbor", 0x55u, vram[9]);
+    check_u32("invert rejects mask", 0u,
+              bellatrix_rtg_accel_invertrect(vram, sizeof(vram),
+                                              0u, 8u, 0u, 0u, 1u, 1u,
+                                              RTG_FMT_CLUT, 0x0fu));
+}
+
 int main(void)
 {
     test_register_contract();
@@ -230,6 +247,7 @@ int main(void)
     test_argb_and_bounds();
     test_accel_fillrect();
     test_accel_blit_copy();
+    test_accel_invertrect();
     puts("rtg scanout tests passed");
     return 0;
 }

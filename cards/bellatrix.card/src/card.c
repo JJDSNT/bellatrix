@@ -60,6 +60,7 @@
 
 #define RTG_ACCEL_FILLRECT 1
 #define RTG_ACCEL_BLIT_COPY 2
+#define RTG_ACCEL_INVERTRECT 3
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -183,8 +184,23 @@ static void ProbeInvertRect(__REGA0(struct BoardInfo *bi),
                             __REGD4(UBYTE mask), __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, hostfmt;
     probe_report(base, PROBE_INVERTRECT, w, h,
                  ((ULONG)fmt << 8) | mask);
+    hostfmt = rtg_format(fmt);
+    if (mask == 0xff && hostfmt && x >= 0 && y >= 0 && w > 0 && h > 0 &&
+        ri->BytesPerRow > 0 && (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_DST, off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY, ((ULONG)(UWORD)x << 16) | (UWORD)y);
+        reg_write(base, RTG_REG_ACCEL_WH, ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, (hostfmt << 8) | mask);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_INVERTRECT);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->InvertRectDefault(bi, ri, x, y, w, h, mask, fmt);
 }
 
