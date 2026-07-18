@@ -166,6 +166,15 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 s_accel.xy >> 16, s_accel.xy & 0xffffu,
                 s_accel.wh >> 16, s_accel.wh & 0xffffu,
                 s_accel.fgpen, s_accel.fmtmask >> 8);
+        } else if (value == RTG_ACCEL_PLANAR2CHUNKY && s_accel.opcode == 0xc0u) {
+            s_accel.status = (uint32_t)bellatrix_rtg_accel_planar2chunky(
+                s_rtg_vram, BELLATRIX_RTG_VRAM_SIZE,
+                s_accel.dst, s_accel.pitch,
+                s_accel.xy >> 16, s_accel.xy & 0xffffu,
+                s_accel.wh >> 16, s_accel.wh & 0xffffu,
+                s_accel_upload, s_accel_upload_size, s_accel.src_pitch,
+                s_accel.src_xy & 0xffu, s_accel.mode,
+                s_accel.fmtmask & 0xffu);
         }
     } else if (reg == RTG_REG_DEBUG) {
         static const char *const probe_names[] = {

@@ -21,7 +21,7 @@ blitter 2D.
 | `BlitTemplate` | parcial | ≥1, 128×8 | **implementado:** upload 1-bit, JAM1/JAM2, INVERSVID, três formatos, máscara `ff` | COMPLEMENT, máscaras parciais |
 | `BlitPattern` | parcial | 0 | **implementado:** 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID, três formatos | COMPLEMENT, máscaras parciais |
 | `DrawLine` | parcial | 0 | **implementado:** sólida, foreground COPY, três formatos | padrões, background e demais draw modes |
-| `BlitPlanar2Chunky` | não | não instrumentado | planar→CLUT | máscaras/interleaved |
+| `BlitPlanar2Chunky` | parcial | HIDD AROS TODO | **implementado:** planar→CLUT, 1–8 planos, COPY `c0`, plane mask, planos constantes | demais minterms/interleaved |
 | `BlitPlanar2Direct` | não | não instrumentado | planar→RGB565/ARGB32 | formatos adicionais |
 
 Cada callback possui um `*Default` CPU no P96. Um caso não implementado deve
@@ -69,8 +69,9 @@ commit, os testes e a evidência guest; itens sem evidência permanecem parciais
   três formatos (unitário; ainda sem chamada no workload AROS).
 - [x] `DrawLine`: linha sólida foreground COPY e três formatos (unitário;
   ainda sem chamada no workload AROS).
-- [ ] **ATUAL:** `BlitPlanar2Chunky`: planar→CLUT.
-- [ ] `BlitPlanar2Direct`: planar→RGB565/ARGB32.
+- [x] `BlitPlanar2Chunky`: planar→CLUT, 1–8 planos, COPY `0xc0`, plane mask
+  e planos constantes (unitário; HIDD AROS local ainda marca a chamada TODO).
+- [ ] **ATUAL:** `BlitPlanar2Direct`: planar→RGB565/ARGB32.
 - [ ] Sprite, VBlank/page flip e depois fila/async.
 - [ ] Screen dragging, overlay e mode mixing após o desktop básico.
 

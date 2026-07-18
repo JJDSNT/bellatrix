@@ -468,4 +468,7 @@ mídia adequada e obter frame RTG não uniforme; depois validar apresentação S
 - `DrawLine` sólido (`LinePtrn=0xffff`) usa Bresenham host nos três formatos.
   Há oráculo unitário e fallback preservado, mas nenhuma chamada no workload
   AROS atual; por isso seu estado permanece parcial.
+- `BlitPlanar2Chunky` cobre COPY `0xc0` de 1–8 planos para CLUT, com plane mask,
+  source X não alinhado e planos constantes. Há teste unitário; o HIDD P96 local
+  ainda declara essa chamada TODO, portanto não existe evidência guest atual.
 - Casos recusados continuam chamando os callbacks `Default` do P96.

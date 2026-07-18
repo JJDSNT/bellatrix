@@ -69,6 +69,7 @@
 #define RTG_ACCEL_BLITTEMPLATE 4
 #define RTG_ACCEL_BLITPATTERN 5
 #define RTG_ACCEL_DRAWLINE 6
+#define RTG_ACCEL_PLANAR2CHUNKY 7
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -148,6 +149,63 @@ static void probe_report(struct BellatrixCardBase *base, UWORD op,
               0xB8000000UL | (((ULONG)width & 0x0fff) << 12) |
               ((ULONG)height & 0x0fff));
     reg_write(base, RTG_REG_DEBUG, 0xB9000000UL | (detail & 0x00ffffff));
+}
+
+static void AccelPlanar2Chunky(__REGA0(struct BoardInfo *bi),
+                               __REGA1(struct BitMap *bm),
+                               __REGA2(struct RenderInfo *ri),
+                               __REGD0(SHORT sx), __REGD1(SHORT sy),
+                               __REGD2(SHORT dx), __REGD3(SHORT dy),
+                               __REGD4(SHORT w), __REGD5(SHORT h),
+                               __REGD6(UBYTE plane_mask),
+                               __REGD7(UBYTE minterm))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, upload_pitch, total, plane, row, byte;
+    UBYTE *src;
+    if (minterm == 0xc0 && sx >= 0 && sy >= 0 && dx >= 0 && dy >= 0 &&
+        w > 0 && h > 0 && bm->Depth > 0 && bm->Depth <= 8 &&
+        (ULONG)(UWORD)sy + (UWORD)h <= bm->Rows && ri->BytesPerRow > 0 &&
+        (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        upload_pitch = (((ULONG)(UWORD)sx & 7) + (UWORD)w + 7) >> 3;
+        if (((ULONG)(UWORD)sx >> 3) + upload_pitch <= bm->BytesPerRow) {
+            total = upload_pitch * (ULONG)(UWORD)h * bm->Depth;
+            if (total <= 65536UL) {
+                off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+                reg_write(base, RTG_REG_ACCEL_UPLOAD_RESET, 0);
+                for (plane = 0; plane < bm->Depth; ++plane) {
+                    src = (UBYTE *)bm->Planes[plane];
+                    for (row = 0; row < (ULONG)(UWORD)h; ++row) {
+                        for (byte = 0; byte < upload_pitch; ++byte) {
+                            ULONG value = 0;
+                            if (src == (UBYTE *)-1) value = 0xff;
+                            else if (src) value = src[((ULONG)(UWORD)sy + row) *
+                                bm->BytesPerRow + ((ULONG)(UWORD)sx >> 3) + byte];
+                            reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, value);
+                        }
+                    }
+                }
+                reg_write(base, RTG_REG_ACCEL_DST, off);
+                reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+                reg_write(base, RTG_REG_ACCEL_XY,
+                          ((ULONG)(UWORD)dx << 16) | (UWORD)dy);
+                reg_write(base, RTG_REG_ACCEL_WH,
+                          ((ULONG)(UWORD)w << 16) | (UWORD)h);
+                reg_write(base, RTG_REG_ACCEL_SRC_PITCH, upload_pitch);
+                reg_write(base, RTG_REG_ACCEL_SRC_XY, (UWORD)sx & 7);
+                reg_write(base, RTG_REG_ACCEL_MODE, bm->Depth);
+                reg_write(base, RTG_REG_ACCEL_FMTMASK, plane_mask);
+                reg_write(base, RTG_REG_ACCEL_OPCODE, minterm);
+                reg_write(base, RTG_REG_ACCEL_COMMAND,
+                          RTG_ACCEL_PLANAR2CHUNKY);
+                if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+                    return;
+            }
+        }
+    }
+    bi->BlitPlanar2ChunkyDefault(bi, bm, ri, sx, sy, dx, dy, w, h,
+                                 plane_mask, minterm);
 }
 
 static ULONG rtg_format(RGBFTYPE fmt);
@@ -655,6 +713,7 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
     bi->GetVBeamPos = GetVBeamPos;
     bi->SetInterrupt = SetInterrupt;
     bi->WaitBlitter = WaitBlitter;
+    bi->BlitPlanar2Chunky = AccelPlanar2Chunky;
     bi->FillRect = ProbeFillRect;
     bi->InvertRect = ProbeInvertRect;
     bi->BlitRect = ProbeBlitRect;

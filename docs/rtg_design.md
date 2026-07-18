@@ -142,6 +142,9 @@ ABI independente do backend CPU e cobre JAM1/JAM2, INVERSVID e os três formatos
 `DrawLine` cobre inicialmente `LinePtrn=0xffff`, usando Bresenham inclusivo nos
 dois endpoints e o foreground pen. O caminho AROS inicializa endpoints, pens e
 `LinePtrn`; campos auxiliares não inicializados não são usados pelo contrato.
+`BlitPlanar2Chunky` envia os recortes dos bitplanes pela janela de upload e
+converte COPY (`0xc0`) para CLUT, respeitando plane mask e os planos constantes
+Amiga `NULL`/`-1`. O HIDD P96 do AROS local ainda deixa essa chamada como TODO.
 
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve

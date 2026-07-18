@@ -238,6 +238,47 @@ int bellatrix_rtg_accel_drawline(uint8_t *vram, uint32_t vram_size,
     return 1;
 }
 
+int bellatrix_rtg_accel_planar2chunky(uint8_t *vram, uint32_t vram_size,
+                                      uint32_t dst, uint32_t pitch,
+                                      uint32_t dx, uint32_t dy,
+                                      uint32_t width, uint32_t height,
+                                      const uint8_t *planes,
+                                      uint32_t planes_size,
+                                      uint32_t plane_pitch,
+                                      uint32_t source_bit,
+                                      uint32_t depth, uint32_t plane_mask)
+{
+    uint32_t row, col, plane;
+    uint64_t first, last, plane_span, needed;
+    if (!vram || !planes || !pitch || !width || !height || !plane_pitch ||
+        !depth || depth > 8u || source_bit > 7u || dx > pitch ||
+        width > pitch - dx || source_bit + width > plane_pitch * 8u)
+        return 0;
+    plane_span = (uint64_t)plane_pitch * height;
+    needed = plane_span * depth;
+    first = (uint64_t)dst + (uint64_t)dy * pitch + dx;
+    last = first + (uint64_t)(height - 1u) * pitch + width;
+    if (needed > planes_size || first >= vram_size || last > vram_size)
+        return 0;
+    for (row = 0; row < height; ++row) {
+        uint8_t *out = vram + first + (uint64_t)row * pitch;
+        for (col = 0; col < width; ++col) {
+            uint32_t pixel = out[col];
+            uint32_t bitpos = source_bit + col;
+            for (plane = 0; plane < depth; ++plane) {
+                uint32_t bit;
+                if (!(plane_mask & (1u << plane))) continue;
+                bit = (planes[(uint64_t)plane * plane_span +
+                              (uint64_t)row * plane_pitch + bitpos / 8u] >>
+                       (7u - bitpos % 8u)) & 1u;
+                pixel = (pixel & ~(1u << plane)) | (bit << plane);
+            }
+            out[col] = (uint8_t)pixel;
+        }
+    }
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,

@@ -310,6 +310,25 @@ static void test_accel_drawline(void)
                                             0u, RTG_FMT_R5G6B5));
 }
 
+static void test_accel_planar2chunky(void)
+{
+    uint8_t vram[32], planes[2] = { 0xa0u, 0xc0u };
+    memset(vram, 0x80, sizeof(vram));
+    check_u32("planar chunky", 1u,
+              bellatrix_rtg_accel_planar2chunky(
+                  vram, sizeof(vram), 0u, 8u, 1u, 1u, 4u, 1u,
+                  planes, sizeof(planes), 1u, 0u, 2u, 0x03u));
+    check_u32("planar pixel 3", 0x83u, vram[9]);
+    check_u32("planar pixel 2", 0x82u, vram[10]);
+    check_u32("planar pixel 1", 0x81u, vram[11]);
+    check_u32("planar pixel 0", 0x80u, vram[12]);
+    check_u32("planar neighbor", 0x80u, vram[8]);
+    check_u32("planar rejects depth", 0u,
+              bellatrix_rtg_accel_planar2chunky(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 1u, 1u,
+                  planes, sizeof(planes), 1u, 0u, 9u, 0xffu));
+}
+
 int main(void)
 {
     test_register_contract();
@@ -322,6 +341,7 @@ int main(void)
     test_accel_blittemplate();
     test_accel_blitpattern();
     test_accel_drawline();
+    test_accel_planar2chunky();
     puts("rtg scanout tests passed");
     return 0;
 }
