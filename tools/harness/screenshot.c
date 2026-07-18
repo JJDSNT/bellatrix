@@ -46,6 +46,7 @@ void harness_maybe_screenshot(long frame_count)
         frame.width  = rtg_frame.width;
         frame.height = rtg_frame.height;
         frame.pitch  = rtg_frame.pitch;
+        frame.format = RIGEL_PIXEL_RGBA8888;
     } else if (!ctx || !rigel_get_frame(ctx, &frame) || !frame.pixels) {
         fprintf(stderr, "[SCREENSHOT] frame %ld: no frame available\n", frame_count);
         return;

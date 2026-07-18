@@ -2,11 +2,11 @@
 id: ISSUE-0033
 title: "Harness: RTG (gfx board) para distros que não usam Denise — ArosOne desktop"
 status: open
-priority: low
+priority: high
 type: enhancement
 owner: unassigned
 created_at: 2026-07-03
-updated_at: 2026-07-03
+updated_at: 2026-07-18
 tags:
   - harness
   - rtg
@@ -26,6 +26,12 @@ ArosOne-68K boota no harness (68040 + Z2 fast RAM, ISSUE-0031) mas o
 desktop nunca aparece: a distro é configurada para tela RTG (perfil
 WinUAE usa uaegfx com 512MB VRAM). O harness só renderiza via Denise.
 O Emu68 tem RTG próprio no hardware; o harness não tem nada.
+
+> **Direção retomada em 2026-07-18:** esta issue volta a ser o plano ativo de
+> RTG. A decisão anterior de tratar `bellatrix.rtg` como lab destinado à remoção
+> foi superada após separar a placa P96/framebuffer portátil do backend físico
+> VideoCore. O histórico abaixo não foi reescrito; a decisão e o plano novos
+> estão no final desta issue e em `docs/rtg_design.md`.
 
 # Objetivos (em ordem de custo)
 
@@ -226,3 +232,151 @@ espera 0x10000). Hipoteses, em ordem:
    (RTG-only) nao abre nada — checar MonitorList/hidd via os_debug (extensao facil).
 
 Nota 68040: rodado com `--cpu 68040` (FPU da ISSUE-0034). Sem F-line em nenhum run.
+
+# Retomada 2026-07-18 — framebuffer P96 portátil inspirado no Minimig/MiSTer
+
+## Identidade no log e bug de ativação pelo wrapper
+
+- placa/`BoardName`: `Bellatrix RTG`;
+- biblioteca P96 no guest: `bellatrix.card`;
+- ativação pedida: `[HARNESS] RTG enabled: Bellatrix RTG (bellatrix.card), Zorro III 8MB`;
+- modo efetivamente aberto: `[RTG] enable=1 ...`.
+
+Foi reproduzido `HARNESS_RTG=1 ./run.sh harness` imprimindo `RTG disabled`.
+Não era outra branch nem falha do AutoConfig: sem `KICKSTART` explícito,
+`load_launcher_selection` carregava `BELLATRIX_RTG=0` do perfil e atribuía
+esse valor a `HARNESS_RTG`, apagando a variável fornecida pelo usuário. A
+precedência foi corrigida: `HARNESS_RTG` explícito vence o perfil persistido.
+
+## Correção de direção
+
+O backend VideoCore não é requisito do RTG atual. Ele é uma possível solução
+futura de apresentação no Raspberry, provavelmente integrada pelo próprio Emu68.
+O alvo imediato é uma placa P96 mínima cuja VRAM e estado de scanout possam ser
+consumidos tanto pelo harness quanto pelo hardware:
+
+```
+bellatrix.card → VRAM + registradores → scanout comum → SDL | Raspberry
+```
+
+Referência comportamental escolhida: `extra/rtg_driver/MiSTer.card.asm` do
+Minimig-AGA MiSTer. O driver funcional usa 8 MB de VRAM linear e apenas endereço,
+formato, enable, largura, altura, stride e CLUT. VBL interrupt, blitter, sprite e
+clock real estão ausentes ou desabilitados. Isso invalida a hipótese de que seria
+necessário resolver VC4 ou interrupções antes do primeiro desktop.
+
+## Estado real de partida
+
+- O RTG Bellatrix já é uma board Z3 EXTERNAL no `board_registry`.
+- O host já implementa VRAM, registradores, paleta e conversão de três formatos.
+- O harness já consegue capturar o frame RTG em screenshot.
+- DiagArea → CardLoader → LibList → FindCard → InitCard foi comprovado no AROS.
+- O primeiro bloqueio continua sendo a ausência de `SetGC`/`SetPanning`/
+  `SetSwitch`, logo está acima do framebuffer host.
+- Há lógica obsoleta no harness reduzindo Fast RAM Z2 quando `HARNESS_RTG=1`,
+  apesar de o RTG ter migrado para Z3; deve ser removida na fase 0.
+
+## Plano ativo
+
+1. **Contrato e testes host:** comparar MiSTer/Bellatrix/AROS, congelar a spec e
+   testar CLUT, RGB565, 32-bit, pan, stride e limites sem guest.
+2. **P96 conhecido no harness:** alinhar callbacks ao MiSTer e validar primeiro
+   com AmigaOS + Picasso96 carregando a `.card` por disco; apresentar via SDL.
+3. **AROS base:** retomar a residência já funcional e identificar o motivo de o
+   HIDD não selecionar modo depois de `InitCard`.
+4. **ArosOne:** desktop RTG-only em resolução maior que PAL.
+5. **Raspberry:** ligar o mesmo scanout a um presenter futuro, sem alterar a ABI.
+
+## Próximo incremento de código
+
+- criar testes unitários para o register file/scanout;
+- retirar o acoplamento RTG Z3 → redução de Fast RAM Z2;
+- corrigir divergências objetivas encontradas na comparação com MiSTer, começando
+  pela semântica de retorno de `SetSwitch`, formatos e `SetPanning`;
+- adicionar apresentação SDL contínua somente depois que os oráculos host estiverem
+  verdes.
+
+## Critério do primeiro marco
+
+Um padrão escrito diretamente na VRAM, com modo programado pelos mesmos registros
+que a `.card` usa, deve produzir frame correto nos três formatos e screenshot
+determinística. Esse marco não depende de ROM, HDF, AROS, SDL nem Raspberry.
+
+## Execução 2026-07-18 — primeiro oráculo concluído
+
+- Extraído `rtg_scanout.c/.h`: núcleo puro, sem machine/AutoConfig/SDL/VC4, que
+  contém estado, contrato de registradores, validação e conversão para RGBA.
+- `rtg.c` agora é o adaptador Z3: serve a janela/ROM/VRAM e delega o scanout ao
+  núcleo portátil.
+- Adicionado `bellatrix_unit_rtg_scanout`, cobrindo ID/versão/VRAM, auto-incremento
+  e wrap da paleta, VBL tick, CLUT, R5G6B5, A8R8G8B8, stride, pan e rejeição de
+  stride curto ou frame fora da VRAM.
+- Removida a redução de Fast RAM Z2 para 4 MB quando `HARNESS_RTG=1`; RTG é Z3 e
+  não disputa essa janela.
+- Build completo do harness passou, incluindo a reconstrução de `bellatrix.card`
+  e `rtg.rom` (9512 bytes). O erro anterior não era do wrapper: o sandbox bloqueou
+  o socket vsock do `wslc.exe`; com execução autorizada fora do sandbox o wrapper
+  existente funcionou sem mudanças.
+- Validação: 15/15 testes Bellatrix relevantes verdes, incluindo smoke, ADF e
+  boots KS1.3/KS2.0/KS3.1/AROS.
+- Primeira divergência da matriz corrigida: `SetSwitch` agora retorna o inverso
+  do estado selecionado, como exigido pelo P96 e implementado por MiSTer.card e
+  VideoCore.card. O caminho de display do AROS ignora esse retorno, então a
+  correção é de contrato, não uma explicação suficiente para o bloqueio antigo.
+
+**Próximo passo:** fechar a matriz callback/semântica MiSTer × bellatrix.card ×
+AROS e corrigir divergências comprovadas antes de iniciar o teste AmigaOS/P96.
+
+## Correção histórica 2026-07-18 — o blocker não era mode matching
+
+**Suposição errada preservada acima:** após a sessão de 2026-07-06, concluímos que
+`InitCard` funcionava, mas `SetGC`/`SetPanning`/`SetSwitch` não eram chamados, e
+priorizamos mode matching, monitor default e VBL. Isso deixou de representar a
+execução depois que o RTG foi migrado para Z3.
+
+**Causa comprovada:** `tools/harness/musashi_backend.c` devolvia open bus para
+qualquer endereço `> 0x00ffffff` antes de consultar `machine_dispatch`. O guest
+configurava a board em `0x40000000`, mas nenhuma leitura/escrita posterior da
+janela alcançava `rtg_bus_ops`. Antes da correção, `diag init` leu `da_Config=f0`
+(open bus mascarado); não houve sequer o log da primeira leitura da ROM RTG.
+
+**Correção:** consultar `bellatrix_boards_external_window_owner(addr)` antes do
+fallback open bus. Se houver owner configurado e `is_z3`, encaminhar pelo bridge;
+probes/endereço Z3 sem owner continuam retornando open bus e não sofrem máscara
+para 24 bits.
+
+**Evidência posterior, mesma `aros.rom`, 1000 frames:** `da_Config=90`, CardLoader
+completa (`b0000004`), `FindCard` (`cafd0001`), `InitCard` (`cafd0003`), paleta,
+`SetGC=640x480`, formato CLUT, stride 640, pan 0 e `enable=1`. Logo o AROS já
+selecionava um modo corretamente; a hipótese de mode matching não explicava a
+ausência dos callbacks.
+
+**Segunda suposição corrigida:** os primeiros `_Static_assert` de `BoardInfo`
+falharam e pareceram indicar ABI deslocada. O erro estava nos offsets esperados,
+calculados 10 bytes à frente. Probe compilado pela toolchain m68k confirmou que a
+struct existente casa o AROS (`PixelClockCount=254`, `SetSwitch=282`, `SetGC=294`,
+`SetPanning=298`). Os asserts foram corrigidos e mantidos.
+
+## Execução 2026-07-18 — Z3 destravado e primeiro modo programado
+
+- Musashi agora encaminha janelas Z3 EXTERNAL configuradas ao bridge antes do
+  fallback open bus. Probes Z3 sem owner continuam open bus.
+- Janela RTG ampliada de 4 para 8 MB (`0x40000000–0x407fffff`, 8180 KB úteis),
+  suficiente para `1440x900x32`; Fast RAM Z2 permanece 8 MB.
+- `WaitVerticalSync` virou no-op como no MiSTer, removendo um deadlock potencial
+  entre callback guest e tick do loop host.
+- Adicionados `_Static_assert` m68k dos offsets P96 críticos da `BoardInfo`.
+- `machine_present_frame_from_rigel()` agora prefere o frame RTG ativo no harness
+  e converte seus bytes RGBA para a superfície RGB565 SDL; Denise continua sendo
+  o fallback quando RTG está desabilitado.
+- Corrigido o campo `format` não inicializado na captura RTG de `screenshot.c`.
+- Novo teste `bellatrix_harness_rtg_aros`: prova Z3 8 MB + DiagArea 0x90 +
+  CardLoader + FindCard + InitCard + `640x480 CLUT/stride 640/pan 0/enable 1`, e
+  rejeita regressão em que `0x40000000` volte a open bus.
+- Validação completa: 16/16 testes Bellatrix verdes, incluindo a nova integração
+  RTG e boots KS1.3/KS2.0/KS3.1/AROS.
+
+Uma screenshot sem mídia no frame 900 foi corretamente produzida como RTG
+`640x480`, mas estava preta/uniforme. Isso comprova seleção e captura do scanout,
+não ainda o critério final de conteúdo/desktop visível. O próximo alvo é bootar
+mídia adequada e obter frame RTG não uniforme; depois validar apresentação SDL.

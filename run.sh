@@ -296,7 +296,10 @@ load_launcher_selection() {
                 ;;
             BELLATRIX_RTG)
                 BELLATRIX_RTG="$value"
-                HARNESS_RTG="$value"
+                # An explicit shell override must win over the launcher's
+                # persisted profile (for example HARNESS_RTG=1 ./run.sh
+                # harness).  Only inherit the profile when it was not set.
+                HARNESS_RTG="${HARNESS_RTG:-$value}"
                 ;;
             BELLATRIX_USB_POINTER)
                 BELLATRIX_USB_POINTER="$value"

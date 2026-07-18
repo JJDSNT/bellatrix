@@ -1102,19 +1102,25 @@ int main(int argc, char **argv)
     /* Announce Fast RAM through Zorro II Autoconfig. Its host backing is
      * reserved already, but the Musashi direct region is installed only
      * after the guest assigns the board base. HARNESS_FASTRAM=0 disables it.
-     * With HARNESS_RTG=1 the RTG board takes a 4MB window out of the
-     * Zorro II space, so fast RAM drops to 4MB. */
+     * RTG is Zorro III and does not consume this Zorro II address space. */
     const char *rtg_env = getenv("HARNESS_RTG");
     int rtg_enabled = rtg_env && rtg_env[0] != '\0' && rtg_env[0] != '0';
     const char *fastram_env = getenv("HARNESS_FASTRAM");
     if (!(fastram_env && fastram_env[0] == '0')) {
-        uint32_t fast_mb = rtg_enabled ? 4u : 8u;
+        uint32_t fast_mb = 8u;
         bellatrix_z2_fast_ram_configure(fast_mb * 1024u * 1024u);
         printf("[HARNESS] Fast RAM: %uMB Zorro II board configured\n",
                (unsigned)fast_mb);
     }
-    if (rtg_enabled && bellatrix_rtg_register(m) != 0) {
-        fprintf(stderr, "[HARNESS] bellatrix_rtg_register failed\n");
+    if (rtg_enabled) {
+        if (bellatrix_rtg_register(m) != 0) {
+            fprintf(stderr, "[HARNESS] RTG requested but Bellatrix RTG registration failed\n");
+        } else {
+            printf("[HARNESS] RTG enabled: Bellatrix RTG (bellatrix.card), "
+                   "Zorro III 8MB\n");
+        }
+    } else {
+        printf("[HARNESS] RTG disabled (set HARNESS_RTG=1 to enable)\n");
     }
 
     /* Register the CD-ROM board only when it has media, unless explicitly

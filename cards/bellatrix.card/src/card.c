@@ -1,14 +1,14 @@
 /*
- * bellatrix.card — P96 card driver for the "bellatrix.rtg" Zorro II board.
+ * bellatrix.card — P96 card driver for the "bellatrix.rtg" Zorro III board.
  *
  * Consumed by the AROS m68k p96gfx HIDD (external/aros .../hidd/p96gfx),
  * which scans exec's LibList for libraries named "*.card". The board is
- * emulated by src/machine/expansions/rtg/rtg.c (harness) and, in phase 2,
- * backed by the VC4 framebuffer on baremetal. Register spec:
+ * served by src/machine/expansions/rtg/rtg.c. Harness and future Raspberry
+ * presenters consume the same backend-neutral scanout state. Register spec:
  * docs/rtg_design.md — keep in sync with src/machine/expansions/rtg/rtg.h.
  *
- * Structure follows external/VideoCore.card (MPL-2.0, (c) Michal
- * Schulz / Emu68 project), stripped down to a dumb-framebuffer card.
+ * BoardInfo scaffolding follows external/VideoCore.card (MPL-2.0, (c) Michal
+ * Schulz / Emu68 project); framebuffer behavior is deliberately backend-neutral.
  */
 
 #include <exec/types.h>
@@ -19,6 +19,7 @@
 #include <proto/exec.h>
 #include <proto/expansion.h>
 #include <libraries/configvars.h>
+#include <stddef.h>
 
 #include "boardinfo.h"
 
@@ -61,6 +62,29 @@ struct BellatrixCardBase {
     UWORD               cb_Width;    /* latched by SetGC for SetPanning */
     UWORD               cb_Height;
 };
+
+/* AROS p96gfx accesses BoardInfo through fixed byte offsets rather than this C
+ * declaration. Keep a compile-time m68k ABI oracle beside the driver so a
+ * header/toolchain change cannot silently move the fields we populate. */
+#define P96_ABI_ASSERT(field, expected) \
+    _Static_assert(offsetof(struct BoardInfo, field) == (expected), \
+                   "P96 BoardInfo offset mismatch: " #field)
+P96_ABI_ASSERT(RegisterBase,          0);
+P96_ABI_ASSERT(MemoryBase,            4);
+P96_ABI_ASSERT(MemorySize,           12);
+P96_ABI_ASSERT(BoardName,            16);
+P96_ABI_ASSERT(CardBase,             52);
+P96_ABI_ASSERT(ResolutionsList,     158);
+P96_ABI_ASSERT(BoardType,           170);
+P96_ABI_ASSERT(Flags,               186);
+P96_ABI_ASSERT(RGBFormats,          200);
+P96_ABI_ASSERT(PixelClockCount,     254);
+P96_ABI_ASSERT(SetSwitch,           282);
+P96_ABI_ASSERT(SetGC,               294);
+P96_ABI_ASSERT(SetPanning,          298);
+P96_ABI_ASSERT(CalculateBytesPerRow,302);
+P96_ABI_ASSERT(WaitVerticalSync,    346);
+#undef P96_ABI_ASSERT
 
 #define SysBase (base->cb_SysBase)
 
@@ -130,7 +154,8 @@ static BOOL SetSwitch(__REGA0(struct BoardInfo *bi), __REGD0(BOOL state))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
     reg_write(base, RTG_REG_ENABLE, state ? 1 : 0);
-    return state;
+    /* P96 expects the inverse of the selected monitor-switch state. */
+    return state ? 0 : 1;
 }
 
 static void SetColorArray(__REGA0(struct BoardInfo *bi), __REGD0(UWORD start), __REGD1(UWORD count))
@@ -247,11 +272,11 @@ static void SetReadPlane(__REGA0(struct BoardInfo *bi), __REGD0(UBYTE plane))
 
 static void WaitVerticalSync(__REGA0(struct BoardInfo *bi), __REGD0(BOOL toggle))
 {
-    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
-    ULONG start = reg_read(base, RTG_REG_VBLANK);
+    /* The host presenter owns cadence. Busy-waiting here deadlocks the harness:
+     * its frame loop cannot advance RTG_REG_VBLANK while the guest is trapped
+     * inside this callback. MiSTer.card likewise treats this as a no-op. */
+    (void)bi;
     (void)toggle;
-    while (reg_read(base, RTG_REG_VBLANK) == start)
-        ;
 }
 
 static ULONG GetVBeamPos(__REGA0(struct BoardInfo *bi))

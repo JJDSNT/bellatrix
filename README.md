@@ -25,7 +25,7 @@ on the Pi. Five areas remain in progress:
   happens.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
-- **RTG support** — `bellatrix.rtg` and the P96 `bellatrix.card` path are in progress; DiagArea/CardLoader residency is confirmed, but p96gfx discovery, live RTG output, and the VC4 bare-metal backend still need validation/completion.
+- **RTG support** — `bellatrix.rtg` is a portable 8 MB linear-framebuffer P96 board shared by the harness and future Raspberry presenters. In the harness, AROS now completes DiagArea/CardLoader, `FindCard`, `InitCard`, and mode selection through an active 640x480 CLUT scanout; the live SDL presenter prefers RTG when enabled. The next milestone is a non-uniform desktop frame from bootable media. A future VC4/Emu68 presenter is deliberately not a prerequisite.
 - **HDMI audio** — the bare-metal HDMI output path is believed to be working:
   the DMA test clip/WAV plays on real Pi hardware. The remaining work is to
   get Amiga/Paula emulation fast enough on hardware to validate real Amiga

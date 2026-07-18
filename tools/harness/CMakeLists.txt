@@ -198,6 +198,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
     ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
     ${SRC}/machine/expansions/rtg/rtg.c
+    ${SRC}/machine/expansions/rtg/rtg_scanout.c
 
     # Memory
     ${SRC}/machine/memory/memory.c
@@ -406,6 +407,15 @@ target_compile_options(bellatrix_unit_board_registry PRIVATE -Wall -Wextra -Werr
 add_test(NAME bellatrix_unit_board_registry
          COMMAND bellatrix_unit_board_registry)
 
+add_executable(bellatrix_unit_rtg_scanout
+    ${ROOT}/tests/unit/test_rtg_scanout.c
+    ${SRC}/machine/expansions/rtg/rtg_scanout.c
+)
+target_include_directories(bellatrix_unit_rtg_scanout PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_rtg_scanout PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_rtg_scanout
+         COMMAND bellatrix_unit_rtg_scanout)
+
 # Pure host-testable protocol modules (no PAL, no machine dependencies).
 add_executable(bellatrix_unit_timeline
     ${ROOT}/tests/unit/test_timeline.c
@@ -486,6 +496,16 @@ add_test(NAME bellatrix_harness_no_autoconfig
                  ${CMAKE_BINARY_DIR}/harness
                  ${ROOT}/src/roms/KS31.rom
                  ${ROOT}/src/disks/workbench31.adf)
+
+add_test(NAME bellatrix_harness_rtg_aros
+         COMMAND /bin/bash
+                 ${ROOT}/tests/integration/harness_rtg_aros.sh
+                 ${CMAKE_BINARY_DIR}/harness
+                 ${ROOT}/src/roms/aros.rom)
+set_tests_properties(bellatrix_harness_rtg_aros PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 30
+)
 
 set_tests_properties(bellatrix_unit_memory PROPERTIES
     ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"

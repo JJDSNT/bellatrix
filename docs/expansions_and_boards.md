@@ -189,19 +189,21 @@ hardcoded memory-map in the `run.sh` TUI (`tools/launcher/tui.go`).
 ## 5. Board inventory
 
 **Emu68 native — keep, never wrap.** `z2ram`, `68040`, `sdcard`, `emmc`,
-`unicam`, `devicetree`, and `VideoCore.card` (the RTG target). These are Emu68's
-and come up through Emu68's own mechanism (boards mode). Do not write Bellatrix
-wrappers around them — a `z3_68040` wrapper existed and was deleted (2026-07-17)
-as redundant.
+`unicam`, `devicetree`, and `VideoCore.card`. These are Emu68's and come up
+through Emu68's own mechanism (boards mode). Do not write Bellatrix wrappers
+around them — a `z3_68040` wrapper existed and was deleted (2026-07-17) as
+redundant. `VideoCore.card` may inform a future Raspberry presenter, but it is
+not the prerequisite or guest contract of Bellatrix RTG.
 
-**RTG (`src/machine/expansions/rtg/`) — a lab, kept for now.** A Bellatrix P96
-graphics board whose *render* path never worked. As of ISSUE-0066 it is a
+**RTG (`src/machine/expansions/rtg/`) — active portable framebuffer work.** A
+Bellatrix P96 graphics board whose first laboratory version reached `InitCard`
+but not mode selection or live scanout. As of ISSUE-0066 it is a
 `board_registry` **Zorro III** EXTERNAL board (`is_z3=1`, `map==NULL`), served
-per access via `expansion.c` `bus_ops` — it registers and its window decodes
-through the Super Buster, but nothing drives its registers. Its target is Emu68's
-`VideoCore.card`, which only exists on the Raspberry Pi, so RTG is evolved in a
-dedicated session rather than deleted. Harness/lab-only (`HARNESS_RTG`). See
-`docs/rtg_design.md` (superseded; correction header) and ISSUE-0033.
+per access via `expansion.c` `bus_ops`; its window decodes through the Super
+Buster. The active direction (2026-07-18) is a backend-neutral linear VRAM and
+scanout contract, modeled behaviorally after Minimig/MiSTer P96. Harness SDL and
+a future Raspberry/Emu68 presenter consume the same state independently. It is
+enabled with `HARNESS_RTG`. See `docs/rtg_design.md` and ISSUE-0033.
 
 **lide (`src/machine/expansions/lide_cdrom/`, `external/lide.device`) — the one
 board Emu68 does not provide.** It gives **ISO (CD-ROM)** and **HDF (hard-disk
@@ -233,7 +235,8 @@ ATA/IDE registers, so no DIRECT region can express it. AutoConfig via
    stabilising boards-mode (sdcard under QEMU).
 6. **Finally.** Retire `expansion.c`'s per-access registry once `board_registry`
    grows a shared EXTERNAL-window serving mechanism; retire the `run.sh` TUI
-   hardcoded memory-map. Evolve RTG against `VideoCore.card` (Pi-only).
+   hardcoded memory-map. This refactor must preserve the portable RTG register/
+   VRAM contract and does not depend on a Pi-only presenter.
 
 ---
 

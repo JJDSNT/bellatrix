@@ -19,6 +19,7 @@
 #include "musashi_backend.h"
 #include "cpu/cpu_bridge.h"
 #include "cpu/direct_region.h"
+#include "machine/bus/board_registry.h"
 #include "machine/machine.h"
 #include "machine/memory/memory.h"
 #include "rigel/rigel_cia.h"
@@ -2571,19 +2572,21 @@ static void harness_instr_hook(unsigned int pc)
 static uint32_t harness_read(uint32_t addr, int size)
 {
     uint32_t direct_value;
+    const struct ExpansionBoard *external_board;
 
     if (bellatrix_direct_region_read(&s_direct_regions, addr,
                                      (unsigned int)size, &direct_value))
         return direct_value;
 
-    /* Zorro III / 32-bit space is unimplemented (ISSUE-0032) — must read
-     * as open bus, not alias into 24-bit space. AROS's Z3 autoconfig
-     * probe (0xFF000000+) was previously masking onto live chip RAM and
-     * the RTG board's own DiagArea, reading mutable state instead of
-     * "nothing here" and causing non-deterministic boot behavior across
-     * runs (found 2026-07-03; same fix applied in cpu_bridge.c for the
-     * non-harness backends). */
+    /* Configured EXTERNAL Z3 windows are real 32-bit bus targets and must
+     * reach machine_dispatch. Everything else above 24 bits remains open bus;
+     * in particular, never mask an unowned Z3 probe onto chip RAM. */
     if (addr > 0x00FFFFFFu) {
+        external_board = bellatrix_boards_external_window_owner(addr);
+        if (external_board && external_board->is_z3) {
+            harness_sync_cpu_progress();
+            return bellatrix_bridge_cpu_read(addr, (unsigned int)size);
+        }
         static int s_hits = 0;
         if (s_hits < 20) {
             s_hits++;
@@ -2661,13 +2664,20 @@ static uint32_t harness_read(uint32_t addr, int size)
 static void harness_write(uint32_t addr, uint32_t value, int size)
 {
     uint32_t pc = (uint32_t)m68k_get_reg(NULL, M68K_REG_PC);
+    const struct ExpansionBoard *external_board;
 
     if (bellatrix_direct_region_write(&s_direct_regions, addr,
                                       (unsigned int)size, value))
         return;
 
-    /* Zorro III / 32-bit space open bus — see harness_read. */
+    /* Route configured EXTERNAL Z3 boards before the unowned open-bus case. */
     if (addr > 0x00FFFFFFu) {
+        external_board = bellatrix_boards_external_window_owner(addr);
+        if (external_board && external_board->is_z3) {
+            harness_sync_cpu_progress();
+            bellatrix_bridge_cpu_write(addr, value, (unsigned int)size);
+            return;
+        }
         static int s_hits = 0;
         if (s_hits < 20) {
             s_hits++;

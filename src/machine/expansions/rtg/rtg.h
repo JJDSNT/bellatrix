@@ -1,17 +1,18 @@
 // src/machine/expansions/rtg/rtg.h
 //
-// "bellatrix.rtg" — Zorro II P96-style framebuffer board.
+// "bellatrix.rtg" — Zorro III P96-style linear framebuffer board.
 // Register spec: docs/rtg_design.md. Guest driver: bellatrix.card (m68k),
 // consumed by the AROS p96gfx HIDD.
 //
-// The board is host-backend agnostic: the harness blits the rendered
-// frame to SDL/screenshots; the baremetal backend blits it to the VC4
-// framebuffer. Rendering to RGBA is done here, once per fetched frame.
+// The board is host-backend agnostic: it exposes a common scanout state for
+// harness SDL/screenshots and a future Raspberry presenter. Rendering to RGBA
+// is done here, once per fetched frame.
 
 #ifndef BELLATRIX_EXPANSIONS_RTG_H
 #define BELLATRIX_EXPANSIONS_RTG_H
 
 #include <stdint.h>
+#include "machine/expansions/rtg/rtg_scanout.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,7 +20,7 @@ extern "C" {
 
 struct BellatrixMachine;
 
-#define BELLATRIX_RTG_WINDOW      0x00400000u  /* 4MB Zorro II window   */
+#define BELLATRIX_RTG_WINDOW      0x00800000u  /* 8MB Zorro III window  */
 #define BELLATRIX_RTG_REG_SIZE    0x00000100u  /* register file (256B)  */
 #define BELLATRIX_RTG_ROM_OFF     0x00000100u  /* DiagArea+card ROM     */
 #define BELLATRIX_RTG_ROM_SIZE    0x00002F00u  /* 11.75KB ROM budget    */
@@ -33,38 +34,7 @@ struct BellatrixMachine;
 #define BELLATRIX_RTG_MANUFACTURER 0x07DBu
 #define BELLATRIX_RTG_PRODUCT      0x10u
 
-/* Register offsets (32-bit big-endian). Keep in sync with bellatrix.card. */
-#define RTG_REG_ID            0x00u  /* RO 'BRTG'                        */
-#define RTG_REG_VERSION       0x04u  /* RO spec version                  */
-#define RTG_REG_VRAM_OFF      0x08u  /* RO VRAM offset in window         */
-#define RTG_REG_VRAM_SIZE     0x0Cu  /* RO VRAM bytes                    */
-#define RTG_REG_ENABLE        0x10u  /* 1 = RTG owns the video output    */
-#define RTG_REG_MODE_W        0x14u
-#define RTG_REG_MODE_H        0x18u
-#define RTG_REG_FORMAT        0x1Cu  /* RGBFTYPE subset, see below       */
-#define RTG_REG_BYTES_PER_ROW 0x20u
-#define RTG_REG_PAN           0x24u  /* visible fb offset inside VRAM    */
-#define RTG_REG_PAL_INDEX     0x28u
-#define RTG_REG_PAL_DATA      0x2Cu  /* 0x00RRGGBB, autoincrements index */
-#define RTG_REG_VBLANK        0x30u  /* RO frame counter                 */
-#define RTG_REG_DEBUG         0x34u  /* WO guest breadcrumb, host logs   */
-
-#define RTG_ID_MAGIC   0x42525447u   /* 'BRTG' */
-#define RTG_SPEC_VERSION 1u
-
-/* RGBFTYPE values used (match p96gfx_rtg.h) */
-#define RTG_FMT_CLUT      1u
-#define RTG_FMT_A8R8G8B8  6u
-#define RTG_FMT_R5G6B5    10u
-
-typedef struct BellatrixRtgFrame {
-    const uint8_t *pixels;  /* RGBA8888, tightly packed */
-    uint32_t width;
-    uint32_t height;
-    uint32_t pitch;         /* bytes per row (= width * 4) */
-} BellatrixRtgFrame;
-
-/* Register the board on the Zorro II bus. Returns 0 on success. */
+/* Register the board on the Zorro III bus. Returns 0 on success. */
 int bellatrix_rtg_register(struct BellatrixMachine *m);
 
 /* 1 when the guest set ENABLE and programmed a plausible mode. */

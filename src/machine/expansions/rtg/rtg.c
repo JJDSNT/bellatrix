@@ -1,4 +1,4 @@
-// src/machine/expansions/rtg/rtg.c — see rtg.h and docs/rtg_design.md.
+// Portable P96 linear-framebuffer board — see rtg.h and docs/rtg_design.md.
 
 #include "machine/expansions/rtg/rtg.h"
 #include "machine/bus/board_registry.h"
@@ -9,22 +9,9 @@
 
 #include <string.h>
 
-typedef struct RtgState {
-    uint8_t  vram[BELLATRIX_RTG_VRAM_SIZE];
-    uint32_t palette[256];       /* 0x00RRGGBB as written by the guest */
-    uint32_t enable;
-    uint32_t mode_w;
-    uint32_t mode_h;
-    uint32_t format;
-    uint32_t bytes_per_row;
-    uint32_t pan;
-    uint32_t pal_index;
-    uint32_t vblank;
-    /* rendered RGBA frame, sized lazily to mode_w*mode_h*4 */
-    uint8_t  frame[1920u * 1080u * 4u];
-} RtgState;
-
-static RtgState s_rtg;
+static uint8_t s_rtg_vram[BELLATRIX_RTG_VRAM_SIZE];
+static uint8_t s_rtg_frame[1920u * 1080u * 4u];
+static BellatrixRtgScanout s_rtg;
 static uint8_t  s_rtg_config[AUTOCONFIG_DATA_SIZE];
 static int      s_registered = 0;
 
@@ -47,21 +34,7 @@ static uint32_t rtg_reg_read(uint32_t reg)
             kprintf("[RTG] REG_ID probed (FindCard reached the board)\n");
         }
     }
-    switch (reg) {
-        case RTG_REG_ID:            return RTG_ID_MAGIC;
-        case RTG_REG_VERSION:       return RTG_SPEC_VERSION;
-        case RTG_REG_VRAM_OFF:      return BELLATRIX_RTG_VRAM_OFF;
-        case RTG_REG_VRAM_SIZE:     return BELLATRIX_RTG_VRAM_SIZE;
-        case RTG_REG_ENABLE:        return s_rtg.enable;
-        case RTG_REG_MODE_W:        return s_rtg.mode_w;
-        case RTG_REG_MODE_H:        return s_rtg.mode_h;
-        case RTG_REG_FORMAT:        return s_rtg.format;
-        case RTG_REG_BYTES_PER_ROW: return s_rtg.bytes_per_row;
-        case RTG_REG_PAN:           return s_rtg.pan;
-        case RTG_REG_PAL_INDEX:     return s_rtg.pal_index;
-        case RTG_REG_VBLANK:        return s_rtg.vblank;
-        default:                    return 0;
-    }
+    return bellatrix_rtg_scanout_reg_read(&s_rtg, reg);
 }
 
 static void rtg_reg_write(uint32_t reg, uint32_t value)
@@ -75,30 +48,16 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                     (unsigned)reg, (unsigned)value);
         }
     }
-    switch (reg) {
-        case RTG_REG_ENABLE:
-            if (value != s_rtg.enable)
-                kprintf("[RTG] enable=%u %ux%u fmt=%u bpr=%u\n",
-                        (unsigned)value, (unsigned)s_rtg.mode_w,
-                        (unsigned)s_rtg.mode_h, (unsigned)s_rtg.format,
-                        (unsigned)s_rtg.bytes_per_row);
-            s_rtg.enable = value & 1u;
-            break;
-        case RTG_REG_MODE_W:        s_rtg.mode_w = value;        break;
-        case RTG_REG_MODE_H:        s_rtg.mode_h = value;        break;
-        case RTG_REG_FORMAT:        s_rtg.format = value;        break;
-        case RTG_REG_BYTES_PER_ROW: s_rtg.bytes_per_row = value; break;
-        case RTG_REG_PAN:           s_rtg.pan = value;           break;
-        case RTG_REG_PAL_INDEX:     s_rtg.pal_index = value & 0xFFu; break;
-        case RTG_REG_PAL_DATA:
-            s_rtg.palette[s_rtg.pal_index] = value & 0x00FFFFFFu;
-            s_rtg.pal_index = (s_rtg.pal_index + 1u) & 0xFFu;
-            break;
-        case RTG_REG_DEBUG:
-            kprintf("[RTG-DBG] %08x\n", (unsigned)value);
-            break;
-        default: break;
+    if (reg == RTG_REG_ENABLE && value != s_rtg.enable) {
+        kprintf("[RTG] enable=%u %ux%u fmt=%u bpr=%u\n",
+                (unsigned)value, (unsigned)s_rtg.mode_w,
+                (unsigned)s_rtg.mode_h, (unsigned)s_rtg.format,
+                (unsigned)s_rtg.bytes_per_row);
     }
+    if (reg == RTG_REG_DEBUG)
+        kprintf("[RTG-DBG] %08x\n", (unsigned)value);
+    else
+        bellatrix_rtg_scanout_reg_write(&s_rtg, reg, value);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -164,15 +123,15 @@ static void rtg_write8(void *userdata, uint32_t offset, uint8_t value)
 static void rtg_reset(void *userdata)
 {
     (void)userdata;
-    s_rtg.enable = 0;
-    s_rtg.pan = 0;
-    s_rtg.pal_index = 0;
+    bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_ENABLE, 0u);
+    bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_PAN, 0u);
+    bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_PAL_INDEX, 0u);
 }
 
 /* -----------------------------------------------------------------------
  * board_registry EXTERNAL Zorro III board
  *
- * RTG is a Zorro III board: its 4MB register+ROM+VRAM window is served per
+ * RTG is a Zorro III board: its 8MB register+ROM+VRAM window is served per
  * access (EXTERNAL, map == NULL), so the walker only latches the guest-assigned
  * base into s_rtg_board.map_base. The window is decoded by the Super Buster
  * (superbuster_decode_z3 consults board_registry) and routed to the bus_ops
@@ -245,11 +204,15 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
     uint8_t raw[AUTOCONFIG_ROM_BYTES];
     BellatrixExpansionDesc desc;
 
-    memset(&s_rtg, 0, sizeof(s_rtg));
+    memset(s_rtg_vram, 0, sizeof(s_rtg_vram));
+    bellatrix_rtg_scanout_init(&s_rtg,
+                               s_rtg_vram, sizeof(s_rtg_vram),
+                               BELLATRIX_RTG_VRAM_OFF,
+                               s_rtg_frame, sizeof(s_rtg_frame));
     memset(raw, 0, sizeof(raw));
     /* Zorro III board. The size in er_Type bits 2-0 is enough for our
      * fixed-size window; the Super Buster decode keys off the assigned base. */
-    raw[0]  = (uint8_t)(AC_TYPE_Z3 | AC_TYPE_DIAGVALID | AC_SIZE_4MB);
+    raw[0]  = (uint8_t)(AC_TYPE_Z3 | AC_TYPE_DIAGVALID | AC_SIZE_8MB);
     raw[1]  = BELLATRIX_RTG_PRODUCT;
     raw[4]  = (uint8_t)(BELLATRIX_RTG_MANUFACTURER >> 8);
     raw[5]  = (uint8_t)(BELLATRIX_RTG_MANUFACTURER & 0xFFu);
@@ -276,7 +239,7 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
         return -1;
     }
     s_registered = 1;
-    kprintf("[RTG] board registered: Zorro III 4MB window, %u KB VRAM\n",
+    kprintf("[RTG] board registered: Zorro III 8MB window, %u KB VRAM\n",
             (unsigned)(BELLATRIX_RTG_VRAM_SIZE / 1024u));
     return 0;
 }
@@ -287,15 +250,12 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
 
 int bellatrix_rtg_active(void)
 {
-    return s_registered && s_rtg.enable &&
-           s_rtg.mode_w >= 64u && s_rtg.mode_w <= 1920u &&
-           s_rtg.mode_h >= 64u && s_rtg.mode_h <= 1080u &&
-           s_rtg.bytes_per_row > 0u;
+    return s_registered && bellatrix_rtg_scanout_active(&s_rtg);
 }
 
 void bellatrix_rtg_frame_tick(void)
 {
-    s_rtg.vblank++;
+    bellatrix_rtg_scanout_frame_tick(&s_rtg);
 }
 
 uint8_t *bellatrix_rtg_vram_ptr(uint32_t *base, uint32_t *size)
@@ -310,62 +270,7 @@ uint8_t *bellatrix_rtg_vram_ptr(uint32_t *base, uint32_t *size)
 
 int bellatrix_rtg_get_frame(BellatrixRtgFrame *out)
 {
-    uint32_t w, h, bpr, x, y, start;
-    const uint8_t *src;
-    uint8_t *dst;
-
-    if (!out || !bellatrix_rtg_active())
+    if (!s_registered)
         return 0;
-
-    w = s_rtg.mode_w;
-    h = s_rtg.mode_h;
-    bpr = s_rtg.bytes_per_row;
-    start = s_rtg.pan;
-    if (start >= BELLATRIX_RTG_VRAM_SIZE)
-        start = 0;
-    /* clamp height so we never read past VRAM */
-    if ((uint64_t)start + (uint64_t)bpr * h > BELLATRIX_RTG_VRAM_SIZE)
-        h = (uint32_t)((BELLATRIX_RTG_VRAM_SIZE - start) / (bpr ? bpr : 1u));
-    if (h == 0)
-        return 0;
-
-    dst = s_rtg.frame;
-    for (y = 0; y < h; y++) {
-        src = s_rtg.vram + start + (size_t)y * bpr;
-        switch (s_rtg.format) {
-            case RTG_FMT_CLUT:
-                for (x = 0; x < w; x++) {
-                    uint32_t rgb = s_rtg.palette[src[x]];
-                    *dst++ = (uint8_t)(rgb >> 16);
-                    *dst++ = (uint8_t)(rgb >> 8);
-                    *dst++ = (uint8_t)rgb;
-                    *dst++ = 0xFF;
-                }
-                break;
-            case RTG_FMT_R5G6B5:
-                for (x = 0; x < w; x++) {
-                    uint16_t p = (uint16_t)((src[x * 2] << 8) | src[x * 2 + 1]);
-                    *dst++ = (uint8_t)(((p >> 11) & 0x1F) << 3);
-                    *dst++ = (uint8_t)(((p >> 5)  & 0x3F) << 2);
-                    *dst++ = (uint8_t)((p & 0x1F) << 3);
-                    *dst++ = 0xFF;
-                }
-                break;
-            case RTG_FMT_A8R8G8B8:
-            default:
-                for (x = 0; x < w; x++) {
-                    *dst++ = src[x * 4 + 1];
-                    *dst++ = src[x * 4 + 2];
-                    *dst++ = src[x * 4 + 3];
-                    *dst++ = 0xFF;
-                }
-                break;
-        }
-    }
-
-    out->pixels = s_rtg.frame;
-    out->width  = w;
-    out->height = h;
-    out->pitch  = w * 4u;
-    return 1;
+    return bellatrix_rtg_scanout_render(&s_rtg, out);
 }

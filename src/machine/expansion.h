@@ -19,7 +19,8 @@
  *     give us. Fully EXTERNAL — its ROM is address-transformed (nibble bootldr,
  *     BYTEWIDE device binary, odd address -> 0xFF) plus side-effecting ATA
  *     registers, so no DIRECT region can express it.
- *   - RTG (harness/lab-only): a Zorro III register/VRAM window.
+ *   - RTG: a portable P96 Zorro III register/VRAM window. Harness SDL and a
+ *     future Raspberry presenter consume the same scanout state.
  *
  * Retiring this registry waits on a shared EXTERNAL-window serving mechanism in
  * board_registry itself; until then, do not delete it. Neither board uses the
