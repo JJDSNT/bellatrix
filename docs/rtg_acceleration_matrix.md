@@ -18,7 +18,7 @@ blitter 2D.
 | `InvertRect` | parcial | 0 | **implementado:** três formatos, máscara completa | máscaras CLUT parciais |
 | `BlitRect` | parcial | 0 | **implementado:** mesma VRAM, COPY, overlap-safe, três formatos, máscara `ff` | máscaras parciais |
 | `BlitRectNoMaskComplete` | parcial | ≥2, 16×16, minterm `0c` | **implementado:** COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
-| `BlitTemplate` | probe | ≥1, 128×8 | expansão 1-bit, JAM1/JAM2, CLUT | complement/direct color/upload |
+| `BlitTemplate` | parcial | ≥1, 128×8 | **implementado:** upload 1-bit, JAM1/JAM2, INVERSVID, três formatos, máscara `ff` | COMPLEMENT, máscaras parciais |
 | `BlitPattern` | probe | 0 | padrão 16×2, JAM1/JAM2 | alturas, complement, máscaras |
 | `DrawLine` | probe | 0 | sólida, COPY | padrões e draw modes |
 | `BlitPlanar2Chunky` | não | não instrumentado | planar→CLUT | máscaras/interleaved |
@@ -47,7 +47,7 @@ argumento do callback, não deve ser inferido de `RenderInfo`.
 | Recurso | Estado | Decisão |
 |---|---:|---|
 | VRAM CPU direta | sim | `base+0x3000..+0x7fffff`, sem bridge byte a byte |
-| command ABI síncrona | parcial | FillRect e BlitCopy usam validação e `STATUS`; `COMMAND` termina antes do retorno |
+| command ABI síncrona | parcial | FillRect, BlitCopy, InvertRect e BlitTemplate usam validação e `STATUS`; `COMMAND` termina antes do retorno |
 | command queue | não | somente após comandos síncronos e fences corretos |
 | async blits | futuro | requer `WaitBlitter`, status, ordering e proteção contra leitura prematura |
 | dirty rectangles | não | presenter/shadow remoto; VRAM direta exige marcação explícita |
@@ -55,15 +55,22 @@ argumento do callback, não deve ser inferido de `RenderInfo`.
 
 ## Ordem de implementação
 
-1. ✅ `FillRect` CLUT/full-mask, incluindo o clear 640×480 observado.
-2. ✅ `FillRect` RGB565 e ARGB32.
-3. ✅ `BlitRectNoMaskComplete` e `BlitRect` COPY overlap-safe.
-4. `InvertRect`.
-5. `BlitTemplate`, já observado no boot.
-6. `BlitPattern` e `DrawLine` conforme workloads maiores.
-7. conversões planar e sprite.
-8. VBlank/page flip; depois fila/async.
-9. screen dragging, overlay e mode mixing após o desktop básico.
+Este bloco é o tracker de execução. Ao concluir uma etapa, registrar aqui o
+commit, os testes e a evidência guest; itens sem evidência permanecem parciais.
+
+- [x] `FillRect` CLUT/full-mask, incluindo o clear 640×480 observado (`5d761d1`).
+- [x] `FillRect` RGB565 e ARGB32 (`0cac68d`).
+- [x] `BlitRectNoMaskComplete` e `BlitRect` COPY overlap-safe (`0cac68d`).
+- [x] `InvertRect`, três formatos e máscara completa (`21a1bc1`; unitário,
+  ainda sem chamada no workload AROS).
+- [x] `BlitTemplate`: upload portátil da máscara 1-bit, JAM1/JAM2,
+  INVERSVID, três formatos e fallback (unitário + boot AROS com ADF).
+- [ ] **ATUAL:** `BlitPattern`: padrão 16×(1<<Size), JAM1/JAM2 e três formatos.
+- [ ] `DrawLine`: linha sólida COPY; depois padrões e demais draw modes.
+- [ ] `BlitPlanar2Chunky`: planar→CLUT.
+- [ ] `BlitPlanar2Direct`: planar→RGB565/ARGB32.
+- [ ] Sprite, VBlank/page flip e depois fila/async.
+- [ ] Screen dragging, overlay e mode mixing após o desktop básico.
 
 ## Critério para mudar o estado
 

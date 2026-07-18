@@ -134,6 +134,10 @@ ponteiros, formatos, pitches e bounds; qualquer rejeição chama o callback
 `BlitRect` reutiliza o mesmo motor para COPY dentro de um único `RenderInfo`,
 com máscara `0xff`; sobreposição vertical e horizontal é preservada.
 
+`BlitTemplate` transporta a máscara 1-bit por uma janela de upload da board,
+em vez de o host acessar diretamente Chip/Fast RAM. O desenho mantém a command
+ABI independente do backend CPU e cobre JAM1/JAM2, INVERSVID e os três formatos.
+
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve
 limpar `AROSFlag`, preservando o fallback do AROS em vez de produzir corrupção.

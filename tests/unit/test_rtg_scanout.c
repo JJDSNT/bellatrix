@@ -239,6 +239,33 @@ static void test_accel_invertrect(void)
                                               RTG_FMT_CLUT, 0x0fu));
 }
 
+static void test_accel_blittemplate(void)
+{
+    uint8_t vram[64], bits[2] = { 0xa0u, 0x40u };
+    memset(vram, 0x11, sizeof(vram));
+    check_u32("template jam1", 1u,
+              bellatrix_rtg_accel_blittemplate(
+                  vram, sizeof(vram), 0u, 8u, 1u, 1u, 3u, 2u,
+                  RTG_FMT_CLUT, 0xffu, bits, sizeof(bits), 1u, 0u,
+                  0u, 0x77u, 0x22u));
+    check_u32("template fg row0 col0", 0x77u, vram[9]);
+    check_u32("template transparent", 0x11u, vram[10]);
+    check_u32("template fg row0 col2", 0x77u, vram[11]);
+    check_u32("template fg row1 col1", 0x77u, vram[18]);
+    check_u32("template jam2 inverse", 1u,
+              bellatrix_rtg_accel_blittemplate(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 3u, 1u,
+                  RTG_FMT_CLUT, 0xffu, bits, sizeof(bits), 1u, 0u,
+                  5u, 0x33u, 0x44u));
+    check_u32("template inverse bg", 0x44u, vram[0]);
+    check_u32("template inverse fg", 0x33u, vram[1]);
+    check_u32("template rejects short upload", 0u,
+              bellatrix_rtg_accel_blittemplate(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 8u, 2u,
+                  RTG_FMT_CLUT, 0xffu, bits, 1u, 1u, 0u,
+                  0u, 1u, 0u));
+}
+
 int main(void)
 {
     test_register_contract();
@@ -248,6 +275,7 @@ int main(void)
     test_accel_fillrect();
     test_accel_blit_copy();
     test_accel_invertrect();
+    test_accel_blittemplate();
     puts("rtg scanout tests passed");
     return 0;
 }

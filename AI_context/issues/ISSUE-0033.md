@@ -458,4 +458,7 @@ mídia adequada e obter frame RTG não uniforme; depois validar apresentação S
   sobreposição tanto horizontal quanto vertical.
 - O boot de integração confirma duas cópias CLUT 16×16 tratadas pelo host.
 - `BlitRect` com máscara completa reutiliza o mesmo motor COPY overlap-safe.
+- `BlitTemplate` usa upload explícito da máscara 1-bit e acelera JAM1/JAM2 com
+  INVERSVID nos três formatos. O teste AROS agora inclui `aros.adf` e exige que
+  a chamada 128×8 observada seja tratada pelo host.
 - Casos recusados continuam chamando os callbacks `Default` do P96.

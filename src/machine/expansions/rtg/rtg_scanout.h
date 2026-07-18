@@ -31,6 +31,11 @@
 #define RTG_REG_ACCEL_SRC_PITCH 0x5Cu
 #define RTG_REG_ACCEL_SRC_XY  0x60u
 #define RTG_REG_ACCEL_OPCODE  0x64u
+#define RTG_REG_ACCEL_UPLOAD_RESET 0x68u
+#define RTG_REG_ACCEL_UPLOAD_DATA  0x6Cu
+#define RTG_REG_ACCEL_MODE    0x70u
+#define RTG_REG_ACCEL_FGPEN   0x74u
+#define RTG_REG_ACCEL_BGPEN   0x78u
 
 #define RTG_ID_MAGIC       0x42525447u /* 'BRTG' */
 #define RTG_SPEC_VERSION   1u
@@ -42,6 +47,7 @@
 #define RTG_ACCEL_FILLRECT 1u
 #define RTG_ACCEL_BLIT_COPY 2u
 #define RTG_ACCEL_INVERTRECT 3u
+#define RTG_ACCEL_BLITTEMPLATE 4u
 
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
@@ -100,5 +106,14 @@ int bellatrix_rtg_accel_invertrect(uint8_t *vram, uint32_t vram_size,
                                    uint32_t x, uint32_t y,
                                    uint32_t width, uint32_t height,
                                    uint32_t format, uint32_t mask);
+int bellatrix_rtg_accel_blittemplate(uint8_t *vram, uint32_t vram_size,
+                                     uint32_t dst, uint32_t pitch,
+                                     uint32_t x, uint32_t y,
+                                     uint32_t width, uint32_t height,
+                                     uint32_t format, uint32_t mask,
+                                     const uint8_t *bits, uint32_t bits_size,
+                                     uint32_t bits_pitch, uint32_t xoffset,
+                                     uint32_t drawmode, uint32_t fg,
+                                     uint32_t bg);
 
 #endif

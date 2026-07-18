@@ -501,7 +501,8 @@ add_test(NAME bellatrix_harness_rtg_aros
          COMMAND /bin/bash
                  ${ROOT}/tests/integration/harness_rtg_aros.sh
                  ${CMAKE_BINARY_DIR}/harness
-                 ${ROOT}/src/roms/aros.rom)
+                 ${ROOT}/src/roms/aros.rom
+                 ${ROOT}/src/disks/aros.adf)
 set_tests_properties(bellatrix_harness_rtg_aros PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 30

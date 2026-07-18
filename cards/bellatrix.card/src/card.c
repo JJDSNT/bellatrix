@@ -57,10 +57,16 @@
 #define RTG_REG_ACCEL_SRC_PITCH 0x5C
 #define RTG_REG_ACCEL_SRC_XY  0x60
 #define RTG_REG_ACCEL_OPCODE  0x64
+#define RTG_REG_ACCEL_UPLOAD_RESET 0x68
+#define RTG_REG_ACCEL_UPLOAD_DATA  0x6C
+#define RTG_REG_ACCEL_MODE    0x70
+#define RTG_REG_ACCEL_FGPEN   0x74
+#define RTG_REG_ACCEL_BGPEN   0x78
 
 #define RTG_ACCEL_FILLRECT 1
 #define RTG_ACCEL_BLIT_COPY 2
 #define RTG_ACCEL_INVERTRECT 3
+#define RTG_ACCEL_BLITTEMPLATE 4
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -248,8 +254,39 @@ static void ProbeBlitTemplate(__REGA0(struct BoardInfo *bi),
                               __REGD4(UBYTE mask), __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, hostfmt, upload_pitch, row, byte;
+    UBYTE *src;
     probe_report(base, PROBE_BLITTEMPLATE, w, h,
                  ((ULONG)fmt << 8) | mask);
+    hostfmt = rtg_format(fmt);
+    upload_pitch = ((ULONG)tmpl->XOffset + (ULONG)(UWORD)w + 7) >> 3;
+    if (mask == 0xff && hostfmt && x >= 0 && y >= 0 && w > 0 && h > 0 &&
+        tmpl->BytesPerRow > 0 && upload_pitch <= (ULONG)tmpl->BytesPerRow &&
+        upload_pitch * (ULONG)(UWORD)h <= 65536UL &&
+        (tmpl->DrawMode & ~5) == 0 && ri->BytesPerRow > 0 &&
+        (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_UPLOAD_RESET, 0);
+        src = (UBYTE *)tmpl->Memory;
+        for (row = 0; row < (ULONG)(UWORD)h; ++row)
+            for (byte = 0; byte < upload_pitch; ++byte)
+                reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA,
+                          src[row * (UWORD)tmpl->BytesPerRow + byte]);
+        reg_write(base, RTG_REG_ACCEL_DST, off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY, ((ULONG)(UWORD)x << 16) | (UWORD)y);
+        reg_write(base, RTG_REG_ACCEL_WH, ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_SRC_PITCH, upload_pitch);
+        reg_write(base, RTG_REG_ACCEL_SRC_XY, tmpl->XOffset);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, (hostfmt << 8) | mask);
+        reg_write(base, RTG_REG_ACCEL_MODE, tmpl->DrawMode);
+        reg_write(base, RTG_REG_ACCEL_FGPEN, tmpl->FgPen);
+        reg_write(base, RTG_REG_ACCEL_BGPEN, tmpl->BgPen);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_BLITTEMPLATE);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->BlitTemplateDefault(bi, ri, tmpl, x, y, w, h, mask, fmt);
 }
 

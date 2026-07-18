@@ -18,9 +18,12 @@ static BellatrixRtgScanout s_rtg;
 static uint8_t  s_rtg_config[AUTOCONFIG_DATA_SIZE];
 static int      s_registered = 0;
 static uint32_t s_direct_vram_base;
+static uint8_t s_accel_upload[65536];
+static uint32_t s_accel_upload_size;
 static struct {
     uint32_t dst, pitch, xy, wh, color, fmtmask, status;
     uint32_t src, src_pitch, src_xy, opcode;
+    uint32_t mode, fgpen, bgpen;
 } s_accel;
 
 static void rtg_ensure_direct_vram(void);
@@ -78,6 +81,14 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
     else if (reg == RTG_REG_ACCEL_SRC_PITCH) s_accel.src_pitch = value;
     else if (reg == RTG_REG_ACCEL_SRC_XY) s_accel.src_xy = value;
     else if (reg == RTG_REG_ACCEL_OPCODE) s_accel.opcode = value;
+    else if (reg == RTG_REG_ACCEL_MODE) s_accel.mode = value;
+    else if (reg == RTG_REG_ACCEL_FGPEN) s_accel.fgpen = value;
+    else if (reg == RTG_REG_ACCEL_BGPEN) s_accel.bgpen = value;
+    else if (reg == RTG_REG_ACCEL_UPLOAD_RESET) s_accel_upload_size = 0u;
+    else if (reg == RTG_REG_ACCEL_UPLOAD_DATA) {
+        if (s_accel_upload_size < sizeof(s_accel_upload))
+            s_accel_upload[s_accel_upload_size++] = (uint8_t)value;
+    }
     else if (reg == RTG_REG_ACCEL_COMMAND) {
         s_accel.status = 0u;
         if (value == RTG_ACCEL_FILLRECT) {
@@ -120,6 +131,24 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 s_accel.xy >> 16, s_accel.xy & 0xffffu,
                 s_accel.wh >> 16, s_accel.wh & 0xffffu,
                 s_accel.fmtmask >> 8, s_accel.fmtmask & 0xffu);
+        } else if (value == RTG_ACCEL_BLITTEMPLATE) {
+            static uint32_t template_count;
+            s_accel.status = (uint32_t)bellatrix_rtg_accel_blittemplate(
+                s_rtg_vram, BELLATRIX_RTG_VRAM_SIZE,
+                s_accel.dst, s_accel.pitch,
+                s_accel.xy >> 16, s_accel.xy & 0xffffu,
+                s_accel.wh >> 16, s_accel.wh & 0xffffu,
+                s_accel.fmtmask >> 8, s_accel.fmtmask & 0xffu,
+                s_accel_upload, s_accel_upload_size, s_accel.src_pitch,
+                s_accel.src_xy & 0xffffu, s_accel.mode,
+                s_accel.fgpen, s_accel.bgpen);
+            if (s_accel.status && (++template_count == 1u ||
+                (template_count & (template_count - 1u)) == 0u))
+                kprintf("[RTG-ACCEL] BlitTemplate count=%u fmt=%u %ux%u handled=host\n",
+                        (unsigned)template_count,
+                        (unsigned)(s_accel.fmtmask >> 8),
+                        (unsigned)(s_accel.wh >> 16),
+                        (unsigned)(s_accel.wh & 0xffffu));
         }
     } else if (reg == RTG_REG_DEBUG) {
         static const char *const probe_names[] = {

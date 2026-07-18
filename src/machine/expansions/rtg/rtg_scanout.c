@@ -116,6 +116,55 @@ int bellatrix_rtg_accel_invertrect(uint8_t *vram, uint32_t vram_size,
     return 1;
 }
 
+static void store_pixel(uint8_t *p, uint32_t bpp, uint32_t color)
+{
+    if (bpp == 1u) p[0] = (uint8_t)color;
+    else if (bpp == 2u) { p[0] = (uint8_t)(color >> 8); p[1] = (uint8_t)color; }
+    else { p[0] = (uint8_t)(color >> 24); p[1] = (uint8_t)(color >> 16);
+           p[2] = (uint8_t)(color >> 8); p[3] = (uint8_t)color; }
+}
+
+int bellatrix_rtg_accel_blittemplate(uint8_t *vram, uint32_t vram_size,
+                                     uint32_t dst, uint32_t pitch,
+                                     uint32_t x, uint32_t y,
+                                     uint32_t width, uint32_t height,
+                                     uint32_t format, uint32_t mask,
+                                     const uint8_t *bits, uint32_t bits_size,
+                                     uint32_t bits_pitch, uint32_t xoffset,
+                                     uint32_t drawmode, uint32_t fg,
+                                     uint32_t bg)
+{
+    uint32_t bpp = format_bytes(format), row, col;
+    uint64_t first, last, row_bytes, needed;
+    if (!vram || !bits || !bpp || mask != 0xffu || !width || !height ||
+        !pitch || !bits_pitch || xoffset > 15u || (drawmode & ~5u) != 0u ||
+        (drawmode & 1u) > 1u || (uint64_t)x * bpp > pitch)
+        return 0;
+    row_bytes = (uint64_t)width * bpp;
+    if (row_bytes > pitch - (uint64_t)x * bpp ||
+        (uint64_t)xoffset + width > (uint64_t)bits_pitch * 8u)
+        return 0;
+    needed = (uint64_t)(height - 1u) * bits_pitch +
+             ((uint64_t)xoffset + width + 7u) / 8u;
+    first = (uint64_t)dst + (uint64_t)y * pitch + (uint64_t)x * bpp;
+    last = first + (uint64_t)(height - 1u) * pitch + row_bytes;
+    if (needed > bits_size || first >= vram_size || last > vram_size)
+        return 0;
+    for (row = 0; row < height; ++row) {
+        uint8_t *out = vram + first + (uint64_t)row * pitch;
+        for (col = 0; col < width; ++col) {
+            uint32_t bitpos = xoffset + col;
+            uint32_t set = (bits[(uint64_t)row * bits_pitch + bitpos / 8u] >>
+                            (7u - bitpos % 8u)) & 1u;
+            if (drawmode & 4u) set ^= 1u;
+            if (set || (drawmode & 1u))
+                store_pixel(out, bpp, set ? fg : bg);
+            out += bpp;
+        }
+    }
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,
