@@ -18,6 +18,9 @@ static BellatrixRtgScanout s_rtg;
 static uint8_t  s_rtg_config[AUTOCONFIG_DATA_SIZE];
 static int      s_registered = 0;
 static uint32_t s_direct_vram_base;
+static struct {
+    uint32_t dst, pitch, xy, wh, color, fmtmask, status;
+} s_accel;
 
 static void rtg_ensure_direct_vram(void);
 static void rtg_unmap_direct_vram(void);
@@ -34,6 +37,8 @@ extern const size_t        g_rtg_rom_size;
 
 static uint32_t rtg_reg_read(uint32_t reg)
 {
+    if (reg == RTG_REG_ACCEL_STATUS)
+        return s_accel.status;
     if (reg == RTG_REG_ID) {
         static int s_id_read_seen = 0;
         if (!s_id_read_seen) {
@@ -62,7 +67,31 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 (unsigned)s_rtg.mode_h, (unsigned)s_rtg.format,
                 (unsigned)s_rtg.bytes_per_row);
     }
-    if (reg == RTG_REG_DEBUG) {
+    if (reg == RTG_REG_ACCEL_DST) s_accel.dst = value;
+    else if (reg == RTG_REG_ACCEL_PITCH) s_accel.pitch = value;
+    else if (reg == RTG_REG_ACCEL_XY) s_accel.xy = value;
+    else if (reg == RTG_REG_ACCEL_WH) s_accel.wh = value;
+    else if (reg == RTG_REG_ACCEL_COLOR) s_accel.color = value;
+    else if (reg == RTG_REG_ACCEL_FMTMASK) s_accel.fmtmask = value;
+    else if (reg == RTG_REG_ACCEL_COMMAND) {
+        s_accel.status = 0u;
+        if (value == RTG_ACCEL_FILLRECT) {
+            static uint32_t fill_count;
+            s_accel.status = (uint32_t)bellatrix_rtg_accel_fillrect(
+                s_rtg_vram, BELLATRIX_RTG_VRAM_SIZE,
+                s_accel.dst, s_accel.pitch,
+                s_accel.xy >> 16, s_accel.xy & 0xffffu,
+                s_accel.wh >> 16, s_accel.wh & 0xffffu,
+                s_accel.color, s_accel.fmtmask >> 8,
+                s_accel.fmtmask & 0xffu);
+            if (s_accel.status && (++fill_count == 1u ||
+                                   (fill_count & (fill_count - 1u)) == 0u))
+                kprintf("[RTG-ACCEL] FillRect count=%u CLUT %ux%u handled=host\n",
+                        (unsigned)fill_count,
+                        (unsigned)(s_accel.wh >> 16),
+                        (unsigned)(s_accel.wh & 0xffffu));
+        }
+    } else if (reg == RTG_REG_DEBUG) {
         static const char *const probe_names[] = {
             "unknown", "FillRect", "InvertRect", "BlitRect",
             "BlitTemplate", "BlitPattern", "DrawLine",
@@ -79,7 +108,7 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 sizeof(probe_names) / sizeof(probe_names[0]) ?
                 probe_names[probe_op] : probe_names[0];
             kprintf("[RTG-PROBE] %s count=%u size=%ux%u fmt=%u arg=%02x "
-                    "handled=software\n",
+                    "action=observed\n",
                     name, (unsigned)probe_count,
                     (unsigned)probe_w, (unsigned)probe_h,
                     (unsigned)((value >> 8) & 0xffffu),
@@ -98,7 +127,7 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
 /* Byte write latch so 8/16-bit accesses to the 32-bit registers work:
  * bytes accumulate and the register commits on the write of its last
  * byte (offset % 4 == 3). Reads are stateless slices of the register. */
-static uint32_t s_reg_latch[16];
+static uint32_t s_reg_latch[64];
 
 static uint8_t rtg_read8(void *userdata, uint32_t offset)
 {
@@ -142,7 +171,7 @@ static void rtg_write8(void *userdata, uint32_t offset, uint8_t value)
     {
         uint32_t reg  = offset & ~3u;
         unsigned lane = offset & 3u;
-        unsigned slot = (reg >> 2) & 15u;
+        unsigned slot = (reg >> 2) & 63u;
         uint32_t shift = (3u - lane) * 8u;
         s_reg_latch[slot] &= ~(0xFFu << shift);
         s_reg_latch[slot] |= ((uint32_t)value << shift);
@@ -155,6 +184,7 @@ static void rtg_reset(void *userdata)
 {
     (void)userdata;
     rtg_unmap_direct_vram();
+    memset(&s_accel, 0, sizeof(s_accel));
     bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_ENABLE, 0u);
     bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_PAN, 0u);
     bellatrix_rtg_scanout_reg_write(&s_rtg, RTG_REG_PAL_INDEX, 0u);

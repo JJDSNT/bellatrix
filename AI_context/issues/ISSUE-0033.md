@@ -305,6 +305,17 @@ primeira chamada é o clear completo `640x480`, CLUT, máscara `0xff`.
 desenho linha a linha. Próximo incremento: command ABI síncrona + `FillRect`
 CLUT/full-mask antes de ampliar formatos e operações.
 
+### FillRect CLUT acelerado
+
+Implementado o primeiro comando síncrono com registradores de destino, pitch,
+XY, WH, cor, formato/máscara, comando e status. Card e host validam a operação;
+somente CLUT/máscara `0xff` retorna tratado, todo o restante chama o default do
+AROS. O unitário cobre região correta e rejeições de máscara, formato, pitch e
+bounds. A integração exige o clear `640x480 handled=host`.
+
+A matriz permanente, incluindo acelerações ainda não exercitadas pelo AROS,
+está em `docs/rtg_acceleration_matrix.md`.
+
 ## Correção de direção
 
 O backend VideoCore não é requisito do RTG atual. Ele é uma possível solução

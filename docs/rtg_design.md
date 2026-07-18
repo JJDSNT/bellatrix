@@ -52,6 +52,11 @@ quantum maior altera a granularidade temporal do chipset.
 
 ## Plano de aceleração dirigido pelo código do AROS
 
+A lista completa, incluindo recursos não exercitados pelo AROS atual, vive em
+[`rtg_acceleration_matrix.md`](rtg_acceleration_matrix.md). Este documento
+mantém arquitetura e sequência; a matriz é o checklist implementado/não
+implementado operação por operação.
+
 Pesquisa local em `external/aros/arch/m68k-amiga/hidd/p96gfx/` confirmou o
 fluxo real, sem depender de inferência sobre buffering:
 
@@ -118,6 +123,13 @@ Isso evita fila, IRQ e condições de corrida enquanto o contrato é estabilizad
 4. **InvertRect:** operação simples e frequente, respeitando máscara/formato.
 5. Só depois avaliar `BlitTemplate`, `BlitPattern` e `DrawLine`, guiado pelas
    contagens da Fase A.
+
+**Primeiro item implementado:** `FillRect` CLUT com máscara `0xff` usa uma
+command ABI síncrona (`DST`, pitch, XY, WH, color, format/mask, `COMMAND` e
+`STATUS`). A `.card` valida ponteiro/formato/parâmetros, o host repete validação
+de overflow/pitch/bounds e somente `STATUS=1` mantém `AROSFlag` tratado. Qualquer
+rejeição chama `FillRectDefault`. RGB565, ARGB32 e máscaras parciais continuam
+explicitamente em software.
 
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve

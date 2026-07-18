@@ -45,6 +45,16 @@
 #define RTG_REG_PAL_DATA      0x2C
 #define RTG_REG_VBLANK        0x30
 #define RTG_REG_DEBUG         0x34
+#define RTG_REG_ACCEL_DST     0x38
+#define RTG_REG_ACCEL_PITCH   0x3C
+#define RTG_REG_ACCEL_XY      0x40
+#define RTG_REG_ACCEL_WH      0x44
+#define RTG_REG_ACCEL_COLOR   0x48
+#define RTG_REG_ACCEL_FMTMASK 0x4C
+#define RTG_REG_ACCEL_COMMAND 0x50
+#define RTG_REG_ACCEL_STATUS  0x54
+
+#define RTG_ACCEL_FILLRECT 1
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -134,8 +144,27 @@ static void ProbeFillRect(__REGA0(struct BoardInfo *bi),
                           __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG dst;
     probe_report(base, PROBE_FILLRECT, w, h,
                  ((ULONG)fmt << 8) | mask);
+    if (fmt == RGBFB_CLUT && mask == 0xff && x >= 0 && y >= 0 &&
+        w > 0 && h > 0 && ri->BytesPerRow > 0 &&
+        (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        dst = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_DST, dst);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY,
+                  ((ULONG)(UWORD)x << 16) | (UWORD)y);
+        reg_write(base, RTG_REG_ACCEL_WH,
+                  ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_COLOR, pen);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK,
+                  ((ULONG)RTG_FMT_CLUT << 8) | mask);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_FILLRECT);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->FillRectDefault(bi, ri, x, y, w, h, pen, mask, fmt);
 }
 

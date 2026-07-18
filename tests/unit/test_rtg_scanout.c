@@ -146,12 +146,44 @@ static void test_argb_and_bounds(void)
     check_u32("short stride inactive", 0u, bellatrix_rtg_scanout_active(&s));
 }
 
+static void test_accel_fillrect_clut(void)
+{
+    uint8_t vram[64];
+
+    memset(vram, 0x11, sizeof(vram));
+    check_u32("fillrect handled", 1u,
+              bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
+                                           4u, 8u, 2u, 1u, 3u, 2u,
+                                           0x5au, RTG_FMT_CLUT, 0xffu));
+    check_u32("fillrect row0 first", 0x5au, vram[14]);
+    check_u32("fillrect row0 last", 0x5au, vram[16]);
+    check_u32("fillrect row1 first", 0x5au, vram[22]);
+    check_u32("fillrect neighbor intact", 0x11u, vram[13]);
+    check_u32("fillrect rejects mask", 0u,
+              bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
+                                           0u, 8u, 0u, 0u, 2u, 2u,
+                                           0u, RTG_FMT_CLUT, 0x0fu));
+    check_u32("fillrect rejects format", 0u,
+              bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
+                                           0u, 8u, 0u, 0u, 2u, 2u,
+                                           0u, RTG_FMT_R5G6B5, 0xffu));
+    check_u32("fillrect rejects row overflow", 0u,
+              bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
+                                           0u, 8u, 7u, 0u, 2u, 1u,
+                                           0u, RTG_FMT_CLUT, 0xffu));
+    check_u32("fillrect rejects vram overflow", 0u,
+              bellatrix_rtg_accel_fillrect(vram, sizeof(vram),
+                                           60u, 8u, 0u, 0u, 8u, 1u,
+                                           0u, RTG_FMT_CLUT, 0xffu));
+}
+
 int main(void)
 {
     test_register_contract();
     test_clut_stride_and_pan();
     test_rgb565();
     test_argb_and_bounds();
+    test_accel_fillrect_clut();
     puts("rtg scanout tests passed");
     return 0;
 }

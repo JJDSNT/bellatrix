@@ -2,6 +2,30 @@
 
 #include <string.h>
 
+int bellatrix_rtg_accel_fillrect(uint8_t *vram, uint32_t vram_size,
+                                 uint32_t dst, uint32_t pitch,
+                                 uint32_t x, uint32_t y,
+                                 uint32_t width, uint32_t height,
+                                 uint32_t color, uint32_t format,
+                                 uint32_t mask)
+{
+    uint64_t first, last;
+    uint32_t row;
+
+    if (!vram || format != RTG_FMT_CLUT || mask != 0xffu ||
+        width == 0u || height == 0u || pitch == 0u ||
+        x > pitch || width > pitch - x)
+        return 0;
+    first = (uint64_t)dst + (uint64_t)y * pitch + x;
+    last = first + (uint64_t)(height - 1u) * pitch + width;
+    if (first >= vram_size || last > vram_size)
+        return 0;
+    for (row = 0u; row < height; ++row)
+        memset(vram + (size_t)(first + (uint64_t)row * pitch),
+               (int)(uint8_t)color, width);
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,

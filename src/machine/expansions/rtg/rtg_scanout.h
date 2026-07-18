@@ -19,6 +19,14 @@
 #define RTG_REG_PAL_DATA      0x2Cu
 #define RTG_REG_VBLANK        0x30u
 #define RTG_REG_DEBUG         0x34u
+#define RTG_REG_ACCEL_DST     0x38u
+#define RTG_REG_ACCEL_PITCH   0x3Cu
+#define RTG_REG_ACCEL_XY      0x40u
+#define RTG_REG_ACCEL_WH      0x44u
+#define RTG_REG_ACCEL_COLOR   0x48u
+#define RTG_REG_ACCEL_FMTMASK 0x4Cu
+#define RTG_REG_ACCEL_COMMAND 0x50u
+#define RTG_REG_ACCEL_STATUS  0x54u
 
 #define RTG_ID_MAGIC       0x42525447u /* 'BRTG' */
 #define RTG_SPEC_VERSION   1u
@@ -26,6 +34,8 @@
 #define RTG_FMT_CLUT       1u
 #define RTG_FMT_A8R8G8B8   6u
 #define RTG_FMT_R5G6B5     10u
+
+#define RTG_ACCEL_FILLRECT 1u
 
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
@@ -63,5 +73,14 @@ int bellatrix_rtg_scanout_active(const BellatrixRtgScanout *s);
 void bellatrix_rtg_scanout_frame_tick(BellatrixRtgScanout *s);
 int bellatrix_rtg_scanout_render(BellatrixRtgScanout *s,
                                  BellatrixRtgFrame *out);
+
+/* Synchronous accelerator primitive. Returns 1 only when the complete
+ * operation was validated and executed; 0 means the guest must fall back. */
+int bellatrix_rtg_accel_fillrect(uint8_t *vram, uint32_t vram_size,
+                                 uint32_t dst, uint32_t pitch,
+                                 uint32_t x, uint32_t y,
+                                 uint32_t width, uint32_t height,
+                                 uint32_t color, uint32_t format,
+                                 uint32_t mask);
 
 #endif
