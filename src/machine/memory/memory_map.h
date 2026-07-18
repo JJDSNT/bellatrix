@@ -19,9 +19,7 @@ typedef enum
     MEM_REGION_CIAB,
     MEM_REGION_FAST,
     MEM_REGION_SLOW,
-    MEM_REGION_Z2,
     MEM_REGION_Z3,
-    MEM_REGION_Z2_BOARD,
     MEM_REGION_UNKNOWN
 
 } MemoryRegion;

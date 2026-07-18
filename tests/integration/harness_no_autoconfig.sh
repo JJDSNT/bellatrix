@@ -9,8 +9,8 @@ trap 'rm -f "$LOG"' EXIT
 
 "$HARNESS" "$ROM" --adf "$ADF" --headless --cycles 5000 >"$LOG" 2>&1
 
-grep -F "[MEMMAP] expansion backend: harness zorro2 bus" "$LOG" >/dev/null
-grep -F "[Z2] all boards configured" "$LOG" >/dev/null
+grep -F "[MEMMAP] expansion backend: board_registry (harness)" "$LOG" >/dev/null
+grep -F "[HARNESS] Fast RAM: 8MB Zorro II board configured" "$LOG" >/dev/null
 
 if grep -F "[AUTOCONFIG]" "$LOG" >/dev/null; then
     echo "unexpected legacy AutoConfig activity"

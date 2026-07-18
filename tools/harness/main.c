@@ -15,7 +15,6 @@
 
 #include "musashi_backend.h"
 #include "screenshot.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/expansions/z2_fast_ram/z2_fast_ram.h"
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
 #include "machine/expansions/rtg/rtg.h"

@@ -2,9 +2,8 @@
 
 #include "machine/expansions/lide_cdrom/ata_ide.h"
 #include "machine/expansions/lide_cdrom/atapi_cdrom.h"
-#include "machine/autoconfig/autoconfig.h"
+#include "machine/autoconfig/autoconfig.h"   /* BELLATRIX_ZORRO2_WIN_128KB */
 #include "machine/bus/board_registry.h"
-#include "machine/bus/zorro2/zorro2_bus.h"   /* BELLATRIX_ZORRO2_WIN_128KB */
 #include "machine/expansion.h"
 #include "machine/machine.h"
 

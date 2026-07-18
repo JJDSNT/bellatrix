@@ -57,4 +57,14 @@
  */
 void autoconfig_build(uint8_t *out, const uint8_t *bytes);
 
+/* Zorro II board window sizes (bytes), keyed by the AC_SIZE_* codes above.
+ * Used by EXTERNAL boards to bound their assigned window. */
+#define BELLATRIX_ZORRO2_WIN_64KB    0x00010000u
+#define BELLATRIX_ZORRO2_WIN_128KB   0x00020000u
+#define BELLATRIX_ZORRO2_WIN_256KB   0x00040000u
+#define BELLATRIX_ZORRO2_WIN_512KB   0x00080000u
+#define BELLATRIX_ZORRO2_WIN_1MB     0x00100000u
+#define BELLATRIX_ZORRO2_WIN_2MB     0x00200000u
+#define BELLATRIX_ZORRO2_WIN_8MB     0x00800000u
+
 #endif

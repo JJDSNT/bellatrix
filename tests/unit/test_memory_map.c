@@ -1,7 +1,6 @@
 #include "machine/memory/memory.h"
 #include "machine/memory/memory_map.h"
 #include "machine/autoconfig/autoconfig.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -14,17 +13,6 @@ uint32_t bellatrix_debug_cpu_pc(void)
 }
 
 static uint8_t s_chip_ram[BELLATRIX_CHIP_RAM_SIZE];
-static uint8_t test_fast_read8(void *userdata, uint32_t offset)
-{
-    BellatrixMemory *mem = (BellatrixMemory *)userdata;
-    return mem->fast_ram[offset];
-}
-
-static void test_fast_write8(void *userdata, uint32_t offset, uint8_t value)
-{
-    BellatrixMemory *mem = (BellatrixMemory *)userdata;
-    mem->fast_ram[offset] = value;
-}
 
 static void failf(const char *expr, const char *file, int line,
                   uint32_t expected, uint32_t actual)
@@ -58,11 +46,10 @@ static void test_decode_regions(void)
     CHECK_EQ("slow decode cxf mirror-looking address",
              MEM_REGION_SLOW,
              memory_map_decode(0x00C1FA68u));
-    CHECK_EQ("z2 decode", MEM_REGION_Z2, memory_map_decode(0x00e80000u));
-    CHECK_EQ("z2 decode end", MEM_REGION_Z2,
-             memory_map_decode(BELLATRIX_Z2_CONFIG_END));
-    CHECK_EQ("after z2 aperture is not config", MEM_REGION_UNKNOWN,
-             memory_map_decode(BELLATRIX_Z2_CONFIG_END + 1u));
+    /* memory_map no longer classifies the Zorro AutoConfig window — it is
+     * decoded and served upstream by machine_dispatch (board_registry). */
+    CHECK_EQ("z2 config window not classified here", MEM_REGION_UNKNOWN,
+             memory_map_decode(0x00e80000u));
     CHECK_EQ("CIA-B primary even", MEM_REGION_CIAB,
              memory_map_decode(0x00bfd000u));
     CHECK_EQ("CIA-B primary odd hole", MEM_REGION_UNKNOWN,
@@ -122,48 +109,6 @@ static void test_overlay_reads_and_chip_writes(void)
              bellatrix_mem_read32(&mem, 0x00100004u));
     CHECK_EQ("rom window read32", 0x11223344u, bellatrix_mem_read32(&mem, 0x00f80000u));
     CHECK_EQ("rom window read16", 0xaabbu, bellatrix_mem_read16(&mem, 0x00f80004u));
-}
-
-static void test_fast_ram_big_endian(void)
-{
-    BellatrixMemory mem;
-    static uint8_t config[AUTOCONFIG_DATA_SIZE];
-    BellatrixZorro2BoardDesc desc;
-    BellatrixZorro2BoardOps ops;
-    const uint32_t assigned_base = 0x00400000u;
-
-    test_memory_init(&mem);
-    memset(config, 0, sizeof(config));
-    memset(&desc, 0, sizeof(desc));
-    memset(&ops, 0, sizeof(ops));
-    ops.read8 = test_fast_read8;
-    ops.write8 = test_fast_write8;
-    desc.id = "test.dynamic-fast";
-    desc.config_data = config;
-    desc.config_size = sizeof(config);
-    desc.window_size = (uint32_t)mem.fast_ram_size;
-    desc.userdata = &mem;
-    desc.ops = &ops;
-    CHECK_EQ("register dynamic fast", 0u,
-             bellatrix_zorro2_register_board(&desc));
-    bellatrix_zorro2_init();
-
-    CHECK_EQ("dynamic fast hidden before assignment", MEM_REGION_UNKNOWN,
-             memory_map_decode(assigned_base));
-    CHECK_EQ("hidden fast reads open bus", 0xffffffffu,
-             bellatrix_mem_read32(&mem, assigned_base));
-    bellatrix_zorro2_config_write8(0x00e80048u,
-                                   (uint8_t)(assigned_base >> 16));
-    CHECK_EQ("assigned fast decodes as board", MEM_REGION_Z2_BOARD,
-             memory_map_decode(assigned_base));
-
-    bellatrix_mem_write32(&mem, assigned_base, 0x12345678u);
-
-    CHECK_EQ("fast read32", 0x12345678u, bellatrix_mem_read32(&mem, assigned_base));
-    CHECK_EQ("fast read16 hi", 0x1234u, bellatrix_mem_read16(&mem, assigned_base));
-    CHECK_EQ("fast read16 lo", 0x5678u, bellatrix_mem_read16(&mem, assigned_base + 2u));
-    CHECK_EQ("fast read8 b0", 0x12u, bellatrix_mem_read8(&mem, assigned_base));
-    CHECK_EQ("fast read8 b3", 0x78u, bellatrix_mem_read8(&mem, assigned_base + 3u));
 }
 
 static void test_slow_ram_big_endian_and_no_custom_alias(void)
@@ -336,7 +281,6 @@ int main(void)
 {
     test_decode_regions();
     test_overlay_reads_and_chip_writes();
-    test_fast_ram_big_endian();
     test_slow_ram_big_endian_and_no_custom_alias();
     test_autoconfig_window_is_empty();
     test_expansion_rom_probe_window_is_neutral();

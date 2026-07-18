@@ -21,7 +21,6 @@
 #include "rigel/rigel_cia.h"
 #include "rigel/rigel_irq.h"
 #include "rigel/rigel_mmio.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/expansions/z2_fast_ram/z2_fast_ram.h"
 #include "debug/cpu_pc.h"
 #include "host/pal.h"
@@ -1069,9 +1068,9 @@ void bellatrix_init(void)
     mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 #else
-    /* Legacy non-boards path: Bellatrix handles Zorro II config via its own memory map.
+    /* Non-boards path: Bellatrix answers the Zorro II/III AutoConfig window.
      * Fault-drive the config window so every read/write reaches
-     * bellatrix_bus_access → memory_map → zorro2_bus.c. */
+     * bellatrix_bus_access → machine_dispatch → board_registry. */
     mmu_map(0x00E80000u, 0x00E80000u, 0x00010000u,
             MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED, 0);
 

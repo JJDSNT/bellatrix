@@ -6,13 +6,9 @@
 #include "machine/memory/overlay.h"
 #include "machine/memory/slow_ram.h"
 
-#if defined(BELLATRIX_HARNESS) || \
-    (defined(BELLATRIX_ENABLE_EMU68_BOARDS) && !BELLATRIX_ENABLE_EMU68_BOARDS)
-#include "machine/bus/zorro2/zorro2_bus.h"
-#define BELLATRIX_ROUTE_Z2_AUTOCONFIG 1
-#else
-#define BELLATRIX_ROUTE_Z2_AUTOCONFIG 0
-#endif
+/* Zorro II/III AutoConfig and board windows are decoded and served upstream by
+ * machine_rigel_bus.c (board_registry + expansion.c bus_ops); memory_map only
+ * sees the addresses those layers don't claim, so it has no Z2 routing. */
 
 /* ------------------------------------------------------------------------- */
 /* decode                                                                    */
@@ -39,14 +35,6 @@ MemoryRegion memory_map_decode(uint32_t addr)
 
     if (bellatrix_custom_addr_contains(addr))
         return MEM_REGION_CUSTOM;
-
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    if (bellatrix_zorro2_in_board_window(addr))
-        return MEM_REGION_Z2_BOARD;
-
-    if (bellatrix_zorro2_in_config_window(addr))
-        return MEM_REGION_Z2;
-#endif
 
     if (addr >= 0x00F00000u && addr <= 0x00F7FFFFu)
         return MEM_REGION_EXP_ROM_CHECK;
@@ -83,13 +71,6 @@ uint8_t memory_map_read8(BellatrixMemory *m, uint32_t addr)
     case MEM_REGION_SLOW:
         return slow_ram_read8(m, addr);
 
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    case MEM_REGION_Z2:
-        return bellatrix_zorro2_config_read8(addr);
-
-    case MEM_REGION_Z2_BOARD:
-        return bellatrix_zorro2_board_read8(addr);
-#endif
 
     default:
         return 0xFFu;
@@ -113,13 +94,6 @@ uint16_t memory_map_read16(BellatrixMemory *m, uint32_t addr)
     case MEM_REGION_SLOW:
         return slow_ram_read16(m, addr);
 
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    case MEM_REGION_Z2:
-        return bellatrix_zorro2_config_read16(addr);
-
-    case MEM_REGION_Z2_BOARD:
-        return bellatrix_zorro2_board_read16(addr);
-#endif
 
     default:
         return 0xFFFFu;
@@ -143,13 +117,6 @@ uint32_t memory_map_read32(BellatrixMemory *m, uint32_t addr)
     case MEM_REGION_SLOW:
         return slow_ram_read32(m, addr);
 
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    case MEM_REGION_Z2:
-        return bellatrix_zorro2_config_read32(addr);
-
-    case MEM_REGION_Z2_BOARD:
-        return bellatrix_zorro2_board_read32(addr);
-#endif
 
     default:
         return 0xFFFFFFFFu;
@@ -173,15 +140,6 @@ void memory_map_write8(BellatrixMemory *m, uint32_t addr, uint8_t value)
         slow_ram_write8(m, addr, value);
         return;
 
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    case MEM_REGION_Z2:
-        bellatrix_zorro2_config_write8(addr, value);
-        return;
-
-    case MEM_REGION_Z2_BOARD:
-        bellatrix_zorro2_board_write8(addr, value);
-        return;
-#endif
 
     default:
         return;
@@ -201,15 +159,6 @@ void memory_map_write16(BellatrixMemory *m, uint32_t addr, uint16_t value)
         slow_ram_write16(m, addr, value);
         return;
 
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    case MEM_REGION_Z2:
-        bellatrix_zorro2_config_write16(addr, value);
-        return;
-
-    case MEM_REGION_Z2_BOARD:
-        bellatrix_zorro2_board_write16(addr, value);
-        return;
-#endif
 
     default:
         return;
@@ -229,15 +178,6 @@ void memory_map_write32(BellatrixMemory *m, uint32_t addr, uint32_t value)
         slow_ram_write32(m, addr, value);
         return;
 
-#if BELLATRIX_ROUTE_Z2_AUTOCONFIG
-    case MEM_REGION_Z2:
-        bellatrix_zorro2_config_write32(addr, value);
-        return;
-
-    case MEM_REGION_Z2_BOARD:
-        bellatrix_zorro2_board_write32(addr, value);
-        return;
-#endif
 
     default:
         return;

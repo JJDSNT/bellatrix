@@ -190,9 +190,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/board_registry.c
     ${SRC}/machine/bus/zorro_autoconfig.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
     ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
-    ${SRC}/machine/bus/zorro3/zorro3.c
     ${SRC}/machine/bus/superbuster/superbuster.c
 
     # lide.device CD-ROM expansion
@@ -352,7 +350,6 @@ add_executable(bellatrix_unit_memory
     ${SRC}/machine/memory/overlay.c
     ${SRC}/machine/memory/memory_map.c
     ${SRC}/machine/autoconfig/autoconfig.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
 )
 
 target_include_directories(bellatrix_unit_memory PRIVATE
@@ -371,22 +368,6 @@ target_compile_options(bellatrix_unit_memory PRIVATE
 add_test(NAME bellatrix_unit_memory
          COMMAND bellatrix_unit_memory)
 
-add_executable(bellatrix_unit_zorro_autoconfig
-    ${ROOT}/tests/unit/test_zorro_autoconfig.c
-    ${SRC}/cpu/direct_region.c
-    ${SRC}/machine/autoconfig/autoconfig.c
-    ${SRC}/machine/bus/zorro_autoconfig.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
-    ${SRC}/machine/bus/zorro3/zorro3.c
-)
-target_include_directories(bellatrix_unit_zorro_autoconfig PRIVATE
-    ${SRC}/host/posix
-    ${SRC}
-)
-target_compile_options(bellatrix_unit_zorro_autoconfig PRIVATE -Wall -Wextra -Werror)
-add_test(NAME bellatrix_unit_zorro_autoconfig
-         COMMAND bellatrix_unit_zorro_autoconfig)
-
 add_executable(bellatrix_unit_direct_region
     ${ROOT}/tests/unit/test_direct_region.c
     ${SRC}/cpu/direct_region.c
@@ -401,7 +382,6 @@ add_executable(bellatrix_unit_superbuster_z3
     ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/superbuster/superbuster.c
     ${SRC}/machine/bus/board_registry.c
-    ${SRC}/machine/bus/zorro3/zorro3.c
 )
 target_include_directories(bellatrix_unit_superbuster_z3 PRIVATE
     ${SRC}/host/posix

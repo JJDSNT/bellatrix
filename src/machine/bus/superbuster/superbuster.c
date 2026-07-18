@@ -1,7 +1,6 @@
 #include "machine/bus/superbuster/superbuster.h"
 
 #include "machine/bus/board_registry.h"
-#include "machine/bus/zorro3/zorro3.h"
 
 void superbuster_init(SuperBusterState *s)
 {
@@ -48,7 +47,5 @@ SuperBusterZ3Decode superbuster_decode_z3(const SuperBusterState *s,
         if (b && b->is_z3)
             return SUPERBUSTER_Z3_BOARD;
     }
-    if (bellatrix_zorro3_in_board_window(addr))
-        return SUPERBUSTER_Z3_BOARD;
     return SUPERBUSTER_Z3_UNMAPPED;
 }

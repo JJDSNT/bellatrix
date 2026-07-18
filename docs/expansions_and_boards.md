@@ -147,43 +147,71 @@ machine bus. The live paths are described next.
 
 ## 4. What actually drives boards today
 
-Three paths coexist right now. Convergence means collapsing them onto §1/§3.
+`board_registry` (§3) is the single AutoConfig authority on the live bus for
+both backends: every access routes through `bellatrix_machine_read/write →
+machine_dispatch` (Emu68 via `cpu_bridge.c`, Musashi via `musashi_backend.c`).
+The old ad-hoc Zorro II/III registries (`zorro2_bus.c`, `zorro3.c`) have been
+**deleted** (ISSUE-0066); nothing routes through them any longer.
 
-| Path | Used by | Notes |
+Two things remain alongside `board_registry`, on purpose:
+
+| Piece | Role | Why it stays |
 |---|---|---|
-| Emu68 native `.boards` + `vectors.c` | **Emu68 backend** (product, `BELLATRIX_ENABLE_EMU68_BOARDS=ON`) | Emu68's own z2ram, 68040, sdcard, emmc, unicam, devicetree. Already the target model — untouched. |
-| `board_registry` (§3) | harness / Musashi (foundation) | Same descriptor + self-registration; not yet the live consumer. |
-| `expansion.c` + Zorro II/III registries | **lide** (§5) and the harness AutoConfig path | The older approach; kept alive for lide only. |
+| `expansion.c` `bus_ops` | Per-access read/write for an EXTERNAL board's *window* | `struct ExpansionBoard` has no per-access callback, so an EXTERNAL board latches its base via the walker (`map == NULL`) and serves its window here. Used by **lide** and **RTG**. |
+| Emu68 native `.boards` + `vectors.c` | Emu68's own boards (z2ram, sdcard, emmc, devicetree, 68040) | Compiled only in boards mode (below); they self-register into Emu68's sections and are needed on the real Pi. |
 
-The real legacy to retire is neither of these: it is the **hardcoded memory-map
-in the `run.sh` TUI** (`tools/launcher/tui.go`).
+### Build modes (`BELLATRIX_ENABLE_EMU68_BOARDS`)
+
+After ISSUE-0066 this flag is **no longer** "legacy registry vs modern" — that
+registry is gone. It now selects which *native board set* is compiled:
+
+- **ON ("boards")** — compiles Emu68's native `src/boards/{z2ram,sdcard,68040,
+  devicetree}.c`. These self-register into Emu68's `.boards.z2/.z3` sections and
+  are walked by Emu68's `vectors.c`. Fast RAM comes from Emu68's `z2ram.c`.
+- **OFF ("legacy", the `build.sh` default)** — those Emu68 native boards are not
+  compiled; the Bellatrix `z2_fast_ram.c` board (via `board_registry`) provides
+  Fast RAM, sized by `BELLATRIX_LEGACY_Z2_RAM_MB`.
+
+In **both** modes the Bellatrix `board_registry` boards (lide, RTG, fast_ram) are
+present and drive AutoConfig through `machine_dispatch`. The flag name still says
+"legacy" only for historical continuity — it is not renamed.
+
+**Direction:** the two modes exist because two board *walkers/sections* still
+coexist — Emu68's native `vectors.c` walker (`.boards.z2`) and Bellatrix's
+`board_registry` walker (`bellatrix_boards`). Convergence (§6) is to unify them
+so a single walk sees every `struct ExpansionBoard`, at which point the flag
+disappears. That waits on stabilising boards-mode (e.g. the sdcard board under
+QEMU) and is a dedicated effort. The real legacy still to retire is the
+hardcoded memory-map in the `run.sh` TUI (`tools/launcher/tui.go`).
 
 ---
 
 ## 5. Board inventory
 
 **Emu68 native — keep, never wrap.** `z2ram`, `68040`, `sdcard`, `emmc`,
-`unicam`, `devicetree`, and `VideoCore.card` (the RTG equivalent). These are
-Emu68's and come up through Emu68's own mechanism on the Emu68 backend. Do not
-write Bellatrix wrappers around them — a `z3_68040` wrapper existed and was
-deleted (2026-07-17) as redundant.
+`unicam`, `devicetree`, and `VideoCore.card` (the RTG target). These are Emu68's
+and come up through Emu68's own mechanism (boards mode). Do not write Bellatrix
+wrappers around them — a `z3_68040` wrapper existed and was deleted (2026-07-17)
+as redundant.
 
-**RTG (`src/machine/expansions/rtg/`) — a lab that never worked.** An attempt at
-a Bellatrix-specific P96 graphics board. It never reached a working state and is
-not a reference. The target for RTG is Emu68's `VideoCore.card`. Deletion is
-deferred (the blast radius is large: harness `main` `HARNESS_RTG`,
-`screenshot.c`, the `rtg_rom_data` Docker ROM build, and the `cards/bellatrix.card`
-tree). See `docs/rtg_design.md` (kept for design reference only, with a
-correction header) and `AI_context/issues/ISSUE-0033`.
+**RTG (`src/machine/expansions/rtg/`) — a lab, kept for now.** A Bellatrix P96
+graphics board whose *render* path never worked. As of ISSUE-0066 it is a
+`board_registry` **Zorro III** EXTERNAL board (`is_z3=1`, `map==NULL`), served
+per access via `expansion.c` `bus_ops` — it registers and its window decodes
+through the Super Buster, but nothing drives its registers. Its target is Emu68's
+`VideoCore.card`, which only exists on the Raspberry Pi, so RTG is evolved in a
+dedicated session rather than deleted. Harness/lab-only (`HARNESS_RTG`). See
+`docs/rtg_design.md` (superseded; correction header) and ISSUE-0033.
 
 **lide (`src/machine/expansions/lide_cdrom/`, `external/lide.device`) — the one
 board Emu68 does not provide.** It gives **ISO (CD-ROM)** and **HDF (hard-disk
-image)** support. lide is a *mixed* board: a ROM plus side-effecting ATA/IDE
-registers served per access via `expansion.c` `bus_ops`. **This is the sole
-reason the older `expansion.c` + Zorro II/III registry path is kept alive**
-(documented at the top of `src/machine/expansion.h`). `expansion.c` is *not*
-orphaned — it is used by `machine_rigel*.c`, `lide_cdrom.c`, and
-`src/plugin/plugin_loader.c`.
+image)** support. lide is *fully EXTERNAL*: its ROM is address-transformed
+(nibble bootldr, BYTEWIDE device binary, odd address → 0xFF) plus side-effecting
+ATA/IDE registers, so no DIRECT region can express it. AutoConfig via
+`board_registry` (Zorro II, `map==NULL`); window served per access via
+`expansion.c` `bus_ops`. **This is the sole reason `expansion.c` is kept alive**
+(documented at the top of `src/machine/expansion.h`) — used by `machine_rigel*.c`,
+`lide_cdrom.c`, and `rtg.c`.
 
 ---
 
@@ -191,16 +219,21 @@ orphaned — it is used by `machine_rigel*.c`, `lide_cdrom.c`, and
 
 1. **Done.** Super Buster as the Z3 decode authority; DIRECT/EXTERNAL/UNMAPPED
    classification shared by both backends (`cpu_bridge_classify`).
-2. **Done (foundation).** `board_registry`: Emu68-style self-registration over
-   the real `struct ExpansionBoard`, harness-tested.
-3. **Next.** Wire `board_registry` into the live Musashi/harness bus so it, not
-   the ad-hoc Zorro registries, drives AutoConfig there.
-4. **Then.** Re-express **lide** as an Emu68-style DIRECT ROM board **plus** an
-   EXTERNAL register window (routed by the Super Buster / bus dispatch). This is
-   the mixed-region case (`AI_context/issues/ISSUE-0032` item 6) and the last
-   holdout on the old path.
-5. **Finally.** Retire `expansion.c`'s parallel registry and the `run.sh` TUI
-   hardcoded memory-map. Decide RTG's fate against `VideoCore.card`.
+2. **Done.** `board_registry`: Emu68-style self-registration over the real
+   `struct ExpansionBoard`; wired as the live AutoConfig authority for both
+   backends.
+3. **Done.** lide re-expressed as an EXTERNAL `board_registry` Z2 board; RTG as
+   an EXTERNAL `board_registry` Z3 board (exercising the Super Buster Z3 decode).
+4. **Done.** Deleted the legacy `zorro2_bus.c`/`zorro3.c` registries and the
+   harness-only plugin subsystem; live bus depends only on `board_registry`
+   (ISSUE-0066).
+5. **Next.** Unify the two board walkers/sections (Emu68 `vectors.c` `.boards.z2`
+   vs Bellatrix `board_registry` `bellatrix_boards`) so one walk sees every
+   board and `BELLATRIX_ENABLE_EMU68_BOARDS` can disappear. Depends on
+   stabilising boards-mode (sdcard under QEMU).
+6. **Finally.** Retire `expansion.c`'s per-access registry once `board_registry`
+   grows a shared EXTERNAL-window serving mechanism; retire the `run.sh` TUI
+   hardcoded memory-map. Evolve RTG against `VideoCore.card` (Pi-only).
 
 ---
 
