@@ -317,3 +317,29 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   nele é inerte (não é varrida pelo host) — via plugin superseded pelo registro
   estático. **Ambas as pendências Z3 (0032/0060) fechadas na prática**; legacy
   real remanescente = memory-map hardcoded da TUI do run.sh (anotado, não urgente).
+- 2026-07-18 (limpeza pós-Z3, branch `cleanup-legacy-boards`): três fases de
+  remoção de legacy após lide+RTG estarem no board_registry.
+  **(1) Sistema de plugins removido:** `src/plugin/*` (loader/manifest/registry
+  dlopen) + o MODULE `.so` do lide + `plugin.json` + `--plugins` do harness. Era
+  harness-only (produto nunca compila MODULE nem linka plugin_loader), e uma `.so`
+  não participa do board_registry (seção de auto-registro não é varrida pelo host).
+  lide segue registrado estaticamente. **(2) RTG migrado para board_registry Z3:**
+  reexpresso como EXTERNAL `struct ExpansionBoard` (is_z3=1, map=NULL) servido por
+  `expansion.c` bus_ops; AutoConfig agora Zorro III (AC_TYPE_Z3). Reconciliação
+  board_registry<->Super Buster: `bellatrix_boards_external_window_owner` cobre
+  ambos os barramentos, `superbuster_decode_z3` consulta o board_registry (fallback
+  legacy zorro3 mantido), `is_z2/is_z3_board_addr` classificam por `is_z3`, janela
+  Z3 servida via expansion bus. Novo caso em `test_superbuster_z3` prova o decode Z3
+  do board_registry (base latch -> janela -> gate NBSTAB). RTG segue harness/lab-only
+  (HARNESS_RTG); render nunca funcionou, não é o alvo. **(3) Live bus desacoplado
+  do legacy:** removidos os fallbacks mortos em `machine_rigel_bus` (in_board_window
+  + board_read/write zorro2/3) e o campo `zorro2_board` de `expansion.c/.h`. Bus
+  vivo depende só do board_registry. **DEFERIDO** (deleção total, precisa build do
+  produto): deletar `zorro2_bus.c`/`zorro3.c` (relocar `WIN_128KB`, converter o caso
+  legacy do teste), remover o fallback zorro3 do Super Buster, remover o bloco
+  `BELLATRIX_ROUTE_Z2_AUTOCONFIG` de `memory_map.c` e consolidar o modo de build
+  `BELLATRIX_ENABLE_EMU68_BOARDS` (boards-vs-legacy). Ambos os backends (emu68 via
+  cpu_bridge, musashi via musashi_backend) roteiam por bellatrix_machine_read/write
+  -> machine_dispatch, então board_registry é autoridade no produto também.
+  Validação: 17/17 ctest verde; lide carrega lide.device + janela ATA dispara; RTG
+  registra como Z3.
