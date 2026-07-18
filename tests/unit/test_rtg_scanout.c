@@ -329,6 +329,41 @@ static void test_accel_planar2chunky(void)
                   planes, sizeof(planes), 1u, 0u, 9u, 0xffu));
 }
 
+static void test_accel_planar2direct(void)
+{
+    uint8_t vram[64];
+    uint8_t upload565[18] = {
+        0xa0u, 0xc0u,
+        0,0,0,0, 0,0,0x12,0x34, 0,0,0x56,0x78, 0,0,0x9a,0xbc
+    };
+    uint8_t upload32[9] = {
+        0x80u, 0,0,0,0, 0,0x11,0x22,0x33
+    };
+    memset(vram, 0, sizeof(vram));
+    check_u32("planar direct 565", 1u,
+              bellatrix_rtg_accel_planar2direct(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 4u, 1u,
+                  RTG_FMT_R5G6B5, upload565, sizeof(upload565),
+                  1u, 0u, 2u, 0x03u, 0xffffu));
+    check_u32("direct 565 p3 hi", 0x9au, vram[0]);
+    check_u32("direct 565 p3 lo", 0xbcu, vram[1]);
+    check_u32("direct 565 p2", 0x56u, vram[2]);
+    vram[16] = 0xaau; vram[17] = 0x55u; vram[18] = 0x66u; vram[19] = 0x77u;
+    check_u32("planar direct argb", 1u,
+              bellatrix_rtg_accel_planar2direct(
+                  vram, sizeof(vram), 0u, 8u, 0u, 2u, 1u, 1u,
+                  RTG_FMT_A8R8G8B8, upload32, sizeof(upload32),
+                  1u, 0u, 1u, 0x01u, 0x00ffffffu));
+    check_u32("direct preserves alpha", 0xaau, vram[16]);
+    check_u32("direct argb red", 0x11u, vram[17]);
+    check_u32("direct argb blue", 0x33u, vram[19]);
+    check_u32("direct rejects clut", 0u,
+              bellatrix_rtg_accel_planar2direct(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 1u, 1u,
+                  RTG_FMT_CLUT, upload32, sizeof(upload32),
+                  1u, 0u, 1u, 1u, 0xffu));
+}
+
 int main(void)
 {
     test_register_contract();
@@ -342,6 +377,7 @@ int main(void)
     test_accel_blitpattern();
     test_accel_drawline();
     test_accel_planar2chunky();
+    test_accel_planar2direct();
     puts("rtg scanout tests passed");
     return 0;
 }

@@ -70,6 +70,7 @@
 #define RTG_ACCEL_BLITPATTERN 5
 #define RTG_ACCEL_DRAWLINE 6
 #define RTG_ACCEL_PLANAR2CHUNKY 7
+#define RTG_ACCEL_PLANAR2DIRECT 8
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -151,6 +152,8 @@ static void probe_report(struct BellatrixCardBase *base, UWORD op,
     reg_write(base, RTG_REG_DEBUG, 0xB9000000UL | (detail & 0x00ffffff));
 }
 
+static ULONG rtg_format(RGBFTYPE fmt);
+
 static void AccelPlanar2Chunky(__REGA0(struct BoardInfo *bi),
                                __REGA1(struct BitMap *bm),
                                __REGA2(struct RenderInfo *ri),
@@ -208,7 +211,72 @@ static void AccelPlanar2Chunky(__REGA0(struct BoardInfo *bi),
                                  plane_mask, minterm);
 }
 
-static ULONG rtg_format(RGBFTYPE fmt);
+static void AccelPlanar2Direct(__REGA0(struct BoardInfo *bi),
+                               __REGA1(struct BitMap *bm),
+                               __REGA2(struct RenderInfo *ri),
+                               __REGA3(struct ColorIndexMapping *cim),
+                               __REGD0(SHORT sx), __REGD1(SHORT sy),
+                               __REGD2(SHORT dx), __REGD3(SHORT dy),
+                               __REGD4(SHORT w), __REGD5(SHORT h),
+                               __REGD6(UBYTE minterm),
+                               __REGD7(UBYTE plane_mask))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, hostfmt, upload_pitch, total, colors, plane, row, byte, i, value;
+    UBYTE *src;
+    hostfmt = rtg_format(ri->RGBFormat);
+    if (minterm == 0x0c && (hostfmt == RTG_FMT_R5G6B5 ||
+        hostfmt == RTG_FMT_A8R8G8B8) && sx >= 0 && sy >= 0 && dx >= 0 &&
+        dy >= 0 && w > 0 && h > 0 && bm->Depth > 0 && bm->Depth <= 8 &&
+        (ULONG)(UWORD)sy + (UWORD)h <= bm->Rows && ri->BytesPerRow > 0 &&
+        (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        upload_pitch = (((ULONG)(UWORD)sx & 7) + (UWORD)w + 7) >> 3;
+        colors = 1UL << bm->Depth;
+        total = upload_pitch * (ULONG)(UWORD)h * bm->Depth + colors * 4;
+        if (((ULONG)(UWORD)sx >> 3) + upload_pitch <= bm->BytesPerRow &&
+            total <= 65536UL) {
+            off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+            reg_write(base, RTG_REG_ACCEL_UPLOAD_RESET, 0);
+            for (plane = 0; plane < bm->Depth; ++plane) {
+                src = (UBYTE *)bm->Planes[plane];
+                for (row = 0; row < (ULONG)(UWORD)h; ++row)
+                    for (byte = 0; byte < upload_pitch; ++byte) {
+                        value = 0;
+                        if (src == (UBYTE *)-1) value = 0xff;
+                        else if (src) value = src[((ULONG)(UWORD)sy + row) *
+                            bm->BytesPerRow + ((ULONG)(UWORD)sx >> 3) + byte];
+                        reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, value);
+                    }
+            }
+            for (i = 0; i < colors; ++i) {
+                value = cim->Colors[i];
+                reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, value >> 24);
+                reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, value >> 16);
+                reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, value >> 8);
+                reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, value);
+            }
+            reg_write(base, RTG_REG_ACCEL_DST, off);
+            reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+            reg_write(base, RTG_REG_ACCEL_XY,
+                      ((ULONG)(UWORD)dx << 16) | (UWORD)dy);
+            reg_write(base, RTG_REG_ACCEL_WH,
+                      ((ULONG)(UWORD)w << 16) | (UWORD)h);
+            reg_write(base, RTG_REG_ACCEL_SRC_PITCH, upload_pitch);
+            reg_write(base, RTG_REG_ACCEL_SRC_XY, (UWORD)sx & 7);
+            reg_write(base, RTG_REG_ACCEL_MODE, bm->Depth);
+            reg_write(base, RTG_REG_ACCEL_FMTMASK,
+                      (hostfmt << 8) | plane_mask);
+            reg_write(base, RTG_REG_ACCEL_COLOR, cim->ColorMask);
+            reg_write(base, RTG_REG_ACCEL_OPCODE, minterm);
+            reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_PLANAR2DIRECT);
+            if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+                return;
+        }
+    }
+    bi->BlitPlanar2DirectDefault(bi, bm, ri, cim, sx, sy, dx, dy, w, h,
+                                 minterm, plane_mask);
+}
 
 static void ProbeFillRect(__REGA0(struct BoardInfo *bi),
                           __REGA1(struct RenderInfo *ri),
@@ -721,6 +789,7 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
     bi->BlitPattern = ProbeBlitPattern;
     bi->DrawLine = ProbeDrawLine;
     bi->BlitRectNoMaskComplete = ProbeBlitComplete;
+    bi->BlitPlanar2Direct = AccelPlanar2Direct;
 
     return 1;
 }

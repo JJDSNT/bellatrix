@@ -51,6 +51,7 @@
 #define RTG_ACCEL_BLITPATTERN 5u
 #define RTG_ACCEL_DRAWLINE 6u
 #define RTG_ACCEL_PLANAR2CHUNKY 7u
+#define RTG_ACCEL_PLANAR2DIRECT 8u
 
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
@@ -142,5 +143,16 @@ int bellatrix_rtg_accel_planar2chunky(uint8_t *vram, uint32_t vram_size,
                                       uint32_t plane_pitch,
                                       uint32_t source_bit,
                                       uint32_t depth, uint32_t plane_mask);
+int bellatrix_rtg_accel_planar2direct(uint8_t *vram, uint32_t vram_size,
+                                      uint32_t dst, uint32_t pitch,
+                                      uint32_t dx, uint32_t dy,
+                                      uint32_t width, uint32_t height,
+                                      uint32_t format,
+                                      const uint8_t *upload,
+                                      uint32_t upload_size,
+                                      uint32_t plane_pitch,
+                                      uint32_t source_bit,
+                                      uint32_t depth, uint32_t plane_mask,
+                                      uint32_t color_mask);
 
 #endif

@@ -471,4 +471,7 @@ mídia adequada e obter frame RTG não uniforme; depois validar apresentação S
 - `BlitPlanar2Chunky` cobre COPY `0xc0` de 1–8 planos para CLUT, com plane mask,
   source X não alinhado e planos constantes. Há teste unitário; o HIDD P96 local
   ainda declara essa chamada TODO, portanto não existe evidência guest atual.
+- `BlitPlanar2Direct` cobre COPY `0x0c` para R5G6B5/A8R8G8B8, usando a tabela
+  `ColorIndexMapping` e preservando alpha/stencil fora de `ColorMask`. Testes
+  cobrem lookup RGB565 e preservação do alpha ARGB32; o HIDD local segue TODO.
 - Casos recusados continuam chamando os callbacks `Default` do P96.

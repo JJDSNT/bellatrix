@@ -279,6 +279,67 @@ int bellatrix_rtg_accel_planar2chunky(uint8_t *vram, uint32_t vram_size,
     return 1;
 }
 
+static uint32_t load_pixel(const uint8_t *p, uint32_t bpp)
+{
+    if (bpp == 2u) return ((uint32_t)p[0] << 8) | p[1];
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) | p[3];
+}
+
+int bellatrix_rtg_accel_planar2direct(uint8_t *vram, uint32_t vram_size,
+                                      uint32_t dst, uint32_t pitch,
+                                      uint32_t dx, uint32_t dy,
+                                      uint32_t width, uint32_t height,
+                                      uint32_t format,
+                                      const uint8_t *upload,
+                                      uint32_t upload_size,
+                                      uint32_t plane_pitch,
+                                      uint32_t source_bit,
+                                      uint32_t depth, uint32_t plane_mask,
+                                      uint32_t color_mask)
+{
+    uint32_t bpp = format_bytes(format), row, col, plane, colors;
+    uint64_t first, last, row_bytes, plane_span, map_offset, needed;
+    if (!vram || !upload || (bpp != 2u && bpp != 4u) || !pitch ||
+        !width || !height || !plane_pitch || !depth || depth > 8u ||
+        source_bit > 7u || (uint64_t)dx * bpp > pitch ||
+        source_bit + width > plane_pitch * 8u)
+        return 0;
+    row_bytes = (uint64_t)width * bpp;
+    if (row_bytes > pitch - (uint64_t)dx * bpp)
+        return 0;
+    colors = 1u << depth;
+    plane_span = (uint64_t)plane_pitch * height;
+    map_offset = plane_span * depth;
+    needed = map_offset + (uint64_t)colors * 4u;
+    first = (uint64_t)dst + (uint64_t)dy * pitch + (uint64_t)dx * bpp;
+    last = first + (uint64_t)(height - 1u) * pitch + row_bytes;
+    if (needed > upload_size || first >= vram_size || last > vram_size)
+        return 0;
+    for (row = 0; row < height; ++row) {
+        uint8_t *out = vram + first + (uint64_t)row * pitch;
+        for (col = 0; col < width; ++col) {
+            uint32_t index = 0u, bitpos = source_bit + col, mapped, old;
+            const uint8_t *map;
+            for (plane = 0; plane < depth; ++plane) {
+                uint32_t bit = 0u;
+                if (plane_mask & (1u << plane))
+                    bit = (upload[(uint64_t)plane * plane_span +
+                                  (uint64_t)row * plane_pitch + bitpos / 8u] >>
+                           (7u - bitpos % 8u)) & 1u;
+                index |= bit << plane;
+            }
+            map = upload + map_offset + index * 4u;
+            mapped = ((uint32_t)map[0] << 24) | ((uint32_t)map[1] << 16) |
+                     ((uint32_t)map[2] << 8) | map[3];
+            old = load_pixel(out, bpp);
+            store_pixel(out, bpp, (old & ~color_mask) | (mapped & color_mask));
+            out += bpp;
+        }
+    }
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,

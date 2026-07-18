@@ -145,6 +145,9 @@ dois endpoints e o foreground pen. O caminho AROS inicializa endpoints, pens e
 `BlitPlanar2Chunky` envia os recortes dos bitplanes pela janela de upload e
 converte COPY (`0xc0`) para CLUT, respeitando plane mask e os planos constantes
 Amiga `NULL`/`-1`. O HIDD P96 do AROS local ainda deixa essa chamada como TODO.
+`BlitPlanar2Direct` cobre COPY (`0x0c`) para RGB565 e ARGB32. A tabela
+`ColorIndexMapping` é enviada após os planos; `ColorMask` combina a cor mapeada
+com o pixel existente para preservar bits de alpha/stencil.
 
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve

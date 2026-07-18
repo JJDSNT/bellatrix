@@ -22,7 +22,7 @@ blitter 2D.
 | `BlitPattern` | parcial | 0 | **implementado:** 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID, três formatos | COMPLEMENT, máscaras parciais |
 | `DrawLine` | parcial | 0 | **implementado:** sólida, foreground COPY, três formatos | padrões, background e demais draw modes |
 | `BlitPlanar2Chunky` | parcial | HIDD AROS TODO | **implementado:** planar→CLUT, 1–8 planos, COPY `c0`, plane mask, planos constantes | demais minterms/interleaved |
-| `BlitPlanar2Direct` | não | não instrumentado | planar→RGB565/ARGB32 | formatos adicionais |
+| `BlitPlanar2Direct` | parcial | HIDD AROS TODO | **implementado:** planar→RGB565/ARGB32, COPY `0c`, plane mask, `ColorIndexMapping`/`ColorMask` | minterms 0/3/5/10/15, demais formatos |
 
 Cada callback possui um `*Default` CPU no P96. Um caso não implementado deve
 chamar esse default; nunca deve alegar sucesso parcial. `RGBFormat` vem do
@@ -71,8 +71,10 @@ commit, os testes e a evidência guest; itens sem evidência permanecem parciais
   ainda sem chamada no workload AROS).
 - [x] `BlitPlanar2Chunky`: planar→CLUT, 1–8 planos, COPY `0xc0`, plane mask
   e planos constantes (unitário; HIDD AROS local ainda marca a chamada TODO).
-- [ ] **ATUAL:** `BlitPlanar2Direct`: planar→RGB565/ARGB32.
-- [ ] Sprite, VBlank/page flip e depois fila/async.
+- [x] `BlitPlanar2Direct`: planar→RGB565/ARGB32, COPY `0x0c`, plane mask,
+  lookup de cores e preservação de alpha/stencil por `ColorMask` (unitário;
+  HIDD AROS local ainda marca a chamada TODO).
+- [ ] **ATUAL:** sprite e VBlank/page flip; depois fila/async.
 - [ ] Screen dragging, overlay e mode mixing após o desktop básico.
 
 ## Critério para mudar o estado
