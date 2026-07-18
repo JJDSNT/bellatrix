@@ -12,7 +12,20 @@ are `bellatrix_musashi_68000.img`, `bellatrix_musashi_68040.img`,
 `bellatrix_emu68.img`, plus the corresponding `_multicore.img` files. Every
 image includes a `.sha256` checksum. The Musashi builds are the stable ones —
 Kickstart 1.3/Workbench 1.3, AROS, USB HID, and Bluetooth HID are functional
-on the Pi. Five areas remain in progress:
+on the Pi.
+
+Bellatrix also provides a portable 8 MB linear-framebuffer P96 RTG board. In
+the Musashi harness, AROS discovers the Zorro III board, runs its DiagArea and
+CardLoader, initializes `bellatrix.card`, selects a 640×480 CLUT mode, and
+presents the RTG framebuffer through SDL. Direct VRAM mapping and synchronous
+host acceleration are implemented for `FillRect`, COPY blits, and
+`InvertRect`, with safe P96 software fallback for unsupported cases. Enable it
+with `HARNESS_RTG=1` or the RTG toggle in the `run.sh` launcher. The same board
+contract is intended for Raspberry presenters; compatibility with alternative
+Emu68 board/driver interfaces would be an additional integration, not a
+prerequisite for Bellatrix RTG support.
+
+Four areas remain in progress:
 
 - **Emu68 JIT integration** — the Bellatrix adapter reaches the AROS boot
   screen and boots Kickstart with its bus dispatched through Emu68's native
@@ -25,7 +38,6 @@ on the Pi. Five areas remain in progress:
   happens.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
 - **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
-- **RTG support** — `bellatrix.rtg` is a portable 8 MB linear-framebuffer P96 board shared by the harness and future Raspberry presenters. In the harness, AROS now completes DiagArea/CardLoader, `FindCard`, `InitCard`, and mode selection through an active 640x480 CLUT scanout; the live SDL presenter prefers RTG when enabled. The next milestone is a non-uniform desktop frame from bootable media. A future VC4/Emu68 presenter is deliberately not a prerequisite.
 - **HDMI audio** — the bare-metal HDMI output path is believed to be working:
   the DMA test clip/WAV plays on real Pi hardware. The remaining work is to
   get Amiga/Paula emulation fast enough on hardware to validate real Amiga
