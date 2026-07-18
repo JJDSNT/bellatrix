@@ -41,6 +41,15 @@ MMIO que instala o mapeamento; os seguintes usam a memória direta. Reset remove
 a região antes de uma nova enumeração. O log confirma a promoção com
 `[RTG] direct VRAM mapped: ...`.
 
+O VSync do SDL não era o gargalo observado: uma execução real confirmou
+`requested_vsync=off active_vsync=off` sem eliminar o desenho progressivo. O
+profiler atribuiu cerca de 98,7% do tempo ao `cpu_run`. O hook de instrução do
+Musashi, antes instalado mesmo sem diagnóstico ativo, passou a ser opt-in. No
+mesmo boot de 1.000 frames isso elevou a vazão aproximada de 24–25 para 27–31
+milhões de ciclos guest/s. `HARNESS_CPU_QUANTUM=4096` reduz adicionalmente o
+número de chamadas ao Musashi, mas permanece opção de laboratório porque um
+quantum maior altera a granularidade temporal do chipset.
+
 O RTG do Bellatrix será uma placa P96 de framebuffer linear, portátil entre os
 backends. O driver guest e o contrato de scanout não conhecerão SDL, VideoCore
 ou mailbox:

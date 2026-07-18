@@ -2569,6 +2569,30 @@ static void harness_instr_hook(unsigned int pc)
     harness_trace_post_dskblk_window((uint32_t)pc);
 }
 
+static int harness_instr_hook_requested(void)
+{
+    static const char *const env_names[] = {
+        "HARNESS_BOOT_TRACE",
+        "HARNESS_TRACE_PC_RANGE1",
+        "HARNESS_TRACE_PC_RANGE2",
+        "HARNESS_EXEC_CALL_TRACE",
+        "HARNESS_SIGNAL_PROBE",
+        "HARNESS_LIBRARY_CALL_TRACE",
+        "HARNESS_MSGPORT_OWNER_FIX",
+        "HARNESS_TRACKDISK_WAITPORT_OWNER_FIX",
+        "HARNESS_PC_BURST",
+        "HARNESS_PC_RING",
+    };
+    size_t i;
+
+    for (i = 0u; i < sizeof(env_names) / sizeof(env_names[0]); ++i) {
+        const char *value = getenv(env_names[i]);
+        if (value && value[0] != '\0' && value[0] != '0')
+            return 1;
+    }
+    return 0;
+}
+
 static uint32_t harness_read(uint32_t addr, int size)
 {
     uint32_t direct_value;
@@ -2973,7 +2997,13 @@ void musashi_backend_init(void)
            s_cpu_type == M68K_CPU_TYPE_68020 ? "68020" :
            s_cpu_type == M68K_CPU_TYPE_68EC020 ? "68ec020" :
            s_cpu_type == M68K_CPU_TYPE_68010 ? "68010" : "68000");
-    m68k_set_instr_hook_callback(harness_instr_hook);
+    if (harness_instr_hook_requested()) {
+        m68k_set_instr_hook_callback(harness_instr_hook);
+        printf("[HARNESS] Musashi instruction diagnostics: enabled\n");
+    } else {
+        m68k_set_instr_hook_callback(NULL);
+        printf("[HARNESS] Musashi instruction diagnostics: disabled (fast path)\n");
+    }
     if (harness_ipl_trace_enabled())
         m68k_set_int_ack_callback(harness_int_ack);
 }

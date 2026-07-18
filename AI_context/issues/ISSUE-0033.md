@@ -257,6 +257,14 @@ byte dos acessos seguintes do P96. O mapeamento é alinhado a 4 KiB, removido no
 reset e coberto pela integração AROS, que exige o log
 `direct VRAM mapped: 40003000-407fffff` antes de aceitar o scanout.
 
+O desenho linha a linha continuou visível com SDL confirmando VSync realmente
+desligado. O profiler mostrou ~98,7% em `cpu_run`; portanto VSync não era o
+blocker. O instruction hook do Musashi era registrado incondicionalmente apesar
+de todas as sondas estarem desligadas. Agora ele só é instalado quando uma das
+flags de trace/probe dependentes estiver ativa. A vazão medida no boot AROS de
+1.000 frames subiu de ~24–25M para ~27–31M ciclos guest/s. Quantum 4096 também
+foi validado, com ganho menor, e não virou default por afetar granularidade.
+
 ## Correção de direção
 
 O backend VideoCore não é requisito do RTG atual. Ele é uma possível solução
