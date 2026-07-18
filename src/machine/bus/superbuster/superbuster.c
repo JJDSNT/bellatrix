@@ -1,5 +1,6 @@
 #include "machine/bus/superbuster/superbuster.h"
 
+#include "machine/bus/board_registry.h"
 #include "machine/bus/zorro3/zorro3.h"
 
 void superbuster_init(SuperBusterState *s)
@@ -40,6 +41,13 @@ SuperBusterZ3Decode superbuster_decode_z3(const SuperBusterState *s,
      * for any slot. This is the chip's own state, not an address property. */
     if (!s || (s->ctrl & SUPERBUSTER_NBSTAB) == 0u)
         return SUPERBUSTER_Z3_UNMAPPED;
+    /* A configured EXTERNAL Z3 board (board_registry) owns this window. */
+    {
+        const struct ExpansionBoard *b =
+            bellatrix_boards_external_window_owner(addr);
+        if (b && b->is_z3)
+            return SUPERBUSTER_Z3_BOARD;
+    }
     if (bellatrix_zorro3_in_board_window(addr))
         return SUPERBUSTER_Z3_BOARD;
     return SUPERBUSTER_Z3_UNMAPPED;

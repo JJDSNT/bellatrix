@@ -400,11 +400,13 @@ add_executable(bellatrix_unit_superbuster_z3
     ${ROOT}/tests/unit/test_superbuster_z3.c
     ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/superbuster/superbuster.c
+    ${SRC}/machine/bus/board_registry.c
     ${SRC}/machine/bus/zorro3/zorro3.c
 )
 target_include_directories(bellatrix_unit_superbuster_z3 PRIVATE
     ${SRC}/host/posix
     ${SRC}
+    ${ROOT}/emu68/include
 )
 target_compile_options(bellatrix_unit_superbuster_z3 PRIVATE -Wall -Wextra -Werror)
 add_test(NAME bellatrix_unit_superbuster_z3

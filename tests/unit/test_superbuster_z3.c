@@ -10,6 +10,7 @@
  * is also gated on the Buster's own NBSTAB ("Z3 bus available") bit.
  */
 #include "machine/autoconfig/autoconfig.h"
+#include "machine/bus/board_registry.h"
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/bus/zorro3/zorro3.h"
 
@@ -43,6 +44,20 @@ typedef struct ExtBoard {
 } ExtBoard;
 
 static ExtBoard s_ext;
+
+/* Second path under test: an EXTERNAL Zorro III board registered through the
+ * self-registering board_registry (map == NULL). The Super Buster decode must
+ * recognise its window too, not only legacy zorro3 registry boards. */
+static uint8_t s_reg_config[AUTOCONFIG_DATA_SIZE];
+static struct ExpansionBoard s_reg_board = {
+    .rom_file = s_reg_config,
+    .rom_size = 0x00020000u,
+    .map_base = 0u,
+    .is_z3    = 1u,
+    .enabled  = 1u,
+    .map      = NULL,
+};
+BELLATRIX_REGISTER_BOARD_Z3(s_reg_board);
 
 static int ext_map(void *userdata, uint32_t base, uint32_t size)
 {
@@ -153,6 +168,31 @@ int main(void)
     bellatrix_zorro3_board_write32(0x40000030u, 0xdeadbeefu);
     check_eq("read32 assembles big-endian", 0xdeadbeefu,
              bellatrix_zorro3_board_read32(0x40000030u));
+
+    /* board_registry path: a Z3 EXTERNAL board drives the same decode. Before
+     * its base is assigned, its window is open bus. */
+    s_reg_config[0] = 0x80u; /* Zorro III er_Type (config-read content only) */
+    bellatrix_boards_autoconfig_reset();
+    check_eq("registry board undecoded before base",
+             (uint32_t)SUPERBUSTER_Z3_UNMAPPED,
+             (uint32_t)superbuster_decode_z3(&sb, 0x50000000u));
+
+    /* Guest assigns base[31:16] at Z3 offset 0x44 through the registry walker. */
+    bellatrix_boards_autoconfig_write(0x00e80044u, 0x5000u, 2u);
+    check_eq("registry board base latched", 0x50000000u, s_reg_board.map_base);
+    check_eq("registry window start decoded", (uint32_t)SUPERBUSTER_Z3_BOARD,
+             (uint32_t)superbuster_decode_z3(&sb, 0x50000000u));
+    check_eq("registry window end decoded", (uint32_t)SUPERBUSTER_Z3_BOARD,
+             (uint32_t)superbuster_decode_z3(&sb, 0x5001ffffu));
+    check_eq("registry just past window", (uint32_t)SUPERBUSTER_Z3_UNMAPPED,
+             (uint32_t)superbuster_decode_z3(&sb, 0x50020000u));
+
+    /* NBSTAB gates the registry path exactly as the legacy path. */
+    sb.ctrl &= (uint8_t)~SUPERBUSTER_NBSTAB;
+    check_eq("registry no decode when Z3 bus disabled",
+             (uint32_t)SUPERBUSTER_Z3_UNMAPPED,
+             (uint32_t)superbuster_decode_z3(&sb, 0x50000000u));
+    sb.ctrl |= SUPERBUSTER_NBSTAB;
 
     /* Reset tears the window down and the Buster stops decoding it. */
     bellatrix_zorro3_reset();

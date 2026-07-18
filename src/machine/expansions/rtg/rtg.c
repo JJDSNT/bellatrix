@@ -1,8 +1,10 @@
 // src/machine/expansions/rtg/rtg.c — see rtg.h and docs/rtg_design.md.
 
 #include "machine/expansions/rtg/rtg.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
+#include "machine/bus/board_registry.h"
 #include "machine/autoconfig/autoconfig.h"
+#include "machine/expansion.h"
+#include "machine/machine.h"
 #include "support.h"
 
 #include <string.h>
@@ -167,23 +169,87 @@ static void rtg_reset(void *userdata)
     s_rtg.pal_index = 0;
 }
 
-static const BellatrixZorro2BoardOps s_rtg_ops = {
-    .reset  = rtg_reset,
-    .destroy = 0,
-    .read8  = rtg_read8,
-    .write8 = rtg_write8,
+/* -----------------------------------------------------------------------
+ * board_registry EXTERNAL Zorro III board
+ *
+ * RTG is a Zorro III board: its 4MB register+ROM+VRAM window is served per
+ * access (EXTERNAL, map == NULL), so the walker only latches the guest-assigned
+ * base into s_rtg_board.map_base. The window is decoded by the Super Buster
+ * (superbuster_decode_z3 consults board_registry) and routed to the bus_ops
+ * below via machine_rigel_bus.c's is_z3_board_addr -> expansion bus dispatch.
+ * The descriptor is always linked in; enabled flips to 1 in the register call.
+ * --------------------------------------------------------------------- */
+static struct ExpansionBoard s_rtg_board = {
+    .rom_file = s_rtg_config,
+    .rom_size = BELLATRIX_RTG_WINDOW,
+    .map_base = 0u,
+    .is_z3    = 1u,
+    .enabled  = 0u,
+    .map      = NULL,
+};
+BELLATRIX_REGISTER_BOARD_Z3(s_rtg_board);
+
+static uint32_t rtg_window_base(void) { return s_rtg_board.map_base; }
+
+/* Per-access window serving (bus_ops). owns_address gates read/write, so both
+ * assume addr lies in the window; bytes are assembled/split big-endian, which
+ * feeds the byte-latch commit in rtg_write8. */
+static int rtg_bus_owns(BellatrixExpansion *exp, uint32_t addr)
+{
+    uint32_t base = rtg_window_base();
+    (void)exp;
+    if (!base)
+        return 0;
+    return addr >= base && addr < base + BELLATRIX_RTG_WINDOW;
+}
+
+static uint32_t rtg_bus_read(BellatrixExpansion *exp, uint32_t addr,
+                             unsigned int size)
+{
+    uint32_t off = addr - rtg_window_base();
+    uint32_t v = 0u;
+    unsigned i;
+    (void)exp;
+    for (i = 0; i < size; i++)
+        v = (v << 8) | rtg_read8(NULL, off + i);
+    return v;
+}
+
+static void rtg_bus_write(BellatrixExpansion *exp, uint32_t addr,
+                          uint32_t value, unsigned int size)
+{
+    uint32_t off = addr - rtg_window_base();
+    unsigned i;
+    (void)exp;
+    for (i = 0; i < size; i++)
+        rtg_write8(NULL, off + i, (uint8_t)(value >> ((size - 1u - i) * 8u)));
+}
+
+static const BellatrixExpansionBusOps s_rtg_bus_ops = {
+    .owns_address = rtg_bus_owns,
+    .read         = rtg_bus_read,
+    .write        = rtg_bus_write,
 };
 
-static BellatrixZorro2BoardDesc s_rtg_desc;
+static void rtg_exp_reset(BellatrixExpansion *exp) { (void)exp; rtg_reset(NULL); }
+
+static const BellatrixExpansionOps s_rtg_exp_ops = {
+    .attach   = 0,
+    .reset    = rtg_exp_reset,
+    .shutdown = 0,
+    .destroy  = 0,
+};
 
 int bellatrix_rtg_register(struct BellatrixMachine *m)
 {
     uint8_t raw[AUTOCONFIG_ROM_BYTES];
-    (void)m;
+    BellatrixExpansionDesc desc;
 
     memset(&s_rtg, 0, sizeof(s_rtg));
     memset(raw, 0, sizeof(raw));
-    raw[0]  = (uint8_t)(AC_TYPE_Z2 | AC_TYPE_DIAGVALID | AC_SIZE_4MB);
+    /* Zorro III board. The size in er_Type bits 2-0 is enough for our
+     * fixed-size window; the Super Buster decode keys off the assigned base. */
+    raw[0]  = (uint8_t)(AC_TYPE_Z3 | AC_TYPE_DIAGVALID | AC_SIZE_4MB);
     raw[1]  = BELLATRIX_RTG_PRODUCT;
     raw[4]  = (uint8_t)(BELLATRIX_RTG_MANUFACTURER >> 8);
     raw[5]  = (uint8_t)(BELLATRIX_RTG_MANUFACTURER & 0xFFu);
@@ -192,17 +258,26 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
     raw[11] = (uint8_t)(BELLATRIX_RTG_ROM_OFF & 0xFFu); /* InitDiagVec low  */
     autoconfig_build(s_rtg_config, raw);
 
-    memset(&s_rtg_desc, 0, sizeof(s_rtg_desc));
-    s_rtg_desc.id          = "bellatrix.rtg";
-    s_rtg_desc.config_data = s_rtg_config;
-    s_rtg_desc.config_size = sizeof(s_rtg_config);
-    s_rtg_desc.window_size = BELLATRIX_RTG_WINDOW;
-    s_rtg_desc.ops         = &s_rtg_ops;
+    s_rtg_board.map_base = 0u;
+    s_rtg_board.enabled  = 1u;
 
-    if (bellatrix_zorro2_register_board(&s_rtg_desc) != 0)
+    /* Per-access serving via expansion.c bus_ops; no legacy zorro registry. */
+    memset(&desc, 0, sizeof(desc));
+    desc.id           = "bellatrix.rtg";
+    desc.name         = "Bellatrix RTG";
+    desc.kind         = BELLATRIX_EXPANSION_BOARD;
+    desc.priority     = 80;
+    desc.userdata     = &s_rtg;
+    desc.zorro2_board = NULL;
+    desc.bus_ops      = &s_rtg_bus_ops;
+    desc.ops          = &s_rtg_exp_ops;
+
+    if (bellatrix_expansion_register(m, &desc) != 0) {
+        s_rtg_board.enabled = 0u;
         return -1;
+    }
     s_registered = 1;
-    kprintf("[RTG] board registered: 4MB window, %u KB VRAM\n",
+    kprintf("[RTG] board registered: Zorro III 4MB window, %u KB VRAM\n",
             (unsigned)(BELLATRIX_RTG_VRAM_SIZE / 1024u));
     return 0;
 }
@@ -226,11 +301,8 @@ void bellatrix_rtg_frame_tick(void)
 
 uint8_t *bellatrix_rtg_vram_ptr(uint32_t *base, uint32_t *size)
 {
-    uint32_t board_base;
-    if (!s_registered || !bellatrix_zorro2_board_configured("bellatrix.rtg"))
-        return 0;
-    board_base = bellatrix_zorro2_board_base("bellatrix.rtg");
-    if (!board_base)
+    uint32_t board_base = rtg_window_base();
+    if (!s_registered || !board_base)
         return 0;
     if (base) *base = board_base + BELLATRIX_RTG_VRAM_OFF;
     if (size) *size = BELLATRIX_RTG_VRAM_SIZE;
