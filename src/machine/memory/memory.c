@@ -9,7 +9,6 @@
 #include "support.h"
 
 #if defined(BELLATRIX_HARNESS)
-#include "machine/bus/zorro2/zorro2_bus.h"
 #endif
 
 #include <string.h>
@@ -36,11 +35,11 @@ static uint8_t g_slow_ram[BELLATRIX_SLOW_RAM_SIZE];
 static void bellatrix_memory_log_expansion_backend(void)
 {
 #if defined(BELLATRIX_HARNESS)
-    kprintf("[MEMMAP] expansion backend: harness zorro2 bus\n");
+    kprintf("[MEMMAP] expansion backend: board_registry (harness)\n");
 #elif defined(BELLATRIX_EMU68) && defined(BELLATRIX_ENABLE_EMU68_BOARDS) && BELLATRIX_ENABLE_EMU68_BOARDS
-    kprintf("[MEMMAP] expansion backend: emu68 boards\n");
+    kprintf("[MEMMAP] expansion backend: emu68 native boards + board_registry\n");
 #elif defined(BELLATRIX_EMU68)
-    kprintf("[MEMMAP] expansion backend: bellatrix legacy zorro2 bus\n");
+    kprintf("[MEMMAP] expansion backend: board_registry\n");
 #endif
 }
 

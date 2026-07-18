@@ -202,8 +202,6 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/machine/autoconfig/autoconfig.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/board_registry.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro_autoconfig.c
-    ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro2/zorro2_bus.c
-    ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro3/zorro3.c
     ${CMAKE_SOURCE_DIR}/../src/machine/bus/superbuster/superbuster.c
     ${CMAKE_SOURCE_DIR}/../src/machine/expansions/z2_fast_ram/z2_fast_ram.c
     ${CMAKE_SOURCE_DIR}/../src/machine/expansions/lide_cdrom/lide_cdrom.c
@@ -282,12 +280,12 @@ if(BELLATRIX_ENABLE_EMU68_BOARDS)
     )
 else()
     add_compile_definitions(BELLATRIX_ENABLE_EMU68_BOARDS=0)
+    # Non-boards mode: Emu68's native z2ram/etc. are not compiled; the Bellatrix
+    # Z2 Fast RAM board (board_registry, in BASE_FILES unconditionally) provides
+    # expansion RAM at this size instead.
     set(BELLATRIX_LEGACY_Z2_RAM_MB "8" CACHE STRING
-        "Z2 Fast RAM size in MB for the Bellatrix-owned autoconfig path (legacy non-boards mode)")
+        "Z2 Fast RAM size in MB for the board_registry Fast RAM (non-boards mode)")
     add_compile_definitions(BELLATRIX_LEGACY_Z2_RAM_MB=${BELLATRIX_LEGACY_Z2_RAM_MB})
-    list(APPEND BASE_FILES
-        ${CMAKE_SOURCE_DIR}/../src/machine/bus/zorro2/zorro2_bus.c
-    )
 endif()
 list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src/io/bluetooth

@@ -3,14 +3,11 @@
 
 #include <stdint.h>
 
+/*
+ * The $E80000 AutoConfig window predicate. AutoConfig accesses in this window
+ * are answered by the board_registry walker (see machine/bus/board_registry.h);
+ * this header only classifies the address range.
+ */
 int bellatrix_zorro_autoconfig_in_window(uint32_t addr);
-
-uint8_t  bellatrix_zorro_autoconfig_read8(uint32_t addr);
-uint16_t bellatrix_zorro_autoconfig_read16(uint32_t addr);
-uint32_t bellatrix_zorro_autoconfig_read32(uint32_t addr);
-
-void bellatrix_zorro_autoconfig_write8(uint32_t addr, uint8_t value);
-void bellatrix_zorro_autoconfig_write16(uint32_t addr, uint16_t value);
-void bellatrix_zorro_autoconfig_write32(uint32_t addr, uint32_t value);
 
 #endif

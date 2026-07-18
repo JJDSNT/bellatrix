@@ -9,8 +9,6 @@
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
 #include "cpu/cpu_backend.h"
 #include "machine/bus/board_registry.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
-#include "machine/bus/zorro3/zorro3.h"
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/memory/chip_ram.h"
 
@@ -188,8 +186,6 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     audio_mixer_init(&m->audio_queue);
     bellatrix_audio_output_init();
     superbuster_init(&m->superbuster);
-    bellatrix_zorro2_init();
-    bellatrix_zorro3_init();
     machine_debug_init(m);
 
     machine_rigel_trace_init();
@@ -303,8 +299,6 @@ void bellatrix_machine_reset(void)
     }
     m->memory.fast_ram_base = 0u;
     m->memory.fast_ram_configured = 0u;
-    bellatrix_zorro2_reset();
-    bellatrix_zorro3_reset();
     machine_debug_reset(m);
     bellatrix_expansion_reset_all(m);
 

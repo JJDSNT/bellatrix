@@ -8,8 +8,6 @@
 #include "machine/memory/chip_ram.h"
 #include "machine/memory/fast_ram.h"
 #include "machine/bus/board_registry.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
-#include "machine/bus/zorro3/zorro3.h"
 #include "machine/bus/zorro_autoconfig.h"
 #include "machine/bus/superbuster/superbuster.h"
 #include "machine/expansion.h"
