@@ -139,6 +139,9 @@ em vez de o host acessar diretamente Chip/Fast RAM. O desenho mantém a command
 ABI independente do backend CPU e cobre JAM1/JAM2, INVERSVID e os três formatos.
 `BlitPattern` reutiliza o upload para padrões P96 de 16 bits, repetindo a altura
 `1 << Size` e respeitando offsets X/Y.
+`DrawLine` cobre inicialmente `LinePtrn=0xffff`, usando Bresenham inclusivo nos
+dois endpoints e o foreground pen. O caminho AROS inicializa endpoints, pens e
+`LinePtrn`; campos auxiliares não inicializados não são usados pelo contrato.
 
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve

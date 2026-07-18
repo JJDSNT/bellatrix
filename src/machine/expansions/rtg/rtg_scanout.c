@@ -205,6 +205,39 @@ int bellatrix_rtg_accel_blitpattern(uint8_t *vram, uint32_t vram_size,
     return 1;
 }
 
+int bellatrix_rtg_accel_drawline(uint8_t *vram, uint32_t vram_size,
+                                 uint32_t dst, uint32_t pitch,
+                                 uint32_t x0, uint32_t y0,
+                                 uint32_t x1, uint32_t y1,
+                                 uint32_t color, uint32_t format)
+{
+    uint32_t bpp = format_bytes(format);
+    int64_t x = x0, y = y0, tx = x1, ty = y1;
+    int64_t dx, dy, sx, sy, err;
+    uint64_t end0, end1;
+    if (!vram || !bpp || !pitch ||
+        (uint64_t)x0 * bpp + bpp > pitch ||
+        (uint64_t)x1 * bpp + bpp > pitch)
+        return 0;
+    end0 = (uint64_t)dst + (uint64_t)y0 * pitch + (uint64_t)x0 * bpp + bpp;
+    end1 = (uint64_t)dst + (uint64_t)y1 * pitch + (uint64_t)x1 * bpp + bpp;
+    if (end0 > vram_size || end1 > vram_size)
+        return 0;
+    dx = tx > x ? tx - x : x - tx;
+    sx = x < tx ? 1 : -1;
+    dy = ty > y ? y - ty : ty - y;
+    sy = y < ty ? 1 : -1;
+    err = dx + dy;
+    for (;;) {
+        store_pixel(vram + dst + (uint64_t)y * pitch + (uint64_t)x * bpp,
+                    bpp, color);
+        if (x == tx && y == ty) break;
+        if (2 * err >= dy) { err += dy; x += sx; }
+        if (2 * err <= dx) { err += dx; y += sy; }
+    }
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,

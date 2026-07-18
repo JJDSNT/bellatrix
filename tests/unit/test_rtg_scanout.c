@@ -286,6 +286,30 @@ static void test_accel_blitpattern(void)
                   0u, 0u, 0u, 1u, 0u));
 }
 
+static void test_accel_drawline(void)
+{
+    uint8_t vram[64];
+    memset(vram, 0x11, sizeof(vram));
+    check_u32("line diagonal", 1u,
+              bellatrix_rtg_accel_drawline(vram, sizeof(vram),
+                                            0u, 8u, 1u, 1u, 4u, 4u,
+                                            0x77u, RTG_FMT_CLUT));
+    check_u32("line start", 0x77u, vram[9]);
+    check_u32("line middle", 0x77u, vram[27]);
+    check_u32("line end", 0x77u, vram[36]);
+    check_u32("line neighbor", 0x11u, vram[10]);
+    check_u32("line rgb565", 1u,
+              bellatrix_rtg_accel_drawline(vram, sizeof(vram),
+                                            0u, 8u, 0u, 0u, 2u, 0u,
+                                            0x1234u, RTG_FMT_R5G6B5));
+    check_u32("line rgb565 hi", 0x12u, vram[4]);
+    check_u32("line rgb565 lo", 0x34u, vram[5]);
+    check_u32("line rejects pitch", 0u,
+              bellatrix_rtg_accel_drawline(vram, sizeof(vram),
+                                            0u, 8u, 0u, 0u, 4u, 0u,
+                                            0u, RTG_FMT_R5G6B5));
+}
+
 int main(void)
 {
     test_register_contract();
@@ -297,6 +321,7 @@ int main(void)
     test_accel_invertrect();
     test_accel_blittemplate();
     test_accel_blitpattern();
+    test_accel_drawline();
     puts("rtg scanout tests passed");
     return 0;
 }

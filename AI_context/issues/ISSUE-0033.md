@@ -465,4 +465,7 @@ mídia adequada e obter frame RTG não uniforme; depois validar apresentação S
   em `0x3000` e o CardLoader retornou `b00000ee`. A abertura VRAM passou para
   `0x10000`, reservando 64 KB para registradores/DiagArea/`.card` e deixando
   8128 KB de VRAM. Isso elimina a sobreposição em vez de mascarar o crescimento.
+- `DrawLine` sólido (`LinePtrn=0xffff`) usa Bresenham host nos três formatos.
+  Há oráculo unitário e fallback preservado, mas nenhuma chamada no workload
+  AROS atual; por isso seu estado permanece parcial.
 - Casos recusados continuam chamando os callbacks `Default` do P96.

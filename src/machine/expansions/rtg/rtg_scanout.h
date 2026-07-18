@@ -49,6 +49,7 @@
 #define RTG_ACCEL_INVERTRECT 3u
 #define RTG_ACCEL_BLITTEMPLATE 4u
 #define RTG_ACCEL_BLITPATTERN 5u
+#define RTG_ACCEL_DRAWLINE 6u
 
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
@@ -126,5 +127,10 @@ int bellatrix_rtg_accel_blitpattern(uint8_t *vram, uint32_t vram_size,
                                     uint32_t xoffset, uint32_t yoffset,
                                     uint32_t drawmode, uint32_t fg,
                                     uint32_t bg);
+int bellatrix_rtg_accel_drawline(uint8_t *vram, uint32_t vram_size,
+                                 uint32_t dst, uint32_t pitch,
+                                 uint32_t x0, uint32_t y0,
+                                 uint32_t x1, uint32_t y1,
+                                 uint32_t color, uint32_t format);
 
 #endif

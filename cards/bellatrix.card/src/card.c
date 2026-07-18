@@ -68,6 +68,7 @@
 #define RTG_ACCEL_INVERTRECT 3
 #define RTG_ACCEL_BLITTEMPLATE 4
 #define RTG_ACCEL_BLITPATTERN 5
+#define RTG_ACCEL_DRAWLINE 6
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -338,8 +339,30 @@ static void ProbeDrawLine(__REGA0(struct BoardInfo *bi),
                           __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, hostfmt;
     probe_report(base, PROBE_DRAWLINE, 0, 0,
                  ((ULONG)fmt << 8) | mask);
+    hostfmt = rtg_format(fmt);
+    /* AROS initializes the endpoints, pens and LinePtrn. Other Line fields
+     * are not authoritative in this path, so the first safe contract is the
+     * solid (0xffff) foreground line. */
+    if (hostfmt && line->LinePtrn == 0xffff && line->X >= 0 && line->Y >= 0 &&
+        line->dX >= 0 && line->dY >= 0 && ri->BytesPerRow > 0 &&
+        (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_DST, off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY,
+                  ((ULONG)(UWORD)line->X << 16) | (UWORD)line->Y);
+        reg_write(base, RTG_REG_ACCEL_WH,
+                  ((ULONG)(UWORD)line->dX << 16) | (UWORD)line->dY);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, hostfmt << 8);
+        reg_write(base, RTG_REG_ACCEL_FGPEN, line->FgPen);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_DRAWLINE);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->DrawLineDefault(bi, ri, line, mask, fmt);
 }
 

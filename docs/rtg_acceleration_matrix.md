@@ -20,7 +20,7 @@ blitter 2D.
 | `BlitRectNoMaskComplete` | parcial | ≥2, 16×16, minterm `0c` | **implementado:** COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
 | `BlitTemplate` | parcial | ≥1, 128×8 | **implementado:** upload 1-bit, JAM1/JAM2, INVERSVID, três formatos, máscara `ff` | COMPLEMENT, máscaras parciais |
 | `BlitPattern` | parcial | 0 | **implementado:** 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID, três formatos | COMPLEMENT, máscaras parciais |
-| `DrawLine` | probe | 0 | sólida, COPY | padrões e draw modes |
+| `DrawLine` | parcial | 0 | **implementado:** sólida, foreground COPY, três formatos | padrões, background e demais draw modes |
 | `BlitPlanar2Chunky` | não | não instrumentado | planar→CLUT | máscaras/interleaved |
 | `BlitPlanar2Direct` | não | não instrumentado | planar→RGB565/ARGB32 | formatos adicionais |
 
@@ -67,8 +67,9 @@ commit, os testes e a evidência guest; itens sem evidência permanecem parciais
   INVERSVID, três formatos e fallback (unitário + boot AROS com ADF).
 - [x] `BlitPattern`: padrão 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID e
   três formatos (unitário; ainda sem chamada no workload AROS).
-- [ ] **ATUAL:** `DrawLine`: linha sólida COPY; depois padrões e demais draw modes.
-- [ ] `BlitPlanar2Chunky`: planar→CLUT.
+- [x] `DrawLine`: linha sólida foreground COPY e três formatos (unitário;
+  ainda sem chamada no workload AROS).
+- [ ] **ATUAL:** `BlitPlanar2Chunky`: planar→CLUT.
 - [ ] `BlitPlanar2Direct`: planar→RGB565/ARGB32.
 - [ ] Sprite, VBlank/page flip e depois fila/async.
 - [ ] Screen dragging, overlay e mode mixing após o desktop básico.
