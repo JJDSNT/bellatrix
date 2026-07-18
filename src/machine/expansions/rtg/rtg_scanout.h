@@ -53,11 +53,24 @@
 #define RTG_ACCEL_PLANAR2CHUNKY 7u
 #define RTG_ACCEL_PLANAR2DIRECT 8u
 
+#define RTG_DIRTY_TILE_W 32u
+#define RTG_DIRTY_TILE_H 16u
+#define RTG_DIRTY_MAX_TILES 4096u
+#define RTG_DIRTY_MAX_RECTS 64u
+
+typedef struct BellatrixRtgRect {
+    uint16_t x, y, w, h;
+} BellatrixRtgRect;
+
 typedef struct BellatrixRtgFrame {
     const uint8_t *pixels;
     uint32_t width;
     uint32_t height;
     uint32_t pitch;
+    uint32_t dirty_count;
+    uint8_t changed;
+    uint8_t full_update;
+    BellatrixRtgRect dirty[RTG_DIRTY_MAX_RECTS];
 } BellatrixRtgFrame;
 
 typedef struct BellatrixRtgScanout {
@@ -75,6 +88,11 @@ typedef struct BellatrixRtgScanout {
     uint32_t pan;
     uint32_t pal_index;
     uint32_t vblank;
+    uint32_t tile_hash[RTG_DIRTY_MAX_TILES];
+    uint16_t tile_columns;
+    uint16_t tile_rows;
+    uint8_t hashes_valid;
+    uint8_t force_full;
 } BellatrixRtgScanout;
 
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,

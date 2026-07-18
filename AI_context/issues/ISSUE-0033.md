@@ -475,3 +475,142 @@ mídia adequada e obter frame RTG não uniforme; depois validar apresentação S
   `ColorIndexMapping` e preservando alpha/stencil fora de `ColorMask`. Testes
   cobrem lookup RGB565 e preservação do alpha ARGB32; o HIDD local segue TODO.
 - Casos recusados continuam chamando os callbacks `Default` do P96.
+
+## Execução 2026-07-18 — estudo e otimização do presenter P96/SDL
+
+### Pesquisa e diagnóstico do caminho antigo
+
+- O estudo está em `docs/rtg_performance_study.md` (commit `9840aaa`). A
+  auditoria encontrou três passagens integrais por frame no harness:
+  VRAM→RGBA8888 no scanout, RGBA8888→RGB565 com escala CPU no machine layer e
+  upload RGB565 integral via `SDL_UpdateTexture()`.
+- A pesquisa em Amiberry, SDL, FS-UAE e MiSTer indicou como estratégias
+  transferíveis: formato host compatível, zero/menos cópias, dirty rectangles,
+  write-watch/invalidation, limiar para abandonar parcial, escala GPU e SIMD
+  somente após remover trabalho estruturalmente redundante.
+- A percepção de desenho "linha a linha" não era apresentação de scanlines pelo
+  SDL: frames completos capturavam estados sucessivos da VRAM frontal enquanto
+  o guest ainda desenhava.
+
+### Instrumentação publicada
+
+- Commit `99ba945` adicionou `[PAL-PERF]` sob `HARNESS_PERF_TRACE=1`, separando
+  OSD, upload, clear, copy e `SDL_RenderPresent`, além de FPS e MB/s enviados.
+- `HARNESS_SDL_VSYNC=0` mede throughput; VSync ativo mede pacing. SDL `dummy`
+  coloca o harness em headless e não exercita o presenter, portanto não serve
+  de baseline gráfico.
+
+### Implementação local ainda não consolidada em commit
+
+O checkout atual contém trabalho funcional, compilado e testado, mas ainda não
+commitado porque `src/machine/machine_rigel_step.c` já possuía um conjunto grande
+de alterações locais preexistentes que não deve ser incorporado automaticamente:
+
+1. **Presenter RTG direto:** textura streaming `SDL_PIXELFORMAT_RGBA32`; frame
+   RTG deixa de passar por RGB565 e pela escala CPU. Frame completo usa
+   `SDL_LockTexture()`; falha retorna ao presenter RGB565 anterior.
+2. **Dirty tiles portátil:** hashes FNV-1a de tiles 32×16; converte somente tiles
+   alterados; coalesce horizontalmente até 64 retângulos. Primeiro frame,
+   modo/formato/palette/pan, excesso de regiões ou ≥80% sujo selecionam full.
+3. **Upload parcial:** regiões usam `SDL_UpdateTexture()` (lock parcial de textura
+   streaming não preserva garantidamente o restante); frame inalterado pula
+   upload e present.
+4. **Pacing inicial:** com VSync desligado, default de 60 Hz; com VSync ativo,
+   sem segundo limitador para evitar 30 Hz. Override:
+   `HARNESS_RTG_PRESENT_HZ=0` ilimitado ou outro valor explícito.
+5. **OSD:** ainda desenha no framebuffer RGB565 legado e não aparece no caminho
+   RTG direto; deve virar overlay separado do renderer.
+
+Validação local: build completo, `bellatrix_unit_rtg_scanout` e
+`bellatrix_harness_rtg_aros` verdes. O teste unitário cobre full inicial, frame
+inalterado, alteração de um tile e full por mudança de palette.
+
+### Resultado medido no AROS
+
+Log fornecido pelo usuário após P1/P2:
+
+- primeiro intervalo: 65,6 fps, 54,0 MB/s, upload 1,342 ms, present 2,330 ms;
+- regime parcial: 81–85 fps, aproximadamente 0,2 MB/s, upload 0,038–0,045 ms,
+  present 2,23–2,34 ms;
+- quando não houve alteração, `[PAL-PERF]` deixou de aparecer.
+
+Conclusão: dirty rectangles reduziram drasticamente tráfego e upload; o custo
+dominante passou a ser `SDL_RenderPresent`. Isso motivou o pacing P3.
+
+### Investigação do aparente bloqueio de `arosone.hdf`
+
+Um run interativo terminou em `ATA boot wait` após somente `lba=0/1`. A
+regressão não foi reproduzida em testes controlados com a mesma `aros.rom`,
+`arosone.hdf` e 68040:
+
+- RTG desligado avançou para `lba=32`, `716816`, `716820` e seguintes;
+- RTG ligado avançou pelos mesmos LBAs;
+- RTG + `aros.adf` + HDF simultâneos também avançaram.
+
+Nesse estágio não havia `[RTG] enable=1`, portanto o presenter/dirty/pacing ainda
+não estava ativo. `[HARNESS] Done` prova encerramento do loop, não apenas espera.
+Hipótese atual: diferença do perfil/TUI, mídia/limite `FRAMES`/`CYCLES` herdado
+ou evento de encerramento. Próximo diagnóstico útil é registrar explicitamente
+o motivo de término e criar regressão HDF+RTG que exija alcançar `lba=32`.
+
+### Próximas etapas preservadas
+
+1. separar/consolidar os patches locais sem absorver mudanças alheias;
+2. distinguir nas métricas updates/full/partial/unchanged/presents e medir
+   separadamente hash e conversão;
+3. dirty tracking direto nas primitivas e MMIO; write-watch no backend de memória
+   direta, mantendo hashes como fallback;
+4. fusão vertical e heurística de custo por chamadas/bytes;
+5. page flip/`SetPanning` coerente e overlay OSD;
+6. staging bulk das primitivas e, depois de medir, NEON/OpenGL ES no alvo Emu68.
+
+# Sessão 2026-07-18 — "linha a linha" medido + decisão bare-metal = VideoCore.card
+
+## O "linha a linha" do harness não tem cura no presenter (medido)
+
+A queixa era: o desktop AROS pinta linha a linha, o WinUAE não. Sonda nova
+`[RTG-FLIP]` (em `rtg.c`, no write de `RTG_REG_PAN`) conta bases de pan
+distintas — a assinatura de page-flip. Boot AROS (`aros.rom` + `aros.adf`,
+1600 frames):
+
+```
+[RTG-FLIP] new pan base=00000000 distinct=1 writes=1
+[RTG] first write reg=24 value=00000000
+[RTG] enable=1 640x480 fmt=1 bpr=640
+```
+
+`distinct=1`, base sempre 0, `SetPanning` chamado uma única vez → o desktop é
+**single-buffered**, desenha direto no buffer visível. O WinUAE mostra a mesma
+coisa, só que rápido demais pro olho porque roda a realtime. Logo:
+
+- **Não** é dirty-rect, `SDL_UpdateTexture`, nem `WaitVerticalSync`. `SetPanning`
+  **não** é no-op (escreve `RTG_REG_PAN`, e o scanout segue o pan — o flip já
+  funciona); o único no-op é `WaitVerticalSync`, e por um motivo legítimo
+  (deadlock do loop single-thread). Nada disso é o culpado.
+- Cura de causa = rodar a realtime (bare-metal). Mitigação perceptual barata no
+  harness = **coalescer por quiescência** (só apresentar após K frames emulados
+  sem mudança) — esconde a construção do desktop estático, ao custo de latência
+  e sem ajudar conteúdo animado. Opcional; não é o caminho principal.
+- A sonda `[RTG-FLIP]` fica no código como guarda: se um app double-buffered
+  aparecer (`distinct>=2`), aí sim vale implementar flip real.
+
+## Decisão: RTG bare-metal usa a VideoCore.card do Emu68
+
+Plano completo em `rtg-baremetal.md`. Resumo verificado no código:
+
+- **Framethrower NÃO é arbitragem de software** — é HW (RP2040 → MIPI CSI-2 →
+  unicam) que captura a Denise **física**. A arbitragem mora no HVS do VC4. O
+  Bellatrix tem Denise emulada como buffer → pula toda a cadeia de captura; a
+  arbitragem fica mais simples que a do PiStorm.
+- **Runtime viável na v1.0.7 pinada** (`305f686`): `devicetree.resource`
+  (mandatória, `main.c:122`) já é fornecida por `emu68/src/boards/devicetree.c`;
+  `unicam.resource` (opcional, `main.c:300`) é pulável. Não precisa bumpar Emu68.
+- **Conflito estrutural**: dono do HVS. Bellatrix usa framebuffer do firmware;
+  a card programa o HVS direto. Etapa 3 = arbitrar (switch ou dois planos).
+- **Reutilizável**: `external/VideoCore.card/src/vc4.c`/`vc6.c` (HVS/planos).
+  Não: `unicam.c` e firmware do Framethrower.
+
+Etapas: (1) build gated por `BELLATRIX_RTG_VIDEOCORE` — init dos submódulos
+aninhados + construir a card; (2) carga/runtime até `[VC] InitCard ready` no Pi3;
+(3) arbitragem Denise×RTG no HVS. Harness segue com `bellatrix.card`.
+`external/emu68-bootstrap` adicionado para a etapa de empacotamento/imagem.

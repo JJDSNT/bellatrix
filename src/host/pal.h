@@ -83,6 +83,20 @@ int      PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp);
 int      PAL_Video_Resize(uint32_t w, uint32_t h, uint32_t bpp);
 uint32_t *PAL_Video_GetBuffer(void);
 void     PAL_Video_Flip(void);
+#if defined(BELLATRIX_HARNESS)
+/* Harness-only RTG presenter.  Bare metal uses Emu68's VideoCore.card and
+   lets the VC4/VC6 HVS own RTG scanout/switching instead of copying an RTG
+   frame through Bellatrix's Denise framebuffer. */
+int      PAL_Video_PresentRGBA(const uint8_t *pixels, uint32_t w,
+                               uint32_t h, uint32_t source_pitch);
+typedef struct PAL_VideoRect {
+    uint16_t x, y, w, h;
+} PAL_VideoRect;
+int      PAL_Video_PresentRGBARegions(const uint8_t *pixels, uint32_t w,
+                                      uint32_t h, uint32_t source_pitch,
+                                      const PAL_VideoRect *rects,
+                                      uint32_t rect_count, int full_update);
+#endif
 void     PAL_Video_SetPalette(uint8_t idx, uint32_t rgb);
 
 /* ---- Runtime lifecycle ---- */

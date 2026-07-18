@@ -595,6 +595,9 @@ case "$BUILD_KIND" in
         export BELLATRIX_USBSTACK="${BELLATRIX_USBSTACK:-0}"
         export BELLATRIX_USB_MSC="${BELLATRIX_USB_MSC:-1}"
         export BELLATRIX_RTG="${BELLATRIX_RTG:-0}"
+        # Harness RTG is bellatrix.card -> SDL.  Bare metal builds and ships
+        # Emu68's VideoCore.card, whose SetSwitch path controls the HVS.
+        export BELLATRIX_RTG_VIDEOCORE="${BELLATRIX_RTG_VIDEOCORE:-$BELLATRIX_RTG}"
         export BELLATRIX_HDMI_AUDIO="${BELLATRIX_HDMI_AUDIO:-0}"
         export BELLATRIX_EMU68_BOARDS_MODE="${BELLATRIX_EMU68_BOARDS_MODE:-legacy}"
         export BELLATRIX_PROFILE="${BELLATRIX_PROFILE:-0}"

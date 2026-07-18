@@ -1,0 +1,195 @@
+diff --git a/src/emu68-vc4.h b/src/emu68-vc4.h
+index 10e30f7..27debc9 100644
+--- a/src/emu68-vc4.h
++++ b/src/emu68-vc4.h
+@@ -54,6 +54,11 @@ struct VC4Base {
+     APTR                    vc4_Unicambuffer;
+     ULONG                   vc4_UnicambufferSize;
+     ULONG                   vc4_UnicamDL;
++    APTR                    vc4_NativeBuffer;
++    ULONG                   vc4_NativeWidth;
++    ULONG                   vc4_NativeHeight;
++    ULONG                   vc4_NativePitch;
++    ULONG                   vc4_NativeDL;
+     APTR                    vc4_Framebuffer;
+     uint32_t                vc4_Pitch;
+     uint16_t                vc4_Enabled;
+@@ -109,6 +114,7 @@ struct VC4Base {
+     UBYTE                   vc4_SwitchInverted;
+     UBYTE                   vc4_IntegerScaler;
+     UBYTE                   vc4_UnicamVisible;
++    UBYTE                   vc4_NativeAvailable;
+     ULONG                   vc4_ScalingKernel;
+     ULONG                   vc4_UnityKernel;
+     ULONG                   vc4_UnicamKernel;
+diff --git a/src/main.c b/src/main.c
+index c33ce33..8e21763 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -308,6 +308,27 @@ static int FindCard(REGARG(struct BoardInfo* bi, "a0"), REGARG(struct VC4Base *V
+         UnicamStart(VC4Base->vc4_Unicambuffer, 1, (mode >> 8) & 0xff, size >> 16, size & 0xffff, mode & 0xff);
+     }
+ 
++    /* Bellatrix has no physical Denise/CSI capture.  Its Rigel framebuffer is
++       published by Emu68 and can be fed to the same HVS native/RTG switch. */
++    key = DT_OpenKey("/emu68");
++    if (key)
++    {
++        const ULONG *native = DT_GetPropValue(
++            DT_FindProperty(key, "bellatrix-native-fb"));
++        if (native != NULL && native[0] != 0 && native[1] != 0 &&
++            native[2] != 0 && native[3] >= native[1] * 2)
++        {
++            VC4Base->vc4_NativeBuffer = (APTR)native[0];
++            VC4Base->vc4_NativeWidth = native[1];
++            VC4Base->vc4_NativeHeight = native[2];
++            VC4Base->vc4_NativePitch = native[3];
++            VC4Base->vc4_NativeAvailable = TRUE;
++            bug("[VC] Bellatrix native framebuffer %08lx %ldx%ld pitch=%ld\n",
++                native[0], native[1], native[2], native[3]);
++        }
++        DT_CloseKey(key);
++    }
++
+     return 1;
+ }
+ 
+@@ -967,6 +988,14 @@ static int InitCard(REGARG(struct BoardInfo* bi, "a0"), REGARG(const char **Tool
+             }
+         }
+     }
++    else if (VC4Base->vc4_NativeAvailable)
++    {
++        if (VC4Base->vc4_VideoCore6)
++            VC6_ConstructNativeDL(VC4Base);
++        else
++            VC4_ConstructNativeDL(VC4Base);
++        VC4Base->vc4_SwitchMode = CSI;
++    }
+ 
+     VC4Base->vc4_Task = NewCreateTask(
+         TASKTAG_PC,         (Tag)vc4_Task,
+@@ -990,6 +1019,12 @@ static int InitCard(REGARG(struct BoardInfo* bi, "a0"), REGARG(const char **Tool
+             wr32le((volatile uint32_t *)0xf2400024, VC4Base->vc4_UnicamDL);
+         }
+     }
++    else if (VC4Base->vc4_NativeAvailable)
++    {
++        VC4Base->vc4_UnicamVisible = TRUE;
++        wr32le((volatile uint32_t *)0xf2400024,
++               BUDDY_OFFSET(VC4Base->vc4_NativeDL));
++    }
+ 
+     CloseLibrary(MathIeeeSingBasBase);
+ 
+diff --git a/src/vc4.c b/src/vc4.c
+index e7eda93..24785a5 100644
+--- a/src/vc4.c
++++ b/src/vc4.c
+@@ -376,7 +376,9 @@ UWORD SetSwitch(REGARG(struct BoardInfo *b, "a0"), REGARG(UWORD enabled, "d0"))
+            case CSI:
+                 if (!en) {
+                     VC4Base->vc4_UnicamVisible = TRUE;
+-                    wr32le((volatile uint32_t *)0xf2400024, BUDDY_OFFSET(VC4Base->vc4_UnicamDL));
++                    wr32le((volatile uint32_t *)0xf2400024,
++                           BUDDY_OFFSET(VC4Base->vc4_NativeAvailable ?
++                               VC4Base->vc4_NativeDL : VC4Base->vc4_UnicamDL));
+                 }
+                 else {
+                     VC4Base->vc4_UnicamVisible = FALSE;
+@@ -389,6 +391,26 @@ UWORD SetSwitch(REGARG(struct BoardInfo *b, "a0"), REGARG(UWORD enabled, "d0"))
+     return 1 - enabled;
+ }
+ 
++void VC4_ConstructNativeDL(struct VC4Base *VC4Base)
++{
++    volatile uint32_t *displist = (uint32_t *)0xf2402000;
++    ULONG allocation = BuddyAlloc(VC4Base, 8);
++    ULONG cnt = BUDDY_OFFSET(allocation);
++
++    VC4Base->vc4_NativeDL = allocation;
++    wr32le(&displist[cnt++], CONTROL_VALID | CONTROL_WORDS(7) |
++           CONTROL_UNITY | mode_table[RGBFB_R5G6B5PC]);
++    wr32le(&displist[cnt++], POS0_X(0) | POS0_Y(0) | POS0_ALPHA(0xff));
++    wr32le(&displist[cnt++], POS2_H(VC4Base->vc4_NativeHeight) |
++           POS2_W(VC4Base->vc4_NativeWidth) | (1 << 30));
++    wr32le(&displist[cnt++], 0xdeadbeef);
++    wr32le(&displist[cnt++], 0xc0000000 |
++           (ULONG)VC4Base->vc4_NativeBuffer);
++    wr32le(&displist[cnt++], 0xdeadbeef);
++    wr32le(&displist[cnt++], VC4Base->vc4_NativePitch);
++    wr32le(&displist[cnt++], 0x80000000);
++}
++
+ void SetPanning(REGARG(struct BoardInfo *b, "a0"), REGARG(UBYTE *addr, "a1"), 
+                 REGARG(UWORD width, "d0"), REGARG(WORD x_offset, "d1"), REGARG(WORD y_offset, "d2"), 
+                 REGARG(RGBFTYPE format, "d7"))
+diff --git a/src/vc4.h b/src/vc4.h
+index 19791f2..10a9aa8 100644
+--- a/src/vc4.h
++++ b/src/vc4.h
+@@ -78,5 +78,6 @@ int compute_nearest_neighbour_kernel(volatile uint32_t *dlist_memory, ULONG offs
+ int compute_scaling_kernel(volatile uint32_t *dlist_memory, ULONG offset, ULONG b, ULONG c);
+ 
+ void VC4_ConstructUnicamDL(struct VC4Base *VC4Base);
++void VC4_ConstructNativeDL(struct VC4Base *VC4Base);
+ 
+ #endif /* _VC4_H */
+diff --git a/src/vc6.c b/src/vc6.c
+index 59c5dc6..74937bd 100644
+--- a/src/vc6.c
++++ b/src/vc6.c
+@@ -177,7 +177,9 @@ UWORD VC6_SetSwitch(REGARG(struct BoardInfo *b, "a0"), REGARG(UWORD enabled, "d0
+            case CSI:
+                 if (!en) {
+                     VC4Base->vc4_UnicamVisible = TRUE;
+-                    wr32le((volatile uint32_t *)0xf2400024, BUDDY_OFFSET(VC4Base->vc4_UnicamDL));
++                    wr32le((volatile uint32_t *)0xf2400024,
++                           BUDDY_OFFSET(VC4Base->vc4_NativeAvailable ?
++                               VC4Base->vc4_NativeDL : VC4Base->vc4_UnicamDL));
+                 }
+                 else {
+                     VC4Base->vc4_UnicamVisible = FALSE;
+@@ -190,6 +192,31 @@ UWORD VC6_SetSwitch(REGARG(struct BoardInfo *b, "a0"), REGARG(UWORD enabled, "d0
+     return 1 - enabled;
+ }
+ 
++void VC6_ConstructNativeDL(struct VC4Base *VC4Base)
++{
++    volatile uint32_t *displist = (uint32_t *)0xf2404000;
++    ULONG allocation = BuddyAlloc(VC4Base, 16);
++    ULONG cnt = BUDDY_OFFSET(allocation);
++
++    VC4Base->vc4_NativeDL = allocation;
++    wr32le(&displist[cnt++], VC6_CONTROL_VALID | VC6_CONTROL_WORDS(8) |
++           VC6_CONTROL_UNITY | VC6_CONTROL_ALPHA_EXPAND |
++           VC6_CONTROL_RGB_EXPAND | mode_table[RGBFB_R5G6B5PC]);
++    wr32le(&displist[cnt++], VC6_POS0_X(0) | VC6_POS0_Y(0));
++    wr32le(&displist[cnt++],
++           (VC6_SCALER_POS2_ALPHA_MODE_FIXED <<
++            VC6_SCALER_POS2_ALPHA_MODE_SHIFT) |
++           VC6_SCALER_POS2_ALPHA(0xfff));
++    wr32le(&displist[cnt++], VC6_POS2_H(VC4Base->vc4_NativeHeight) |
++           VC6_POS2_W(VC4Base->vc4_NativeWidth));
++    wr32le(&displist[cnt++], 0xdeadbeef);
++    wr32le(&displist[cnt++], 0xc0000000 |
++           (ULONG)VC4Base->vc4_NativeBuffer);
++    wr32le(&displist[cnt++], 0xdeadbeef);
++    wr32le(&displist[cnt++], VC4Base->vc4_NativePitch);
++    wr32le(&displist[cnt++], 0x80000000);
++}
++
+ void VC6_SetPanning(REGARG(struct BoardInfo *b, "a0"), REGARG(UBYTE *addr, "a1"), 
+                     REGARG(UWORD width, "d0"), REGARG(WORD x_offset, "d1"), 
+                     REGARG(WORD y_offset, "d2"), REGARG(RGBFTYPE format, "d7"))
+diff --git a/src/vc6.h b/src/vc6.h
+index a5f4a20..4b91c6f 100644
+--- a/src/vc6.h
++++ b/src/vc6.h
+@@ -80,5 +80,6 @@ int compute_nearest_neighbour_kernel(volatile uint32_t *dlist_memory, ULONG offs
+ int compute_scaling_kernel(volatile uint32_t *dlist_memory, ULONG offset, ULONG b, ULONG c);
+ 
+ void VC6_ConstructUnicamDL(struct VC4Base *VC4Base);
++void VC6_ConstructNativeDL(struct VC4Base *VC4Base);
+ 
+ #endif /* _VC6_H */

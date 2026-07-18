@@ -38,6 +38,9 @@
 #endif
 
 #ifdef BELLATRIX_HARNESS
+#ifdef BELLATRIX_HARNESS
+#include "machine/expansions/rtg/rtg.h"
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,6 +100,16 @@ static uint16_t machine_rgb8888_to_le565(uint32_t rgba)
                                  (b8 >> 3));
     return LE16(rgb565);
 }
+
+#ifdef BELLATRIX_HARNESS
+static uint16_t machine_rgba_bytes_to_le565(const uint8_t *rgba)
+{
+    uint16_t rgb565 = (uint16_t)(((rgba[0] >> 3) << 11) |
+                                 ((rgba[1] >> 2) << 5) |
+                                 (rgba[2] >> 3));
+    return LE16(rgb565);
+}
+#endif
 
 #ifdef BELLATRIX_HARNESS
 static int machine_perf_trace_enabled(void)
@@ -316,6 +329,11 @@ static void machine_trace_baremetal_video_frame(const rigel_frame_t *frame)
 void machine_present_frame_from_rigel(void)
 {
     rigel_frame_t frame;
+#ifdef BELLATRIX_HARNESS
+    BellatrixRtgFrame rtg_frame;
+    PAL_VideoRect rtg_dirty[RTG_DIRTY_MAX_RECTS];
+    bool use_rtg = false;
+#endif
     uint32_t x, y;
     uint32_t width;
     uint32_t height;
@@ -337,7 +355,29 @@ void machine_present_frame_from_rigel(void)
     }
 #endif
 
-    if (g_rigel_zero_copy_video) {
+#ifdef BELLATRIX_HARNESS
+    use_rtg = bellatrix_rtg_get_frame(&rtg_frame) != 0;
+    if (use_rtg) {
+        uint32_t i;
+        for (i = 0u; i < rtg_frame.dirty_count; ++i) {
+            rtg_dirty[i].x = rtg_frame.dirty[i].x;
+            rtg_dirty[i].y = rtg_frame.dirty[i].y;
+            rtg_dirty[i].w = rtg_frame.dirty[i].w;
+            rtg_dirty[i].h = rtg_frame.dirty[i].h;
+        }
+        if (PAL_Video_PresentRGBARegions(
+                rtg_frame.pixels, rtg_frame.width, rtg_frame.height,
+                rtg_frame.pitch, rtg_dirty, rtg_frame.dirty_count,
+                rtg_frame.full_update))
+            return;
+    }
+#endif
+
+    if (g_rigel_zero_copy_video
+#ifdef BELLATRIX_HARNESS
+        && !use_rtg
+#endif
+    ) {
         PAL_Video_Flip();
 #ifdef BELLATRIX_HARNESS
         if (machine_perf_trace_enabled())
@@ -346,16 +386,25 @@ void machine_present_frame_from_rigel(void)
         return;
     }
 
-    if (!g_rigel || !framebuffer || !pitch)
+    if (!framebuffer || !pitch)
         return;
 
-    /* The Core 3 host presenter fetches the frame descriptor under chipset lock
-     * so width/height/pitch/pixels are mutually coherent (a torn mix could
-     * walk past the buffer in the copy below). The pixel copy itself stays
-     * outside the lock: racing the next frame's composition can only tear the
-     * image, never the memory bounds, and holding the lock for a full-frame
-     * copy would stall the chipset for hundreds of microseconds per frame. */
+#ifdef BELLATRIX_HARNESS
+    if (use_rtg) {
+        memset(&frame, 0, sizeof(frame));
+        frame.pixels = rtg_frame.pixels;
+        frame.width = rtg_frame.width;
+        frame.height = rtg_frame.height;
+        frame.pitch = rtg_frame.pitch;
+        frame.format = RIGEL_PIXEL_RGBA8888;
+    } else
+#endif
     {
+        if (!g_rigel)
+            return;
+
+        /* Fetch the Denise frame descriptor coherently. The pixel copy stays
+         * outside the lock; a race can tear pixels but not memory bounds. */
         bool frame_ok;
 
         core_chipset_lock_acquire();
@@ -373,7 +422,11 @@ void machine_present_frame_from_rigel(void)
     /* When DIWSTRT/DIWSTOP are both 0 (cleared at reset), display_window_update
      * produces width=1, height=1 pointing to the VBLANK region.  Skip the PAL
      * VBLANK (26 lines) and fall back to the standard 320×256 active area. */
-    if (frame.width < 16u || frame.height < 16u) {
+    if (
+#ifdef BELLATRIX_HARNESS
+        !use_rtg &&
+#endif
+        (frame.width < 16u || frame.height < 16u)) {
         frame.pixels = (const rigel_u32 *)((const uint8_t *)frame.pixels
                                            + 26u * frame.pitch);
         frame.width  = 320u;
@@ -384,7 +437,7 @@ void machine_present_frame_from_rigel(void)
      * produce out-of-range visible_y_start, causing rigel_get_frame to return a
      * nonsensical height via uint wrap.  Skip the frame to avoid reading past the
      * frame buffer and corrupting the SDL surface. */
-    if (!frame.pixels || frame.width > 1024u || frame.height > 512u)
+    if (!frame.pixels || frame.width > 1920u || frame.height > 1080u)
         return;
 
     stride = pitch / 2u;
@@ -432,7 +485,11 @@ void machine_present_frame_from_rigel(void)
         static uint32_t last_height;
         static uint16_t last_bg;
         static uint8_t initialized;
-        uint16_t bg = machine_rgb8888_to_le565(src[0]);
+        uint16_t bg =
+#ifdef BELLATRIX_HARNESS
+            use_rtg ? machine_rgba_bytes_to_le565((const uint8_t *)src) :
+#endif
+            machine_rgb8888_to_le565(src[0]);
 
         if (!initialized ||
             fb_width != last_fb_width ||
@@ -469,7 +526,15 @@ void machine_present_frame_from_rigel(void)
             uint32_t src_x = (frame.width > width)
                 ? (uint32_t)(((uint64_t)x * frame.width) / width)
                 : (x / scale_x);
-            drow[dst_x0 + x] = machine_rgb8888_to_le565(row[src_x]);
+#ifdef BELLATRIX_HARNESS
+            if (use_rtg) {
+                const uint8_t *pixel = (const uint8_t *)row + src_x * 4u;
+                drow[dst_x0 + x] = machine_rgba_bytes_to_le565(pixel);
+            } else
+#endif
+            {
+                drow[dst_x0 + x] = machine_rgb8888_to_le565(row[src_x]);
+            }
         }
     }
 
@@ -846,6 +911,97 @@ void bellatrix_machine_on_frame_skipped(void)
     machine_mouse_frame_tick();
 }
 
+#if defined(BELLATRIX_PLANE_DIAG_BUILD) && BELLATRIX_PLANE_DIAG_BUILD
+static uint32_t machine_plane_hash(uint32_t addr, uint32_t bytes)
+{
+    uint32_t hash = 2166136261u;
+    uint32_t end;
+
+    addr &= 0x00fffffeu;
+    if (!chip_ram_is_configured(&g_machine.memory) ||
+        addr >= g_machine.memory.chip_ram_size)
+        return 0u;
+    end = addr + bytes;
+    if (end < addr || end > g_machine.memory.chip_ram_size)
+        end = g_machine.memory.chip_ram_size;
+
+    while (addr + 1u < end) {
+        uint16_t word = chip_ram_read16(&g_machine.memory, addr);
+        hash ^= (uint8_t)(word >> 8);
+        hash *= 16777619u;
+        hash ^= (uint8_t)word;
+        hash *= 16777619u;
+        addr += 2u;
+    }
+    return hash;
+}
+
+static uint32_t machine_direct_alias_hash(uint32_t addr, uint32_t bytes)
+{
+    volatile const uint8_t *p = (volatile const uint8_t *)(uintptr_t)addr;
+    uint32_t hash = 2166136261u;
+    uint32_t i;
+
+    if (addr >= BELLATRIX_CHIP_CPU_APERTURE_SIZE ||
+        bytes > BELLATRIX_CHIP_CPU_APERTURE_SIZE - addr)
+        return 0u;
+    for (i = 0u; i < bytes; i++) {
+        hash ^= p[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static void machine_trace_plane_payload(void)
+{
+    uint32_t ptr[6];
+    uint32_t hash[6];
+    uint16_t bplcon0;
+    unsigned i;
+
+    if (!g_rigel)
+        return;
+    bplcon0 = rigel_custom_read16(g_rigel, RIGEL_REG_BPLCON0);
+    for (i = 0u; i < 6u; i++) {
+        uint32_t reg = RIGEL_REG_BPL1PTH + i * 4u;
+        ptr[i] = ((uint32_t)rigel_custom_read16(g_rigel, reg) << 16) |
+                 rigel_custom_read16(g_rigel, reg + 2u);
+        hash[i] = machine_plane_hash(ptr[i], 0x2000u);
+    }
+    kprintf("[PLANE-DIAG] frame=%u bplcon0=%04x mod=%04x/%04x "
+            "p1=%06x:%08x p2=%06x:%08x p3=%06x:%08x "
+            "p4=%06x:%08x p5=%06x:%08x p6=%06x:%08x\n",
+            (unsigned)g_machine.frame_counter,
+            (unsigned)bplcon0,
+            (unsigned)rigel_custom_read16(g_rigel, 0x108u),
+            (unsigned)rigel_custom_read16(g_rigel, 0x10au),
+            (unsigned)(ptr[0] & 0x00ffffffu), (unsigned)hash[0],
+            (unsigned)(ptr[1] & 0x00ffffffu), (unsigned)hash[1],
+            (unsigned)(ptr[2] & 0x00ffffffu), (unsigned)hash[2],
+            (unsigned)(ptr[3] & 0x00ffffffu), (unsigned)hash[3],
+            (unsigned)(ptr[4] & 0x00ffffffu), (unsigned)hash[4],
+            (unsigned)(ptr[5] & 0x00ffffffu), (unsigned)hash[5]);
+
+    if ((g_machine.frame_counter == 200u ||
+         g_machine.frame_counter == 300u) && ptr[1] != 0u) {
+        kprintf("[PLANE2-ALIAS] backing=%08x direct=%08x\n",
+                (unsigned)machine_plane_hash(ptr[1], 0x2000u),
+                (unsigned)machine_direct_alias_hash(ptr[1], 0x2000u));
+    }
+    if (g_machine.frame_counter == 300u && ptr[1] != 0u) {
+        for (i = 0u; i < 32u; i++) {
+            if ((i & 7u) == 0u)
+                kprintf("[PLANE2-BLOCKS] base=%06x block=%02u",
+                        (unsigned)(ptr[1] & 0x00ffffffu), i);
+            kprintf(" %08x", (unsigned)machine_plane_hash(
+                        ptr[1] + i * 0x100u, 0x100u));
+            if ((i & 7u) == 7u)
+                kprintf("\n");
+        }
+    }
+}
+#endif
+
 void bellatrix_machine_on_frame_ready(void)
 {
     g_machine.frame_counter++;
@@ -859,6 +1015,14 @@ void bellatrix_machine_on_frame_ready(void)
         return;
 #endif
     machine_present_frame_from_rigel();
+
+#if defined(BELLATRIX_PLANE_DIAG_BUILD) && BELLATRIX_PLANE_DIAG_BUILD
+    if (g_machine.frame_counter == 200u ||
+        g_machine.frame_counter == 300u ||
+        g_machine.frame_counter == 500u ||
+        g_machine.frame_counter == 1000u)
+        machine_trace_plane_payload();
+#endif
 
 #if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
     if (g_machine.frame_counter == 1u ||

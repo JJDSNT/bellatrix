@@ -188,6 +188,30 @@ Somente após P1–P4:
 6. Staging bulk das primitivas para o caminho Emu68.
 7. NEON; depois OpenGL ES/Vulkan se os números ainda justificarem.
 
+## Estado de implementação
+
+- **P0 parcial:** `[PAL-PERF]` separa OSD, upload, clear, copy e present.
+- **P1 implementado no harness:** frames RTG RGBA8888 são copiados diretamente
+  para uma textura streaming `SDL_PIXELFORMAT_RGBA32` via `SDL_LockTexture()`;
+  escala é feita por `SDL_RenderCopy()`. Se a textura direta não puder ser
+  criada ou bloqueada, o presenter RGB565 anterior continua como fallback.
+- **Limitação conhecida:** o OSD existente desenha no framebuffer RGB565 e não
+  é composto no presenter RTG direto. A composição deve migrar para overlay do
+  renderer em vez de reintroduzir a conversão intermediária.
+- **P2 implementado no harness:** o scanout calcula hashes FNV-1a de tiles 32×16, converte apenas
+  tiles modificados e publica até 64 retângulos coalescidos horizontalmente.
+  Primeiro frame, mudanças de modo/palette/panning, excesso de retângulos ou
+  pelo menos 80% de pixels sujos selecionam frame completo. Frames parciais
+  usam `SDL_UpdateTexture()` por região; frames completos usam lock da textura;
+  frames inalterados pulam upload e apresentação. `[PAL-PERF] bytes=` contabiliza
+  somente os pixels efetivamente enviados.
+- **P3 pacing inicial:** com VSync SDL desligado, o presenter RTG limita
+  `SDL_RenderPresent()` a 60 Hz,
+  mantendo na textura todas as atualizações intermediárias e publicando o estado
+  mais recente. `HARNESS_RTG_PRESENT_HZ=0` remove o limite para benchmark; outro
+  valor seleciona explicitamente a frequência desejada. Com VSync ativo, o
+  limitador adicional fica desligado por padrão para não produzir 30 Hz.
+
 ## Fontes
 
 - Código Bellatrix: `rtg_scanout.c`, `machine_rigel_step.c`, `pal_posix.c` e

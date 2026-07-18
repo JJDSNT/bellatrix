@@ -146,6 +146,43 @@ static void test_argb_and_bounds(void)
     check_u32("short stride inactive", 0u, bellatrix_rtg_scanout_active(&s));
 }
 
+static void test_dirty_tiles(void)
+{
+    BellatrixRtgScanout s;
+    BellatrixRtgFrame out;
+
+    memset(s_vram, 0, sizeof(s_vram));
+    bellatrix_rtg_scanout_init(&s, s_vram, sizeof(s_vram), 0u,
+                               s_frame, sizeof(s_frame));
+    configure(&s, RTG_FMT_CLUT, W, 0u);
+    check_u32("dirty initial render", 1u,
+              bellatrix_rtg_scanout_render(&s, &out));
+    check_u32("dirty initial changed", 1u, out.changed);
+    check_u32("dirty initial full", 1u, out.full_update);
+
+    check_u32("dirty unchanged render", 1u,
+              bellatrix_rtg_scanout_render(&s, &out));
+    check_u32("dirty unchanged", 0u, out.changed);
+    check_u32("dirty unchanged rects", 0u, out.dirty_count);
+
+    s_vram[20u * W + 40u] = 1u;
+    check_u32("dirty tile render", 1u,
+              bellatrix_rtg_scanout_render(&s, &out));
+    check_u32("dirty tile changed", 1u, out.changed);
+    check_u32("dirty tile partial", 0u, out.full_update);
+    check_u32("dirty tile count", 1u, out.dirty_count);
+    check_u32("dirty tile x", 32u, out.dirty[0].x);
+    check_u32("dirty tile y", 16u, out.dirty[0].y);
+    check_u32("dirty tile w", 32u, out.dirty[0].w);
+    check_u32("dirty tile h", 16u, out.dirty[0].h);
+
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_PAL_INDEX, 1u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_PAL_DATA, 0x00112233u);
+    check_u32("dirty palette render", 1u,
+              bellatrix_rtg_scanout_render(&s, &out));
+    check_u32("dirty palette full", 1u, out.full_update);
+}
+
 static void test_accel_fillrect(void)
 {
     uint8_t vram[64];
@@ -370,6 +407,7 @@ int main(void)
     test_clut_stride_and_pan();
     test_rgb565();
     test_argb_and_bounds();
+    test_dirty_tiles();
     test_accel_fillrect();
     test_accel_blit_copy();
     test_accel_invertrect();

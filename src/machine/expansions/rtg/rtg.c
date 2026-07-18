@@ -71,6 +71,30 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 (unsigned)s_rtg.mode_h, (unsigned)s_rtg.format,
                 (unsigned)s_rtg.bytes_per_row);
     }
+    if (reg == RTG_REG_PAN) {
+        /* Page-flip signature. A double-buffered P96 app alternates the
+         * scanout base between two (or more) distinct VRAM offsets, always
+         * panning to a buffer it has already finished drawing -- so each
+         * host present catches a complete image. A single-buffered desktop
+         * (e.g. AROS Wanderer) keeps PAN constant and draws straight into
+         * the visible buffer; no flip or WaitVerticalSync can hide that,
+         * only host speed can. This probe settles which case we are in and
+         * therefore whether any presenter work can remove the line-by-line
+         * progression. */
+        static uint32_t s_pan_bases[4];
+        static uint32_t s_pan_nbases;
+        static uint32_t s_pan_writes;
+        uint32_t i, known = 0u;
+        s_pan_writes++;
+        for (i = 0u; i < s_pan_nbases; i++)
+            if (s_pan_bases[i] == value) { known = 1u; break; }
+        if (!known && s_pan_nbases < 4u) {
+            s_pan_bases[s_pan_nbases++] = value;
+            kprintf("[RTG-FLIP] new pan base=%08x distinct=%u writes=%u\n",
+                    (unsigned)value, (unsigned)s_pan_nbases,
+                    (unsigned)s_pan_writes);
+        }
+    }
     if (reg == RTG_REG_ACCEL_DST) s_accel.dst = value;
     else if (reg == RTG_REG_ACCEL_PITCH) s_accel.pitch = value;
     else if (reg == RTG_REG_ACCEL_XY) s_accel.xy = value;

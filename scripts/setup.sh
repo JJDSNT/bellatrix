@@ -24,6 +24,7 @@ EMU68="$ROOT/emu68"
 CHERRYUSB="$ROOT/external/cherryusb"
 BTSTACK="$ROOT/external/btstack"
 MUSASHI="$ROOT/external/musashi"
+VIDEOCORE="$ROOT/external/VideoCore.card"
 PATCHES="$ROOT/patches"
 EMU68_GITIGNORE="$EMU68/.gitignore"
 
@@ -206,6 +207,7 @@ EMU68_PATCHES=(
     # (same class as the x12/v28 clobber bug in ISSUE-0038), not confirmed.
     # Do not remove without re-testing carefully.
     "$PATCHES/0035-emu68-modeled-cycles.patch"
+    "$PATCHES/0036-emu68-bellatrix-native-framebuffer.patch"
 )
 
 CHERRYUSB_PATCHES=(
@@ -231,6 +233,10 @@ LIDE_PATCHES=(
 
 ODFS_PATCHES=(
     "$PATCHES/0012-odfs-cd01-romtag.patch"
+)
+
+VIDEOCORE_PATCHES=(
+    "$PATCHES/0037-videocore-bellatrix-native-hvs-switch.patch"
 )
 
 # ---------------------------------------------------------------------------
@@ -365,6 +371,18 @@ if [ "$SETUP_MODE" = "verify" ]; then
         fi
     done
 
+    echo "--- external/VideoCore.card ---"
+    for patch in "${VIDEOCORE_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        name="$(basename "$patch")"
+        if git -C "$VIDEOCORE" apply --reverse --check "$patch" >/dev/null 2>&1; then
+            echo "  OK  $name"
+        else
+            echo "  FAIL $name"
+            failed=1
+        fi
+    done
+
     echo ""
     if [ "$failed" -eq 0 ]; then
         echo "All patches verified."
@@ -406,6 +424,9 @@ if [ "$SETUP_MODE" = "reset" ]; then
     echo "Resetting external/musashi..."
     git submodule update --force -- external/musashi
 
+    echo "Resetting external/VideoCore.card..."
+    git submodule update --force -- external/VideoCore.card
+
     echo "Submodules reset. Applying patches..."
 
     ensure_emu68_gitignore
@@ -444,6 +465,11 @@ if [ "$SETUP_MODE" = "reset" ]; then
         apply_submodule_patch_if_needed "$ROOT/external/ODFileSystem" "$patch"
     done
 
+    for patch in "${VIDEOCORE_PATCHES[@]}"; do
+        [ -f "$patch" ] || continue
+        apply_submodule_patch_if_needed "$VIDEOCORE" "$patch"
+    done
+
     install_be_stub_if_needed
 
     echo ""
@@ -460,7 +486,7 @@ check_cmd aarch64-linux-gnu-gcc
 
 cd "$ROOT"
 git submodule sync -- external/cherryusb >/dev/null 2>&1 || true
-git submodule update --init emu68 external/musashi external/cherryusb external/btstack external/rigel external/lide.device external/ODFileSystem
+git submodule update --init emu68 external/musashi external/cherryusb external/btstack external/rigel external/lide.device external/ODFileSystem external/VideoCore.card
 
 # emu68's own nested submodules — required for the bare-metal build
 # (BELLATRIX_CPU_BACKEND=musashi or emu68) to configure via CMake.
@@ -504,6 +530,11 @@ done
 for patch in "${ODFS_PATCHES[@]}"; do
     [ -f "$patch" ] || continue
     apply_submodule_patch_if_needed "$ROOT/external/ODFileSystem" "$patch"
+done
+
+for patch in "${VIDEOCORE_PATCHES[@]}"; do
+    [ -f "$patch" ] || continue
+    apply_submodule_patch_if_needed "$VIDEOCORE" "$patch"
 done
 
 install_be_stub_if_needed

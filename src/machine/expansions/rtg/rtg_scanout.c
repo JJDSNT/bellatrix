@@ -4,6 +4,59 @@
 
 static uint32_t format_bytes(uint32_t format);
 
+static uint32_t hash_tile(const uint8_t *base, uint32_t pitch,
+                          uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                          uint32_t pixel_bytes)
+{
+    uint32_t hash = 2166136261u;
+    uint32_t row, i;
+    size_t row_bytes = (size_t)w * pixel_bytes;
+
+    for (row = 0u; row < h; ++row) {
+        const uint8_t *p = base + (size_t)(y + row) * pitch +
+                           (size_t)x * pixel_bytes;
+        for (i = 0u; i < row_bytes; ++i) {
+            hash ^= p[i];
+            hash *= 16777619u;
+        }
+    }
+    return hash;
+}
+
+static void convert_rect(BellatrixRtgScanout *s, uint32_t x0, uint32_t y0,
+                         uint32_t width, uint32_t height)
+{
+    uint32_t x, y;
+
+    for (y = y0; y < y0 + height; ++y) {
+        const uint8_t *src = s->vram + s->pan + (size_t)y * s->bytes_per_row;
+        uint8_t *dst = s->frame + ((size_t)y * s->mode_w + x0) * 4u;
+        switch (s->format) {
+        case RTG_FMT_CLUT:
+            for (x = x0; x < x0 + width; ++x) {
+                uint32_t rgb = s->palette[src[x]];
+                *dst++ = (uint8_t)(rgb >> 16); *dst++ = (uint8_t)(rgb >> 8);
+                *dst++ = (uint8_t)rgb; *dst++ = 0xffu;
+            }
+            break;
+        case RTG_FMT_R5G6B5:
+            for (x = x0; x < x0 + width; ++x) {
+                uint16_t p = (uint16_t)((src[x * 2u] << 8) | src[x * 2u + 1u]);
+                *dst++ = (uint8_t)(((p >> 11) & 0x1fu) << 3);
+                *dst++ = (uint8_t)(((p >> 5) & 0x3fu) << 2);
+                *dst++ = (uint8_t)((p & 0x1fu) << 3); *dst++ = 0xffu;
+            }
+            break;
+        case RTG_FMT_A8R8G8B8:
+            for (x = x0; x < x0 + width; ++x) {
+                *dst++ = src[x * 4u + 1u]; *dst++ = src[x * 4u + 2u];
+                *dst++ = src[x * 4u + 3u]; *dst++ = 0xffu;
+            }
+            break;
+        }
+    }
+}
+
 int bellatrix_rtg_accel_fillrect(uint8_t *vram, uint32_t vram_size,
                                  uint32_t dst, uint32_t pitch,
                                  uint32_t x, uint32_t y,
@@ -351,6 +404,7 @@ void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
     s->vram_offset = vram_offset;
     s->frame = frame;
     s->frame_capacity = frame_capacity;
+    s->force_full = 1u;
 }
 
 uint32_t bellatrix_rtg_scanout_reg_read(const BellatrixRtgScanout *s,
@@ -377,16 +431,29 @@ void bellatrix_rtg_scanout_reg_write(BellatrixRtgScanout *s,
                                      uint32_t reg, uint32_t value)
 {
     switch (reg) {
-        case RTG_REG_ENABLE:        s->enable = value & 1u; break;
-        case RTG_REG_MODE_W:        s->mode_w = value; break;
-        case RTG_REG_MODE_H:        s->mode_h = value; break;
-        case RTG_REG_FORMAT:        s->format = value; break;
-        case RTG_REG_BYTES_PER_ROW: s->bytes_per_row = value; break;
-        case RTG_REG_PAN:           s->pan = value; break;
+        case RTG_REG_ENABLE:
+            if (s->enable != (value & 1u)) s->force_full = 1u;
+            s->enable = value & 1u; break;
+        case RTG_REG_MODE_W:
+            if (s->mode_w != value) s->force_full = 1u;
+            s->mode_w = value; break;
+        case RTG_REG_MODE_H:
+            if (s->mode_h != value) s->force_full = 1u;
+            s->mode_h = value; break;
+        case RTG_REG_FORMAT:
+            if (s->format != value) s->force_full = 1u;
+            s->format = value; break;
+        case RTG_REG_BYTES_PER_ROW:
+            if (s->bytes_per_row != value) s->force_full = 1u;
+            s->bytes_per_row = value; break;
+        case RTG_REG_PAN:
+            if (s->pan != value) s->force_full = 1u;
+            s->pan = value; break;
         case RTG_REG_PAL_INDEX:     s->pal_index = value & 0xffu; break;
         case RTG_REG_PAL_DATA:
             s->palette[s->pal_index] = value & 0x00ffffffu;
             s->pal_index = (s->pal_index + 1u) & 0xffu;
+            s->force_full = 1u;
             break;
         default: break;
     }
@@ -421,13 +488,14 @@ void bellatrix_rtg_scanout_frame_tick(BellatrixRtgScanout *s)
 int bellatrix_rtg_scanout_render(BellatrixRtgScanout *s,
                                  BellatrixRtgFrame *out)
 {
-    uint32_t w, h, bpr, x, y, pixel_bytes;
-    uint64_t required;
-    const uint8_t *src;
-    uint8_t *dst;
+    uint32_t w, h, bpr, pixel_bytes, columns, rows, tx, ty;
+    uint64_t required, dirty_pixels = 0u;
+    int full;
 
     if (!out || !bellatrix_rtg_scanout_active(s) || s->pan >= s->vram_size)
         return 0;
+
+    memset(out, 0, sizeof(*out));
 
     w = s->mode_w;
     h = s->mode_h;
@@ -438,41 +506,69 @@ int bellatrix_rtg_scanout_render(BellatrixRtgScanout *s,
         (uint64_t)w * h * 4u > s->frame_capacity)
         return 0;
 
-    dst = s->frame;
-    for (y = 0; y < h; y++) {
-        src = s->vram + s->pan + (size_t)y * bpr;
-        switch (s->format) {
-            case RTG_FMT_CLUT:
-                for (x = 0; x < w; x++) {
-                    uint32_t rgb = s->palette[src[x]];
-                    *dst++ = (uint8_t)(rgb >> 16);
-                    *dst++ = (uint8_t)(rgb >> 8);
-                    *dst++ = (uint8_t)rgb;
-                    *dst++ = 0xffu;
+    columns = (w + RTG_DIRTY_TILE_W - 1u) / RTG_DIRTY_TILE_W;
+    rows = (h + RTG_DIRTY_TILE_H - 1u) / RTG_DIRTY_TILE_H;
+    if ((uint64_t)columns * rows > RTG_DIRTY_MAX_TILES)
+        return 0;
+    full = s->force_full || !s->hashes_valid ||
+           s->tile_columns != columns || s->tile_rows != rows;
+
+    for (ty = 0u; ty < rows; ++ty) {
+        uint32_t run_start = columns;
+        for (tx = 0u; tx <= columns; ++tx) {
+            int changed = 0;
+            if (tx < columns) {
+                uint32_t x = tx * RTG_DIRTY_TILE_W;
+                uint32_t y = ty * RTG_DIRTY_TILE_H;
+                uint32_t tw = w - x < RTG_DIRTY_TILE_W ? w - x : RTG_DIRTY_TILE_W;
+                uint32_t th = h - y < RTG_DIRTY_TILE_H ? h - y : RTG_DIRTY_TILE_H;
+                uint32_t index = ty * columns + tx;
+                uint32_t hash = hash_tile(s->vram + s->pan, bpr, x, y,
+                                          tw, th, pixel_bytes);
+                changed = full || s->tile_hash[index] != hash;
+                s->tile_hash[index] = hash;
+            }
+            if (changed && run_start == columns) {
+                run_start = tx;
+            } else if (!changed && run_start != columns) {
+                uint32_t x = run_start * RTG_DIRTY_TILE_W;
+                uint32_t y = ty * RTG_DIRTY_TILE_H;
+                uint32_t rw = tx * RTG_DIRTY_TILE_W - x;
+                uint32_t rh = h - y < RTG_DIRTY_TILE_H ? h - y : RTG_DIRTY_TILE_H;
+                if (x + rw > w) rw = w - x;
+                dirty_pixels += (uint64_t)rw * rh;
+                if (!full && out->dirty_count < RTG_DIRTY_MAX_RECTS) {
+                    BellatrixRtgRect *r = &out->dirty[out->dirty_count++];
+                    r->x = (uint16_t)x; r->y = (uint16_t)y;
+                    r->w = (uint16_t)rw; r->h = (uint16_t)rh;
+                } else if (!full) {
+                    full = 1;
                 }
-                break;
-            case RTG_FMT_R5G6B5:
-                for (x = 0; x < w; x++) {
-                    uint16_t p = (uint16_t)((src[x * 2u] << 8) |
-                                             src[x * 2u + 1u]);
-                    *dst++ = (uint8_t)(((p >> 11) & 0x1fu) << 3);
-                    *dst++ = (uint8_t)(((p >> 5) & 0x3fu) << 2);
-                    *dst++ = (uint8_t)((p & 0x1fu) << 3);
-                    *dst++ = 0xffu;
-                }
-                break;
-            case RTG_FMT_A8R8G8B8:
-                for (x = 0; x < w; x++) {
-                    *dst++ = src[x * 4u + 1u];
-                    *dst++ = src[x * 4u + 2u];
-                    *dst++ = src[x * 4u + 3u];
-                    *dst++ = 0xffu;
-                }
-                break;
-            default:
-                return 0;
+                run_start = columns;
+            }
         }
     }
+
+    if (dirty_pixels * 100u >= (uint64_t)w * h * 80u)
+        full = 1;
+    if (full) {
+        convert_rect(s, 0u, 0u, w, h);
+        out->dirty_count = 0u;
+        out->full_update = 1u;
+        out->changed = 1u;
+    } else {
+        uint32_t i;
+        for (i = 0u; i < out->dirty_count; ++i) {
+            BellatrixRtgRect *r = &out->dirty[i];
+            convert_rect(s, r->x, r->y, r->w, r->h);
+        }
+        out->changed = out->dirty_count != 0u;
+    }
+
+    s->tile_columns = (uint16_t)columns;
+    s->tile_rows = (uint16_t)rows;
+    s->hashes_valid = 1u;
+    s->force_full = 0u;
 
     out->pixels = s->frame;
     out->width = w;

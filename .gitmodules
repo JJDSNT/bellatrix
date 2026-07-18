@@ -37,3 +37,6 @@
 [submodule "external/RaspberryPI"]
 	path = external/RaspberryPI
 	url = https://github.com/kumaashi/RaspberryPI
+[submodule "external/emu68-bootstrap"]
+	path = external/emu68-bootstrap
+	url = https://github.com/jit06/emu68-bootstrap

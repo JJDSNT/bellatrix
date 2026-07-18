@@ -1,0 +1,50 @@
+diff --git a/src/raspi/start_rpi64.c b/src/raspi/start_rpi64.c
+index 372ef61..2e4a0d7 100644
+--- a/src/raspi/start_rpi64.c
++++ b/src/raspi/start_rpi64.c
+@@ -30,6 +30,10 @@ extern uint64_t mmu_user_L1[512];
+ extern uint64_t mmu_user_L2[4*512];
+ 
+ void M68K_StartEmu(void *addr);
++#ifdef BELLATRIX
++void bellatrix_console_log_reclock(uint32_t core_hz);
++#define BELLATRIX_MINIUART_CORE_HZ 400000000u
++#endif
+ 
+ uint16_t *framebuffer;
+ uint32_t pitch;
+@@ -127,6 +131,24 @@ void display_logo()
+     init_display(sz, (void**)&framebuffer, &pitch);
+     kprintf("[BOOT] Framebuffer @ %08x\n", framebuffer);
+ 
++#ifdef BELLATRIX
++    /* Export Bellatrix's software-Denise scanout to guest-side display
++       drivers.  VideoCore.card consumes this as the native HVS plane and
++       switches between it and the P96 RTG plane in SetSwitch(). */
++    {
++        of_node_t *emu68 = dt_find_node("/emu68");
++        uint32_t native_fb[] = {
++            (uint32_t)(uintptr_t)framebuffer,
++            fb_width,
++            fb_height,
++            pitch
++        };
++        if (emu68)
++            dt_add_property(emu68, "bellatrix-native-fb",
++                            native_fb, sizeof(native_fb));
++    }
++#endif
++
+     start_x = (sz.width - EmuLogo.el_Width) / 2;
+     start_y = (sz.height - EmuLogo.el_Height) / 2;
+ 
+@@ -307,6 +329,9 @@ void platform_post_init()
+     }
+     kprintf("[BOOT] ARM Clock at %d MHz\n", get_clock_rate(3) / 1000000);  
+     kprintf("[BOOT] CORE Clock at %d MHz\n", get_clock_rate(4) / 1000000);
++#ifdef BELLATRIX
++    bellatrix_console_log_reclock(BELLATRIX_MINIUART_CORE_HZ);
++#endif
+ 
+     get_vc_memory(&base_vcmem, &size_vcmem);
+     kprintf("[BOOT] VC4 memory: %p-%p\n", (intptr_t)base_vcmem, (intptr_t)base_vcmem + size_vcmem - 1);

@@ -353,6 +353,35 @@ int PAL_Diag_GetEnvBool(const char *name)
 static SDL_Window *s_window = NULL;
 static SDL_Renderer *s_renderer = NULL;
 static SDL_Texture *s_texture = NULL;
+static SDL_Texture *s_rgba_texture = NULL;
+static uint32_t s_rgba_texture_w = 0u;
+static uint32_t s_rgba_texture_h = 0u;
+static uint64_t s_rgba_last_present_ns = 0u;
+static int s_rgba_present_pending = 0;
+static int s_renderer_vsync_active = 0;
+
+static uint32_t pal_rtg_present_hz(void)
+{
+    static int initialized = 0;
+    static uint32_t hz;
+    if (!initialized) {
+        const char *env = getenv("HARNESS_RTG_PRESENT_HZ");
+        char *end = NULL;
+        unsigned long value;
+        hz = s_renderer_vsync_active ? 0u : 60u;
+        if (env && env[0] != '\0') {
+            value = strtoul(env, &end, 10);
+            if (end != env && *end == '\0' && value <= 1000ul)
+                hz = (uint32_t)value;
+        }
+        fprintf(stderr, "[PAL] RTG present pacing: %s",
+                hz ? "limited" : "unlimited");
+        if (hz) fprintf(stderr, " (%u Hz)", (unsigned)hz);
+        fputc('\n', stderr);
+        initialized = 1;
+    }
+    return hz;
+}
 
 typedef struct PalVideoPerf {
     uint64_t window_start;
@@ -442,6 +471,32 @@ static int pal_sdl_recreate_texture(uint32_t w, uint32_t h)
         SDL_DestroyTexture(s_texture);
     s_texture = texture;
     return 0;
+}
+
+static int pal_sdl_prepare_rgba_texture(uint32_t w, uint32_t h)
+{
+    SDL_Texture *texture;
+
+    if (!s_renderer || w == 0u || h == 0u)
+        return 0;
+    if (s_rgba_texture && s_rgba_texture_w == w && s_rgba_texture_h == h)
+        return 1;
+
+    texture = SDL_CreateTexture(s_renderer, SDL_PIXELFORMAT_RGBA32,
+                                SDL_TEXTUREACCESS_STREAMING, (int)w, (int)h);
+    if (!texture) {
+        fprintf(stderr, "[PAL] SDL_CreateTexture(RGBA32 %ux%u): %s\n",
+                (unsigned)w, (unsigned)h, SDL_GetError());
+        return 0;
+    }
+    if (s_rgba_texture)
+        SDL_DestroyTexture(s_rgba_texture);
+    s_rgba_texture = texture;
+    s_rgba_texture_w = w;
+    s_rgba_texture_h = h;
+    fprintf(stderr, "[PAL] RTG direct presenter texture=RGBA32 size=%ux%u\n",
+            (unsigned)w, (unsigned)h);
+    return 1;
 }
 
 static void pal_sdl_enable_relative_mouse(void)
@@ -722,6 +777,8 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
         }
 
         if (s_renderer && SDL_GetRendererInfo(s_renderer, &renderer_info) == 0) {
+            s_renderer_vsync_active =
+                (renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) != 0u;
             fprintf(stderr,
                     "[PAL] SDL renderer=%s requested_vsync=%s active_vsync=%s%s\n",
                     renderer_info.name ? renderer_info.name : "unknown",
@@ -849,6 +906,104 @@ void PAL_Video_Flip(void)
         s_video_perf.uploaded_bytes += (uint64_t)pitch * fb_height;
         pal_video_perf_report(t1);
     }
+}
+
+int PAL_Video_PresentRGBA(const uint8_t *pixels, uint32_t w,
+                          uint32_t h, uint32_t source_pitch)
+{
+    return PAL_Video_PresentRGBARegions(pixels, w, h, source_pitch,
+                                        NULL, 0u, 1);
+}
+
+int PAL_Video_PresentRGBARegions(const uint8_t *pixels, uint32_t w,
+                                 uint32_t h, uint32_t source_pitch,
+                                 const PAL_VideoRect *rects,
+                                 uint32_t rect_count, int full_update)
+{
+    uint64_t t0 = 0u, t1 = 0u;
+    uint64_t uploaded_bytes = 0u;
+    uint8_t *texture_pixels;
+    int texture_pitch;
+    uint32_t i, y;
+    int perf;
+
+    if (!pixels || source_pitch < w * 4u ||
+        !pal_sdl_prepare_rgba_texture(w, h))
+        return 0;
+    if (!full_update && rect_count == 0u && !s_rgba_present_pending)
+        return 1;
+
+    perf = pal_video_perf_enabled();
+    if (perf)
+        t0 = PAL_Time_ReadCounter();
+
+    if (full_update) {
+        if (SDL_LockTexture(s_rgba_texture, NULL, (void **)&texture_pixels,
+                            &texture_pitch) != 0)
+            return 0;
+        for (y = 0u; y < h; ++y)
+            memcpy(texture_pixels + (size_t)y * (size_t)texture_pitch,
+                   pixels + (size_t)y * source_pitch, (size_t)w * 4u);
+        SDL_UnlockTexture(s_rgba_texture);
+        uploaded_bytes = (uint64_t)w * h * 4u;
+        s_rgba_present_pending = 1;
+    } else if (rect_count != 0u) {
+        for (i = 0u; i < rect_count; ++i) {
+            SDL_Rect r;
+            const PAL_VideoRect *dirty = &rects[i];
+            if (dirty->w == 0u || dirty->h == 0u ||
+                (uint32_t)dirty->x + dirty->w > w ||
+                (uint32_t)dirty->y + dirty->h > h)
+                return 0;
+            r.x = dirty->x; r.y = dirty->y;
+            r.w = dirty->w; r.h = dirty->h;
+            if (SDL_UpdateTexture(s_rgba_texture, &r,
+                    pixels + (size_t)dirty->y * source_pitch +
+                    (size_t)dirty->x * 4u, (int)source_pitch) != 0)
+                return 0;
+            uploaded_bytes += (uint64_t)dirty->w * dirty->h * 4u;
+        }
+        s_rgba_present_pending = 1;
+    }
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.upload_ns += t1 - t0;
+        t0 = t1;
+    }
+    if (perf)
+        s_video_perf.uploaded_bytes += uploaded_bytes;
+    {
+        uint32_t hz = pal_rtg_present_hz();
+        uint64_t now = PAL_Time_ReadCounter();
+        if (hz && s_rgba_last_present_ns != 0u &&
+            now - s_rgba_last_present_ns < 1000000000ULL / hz) {
+            if (perf)
+                pal_video_perf_report(now);
+            return 1;
+        }
+    }
+    SDL_RenderClear(s_renderer);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.clear_ns += t1 - t0;
+        t0 = t1;
+    }
+    SDL_RenderCopy(s_renderer, s_rgba_texture, NULL, NULL);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.copy_ns += t1 - t0;
+        t0 = t1;
+    }
+    SDL_RenderPresent(s_renderer);
+    s_rgba_last_present_ns = PAL_Time_ReadCounter();
+    s_rgba_present_pending = 0;
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.present_ns += t1 - t0;
+        s_video_perf.flips++;
+        pal_video_perf_report(t1);
+    }
+    return 1;
 }
 
 void PAL_Video_SetPalette(uint8_t idx, uint32_t rgb)
@@ -1013,6 +1168,25 @@ uint32_t *PAL_Video_GetBuffer(void)
 }
 
 void PAL_Video_Flip(void) {}
+
+int PAL_Video_PresentRGBA(const uint8_t *pixels, uint32_t w,
+                          uint32_t h, uint32_t source_pitch)
+{
+    (void)pixels;
+    (void)w;
+    (void)h;
+    (void)source_pitch;
+    return 0;
+}
+
+int PAL_Video_PresentRGBARegions(const uint8_t *pixels, uint32_t w,
+                                 uint32_t h, uint32_t source_pitch,
+                                 const PAL_VideoRect *rects,
+                                 uint32_t rect_count, int full_update)
+{
+    (void)rects; (void)rect_count; (void)full_update;
+    return PAL_Video_PresentRGBA(pixels, w, h, source_pitch);
+}
 
 void PAL_Video_SetPalette(uint8_t idx, uint32_t rgb)
 {

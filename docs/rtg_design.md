@@ -3,6 +3,13 @@
 O estudo específico do custo de scanout e apresentação está em
 [`rtg_performance_study.md`](rtg_performance_study.md).
 
+Este documento cobre o RTG do **harness** (`bellatrix.card` → SDL). O RTG do
+alvo **bare-metal** (Pi3) segue outra decisão: usa a `VideoCore.card` do Emu68
+e é planejado em [`../rtg-baremetal.md`](../rtg-baremetal.md). A progressão
+"linha a linha" observada no harness foi medida como efeito de app
+single-buffered + emulação abaixo de realtime (não é gargalo de presenter); ver
+a sessão 2026-07-18 em `AI_context/issues/ISSUE-0033.md`.
+
 ## Direção atual (decisão de 2026-07-18)
 
 ### Nome visível e ativação no harness
