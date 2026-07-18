@@ -61,6 +61,7 @@ struct BellatrixCardBase {
     ULONG               cb_VRAMSize;
     UWORD               cb_Width;    /* latched by SetGC for SetPanning */
     UWORD               cb_Height;
+    ULONG               cb_ProbeCount[7];
 };
 
 /* AROS p96gfx accesses BoardInfo through fixed byte offsets rather than this C
@@ -96,6 +97,124 @@ static inline void reg_write(struct BellatrixCardBase *base, ULONG off, ULONG va
 static inline ULONG reg_read(struct BellatrixCardBase *base, ULONG off)
 {
     return base->cb_Regs[off / 4];
+}
+
+enum {
+    PROBE_FILLRECT = 1,
+    PROBE_INVERTRECT,
+    PROBE_BLITRECT,
+    PROBE_BLITTEMPLATE,
+    PROBE_BLITPATTERN,
+    PROBE_DRAWLINE,
+    PROBE_BLITCOMPLETE
+};
+
+/* Telemetry-only callbacks. Report the first and power-of-two calls, then
+ * invoke AROS' Default entry so AROSFlag is cleared and the existing software
+ * fallback remains authoritative. */
+static void probe_report(struct BellatrixCardBase *base, UWORD op,
+                         UWORD width, UWORD height, ULONG detail)
+{
+    ULONG count = ++base->cb_ProbeCount[op - 1];
+    if (count != 1 && (count & (count - 1)) != 0)
+        return;
+    reg_write(base, RTG_REG_DEBUG,
+              0xB7000000UL | ((ULONG)op << 20) | (count & 0x0fffff));
+    reg_write(base, RTG_REG_DEBUG,
+              0xB8000000UL | (((ULONG)width & 0x0fff) << 12) |
+              ((ULONG)height & 0x0fff));
+    reg_write(base, RTG_REG_DEBUG, 0xB9000000UL | (detail & 0x00ffffff));
+}
+
+static void ProbeFillRect(__REGA0(struct BoardInfo *bi),
+                          __REGA1(struct RenderInfo *ri),
+                          __REGD0(WORD x), __REGD1(WORD y),
+                          __REGD2(WORD w), __REGD3(WORD h),
+                          __REGD4(ULONG pen), __REGD5(UBYTE mask),
+                          __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_FILLRECT, w, h,
+                 ((ULONG)fmt << 8) | mask);
+    bi->FillRectDefault(bi, ri, x, y, w, h, pen, mask, fmt);
+}
+
+static void ProbeInvertRect(__REGA0(struct BoardInfo *bi),
+                            __REGA1(struct RenderInfo *ri),
+                            __REGD0(WORD x), __REGD1(WORD y),
+                            __REGD2(WORD w), __REGD3(WORD h),
+                            __REGD4(UBYTE mask), __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_INVERTRECT, w, h,
+                 ((ULONG)fmt << 8) | mask);
+    bi->InvertRectDefault(bi, ri, x, y, w, h, mask, fmt);
+}
+
+static void ProbeBlitRect(__REGA0(struct BoardInfo *bi),
+                          __REGA1(struct RenderInfo *ri),
+                          __REGD0(WORD sx), __REGD1(WORD sy),
+                          __REGD2(WORD dx), __REGD3(WORD dy),
+                          __REGD4(WORD w), __REGD5(WORD h),
+                          __REGD6(UBYTE mask), __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_BLITRECT, w, h,
+                 ((ULONG)fmt << 8) | mask);
+    bi->BlitRectDefault(bi, ri, sx, sy, dx, dy, w, h, mask, fmt);
+}
+
+static void ProbeBlitTemplate(__REGA0(struct BoardInfo *bi),
+                              __REGA1(struct RenderInfo *ri),
+                              __REGA2(struct Template *tmpl),
+                              __REGD0(WORD x), __REGD1(WORD y),
+                              __REGD2(WORD w), __REGD3(WORD h),
+                              __REGD4(UBYTE mask), __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_BLITTEMPLATE, w, h,
+                 ((ULONG)fmt << 8) | mask);
+    bi->BlitTemplateDefault(bi, ri, tmpl, x, y, w, h, mask, fmt);
+}
+
+static void ProbeBlitPattern(__REGA0(struct BoardInfo *bi),
+                             __REGA1(struct RenderInfo *ri),
+                             __REGA2(struct Pattern *pat),
+                             __REGD0(WORD x), __REGD1(WORD y),
+                             __REGD2(WORD w), __REGD3(WORD h),
+                             __REGD4(UBYTE mask), __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_BLITPATTERN, w, h,
+                 ((ULONG)fmt << 8) | mask);
+    bi->BlitPatternDefault(bi, ri, pat, x, y, w, h, mask, fmt);
+}
+
+static void ProbeDrawLine(__REGA0(struct BoardInfo *bi),
+                          __REGA1(struct RenderInfo *ri),
+                          __REGA2(struct Line *line), __REGD0(UBYTE mask),
+                          __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_DRAWLINE, 0, 0,
+                 ((ULONG)fmt << 8) | mask);
+    bi->DrawLineDefault(bi, ri, line, mask, fmt);
+}
+
+static void ProbeBlitComplete(__REGA0(struct BoardInfo *bi),
+                              __REGA1(struct RenderInfo *src),
+                              __REGA2(struct RenderInfo *dst),
+                              __REGD0(WORD sx), __REGD1(WORD sy),
+                              __REGD2(WORD dx), __REGD3(WORD dy),
+                              __REGD4(WORD w), __REGD5(WORD h),
+                              __REGD6(UBYTE opcode),
+                              __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    probe_report(base, PROBE_BLITCOMPLETE, w, h,
+                 ((ULONG)fmt << 8) | opcode);
+    bi->BlitRectNoMaskCompleteDefault(bi, src, dst, sx, sy, dx, dy,
+                                      w, h, opcode, fmt);
 }
 
 static ULONG rtg_format(RGBFTYPE fmt)
@@ -344,6 +463,13 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
     bi->GetVBeamPos = GetVBeamPos;
     bi->SetInterrupt = SetInterrupt;
     bi->WaitBlitter = WaitBlitter;
+    bi->FillRect = ProbeFillRect;
+    bi->InvertRect = ProbeInvertRect;
+    bi->BlitRect = ProbeBlitRect;
+    bi->BlitTemplate = ProbeBlitTemplate;
+    bi->BlitPattern = ProbeBlitPattern;
+    bi->DrawLine = ProbeDrawLine;
+    bi->BlitRectNoMaskComplete = ProbeBlitComplete;
 
     return 1;
 }

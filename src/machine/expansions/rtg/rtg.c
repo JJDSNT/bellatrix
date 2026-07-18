@@ -46,6 +46,7 @@ static uint32_t rtg_reg_read(uint32_t reg)
 
 static void rtg_reg_write(uint32_t reg, uint32_t value)
 {
+    static uint32_t probe_op, probe_count, probe_w, probe_h;
     {
         static uint32_t s_seen_mask;
         uint32_t bit = 1u << ((reg >> 2) & 31u);
@@ -61,9 +62,32 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
                 (unsigned)s_rtg.mode_h, (unsigned)s_rtg.format,
                 (unsigned)s_rtg.bytes_per_row);
     }
-    if (reg == RTG_REG_DEBUG)
-        kprintf("[RTG-DBG] %08x\n", (unsigned)value);
-    else
+    if (reg == RTG_REG_DEBUG) {
+        static const char *const probe_names[] = {
+            "unknown", "FillRect", "InvertRect", "BlitRect",
+            "BlitTemplate", "BlitPattern", "DrawLine",
+            "BlitRectNoMaskComplete"
+        };
+        if ((value & 0xff000000u) == 0xb7000000u) {
+            probe_op = (value >> 20) & 0x0fu;
+            probe_count = value & 0x000fffffu;
+        } else if ((value & 0xff000000u) == 0xb8000000u) {
+            probe_w = (value >> 12) & 0x0fffu;
+            probe_h = value & 0x0fffu;
+        } else if ((value & 0xff000000u) == 0xb9000000u) {
+            const char *name = probe_op <
+                sizeof(probe_names) / sizeof(probe_names[0]) ?
+                probe_names[probe_op] : probe_names[0];
+            kprintf("[RTG-PROBE] %s count=%u size=%ux%u fmt=%u arg=%02x "
+                    "handled=software\n",
+                    name, (unsigned)probe_count,
+                    (unsigned)probe_w, (unsigned)probe_h,
+                    (unsigned)((value >> 8) & 0xffffu),
+                    (unsigned)(value & 0xffu));
+        } else {
+            kprintf("[RTG-DBG] %08x\n", (unsigned)value);
+        }
+    } else
         bellatrix_rtg_scanout_reg_write(&s_rtg, reg, value);
 }
 

@@ -294,6 +294,17 @@ Plano aprovado para execução incremental:
    screenshots e benchmark de operações, preservando fallback software para
    todo opcode/máscara/minterm ainda não implementado.
 
+### Fase A executada — resultado do probe
+
+Foram instalados callbacks que registram primeira chamada/potências de dois e
+depois invocam o callback `Default`, mantendo o fallback via `AROSFlag=0`.
+`aros.rom + aros.adf`, 1.600 frames, mostrou `FillRect` pelo menos 16 vezes; a
+primeira chamada é o clear completo `640x480`, CLUT, máscara `0xff`.
+`BlitTemplate` apareceu uma vez (`128x8`) e `BlitRectNoMaskComplete` duas vezes
+(`16x16`, opcode `0x0c`). O clear integral software confirma a causa visual do
+desenho linha a linha. Próximo incremento: command ABI síncrona + `FillRect`
+CLUT/full-mask antes de ampliar formatos e operações.
+
 ## Correção de direção
 
 O backend VideoCore não é requisito do RTG atual. Ele é uma possível solução

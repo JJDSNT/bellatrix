@@ -23,6 +23,7 @@ grep -F "[RTG-DBG] b0000004" "$LOG" >/dev/null
 grep -F "[RTG] REG_ID probed (FindCard reached the board)" "$LOG" >/dev/null
 grep -F "[RTG-DBG] cafd0003" "$LOG" >/dev/null
 grep -F "[RTG] direct VRAM mapped: 40003000-407fffff" "$LOG" >/dev/null
+grep -F "[RTG-PROBE] FillRect count=1 size=640x480 fmt=1 arg=ff handled=software" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=14 value=00000280" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=18 value=000001e0" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=24 value=00000000" "$LOG" >/dev/null

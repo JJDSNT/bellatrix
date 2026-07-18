@@ -80,6 +80,23 @@ fluxo real, sem depender de inferência sobre buffering:
 3. Produzir um resumo por operação, não log por chamada, e capturar um boot do
    AROS até o desktop. Isso determina a ordem pelo volume real, não por palpite.
 
+**Executada em 2026-07-18.** Os callbacks-probe chamam seus respectivos
+`*Default`, portanto preservam `AROSFlag=0` e o resultado software. O log é
+amostrado na primeira chamada e em potências de dois. No boot
+`aros.rom + aros.adf`, até 1.600 frames, observamos:
+
+```
+FillRect                 count >= 16; primeira operação 640x480 CLUT mask ff
+BlitTemplate             count >= 1;  128x8 CLUT mask ff
+BlitRectNoMaskComplete   count >= 2;  16x16 CLUT opcode 0x0c
+```
+
+O clear inicial de toda a tela é explicitamente um `FillRect` recusado pela
+card e executado em software. Isso explica diretamente o preenchimento visível
+linha a linha e torna `FillRect` o primeiro alvo da Fase C. Não foram observados
+`InvertRect`, `BlitRect`, `BlitPattern` ou `DrawLine` nessa janela curta; isso
+não os declara desnecessários, apenas reduz sua prioridade inicial.
+
 ### Fase B — command ABI síncrona e segura
 
 Adicionar ao register file um bloco de comando com opcode, offsets de
