@@ -461,4 +461,8 @@ mídia adequada e obter frame RTG não uniforme; depois validar apresentação S
 - `BlitTemplate` usa upload explícito da máscara 1-bit e acelera JAM1/JAM2 com
   INVERSVID nos três formatos. O teste AROS agora inclui `aros.adf` e exige que
   a chamada 128×8 observada seja tratada pelo host.
+- Ao adicionar `BlitPattern`, a `.card` ultrapassou a antiga fronteira de ROM
+  em `0x3000` e o CardLoader retornou `b00000ee`. A abertura VRAM passou para
+  `0x10000`, reservando 64 KB para registradores/DiagArea/`.card` e deixando
+  8128 KB de VRAM. Isso elimina a sobreposição em vez de mascarar o crescimento.
 - Casos recusados continuam chamando os callbacks `Default` do P96.

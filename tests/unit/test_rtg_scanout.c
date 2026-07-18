@@ -266,6 +266,26 @@ static void test_accel_blittemplate(void)
                   0u, 1u, 0u));
 }
 
+static void test_accel_blitpattern(void)
+{
+    uint8_t vram[64], bits[4] = { 0xa0u, 0x00u, 0x40u, 0x00u };
+    memset(vram, 0x11, sizeof(vram));
+    check_u32("pattern jam2", 1u,
+              bellatrix_rtg_accel_blitpattern(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 4u, 3u,
+                  RTG_FMT_CLUT, 0xffu, bits, sizeof(bits), 2u,
+                  0u, 0u, 1u, 0x77u, 0x22u));
+    check_u32("pattern row0 fg", 0x77u, vram[0]);
+    check_u32("pattern row0 bg", 0x22u, vram[1]);
+    check_u32("pattern row1 fg", 0x77u, vram[9]);
+    check_u32("pattern repeats", 0x77u, vram[16]);
+    check_u32("pattern rejects height", 0u,
+              bellatrix_rtg_accel_blitpattern(
+                  vram, sizeof(vram), 0u, 8u, 0u, 0u, 1u, 1u,
+                  RTG_FMT_CLUT, 0xffu, bits, sizeof(bits), 3u,
+                  0u, 0u, 0u, 1u, 0u));
+}
+
 int main(void)
 {
     test_register_contract();
@@ -276,6 +296,7 @@ int main(void)
     test_accel_blit_copy();
     test_accel_invertrect();
     test_accel_blittemplate();
+    test_accel_blitpattern();
     puts("rtg scanout tests passed");
     return 0;
 }

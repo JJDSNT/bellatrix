@@ -19,7 +19,7 @@ blitter 2D.
 | `BlitRect` | parcial | 0 | **implementado:** mesma VRAM, COPY, overlap-safe, três formatos, máscara `ff` | máscaras parciais |
 | `BlitRectNoMaskComplete` | parcial | ≥2, 16×16, minterm `0c` | **implementado:** COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
 | `BlitTemplate` | parcial | ≥1, 128×8 | **implementado:** upload 1-bit, JAM1/JAM2, INVERSVID, três formatos, máscara `ff` | COMPLEMENT, máscaras parciais |
-| `BlitPattern` | probe | 0 | padrão 16×2, JAM1/JAM2 | alturas, complement, máscaras |
+| `BlitPattern` | parcial | 0 | **implementado:** 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID, três formatos | COMPLEMENT, máscaras parciais |
 | `DrawLine` | probe | 0 | sólida, COPY | padrões e draw modes |
 | `BlitPlanar2Chunky` | não | não instrumentado | planar→CLUT | máscaras/interleaved |
 | `BlitPlanar2Direct` | não | não instrumentado | planar→RGB565/ARGB32 | formatos adicionais |
@@ -46,7 +46,7 @@ argumento do callback, não deve ser inferido de `RenderInfo`.
 
 | Recurso | Estado | Decisão |
 |---|---:|---|
-| VRAM CPU direta | sim | `base+0x3000..+0x7fffff`, sem bridge byte a byte |
+| VRAM CPU direta | sim | `base+0x10000..+0x7fffff`, sem bridge byte a byte; 64 KB iniciais reservam ABI/ROM |
 | command ABI síncrona | parcial | FillRect, BlitCopy, InvertRect e BlitTemplate usam validação e `STATUS`; `COMMAND` termina antes do retorno |
 | command queue | não | somente após comandos síncronos e fences corretos |
 | async blits | futuro | requer `WaitBlitter`, status, ordering e proteção contra leitura prematura |
@@ -65,8 +65,9 @@ commit, os testes e a evidência guest; itens sem evidência permanecem parciais
   ainda sem chamada no workload AROS).
 - [x] `BlitTemplate`: upload portátil da máscara 1-bit, JAM1/JAM2,
   INVERSVID, três formatos e fallback (unitário + boot AROS com ADF).
-- [ ] **ATUAL:** `BlitPattern`: padrão 16×(1<<Size), JAM1/JAM2 e três formatos.
-- [ ] `DrawLine`: linha sólida COPY; depois padrões e demais draw modes.
+- [x] `BlitPattern`: padrão 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID e
+  três formatos (unitário; ainda sem chamada no workload AROS).
+- [ ] **ATUAL:** `DrawLine`: linha sólida COPY; depois padrões e demais draw modes.
 - [ ] `BlitPlanar2Chunky`: planar→CLUT.
 - [ ] `BlitPlanar2Direct`: planar→RGB565/ARGB32.
 - [ ] Sprite, VBlank/page flip e depois fila/async.

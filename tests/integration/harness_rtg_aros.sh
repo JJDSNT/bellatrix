@@ -20,14 +20,14 @@ trap 'rm -f "$LOG"' EXIT
 HARNESS_RTG=1 "$HARNESS" "$ROM" --adf "$ADF" --headless --frames 1600 >"$LOG" 2>&1
 
 grep -F "[HARNESS] Fast RAM: 8MB Zorro II board configured" "$LOG" >/dev/null
-grep -F "[RTG] board registered: Zorro III 8MB window, 8180 KB VRAM" "$LOG" >/dev/null
+grep -F "[RTG] board registered: Zorro III 8MB window, 8128 KB VRAM" "$LOG" >/dev/null
 grep -F "[SERIAL] -> configured, 40000000 - 407fffff" "$LOG" >/dev/null
 grep -F "[RTG] first ROM read at window offset 0x100 — DiagArea probed" "$LOG" >/dev/null
 grep -F "[SERIAL] da_Config=90" "$LOG" >/dev/null
 grep -F "[RTG-DBG] b0000004" "$LOG" >/dev/null
 grep -F "[RTG] REG_ID probed (FindCard reached the board)" "$LOG" >/dev/null
 grep -F "[RTG-DBG] cafd0003" "$LOG" >/dev/null
-grep -F "[RTG] direct VRAM mapped: 40003000-407fffff" "$LOG" >/dev/null
+grep -F "[RTG] direct VRAM mapped: 40010000-407fffff" "$LOG" >/dev/null
 grep -F "[RTG-PROBE] FillRect count=1 size=640x480 fmt=1 arg=ff action=observed" "$LOG" >/dev/null
 grep -F "[RTG-ACCEL] FillRect count=1 fmt=1 640x480 handled=host" "$LOG" >/dev/null
 grep -F "[RTG-PROBE] BlitTemplate count=1 size=128x8 fmt=1 arg=ff action=observed" "$LOG" >/dev/null

@@ -32,7 +32,7 @@ de VRAM alinhada a página é promovida a uma região direta do backend CPU:
 
 ```
 40000000-40002fff  registradores + DiagArea/card ROM (MMIO)
-40003000-407fffff  VRAM linear (DIRECT)
+40010000-407fffff  VRAM linear (DIRECT)
 ```
 
 Assim, clears, cópias e desenho do P96 deixam de atravessar o bridge e o loop
@@ -137,6 +137,8 @@ com máscara `0xff`; sobreposição vertical e horizontal é preservada.
 `BlitTemplate` transporta a máscara 1-bit por uma janela de upload da board,
 em vez de o host acessar diretamente Chip/Fast RAM. O desenho mantém a command
 ABI independente do backend CPU e cobre JAM1/JAM2, INVERSVID e os três formatos.
+`BlitPattern` reutiliza o upload para padrões P96 de 16 bits, repetindo a altura
+`1 << Size` e respeitando offsets X/Y.
 
 `BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
 casos de cópia prometidos estiverem testados. Cada callback não suportado deve
@@ -210,7 +212,7 @@ Estado atualizado após a correção Z3: o AROS já percorre toda a cadeia e pro
 um scanout `640x480 CLUT`, stride 640, pan 0 e enable 1. A frase anterior é
 preservada como transição histórica; a correção detalhada está abaixo.
 
-A janela atual é Z3 de **8 MB** (8180 KB úteis após registradores/ROM). A ampliação
+A janela atual é Z3 de **8 MB** (8128 KB úteis após registradores/ROM). A ampliação
 de 4 para 8 MB acompanha o modelo MiSTer e permite comportar o maior modo da tabela
 AROS atual (`1440x900x32`, cerca de 5,2 MB) sem reduzir a Fast RAM Z2.
 
@@ -384,7 +386,7 @@ fase 2 para caber a DiagArea+card, que juntos passam de 9KB):
 |---|---|---|
 | 0x0000–0x00FF | 256B | registradores |
 | 0x0100–0x2FFF | 11.75KB | ROM: DiagArea+CardLoader em 0x100, card hunk em 0x2000 |
-| 0x3000–0x3FFFFF | ~4MB | VRAM linear (MemoryBase = base+0x3000) |
+| 0x10000–0x7FFFFF | 8128 KB | VRAM linear; os 64 KB iniciais reservam ABI e crescimento da ROM `.card` |
 
 Registradores (32-bit, big-endian; RO = read-only):
 
@@ -392,7 +394,7 @@ Registradores (32-bit, big-endian; RO = read-only):
 |---|---|---|
 | ID | 0x00 | RO, magic 0x42525447 'BRTG' |
 | VERSION | 0x04 | RO, versão da spec (1) |
-| VRAM_OFF | 0x08 | RO, offset da VRAM na janela (0x1000) |
+| VRAM_OFF | 0x08 | RO, offset da VRAM na janela (`0x10000`) |
 | VRAM_SIZE | 0x0C | RO, bytes de VRAM |
 | ENABLE | 0x10 | 1 = RTG dono da saída (SetSwitch); 0 = Denise |
 | MODE_W | 0x14 | largura em pixels |

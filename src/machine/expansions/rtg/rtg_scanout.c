@@ -165,6 +165,46 @@ int bellatrix_rtg_accel_blittemplate(uint8_t *vram, uint32_t vram_size,
     return 1;
 }
 
+int bellatrix_rtg_accel_blitpattern(uint8_t *vram, uint32_t vram_size,
+                                    uint32_t dst, uint32_t pitch,
+                                    uint32_t x, uint32_t y,
+                                    uint32_t width, uint32_t height,
+                                    uint32_t format, uint32_t mask,
+                                    const uint8_t *bits, uint32_t bits_size,
+                                    uint32_t pattern_height,
+                                    uint32_t xoffset, uint32_t yoffset,
+                                    uint32_t drawmode, uint32_t fg,
+                                    uint32_t bg)
+{
+    uint32_t bpp = format_bytes(format), row, col;
+    uint64_t first, last, row_bytes;
+    if (!vram || !bits || !bpp || mask != 0xffu || !width || !height ||
+        !pitch || !pattern_height || pattern_height > 256u ||
+        (pattern_height & (pattern_height - 1u)) != 0u ||
+        bits_size < pattern_height * 2u || xoffset > 15u ||
+        (drawmode & ~5u) != 0u || (uint64_t)x * bpp > pitch)
+        return 0;
+    row_bytes = (uint64_t)width * bpp;
+    if (row_bytes > pitch - (uint64_t)x * bpp)
+        return 0;
+    first = (uint64_t)dst + (uint64_t)y * pitch + (uint64_t)x * bpp;
+    last = first + (uint64_t)(height - 1u) * pitch + row_bytes;
+    if (first >= vram_size || last > vram_size)
+        return 0;
+    for (row = 0; row < height; ++row) {
+        uint32_t pr = (yoffset + row) & (pattern_height - 1u);
+        uint32_t word = ((uint32_t)bits[pr * 2u] << 8) | bits[pr * 2u + 1u];
+        uint8_t *out = vram + first + (uint64_t)row * pitch;
+        for (col = 0; col < width; ++col) {
+            uint32_t set = (word >> (15u - ((xoffset + col) & 15u))) & 1u;
+            if (drawmode & 4u) set ^= 1u;
+            if (set || (drawmode & 1u)) store_pixel(out, bpp, set ? fg : bg);
+            out += bpp;
+        }
+    }
+    return 1;
+}
+
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
                                 uint8_t *vram, uint32_t vram_size,
                                 uint32_t vram_offset,

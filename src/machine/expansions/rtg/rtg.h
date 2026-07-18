@@ -23,12 +23,12 @@ struct BellatrixMachine;
 #define BELLATRIX_RTG_WINDOW      0x00800000u  /* 8MB Zorro III window  */
 #define BELLATRIX_RTG_REG_SIZE    0x00000100u  /* register file (256B)  */
 #define BELLATRIX_RTG_ROM_OFF     0x00000100u  /* DiagArea+card ROM     */
-#define BELLATRIX_RTG_ROM_SIZE    0x00002F00u  /* 11.75KB ROM budget    */
+#define BELLATRIX_RTG_ROM_SIZE    0x0000FF00u  /* ROM until VRAM aperture */
 /* Card hunk offset within the window — must match CARDOFFSET in
  * cards/bellatrix.card/bootrom/cardldr.S (not shared: that file is
  * assembled standalone, see its own header comment). */
 #define BELLATRIX_RTG_CARD_OFF    0x00002000u
-#define BELLATRIX_RTG_VRAM_OFF    0x00003000u  /* VRAM offset in window */
+#define BELLATRIX_RTG_VRAM_OFF    0x00010000u  /* VRAM offset in window */
 #define BELLATRIX_RTG_VRAM_SIZE   (BELLATRIX_RTG_WINDOW - BELLATRIX_RTG_VRAM_OFF)
 
 #define BELLATRIX_RTG_MANUFACTURER 0x07DBu

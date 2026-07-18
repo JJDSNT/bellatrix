@@ -67,6 +67,7 @@
 #define RTG_ACCEL_BLIT_COPY 2
 #define RTG_ACCEL_INVERTRECT 3
 #define RTG_ACCEL_BLITTEMPLATE 4
+#define RTG_ACCEL_BLITPATTERN 5
 
 #define RTG_ID_MAGIC 0x42525447
 
@@ -298,8 +299,36 @@ static void ProbeBlitPattern(__REGA0(struct BoardInfo *bi),
                              __REGD4(UBYTE mask), __REGD7(RGBFTYPE fmt))
 {
     struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    ULONG off, hostfmt, rows, i;
+    UBYTE *src;
     probe_report(base, PROBE_BLITPATTERN, w, h,
                  ((ULONG)fmt << 8) | mask);
+    hostfmt = rtg_format(fmt);
+    rows = pat->Size <= 8 ? 1UL << pat->Size : 0;
+    if (mask == 0xff && hostfmt && rows && x >= 0 && y >= 0 && w > 0 && h > 0 &&
+        pat->XOffset <= 15 && (pat->DrawMode & ~5) == 0 &&
+        ri->BytesPerRow > 0 && (UBYTE *)ri->Memory >= base->cb_VRAM &&
+        (UBYTE *)ri->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        off = (ULONG)((UBYTE *)ri->Memory - base->cb_VRAM);
+        src = (UBYTE *)pat->Memory;
+        reg_write(base, RTG_REG_ACCEL_UPLOAD_RESET, 0);
+        for (i = 0; i < rows * 2; ++i)
+            reg_write(base, RTG_REG_ACCEL_UPLOAD_DATA, src[i]);
+        reg_write(base, RTG_REG_ACCEL_DST, off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)ri->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY, ((ULONG)(UWORD)x << 16) | (UWORD)y);
+        reg_write(base, RTG_REG_ACCEL_WH, ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_SRC_PITCH, rows);
+        reg_write(base, RTG_REG_ACCEL_SRC_XY,
+                  ((ULONG)pat->XOffset << 16) | pat->YOffset);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, (hostfmt << 8) | mask);
+        reg_write(base, RTG_REG_ACCEL_MODE, pat->DrawMode);
+        reg_write(base, RTG_REG_ACCEL_FGPEN, pat->FgPen);
+        reg_write(base, RTG_REG_ACCEL_BGPEN, pat->BgPen);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_BLITPATTERN);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     bi->BlitPatternDefault(bi, ri, pat, x, y, w, h, mask, fmt);
 }
 
