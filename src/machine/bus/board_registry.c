@@ -31,8 +31,9 @@ struct ExpansionBoard *bellatrix_boards_external_window_owner(uint32_t addr)
 
     for (i = 0; i < n; ++i) {
         struct ExpansionBoard *b = bellatrix_board_at(i);
-        /* EXTERNAL = no map(); a configured board has a non-zero base. */
-        if (!b || b->map || b->is_z3 || !b->map_base)
+        /* EXTERNAL = no map(); a configured board has a non-zero base. Covers
+         * both buses (Z2 and Z3); the caller reads is_z3 to disambiguate. */
+        if (!b || b->map || !b->map_base)
             continue;
         if (addr >= b->map_base && addr < b->map_base + b->rom_size)
             return b;

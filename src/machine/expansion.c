@@ -80,20 +80,6 @@ int bellatrix_expansion_register(
         }
     }
 
-    if (exp->desc.zorro2_board) {
-        rc = bellatrix_zorro2_register_board(exp->desc.zorro2_board);
-        if (rc != 0) {
-            if (exp->desc.ops->shutdown) {
-                exp->desc.ops->shutdown(exp);
-            }
-            if (exp->desc.ops->destroy) {
-                exp->desc.ops->destroy(exp);
-            }
-            free(exp);
-            return rc;
-        }
-    }
-
     exp->attached = 1;
     g_registry.items[g_registry.count++] = exp;
 
@@ -170,10 +156,6 @@ void bellatrix_expansion_shutdown_all(BellatrixMachine *machine)
         }
 
         exp->attached = 0;
-
-        if (exp->desc.zorro2_board && exp->desc.zorro2_board->id) {
-            bellatrix_zorro2_unregister_board(exp->desc.zorro2_board->id);
-        }
 
         if (exp->desc.ops && exp->desc.ops->destroy) {
             exp->desc.ops->destroy(exp);

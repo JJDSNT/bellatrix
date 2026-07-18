@@ -69,9 +69,11 @@ struct ExpansionBoard *bellatrix_board_at(size_t index);
  *                   window [map_base, map_base+rom_size) is served per access
  *                   by the machine bus dispatch (never unmapped on reset).
  *
- * A configured EXTERNAL Z2 board owns an address in its window; the bus uses
- * this to route the region to that board's per-access read/write. DIRECT board
- * windows are consumed before the fault path, so they never reach this check.
+ * A configured EXTERNAL board owns an address in its window; the bus uses this
+ * to route the region to that board's per-access read/write. Covers both buses
+ * (Z2 and Z3) — the caller reads the returned board's is_z3 to disambiguate.
+ * DIRECT board windows are consumed before the fault path, so they never reach
+ * this check.
  */
 struct ExpansionBoard *bellatrix_boards_external_window_owner(uint32_t addr);
 

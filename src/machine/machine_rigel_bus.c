@@ -80,16 +80,18 @@ static inline bool is_autoconfig_addr(uint32_t addr)
 
 static inline bool is_z2_board_addr(uint32_t addr)
 {
-    /* Legacy zorro2 registry (RTG lab) plus EXTERNAL boards configured through
-     * the self-registering board_registry (lide). Both resolve to the same
-     * per-access expansion bus dispatch below. */
-    return bellatrix_zorro2_in_board_window(addr) ||
-           bellatrix_boards_external_window_owner(addr) != NULL;
+    /* EXTERNAL Z2 board configured through the self-registering board_registry
+     * (lide). Served per-access by expansion.c bus_ops below. No legacy zorro2
+     * board exists any longer. */
+    const struct ExpansionBoard *b = bellatrix_boards_external_window_owner(addr);
+    return b && !b->is_z3;
 }
 
 static inline bool is_z3_board_addr(uint32_t addr)
 {
-    return bellatrix_zorro3_in_board_window(addr);
+    /* EXTERNAL Z3 board configured through the board_registry (RTG). */
+    const struct ExpansionBoard *b = bellatrix_boards_external_window_owner(addr);
+    return b && b->is_z3;
 }
 
 static inline bool is_superbuster_addr(uint32_t addr)
@@ -565,21 +567,10 @@ uint32_t machine_dispatch_read(BellatrixMachine *m, uint32_t addr, unsigned int 
         default: break;
         }
     } else if (is_z2_board_addr(addr)) {
-        if (!bellatrix_expansion_bus_read(m, addr, size, &value)) {
-            switch (size) {
-            case 1: value = bellatrix_zorro2_board_read8(addr); break;
-            case 2: value = bellatrix_zorro2_board_read16(addr); break;
-            case 4: value = bellatrix_zorro2_board_read32(addr); break;
-            default: break;
-            }
-        }
+        /* value stays open-bus (0xFFFFFFFF) if no board serves it. */
+        (void)bellatrix_expansion_bus_read(m, addr, size, &value);
     } else if (is_z3_board_addr(addr)) {
-        switch (size) {
-        case 1: value = bellatrix_zorro3_board_read8(addr); break;
-        case 2: value = bellatrix_zorro3_board_read16(addr); break;
-        case 4: value = bellatrix_zorro3_board_read32(addr); break;
-        default: break;
-        }
+        (void)bellatrix_expansion_bus_read(m, addr, size, &value);
     } else if (is_superbuster_addr(addr)) {
         value = superbuster_read8(&m->superbuster, addr);
     } else if (bellatrix_expansion_bus_read(m, addr, size, &value)) {
@@ -667,21 +658,9 @@ void machine_dispatch_write(BellatrixMachine *m, uint32_t addr, uint32_t value, 
     } else if (is_autoconfig_addr(addr)) {
         bellatrix_boards_autoconfig_write(addr, value, size);
     } else if (is_z2_board_addr(addr)) {
-        if (!bellatrix_expansion_bus_write(m, addr, value, size)) {
-            switch (size) {
-            case 1: bellatrix_zorro2_board_write8(addr, (uint8_t)value); break;
-            case 2: bellatrix_zorro2_board_write16(addr, (uint16_t)value); break;
-            case 4: bellatrix_zorro2_board_write32(addr, (uint32_t)value); break;
-            default: break;
-            }
-        }
+        (void)bellatrix_expansion_bus_write(m, addr, value, size);
     } else if (is_z3_board_addr(addr)) {
-        switch (size) {
-        case 1: bellatrix_zorro3_board_write8(addr, (uint8_t)value); break;
-        case 2: bellatrix_zorro3_board_write16(addr, (uint16_t)value); break;
-        case 4: bellatrix_zorro3_board_write32(addr, (uint32_t)value); break;
-        default: break;
-        }
+        (void)bellatrix_expansion_bus_write(m, addr, value, size);
     } else if (is_superbuster_addr(addr)) {
         superbuster_write8(&m->superbuster, addr, (uint8_t)value);
     } else if (bellatrix_expansion_bus_write(m, addr, value, size)) {

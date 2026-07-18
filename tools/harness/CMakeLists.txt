@@ -17,7 +17,6 @@ set(MUSASHI ${ROOT}/external/musashi)
 set(LIDE    ${ROOT}/external/lide.device)
 set(ODFS    ${ROOT}/external/ODFileSystem)
 set(RTGCARD ${ROOT}/cards/bellatrix.card)
-set(PLUGINS_OUT ${CMAKE_BINARY_DIR}/plugins)
 
 # ---------------------------------------------------------------------------
 # Generate m68kops.c + m68kops.h from Musashi's code generator
@@ -186,8 +185,6 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/expansion.c
     ${SRC}/cpu/cpu_bridge.c
     ${SRC}/cpu/direct_region.c
-    ${SRC}/plugin/plugin_loader.c
-    ${SRC}/plugin/plugin_manifest.c
 
     # Autoconfig + bus fabric
     ${SRC}/machine/autoconfig/autoconfig.c
@@ -403,11 +400,13 @@ add_executable(bellatrix_unit_superbuster_z3
     ${ROOT}/tests/unit/test_superbuster_z3.c
     ${SRC}/machine/autoconfig/autoconfig.c
     ${SRC}/machine/bus/superbuster/superbuster.c
+    ${SRC}/machine/bus/board_registry.c
     ${SRC}/machine/bus/zorro3/zorro3.c
 )
 target_include_directories(bellatrix_unit_superbuster_z3 PRIVATE
     ${SRC}/host/posix
     ${SRC}
+    ${ROOT}/emu68/include
 )
 target_compile_options(bellatrix_unit_superbuster_z3 PRIVATE -Wall -Wextra -Werror)
 add_test(NAME bellatrix_unit_superbuster_z3
@@ -550,38 +549,3 @@ foreach(rom_boot
         SKIP_RETURN_CODE 77
     )
 endforeach()
-
-add_library(lide_cdrom MODULE
-    ${SRC}/machine/autoconfig/autoconfig.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
-    ${SRC}/machine/bus/zorro3/zorro3.c
-    ${SRC}/machine/bus/superbuster/superbuster.c
-    ${SRC}/machine/expansions/lide_cdrom/ata_ide.c
-    ${SRC}/machine/expansions/lide_cdrom/atapi_cdrom.c
-    ${SRC}/machine/expansions/lide_cdrom/lide_cdrom.c
-    ${SRC}/storage/iso/iso_image.c
-)
-
-set_target_properties(lide_cdrom PROPERTIES
-    PREFIX ""
-    OUTPUT_NAME "lide_cdrom"
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules/lide_cdrom
-)
-
-target_include_directories(lide_cdrom PRIVATE
-    ${SRC}/host/posix
-    ${SRC}
-    # struct ExpansionBoard, via machine/bus/board_registry.h. In this MODULE
-    # (.so) build the board's self-registration section is inert — a plugin's
-    # section is not walked by the host executable — but lide still needs the
-    # shared descriptor type to compile. The plugin autoconfig path predates
-    # board_registry and is superseded by the static registration.
-    ${ROOT}/emu68/include
-)
-
-target_compile_definitions(lide_cdrom PRIVATE
-    BELLATRIX_HARNESS=1
-    BELLATRIX_ENABLE_ODFS=1
-)
-
-target_link_libraries(lide_cdrom PRIVATE lide_rom_data odfs_data)

@@ -2,37 +2,32 @@
 #define BELLATRIX_MACHINE_EXPANSION_H
 
 /*
- * Bellatrix expansion registry (the pre-Emu68-convergence path).
+ * Bellatrix EXTERNAL-window serving registry.
  *
- * The board mechanism we are converging on is Emu68's: a minimal
- * `struct ExpansionBoard` that self-registers into a linker section and whose
- * map() installs a DIRECT region (see machine/bus/board_registry.h). This
- * registry — bellatrix_expansion_register() + bus_ops (owns_address/read/write)
- * over the Zorro II/III registries — predates that and is the older approach.
+ * The board mechanism we converge on is Emu68's: a minimal `struct
+ * ExpansionBoard` that self-registers into a linker section (see
+ * machine/bus/board_registry.h). A DIRECT board's map() installs a region; an
+ * EXTERNAL board (map == NULL) has the walker only latch its guest-assigned
+ * base. board_registry is the single Autoconfig authority for both.
  *
- * It is kept alive for exactly one reason: **lide** (external/lide.device),
- * which provides ISO (CD-ROM) and HDF (hard-disk image) support and is the one
- * expansion Emu68 does not give us. lide is a *fully EXTERNAL* board: its ROM
- * is address-transformed (nibble-encoded bootldr, BYTEWIDE stride-2 device
- * binary, odd-address -> 0xFF) and it carries side-effecting ATA/IDE registers,
- * so it cannot be a plain DIRECT region and must be served per access.
+ * board_registry's ExpansionBoard has no per-access read/write callbacks, so an
+ * EXTERNAL board's *window* is served here: bellatrix_expansion_register() +
+ * bus_ops (owns_address/read/write), routed from machine_rigel_bus.c's
+ * is_z2/is_z3_board_addr (bellatrix_boards_external_window_owner) to the owning
+ * board's bus_ops. Two boards use this today:
+ *   - lide (external/lide.device): ISO + HDF, the one expansion Emu68 does not
+ *     give us. Fully EXTERNAL — its ROM is address-transformed (nibble bootldr,
+ *     BYTEWIDE device binary, odd address -> 0xFF) plus side-effecting ATA
+ *     registers, so no DIRECT region can express it.
+ *   - RTG (harness/lab-only): a Zorro III register/VRAM window.
  *
- * As of the board_registry-live work, lide's *Autoconfig* is presented by the
- * Emu68-style board_registry (the single Autoconfig authority): lide drops a
- * `struct ExpansionBoard` with map == NULL, so the walker only latches the
- * guest-assigned base into it (see lide_cdrom.c). This registry now serves only
- * the board's *window* — its per-access read/write over the ATA registers and
- * transformed ROM (bus_ops), routed by machine_rigel_bus.c's is_z2_board_addr
- * via bellatrix_boards_external_window_owner(). Retiring this registry waits on
- * a shared EXTERNAL-window serving mechanism in board_registry itself; until
- * then, do not delete it. lide no longer registers in the legacy zorro2
- * Autoconfig state machine (that path is now RTG-only).
+ * Retiring this registry waits on a shared EXTERNAL-window serving mechanism in
+ * board_registry itself; until then, do not delete it. Neither board uses the
+ * legacy zorro2/zorro3 Autoconfig registries any longer.
  */
 
 #include <stdint.h>
 #include <stddef.h>
-
-#include "machine/bus/zorro2/zorro2_bus.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,7 +62,6 @@ typedef struct BellatrixExpansionDesc {
     BellatrixExpansionKind kind;
     uint32_t priority;
     void *userdata;
-    const BellatrixZorro2BoardDesc *zorro2_board;
     const BellatrixExpansionBusOps *bus_ops;
     const BellatrixExpansionOps *ops;
 } BellatrixExpansionDesc;

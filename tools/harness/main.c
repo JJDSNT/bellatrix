@@ -28,7 +28,6 @@
 #include "debug/os_debug.h"
 #include "host/pal.h"
 #include "machine/memory/memory.h"
-#include "plugin/plugin_loader.h"
 #include "m68k.h"
 
 #include <stdio.h>
@@ -908,7 +907,6 @@ int main(int argc, char **argv)
     const char *adf_path      = NULL;
     const char *iso_path      = NULL;
     const char *hdf_path      = NULL;
-    const char *plugins_path  = NULL;
     const char *cpu_type      = NULL;
     int         headless      = 0;
     long        max_cycles    = 0;
@@ -934,8 +932,6 @@ int main(int argc, char **argv)
             iso_path = argv[++i];
         } else if (strcmp(argv[i], "--hdf") == 0 && i + 1 < argc) {
             hdf_path = argv[++i];
-        } else if (strcmp(argv[i], "--plugins") == 0 && i + 1 < argc) {
-            plugins_path = argv[++i];
         } else if (strcmp(argv[i], "--cpu") == 0 && i + 1 < argc) {
             cpu_type = argv[++i];
         } else if (argv[i][0] != '-') {
@@ -945,7 +941,6 @@ int main(int argc, char **argv)
             fprintf(stderr,
                 "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
                 "               [--hdf disk.hdf]\n"
-                "               [--plugins dir]\n"
                 "               [--cpu 68000|68010|68ec020|68020|68030|68040]\n"
                 "               [--headless] [--cycles N] [--frames N]\n"
                 "Example ISO: harness kick.rom --iso game.iso\n");
@@ -957,7 +952,6 @@ int main(int argc, char **argv)
         fprintf(stderr,
             "Usage: harness <rom.bin> [--adf disk.adf] [--iso image.iso]\n"
                 "               [--hdf disk.hdf]\n"
-            "               [--plugins dir]\n"
             "               [--cpu 68000|68010|68ec020|68020|68030|68040]\n"
             "               [--headless] [--cycles N] [--frames N]\n"
             "Example ISO: harness kick.rom --iso game.iso\n");
@@ -1094,28 +1088,6 @@ int main(int argc, char **argv)
     bellatrix_machine_init(musashi_backend_get());
     BellatrixMachine *m = bellatrix_machine_get();
     harness_memory_init(&m->memory);
-
-    if (plugins_path) {
-        BellatrixPluginLoader loader;
-        if (bellatrix_plugin_loader_init(&loader, plugins_path) == 0) {
-            int plugin_rc = bellatrix_plugin_load_all(&loader, m);
-            if (plugin_rc != 0) {
-                fprintf(stderr,
-                        "[HARNESS] Plugin load failed from %s (%d)\n",
-                        plugins_path,
-                        plugin_rc);
-            } else {
-                fprintf(stderr,
-                        "[HARNESS] Plugins loaded from %s\n",
-                        plugins_path);
-            }
-            bellatrix_plugin_loader_shutdown(&loader);
-        } else {
-            fprintf(stderr,
-                    "[HARNESS] Plugin loader init failed for %s\n",
-                    plugins_path);
-        }
-    }
 
     /* Mount or eject DF0 explicitly. */
     if (adf_data) {
