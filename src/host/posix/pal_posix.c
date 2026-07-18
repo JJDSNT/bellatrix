@@ -353,6 +353,63 @@ int PAL_Diag_GetEnvBool(const char *name)
 static SDL_Window *s_window = NULL;
 static SDL_Renderer *s_renderer = NULL;
 static SDL_Texture *s_texture = NULL;
+
+typedef struct PalVideoPerf {
+    uint64_t window_start;
+    uint64_t flips;
+    uint64_t osd_ns;
+    uint64_t upload_ns;
+    uint64_t clear_ns;
+    uint64_t copy_ns;
+    uint64_t present_ns;
+    uint64_t uploaded_bytes;
+} PalVideoPerf;
+
+static PalVideoPerf s_video_perf;
+
+static int pal_video_perf_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *env = getenv("HARNESS_PERF_TRACE");
+        enabled = env && env[0] != '\0' && env[0] != '0';
+    }
+    return enabled;
+}
+
+static void pal_video_perf_report(uint64_t now)
+{
+    uint64_t elapsed;
+    double divisor;
+
+    if (s_video_perf.window_start == 0u) {
+        s_video_perf.window_start = now;
+        return;
+    }
+    elapsed = now - s_video_perf.window_start;
+    if (elapsed < 1000000000ULL || s_video_perf.flips == 0u)
+        return;
+
+    divisor = (double)s_video_perf.flips * 1000000.0;
+    fprintf(stderr,
+            "[PAL-PERF] flips=%llu fps=%.1f bytes=%.1fMB/s "
+            "avg_ms osd=%.3f upload=%.3f clear=%.3f copy=%.3f "
+            "present=%.3f total=%.3f\n",
+            (unsigned long long)s_video_perf.flips,
+            (double)s_video_perf.flips * 1000000000.0 / (double)elapsed,
+            (double)s_video_perf.uploaded_bytes * 1000.0 / (double)elapsed,
+            (double)s_video_perf.osd_ns / divisor,
+            (double)s_video_perf.upload_ns / divisor,
+            (double)s_video_perf.clear_ns / divisor,
+            (double)s_video_perf.copy_ns / divisor,
+            (double)s_video_perf.present_ns / divisor,
+            (double)(s_video_perf.osd_ns + s_video_perf.upload_ns +
+                     s_video_perf.clear_ns + s_video_perf.copy_ns +
+                     s_video_perf.present_ns) / divisor);
+    memset(&s_video_perf, 0, sizeof(s_video_perf));
+    s_video_perf.window_start = now;
+}
 static SDL_Cursor *s_blank_cursor = NULL;
 static int s_mouse_right_down = 0;
 static uint8_t s_mouse_buttons[3];
@@ -748,17 +805,50 @@ uint32_t *PAL_Video_GetBuffer(void)
 void PAL_Video_Flip(void)
 {
     static uint32_t flip_count = 0;
+    uint64_t t0 = 0u, t1 = 0u;
+    int perf;
 
     if (!s_texture || !s_renderer || !framebuffer)
         return;
 
     flip_count++;
 
+    perf = pal_video_perf_enabled();
+    if (perf)
+        t0 = PAL_Time_ReadCounter();
+
     osd_render((uint64_t)flip_count);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.osd_ns += t1 - t0;
+        t0 = t1;
+    }
     SDL_UpdateTexture(s_texture, NULL, framebuffer, (int)pitch);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.upload_ns += t1 - t0;
+        t0 = t1;
+    }
     SDL_RenderClear(s_renderer);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.clear_ns += t1 - t0;
+        t0 = t1;
+    }
     SDL_RenderCopy(s_renderer, s_texture, NULL, NULL);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.copy_ns += t1 - t0;
+        t0 = t1;
+    }
     SDL_RenderPresent(s_renderer);
+    if (perf) {
+        t1 = PAL_Time_ReadCounter();
+        s_video_perf.present_ns += t1 - t0;
+        s_video_perf.flips++;
+        s_video_perf.uploaded_bytes += (uint64_t)pitch * fb_height;
+        pal_video_perf_report(t1);
+    }
 }
 
 void PAL_Video_SetPalette(uint8_t idx, uint32_t rgb)

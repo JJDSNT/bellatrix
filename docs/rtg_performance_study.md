@@ -111,6 +111,14 @@ Adicionar tempos e bytes separados para:
 Critérios iniciais: p50/p95 por estágio, MB/s copiados e porcentagem da tela
 alterada. `HARNESS_SDL_VSYNC=0` mede throughput; VSync ligado mede pacing.
 
+O primeiro nível de instrumentação está disponível com
+`HARNESS_PERF_TRACE=1`. Além do agregado `[HARNESS-PERF]`, o presenter SDL emite
+uma linha `[PAL-PERF]` por segundo com FPS, MB/s enviados e média em milissegundos
+para OSD, `SDL_UpdateTexture`, clear, copy e `SDL_RenderPresent`. Comparar duas
+execuções equivalentes, primeiro com `HARNESS_SDL_VSYNC=1` e depois com `0`.
+O driver SDL `dummy` torna o harness headless e não exercita esse caminho; a
+medição precisa ser feita com uma janela/renderer real.
+
 ### P1 — remover a segunda conversão
 
 Criar uma textura SDL no formato do buffer de scanout, preferencialmente
