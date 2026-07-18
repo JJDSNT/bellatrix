@@ -17,6 +17,9 @@ set(BELLATRIX_SOURCES "")
 enable_language(ASM)
 
 option(BELLATRIX_ENABLE_EMU68_BOARDS "Enable Emu68 expansion boards in Bellatrix" ON)
+option(BELLATRIX_ENABLE_SDCARD_BOARD "Include Emu68 SD card Z3 board" ON)
+option(BELLATRIX_ENABLE_DEVICETREE_BOARD "Include Emu68 devicetree.resource Z3 board" OFF)
+option(BELLATRIX_ENABLE_68040_BOARD "Include Emu68 68040 support Z3 board" OFF)
 option(BELLATRIX_USE_MUSASHI_CPU "Use Musashi instead of Emu68 JIT as the Bellatrix CPU backend" OFF)
 set(BELLATRIX_MUSASHI_CPU "68040" CACHE STRING "Musashi CPU model for Bellatrix bare-metal: 68000, 68010, 68ec020, 68020, 68030, 68040")
 option(BELLATRIX_OSD "Show FPS/frame overlay on framebuffer" OFF)
@@ -273,10 +276,7 @@ endif()
 if(BELLATRIX_ENABLE_EMU68_BOARDS)
     add_compile_definitions(BELLATRIX_ENABLE_EMU68_BOARDS=1)
     list(APPEND BASE_FILES
-        src/boards/devicetree.c
         src/boards/z2ram.c
-        src/boards/sdcard.c
-        src/boards/68040.c
     )
 else()
     add_compile_definitions(BELLATRIX_ENABLE_EMU68_BOARDS=0)
@@ -286,6 +286,27 @@ else()
     set(BELLATRIX_LEGACY_Z2_RAM_MB "8" CACHE STRING
         "Z2 Fast RAM size in MB for the board_registry Fast RAM (non-boards mode)")
     add_compile_definitions(BELLATRIX_LEGACY_Z2_RAM_MB=${BELLATRIX_LEGACY_Z2_RAM_MB})
+endif()
+if(BELLATRIX_ENABLE_SDCARD_BOARD)
+    list(APPEND BASE_FILES src/boards/sdcard.c)
+    message(STATUS "[BUILD] Emu68 SD card board: enabled")
+else()
+    message(FATAL_ERROR "Bellatrix requires BELLATRIX_ENABLE_SDCARD_BOARD=ON")
+endif()
+if(BELLATRIX_ENABLE_DEVICETREE_BOARD)
+    list(APPEND BASE_FILES src/boards/devicetree.c)
+    message(STATUS "[BUILD] Emu68 devicetree board: enabled")
+else()
+    message(STATUS "[BUILD] Emu68 devicetree board: disabled")
+endif()
+if(BELLATRIX_ENABLE_68040_BOARD)
+    if(BELLATRIX_USE_MUSASHI_CPU)
+        message(FATAL_ERROR "Emu68 68040 support board must not be enabled with Musashi")
+    endif()
+    list(APPEND BASE_FILES src/boards/68040.c)
+    message(STATUS "[BUILD] Emu68 68040 support board: enabled")
+else()
+    message(STATUS "[BUILD] Emu68 68040 support board: disabled")
 endif()
 list(APPEND BELLATRIX_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/../src/io/bluetooth

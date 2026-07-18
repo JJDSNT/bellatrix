@@ -20,6 +20,7 @@ jobs:
       matrix:
         include:
           - backend: musashi
+            release_profile: musashi_68000
             musashi_cpu: "68000"
             multicore: "0"
             build_dir: emu68/build-bellatrix-rigel-musashi
@@ -27,6 +28,7 @@ jobs:
             image: bellatrix_musashi_68000.img
             expected_backend: musashi
           - backend: musashi
+            release_profile: musashi_68040
             musashi_cpu: "68040"
             multicore: "0"
             build_dir: emu68/build-bellatrix-rigel-musashi
@@ -34,6 +36,7 @@ jobs:
             image: bellatrix_musashi_68040.img
             expected_backend: musashi
           - backend: emu68
+            release_profile: emu68
             musashi_cpu: "68040"
             multicore: "0"
             build_dir: emu68/build-bellatrix-rigel
@@ -41,6 +44,7 @@ jobs:
             image: bellatrix_emu68.img
             expected_backend: "emu68"
           - backend: musashi
+            release_profile: musashi_68000
             musashi_cpu: "68000"
             multicore: "1"
             build_dir: emu68/build-bellatrix-rigel-musashi
@@ -48,6 +52,7 @@ jobs:
             image: bellatrix_musashi_68000_multicore.img
             expected_backend: musashi
           - backend: musashi
+            release_profile: musashi_68040
             musashi_cpu: "68040"
             multicore: "1"
             build_dir: emu68/build-bellatrix-rigel-musashi
@@ -55,6 +60,7 @@ jobs:
             image: bellatrix_musashi_68040_multicore.img
             expected_backend: musashi
           - backend: emu68
+            release_profile: emu68
             musashi_cpu: "68040"
             multicore: "1"
             build_dir: emu68/build-bellatrix-rigel
@@ -87,9 +93,12 @@ jobs:
       - name: Build release image
         env:
           BELLATRIX_CHIPSET_BACKEND: rigel
+          BELLATRIX_RELEASE_PROFILE: ${{ matrix.release_profile }}
           BELLATRIX_CPU_BACKEND: ${{ matrix.backend }}
           BELLATRIX_MUSASHI_CPU: ${{ matrix.musashi_cpu }}
           BELLATRIX_MULTICORE_BUILD: ${{ matrix.multicore }}
+          BELLATRIX_BTSTACK: "1"
+          BELLATRIX_HDMI_AUDIO: "1"
           BELLATRIX_USBSTACK: "1"
           BELLATRIX_USB_MSC: "1"
         run: ./scripts/build.sh clean
@@ -111,9 +120,38 @@ jobs:
             echo "ERROR: ${{ matrix.image }} was not configured as Musashi ${{ matrix.musashi_cpu }}"
             exit 1
           fi
+          if ! grep -F "BELLATRIX_ENABLE_SDCARD_BOARD:BOOL=ON" \
+               "${{ matrix.build_dir }}/CMakeCache.txt" >/dev/null; then
+            echo "ERROR: ${{ matrix.image }} does not include the mandatory SD card board"
+            exit 1
+          fi
+          case "${{ matrix.release_profile }}" in
+            emu68)
+              expected_68040=ON; expected_dt=ON; expected_rtg=1 ;;
+            musashi_68040)
+              expected_68040=OFF; expected_dt=ON; expected_rtg=1 ;;
+            musashi_68000)
+              expected_68040=OFF; expected_dt=OFF; expected_rtg=0 ;;
+          esac
+          grep -F "BELLATRIX_ENABLE_68040_BOARD:BOOL=$expected_68040" \
+            "${{ matrix.build_dir }}/CMakeCache.txt" >/dev/null
+          grep -F "BELLATRIX_ENABLE_DEVICETREE_BOARD:BOOL=$expected_dt" \
+            "${{ matrix.build_dir }}/CMakeCache.txt" >/dev/null
+          if [ "$expected_rtg" = 1 ]; then
+            card="${{ matrix.install_dir }}/VideoCore/VideoCore.card"
+            test -f "$card"
+            card_artifact="${{ matrix.image }}.VideoCore.card"
+            cp "$card" "dist/$card_artifact"
+          elif [ -e "${{ matrix.install_dir }}/VideoCore/VideoCore.card" ]; then
+            echo "ERROR: Musashi 68000 release unexpectedly contains VideoCore.card"
+            exit 1
+          fi
           (
             cd dist
             sha256sum "${{ matrix.image }}" > "${{ matrix.image }}.sha256"
+            if [ "$expected_rtg" = 1 ]; then
+              sha256sum "$card_artifact" > "$card_artifact.sha256"
+            fi
           )
 
       - name: Upload workflow artifact
@@ -122,6 +160,7 @@ jobs:
           name: ${{ matrix.image }}
           path: |
             dist/*.img
+            dist/*.VideoCore.card
             dist/*.sha256
 
   publish-release:

@@ -93,6 +93,43 @@ hide_modified_files() {
 
 CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
 MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-${HARNESS_CPU:-68040}}"
+RELEASE_PROFILE="${BELLATRIX_RELEASE_PROFILE:-}"
+
+case "$RELEASE_PROFILE" in
+    emu68)
+        CPU_BACKEND="emu68"
+        MUSASHI_CPU="68040"
+        BELLATRIX_EMU68_BOARDS_MODE="boards"
+        BELLATRIX_Z3_68040="1"
+        BELLATRIX_DEVICETREE_BOARD="1"
+        BELLATRIX_SDCARD_BOARD="1"
+        BELLATRIX_RTG_VIDEOCORE="1"
+        ;;
+    musashi_68040)
+        CPU_BACKEND="musashi"
+        MUSASHI_CPU="68040"
+        BELLATRIX_EMU68_BOARDS_MODE="legacy"
+        BELLATRIX_Z3_68040="0"
+        BELLATRIX_DEVICETREE_BOARD="1"
+        BELLATRIX_SDCARD_BOARD="1"
+        BELLATRIX_RTG_VIDEOCORE="1"
+        ;;
+    musashi_68000)
+        CPU_BACKEND="musashi"
+        MUSASHI_CPU="68000"
+        BELLATRIX_EMU68_BOARDS_MODE="legacy"
+        BELLATRIX_Z3_68040="0"
+        BELLATRIX_DEVICETREE_BOARD="0"
+        BELLATRIX_SDCARD_BOARD="1"
+        BELLATRIX_RTG_VIDEOCORE="0"
+        ;;
+    "") ;;
+    *)
+        echo "ERROR: invalid BELLATRIX_RELEASE_PROFILE: $RELEASE_PROFILE"
+        echo "Valid values: emu68, musashi_68040, musashi_68000"
+        exit 1
+        ;;
+esac
 
 case "$CPU_BACKEND" in
     emu68|"")
@@ -153,6 +190,9 @@ OSD_ENABLED="${BELLATRIX_OSD:-1}"
 LAUNCHER_ENABLED="${BELLATRIX_LAUNCHER:-1}"
 TIMELINE_MODE="${BELLATRIX_TIMELINE_MODE:-realtime}"
 COARSE_DEADLINES_ENABLED="${BELLATRIX_COARSE_OBSERVABLE_DEADLINES:-0}"
+RTG_VIDEOCORE_ENABLED="${BELLATRIX_RTG_VIDEOCORE:-${BELLATRIX_RTG:-0}}"
+DEVICETREE_BOARD_ENABLED="${BELLATRIX_DEVICETREE_BOARD:-$RTG_VIDEOCORE_ENABLED}"
+SDCARD_BOARD_ENABLED="${BELLATRIX_SDCARD_BOARD:-1}"
 
 echo "[BUILD] cpu backend: $CPU_BACKEND"
 if [ "$CPU_BACKEND" = "musashi" ]; then
@@ -161,6 +201,47 @@ fi
 echo "[BUILD] chipset backend: rigel"
 echo "[BUILD] timeline mode: $TIMELINE_MODE"
 echo "[BUILD] coarse observable deadlines: $COARSE_DEADLINES_ENABLED"
+if [ -n "$RELEASE_PROFILE" ]; then
+    echo "[BUILD] release profile: $RELEASE_PROFILE"
+fi
+
+if [ "$SDCARD_BOARD_ENABLED" != "1" ]; then
+    echo "ERROR: Bellatrix requires BELLATRIX_SDCARD_BOARD=1"
+    exit 1
+fi
+SDCARD_BOARD_FLAG="ON"
+case "$DEVICETREE_BOARD_ENABLED" in
+    1) DEVICETREE_BOARD_FLAG="ON" ;;
+    0|"") DEVICETREE_BOARD_FLAG="OFF" ;;
+    *)
+        echo "ERROR: invalid BELLATRIX_DEVICETREE_BOARD: $DEVICETREE_BOARD_ENABLED"
+        exit 1
+        ;;
+esac
+if [ "$RTG_VIDEOCORE_ENABLED" = "1" ] && [ "$DEVICETREE_BOARD_ENABLED" != "1" ]; then
+    echo "ERROR: VideoCore RTG requires BELLATRIX_DEVICETREE_BOARD=1"
+    exit 1
+fi
+if [ "$CPU_BACKEND" = "musashi" ] && [ "$MUSASHI_CPU" = "68000" ] &&
+   [ "$RTG_VIDEOCORE_ENABLED" = "1" ]; then
+    echo "ERROR: VideoCore.card is built for 68040 and cannot be used by Musashi 68000"
+    exit 1
+fi
+
+case "$RTG_VIDEOCORE_ENABLED" in
+    1)
+        echo "[BUILD] RTG: Emu68 VideoCore.card (VC4/VC6 HVS)"
+        ;;
+    0|"")
+        RTG_VIDEOCORE_ENABLED="0"
+        echo "[BUILD] RTG: disabled"
+        ;;
+    *)
+        echo "ERROR: invalid BELLATRIX_RTG_VIDEOCORE/BELLATRIX_RTG: $RTG_VIDEOCORE_ENABLED"
+        echo "Valid values: 0, 1"
+        exit 1
+        ;;
+esac
 
 MULTICORE_FLAG="OFF"
 if [ "$MULTICORE_BUILD" = "1" ]; then
@@ -179,6 +260,14 @@ if [ "$MULTICORE_LOGS" = "1" ]; then
     echo "[BUILD] core log: enabled ([CORE0-HOST/IO] [CORE1-CPU] [CORE2-CHIPSET] [XCORE-*])"
 else
     echo "[BUILD] core log: disabled"
+fi
+
+BT_TRACE_FLAG="OFF"
+if [ "${BELLATRIX_BT_TRACE:-0}" = "1" ]; then
+    BT_TRACE_FLAG="ON"
+    echo "[BUILD] BT HAL trace: enabled ([BT-HAL] [BT-RX] [BT-TX] byte/block dumps)"
+else
+    echo "[BUILD] BT HAL trace: disabled"
 fi
 
 if [ "$BTSTACK_ENABLED" = "1" ]; then
@@ -296,6 +385,11 @@ if [ "${BELLATRIX_RIGEL_TRACE_BUILD:-0}" = "1" ]; then
     echo "[BUILD] Rigel trace: enabled unconditionally (bare-metal)"
 fi
 
+if [ "${BELLATRIX_PLANE_DIAG_BUILD:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_PLANE_DIAG_BUILD=1"
+    echo "[BUILD] Bitplane payload diagnostics: enabled"
+fi
+
 if [ "${BELLATRIX_FLOPPY_BOOT_PROBE:-0}" = "1" ]; then
     EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_FLOPPY_BOOT_PROBE=1"
     echo "[BUILD] DF0 boot probe: enabled"
@@ -358,7 +452,9 @@ cmake "$EMU68" \
     -DCMAKE_C_FLAGS="$EXTRA_DEFINES" \
     -DCMAKE_CXX_FLAGS="$EXTRA_DEFINES" \
     -DBELLATRIX_ENABLE_EMU68_BOARDS="$EMU68_BOARDS_ENABLED" \
-    -DBELLATRIX_ENABLE_Z3_68040="$Z3_68040_FLAG" \
+    -DBELLATRIX_ENABLE_68040_BOARD="$Z3_68040_FLAG" \
+    -DBELLATRIX_ENABLE_DEVICETREE_BOARD="$DEVICETREE_BOARD_FLAG" \
+    -DBELLATRIX_ENABLE_SDCARD_BOARD="$SDCARD_BOARD_FLAG" \
     -DBELLATRIX_USE_MUSASHI_CPU="$MUSASHI_CPU_FLAG" \
     -DBELLATRIX_MUSASHI_CPU="$MUSASHI_CPU" \
     -DBELLATRIX_ENABLE_BTSTACK="$BTSTACK_ENABLED" \
@@ -370,6 +466,7 @@ cmake "$EMU68" \
     -DBELLATRIX_ENABLE_MULTICORE="$MULTICORE_FLAG" \
     -DBELLATRIX_EMU68_CORE0_REBASELINE="$EMU68_CORE0_REBASELINE" \
     -DBELLATRIX_CORE_LOG="$CORELOG_FLAG" \
+    -DBELLATRIX_BT_TRACE="$BT_TRACE_FLAG" \
     -DBELLATRIX_LAUNCHER="$LAUNCHER_FLAG" \
     -DBELLATRIX_PROFILE="$PROFILE_FLAG" \
     -DBELLATRIX_COARSE_OBSERVABLE_DEADLINES="$COARSE_DEADLINES_ENABLED" \
@@ -378,6 +475,13 @@ cmake "$EMU68" \
 make -j"$(nproc)"
 "$ROOT/scripts/check_bt_irq_abi.sh" "$BUILD/Emu68.elf"
 make install
+
+if [ "$RTG_VIDEOCORE_ENABLED" = "1" ]; then
+    # This is a guest P96 driver, not part of Emu68.img.  Keep it beside the
+    # installed image so it can be copied to LIBS:Picasso96/ on the Amiga
+    # system volume.  Its SetSwitch implementation owns the HVS RTG plane.
+    "$ROOT/scripts/build-videocore-card.sh" "$INSTALL/VideoCore"
+fi
 
 hide_modified_files
 
