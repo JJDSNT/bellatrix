@@ -50,6 +50,81 @@ milhões de ciclos guest/s. `HARNESS_CPU_QUANTUM=4096` reduz adicionalmente o
 número de chamadas ao Musashi, mas permanece opção de laboratório porque um
 quantum maior altera a granularidade temporal do chipset.
 
+## Plano de aceleração dirigido pelo código do AROS
+
+Pesquisa local em `external/aros/arch/m68k-amiga/hidd/p96gfx/` confirmou o
+fluxo real, sem depender de inferência sobre buffering:
+
+- `p96gfx_bitmapclass.c::FillRect` tenta `BoardInfo.FillRect` quando o bitmap
+  está na VRAM; se o callback não deixa `AROSFlag` como tratado, executa
+  `HIDD_BM_FillMemRect*` pela CPU.
+- `p96gfx_hiddclass.c::CopyBox` tenta `BlitRectNoMaskComplete` quando origem e
+  destino estão na VRAM; ao receber não tratado, cai no superclass/software.
+- `p96gfx_rtg.c::P96GFXRTG__Init` preenche callbacks ausentes com
+  `RTGCall_Default`, que limpa `AROSFlag` e força esse fallback.
+- nossa `bellatrix.card` não instala callbacks de desenho e ainda anuncia
+  `BIF_NOBLITTER`; logo clears, layers e movimentos de janela percorrem o
+  68040 emulado e podem permanecer visíveis por vários frames.
+- `SetPanning` é chamado ao mostrar/trocar a tela para selecionar
+  `VideoData`, largura e offsets. Ele permite page flip quando há bitmaps
+  distintos, mas não transforma o desenho normal do Wanderer em double buffer.
+
+### Fase A — medir os fallbacks antes de acelerá-los
+
+1. Instalar callbacks-probe para `FillRect`, `BlitRect`,
+   `BlitRectNoMaskComplete`, `InvertRect`, `BlitTemplate`, `BlitPattern` e
+   `DrawLine`.
+2. Cada probe registra contagem, formato, dimensões, máscara/minterm e se os
+   `RenderInfo.Memory` estão dentro da VRAM; inicialmente limpa `AROSFlag` para
+   manter o fallback correto.
+3. Produzir um resumo por operação, não log por chamada, e capturar um boot do
+   AROS até o desktop. Isso determina a ordem pelo volume real, não por palpite.
+
+### Fase B — command ABI síncrona e segura
+
+Adicionar ao register file um bloco de comando com opcode, offsets de
+origem/destino relativos à VRAM, pitches, coordenadas, largura/altura, pen,
+máscara, minterm e formato. O host valida overflow, pitch, formato e limites
+antes de tocar a memória. A primeira versão é síncrona: escrever `COMMAND`
+termina a operação antes do retorno do callback; `WaitBlitter` continua no-op.
+Isso evita fila, IRQ e condições de corrida enquanto o contrato é estabilizado.
+
+### Fase C — operações de maior retorno
+
+1. **FillRect:** CLUT, R5G6B5 e A8R8G8B8; máscara `0xff` primeiro. Só então o
+   callback deixa `AROSFlag=1`. Máscaras parciais não suportadas retornam ao
+   software.
+2. **BlitRect:** cópia no mesmo bitmap, incluindo overlap com semântica de
+   `memmove` por linha e direção vertical correta.
+3. **BlitRectNoMaskComplete:** começar por COPY entre dois `RenderInfo` na
+   VRAM; minterms restantes continuam recusados até terem oráculos.
+4. **InvertRect:** operação simples e frequente, respeitando máscara/formato.
+5. Só depois avaliar `BlitTemplate`, `BlitPattern` e `DrawLine`, guiado pelas
+   contagens da Fase A.
+
+`BIF_NOBLITTER` só será removido e `BIF_BLITTER` anunciado quando FillRect e os
+casos de cópia prometidos estiverem testados. Cada callback não suportado deve
+limpar `AROSFlag`, preservando o fallback do AROS em vez de produzir corrupção.
+
+### Fase D — apresentação e buffering
+
+Instrumentar `SetPanning` para distinguir troca real de `VideoData` de simples
+mudança de offset. Se o AROS usar bitmaps alternados, o registrador `PAN` já é o
+ponto de page flip e deve ser aplicado atomicamente no VBlank. Se ele desenhar
+no bitmap visível, buffers duplos/triplos criados apenas pelo host capturariam
+os mesmos estados parciais e não corrigiriam a causa. Shadow/coalescing fica
+como opção posterior, nunca como substituto da aceleração P96.
+
+### Oráculos e critérios
+
+- testes unitários host para bounds, overlap, pitches, máscaras e três formatos;
+- teste ABI m68k que confirma offsets e convenção de registradores dos callbacks;
+- integração AROS exigindo breadcrumbs/contadores de cada operação acelerada;
+- screenshots determinísticas antes/depois de clear, scroll e janela;
+- benchmark fixo reportando ciclos guest/s, frames até modo ativo e tempo de
+  uma sequência de FillRect/BlitRect; nenhum ganho será aceito apenas por
+  esconder frames intermediários.
+
 O RTG do Bellatrix será uma placa P96 de framebuffer linear, portátil entre os
 backends. O driver guest e o contrato de scanout não conhecerão SDL, VideoCore
 ou mailbox:

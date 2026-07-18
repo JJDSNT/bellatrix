@@ -265,6 +265,35 @@ flags de trace/probe dependentes estiver ativa. A vazão medida no boot AROS de
 1.000 frames subiu de ~24–25M para ~27–31M ciclos guest/s. Quantum 4096 também
 foi validado, com ganho menor, e não virou default por afetar granularidade.
 
+## Pesquisa no AROS local — plano do driver
+
+Fonte: `external/aros/arch/m68k-amiga/hidd/p96gfx/`.
+
+Achado decisivo: `p96gfx_bitmapclass.c` tenta `FillRect` para bitmaps em VRAM e
+faz fill pela CPU se `AROSFlag` indicar não tratado. `p96gfx_hiddclass.c` faz o
+mesmo com `BlitRectNoMaskComplete` antes do superclass. `p96gfx_rtg.c` instala
+`RTGCall_Default` nos callbacks ausentes; esse default limpa `AROSFlag`. Nossa
+card deixa os callbacks default e anuncia `BIF_NOBLITTER`. Assim, o desenho
+progressivo observado é explicado pelo fallback CPU, não por falta de buffers
+no SDL. `SetPanning` aparece no caminho de mostrar/trocar screen e só faz page
+flip se o guest realmente fornecer outro `VideoData`.
+
+Plano aprovado para execução incremental:
+
+1. probes que contam operações/dimensões/formatos e recusam corretamente via
+   `AROSFlag=0`;
+2. command ABI síncrona host↔card com validação estrita de toda faixa VRAM;
+3. `FillRect` nos três formatos, começando por máscara completa;
+4. `BlitRect` overlap-safe e `BlitRectNoMaskComplete` COPY VRAM↔VRAM;
+5. `InvertRect`; template/pattern/line somente conforme telemetria;
+6. remover `BIF_NOBLITTER`/adicionar `BIF_BLITTER` apenas quando a promessa
+   mínima estiver coberta por testes;
+7. instrumentar `SetPanning` e aplicar page flip no VBlank se houver troca real
+   de bitmap; não criar triple buffer host para mascarar fallback lento;
+8. validar com unitários de bounds/overlap/formato, integração AROS,
+   screenshots e benchmark de operações, preservando fallback software para
+   todo opcode/máscara/minterm ainda não implementado.
+
 ## Correção de direção
 
 O backend VideoCore não é requisito do RTG atual. Ele é uma possível solução
