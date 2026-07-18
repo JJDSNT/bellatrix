@@ -1,5 +1,8 @@
 # Bellatrix RTG — arquitetura e plano
 
+O estudo específico do custo de scanout e apresentação está em
+[`rtg_performance_study.md`](rtg_performance_study.md).
+
 ## Direção atual (decisão de 2026-07-18)
 
 ### Nome visível e ativação no harness
