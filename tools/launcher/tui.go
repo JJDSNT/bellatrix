@@ -582,7 +582,7 @@ func (m model) renderPanel() string {
 	if m.rtg {
 		rtgBadge = onBadgeStyle.Render("ON")
 	}
-	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("RTG:"), rtgBadge))
+	b.WriteString(fmt.Sprintf("%s %s", itemStyle.Render("[R] Bellatrix RTG (P96 framebuffer):"), rtgBadge))
 	b.WriteString("\n")
 
 	multicoreBadge := offBadgeStyle.Render("OFF")
@@ -716,7 +716,7 @@ func (m model) renderPanel() string {
 	b.WriteString(commandStyle.Render(m.qemuCommand()))
 	b.WriteString("\n")
 
-	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Debug • R RTG • M Multicore • A Perf mute • B BTStack • U USB • X MSC • P Pointer • E Boards • L Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • H HDMI audio • I Profile • T Timeline • Enter Run • Q Quit"))
+	b.WriteString(helpStyle.Render("↑/↓ Navigate • Tab Switch Section (KS→ADF→ISO→HDF) • D Debug • R Toggle Bellatrix RTG/P96 • M Multicore • A Perf mute • B BTStack • U USB • X MSC • P Pointer • E Boards • L Logs • C CPU • F FPU • Z Z2 RAM • S Serial • O OSD • N Launcher • H HDMI audio • I Profile • T Timeline • Enter Run • Q Quit"))
 
 	return panelStyle.Render(b.String())
 }

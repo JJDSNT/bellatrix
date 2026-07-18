@@ -20,6 +20,10 @@ um bug em que carregar o perfil salvo do launcher (`BELLATRIX_RTG=0`)
 sobrescrevia `HARNESS_RTG=1 ./run.sh harness`, fazendo o próprio log informar
 `RTG disabled`; essa precedência estava errada e foi corrigida.
 
+Na TUI de `run.sh`, a opção aparece como
+`[R] Bellatrix RTG (P96 framebuffer)`; a tecla `R` alterna `ON/OFF` e a seleção
+é emitida como `BELLATRIX_RTG`, sendo convertida em `HARNESS_RTG` no harness.
+
 O RTG do Bellatrix será uma placa P96 de framebuffer linear, portátil entre os
 backends. O driver guest e o contrato de scanout não conhecerão SDL, VideoCore
 ou mailbox:
