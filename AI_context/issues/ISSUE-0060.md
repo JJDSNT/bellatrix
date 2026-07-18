@@ -270,3 +270,50 @@ Os arquivos `0025`–`0034` permanecem apenas como histórico. Desde 2026-07-15,
   oráculos de ROM); o board_registry é provado por `bellatrix_unit_board_registry`;
   ainda não há boot de guest enumerando board EXTERNAL (não há board EXTERNAL no
   produto por padrão).
+- 2026-07-17 (passo 1 da conclusão Z3): **board_registry LIGADO ao bus vivo**
+  (branch `z3-board-registry-live`). O AutoConfig `$E80000` da máquina
+  (`machine_rigel_bus.c`) passou a ser respondido pelo walker do
+  `board_registry` (`bellatrix_boards_autoconfig_*`) em vez do sequenciador
+  zorro2/zorro3. O **Z2 Fast RAM** foi migrado de `bellatrix_zorro2_register_board`
+  para uma `struct ExpansionBoard` auto-registrável (`BELLATRIX_REGISTER_BOARD_Z2`);
+  seu `map()` instala a região DIRECT usando globais (`bellatrix_machine_memory()`,
+  `cpu_backend_selected()`), à la z2ram.c do Emu68. Call sites viraram
+  `bellatrix_z2_fast_ram_configure(size)`. Reset da máquina faz teardown genérico
+  das regiões DIRECT dos boards (ExpansionBoard não tem unmap; removível por
+  `map_base`/`rom_size` via backend). **Validado no harness:** AROS mapeia o Fast
+  RAM (`[Z2-RAM] mapped guest=00200000-009fffff`), enumera como 'Fast Memory',
+  passa da lowlevel.library até dosboot.resource; `rom_boot_aros` + toda a suíte
+  (17/17) verdes. **lide QUEBRADO de propósito** (autorizado): ele registra no
+  zorro2, que deixou de ser o sequenciador — será readaptado no passo 2 (board
+  DIRECT ROM + janela EXTERNAL). **Pendência do passo 2:** o Super Buster decodifica
+  Z3 consultando `bellatrix_zorro3_in_board_window`; uma board Z3 via board_registry
+  não entra nesse registro — reconciliar quando houver board Z3/EXTERNAL (hoje
+  dormente, sem board Z3). test_z2_fast_ram removido (assunto migrado; cobertura em
+  board_registry + rom_boot_aros).
+- 2026-07-18 (passo 2 da conclusão Z3): **lide REEXPRESSO e FUNCIONAL** pela via
+  board_registry (branch `z3-board-registry-live`). Correção de premissa: lide é
+  **Z2, não Z3** — logo o reconciliamento com o decode Z3 do Super Buster NÃO se
+  aplica (fica dormente até existir board Z3/EXTERNAL). Correção de altitude: o
+  ROM do lide é **address-transformed** (bootldr nibble, device binary BYTEWIDE
+  stride-2, endereço ímpar -> 0xFF) — não é ROM DIRECT plano; a board **inteira**
+  é EXTERNAL (servida por acesso). Design: distinguimos DIRECT vs EXTERNAL **sem
+  estender a struct do Emu68** — `map != NULL` = DIRECT (instala região; teardown
+  por `map_base`/`rom_size`); `map == NULL` = EXTERNAL (walker só trava `map_base`;
+  janela servida por acesso; NUNCA sofre unmap — evita `mmu_unmap` de janela nunca
+  mapeada). Novo `bellatrix_boards_external_window_owner(addr)`; `is_z2_board_addr`
+  passou a casar boards EXTERNAL do registry além do zorro2 legacy (agora só RTG).
+  lide: `struct ExpansionBoard s_lide_board` (map=NULL) auto-registrada,
+  `rom_file` = imagem AutoConfig; base lida de `s_lide_board.map_base` (fonte
+  única); removidos config-window handling e os ops zorro2 legacy mortos
+  (`ripple_read8/write8/reset/destroy`, `g_ripple_ops`, campo `board_desc`);
+  `desc.zorro2_board = NULL` (expansion.c não registra mais no zorro2). **Validado
+  no harness** (KS31 + ISO): `registered OAHR RIPPLE mfr=0x144a prod=7`, Fast RAM
+  DIRECT mapeia, guest lê a **janela** do lide (bank2 ODFS `0x10000`, trailer
+  `0x1fff8`), bootldr carrega **lide.device**, e a **janela de registradores ATA**
+  dispara (`[ATAPI] UNIT_ATTENTION`, cmd MODE SELECT chega à camada ATAPI). Suíte
+  17/17 verde, sem regressão. `expansion.h` atualizado: registry vive só para
+  servir a **janela** EXTERNAL do lide (AutoConfig agora é do board_registry).
+  MODULE plugin `.so` do lide compila (add emu68/include); seção de auto-registro
+  nele é inerte (não é varrida pelo host) — via plugin superseded pelo registro
+  estático. **Ambas as pendências Z3 (0032/0060) fechadas na prática**; legacy
+  real remanescente = memory-map hardcoded da TUI do run.sh (anotado, não urgente).

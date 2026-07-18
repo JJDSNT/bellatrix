@@ -1138,13 +1138,8 @@ int main(int argc, char **argv)
     const char *fastram_env = getenv("HARNESS_FASTRAM");
     if (!(fastram_env && fastram_env[0] == '0')) {
         uint32_t fast_mb = rtg_enabled ? 4u : 8u;
-        if (bellatrix_z2_fast_ram_register(
-                musashi_backend_get(), &m->memory,
-                fast_mb * 1024u * 1024u) != 0) {
-            fprintf(stderr, "[HARNESS] Fast RAM registration failed\n");
-            return 1;
-        }
-        printf("[HARNESS] Fast RAM: %uMB Zorro II board registered\n",
+        bellatrix_z2_fast_ram_configure(fast_mb * 1024u * 1024u);
+        printf("[HARNESS] Fast RAM: %uMB Zorro II board configured\n",
                (unsigned)fast_mb);
     }
     if (rtg_enabled && bellatrix_rtg_register(m) != 0) {

@@ -896,14 +896,10 @@ void bellatrix_init(void)
 #ifndef BELLATRIX_LEGACY_Z2_RAM_MB
 #define BELLATRIX_LEGACY_Z2_RAM_MB 8u
 #endif
-    if (bellatrix_z2_fast_ram_register(
-            cpu_backend, bellatrix_machine_memory(),
-            (uint32_t)BELLATRIX_LEGACY_Z2_RAM_MB * 1024u * 1024u) != 0) {
-        kprintf("[BELA] Z2 Fast RAM registration failed\n");
-    } else {
-        kprintf("[BELA] Z2 Fast RAM %uMB registered; awaiting guest base\n",
-                (unsigned)BELLATRIX_LEGACY_Z2_RAM_MB);
-    }
+    bellatrix_z2_fast_ram_configure(
+        (uint32_t)BELLATRIX_LEGACY_Z2_RAM_MB * 1024u * 1024u);
+    kprintf("[BELA] Z2 Fast RAM %uMB configured; awaiting guest base\n",
+            (unsigned)BELLATRIX_LEGACY_Z2_RAM_MB);
 #endif
 #ifdef BELLATRIX_CORE_LOG
     kprintf("[BUILD] BELLATRIX_CORE_LOG: ON\n");

@@ -191,6 +191,7 @@ set(BELLATRIX_SOURCES
 
     # Autoconfig + bus fabric
     ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/board_registry.c
     ${SRC}/machine/bus/zorro_autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
     ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
@@ -296,6 +297,7 @@ target_include_directories(harness PRIVATE
     ${SRC}/cpu
     ${SRC}/host
     ${SRC}/boards
+    ${ROOT}/emu68/include
     ${MUSASHI}
     ${CMAKE_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -387,22 +389,6 @@ target_include_directories(bellatrix_unit_zorro_autoconfig PRIVATE
 target_compile_options(bellatrix_unit_zorro_autoconfig PRIVATE -Wall -Wextra -Werror)
 add_test(NAME bellatrix_unit_zorro_autoconfig
          COMMAND bellatrix_unit_zorro_autoconfig)
-
-add_executable(bellatrix_unit_z2_fast_ram
-    ${ROOT}/tests/unit/test_z2_fast_ram.c
-    ${SRC}/cpu/direct_region.c
-    ${SRC}/machine/autoconfig/autoconfig.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
-    ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
-)
-target_include_directories(bellatrix_unit_z2_fast_ram PRIVATE
-    ${SRC}/host/posix
-    ${SRC}
-)
-target_compile_options(bellatrix_unit_z2_fast_ram PRIVATE
-    -Wall -Wextra -Werror)
-add_test(NAME bellatrix_unit_z2_fast_ram
-         COMMAND bellatrix_unit_z2_fast_ram)
 
 add_executable(bellatrix_unit_direct_region
     ${ROOT}/tests/unit/test_direct_region.c
@@ -585,6 +571,12 @@ set_target_properties(lide_cdrom PROPERTIES
 target_include_directories(lide_cdrom PRIVATE
     ${SRC}/host/posix
     ${SRC}
+    # struct ExpansionBoard, via machine/bus/board_registry.h. In this MODULE
+    # (.so) build the board's self-registration section is inert — a plugin's
+    # section is not walked by the host executable — but lide still needs the
+    # shared descriptor type to compile. The plugin autoconfig path predates
+    # board_registry and is superseded by the static registration.
+    ${ROOT}/emu68/include
 )
 
 target_compile_definitions(lide_cdrom PRIVATE

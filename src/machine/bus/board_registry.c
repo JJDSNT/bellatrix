@@ -25,6 +25,21 @@ struct ExpansionBoard *bellatrix_board_at(size_t index)
     return __start_bellatrix_boards[index];
 }
 
+struct ExpansionBoard *bellatrix_boards_external_window_owner(uint32_t addr)
+{
+    size_t i, n = bellatrix_board_count();
+
+    for (i = 0; i < n; ++i) {
+        struct ExpansionBoard *b = bellatrix_board_at(i);
+        /* EXTERNAL = no map(); a configured board has a non-zero base. */
+        if (!b || b->map || b->is_z3 || !b->map_base)
+            continue;
+        if (addr >= b->map_base && addr < b->map_base + b->rom_size)
+            return b;
+    }
+    return NULL;
+}
+
 /* Autoconfig walk position: index of the board currently being configured. */
 static size_t s_board_idx;
 

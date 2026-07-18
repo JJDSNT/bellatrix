@@ -3,14 +3,18 @@
 
 #include <stdint.h>
 
-#include "cpu/cpu_backend.h"
-#include "machine/memory/memory.h"
+/*
+ * Zorro II Fast RAM as a self-registering board (machine/bus/board_registry.h).
+ * The descriptor drops itself into the board table at link time; this call only
+ * sizes it and enables it for Autoconfig. The host backing (BellatrixMemory's
+ * fast_ram) and the CPU backend are resolved from globals inside the board's
+ * map() at Autoconfig time, so no pointers are threaded through here.
+ *
+ * size_bytes == 0 leaves the board disabled.
+ */
+void bellatrix_z2_fast_ram_configure(uint32_t size_bytes);
 
-/* Register RAM backing as a Zorro II memory board. The backing exists on the
- * ARM/host side immediately, but no 68k address responds until Autoconfig
- * invokes the board map callback with the guest-assigned base. */
-int bellatrix_z2_fast_ram_register(CpuBackend *cpu_backend,
-                                   BellatrixMemory *memory,
-                                   uint32_t size_bytes);
+/* Disable the Fast RAM board (it will not participate in Autoconfig). */
+void bellatrix_z2_fast_ram_disable(void);
 
 #endif

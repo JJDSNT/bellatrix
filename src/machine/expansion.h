@@ -12,12 +12,21 @@
  *
  * It is kept alive for exactly one reason: **lide** (external/lide.device),
  * which provides ISO (CD-ROM) and HDF (hard-disk image) support and is the one
- * expansion Emu68 does not give us. lide is a *mixed* board — a ROM plus
- * side-effecting ATA/IDE registers served per-access through bus_ops — which
- * the Emu68 DIRECT-only board model does not express. Retiring this path
- * therefore waits on lide being re-expressed as an Emu68-style board (DIRECT
- * ROM) plus an EXTERNAL register window (routed by the Super Buster / bus
- * dispatch). Until then, do not delete this registry.
+ * expansion Emu68 does not give us. lide is a *fully EXTERNAL* board: its ROM
+ * is address-transformed (nibble-encoded bootldr, BYTEWIDE stride-2 device
+ * binary, odd-address -> 0xFF) and it carries side-effecting ATA/IDE registers,
+ * so it cannot be a plain DIRECT region and must be served per access.
+ *
+ * As of the board_registry-live work, lide's *Autoconfig* is presented by the
+ * Emu68-style board_registry (the single Autoconfig authority): lide drops a
+ * `struct ExpansionBoard` with map == NULL, so the walker only latches the
+ * guest-assigned base into it (see lide_cdrom.c). This registry now serves only
+ * the board's *window* — its per-access read/write over the ATA registers and
+ * transformed ROM (bus_ops), routed by machine_rigel_bus.c's is_z2_board_addr
+ * via bellatrix_boards_external_window_owner(). Retiring this registry waits on
+ * a shared EXTERNAL-window serving mechanism in board_registry itself; until
+ * then, do not delete it. lide no longer registers in the legacy zorro2
+ * Autoconfig state machine (that path is now RTG-only).
  */
 
 #include <stdint.h>

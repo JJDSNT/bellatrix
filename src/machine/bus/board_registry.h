@@ -57,6 +57,25 @@ size_t                 bellatrix_board_count(void);
 struct ExpansionBoard *bellatrix_board_at(size_t index);
 
 /*
+ * DIRECT vs EXTERNAL boards. Emu68's model is DIRECT-only: map() installs a
+ * region (MMU/bank) and the board is thereafter invisible to the fault path.
+ * Bellatrix also carries *mixed* boards (lide: address-transformed ROM plus a
+ * side-effecting ATA window) that cannot be a plain DIRECT region and must be
+ * served per access. We distinguish them without extending Emu68's struct:
+ *
+ *   map != NULL  -> DIRECT. Autoconfig calls map() to install a region;
+ *                   reset tears it down by (map_base, rom_size).
+ *   map == NULL  -> EXTERNAL. Autoconfig only latches map_base; the board's
+ *                   window [map_base, map_base+rom_size) is served per access
+ *                   by the machine bus dispatch (never unmapped on reset).
+ *
+ * A configured EXTERNAL Z2 board owns an address in its window; the bus uses
+ * this to route the region to that board's per-access read/write. DIRECT board
+ * windows are consumed before the fault path, so they never reach this check.
+ */
+struct ExpansionBoard *bellatrix_boards_external_window_owner(uint32_t addr);
+
+/*
  * Autoconfig driver over the discovered table, mirroring Emu68's vectors.c:
  * config reads answer straight from the board's rom_file; the guest-written
  * base at offset 0x44 (Z3) / 0x48 (Z2) completes assignment and calls map();
