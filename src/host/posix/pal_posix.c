@@ -648,15 +648,35 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
     {
         uint32_t renderer_flags = SDL_RENDERER_ACCELERATED;
         const char *vsync = getenv("HARNESS_SDL_VSYNC");
+        int vsync_requested =
+            !vsync || vsync[0] == '\0' || strcmp(vsync, "0") != 0;
+        int software_fallback = 0;
+        SDL_RendererInfo renderer_info;
 
-        if (!vsync || vsync[0] == '\0' || strcmp(vsync, "0") != 0) {
+        if (vsync_requested) {
             renderer_flags |= SDL_RENDERER_PRESENTVSYNC;
         }
 
         s_renderer = SDL_CreateRenderer(s_window, -1, renderer_flags);
+        if (!s_renderer) {
+            software_fallback = 1;
+            s_renderer = SDL_CreateRenderer(s_window, -1,
+                                            SDL_RENDERER_SOFTWARE);
+        }
+
+        if (s_renderer && SDL_GetRendererInfo(s_renderer, &renderer_info) == 0) {
+            fprintf(stderr,
+                    "[PAL] SDL renderer=%s requested_vsync=%s active_vsync=%s%s\n",
+                    renderer_info.name ? renderer_info.name : "unknown",
+                    vsync_requested ? "on" : "off",
+                    (renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "on" : "off",
+                    software_fallback ? " fallback=software" : "");
+        } else {
+            fprintf(stderr, "[PAL] SDL requested_vsync=%s%s\n",
+                    vsync_requested ? "on" : "off",
+                    software_fallback ? " fallback=software" : "");
+        }
     }
-    if (!s_renderer)
-        s_renderer = SDL_CreateRenderer(s_window, -1, SDL_RENDERER_SOFTWARE);
 
     if (!s_renderer)
     {

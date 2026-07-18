@@ -95,6 +95,8 @@ Harness options (env vars):
   CYCLES=<n>          Stop after N M68K cycles and exit (headless mode)
   HARNESS_CPU=<type>  Musashi CPU type: 68000, 68010, 68ec020, 68020, 68030, 68040
                       (default: 68000)
+  HARNESS_SDL_VSYNC=0 Disable the SDL VSync request in interactive mode and run
+                      without display pacing when the selected renderer allows it
   HARNESS_SERIAL_MODE=<mode>
                       Serial presentation: line, raw, ansi, pty (default: line)
   HARNESS_SERIAL_NOWAIT=1
@@ -431,6 +433,11 @@ if [ "$MODE" = "harness" ]; then
     fi
     if [ -d "$PLUGINS_DIR" ]; then
         echo "[RUN] Harness plugins: $PLUGINS_DIR"
+    fi
+    if [ "${HARNESS_SDL_VSYNC:-1}" = "0" ]; then
+        echo "[RUN] Harness SDL VSync: disabled (HARNESS_SDL_VSYNC=0)"
+    else
+        echo "[RUN] Harness SDL VSync: enabled (default)"
     fi
 
     TRACE_LOGS="${BELLATRIX_LOGS:-${BELLATRIX_TRACE_LOGS:-${BELLATRIX_TRACE:-${BELLATRIX_RIGEL_TRACE:-0}}}}"
