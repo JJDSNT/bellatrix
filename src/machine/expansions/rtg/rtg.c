@@ -268,7 +268,6 @@ int bellatrix_rtg_register(struct BellatrixMachine *m)
     desc.kind         = BELLATRIX_EXPANSION_BOARD;
     desc.priority     = 80;
     desc.userdata     = &s_rtg;
-    desc.zorro2_board = NULL;
     desc.bus_ops      = &s_rtg_bus_ops;
     desc.ops          = &s_rtg_exp_ops;
 

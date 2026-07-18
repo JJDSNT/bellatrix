@@ -428,15 +428,13 @@ int lide_cdrom_register(BellatrixMachine *machine)
     s_lide_board.map_base = 0u;
     s_lide_board.enabled  = 1u;
 
-    /* Register as expansion (for per-access bus dispatch only — no legacy
-     * zorro2 autoconfig; zorro2_board stays NULL). */
+    /* Register as expansion (for per-access bus dispatch only). */
     memset(&desc, 0, sizeof(desc));
     desc.id         = "lide.cdrom";
     desc.name       = "OAHR RIPPLE CD-ROM";
     desc.kind       = BELLATRIX_EXPANSION_BOARD;
     desc.priority   = 90;
     desc.userdata   = s;
-    desc.zorro2_board = NULL;
     desc.bus_ops    = &g_ripple_bus_ops;
     desc.ops        = &g_ripple_exp_ops;
 
