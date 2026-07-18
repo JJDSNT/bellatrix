@@ -1,22 +1,22 @@
 #include "machine/expansions/z2_fast_ram/z2_fast_ram.h"
 
+#include "cpu/cpu_backend.h"
 #include "cpu/direct_region.h"
 #include "machine/autoconfig/autoconfig.h"
-#include "machine/bus/zorro2/zorro2_bus.h"
+#include "machine/bus/board_registry.h"
+#include "machine/machine.h"
 #include "support.h"
 
 #include <string.h>
 
-typedef struct BellatrixZ2FastRam {
-    CpuBackend *cpu_backend;
-    BellatrixMemory *memory;
-    uint32_t mapped_base;
-    uint32_t mapped_size;
-} BellatrixZ2FastRam;
+/*
+ * Zorro II Fast RAM board, expressed in the Emu68 ExpansionBoard model: a
+ * self-registering descriptor whose map() installs a DIRECT region. The host
+ * backing and the CPU backend are taken from globals at map() time, mirroring
+ * how Emu68's z2ram.c uses the global MMU.
+ */
 
-static BellatrixZ2FastRam s_fast_ram;
 static uint8_t s_config[AUTOCONFIG_DATA_SIZE];
-static BellatrixZorro2BoardDesc s_desc;
 
 static uint8_t bytes_to_ac_size(uint32_t size)
 {
@@ -44,91 +44,52 @@ static uint32_t ac_size_to_bytes(uint8_t code)
     }
 }
 
-static int fast_ram_map(void *userdata, uint32_t base, uint32_t size)
+static void fast_ram_map(struct ExpansionBoard *board)
 {
-    BellatrixZ2FastRam *board = (BellatrixZ2FastRam *)userdata;
+    BellatrixMemory *memory = bellatrix_machine_memory();
+    CpuBackend *backend = cpu_backend_selected();
     BellatrixDirectRegion region;
-    int rc;
 
-    if (!board || !board->cpu_backend || !board->memory ||
-        !board->memory->fast_ram || board->memory->fast_ram_size < size)
-        return -1;
-    region.guest_base = base;
-    region.size = size;
-    region.host_base = board->memory->fast_ram;
+    if (!memory || !backend || !memory->fast_ram ||
+        memory->fast_ram_size < board->rom_size)
+        return;
+
+    region.guest_base = board->map_base;
+    region.size = board->rom_size;
+    region.host_base = memory->fast_ram;
     region.flags = BELLATRIX_DIRECT_READ | BELLATRIX_DIRECT_WRITE |
                    BELLATRIX_DIRECT_EXECUTE | BELLATRIX_DIRECT_CACHEABLE;
-    rc = cpu_backend_map_direct(board->cpu_backend, &region);
-    if (rc != 0)
-        return rc;
-    board->mapped_base = base;
-    board->mapped_size = size;
-    board->memory->fast_ram_base = base;
-    board->memory->fast_ram_configured = 1u;
+    if (cpu_backend_map_direct(backend, &region) != 0)
+        return;
+
+    memory->fast_ram_base = board->map_base;
+    memory->fast_ram_configured = 1u;
     kprintf("[Z2-RAM] mapped backing=%p guest=%08x-%08x\n",
-            (void *)board->memory->fast_ram, (unsigned)base,
-            (unsigned)(base + size - 1u));
-    return 0;
+            (void *)memory->fast_ram, (unsigned)board->map_base,
+            (unsigned)(board->map_base + board->rom_size - 1u));
 }
 
-static void fast_ram_unmap(void *userdata, uint32_t base, uint32_t size)
-{
-    BellatrixZ2FastRam *board = (BellatrixZ2FastRam *)userdata;
-    int rc;
+static struct ExpansionBoard s_fast_ram_board = {
+    .rom_file = s_config,
+    .rom_size = 0u,
+    .map_base = 0u,
+    .is_z3 = 0u,
+    .enabled = 0u,
+    .map = fast_ram_map,
+};
+BELLATRIX_REGISTER_BOARD_Z2(s_fast_ram_board);
 
-    if (!board || !board->cpu_backend || board->mapped_base != base ||
-        board->mapped_size != size)
-        return;
-    rc = cpu_backend_unmap_direct(board->cpu_backend, base, size);
-    if (rc != 0)
-        kprintf("[Z2-RAM] unmap failed rc=%d base=%08x size=%08x\n",
-                rc, (unsigned)base, (unsigned)size);
-    board->mapped_base = 0u;
-    board->mapped_size = 0u;
-    if (board->memory) {
-        board->memory->fast_ram_base = 0u;
-        board->memory->fast_ram_configured = 0u;
-    }
-}
-
-static uint8_t fast_ram_read8(void *userdata, uint32_t offset)
+void bellatrix_z2_fast_ram_configure(uint32_t size_bytes)
 {
-    BellatrixZ2FastRam *board = (BellatrixZ2FastRam *)userdata;
-    if (!board || !board->memory || !board->memory->fast_ram ||
-        offset >= board->mapped_size)
-        return 0xffu;
-    return board->memory->fast_ram[offset];
-}
-
-static void fast_ram_write8(void *userdata, uint32_t offset, uint8_t value)
-{
-    BellatrixZ2FastRam *board = (BellatrixZ2FastRam *)userdata;
-    if (!board || !board->memory || !board->memory->fast_ram ||
-        offset >= board->mapped_size)
-        return;
-    board->memory->fast_ram[offset] = value;
-}
-
-int bellatrix_z2_fast_ram_register(CpuBackend *cpu_backend,
-                                   BellatrixMemory *memory,
-                                   uint32_t size_bytes)
-{
-    static const BellatrixZorro2BoardOps ops = {
-        .map = fast_ram_map,
-        .unmap = fast_ram_unmap,
-        .read8 = fast_ram_read8,
-        .write8 = fast_ram_write8,
-    };
     uint8_t raw[AUTOCONFIG_ROM_BYTES];
-    uint8_t size_code = bytes_to_ac_size(size_bytes);
-    int rc;
+    uint8_t size_code;
 
-    if (!cpu_backend || !memory)
-        return -1;
-    if (bellatrix_zorro2_fast_ram_registered()) {
-        (void)bellatrix_zorro2_unregister_board("bellatrix.fastram");
-        bellatrix_zorro2_publish_fast_ram(0u, 0);
+    if (size_bytes == 0u) {
+        bellatrix_z2_fast_ram_disable();
+        return;
     }
+
+    size_code = bytes_to_ac_size(size_bytes);
     memset(raw, 0, sizeof(raw));
     raw[0] = (uint8_t)(AC_TYPE_Z2 | AC_TYPE_MEMLIST | size_code);
     raw[1] = 0x01u;
@@ -137,17 +98,13 @@ int bellatrix_z2_fast_ram_register(CpuBackend *cpu_backend,
     raw[9] = 0x01u;
     autoconfig_build(s_config, raw);
 
-    memset(&s_fast_ram, 0, sizeof(s_fast_ram));
-    s_fast_ram.cpu_backend = cpu_backend;
-    s_fast_ram.memory = memory;
-    memset(&s_desc, 0, sizeof(s_desc));
-    s_desc.id = "bellatrix.fastram";
-    s_desc.config_data = s_config;
-    s_desc.config_size = sizeof(s_config);
-    s_desc.window_size = ac_size_to_bytes(size_code);
-    s_desc.userdata = &s_fast_ram;
-    s_desc.ops = &ops;
-    rc = bellatrix_zorro2_register_board(&s_desc);
-    bellatrix_zorro2_publish_fast_ram(s_desc.window_size, rc == 0);
-    return rc;
+    s_fast_ram_board.rom_size = ac_size_to_bytes(size_code);
+    s_fast_ram_board.map_base = 0u;
+    s_fast_ram_board.enabled = 1u;
+}
+
+void bellatrix_z2_fast_ram_disable(void)
+{
+    s_fast_ram_board.enabled = 0u;
+    s_fast_ram_board.map_base = 0u;
 }

@@ -7,6 +7,8 @@
 
 #include "machine/expansion.h"
 #include "machine/expansions/lide_cdrom/lide_cdrom.h"
+#include "cpu/cpu_backend.h"
+#include "machine/bus/board_registry.h"
 #include "machine/bus/zorro2/zorro2_bus.h"
 #include "machine/bus/zorro3/zorro3.h"
 #include "machine/bus/superbuster/superbuster.h"
@@ -279,6 +281,26 @@ void bellatrix_machine_reset(void)
     bellatrix_audio_output_reset();
 
     superbuster_reset(&m->superbuster);
+    /* Tear down DIRECT regions installed by self-registering boards and rewind
+     * the Autoconfig walk. struct ExpansionBoard has no unmap() (Emu68's model
+     * installs once), so removal is generic: every mapped board backs a DIRECT
+     * region, so drop it through the backend by (map_base, rom_size). */
+    {
+        CpuBackend *backend = cpu_backend_selected();
+        size_t i, n = bellatrix_board_count();
+        for (i = 0; i < n; ++i) {
+            struct ExpansionBoard *b = bellatrix_board_at(i);
+            if (!b || !b->map_base)
+                continue;
+            if (backend)
+                (void)cpu_backend_unmap_direct(backend, b->map_base,
+                                               b->rom_size);
+            b->map_base = 0u;
+        }
+        bellatrix_boards_autoconfig_reset();
+    }
+    m->memory.fast_ram_base = 0u;
+    m->memory.fast_ram_configured = 0u;
     bellatrix_zorro2_reset();
     bellatrix_zorro3_reset();
     machine_debug_reset(m);

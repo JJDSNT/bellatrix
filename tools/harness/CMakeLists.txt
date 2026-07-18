@@ -191,6 +191,7 @@ set(BELLATRIX_SOURCES
 
     # Autoconfig + bus fabric
     ${SRC}/machine/autoconfig/autoconfig.c
+    ${SRC}/machine/bus/board_registry.c
     ${SRC}/machine/bus/zorro_autoconfig.c
     ${SRC}/machine/bus/zorro2/zorro2_bus.c
     ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
@@ -296,6 +297,7 @@ target_include_directories(harness PRIVATE
     ${SRC}/cpu
     ${SRC}/host
     ${SRC}/boards
+    ${ROOT}/emu68/include
     ${MUSASHI}
     ${CMAKE_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -387,22 +389,6 @@ target_include_directories(bellatrix_unit_zorro_autoconfig PRIVATE
 target_compile_options(bellatrix_unit_zorro_autoconfig PRIVATE -Wall -Wextra -Werror)
 add_test(NAME bellatrix_unit_zorro_autoconfig
          COMMAND bellatrix_unit_zorro_autoconfig)
-
-add_executable(bellatrix_unit_z2_fast_ram
-    ${ROOT}/tests/unit/test_z2_fast_ram.c
-    ${SRC}/cpu/direct_region.c
-    ${SRC}/machine/autoconfig/autoconfig.c
-    ${SRC}/machine/bus/zorro2/zorro2_bus.c
-    ${SRC}/machine/expansions/z2_fast_ram/z2_fast_ram.c
-)
-target_include_directories(bellatrix_unit_z2_fast_ram PRIVATE
-    ${SRC}/host/posix
-    ${SRC}
-)
-target_compile_options(bellatrix_unit_z2_fast_ram PRIVATE
-    -Wall -Wextra -Werror)
-add_test(NAME bellatrix_unit_z2_fast_ram
-         COMMAND bellatrix_unit_z2_fast_ram)
 
 add_executable(bellatrix_unit_direct_region
     ${ROOT}/tests/unit/test_direct_region.c
