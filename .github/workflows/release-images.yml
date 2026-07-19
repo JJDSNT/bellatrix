@@ -188,7 +188,22 @@ jobs:
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             gh release upload "$TAG_NAME" dist/* --clobber
           else
+            release_flags=()
+            case "$TAG_NAME" in
+              *-rc*|*-beta*|*-test*)
+                release_flags+=(--prerelease --latest=false)
+                ;;
+            esac
+
+            notes_flags=()
+            notes_file=".github/release-notes/${TAG_NAME}.md"
+            if [ -f "$notes_file" ]; then
+              notes_flags+=(--notes-file "$notes_file")
+            fi
+
             gh release create "$TAG_NAME" dist/* \
               --title "$TAG_NAME" \
-              --generate-notes
+              --generate-notes \
+              "${release_flags[@]}" \
+              "${notes_flags[@]}"
           fi
