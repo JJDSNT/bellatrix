@@ -100,6 +100,27 @@ The Musashi 68040 images are currently the recommended hardware builds. The
 Emu68 JIT images are published for testing the JIT integration path; AROS has
 been validated through its boot screen, but the backend remains experimental.
 
+### RTG with VideoCore.card
+
+RTG-capable releases provide one shared `VideoCore.card` asset alongside the
+kernel images. The same driver is used by the Emu68 and Musashi 68040 variants;
+the Musashi 68000 variants do not support it because the driver is compiled for
+a 68040 CPU.
+
+To use it, install Picasso96 on the Amiga system volume, download
+`VideoCore.card` and its `VideoCore.card.sha256` file from the same GitHub
+Release, verify the checksum, and copy the driver to:
+
+```text
+LIBS:Picasso96/VideoCore.card
+```
+
+Reboot the emulated Amiga and use the normal Picasso96 preferences to configure
+and select a VideoCore screen mode. Switching between the native Amiga display
+and an RTG screen is handled by the driver. This bare-metal RTG path is still
+experimental; keep a bootable system-volume backup before changing the display
+configuration.
+
 ### AROS ROM
 
 AROS uses a split ROM: an EXT ROM (maps to 0xE00000) and a main ROM (maps to 0xF80000). Bellatrix expects a single 1 MB file produced by concatenating them **in that order**:
