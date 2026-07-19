@@ -226,6 +226,57 @@ Rigel should continue to avoid taking ownership of:
 
 That separation is one of the reasons it is attractive as a Bellatrix backend.
 
+## 11. Consider an optional event-skip fast path for the Agnus slot loop
+
+Investigating a bare-metal (Raspberry Pi 3B) performance gap, we read
+`rigel_step()` → `rigel_chipset_step()` → `rigel_agnus_step()` →
+`agnus_slot_scheduler_step_until()` end to end
+(`src/chipset/agnus/timing/slot_scheduler.c`). The loop is:
+
+```c
+for (i = 0; i < cycles; i++)
+    agnus_slot_scheduler_step(sched, ctx, line_clocks, frame_lines);
+```
+
+Every CCK in the step range pays the full cost of
+`agnus_slot_scheduler_step()` — slot ownership resolution, slot dispatch,
+`rigel_beam_domain_step()`, and `rigel_denise_step()` — even CCKs with no
+DMA, no sprite, and no pending Denise/Copper/Blitter state change. This is
+a deliberate, documented choice (`AI_context/dma_slot_timing.md`,
+"Approach C": cycle-exact by construction), not an oversight — and it is
+almost certainly the right default. On our side, hardware measurements
+(4.7x below the target frame rate on a Pi 3B, chipset-bound and identical
+across two different CPU backends) point at this loop as the largest
+single structural cost, consistent with how much cheaper line-based
+schedulers (e.g. older UAE forks that decide per-line rather than per-CCK)
+report being on comparably weak hardware.
+
+`agnus_slot_scheduler_next_event()` already exists and can answer "how far
+to the next non-free/non-CPU slot" — the ingredient for a jump-ahead is
+already there, just not used by the step loop itself.
+
+**Important constraint — this must not be the default and must not touch
+correctness**: cycle-exact behavior is a real requirement for us (Copper
+and sprite-multiplexing tricks used by demoscene-style software we target,
+e.g. Battle Squadron, depend on it), and we do not want a speed/accuracy
+trade made silently or by default. If this is explored at all, it should
+be:
+
+- strictly opt-in (compile-time flag or a runtime mode, analogous to a
+  `RIGEL_FAST`/`RIGEL_ACCURATE` switch), defaulting to the current
+  cycle-exact behavior;
+- scoped to CCKs where no domain has observable state to update (no DMA
+  slot claimed, no sprite/bitplane fetch pending, no Copper/Blitter
+  activity, no beam milestone in range) — i.e. skip should be provably
+  equivalent to stepping one-by-one, not an approximation;
+- validated against the existing Musashi harness tests
+  (`test_vblank.c`, `test_blitter_stall.c`, `test_audio_period.c`) with
+  the fast path enabled, to catch any accuracy regression before it ships.
+
+We are not asking for this to be prioritized — flagging it as the most
+concrete lead from our side, for the Rigel team to judge given full
+visibility into the domain models.
+
 ## Priority Suggestions
 
 If the Rigel team wants a short prioritized list, this is the order I would use:
