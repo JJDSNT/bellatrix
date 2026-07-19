@@ -365,6 +365,12 @@ void machine_present_frame_from_rigel(void)
             rtg_dirty[i].w = rtg_frame.dirty[i].w;
             rtg_dirty[i].h = rtg_frame.dirty[i].h;
         }
+        PAL_Video_SetRTGSprite(rtg_frame.sprite_pixels,
+                               rtg_frame.sprite_x, rtg_frame.sprite_y,
+                               rtg_frame.sprite_w, rtg_frame.sprite_h,
+                               rtg_frame.sprite_visible,
+                               rtg_frame.sprite_image_changed,
+                               rtg_frame.sprite_changed);
         if (PAL_Video_PresentRGBARegions(
                 rtg_frame.pixels, rtg_frame.width, rtg_frame.height,
                 rtg_frame.pitch, rtg_dirty, rtg_frame.dirty_count,

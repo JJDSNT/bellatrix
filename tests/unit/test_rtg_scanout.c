@@ -183,6 +183,56 @@ static void test_dirty_tiles(void)
     check_u32("dirty palette full", 1u, out.full_update);
 }
 
+static void test_hardware_sprite_contract(void)
+{
+    BellatrixRtgScanout s;
+    BellatrixRtgFrame out;
+    uint32_t packed = (1u << 30) | (2u << 28) | (3u << 26);
+
+    memset(s_vram, 0, sizeof(s_vram));
+    bellatrix_rtg_scanout_init(&s, s_vram, sizeof(s_vram), 0u,
+                               s_frame, sizeof(s_frame));
+    configure(&s, RTG_FMT_CLUT, W, 0u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_WH,
+                                    (16u << 16) | 1u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_COLOR_INDEX, 1u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_COLOR_DATA,
+                                    0x00112233u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_COLOR_INDEX, 2u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_COLOR_DATA,
+                                    0x00445566u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_COLOR_INDEX, 3u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_COLOR_DATA,
+                                    0x00778899u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_UPLOAD_RESET, 0u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_UPLOAD_DATA, packed);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_XY,
+                                    ((uint32_t)(uint16_t)-3 << 16) | 7u);
+    bellatrix_rtg_scanout_reg_write(&s, RTG_REG_SPRITE_ENABLE, 1u);
+
+    check_u32("sprite render", 1u, bellatrix_rtg_scanout_render(&s, &out));
+    check_u32("sprite visible", 1u, out.sprite_visible);
+    check_u32("sprite x signed", (uint32_t)(int32_t)-3,
+              (uint32_t)(int32_t)out.sprite_x);
+    check_u32("sprite y", 7u, (uint32_t)out.sprite_y);
+    check_u32("sprite width", 16u, out.sprite_w);
+    check_u32("sprite height", 1u, out.sprite_h);
+    check_pixel("sprite color 1", out.sprite_pixels,
+                0x11u, 0x22u, 0x33u, 0xffu);
+    check_pixel("sprite color 2", out.sprite_pixels + 4u,
+                0x44u, 0x55u, 0x66u, 0xffu);
+    check_pixel("sprite color 3", out.sprite_pixels + 8u,
+                0x77u, 0x88u, 0x99u, 0xffu);
+    check_pixel("sprite transparent", out.sprite_pixels + 12u,
+                0u, 0u, 0u, 0u);
+    check_u32("sprite first image changed", 1u, out.sprite_image_changed);
+
+    check_u32("sprite second render", 1u,
+              bellatrix_rtg_scanout_render(&s, &out));
+    check_u32("sprite stable", 0u, out.sprite_changed);
+    check_u32("sprite image stable", 0u, out.sprite_image_changed);
+}
+
 static void test_accel_fillrect(void)
 {
     uint8_t vram[64];
@@ -408,6 +458,7 @@ int main(void)
     test_rgb565();
     test_argb_and_bounds();
     test_dirty_tiles();
+    test_hardware_sprite_contract();
     test_accel_fillrect();
     test_accel_blit_copy();
     test_accel_invertrect();

@@ -96,6 +96,9 @@ int      PAL_Video_PresentRGBARegions(const uint8_t *pixels, uint32_t w,
                                       uint32_t h, uint32_t source_pitch,
                                       const PAL_VideoRect *rects,
                                       uint32_t rect_count, int full_update);
+void     PAL_Video_SetRTGSprite(const uint8_t *pixels, int16_t x, int16_t y,
+                                uint16_t w, uint16_t h, int visible,
+                                int image_changed, int state_changed);
 #endif
 void     PAL_Video_SetPalette(uint8_t idx, uint32_t rgb);
 

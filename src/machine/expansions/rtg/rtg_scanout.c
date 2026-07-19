@@ -4,6 +4,23 @@
 
 static uint32_t format_bytes(uint32_t format);
 
+static void update_sprite_rgba(BellatrixRtgScanout *s)
+{
+    uint32_t i, count = (uint32_t)s->sprite_w * s->sprite_h;
+
+    if (!s->sprite_image_dirty)
+        return;
+    for (i = 0u; i < count; ++i) {
+        uint32_t color = s->sprite_colors[s->sprite_indices[i] & 3u];
+        uint8_t *dst = s->sprite_rgba + (size_t)i * 4u;
+        dst[0] = (uint8_t)(color >> 16);
+        dst[1] = (uint8_t)(color >> 8);
+        dst[2] = (uint8_t)color;
+        dst[3] = s->sprite_indices[i] ? 0xffu : 0u;
+    }
+    s->sprite_image_dirty = 0u;
+}
+
 static uint32_t hash_tile(const uint8_t *base, uint32_t pitch,
                           uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                           uint32_t pixel_bytes)
@@ -405,6 +422,9 @@ void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,
     s->frame = frame;
     s->frame_capacity = frame_capacity;
     s->force_full = 1u;
+    s->sprite_colors[0] = 0u;
+    s->sprite_image_dirty = 1u;
+    s->sprite_state_dirty = 1u;
 }
 
 uint32_t bellatrix_rtg_scanout_reg_read(const BellatrixRtgScanout *s,
@@ -423,6 +443,12 @@ uint32_t bellatrix_rtg_scanout_reg_read(const BellatrixRtgScanout *s,
         case RTG_REG_PAN:           return s->pan;
         case RTG_REG_PAL_INDEX:     return s->pal_index;
         case RTG_REG_VBLANK:        return s->vblank;
+        case RTG_REG_SPRITE_ENABLE: return s->sprite_visible;
+        case RTG_REG_SPRITE_XY:
+            return ((uint32_t)(uint16_t)s->sprite_x << 16) |
+                   (uint16_t)s->sprite_y;
+        case RTG_REG_SPRITE_WH:
+            return ((uint32_t)s->sprite_w << 16) | s->sprite_h;
         default:                    return 0u;
     }
 }
@@ -455,6 +481,48 @@ void bellatrix_rtg_scanout_reg_write(BellatrixRtgScanout *s,
             s->pal_index = (s->pal_index + 1u) & 0xffu;
             s->force_full = 1u;
             break;
+        case RTG_REG_SPRITE_ENABLE:
+            if (s->sprite_visible != (value & 1u)) s->sprite_state_dirty = 1u;
+            s->sprite_visible = value & 1u;
+            break;
+        case RTG_REG_SPRITE_XY: {
+            int16_t x = (int16_t)(value >> 16), y = (int16_t)value;
+            if (s->sprite_x != x || s->sprite_y != y) s->sprite_state_dirty = 1u;
+            s->sprite_x = x; s->sprite_y = y;
+            break;
+        }
+        case RTG_REG_SPRITE_WH: {
+            uint16_t w = (uint16_t)(value >> 16), h = (uint16_t)value;
+            if (w > RTG_SPRITE_MAX_W) w = RTG_SPRITE_MAX_W;
+            if (h > RTG_SPRITE_MAX_H) h = RTG_SPRITE_MAX_H;
+            if (s->sprite_w != w || s->sprite_h != h) {
+                s->sprite_w = w; s->sprite_h = h;
+                s->sprite_image_dirty = 1u; s->sprite_state_dirty = 1u;
+            }
+            break;
+        }
+        case RTG_REG_SPRITE_COLOR_INDEX:
+            s->pal_index = value & 3u;
+            break;
+        case RTG_REG_SPRITE_COLOR_DATA:
+            s->sprite_colors[s->pal_index & 3u] = value & 0x00ffffffu;
+            s->sprite_image_dirty = 1u; s->sprite_state_dirty = 1u;
+            break;
+        case RTG_REG_SPRITE_UPLOAD_RESET:
+            s->sprite_upload_pos = 0u;
+            memset(s->sprite_indices, 0, sizeof(s->sprite_indices));
+            s->sprite_image_dirty = 1u; s->sprite_state_dirty = 1u;
+            break;
+        case RTG_REG_SPRITE_UPLOAD_DATA: {
+            uint32_t i;
+            for (i = 0u; i < 16u &&
+                 s->sprite_upload_pos < sizeof(s->sprite_indices); ++i) {
+                s->sprite_indices[s->sprite_upload_pos++] =
+                    (uint8_t)((value >> (30u - i * 2u)) & 3u);
+            }
+            s->sprite_image_dirty = 1u; s->sprite_state_dirty = 1u;
+            break;
+        }
         default: break;
     }
 }
@@ -491,6 +559,7 @@ int bellatrix_rtg_scanout_render(BellatrixRtgScanout *s,
     uint32_t w, h, bpr, pixel_bytes, columns, rows, tx, ty;
     uint64_t required, dirty_pixels = 0u;
     int full;
+    uint8_t sprite_image_changed;
 
     if (!out || !bellatrix_rtg_scanout_active(s) || s->pan >= s->vram_size)
         return 0;
@@ -570,9 +639,20 @@ int bellatrix_rtg_scanout_render(BellatrixRtgScanout *s,
     s->hashes_valid = 1u;
     s->force_full = 0u;
 
+    sprite_image_changed = s->sprite_image_dirty;
     out->pixels = s->frame;
     out->width = w;
     out->height = h;
     out->pitch = w * 4u;
+    update_sprite_rgba(s);
+    out->sprite_pixels = s->sprite_rgba;
+    out->sprite_x = s->sprite_x;
+    out->sprite_y = s->sprite_y;
+    out->sprite_w = s->sprite_w;
+    out->sprite_h = s->sprite_h;
+    out->sprite_visible = s->sprite_visible;
+    out->sprite_changed = s->sprite_state_dirty;
+    out->sprite_image_changed = sprite_image_changed;
+    s->sprite_state_dirty = 0u;
     return 1;
 }

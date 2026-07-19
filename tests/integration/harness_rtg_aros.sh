@@ -32,8 +32,12 @@ grep -F "[RTG-PROBE] FillRect count=1 size=640x480 fmt=1 arg=ff action=observed"
 grep -F "[RTG-ACCEL] FillRect count=1 fmt=1 640x480 handled=host" "$LOG" >/dev/null
 grep -F "[RTG-PROBE] BlitTemplate count=1 size=128x8 fmt=1 arg=ff action=observed" "$LOG" >/dev/null
 grep -F "[RTG-ACCEL] BlitTemplate count=1 fmt=1 128x8 handled=host" "$LOG" >/dev/null
-grep -F "[RTG-PROBE] BlitRectNoMaskComplete count=1 size=16x16 fmt=1 arg=0c action=observed" "$LOG" >/dev/null
-grep -F "[RTG-ACCEL] BlitCopy count=1 fmt=1 16x16 handled=host" "$LOG" >/dev/null
+grep -F "[RTG-PROBE] BlitRectNoMaskComplete count=1 size=640x480 fmt=1 arg=00 action=observed" "$LOG" >/dev/null
+grep -E "\[RTG-PROBE\] BlitRectNoMaskComplete count=[0-9]+ size=[0-9]+x[0-9]+ fmt=1 arg=0c action=observed" "$LOG" >/dev/null
+grep -E "\[RTG-ACCEL\] BlitCopy count=1 fmt=1 [0-9]+x[0-9]+ handled=host" "$LOG" >/dev/null
+grep -F "[RTG] first write reg=84 value=00100010" "$LOG" >/dev/null
+grep -F "[RTG] first write reg=94" "$LOG" >/dev/null
+grep -F "[RTG] first write reg=7c value=00000001" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=14 value=00000280" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=18 value=000001e0" "$LOG" >/dev/null
 grep -F "[RTG] first write reg=24 value=00000000" "$LOG" >/dev/null

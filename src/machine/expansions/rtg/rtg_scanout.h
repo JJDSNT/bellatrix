@@ -36,6 +36,13 @@
 #define RTG_REG_ACCEL_MODE    0x70u
 #define RTG_REG_ACCEL_FGPEN   0x74u
 #define RTG_REG_ACCEL_BGPEN   0x78u
+#define RTG_REG_SPRITE_ENABLE 0x7Cu
+#define RTG_REG_SPRITE_XY     0x80u
+#define RTG_REG_SPRITE_WH     0x84u
+#define RTG_REG_SPRITE_COLOR_INDEX 0x88u
+#define RTG_REG_SPRITE_COLOR_DATA  0x8Cu
+#define RTG_REG_SPRITE_UPLOAD_RESET 0x90u
+#define RTG_REG_SPRITE_UPLOAD_DATA  0x94u
 
 #define RTG_ID_MAGIC       0x42525447u /* 'BRTG' */
 #define RTG_SPEC_VERSION   1u
@@ -57,6 +64,8 @@
 #define RTG_DIRTY_TILE_H 16u
 #define RTG_DIRTY_MAX_TILES 4096u
 #define RTG_DIRTY_MAX_RECTS 64u
+#define RTG_SPRITE_MAX_W 32u
+#define RTG_SPRITE_MAX_H 64u
 
 typedef struct BellatrixRtgRect {
     uint16_t x, y, w, h;
@@ -71,6 +80,12 @@ typedef struct BellatrixRtgFrame {
     uint8_t changed;
     uint8_t full_update;
     BellatrixRtgRect dirty[RTG_DIRTY_MAX_RECTS];
+    const uint8_t *sprite_pixels;
+    int16_t sprite_x, sprite_y;
+    uint16_t sprite_w, sprite_h;
+    uint8_t sprite_visible;
+    uint8_t sprite_changed;
+    uint8_t sprite_image_changed;
 } BellatrixRtgFrame;
 
 typedef struct BellatrixRtgScanout {
@@ -93,6 +108,15 @@ typedef struct BellatrixRtgScanout {
     uint16_t tile_rows;
     uint8_t hashes_valid;
     uint8_t force_full;
+    uint32_t sprite_colors[4];
+    uint8_t sprite_indices[RTG_SPRITE_MAX_W * RTG_SPRITE_MAX_H];
+    uint8_t sprite_rgba[RTG_SPRITE_MAX_W * RTG_SPRITE_MAX_H * 4u];
+    uint32_t sprite_upload_pos;
+    int16_t sprite_x, sprite_y;
+    uint16_t sprite_w, sprite_h;
+    uint8_t sprite_visible;
+    uint8_t sprite_image_dirty;
+    uint8_t sprite_state_dirty;
 } BellatrixRtgScanout;
 
 void bellatrix_rtg_scanout_init(BellatrixRtgScanout *s,

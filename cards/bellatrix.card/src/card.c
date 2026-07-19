@@ -62,6 +62,13 @@
 #define RTG_REG_ACCEL_MODE    0x70
 #define RTG_REG_ACCEL_FGPEN   0x74
 #define RTG_REG_ACCEL_BGPEN   0x78
+#define RTG_REG_SPRITE_ENABLE 0x7C
+#define RTG_REG_SPRITE_XY     0x80
+#define RTG_REG_SPRITE_WH     0x84
+#define RTG_REG_SPRITE_COLOR_INDEX 0x88
+#define RTG_REG_SPRITE_COLOR_DATA  0x8C
+#define RTG_REG_SPRITE_UPLOAD_RESET 0x90
+#define RTG_REG_SPRITE_UPLOAD_DATA  0x94
 
 #define RTG_ACCEL_FILLRECT 1
 #define RTG_ACCEL_BLIT_COPY 2
@@ -506,6 +513,26 @@ static void ProbeBlitComplete(__REGA0(struct BoardInfo *bi),
     probe_report(base, PROBE_BLITCOMPLETE, w, h,
                  ((ULONG)fmt << 8) | opcode);
     hostfmt = rtg_format(fmt);
+    /* P96 minterm 0x00 is a constant-zero raster operation.  AROS uses it
+     * for the initial full-screen clear, so routing it through the generic
+     * 68k fallback is especially expensive.  It needs no readable source. */
+    if (opcode == 0x00 && hostfmt != 0 && dx >= 0 && dy >= 0 &&
+        w > 0 && h > 0 && dst->BytesPerRow > 0 &&
+        (UBYTE *)dst->Memory >= base->cb_VRAM &&
+        (UBYTE *)dst->Memory < base->cb_VRAM + base->cb_VRAMSize) {
+        dst_off = (ULONG)((UBYTE *)dst->Memory - base->cb_VRAM);
+        reg_write(base, RTG_REG_ACCEL_DST, dst_off);
+        reg_write(base, RTG_REG_ACCEL_PITCH, (UWORD)dst->BytesPerRow);
+        reg_write(base, RTG_REG_ACCEL_XY,
+                  ((ULONG)(UWORD)dx << 16) | (UWORD)dy);
+        reg_write(base, RTG_REG_ACCEL_WH,
+                  ((ULONG)(UWORD)w << 16) | (UWORD)h);
+        reg_write(base, RTG_REG_ACCEL_COLOR, 0);
+        reg_write(base, RTG_REG_ACCEL_FMTMASK, (hostfmt << 8) | 0xffu);
+        reg_write(base, RTG_REG_ACCEL_COMMAND, RTG_ACCEL_FILLRECT);
+        if (reg_read(base, RTG_REG_ACCEL_STATUS) == 1)
+            return;
+    }
     if (opcode == 0x0c && hostfmt != 0 && sx >= 0 && sy >= 0 &&
         dx >= 0 && dy >= 0 && w > 0 && h > 0 &&
         src->BytesPerRow > 0 && dst->BytesPerRow > 0 &&
@@ -733,6 +760,86 @@ static void WaitBlitter(__REGA0(struct BoardInfo *bi))
     (void)bi;
 }
 
+static BOOL SetSprite(__REGA0(struct BoardInfo *bi), __REGD0(BOOL enable),
+                      __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    (void)fmt;
+    reg_write(base, RTG_REG_SPRITE_ENABLE, enable ? 1 : 0);
+    return 1;
+}
+
+static void SetSpritePosition(__REGA0(struct BoardInfo *bi),
+                              __REGD0(WORD x), __REGD1(WORD y),
+                              __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    (void)x; (void)y; (void)fmt;
+    x = bi->MouseX - bi->XOffset;
+    y = bi->MouseY - bi->YOffset;
+    reg_write(base, RTG_REG_SPRITE_XY,
+              ((ULONG)(UWORD)x << 16) | (UWORD)y);
+}
+
+static void SetSpriteColor(__REGA0(struct BoardInfo *bi),
+                           __REGD0(UBYTE idx), __REGD1(UBYTE red),
+                           __REGD2(UBYTE green), __REGD3(UBYTE blue),
+                           __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    (void)fmt;
+    if (idx >= 3) return;
+    reg_write(base, RTG_REG_SPRITE_COLOR_INDEX, (ULONG)idx + 1u);
+    reg_write(base, RTG_REG_SPRITE_COLOR_DATA,
+              ((ULONG)red << 16) | ((ULONG)green << 8) | blue);
+}
+
+static void SetSpriteImage(__REGA0(struct BoardInfo *bi),
+                           __REGD7(RGBFTYPE fmt))
+{
+    struct BellatrixCardBase *base = (struct BellatrixCardBase *)bi->CardBase;
+    UWORD *src16 = bi->MouseImage;
+    ULONG *src32 = (ULONG *)bi->MouseImage;
+    ULONG width, height, row, block;
+    int hires = (bi->Flags & BIF_HIRESSPRITE) != 0;
+    (void)fmt;
+
+    width = hires ? (ULONG)bi->MouseWidth * 2u : bi->MouseWidth;
+    height = bi->MouseHeight;
+    if (!src16 || width == 0 || height == 0) return;
+    if (width > 32u) width = 32u;
+    if (height > 64u) height = 64u;
+    reg_write(base, RTG_REG_SPRITE_WH, (width << 16) | height);
+    reg_write(base, RTG_REG_SPRITE_UPLOAD_RESET, 0);
+    if (hires) {
+        src32 += 2;
+        for (row = 0; row < height; ++row) {
+            ULONG p0 = *src32++, p1 = *src32++;
+            for (block = 0; block < 2u; ++block) {
+                ULONG packed = 0, bit;
+                for (bit = 0; bit < 16u; ++bit) {
+                    ULONG shift = 31u - block * 16u - bit;
+                    ULONG pixel = ((p0 >> shift) & 1u) |
+                                  (((p1 >> shift) & 1u) << 1);
+                    packed |= pixel << (30u - bit * 2u);
+                }
+                reg_write(base, RTG_REG_SPRITE_UPLOAD_DATA, packed);
+            }
+        }
+    } else {
+        src16 += 2;
+        for (row = 0; row < height; ++row) {
+            ULONG p0 = *src16++, p1 = *src16++, packed = 0, bit;
+            for (bit = 0; bit < 16u; ++bit) {
+                ULONG pixel = ((p0 >> (15u - bit)) & 1u) |
+                              (((p1 >> (15u - bit)) & 1u) << 1);
+                packed |= pixel << (30u - bit * 2u);
+            }
+            reg_write(base, RTG_REG_SPRITE_UPLOAD_DATA, packed);
+        }
+    }
+}
+
 static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolTypes),
                     __REGA6(struct BellatrixCardBase *base))
 {
@@ -747,9 +854,13 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
     bi->PaletteChipType = PCT_S3ViRGE;
     bi->GraphicsControllerType = GCT_S3ViRGE;
 
-    bi->Flags |= BIF_GRANTDIRECTACCESS | BIF_NOBLITTER;
+    /* The callbacks below accelerate supported subsets, but the card must not
+     * advertise a complete blitter yet. AROS otherwise selects operations
+     * such as full-screen minterm 0x00 that still fall back to the 68k. */
+    bi->Flags |= BIF_GRANTDIRECTACCESS | BIF_HARDWARESPRITE | BIF_NOBLITTER;
+    bi->Flags &= ~BIF_BLITTER;
     bi->RGBFormats = RGBFF_CLUT | RGBFF_R5G6B5 | RGBFF_A8R8G8B8;
-    bi->SoftSpriteFlags = bi->RGBFormats;   /* all sprites in software */
+    bi->SoftSpriteFlags = 0;
     bi->BitsPerCannon = 8;
     bi->MemoryClock = 100 * 1000 * 1000;
 
@@ -781,6 +892,10 @@ static int InitCard(__REGA0(struct BoardInfo *bi), __REGA1(const char **ToolType
     bi->GetVBeamPos = GetVBeamPos;
     bi->SetInterrupt = SetInterrupt;
     bi->WaitBlitter = WaitBlitter;
+    bi->SetSprite = SetSprite;
+    bi->SetSpritePosition = SetSpritePosition;
+    bi->SetSpriteImage = SetSpriteImage;
+    bi->SetSpriteColor = SetSpriteColor;
     bi->BlitPlanar2Chunky = AccelPlanar2Chunky;
     bi->FillRect = ProbeFillRect;
     bi->InvertRect = ProbeInvertRect;

@@ -354,8 +354,12 @@ static SDL_Window *s_window = NULL;
 static SDL_Renderer *s_renderer = NULL;
 static SDL_Texture *s_texture = NULL;
 static SDL_Texture *s_rgba_texture = NULL;
+static SDL_Texture *s_rtg_sprite_texture = NULL;
 static uint32_t s_rgba_texture_w = 0u;
 static uint32_t s_rgba_texture_h = 0u;
+static uint16_t s_rtg_sprite_w = 0u, s_rtg_sprite_h = 0u;
+static int16_t s_rtg_sprite_x = 0, s_rtg_sprite_y = 0;
+static int s_rtg_sprite_visible = 0;
 static uint64_t s_rgba_last_present_ns = 0u;
 static int s_rgba_present_pending = 0;
 static int s_renderer_vsync_active = 0;
@@ -761,7 +765,7 @@ int PAL_Video_Init(uint32_t w, uint32_t h, uint32_t bpp)
         uint32_t renderer_flags = SDL_RENDERER_ACCELERATED;
         const char *vsync = getenv("HARNESS_SDL_VSYNC");
         int vsync_requested =
-            !vsync || vsync[0] == '\0' || strcmp(vsync, "0") != 0;
+            vsync && vsync[0] != '\0' && strcmp(vsync, "0") != 0;
         int software_fallback = 0;
         SDL_RendererInfo renderer_info;
 
@@ -915,6 +919,48 @@ int PAL_Video_PresentRGBA(const uint8_t *pixels, uint32_t w,
                                         NULL, 0u, 1);
 }
 
+void PAL_Video_SetRTGSprite(const uint8_t *pixels, int16_t x, int16_t y,
+                            uint16_t w, uint16_t h, int visible,
+                            int image_changed, int state_changed)
+{
+    if (!s_renderer)
+        return;
+    if (w == 0u || h == 0u || !pixels)
+        visible = 0;
+    if (image_changed && visible) {
+        if (!s_rtg_sprite_texture || s_rtg_sprite_w != w ||
+            s_rtg_sprite_h != h) {
+            SDL_Texture *texture = SDL_CreateTexture(
+                s_renderer, SDL_PIXELFORMAT_RGBA32,
+                SDL_TEXTUREACCESS_STREAMING, (int)w, (int)h);
+            if (!texture) {
+                fprintf(stderr, "[PAL] SDL RTG sprite texture: %s\n",
+                        SDL_GetError());
+                visible = 0;
+            } else {
+                SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+                if (s_rtg_sprite_texture)
+                    SDL_DestroyTexture(s_rtg_sprite_texture);
+                s_rtg_sprite_texture = texture;
+                s_rtg_sprite_w = w;
+                s_rtg_sprite_h = h;
+            }
+        }
+        if (s_rtg_sprite_texture &&
+            SDL_UpdateTexture(s_rtg_sprite_texture, NULL, pixels,
+                              (int)w * 4) != 0) {
+            fprintf(stderr, "[PAL] SDL RTG sprite upload: %s\n",
+                    SDL_GetError());
+            visible = 0;
+        }
+    }
+    s_rtg_sprite_x = x;
+    s_rtg_sprite_y = y;
+    s_rtg_sprite_visible = visible && s_rtg_sprite_texture;
+    if (image_changed || state_changed)
+        s_rgba_present_pending = 1;
+}
+
 int PAL_Video_PresentRGBARegions(const uint8_t *pixels, uint32_t w,
                                  uint32_t h, uint32_t source_pitch,
                                  const PAL_VideoRect *rects,
@@ -989,6 +1035,18 @@ int PAL_Video_PresentRGBARegions(const uint8_t *pixels, uint32_t w,
         t0 = t1;
     }
     SDL_RenderCopy(s_renderer, s_rgba_texture, NULL, NULL);
+    if (s_rtg_sprite_visible && s_rtg_sprite_texture) {
+        SDL_Rect dst;
+        int output_w = (int)w, output_h = (int)h;
+        (void)SDL_GetRendererOutputSize(s_renderer, &output_w, &output_h);
+        dst.x = (int)((int64_t)s_rtg_sprite_x * output_w / (int32_t)w);
+        dst.y = (int)((int64_t)s_rtg_sprite_y * output_h / (int32_t)h);
+        dst.w = (int)((uint64_t)s_rtg_sprite_w * (uint32_t)output_w / w);
+        dst.h = (int)((uint64_t)s_rtg_sprite_h * (uint32_t)output_h / h);
+        if (dst.w < 1) dst.w = 1;
+        if (dst.h < 1) dst.h = 1;
+        SDL_RenderCopy(s_renderer, s_rtg_sprite_texture, NULL, &dst);
+    }
     if (perf) {
         t1 = PAL_Time_ReadCounter();
         s_video_perf.copy_ns += t1 - t0;

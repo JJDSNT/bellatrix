@@ -57,8 +57,8 @@ static void rtg_reg_write(uint32_t reg, uint32_t value)
 {
     static uint32_t probe_op, probe_count, probe_w, probe_h;
     {
-        static uint32_t s_seen_mask;
-        uint32_t bit = 1u << ((reg >> 2) & 31u);
+        static uint64_t s_seen_mask;
+        uint64_t bit = UINT64_C(1) << ((reg >> 2) & 63u);
         if (!(s_seen_mask & bit)) {
             s_seen_mask |= bit;
             kprintf("[RTG] first write reg=%02x value=%08x\n",
