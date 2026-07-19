@@ -28,11 +28,7 @@ on the Pi. Five areas remain in progress:
 - **RTG support** — the intended feature is compatibility with the RTG boards
   supported by Emu68 on the Raspberry Pi. If those boards operate through the
   Bellatrix/Emu68 integration, Bellatrix supports RTG; that target path is not
-  validated yet. The current `bellatrix.card` and 8 MB P96 framebuffer in the
-  Musashi harness are an experimental sketch used to study the board contract,
-  scanout, direct VRAM, and acceleration primitives. They are useful
-  engineering evidence, but are not by themselves a supported Bellatrix RTG
-  feature.
+  validated yet.
 - **HDMI audio** — the bare-metal HDMI output path is believed to be working:
   the DMA test clip/WAV plays on real Pi hardware. The remaining work is to
   get Amiga/Paula emulation fast enough on hardware to validate real Amiga
@@ -76,11 +72,29 @@ Example `config.txt`:
 ```ini
 kernel=bellatrix_musashi_68040.img
 initramfs kick.rom
+
 arm_64bit=1
+disable_splash=1
+avoid_warnings=1
+
+# Serial console uses the mini-UART while Bluetooth owns PL011.
 enable_uart=1
+core_freq=400
+
+# Raspberry Pi 3 HDMI video and audio baseline.
+gpu_mem=32
+hdmi_group=2
+hdmi_mode=82
+hdmi_drive=2
+hdmi_stream_channels=1
+no_hdmi_resample=1
 ```
 
 Copy your Kickstart ROM to the same boot partition and make the `initramfs` line point to that file. For example, with `initramfs kick.rom`, the file must be named `kick.rom` on the SD boot partition. Use a legally obtained Kickstart ROM.
+
+`hdmi_drive=2` is required for HDMI audio: it forces HDMI rather than DVI mode
+so the firmware enables audio packets. The example matches the Bellatrix
+baseline maintained through `patches/0009-bellatrix-boot-config.patch`.
 
 The Musashi 68040 images are currently the recommended hardware builds. The
 Emu68 JIT images are published for testing the JIT integration path; AROS has
