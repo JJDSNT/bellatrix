@@ -11,6 +11,11 @@
 // media was found.
 bool media_selection_run(void);
 
+// True when the QEMU generic loader injected a recognizable ADF or ISO.
+// This lets the boot coordinator remain visually silent when neither USB
+// media nor development-loader media is present.
+bool media_selection_qemu_media_present(void);
+
 // Runtime modal lifecycle. Runtime selection is intentionally ADF-only until
 // HDF/ISO hot-swap ownership has an equally explicit safe boundary.
 bool media_selection_runtime_open(void);

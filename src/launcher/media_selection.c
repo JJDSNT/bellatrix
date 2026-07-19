@@ -328,8 +328,17 @@ bool media_selection_runtime_open(void)
     s_runtime_cursor = 0u;
     s_runtime_scroll = 0u;
     s_runtime_started = PAL_Time_ReadCounter();
-    s_runtime_phase = RUNTIME_MEDIA_WAIT_MSC;
     while (launcher_input_pop() != 0u) {}
+#if BELLATRIX_ENABLE_USBSTACK
+    if (!usb_msc_is_ready()) {
+        s_runtime_phase = RUNTIME_MEDIA_EMPTY;
+        draw_message("USB media unavailable. ENTER/ESC closes.",
+                     COL_STATUS_BG);
+        kprintf("[LAUNCHER] F12: no USB mass-storage device available\n");
+        return true;
+    }
+#endif
+    s_runtime_phase = RUNTIME_MEDIA_WAIT_MSC;
     draw_message("Scanning USB media...", COL_TITLE_BG);
     return true;
 }
@@ -498,6 +507,18 @@ bool media_selection_runtime_step(void)
 #define QEMU_ISO_PHYS    0x20000000UL
 #define QEMU_ISO_KVIRT   ((const uint8_t *)(0xffffff9000000000ULL + QEMU_ISO_PHYS))
 #define ADF_SIZE_DD      901120u   // 80 tracks × 11 sectors × 512 bytes
+
+bool media_selection_qemu_media_present(void)
+{
+    const uint8_t *adf = QEMU_ADF_KVIRT;
+    const uint8_t *iso = QEMU_ISO_KVIRT;
+
+    return (adf[0] == 'D' && adf[1] == 'O' && adf[2] == 'S') ||
+           (iso[0x8000] == 0x01u &&
+            iso[0x8001] == 'C' && iso[0x8002] == 'D' &&
+            iso[0x8003] == '0' && iso[0x8004] == '0' &&
+            iso[0x8005] == '1');
+}
 
 static bool try_qemu_loader_adf(void)
 {

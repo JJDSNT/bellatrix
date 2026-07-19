@@ -929,7 +929,7 @@ void bellatrix_init(void)
      * has just finished so the bus is idle). If this is the LAST line seen on
      * real hardware, the stall is inside core_io_init()/usb_host_init(), not
      * later; the deferred console would otherwise hide exactly where it stops. */
-    kprintf("[PHASE] host services up — entering launcher phase\n");
+    kprintf("[PHASE] host services up\n");
     console_log_drain();
 
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
@@ -1171,13 +1171,13 @@ void bellatrix_init(void)
     launcher_run();
 #endif
 
-    /* Preserve launcher costs separately: enumeration/MSC may legitimately
+    /* Preserve boot-time host-I/O costs separately: enumeration/MSC may legitimately
      * block before CPU/chipset launch and must not contaminate runtime maxima. */
     {
         CoreIOReactorStats launcher_io;
         uint64_t freq = PAL_Time_GetFrequency();
         core_io_reactor_get_stats(&g_runtime.io, &launcher_io);
-        kprintf("[HOST-IO-LAUNCHER] calls=%llu budget_miss=%u max=%lluus "
+        kprintf("[HOST-IO-BOOT] calls=%llu budget_miss=%u max=%lluus "
                 "late_max=%lluus usb=%lluus\n",
                 (unsigned long long)launcher_io.dispatch_calls,
                 (unsigned)launcher_io.over_budget,

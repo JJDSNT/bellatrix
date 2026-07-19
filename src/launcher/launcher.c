@@ -8,6 +8,9 @@
 #include "io/hid/hid_router.h"
 #include "host/pal.h"
 #include <stdatomic.h>
+#if BELLATRIX_ENABLE_USBSTACK
+#include "io/usb/usb_msc_bellatrix.h"
+#endif
 #if BELLATRIX_ENABLE_BTSTACK
 #include "launcher/btscan.h"
 #include "io/bluetooth/bt_diag.h"
@@ -123,12 +126,17 @@ bool launcher_run(void)
     s_runtime_stepping = false;
     launcher_input_set_active(true);
 
-    draw_message("Initialising...", COL_TITLE_BG);
-    {
-        uint64_t t_kick = PAL_Time_ReadCounter();
-        while (launcher_ms_since(t_kick) < 300u)
-            pump_usb();
-    }
+    /* Give an attached drive the same enumeration budget the media selector
+     * historically used, but do it before touching the framebuffer.  With no
+     * drive present the normal boot therefore contains no launcher screen. */
+    uint64_t t_enum = PAL_Time_ReadCounter();
+#if BELLATRIX_ENABLE_USBSTACK
+    while (!usb_msc_is_ready() && launcher_ms_since(t_enum) < 5000u)
+        pump_usb();
+#else
+    while (launcher_ms_since(t_enum) < 300u)
+        pump_usb();
+#endif
 
 #if BELLATRIX_ENABLE_BTSTACK
     btscan_screen(false);
@@ -140,6 +148,19 @@ bool launcher_run(void)
     if (!bellatrix_launcher_bt_connect_pairs())
         bt_diag_log("[BT] passive HID reconnect armed; launcher continues\n");
     launcher_save_bt_report();
+#endif
+
+#if BELLATRIX_ENABLE_USBSTACK
+    if (!usb_msc_is_ready() && !media_selection_qemu_media_present()) {
+        kprintf("[LAUNCHER] no USB media; skipping boot-time launcher\n");
+        launcher_input_set_active(false);
+        return false;
+    }
+#else
+    if (!media_selection_qemu_media_present()) {
+        launcher_input_set_active(false);
+        return false;
+    }
 #endif
 
     return media_selection_run();
