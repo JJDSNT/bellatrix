@@ -77,8 +77,8 @@ O Amiberry v8 combina quatro mecanismos relevantes:
 
 O código também evita cópia quando input/output compartilham backing, pula OSD
 sem alterações, evita clear redundante quando o quad cobre a saída e deixa o
-renderer/GPU cuidar de escala. A versão 8 documenta ainda SIMD para o hot loop
-bitplane-to-chunky e renderer OpenGL sem shader como padrão de desempenho.
+renderer/GPU cuidar de escala. SIMD não faz parte da direção do Bellatrix; o
+contrato com o Emu68 permanece baseado nos registradores da placa.
 
 ### FS-UAE
 
@@ -163,17 +163,15 @@ Amiberry: muitos retângulos ou grande área suja viram full frame.
 
 ### P4 — transporte das primitivas
 
-O upload atual de template/pattern/planar envia bytes por registrador. Ele reduz
-escritas de pixels guest, mas no Emu68 cada write de registro pode virar fault.
-Substituir por uma área de staging compartilhada/bulk na abertura da board, com
-um único doorbell de comando. Medir antes: para operações pequenas o fallback
-CPU pode ser mais barato que centenas de faults.
+O upload atual de template/pattern/planar e os comandos usam registradores da
+placa, inclusive no Emu68. Este contrato é deliberado e deve ser preservado.
+Uma área de staging só deve ser considerada como extensão mensurada do mesmo
+ABI, nunca sob a premissa incorreta de que o Emu68 não usa registradores.
 
-### P5 — SIMD e renderer avançado
+### P5 — renderer avançado
 
 Somente após P1–P4:
 
-- NEON para CLUT→RGBA, RGB565 byte-swap/expansão e planar→chunky;
 - OpenGL ES/Vulkan com upload R8/RGB565/32-bit nativo;
 - PBO/staging assíncrono e fences;
 - fila de comandos e `WaitBlitter` real.
@@ -185,8 +183,8 @@ Somente após P1–P4:
 3. Remover scaling CPU e `SDL_RenderClear` quando o quad cobre a saída.
 4. Dirty tiles/rectangles e skip de frames sem mudança.
 5. Panning/page flip sincronizado.
-6. Staging bulk das primitivas para o caminho Emu68.
-7. NEON; depois OpenGL ES/Vulkan se os números ainda justificarem.
+6. Completar minterms P96 observados e hardware sprite.
+7. OpenGL ES/Vulkan somente se os números ainda justificarem.
 
 ## Estado de implementação
 
@@ -211,6 +209,13 @@ Somente após P1–P4:
   mais recente. `HARNESS_RTG_PRESENT_HZ=0` remove o limite para benchmark; outro
   valor seleciona explicitamente a frequência desejada. Com VSync ativo, o
   limitador adicional fica desligado por padrão para não produzir 30 Hz.
+- **Perfil WinUAE/ArosOne aplicado:** VSync RTG passou a ser opt-in, o cursor
+  P96 usa sprite em textura separada e o clear full-screen por minterm `0x00`
+  é convertido em `FillRect` host. Bindings C++ de SDL não foram adotados:
+  encapsulam a mesma API C e não mudam upload, composição ou aceleração.
+- **Separação de alvo:** toda apresentação SDL está sob `BELLATRIX_HARNESS`.
+  No bare-metal, o Emu68/VideoCore.card continua responsável pelo HVS e pelo
+  scanout; Bellatrix não adiciona um segundo renderer ou cópia de framebuffer.
 
 ## Fontes
 

@@ -6,7 +6,7 @@ priority: high
 type: enhancement
 owner: unassigned
 created_at: 2026-07-03
-updated_at: 2026-07-18
+updated_at: 2026-07-19
 tags:
   - harness
   - rtg
@@ -614,3 +614,42 @@ Etapas: (1) build gated por `BELLATRIX_RTG_VIDEOCORE` — init dos submódulos
 aninhados + construir a card; (2) carga/runtime até `[VC] InitCard ready` no Pi3;
 (3) arbitragem Denise×RTG no HVS. Harness segue com `bellatrix.card`.
 `external/emu68-bootstrap` adicionado para a etapa de empacotamento/imagem.
+
+# Sessão 2026-07-19 — perfil WinUAE e correção de premissas
+
+- SIMD foi removido do plano: não é opção para este trabalho. O Emu68 usa o
+  contrato por registradores da placa; qualquer afirmação contrária é obsoleta.
+- O presenter SDL permanece exclusivo do harness (`BELLATRIX_HARNESS`). O alvo
+  bare-metal continua delegando scanout/HVS ao VideoCore.card; Bellatrix não
+  adicionou renderer ou cópia de framebuffer nesse caminho além da arbitragem
+  futura acionada por `SetSwitch`.
+- Do perfil ArosOne/WinUAE foram aplicados VSync RTG opt-in e hardware sprite
+  P96. Bindings C++ do SDL não oferecem aceleração adicional sobre a API C.
+- A telemetria real mostrou `BlitRectNoMaskComplete` 640×480 com minterm `0x00`.
+  Ele agora vira `FillRect` zero no host, evitando o fallback 68k full-screen.
+  Com isso o guest alcança COPY `0x0c` 432×57 na mesma janela de 1600 frames.
+- `bellatrix_unit_rtg_scanout` e `bellatrix_harness_rtg_aros` passam.
+
+## Ensaio ArosOne HDF
+
+Imagem original preservada; todos os boots usaram uma cópia reflink de
+`src/disks/arosone.hdf` (700 MiB). Em 8000 frames com 68040 e RTG:
+
+- ATA não ficou em `lba=0/1`: houve mais de 11 mil leituras e o maior LBA
+  observado foi 1.417.846;
+- CardLoader, `FindCard`, `InitCard`, VRAM direta e upload inicial do cursor P96
+  ocorreram;
+- não houve `SetGC`, `SetPanning`, `SetSwitch`, probe de blitter nem present RTG;
+- captura no frame 4000 permaneceu Denise cinza uniforme (`0xaa`).
+
+Foram isoladas, sempre apenas na cópia do HDF, quatro hipóteses sem mudança de
+resultado: preferência original 1024x768x32 (`DisplayID 0x10051900`), preferência
+normalizada com `INVALID_ID`, 640x480x8, remoção de `SetPatch` e troca do launcher
+direto do Wanderer por `LoadWB`. Logo o bloqueio antecede scanout/SDL e não é
+específico de profundidade, ID persistido, SetPatch ou launcher do desktop.
+
+O dump host de Exec/Intuition não é confiável após este bootstrap: o localizador
+atual reporta um falso ExecBase v255.255. Próximo passo é instrumentar a cadeia
+`IPrefs -> OpenWorkbench/OpenScreen -> FindDisplayInfo/BestModeID` de forma
+compatível com o ExecBase relocável do ArosOne. Só depois que uma screen alcançar
+`SetGC/SetSwitch` haverá workload HDF válido para medir/acelerar.

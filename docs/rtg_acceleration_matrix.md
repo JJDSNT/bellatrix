@@ -17,7 +17,7 @@ blitter 2D.
 | `FillRect` | parcial | ≥16; primeiro 640×480 | **implementado:** CLUT, RGB565 e ARGB32, máscara `ff`, bounds | máscaras parciais |
 | `InvertRect` | parcial | 0 | **implementado:** três formatos, máscara completa | máscaras CLUT parciais |
 | `BlitRect` | parcial | 0 | **implementado:** mesma VRAM, COPY, overlap-safe, três formatos, máscara `ff` | máscaras parciais |
-| `BlitRectNoMaskComplete` | parcial | ≥2, 16×16, minterm `0c` | **implementado:** COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
+| `BlitRectNoMaskComplete` | parcial | clear 640×480 `00`; COPY `0c` | **implementado:** ZERO como FillRect e COPY overlap-safe entre `RenderInfo` em VRAM, nos três formatos | demais minterms |
 | `BlitTemplate` | parcial | ≥1, 128×8 | **implementado:** upload 1-bit, JAM1/JAM2, INVERSVID, três formatos, máscara `ff` | COMPLEMENT, máscaras parciais |
 | `BlitPattern` | parcial | 0 | **implementado:** 16×(1<<Size), offsets, JAM1/JAM2, INVERSVID, três formatos | COMPLEMENT, máscaras parciais |
 | `DrawLine` | parcial | 0 | **implementado:** sólida, foreground COPY, três formatos | padrões, background e demais draw modes |
@@ -37,7 +37,7 @@ argumento do callback, não deve ser inferido de `RenderInfo`.
 | triple buffering | futuro | política de aplicação/fila de flips, não substitui primitivas rápidas |
 | screen dragging/split | futuro | requer panning/split, memória off-screen e possivelmente VBlank |
 | VBlank interrupt | não | necessário para waits/flips precisos; não para blitter síncrono inicial |
-| hardware sprite | não | evita save/restore do softsprite; inclui imagem, posição e cores |
+| hardware sprite | parcial | imagem planar, posição, cores e enable via P96; composição SDL separada | hires/bigsprite e validação bare-metal |
 | palette/panning no VBlank | não | reduz flicker durante troca de paleta/viewport |
 | PIP/video overlay | futuro | scaling, formato e chroma key; fora do desktop básico |
 | mode mixing/dual palette | futuro | múltiplos formatos/paletas na mesma saída |
@@ -74,7 +74,10 @@ commit, os testes e a evidência guest; itens sem evidência permanecem parciais
 - [x] `BlitPlanar2Direct`: planar→RGB565/ARGB32, COPY `0x0c`, plane mask,
   lookup de cores e preservação de alpha/stencil por `ColorMask` (unitário;
   HIDD AROS local ainda marca a chamada TODO).
-- [ ] **ATUAL:** sprite e VBlank/page flip; depois fila/async.
+- [x] Hardware sprite P96 no harness: imagem 2-bit, paleta, posição e enable;
+  integração guest AROS e teste unitário.
+- [x] Minterm `0x00` observado no clear 640×480 convertido em FillRect host.
+- [ ] **ATUAL:** demais minterms observados e VBlank/page flip; depois fila/async.
 - [ ] Screen dragging, overlay e mode mixing após o desktop básico.
 
 ## Critério para mudar o estado
