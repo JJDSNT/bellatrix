@@ -140,8 +140,10 @@ jobs:
           if [ "$expected_rtg" = 1 ]; then
             card="${{ matrix.install_dir }}/VideoCore/VideoCore.card"
             test -f "$card"
-            card_artifact="${{ matrix.image }}.VideoCore.card"
-            cp "$card" "dist/$card_artifact"
+            if [ "${{ matrix.release_profile }}" = "emu68" ] &&
+               [ "${{ matrix.multicore }}" = "0" ]; then
+              cp "$card" dist/VideoCore.card
+            fi
           elif [ -e "${{ matrix.install_dir }}/VideoCore/VideoCore.card" ]; then
             echo "ERROR: Musashi 68000 release unexpectedly contains VideoCore.card"
             exit 1
@@ -149,8 +151,8 @@ jobs:
           (
             cd dist
             sha256sum "${{ matrix.image }}" > "${{ matrix.image }}.sha256"
-            if [ "$expected_rtg" = 1 ]; then
-              sha256sum "$card_artifact" > "$card_artifact.sha256"
+            if [ -f VideoCore.card ]; then
+              sha256sum VideoCore.card > VideoCore.card.sha256
             fi
           )
 
@@ -160,7 +162,8 @@ jobs:
           name: ${{ matrix.image }}
           path: |
             dist/*.img
-            dist/*.VideoCore.card
+            dist/VideoCore.card
+            dist/VideoCore.card.sha256
             dist/*.sha256
 
   publish-release:
