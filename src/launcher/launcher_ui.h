@@ -51,6 +51,5 @@ void     fb_puts_centred(uint32_t x0, uint32_t x1, uint32_t y, const char *s,
 void     draw_message(const char *msg, uint16_t bg_col);
 
 // Boot-phase glue shared by the coordinator and both screens.
-void     pump_usb(void);              // service one USB host iteration
 void     wait_ack(void);              // bounded "press any key / else continue"
 uint32_t launcher_ms_since(uint64_t t0_ticks); // wall-clock ms since a snapshot

@@ -11,6 +11,7 @@
 #include "runtime/core_chipset.h"
 #if BELLATRIX_ENABLE_USBSTACK
 #include "io/usb/usb_msc_bellatrix.h"
+#include "runtime/runtime.h"
 #endif
 
 #include <string.h>
@@ -598,7 +599,7 @@ bool media_selection_run(void)
     uint64_t t_enum = PAL_Time_ReadCounter();
     bool msc_ready = false;
     while (!(msc_ready = usb_msc_is_ready()) && launcher_ms_since(t_enum) < 5000u)
-        pump_usb();
+        bellatrix_runtime_io_pump();
     kprintf("[LAUNCHER] USB MSC %s after %u ms\n",
             msc_ready ? "ready" : "NOT ready (5s timeout)",
             (unsigned)launcher_ms_since(t_enum));
@@ -647,7 +648,7 @@ bool media_selection_run(void)
     draw_frame(count, cursor, scroll, s_entries);
 
     while (!done) {
-        pump_usb();
+        bellatrix_runtime_io_pump();
 
         uint8_t key = launcher_input_pop();
         if (key == 0u) continue;

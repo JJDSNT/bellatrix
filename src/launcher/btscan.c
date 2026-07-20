@@ -16,6 +16,7 @@
 #include "io/bluetooth/bt_hal_raspi3.h"
 #include "io/bluetooth/bt_link_key_db_sd.h"
 #include "host/pal.h"
+#include "runtime/runtime.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -626,7 +627,7 @@ void btscan_screen(bool force_scan)
         bt_session_poll();
         // USB pump can hold the CPU for >1.4 ms (a full PL011 RX FIFO at
         // 115200) — keep it rare; ~64 ms of input latency is invisible.
-        if ((iter & 511u) == 0u) pump_usb();
+        if ((iter & 511u) == 0u) bellatrix_runtime_io_pump();
 
         // ~2s heartbeat into the SD report: UART byte counter shows whether
         // the link is moving at all while the scan appears silent.

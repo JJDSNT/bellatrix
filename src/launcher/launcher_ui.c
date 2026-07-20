@@ -242,12 +242,7 @@ uint32_t launcher_ms_since(uint64_t t0_ticks)
     return (uint32_t)(((PAL_Time_ReadCounter() - t0_ticks) * 1000u) / freq);
 }
 
-void pump_usb(void)
-{
-    bellatrix_runtime_io_pump();
-}
-
-// Wait for a key press, pumping USB each iteration.
+// Wait for a key press, servicing the I/O reactor each iteration.
 // Times out after ~6 seconds so a headless setup still proceeds.
 // Bounded "press any key, else continue" gate used only on the no-media path.
 // Budget kept short so headless QEMU runs (no keyboard attached) fall through to
@@ -259,7 +254,7 @@ void pump_usb(void)
 void wait_ack(void)
 {
     for (uint32_t i = 0u; i < 120u; i++) {
-        pump_usb();
+        bellatrix_runtime_io_pump();
         if (launcher_input_pop() != 0u) return;
         for (volatile uint32_t d = 0u; d < 100000u; d++) asm volatile("nop");
     }

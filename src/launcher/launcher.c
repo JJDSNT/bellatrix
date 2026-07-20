@@ -7,6 +7,7 @@
 #include "launcher/media_selection.h"
 #include "io/hid/hid_router.h"
 #include "host/pal.h"
+#include "runtime/runtime.h"
 #include <stdatomic.h>
 #if BELLATRIX_ENABLE_USBSTACK
 #include "io/usb/usb_msc_bellatrix.h"
@@ -128,10 +129,10 @@ bool launcher_run(void)
     uint64_t t_enum = PAL_Time_ReadCounter();
 #if BELLATRIX_ENABLE_USBSTACK
     while (!usb_msc_is_ready() && launcher_ms_since(t_enum) < 5000u)
-        pump_usb();
+        bellatrix_runtime_io_pump();
 #else
     while (launcher_ms_since(t_enum) < 300u)
-        pump_usb();
+        bellatrix_runtime_io_pump();
 #endif
 
 #if BELLATRIX_ENABLE_BTSTACK
