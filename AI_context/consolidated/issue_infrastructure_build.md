@@ -103,19 +103,39 @@ bellatrix/
 ### `0004-bellatrix-cherryusb-dwc2-host.patch`
 - Patches no CherryUSB: endianness LE, hub descriptor parsing, polling mode, DWC2 MMIO LE accessors
 
-### `0025`–`0035`: machine API do Emu68
+### `0025`–`0035`: machine API do Emu68 — RETIRADA
+
+> **Retirada (2026-07-15), fontes removidos (2026-07-20).** A premissa central
+> desta API — que MMIO normal precisava parar de usar Data Abort — é *errada*,
+> não apenas superada: o fault handler sempre foi só um roteador. Ver
+> `docs/fault_handler.md` para a correção e ISSUE-0058 para a linha de base
+> conservadora, que mantém o caminho fault-driven nativo do Emu68.
+>
+> Os patches `0025`–`0035` foram removidos e arquivados com os diffs completos
+> em `AI_context/archive/emu68-public-machine-api-2026-07.md`. Os fontes
+> correspondentes (`src/cpu/emu68/emu68_machine*`, `emu68_backend.c`,
+> `mainloop_window.S`, `tests/unit/test_emu68_machine.c`) ficaram órfãos —
+> fora de todo `CMakeLists`/`.cmake` — e foram deletados em 2026-07-20.
+> `docs/emu68_public_api.md` é mantido porque a questão *separada* de
+> sincronização do relógio do chipset (ISSUE-0058 §3.1.1) segue aberta.
+
+Descrição histórica do que os patches faziam:
+
 - adicionam retorno/continuação exata do loop, `mmu_unmap`, classificação
   explícita de todos os caminhos de acesso e contagem determinística de ciclos
 - acessos EXTERNAL chegam ao contrato público antes de qualquer load/store host
 - o antigo patch `0021` e o wrapper baseado em fault foram removidos
 
-O contrato e o backend ficam no repositório principal:
+O contrato e o backend ficavam no repositório principal (todos deletados):
 
-- `src/cpu/emu68/emu68_machine.h/.c`
-- `src/cpu/emu68/emu68_machine_emit.c`
-- `src/cpu/emu68/emu68_machine_platform.c`
-- `src/cpu/emu68/emu68_backend.c`
-- registrados em `cmake/bellatrix-variant.cmake`
+- ~~`src/cpu/emu68/emu68_machine.h/.c`~~
+- ~~`src/cpu/emu68/emu68_machine_emit.c`~~
+- ~~`src/cpu/emu68/emu68_machine_platform.c`~~
+- ~~`src/cpu/emu68/emu68_backend.c`~~
+
+O adaptador vivo hoje é `src/cpu/emu68/emu68_native_backend.c` +
+`emu68_direct_region.c` + `vectors.inc`, registrados em
+`cmake/bellatrix-variant.cmake`.
 
 ## Build Commands
 
@@ -195,8 +215,10 @@ constantes centrais, nunca hardcode de `0x1FFFFF` ou `0x200000`.
 - `emu68/CMakeLists.txt` ↔ `patches/0001-...`
 - `emu68/src/aarch64/vectors.c` ↔ `patches/0002-...`
 - `emu68/src/aarch64/start.c` ↔ `patches/0002-...`
-- `emu68/src/ExecutionLoop.c` ↔ `patches/0003-...` e `patches/0025-...`
-- emissores `emu68/src/M68k_*.c` ↔ `patches/0027-...` a `0035-...`
-- `src/cpu/emu68/emu68_machine*` e `emu68_backend.c` ↔
-  `cmake/bellatrix-variant.cmake`
+- `emu68/src/ExecutionLoop.c` ↔ `patches/0003-...`
+  (`patches/0025-...` retirado — ver seção `0025`–`0035` acima)
+- ~~emissores `emu68/src/M68k_*.c` ↔ `patches/0027-...` a `0035-...`~~ (retirados)
+- ~~`src/cpu/emu68/emu68_machine*` e `emu68_backend.c`~~ (deletados 2026-07-20)
+- `src/cpu/emu68/vectors.inc` ↔ `patches/0002-...`
+  (incluído por `emu68/src/aarch64/vectors.c`, não é TU separada)
 - `external/cherryusb/` ↔ `patches/0004-...`

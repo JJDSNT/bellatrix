@@ -96,6 +96,16 @@ device do host precisa de serviço).
 
 ## A fronteira portátil correta (contrato mínimo)
 
+> **Nota de retirada (2026-07-20).** As assinaturas `emu68_machine_*` citadas
+> abaixo eram da machine API pública, retirada em 2026-07-15; seus fontes
+> foram deletados em 2026-07-20 (ver `issue_infrastructure_build.md`, seção
+> `0025`–`0035`, e `AI_context/archive/emu68-public-machine-api-2026-07.md`).
+> Leia-as como *forma desejada do contrato*, não como API existente — o
+> argumento desta seção (separar `ARM IRQ ≡ Amiga IPL`, IPL persistente
+> dirigido por software, IRQ de device do host fora do Emu68) continua válido
+> e independe daquela API. O equivalente vivo de `set_ipl` hoje é
+> `CpuBackend::set_ipl` em `src/cpu/cpu_backend.h`.
+
 O trabalho de longo prazo **não** é um "gateway de IRQ no Core 0" (o que os
 rascunhos apagados propunham). É separar de vez o que o Emu68 confunde
 (`ARM IRQ ≡ Amiga IPL`), dando a ele um contrato de host pequeno — do qual metade
@@ -155,6 +165,8 @@ owner do hardware, e não o Core 0.
 - `emu68/src/aarch64/vectors.c:140-189` — vectors IRQ/FIQ/SError (tradutor INT6→IPL)
 - `src/runtime/core_io.c` — Core 3, polling de USB + Bluetooth
 - `src/io/bluetooth/bt_hal_raspi3.c:40-51` — regime "no routed IRQs" documentado
-- `src/cpu/emu68/emu68_machine.h` — contrato público de CPU, memória, execução e IPL
-- `src/cpu/emu68/emu68_backend.c` — adapter Bellatrix para o contrato público
+- ~~`src/cpu/emu68/emu68_machine.h`~~ / ~~`emu68_backend.c`~~ — deletados
+  2026-07-20 (machine API retirada). Substitutos vivos:
+- `src/cpu/cpu_backend.h` — interface `CpuBackend` (inclui `set_ipl`)
+- `src/cpu/emu68/emu68_native_backend.c` — adapter Emu68 dessa interface
 - CLAUDE.md — "IPL injection", "ABI constraint"
