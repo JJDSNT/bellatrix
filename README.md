@@ -25,7 +25,7 @@ on the Pi. Five areas remain in progress:
   the recommended path for stability; Emu68 is where active integration work
   happens.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
-- **lide.device boot (ISO on AROS)** — lide.device supports both ISO via the ODFileSystem and HDF
+- **lide.device boot (ISO on AROS)** — lide.device supports both ISO, via the ODFileSystem, and HDF
   images. Under Kickstart 2.0+ both work. Under AROS, HDF images boot; ISO
   images do not yet work.
 - **RTG support** — the intended feature is compatibility with the RTG boards
