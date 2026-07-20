@@ -2,13 +2,14 @@
 id: ISSUE-0065
 title: "KS1.3 label text corruption outside Musashi single-core"
 status: doing
-priority: high
+priority: critical
 type: bug
 owner: agent
 created_at: 2026-07-17
-updated_at: 2026-07-17
+updated_at: 2026-07-20
 tags: [ks13, bitplanes, multicore, emu68, timing]
 related_files:
+  - AI_context/issues/ISSUE-0070.md
   - AI_context/issues/ISSUE-0064.md
   - AI_context/consolidated/issue_harness_ks13_boot_screen.md
   - src/cpu/cpu_bridge.c
@@ -49,6 +50,22 @@ payload or in how the final bitplane words are fetched/composed.
 
 The most useful comparison is therefore Musashi single-core (correct) against
 Emu68 single-core (corrupt), with the multicore queue removed from the A/B.
+
+**Caveat on that A/B (recorded 2026-07-20).** It is not as clean as it looks.
+Structural work that day made explicit that there is exactly one
+implementation of guest memory topology and it is Emu68's
+(`bellatrix_emu68_attach_rom_and_ram` / `bellatrix_emu68_map_guest_memory`,
+declared in `src/cpu/emu68/bellatrix.h`); the Musashi product build runs on
+it. So the two arms of this comparison **share** the guest address-space
+layout — chip RAM mirror and ext-ROM probe window included — and differ only
+in the CPU core and in which time-advance path runs (`rigel_step_until()` on
+Core 2 versus `bellatrix_machine_advance()` from the CPU progress hook,
+`src/machine/machine_rigel_step.c:909`). Those two are the remaining
+shared-semantics axes; memory topology is not a variable here.
+
+That structural work changed no behaviour (verified statement-by-statement),
+so it neither fixed nor could have fixed this defect. Same axis as
+ISSUE-0070.
 An initial blitter-boundary trace was implemented and run with KS1.3/Emu68
 single-core through frame 300. No blitter-register write occurred before or
 during construction of this display. This agrees with the older KS1.3 harness
