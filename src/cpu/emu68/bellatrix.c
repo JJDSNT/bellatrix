@@ -626,17 +626,15 @@ static void bellatrix_init_bluetooth(BellatrixRuntime *rt, BellatrixMachine *m)
  * Initialisation
  * ------------------------------------------------------------------------- */
 
-void bellatrix_init(void)
+/* Phase 1a — serial up, and on multicore prove how many PEs entered here. */
+static void bringup_report_entry(void)
 {
-    extern struct M68KState *__m68k_state;
-    CpuBackend *cpu_backend;
 #if defined(BELLATRIX_ENABLE_MULTICORE)
     static _Atomic uint32_t s_init_entry_count;
     uint64_t init_mpidr;
     uintptr_t init_lr;
     uintptr_t init_sp;
 #endif
-
     PAL_Debug_Init(115200);
 #if defined(BELLATRIX_ENABLE_MULTICORE)
     asm volatile("mrs %0, MPIDR_EL1" : "=r"(init_mpidr));
@@ -649,6 +647,13 @@ void bellatrix_init(void)
             (unsigned long long)init_lr,
             (unsigned long long)init_sp);
 #endif
+}
+
+/* Phase 1b — choose the CPU backend and build the machine around it. */
+static void bringup_select_cpu_and_machine(void)
+{
+    CpuBackend *cpu_backend;
+
     bellatrix_emu68_boards_reset();
     cpu_backend = cpu_backend_selected();
     cpu_backend_init_selected();
@@ -671,6 +676,11 @@ void bellatrix_init(void)
 #else
     kprintf("[BUILD] BELLATRIX_CORE_LOG: OFF\n");
 #endif
+}
+
+/* Phase 2 — runtime object, deferred console, host I/O reactor. */
+static void bringup_host_services(void)
+{
     memset(&g_runtime, 0, sizeof(g_runtime));
     g_runtime.machine = bellatrix_machine_get();
     /* ISSUE-0036: switch kprintf from direct/blocking mode to the ring
@@ -697,7 +707,11 @@ void bellatrix_init(void)
      * later; the deferred console would otherwise hide exactly where it stops. */
     kprintf("[PHASE] host services up\n");
     console_log_drain();
+}
 
+/* Phase 3 — ROM and guest RAM backing, plus the 1 MB (AROS) ROM probe. */
+static void bringup_attach_rom_and_ram(void)
+{
     bellatrix_machine_attach_rom((const uint8_t *)ROM_KVIRT, BELLATRIX_ROM_SIZE);
     bellatrix_memory_set_overlay(bellatrix_machine_memory(), 1);
 
@@ -768,7 +782,15 @@ void bellatrix_init(void)
             }
         }
     }
+}
 
+/* Phase 4 — guest address-space layout in the host MMU.
+ *
+ * This phase is Emu68-specific: mmu_map() is Emu68's MMU and what is mapped
+ * here decides what the fault handler never sees. Everything around it is
+ * backend-neutral machine bring-up. */
+static void bellatrix_emu68_map_guest_memory(void)
+{
     /* Map the fitted 1 MiB backing first. The CPU aperture is 2 MiB, but its
      * upper half is an alias installed below, never anonymous extra RAM. */
     mmu_map(0x000000, 0x000000, BELLATRIX_CHIP_RAM_SIZE,
@@ -857,6 +879,12 @@ void bellatrix_init(void)
                 (word0 >> 24) & 0xff, (word0 >> 16) & 0xff,
                 (word0 >> 8) & 0xff, word0 & 0xff);
     }
+}
+
+/* Phase 5 — PAL runtime, Paula serial backend, Bluetooth, HDMI audio. */
+static void bringup_host_io(void)
+{
+    BellatrixMachine *m = bellatrix_machine_get();
 
     PAL_Runtime_Init();
 
@@ -906,7 +934,12 @@ void bellatrix_init(void)
 #if BELLATRIX_ENABLE_HDMI_AUDIO
     hdmi_audio_init();
 #endif
+}
 
+/* Phase 6 — enable secondary cores, then run the launcher.
+ * Core 2 is deliberately NOT started here; see bringup_start_runtime(). */
+static void bringup_launcher_phase(void)
+{
 #ifdef BELLATRIX_ENABLE_MULTICORE
     /* Enable secondary chipset cores only after host-side services are ready. */
     PAL_Core_SetMulticoreEnabled(1);
@@ -971,7 +1004,11 @@ void bellatrix_init(void)
     launcher_save_bt_report();
 #endif
 #endif
+}
 
+/* Phase 7 — chipset context, timeline, worker cores, boot banners. */
+static void bringup_start_runtime(void)
+{
     core_chipset_init(&g_runtime.chipset,
                       bellatrix_machine_rigel_ctx(),
                       g_runtime.machine);
@@ -1031,6 +1068,18 @@ void bellatrix_init(void)
 #else
     kprintf("[BELA] coarse observable deadlines: disabled\n");
 #endif
+}
+
+void bellatrix_init(void)
+{
+    bringup_report_entry();
+    bringup_select_cpu_and_machine();
+    bringup_host_services();
+    bringup_attach_rom_and_ram();
+    bellatrix_emu68_map_guest_memory();
+    bringup_host_io();
+    bringup_launcher_phase();
+    bringup_start_runtime();
 }
 
 void bellatrix_sync_overlay_from_ciaa(void)
