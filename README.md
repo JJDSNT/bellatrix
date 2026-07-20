@@ -9,7 +9,7 @@ The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
 Six kernel variants are released as GitHub Release assets: Musashi 68000,
 Musashi 68040, and Emu68, each in single-core and multicore form. Their names
-are `bellatrix_musashi_68000.img`, `bellatrix_musasno casohi_68040.img`,
+are `bellatrix_musashi_68000.img`, `bellatrix_musashi_68040.img`,
 `bellatrix_emu68.img`, plus the corresponding `_multicore.img` files. Every
 image includes a `.sha256` checksum. The Musashi builds are the stable ones —
 Kickstart 1.3/Workbench 1.3, AROS, USB HID, and Bluetooth HID are functional
@@ -25,7 +25,9 @@ on the Pi. Five areas remain in progress:
   the recommended path for stability; Emu68 is where active integration work
   happens.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
-- **lide.device boot (ISO / HDF)** — booting from ISO images or HDF disk images via lide.device using the ODFileSystem is not yet functional in AROS.
+- **lide.device boot (ISO on AROS)** — lide.device supports both ISO via the ODFileSystem and HDF
+  images. Under Kickstart 2.0+ both work. Under AROS, HDF images boot; ISO
+  images do not yet work.
 - **RTG support** — the intended feature is compatibility with the RTG boards
   supported by Emu68 on the Raspberry Pi. If those boards operate through the
   Bellatrix/Emu68 integration, Bellatrix supports RTG; that target path is not
