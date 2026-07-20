@@ -1,5 +1,6 @@
 # Bellatrix
 > **An AI-generated project, inspired by Bloodline's [Omega](https://github.com/h5n1xp/Omega).**
+> The ultimate objective is to run an AROS setup at reasonable speed on a Raspberry Pi 3B; the desired eventual platform is the Radxa Orion O6.
 
 A bare-metal generic Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/JJDSNT/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
 
@@ -8,7 +9,7 @@ The chipset (CIA, Agnus, Paula, Denise) lives in Rigel.
 
 Six kernel variants are released as GitHub Release assets: Musashi 68000,
 Musashi 68040, and Emu68, each in single-core and multicore form. Their names
-are `bellatrix_musashi_68000.img`, `bellatrix_musashi_68040.img`,
+are `bellatrix_musashi_68000.img`, `bellatrix_musasno casohi_68040.img`,
 `bellatrix_emu68.img`, plus the corresponding `_multicore.img` files. Every
 image includes a `.sha256` checksum. The Musashi builds are the stable ones —
 Kickstart 1.3/Workbench 1.3, AROS, USB HID, and Bluetooth HID are functional
@@ -24,7 +25,7 @@ on the Pi. Five areas remain in progress:
   the recommended path for stability; Emu68 is where active integration work
   happens.
 - **SD card boot (Amiga HD)** — RDB (Rigid Disk Block) support for booting directly from an RDB-partitioned SD card is not yet functional.
-- **ISO boot (Amiga CD-ROM)** — booting from ISO images via lide.device is not yet functional; ODFileSystem is the planned filesystem layer.
+- **lide.device boot (ISO / HDF)** — booting from ISO images or HDF disk images via lide.device using the ODFileSystem is not yet functional in AROS.
 - **RTG support** — the intended feature is compatibility with the RTG boards
   supported by Emu68 on the Raspberry Pi. If those boards operate through the
   Bellatrix/Emu68 integration, Bellatrix supports RTG; that target path is not
@@ -147,6 +148,8 @@ These work both in the launcher and while the emulated machine is running:
 | --- | --- |
 | **F11** | Open the Bluetooth scan screen |
 | **F12** | Open the media (ADF/ISO) selection screen |
+| **(to be defined)** | Warm reset |
+| **(to be defined)** | Early boot menu |
 
 ---
 
@@ -215,3 +218,5 @@ Special thanks to Claude for the guidance and support throughout the development
 - [BTStack](https://github.com/bluekitchen/btstack) — Bluetooth host stack
 - [CherryUSB](https://github.com/cherry-embedded/CherryUSB) — USB host stack
 - [Musashi](https://github.com/kstenerud/musashi) — M68K interpreter
+- [lide.device](https://github.com/LIV2/lide.device) by LIV2 — IDE/ATAPI device driver
+- [ODFileSystem](https://github.com/reinauer/ODFileSystem) by Stefan Reinauer — CD-ROM (ISO 9660) filesystem
