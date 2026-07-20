@@ -134,6 +134,15 @@ boot em 020 (todas as IRQs mid-slice atrasavam até o fim do slice).
 `m68k_execute()` que então toma a IRQ na fronteira da instrução seguinte
 (comportamento do hardware real).
 
+> **ATENÇÃO (2026-07-20): este fix nunca chegou ao produto bare-metal.**
+> Ele foi aplicado só em `tools/harness/musashi_backend.c`. O backend do
+> produto, `src/cpu/musashi/musashi_backend.c`, tem `musashi_set_ipl()`
+> chamando apenas `m68k_set_irq()`, sem `m68k_end_timeslice()` — ou seja,
+> carrega exatamente o defeito descrito acima. Isso é o suspeito principal
+> da ISSUE-0070 (AROS trava em lowlevel.library no produto) e explica por que
+> "o harness passa e o produto trava": o harness tem o fix, o produto não.
+> Ver `AI_context/issues/ISSUE-0070.md`.
+
 **Resultado:** `aros.rom` com 68020 e 68040 passa `lowlevel.library`, completa
 todo o InitCode (`leave InitCode`) e chega ao `dosboot`; com o
 `ArosOne-Lite.hdf`, o `lide.device` boota via Chainloader, `DOSBoot cleanup`

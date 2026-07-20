@@ -20,16 +20,20 @@ related_files:
 # Symptom
 
 AROS does not get past `lowlevel.library` (observed to 2000 frames) on the
-**bare-metal product**: QEMU, Musashi 68040, single-core, legacy boards mode
-(`BELLATRIX_EMU68_BOARDS_MODE=legacy`). Reported 2026-07-17.
+**bare-metal product**: QEMU, single-core, legacy boards mode
+(`BELLATRIX_EMU68_BOARDS_MODE=legacy`). Originally reported 2026-07-17 against
+Musashi 68040; Jaime confirmed on 2026-07-20 that it is **not backend-specific**
+— it occurs with Musashi as well as Emu68.
 
 This is one of the two behaviours Jaime expects the stabilization phase to
 clear (the other is ISSUE-0065). Raised to `critical` on 2026-07-20 at his
 explicit request.
 
-# Scope — do NOT try to reproduce in the POSIX harness
+# Scope — the harness cannot reproduce it, and now we know why
 
-Confirmed: the harness has **no** regression. Harness AROS boots deep through
+Confirmed: the harness has **no** regression — see the prime suspect above:
+the harness backend carries the ISSUE-0026 fix that the product backend
+lacks. Harness AROS boots deep through
 the InitResident chain (expansion → exec → … → trackdisk.device), well past
 where the product stalls.
 
@@ -82,6 +86,72 @@ axes for this bug and for ISSUE-0065:
    `bellatrix_machine_advance()` driven by the CPU progress hook (single-core,
    `src/machine/machine_rigel_step.c:909`). ISSUE-0064 already showed this
    duality producing a single-core-specific IPL delivery defect.
+
+# PRIME SUSPECT — the ISSUE-0026 fix never reached the product (2026-07-20)
+
+**This symptom has happened before, was root-caused, and was fixed — but the
+fix was applied only to the harness backend.**
+
+`AI_context/consolidated/history/ISSUE-0026.md` documents the identical
+symptom (AROS InitCode reaching `lowlevel.library` and never getting to the
+negative-priority residents) with a proven mechanism:
+
+1. `lowlevel.library` Init calls `CreateMsgPort()` then deliberately
+   `FreeSignal(mp_SigBit); mp_SigBit = -1` — a port with no signal bit.
+2. `DoIO(IND_ADDHANDLER)` is always non-quick, so it `PutMsg`es to the
+   input.device command port. The design only works if the `Signal` preempts
+   immediately to the higher-priority input.device task.
+3. Musashi's `m68k_set_irq()` only *stores* the level.
+   `m68ki_check_interrupts()` runs at the start of `m68k_execute()` or when an
+   instruction writes SR — so an IPL raise arriving mid-timeslice is not taken.
+4. ~35 instructions later the bootstrap reaches `WaitIO` → `Wait(0)`, whose
+   internal `Disable` drops INTENA, Paula lowers the IPL, and **the interrupt
+   is rescinded before it is ever taken**. Lost preemption → deadlock, with
+   `mp_SigBit = -1` meaning nothing can wake it.
+
+The 2026-07-03 fix was to call `m68k_end_timeslice()` when the level rises, so
+the IRQ is taken at the next instruction boundary as real hardware would.
+
+**It was applied to `tools/harness/musashi_backend.c` only** (still there at
+line ~2878, with the ISSUE-0026 comment). The bare-metal product backend,
+`src/cpu/musashi/musashi_backend.c`, has:
+
+```c
+static void musashi_set_ipl(void *ctx, int level)
+{
+    (void)ctx;
+    m68k_set_irq((unsigned int)level);
+}
+```
+
+No `m68k_end_timeslice()`. The product carries the exact defect ISSUE-0026
+fixed.
+
+**This explains the otherwise strange scoping of this issue** — "the harness
+boots deep past lowlevel, the product stalls at lowlevel". That was read as
+the harness being too different a platform to reproduce the bug. The simpler
+reading is that **the harness has the fix and the product does not.**
+
+## What this does and does not explain
+
+Jaime confirms the stall also occurs under **Emu68**, which does not use
+either Musashi backend, so this cannot be the whole story. Two readings, both
+worth testing:
+
+- Two defects with one symptom: this one on Musashi, something else on Emu68
+  (the `MainLoop()` suspects below, or the shared IPL publication path).
+- One defect with two expressions: `m68k_end_timeslice()` is Musashi's way of
+  saying "take the pending IRQ at the next instruction boundary". If Emu68's
+  path has an analogous *latency* between IPL publication and exception
+  delivery, the same rescind-before-taken race applies. ISSUE-0064 already
+  documented a single-core-specific IPL delivery defect on Emu68.
+
+## First experiment
+
+Port the ISSUE-0026 fix to `src/cpu/musashi/musashi_backend.c` and re-run AROS
+on the product with Musashi single-core. It is a three-line change against a
+documented root cause. If Musashi then passes lowlevel and Emu68 still stalls,
+the two-defect reading is confirmed and the Emu68 half is cleanly isolated.
 
 # Named suspects shared with ISSUE-0065 (2026-07-20)
 

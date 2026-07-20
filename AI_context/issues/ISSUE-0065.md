@@ -98,6 +98,13 @@ writes / rendezvous are the candidates there) and the Emu68 single-core
 corruption (new; these three) as separate defects that happen to share a
 visual signature.
 
+**Jaime's read (2026-07-20): these three are the leading explanation for the
+Emu68 single-core half of this issue.** That is consistent with the coherence
+check above and with ISSUE-0070, where the AROS lowlevel stall turned out to
+have a *different* root cause on the Musashi side — reinforcing that
+"corrupt/stalled in more than one configuration" has been meaning more than
+one defect, not one shared cause.
+
 **Cheapest next experiment:** revert the three individually on top of HEAD
 and re-shoot the KS1.3 screen with Emu68 single-core. They are small and
 independent. Start with `995e79d` (the 44-cycle injection) — it is the only
