@@ -241,6 +241,7 @@ list(APPEND BASE_FILES
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/pal_core.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/time.c
     ${CMAKE_SOURCE_DIR}/../src/host/raspi3/posix_time.c
+    ${CMAKE_SOURCE_DIR}/../src/runtime/bringup.c
     ${CMAKE_SOURCE_DIR}/../src/runtime/core_chipset.c
     ${CMAKE_SOURCE_DIR}/../src/runtime/timeline.c
     ${CMAKE_SOURCE_DIR}/../src/runtime/posted_writes.c

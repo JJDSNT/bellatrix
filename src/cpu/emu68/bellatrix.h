@@ -17,6 +17,13 @@ int  bellatrix_cpu_backend_owns_execution_loop(void);
 void bellatrix_run_selected_cpu_backend(void);
 void bellatrix_emu68_boards_reset(void);
 
+/* Guest memory topology, owned by the Emu68 environment and sequenced by
+ * machine bring-up (src/runtime/bringup.c). Both work in Emu68 kernel
+ * virtual space, which is why they did not move out with the neutral
+ * bring-up phases. Call in this order, once, during bellatrix_init(). */
+void bellatrix_emu68_attach_rom_and_ram(void);
+void bellatrix_emu68_map_guest_memory(void);
+
 void bellatrix_machine_advance_cpu_cycles(uint32_t cycles);
 void bellatrix_emu68_publish_idle_cycles(uint32_t cycles);
 void bellatrix_emu68_publish_cpu_progress(uint64_t cycles,
