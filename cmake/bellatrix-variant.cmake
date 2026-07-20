@@ -249,6 +249,7 @@ list(APPEND BASE_FILES
     # links instead and USB/BT silently stop after the launcher.
     ${CMAKE_SOURCE_DIR}/../src/runtime/core_io.c
     ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_host.c
+    ${CMAKE_SOURCE_DIR}/../src/io/bluetooth/bt_session.c
     ${CMAKE_SOURCE_DIR}/../src/io/usb/usb_host.c
 )
 if(BELLATRIX_USE_MUSASHI_CPU)

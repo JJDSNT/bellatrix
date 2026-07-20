@@ -14,11 +14,7 @@
 #if BELLATRIX_ENABLE_BTSTACK
 #include "launcher/btscan.h"
 #include "io/bluetooth/bt_diag.h"
-#endif
-
-#if BELLATRIX_ENABLE_BTSTACK
-void bellatrix_launcher_bt_close_pairing(void);
-int  bellatrix_launcher_bt_connect_pairs(void);
+#include "io/bluetooth/bt_session.h"
 #endif
 
 typedef enum LauncherRuntimeModal {
@@ -144,8 +140,8 @@ bool launcher_run(void)
         bt_diag_log("[BT] no saved mouse; enter pairing recovery scan\n");
         btscan_screen(true);
     }
-    bellatrix_launcher_bt_close_pairing();
-    if (!bellatrix_launcher_bt_connect_pairs())
+    bt_session_close_pairing();
+    if (!bt_session_connect_pairs())
         bt_diag_log("[BT] passive HID reconnect armed; launcher continues\n");
     launcher_save_bt_report();
 #endif

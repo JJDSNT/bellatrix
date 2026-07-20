@@ -10,6 +10,7 @@
 #include "storage/fat/fat32.h"
 #include "storage/sdcard/bcm_emmc.h"
 #include "io/bluetooth/bt_scan.h"
+#include "io/bluetooth/bt_session.h"
 #include "io/bluetooth/bt_pairs.h"
 #include "io/bluetooth/bt_diag.h"
 #include "io/bluetooth/bt_hal_raspi3.h"
@@ -19,17 +20,6 @@
 #include <string.h>
 #include <stdint.h>
 
-// BT service glue, implemented in the runtime IO layer.
-void bellatrix_launcher_pump_bt(void);
-void bellatrix_launcher_bt_open_pairing(void);
-void bellatrix_launcher_bt_close_pairing(void);
-int  bellatrix_launcher_bt_ready(void);
-void bellatrix_launcher_bt_connect_now(void);
-void bellatrix_launcher_bt_suspend_reconnect(int suspended);
-void bellatrix_launcher_bt_prepare_pairing(const uint8_t addr[6]);
-int  bellatrix_launcher_bt_mouse_connected(void);
-int  bellatrix_launcher_bt_recovery_discovery_active(void);
-void bellatrix_launcher_bt_claim_recovery_discovery(void);
 
 static bool s_bt_runtime_active;
 static bool s_bt_runtime_working;
@@ -74,7 +64,7 @@ static void bt_fill_rect_pumped(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
     while (h) {
         uint32_t hh = (h < band) ? h : band;
         fb_fill_rect(x, y, w, hh, col);
-        bellatrix_launcher_pump_bt();
+        bt_session_poll();
         y += hh;
         h -= hh;
     }
@@ -155,7 +145,7 @@ static void bt_draw_scan_rows(void)
     while (p < sizeof(line) - 1u) line[p++] = ' ';
     line[p] = '\0';
     fb_puts(lui_margin_x, y, line, COL_CURSOR_BG, COL_BG);
-    bellatrix_launcher_pump_bt();
+    bt_session_poll();
     y += lui_row_h + lui_row_h / 2u;
 
     /* Saved pairs not yet found by inquiry — show immediately on boot */
@@ -179,7 +169,7 @@ static void bt_draw_scan_rows(void)
         while (p < sizeof(line) - 1u) line[p++] = ' ';
         line[p] = '\0';
         fb_puts(lui_margin_x, y, line, COL_STATUS_BG, COL_BG);
-        bellatrix_launcher_pump_bt();
+        bt_session_poll();
         y += lui_row_h;
     }
 
@@ -223,7 +213,7 @@ static void bt_draw_scan_rows(void)
         uint16_t fg = (i == s_bt_cursor) ? COL_BG        : COL_TEXT;
         uint16_t bg = (i == s_bt_cursor) ? COL_CURSOR_BG : COL_BG;
         fb_puts(lui_margin_x, y, line, fg, bg);
-        bellatrix_launcher_pump_bt();
+        bt_session_poll();
         y += lui_row_h;
     }
 }
@@ -405,7 +395,7 @@ bool btscan_runtime_open(void)
         return false;
 
     s_bt_runtime_active = true;
-    s_bt_runtime_working = bellatrix_launcher_bt_ready() != 0;
+    s_bt_runtime_working = bt_session_ready() != 0;
     s_bt_runtime_connect_selected = false;
     s_bt_runtime_borrowed_discovery = false;
     memset(s_bt_runtime_selected_addr, 0,
@@ -424,10 +414,10 @@ bool btscan_runtime_open(void)
 
     if (s_bt_runtime_working) {
         s_bt_runtime_borrowed_discovery =
-            bellatrix_launcher_bt_recovery_discovery_active() != 0;
-        bellatrix_launcher_bt_suspend_reconnect(1);
+            bt_session_recovery_discovery_active() != 0;
+        bt_session_suspend_reconnect(1);
         if (!s_bt_runtime_borrowed_discovery) {
-            bellatrix_launcher_bt_open_pairing();
+            bt_session_open_pairing();
             bt_scan_start();
         } else {
             bt_diag_log("[BT] F11 borrowed active recovery discovery\n");
@@ -451,29 +441,29 @@ void btscan_runtime_close(bool confirmed)
     if (s_bt_runtime_working &&
         (!s_bt_runtime_borrowed_discovery || confirmed)) {
         if (s_bt_runtime_borrowed_discovery)
-            bellatrix_launcher_bt_claim_recovery_discovery();
+            bt_session_claim_recovery_discovery();
         bt_scan_stop();
     }
 
     if (confirmed && s_bt_runtime_connect_selected) {
         /* Pairing and connection outlive the screen. The reactor advances
          * authentication after the framebuffer modal has closed. */
-        bellatrix_launcher_bt_prepare_pairing(
+        bt_session_prepare_pairing(
             s_bt_runtime_selected_addr);
-        bellatrix_launcher_bt_suspend_reconnect(0);
+        bt_session_suspend_reconnect(0);
         /* This function runs after the normal BTstack pass, not in its HID
  * callback. Publish reconnect immediately; the host reactor submits it on the
          * next normal reactor pass. */
-        bellatrix_launcher_bt_connect_now();
+        bt_session_connect_now();
     } else if (!s_bt_runtime_borrowed_discovery) {
-        bellatrix_launcher_bt_suspend_reconnect(0);
-        bellatrix_launcher_bt_close_pairing();
+        bt_session_suspend_reconnect(0);
+        bt_session_close_pairing();
     } else {
         /* Esc returns a borrowed manager-owned scan unchanged. A confirmed
          * non-connect action claimed it above, so close that pairing window. */
-        bellatrix_launcher_bt_suspend_reconnect(0);
+        bt_session_suspend_reconnect(0);
         if (confirmed)
-            bellatrix_launcher_bt_close_pairing();
+            bt_session_close_pairing();
     }
 
     if (s_bt_runtime_sd_ok)
@@ -487,7 +477,7 @@ void btscan_runtime_background_step(void)
     /* A new link key is produced asynchronously after the modal closes.
      * Persist it only once the HID link is live, from the reactor owner. */
     if (s_bt_runtime_sd_ok &&
-        bellatrix_launcher_bt_mouse_connected() &&
+        bt_session_mouse_connected() &&
         bt_link_key_db_sd_dirty())
         bt_pairs_save_to_sd(&s_bt_runtime_fs);
 }
@@ -589,10 +579,10 @@ bool btscan_runtime_step(void)
 // on the framebuffer as well as the independent mini-UART log.
 void btscan_screen(bool force_scan)
 {
-    bool working = bellatrix_launcher_bt_ready() != 0;
+    bool working = bt_session_ready() != 0;
 
     if (working)
-        bellatrix_launcher_bt_suspend_reconnect(1);
+        bt_session_suspend_reconnect(1);
 
     /* Mount SD early so we can load BTPAIRS.TXT before the scan starts. */
     static Fat32State s_sd_fs_scan;
@@ -607,14 +597,14 @@ void btscan_screen(bool force_scan)
 
     if (!force_scan && working && btscan_has_saved_mouse()) {
         bt_diag_log("[BT] saved mouse present; skipping discovery and connecting directly\n");
-        bellatrix_launcher_bt_suspend_reconnect(0);
+        bt_session_suspend_reconnect(0);
         return;
     }
 
     s_bt_cursor = 0u;
 
     if (working) {
-        bellatrix_launcher_bt_open_pairing();
+        bt_session_open_pairing();
         bt_scan_start();
     }
 
@@ -633,7 +623,7 @@ void btscan_screen(bool force_scan)
     uint8_t selected_mouse_addr[6] = {0};
 
     for (uint32_t iter = 0u; iter < budget && !mouse_selected; iter++) {
-        bellatrix_launcher_pump_bt();
+        bt_session_poll();
         // USB pump can hold the CPU for >1.4 ms (a full PL011 RX FIFO at
         // 115200) — keep it rare; ~64 ms of input latency is invisible.
         if ((iter & 511u) == 0u) pump_usb();
@@ -740,19 +730,19 @@ void btscan_screen(bool force_scan)
     if (working && mouse_selected) {
         /* The observed working behavior is immediate connection on discovery.
          * Keep the explicit pairing window and page before FAT/media work. */
-        bellatrix_launcher_bt_prepare_pairing(selected_mouse_addr);
-        bellatrix_launcher_bt_suspend_reconnect(0);
-        bellatrix_launcher_bt_connect_now();
+        bt_session_prepare_pairing(selected_mouse_addr);
+        bt_session_suspend_reconnect(0);
+        bt_session_connect_now();
         uint64_t connect_started = PAL_Time_ReadCounter();
-        while (!bellatrix_launcher_bt_mouse_connected() &&
+        while (!bt_session_mouse_connected() &&
                launcher_ms_since(connect_started) < 5000u)
-            bellatrix_launcher_pump_bt();
+            bt_session_poll();
         bt_diag_log("[BT] immediate pairing connect ended: connected=%u "
                     "elapsed=%u ms\n",
-                    bellatrix_launcher_bt_mouse_connected() ? 1u : 0u,
+                    bt_session_mouse_connected() ? 1u : 0u,
                     (unsigned)launcher_ms_since(connect_started));
     } else if (working) {
-        bellatrix_launcher_bt_suspend_reconnect(0);
+        bt_session_suspend_reconnect(0);
     }
 
     if (sd_ok)

@@ -187,7 +187,6 @@ void core_io_shutdown(RuntimeCoreIO *core)
         return;
     }
 
-    extern BellatrixRuntime g_runtime;
     bt_host_shutdown(&g_runtime.bluetooth);
     usb_host_shutdown(&core->usb_host);
 
@@ -223,7 +222,6 @@ void core_io_step(RuntimeCoreIO *core, uint64_t now, uint64_t freq)
                                                 memory_order_acq_rel);
     uint64_t dispatch_start = PAL_Time_ReadCounter();
 
-    extern BellatrixRuntime g_runtime;
     if (pending & CORE_IO_EVENT_BLUETOOTH) {
         uint64_t start = PAL_Time_ReadCounter();
         bt_host_step(&g_runtime.bluetooth);
@@ -298,7 +296,6 @@ void core_io_reactor_reset_stats(RuntimeCoreIO *core)
 /* Strong definition — overrides the weak stub in pal_core.c. */
 void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
 {
-    extern BellatrixRuntime g_runtime;
     core_io_step(&g_runtime.io, now, freq);
 #ifdef BELLATRIX_LAUNCHER
     launcher_runtime_step();
@@ -308,4 +305,20 @@ void bellatrix_runtime_io_step(uint64_t now, uint64_t freq)
      * Rigel frames; the active reactor consumes and presents the newest one. */
     (void)core_chipset_timeline_update(now);
     core_chipset_drain_host_completions();
+}
+
+void bellatrix_runtime_io_pump(void)
+{
+    /* Service point for callers that drive I/O from their own loop instead of
+     * the host reactor — the launcher during boot, before Core 3 takes over.
+     * Rate-limited to ~1 kHz to match the reactor's own cadence. */
+    static uint64_t last_tick;
+    uint64_t now = PAL_Time_ReadCounter();
+    uint64_t freq = PAL_Time_GetFrequency();
+    uint64_t interval = freq / 1000u ? freq / 1000u : 1u;
+
+    if (!last_tick || now - last_tick >= interval) {
+        last_tick = now;
+        bellatrix_runtime_io_step(now, freq);
+    }
 }

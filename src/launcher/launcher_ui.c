@@ -4,11 +4,11 @@
 #include "launcher/launcher_ui.h"
 #include "launcher/launcher_input.h"
 #include "host/pal.h"
+#include "runtime/runtime.h"
 #if BELLATRIX_ENABLE_BTSTACK
 #include "io/bluetooth/bt_hal_raspi3.h"
 #endif
 
-void bellatrix_launcher_pump_usb(void);
 
 // ---------------------------------------------------------------------------
 // Layout metrics
@@ -244,7 +244,7 @@ uint32_t launcher_ms_since(uint64_t t0_ticks)
 
 void pump_usb(void)
 {
-    bellatrix_launcher_pump_usb();
+    bellatrix_runtime_io_pump();
 }
 
 // Wait for a key press, pumping USB each iteration.
