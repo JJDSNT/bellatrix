@@ -198,13 +198,13 @@ static void bringup_host_services(void)
 /* Phase 5 — PAL runtime, Paula serial backend, Bluetooth, HDMI audio. */
 static void bringup_host_io(void)
 {
-    BellatrixMachine *m = bellatrix_machine_get();
-
     PAL_Runtime_Init();
 
 #if defined(BELLATRIX_UART_LOG)
     kprintf("[SERIAL] log mode — Paula TX forwarded to kprintf [SERIAL] prefix; no UART bridge\n");
 #else
+    BellatrixMachine *m = bellatrix_machine_get();
+
     if (uart_host_open_pty(&m->uart_host))
     {
         const char *pty_name = uart_host_pty_name(&m->uart_host);
@@ -242,7 +242,7 @@ static void bringup_host_io(void)
 #endif
 
 #if BELLATRIX_ENABLE_BTSTACK
-    bellatrix_init_bluetooth(&g_runtime, m);
+    bellatrix_init_bluetooth(&g_runtime, bellatrix_machine_get());
 #endif
 
 #if BELLATRIX_ENABLE_HDMI_AUDIO
