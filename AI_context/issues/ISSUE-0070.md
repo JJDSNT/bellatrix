@@ -83,6 +83,26 @@ axes for this bug and for ISSUE-0065:
    `src/machine/machine_rigel_step.c:909`). ISSUE-0064 already showed this
    duality producing a single-core-specific IPL delivery defect.
 
+# Named suspects shared with ISSUE-0065 (2026-07-20)
+
+Diffing `c7745bc` (2026-07-09) against HEAD found three semantic changes new
+in the window, all inside `MainLoop()` via
+`patches/0003-bellatrix-execution-loop.patch`: `1e3b361` (report on every pass
+while STOPPED), `995e79d` (`CYCLE_COUNT += 44u` per interrupt delivery) and
+`df4559c` (retire STOP before stacking its return PC). See ISSUE-0065 for the
+full table and reasoning.
+
+**Relevance here is weaker than for ISSUE-0065 and must not be assumed.**
+This issue's reported configuration is *Musashi*, which never executes
+`ExecutionLoop.c`. So these three cannot explain a Musashi-only stall. They
+are recorded here only because both issues sit on the CPU→chipset time axis,
+and because the reported configuration should be re-confirmed: if the AROS
+lowlevel stall also occurs on **Emu68** single-core, these become live
+suspects for it too.
+
+First cheap step for this issue is therefore: confirm whether the stall is
+Musashi-only or also reproduces under Emu68.
+
 # How to settle it
 
 Bisect the actual product boot (not the harness):

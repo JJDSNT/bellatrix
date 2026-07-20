@@ -66,6 +66,48 @@ shared-semantics axes; memory topology is not a variable here.
 That structural work changed no behaviour (verified statement-by-statement),
 so it neither fixed nor could have fixed this defect. Same axis as
 ISSUE-0070.
+
+# Named suspects from the c7745bc..HEAD diff (2026-07-20)
+
+Diffing the 2026-07-09 tree (`c7745bc`, before the regression) against HEAD
+turns up **three semantic changes that are new in the window, all inside
+`patches/0003-bellatrix-execution-loop.patch`**, i.e. inside `MainLoop()` in
+`emu68/src/ExecutionLoop.c`:
+
+| Commit | Date | Change |
+| --- | --- | --- |
+| `1e3b361` | 07-11 | report gate becomes `if (ctx->STOPPED \|\| delta>=64 \|\| spins>=64)` — while STOPPED, chipset progress is reported on *every* MainLoop pass instead of every 64 retired instructions |
+| `995e79d` | 07-13 | `ctx->CYCLE_COUNT += 44u` on every interrupt delivery — exception overhead now feeds the CPU→chipset cycle accounting |
+| `df4559c` | 07-17 | `if (ctx->STOPPED) { PC += 2; ctx->STOPPED = 0; }` inside interrupt delivery — STOP retired before its return PC is stacked |
+
+All three change **how much emulated chipset time passes per unit of CPU
+work**, which is the axis a bitplane/DMA-slot composition defect sits on.
+
+**Coherence check — this explains the matrix asymmetry.** Musashi never
+executes `ExecutionLoop.c` (it runs from `cpu_backend_run_selected()`), so no
+Musashi configuration can be affected by these three. That fits the observed
+table exactly where it matters: Musashi single-core is correct, and Emu68
+single-core — which *was* correct on older builds — regressed. `df4559c` is
+dated 07-17, the same day this issue records Emu68 single-core turning
+corrupt "after the ISSUE-0064 STOP fix".
+
+**It also implies two distinct causes, not one.** These commits cannot
+explain Musashi *multicore* corruption, since that path does not run
+`ExecutionLoop.c` either. Treat the multicore corruption (older; posted
+writes / rendezvous are the candidates there) and the Emu68 single-core
+corruption (new; these three) as separate defects that happen to share a
+visual signature.
+
+**Cheapest next experiment:** revert the three individually on top of HEAD
+and re-shoot the KS1.3 screen with Emu68 single-core. They are small and
+independent. Start with `995e79d` (the 44-cycle injection) — it is the only
+one that changes the cycle *quantity* rather than the reporting cadence, and
+it is unconditional on every interrupt.
+
+Caution: `995e79d` and `df4559c` were deliberate fixes (exception cycle
+accounting and ISSUE-0064 STOP delivery). If one of them proves to be the
+cause, the fix is almost certainly not a plain revert — it is that the
+correction was applied at the wrong granularity.
 An initial blitter-boundary trace was implemented and run with KS1.3/Emu68
 single-core through frame 300. No blitter-register write occurred before or
 during construction of this display. This agrees with the older KS1.3 harness
