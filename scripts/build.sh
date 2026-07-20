@@ -400,34 +400,18 @@ if [ "${BELLATRIX_TRACE_BUILD:-0}" = "1" ]; then
     echo "[BUILD] Bellatrix trace: enabled unconditionally (bare-metal)"
 fi
 
-if [ "${BELLATRIX_EMU68_API_TRACE:-0}" = "1" ]; then
-    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_API_TRACE=1"
-    echo "[BUILD] Emu68 API trace: enabled"
+# Periodic [EMU68-LIVE] frame/pc/IPL trace (src/machine/machine_rigel_step.c).
+# Named *_API_TRACE until 2026-07-20; it never had anything to do with the
+# retired public machine API.
+if [ "${BELLATRIX_EMU68_LIVENESS_TRACE:-0}" = "1" ]; then
+    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_LIVENESS_TRACE=1"
+    echo "[BUILD] Emu68 liveness trace: enabled"
 fi
 
-if [ "${BELLATRIX_EMU68_API_AUTODUMP:-0}" = "1" ]; then
-    EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_API_AUTODUMP=1"
-    echo "[BUILD] Emu68 API auto stats dump: enabled"
-fi
-
-EMU68_ACCESS_MODE="${BELLATRIX_EMU68_ACCESS_MODE:-fault}"
 if [ "$CPU_BACKEND" = "musashi" ]; then
     echo "[BUILD] CPU access mode: Musashi callbacks"
 else
-    case "$EMU68_ACCESS_MODE" in
-        public)
-            echo "[BUILD] Emu68 access mode: public machine API"
-            ;;
-        fault)
-            EXTRA_DEFINES="$EXTRA_DEFINES -DBELLATRIX_EMU68_FAULT_DRIVEN=1"
-            echo "[BUILD] Emu68 access mode: native fault-driven"
-            ;;
-        *)
-            echo "ERROR: invalid BELLATRIX_EMU68_ACCESS_MODE: $EMU68_ACCESS_MODE"
-            echo "       expected: public or fault"
-            exit 1
-            ;;
-    esac
+    echo "[BUILD] CPU access mode: Emu68 native fault-driven"
 fi
 
 PROFILE_FLAG="OFF"

@@ -16,7 +16,7 @@
 #include "runtime/core_chipset.h"
 #include "runtime/core_io.h"
 #include "support.h"
-#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+#if defined(BELLATRIX_EMU68_LIVENESS_TRACE) && BELLATRIX_EMU68_LIVENESS_TRACE
 #include "M68k.h"
 #endif
 
@@ -1030,7 +1030,7 @@ void bellatrix_machine_on_frame_ready(void)
         machine_trace_plane_payload();
 #endif
 
-#if defined(BELLATRIX_EMU68_API_TRACE) && BELLATRIX_EMU68_API_TRACE
+#if defined(BELLATRIX_EMU68_LIVENESS_TRACE) && BELLATRIX_EMU68_LIVENESS_TRACE
     if (g_machine.frame_counter == 1u ||
         (g_machine.frame_counter % 25u) == 0u) {
         extern struct M68KState *__m68k_state;

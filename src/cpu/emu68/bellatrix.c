@@ -81,15 +81,14 @@ static void bellatrix_runtime_poll_from_emu68(void)
 int bellatrix_cpu_backend_owns_execution_loop(void)
 {
 #if defined(BELLATRIX_USE_MUSASHI_CPU) && BELLATRIX_USE_MUSASHI_CPU
-    /* Musashi must own the loop even when a stale Emu68 access-mode define is
-     * present in an incremental build. It never enters M68K_StartEmu(). */
+    /* Musashi drives the loop from cpu_backend_run_selected(); it never enters
+     * M68K_StartEmu(). */
     return cpu_backend_owns_execution_loop();
-#elif defined(BELLATRIX_EMU68_FAULT_DRIVEN) && BELLATRIX_EMU68_FAULT_DRIVEN
-    /* The conservative path enters M68K_StartEmu directly. The public machine
-     * driver remains compiled only as an A/B rollback option. */
-    return 0;
 #else
-    return cpu_backend_owns_execution_loop();
+    /* Emu68 enters M68K_StartEmu() directly and owns its own loop. This was
+     * once selectable against the public machine API driver (retired
+     * 2026-07-15, sources deleted 2026-07-20); there is no alternative now. */
+    return 0;
 #endif
 }
 
@@ -178,230 +177,6 @@ static RuntimeTimelineMode bellatrix_timeline_boot_mode(RuntimeTimelineMode fall
 
     s_timeline_mode_source = "build default (timeline= value not recognized)";
     return fallback;
-}
-
-static void __attribute__((unused)) bellatrix_legacy_host_diagnostics(void)
-{
-    extern bool core_chipset_get_progress(uint64_t *chipset_cck,
-                                          uint64_t *target_cck);
-    uint64_t last_target = 0u;
-    uint64_t last_chipset = 0u;
-#if BELLATRIX_PROFILE_ENABLED
-    uint64_t last_steps = 0u;
-    uint64_t last_step_cck = 0u;
-    uint64_t last_step_busy = 0u;
-#endif
-    const uint64_t freq = PAL_Time_GetFrequency();
-    const uint64_t io_interval = freq / 1000u ? freq / 1000u : 1u;
-    const uint64_t heartbeat_interval = freq * 2u;
-    uint64_t last_io = PAL_Time_ReadCounter();
-    uint64_t last_heartbeat = last_io;
-    uint32_t beat = 0u;
-    BellatrixAudioOutputStats last_audio = {0};
-    RuntimeFrameCompletionStats last_frame_stats = {0};
-
-    for (;;) {
-        uint64_t now = PAL_Time_ReadCounter();
-
-        /* Keep physical IO bounded and poll at roughly 1 kHz. */
-        if (now - last_io >= io_interval) {
-            last_io = now;
-            bellatrix_runtime_io_step(now, freq);
-        }
-
-        if (now - last_heartbeat < heartbeat_interval) {
-            asm volatile("yield");
-            continue;
-        }
-        uint64_t beat_elapsed = now - last_heartbeat;
-        last_heartbeat = now;
-
-        uint64_t chipset_cck = 0u;
-        uint64_t target_cck = 0u;
-        uint64_t horizon_cck = core_chipset_get_horizon();
-        RuntimeTimeline timeline;
-        BellatrixMachine *machine = bellatrix_machine_get();
-        CpuBackend *backend = cpu_backend_selected();
-        uint64_t frames = machine
-            ? __atomic_load_n(&machine->frame_counter, __ATOMIC_ACQUIRE)
-            : 0u;
-        uint32_t pc = backend ? cpu_backend_get_pc(backend) : 0u;
-        CoreIOSerialStats serial_stats;
-        CoreIOReactorStats io_stats;
-        RuntimeFrameCompletionStats frame_stats;
-        core_io_serial_get_stats(&serial_stats);
-        core_io_reactor_get_stats(&g_runtime.io, &io_stats);
-        (void)core_chipset_get_progress(&chipset_cck, &target_cck);
-        core_chipset_get_timeline_snapshot(&timeline);
-        core_chipset_get_frame_completion_stats(&frame_stats);
-
-        {
-            uint64_t expected_cck = beat_elapsed && freq
-                ? beat_elapsed * timeline.cck_per_second / freq : 0u;
-            uint64_t advanced_cck = chipset_cck - last_chipset;
-            uint32_t realtime_pct = expected_cck
-                ? (uint32_t)(advanced_cck * 100u / expected_cck) : 0u;
-            osd_set_realtime_percent(realtime_pct);
-        }
-
-        kprintf("[HOST-SUP] beat=%u mode=%u cpu_target=%llu(+%llu) "
-                "horizon=%llu chipset=%llu(+%llu) backlog=%lld frames=%llu pc=%08x "
-                "uart_tx=%u/%u drop=%u uart_rx=%u/%u drop=%u\n",
-                (unsigned)beat,
-                (unsigned)core_chipset_timeline_mode(),
-                (unsigned long long)target_cck,
-                (unsigned long long)(target_cck - last_target),
-                (unsigned long long)horizon_cck,
-                (unsigned long long)chipset_cck,
-                (unsigned long long)(chipset_cck - last_chipset),
-                (long long)((int64_t)target_cck - (int64_t)chipset_cck),
-                (unsigned long long)frames, (unsigned)pc,
-                (unsigned)serial_stats.tx_depth,
-                (unsigned)serial_stats.tx_max_depth,
-                (unsigned)serial_stats.tx_dropped,
-                (unsigned)serial_stats.rx_depth,
-                (unsigned)serial_stats.rx_max_depth,
-                (unsigned)serial_stats.rx_dropped);
-        kprintf("[HOST-TIME] realtime=%llu horizon=%llu rigel=%llu drift=%lld "
-                "clamp=%u generation=%llu\n",
-                (unsigned long long)timeline.realtime_target_cck,
-                (unsigned long long)timeline.horizon_cck,
-                (unsigned long long)chipset_cck,
-                (long long)((int64_t)timeline.horizon_cck -
-                            (int64_t)chipset_cck),
-                timeline.clamp_active ? 1u : 0u,
-                (unsigned long long)timeline.generation);
-        kprintf("[HOST-FRAME] produced=%llu(+%llu) presented=%llu(+%llu) "
-                "coalesced=%llu(+%llu)\n",
-                (unsigned long long)frame_stats.produced,
-                (unsigned long long)(frame_stats.produced -
-                                     last_frame_stats.produced),
-                (unsigned long long)frame_stats.presented,
-                (unsigned long long)(frame_stats.presented -
-                                     last_frame_stats.presented),
-                (unsigned long long)frame_stats.coalesced,
-                (unsigned long long)(frame_stats.coalesced -
-                                     last_frame_stats.coalesced));
-        last_frame_stats = frame_stats;
-
-        /* Host silicon state: the firmware silently drops the ARM clock to
-         * 600 MHz under undervoltage/thermal throttling, which halves every
-         * performance number without any other visible symptom. Proven on
-         * the real board: the second Pi 3 gate ran entirely throttled and
-         * cost exactly 2x. Feed the OSD so the user sees UV! on screen. */
-        {
-            uint32_t throttled = vc_get_throttled();
-            kprintf("[HOST-HW] arm_mhz=%u throttled=%08x\n",
-                    (unsigned)(vc_get_arm_clock_hz() / 1000000u),
-                    (unsigned)throttled);
-            osd_set_power_alert(throttled == 0xFFFFFFFFu ? 0u : throttled);
-        }
-#if BELLATRIX_PROFILE_ENABLED
-        kprintf("[BPROF-BEAM] vposr_fast=%llu vposr_fallback=%llu "
-                "vhposr_fast=%llu vhposr_fallback=%llu snapshot_miss=%llu\n",
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.beam_vposr_fast, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.beam_vposr_fallback, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.beam_vhposr_fast, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.beam_vhposr_fallback, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.beam_snapshot_miss, __ATOMIC_RELAXED));
-        kprintf("[BPROF-POST] queued=%llu applied=%llu full_fallbacks=%llu depth_max=%llu\n",
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.posted_writes, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.posted_writes_applied, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.posted_queue_full_fallbacks, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.posted_queue_depth_max, __ATOMIC_RELAXED));
-        /* Per-beat granularity and occupancy. avg_step is the decisive
-         * integration metric (CCK advanced per rigel_step_until call): a
-         * sub-scanline value means observable deadlines are slicing the
-         * drain and any per-call fixed cost inside Rigel is multiplied.
-         * core2_busy is wall time spent inside the locked step section. */
-        uint64_t steps_now = __atomic_load_n(
-            &g_bprof.multicore.chipset_steps, __ATOMIC_RELAXED);
-        uint64_t step_cck_now = __atomic_load_n(
-            &g_bprof.multicore.chipset_cck_total, __ATOMIC_RELAXED);
-        uint64_t step_busy_now = __atomic_load_n(
-            &g_bprof.chipset_step_time.cycles_total, __ATOMIC_RELAXED);
-        uint64_t d_steps = steps_now - last_steps;
-        uint64_t avg_step = d_steps
-            ? (step_cck_now - last_step_cck) / d_steps : 0u;
-        unsigned busy_pct = beat_elapsed
-            ? (unsigned)((step_busy_now - last_step_busy) * 100u / beat_elapsed)
-            : 0u;
-        last_steps = steps_now;
-        last_step_cck = step_cck_now;
-        last_step_busy = step_busy_now;
-        kprintf("[BPROF-SCHED] event_hz=%u publish=%llu explicit_wakeups=%llu "
-                "chipset_steps=%llu avg_step=%llu core2_busy=%u%% "
-                "empty_host_steps=%llu\n",
-                (unsigned)PAL_Runtime_EventStreamHz(),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.publish_calls, __ATOMIC_RELAXED),
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.wakeups, __ATOMIC_RELAXED),
-                (unsigned long long)steps_now,
-                (unsigned long long)avg_step,
-                busy_pct,
-                (unsigned long long)__atomic_load_n(
-                    &g_bprof.multicore.empty_host_steps, __ATOMIC_RELAXED));
-#endif
-
-        uint64_t io_avg_ticks = io_stats.dispatch_calls
-            ? io_stats.total_ticks / io_stats.dispatch_calls : 0u;
-        kprintf("[HOST-IO] calls=%llu pending=%02x budget_miss=%u "
-                "avg=%lluus max=%lluus late_max=%lluus "
-                "usb=%lluus bt=%lluus serial=%lluus console=%lluus\n",
-                (unsigned long long)io_stats.dispatch_calls,
-                (unsigned)io_stats.pending_events,
-                (unsigned)io_stats.over_budget,
-                (unsigned long long)(io_avg_ticks * 1000000u / freq),
-                (unsigned long long)(io_stats.max_ticks * 1000000u / freq),
-                (unsigned long long)(io_stats.max_late_ticks * 1000000u / freq),
-                (unsigned long long)(io_stats.usb_max_ticks * 1000000u / freq),
-                (unsigned long long)(io_stats.bluetooth_max_ticks * 1000000u / freq),
-                (unsigned long long)(io_stats.serial_max_ticks * 1000000u / freq),
-                (unsigned long long)(io_stats.console_max_ticks * 1000000u / freq));
-
-        /* Audio is meaningful only relative to wall time. Report deltas once
-         * per heartbeat: a sub-realtime producer is immediately distinguishable
-         * from an HDMI consumer/queue fault without per-sample trace noise. */
-        {
-            BellatrixAudioOutputStats audio = bellatrix_audio_output_stats();
-            uint64_t expected = beat_elapsed
-                ? beat_elapsed * BELLATRIX_AUDIO_OUTPUT_RATE_HZ / freq : 0u;
-            uint64_t produced = audio.produced_samples - last_audio.produced_samples;
-            uint64_t consumed = audio.consumed_samples - last_audio.consumed_samples;
-            uint64_t dropped = audio.dropped_samples - last_audio.dropped_samples;
-            uint64_t underrun = audio.underrun_samples - last_audio.underrun_samples;
-            unsigned realtime_pct = expected
-                ? (unsigned)(produced * 100u / expected) : 0u;
-
-            kprintf("[HOST-AUDIO] expected=%llu produced=%llu consumed=%llu "
-                    "realtime=%u%% underrun=%llu dropped=%llu depth=%u "
-                    "prime=%u primed=%u\n",
-                    (unsigned long long)expected,
-                    (unsigned long long)produced,
-                    (unsigned long long)consumed,
-                    realtime_pct,
-                    (unsigned long long)underrun,
-                    (unsigned long long)dropped,
-                    (unsigned)bellatrix_audio_output_count(),
-                    (unsigned)bellatrix_audio_output_prime_frames(),
-                    bellatrix_audio_output_is_primed() ? 1u : 0u);
-            last_audio = audio;
-        }
-
-        last_target = target_cck;
-        last_chipset = chipset_cck;
-        beat++;
-    }
 }
 
 void bellatrix_launch_cpu_and_park(void (*entry)(void))
@@ -709,15 +484,6 @@ static int s_overlay = 1;
 static inline int cia_reg(uint32_t addr)
 {
     return (int)((addr >> 8) & 0xF);
-}
-
-/* ---------------------------------------------------------------------------
- * Address normalization / alias collapse
- * ------------------------------------------------------------------------- */
-
-static void __attribute__((unused)) update_ipl(void)
-{
-    bellatrix_bridge_cpu_sync_ipl();
 }
 
 /* ---------------------------------------------------------------------------
