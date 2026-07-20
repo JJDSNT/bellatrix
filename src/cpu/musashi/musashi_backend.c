@@ -221,6 +221,20 @@ static void musashi_set_ipl(void *ctx, int level)
 {
     (void)ctx;
     m68k_set_irq((unsigned int)level);
+
+    /* Musashi only services pending interrupts at the start of an execute
+     * timeslice (or when an instruction writes SR).  An IPL raise arriving
+     * mid-slice would otherwise wait until the slice ends — long enough for
+     * the guest to Disable() and rescind it (lost preemption, see
+     * ISSUE-0026).  End the slice so the IRQ is taken on the next
+     * instruction boundary, as real hardware would.
+     *
+     * ISSUE-0070: this is the ISSUE-0026 fix, which in 2026-07-03 was applied
+     * only to tools/harness/musashi_backend.c.  The product carried the
+     * original defect until 2026-07-20 — which is why AROS booted past
+     * lowlevel.library in the harness and stalled there on the product. */
+    if (level > 0)
+        m68k_end_timeslice();
 }
 
 static void musashi_reset(void *ctx)
