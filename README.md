@@ -1,6 +1,7 @@
 # Bellatrix
 > **An AI-generated project, inspired by Bloodline's [Omega](https://github.com/h5n1xp/Omega).**
-> The ultimate objective is to run an AROS setup at reasonable speed on a Raspberry Pi 3B; the desired eventual platform is the Radxa Orion O6.
+> 
+> The ultimate objective is to run an AROS setup at reasonable speed on a Raspberry Pi 3B; curious about how it would perform in the Radxa Orion O6.
 
 A bare-metal generic Amiga machine emulator for the Raspberry Pi 3B. Integrates the [Emu68](https://github.com/michalsc/Emu68) M68K JIT engine with the [Rigel](https://github.com/JJDSNT/Rigel) Amiga chipset library, running directly on Pi hardware — no Linux, no hypervisor.
 
