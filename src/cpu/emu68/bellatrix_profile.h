@@ -87,6 +87,27 @@ typedef struct
 } BellatrixHotMMIO;
 
 /* -------------------------------------------------------------------------
+ * Frame pacing ("smooth"): per-frame wall-clock distribution. Buckets are
+ * absolute milliseconds (video-standard independent) aligned to the fps that
+ * matter (60/50/30). A frame taking >= BPROF_LONG_FRAME_MS is below 30fps on
+ * both PAL and NTSC, i.e. a visible stutter regardless of the average rate.
+ * ---------------------------------------------------------------------- */
+#define BPROF_PACING_BUCKETS 7
+#define BPROF_LONG_FRAME_MS  33u
+
+typedef struct
+{
+    uint64_t last_ts;      /* CNTPCT of the previous frame-ready (0 = none)   */
+    uint64_t count;        /* inter-frame deltas measured this window         */
+    uint64_t sum_ticks;    /* Sum of deltas (for the mean)                    */
+    uint64_t min_ticks;    /* 0 = unset                                       */
+    uint64_t max_ticks;
+    uint64_t long_frames;  /* deltas >= BPROF_LONG_FRAME_MS                    */
+    uint64_t hist[BPROF_PACING_BUCKETS]; /* <14 14-17 17-20 20-25 25-33 33-50 50+ */
+    uint32_t worst_frame;  /* frame_counter at max_ticks                      */
+} BellatrixFramePacing;
+
+/* -------------------------------------------------------------------------
  * Aggregate profile state
  * ---------------------------------------------------------------------- */
 typedef struct
@@ -125,6 +146,9 @@ typedef struct
     uint32_t profile_start_frame;
     uint32_t last_mmio_addr;
     uint32_t last_mmio_pc;
+
+    /* Frame pacing (smoothness) */
+    BellatrixFramePacing pacing;
 
     /* Hotspot table */
     BellatrixHotMMIO hot[BPROF_MMIO_SLOTS];
@@ -169,6 +193,8 @@ void bprof_multicore_beam_read(uint32_t addr, int projected,
 void bprof_multicore_posted_queued(uint32_t depth);
 void bprof_multicore_posted_full_fallback(void);
 void bprof_multicore_posted_applied(uint32_t count);
+/* Record one presented/produced frame boundary (call once per RIGEL frame). */
+void bprof_frame_pacing(void);
 void bellatrix_profile_dump(void);
 void bellatrix_profile_reset(void);
 

@@ -15,6 +15,7 @@
 #include "host/osd.h"
 #include "runtime/core_chipset.h"
 #include "runtime/core_io.h"
+#include "cpu/emu68/bellatrix_profile.h"
 #include "support.h"
 #if defined(BELLATRIX_EMU68_LIVENESS_TRACE) && BELLATRIX_EMU68_LIVENESS_TRACE
 #include "M68k.h"
@@ -1011,6 +1012,11 @@ static void machine_trace_plane_payload(void)
 void bellatrix_machine_on_frame_ready(void)
 {
     g_machine.frame_counter++;
+#if BELLATRIX_PROFILE_ENABLED
+    /* Frame-pacing sample: fires once per presented frame in both single-core
+     * and multicore, since this is the common frame-ready point. */
+    bprof_frame_pacing();
+#endif
     machine_mouse_frame_tick();
     osd_set_machine_frame(g_machine.frame_counter);
     /* Runtime launcher screens share the physical framebuffer with Rigel.

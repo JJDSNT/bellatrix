@@ -233,8 +233,76 @@ void bellatrix_profile_reset(void)
 }
 
 /* -------------------------------------------------------------------------
+ * Frame pacing
+ * ---------------------------------------------------------------------- */
+void bprof_frame_pacing(void)
+{
+    BellatrixFramePacing *fp = &g_bprof.pacing;
+    uint64_t now = bprof_now();
+
+    if (fp->last_ts != 0u) {
+        uint64_t d = now - fp->last_ts;
+        uint64_t freq = bprof_freq();
+        uint64_t ms = freq ? (d * 1000ull) / freq : 0u;
+        const BellatrixMachine *m;
+
+        fp->count++;
+        fp->sum_ticks += d;
+        if (fp->min_ticks == 0u || d < fp->min_ticks)
+            fp->min_ticks = d;
+        if (d > fp->max_ticks) {
+            fp->max_ticks = d;
+            m = bellatrix_machine_get();
+            fp->worst_frame = m ? m->frame_counter : 0u;
+        }
+        if (ms >= (uint64_t)BPROF_LONG_FRAME_MS)
+            fp->long_frames++;
+
+        /* Bucket by absolute ms. edges[] are the upper bounds of buckets
+         * 0..N-2; the last bucket is open-ended (>= last edge). */
+        {
+            static const uint32_t edges[BPROF_PACING_BUCKETS - 1] =
+                { 14u, 17u, 20u, 25u, 33u, 50u };
+            int b = 0;
+            while (b < BPROF_PACING_BUCKETS - 1 && ms >= (uint64_t)edges[b])
+                b++;
+            fp->hist[b]++;
+        }
+    }
+
+    fp->last_ts = now;
+}
+
+/* -------------------------------------------------------------------------
  * Helpers for dump
  * ---------------------------------------------------------------------- */
+/* Milliseconds as fixed-point whole.tenth (kprintf has no %f). */
+static void pacing_ms(uint64_t ticks, uint64_t freq,
+                      unsigned long long *whole, unsigned long long *tenth)
+{
+    if (!freq) { *whole = 0; *tenth = 0; return; }
+    *whole = (unsigned long long)((ticks * 1000ull) / freq);
+    *tenth = (unsigned long long)(((ticks * 10000ull) / freq) % 10ull);
+}
+
+/* Approximate percentile: upper-bound ms of the bucket holding the num/den
+ * quantile. Returns 999 for the open-ended top bucket (i.e. > 50 ms). */
+static uint32_t pacing_pctile_ms(const BellatrixFramePacing *fp,
+                                 uint64_t num, uint64_t den)
+{
+    static const uint32_t edge[BPROF_PACING_BUCKETS] =
+        { 14u, 17u, 20u, 25u, 33u, 50u, 999u };
+    uint64_t target = (fp->count * num) / den;
+    uint64_t cum = 0;
+    for (int i = 0; i < BPROF_PACING_BUCKETS; i++) {
+        cum += fp->hist[i];
+        if (cum >= target)
+            return edge[i];
+    }
+    return 999u;
+}
+
+
 static uint64_t avg_cy(const BellatrixProfileBucket *b)
 {
     return b->calls ? b->cycles_total / b->calls : 0;
@@ -315,6 +383,41 @@ void bellatrix_profile_dump(void)
     kprintf("[BPROF] reads=%llu  writes=%llu\n",
             (unsigned long long)p->reads,
             (unsigned long long)p->writes);
+
+    /* Frame pacing near the top: it is the headline "smooth" metric and the
+     * long dump can be truncated by a slow serial (e.g. QEMU-TCG) before the
+     * tail sections print. */
+    kprintf("[BPROF] --- Frame pacing (window) ---\n");
+    {
+        const BellatrixFramePacing *fp = &p->pacing;
+        if (fp->count == 0u) {
+            kprintf("[BPROF]   (no frame boundaries measured)\n");
+        } else {
+            unsigned long long mnw, mnt, mew, met, mxw, mxt;
+            uint64_t mean = fp->sum_ticks / fp->count;
+            uint32_t p50 = pacing_pctile_ms(fp, 50, 100);
+            uint32_t p95 = pacing_pctile_ms(fp, 95, 100);
+            uint32_t p99 = pacing_pctile_ms(fp, 99, 100);
+
+            pacing_ms(fp->min_ticks, freq, &mnw, &mnt);
+            pacing_ms(mean,          freq, &mew, &met);
+            pacing_ms(fp->max_ticks, freq, &mxw, &mxt);
+
+            kprintf("[BPROF]   frames=%llu  min=%llu.%llu  mean=%llu.%llu  max=%llu.%llu ms\n",
+                    (unsigned long long)fp->count, mnw, mnt, mew, met, mxw, mxt);
+            kprintf("[BPROF]   p50<=%u  p95<=%u  p99<=%u ms  (bucket upper bound; 999 = >50)\n",
+                    (unsigned)p50, (unsigned)p95, (unsigned)p99);
+            kprintf("[BPROF]   long_frames(>=%ums)=%llu  worst=%llu.%llu ms @frame %u\n",
+                    (unsigned)BPROF_LONG_FRAME_MS,
+                    (unsigned long long)fp->long_frames,
+                    mxw, mxt, (unsigned)fp->worst_frame);
+            kprintf("[BPROF]   hist ms  <14:%llu 14-17:%llu 17-20:%llu 20-25:%llu 25-33:%llu 33-50:%llu 50+:%llu\n",
+                    (unsigned long long)fp->hist[0], (unsigned long long)fp->hist[1],
+                    (unsigned long long)fp->hist[2], (unsigned long long)fp->hist[3],
+                    (unsigned long long)fp->hist[4], (unsigned long long)fp->hist[5],
+                    (unsigned long long)fp->hist[6]);
+        }
+    }
 
     kprintf("[BPROF] --- bellatrix_bus_access breakdown ---\n");
     kprintf("[BPROF] total_access : calls=%llu  avg=%llu cy (%llu ns)  min=%llu  max=%llu\n",
