@@ -508,6 +508,23 @@ set_tests_properties(bellatrix_harness_rtg_aros PROPERTIES
     TIMEOUT 30
 )
 
+# Cross-emulator E-clock timing probe (LinuxJedi/Copperline timing-test).
+# Boots the upstream timing-test ADF and locks its 32 serial rows against a
+# committed baseline so a chipset/CPU-timing regression changes a row.
+# Skipped (exit 77) when the external/copperline submodule is not checked out.
+add_test(NAME bellatrix_harness_timing_test
+         COMMAND /bin/bash
+                 ${ROOT}/tests/integration/harness_timing_test.sh
+                 ${CMAKE_BINARY_DIR}/harness
+                 ${ROOT}/src/roms/KS13.rom
+                 ${ROOT}/external/copperline/timing-test
+                 ${ROOT}/tests/integration/timing_test_baseline.txt)
+set_tests_properties(bellatrix_harness_timing_test PROPERTIES
+    ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 60
+)
+
 set_tests_properties(bellatrix_unit_memory PROPERTIES
     ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0"
 )
