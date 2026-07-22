@@ -1019,6 +1019,43 @@ void bellatrix_machine_on_frame_ready(void)
 #endif
     machine_mouse_frame_tick();
     osd_set_machine_frame(g_machine.frame_counter);
+
+    /* Live speed readout, sampled over ~0.5 s so the figures are steady:
+     *   realtime% = emulated CCK advanced per wall second vs the master clock
+     *               (the "am I keeping up" metric; 100% = full-speed Amiga).
+     *   fps       = presented frames per wall second (what the eye sees),
+     *               measured directly so it needs no PAL/NTSC assumption.
+     * realtime% feeds the on-screen OSD (which nothing else fed, so its RT
+     * field previously read 000%); both go to the serial [PERF] line so the
+     * rate is visible headless too. */
+    {
+        static uint64_t rt_last_wall  = 0;
+        static uint64_t rt_last_cck   = 0;
+        static uint64_t rt_last_frame = 0;
+        uint64_t now  = PAL_Time_ReadCounter();
+        uint64_t freq = PAL_Time_GetFrequency();
+        if (rt_last_wall == 0u || freq == 0u) {
+            rt_last_wall  = now;
+            rt_last_cck   = g_machine.tick_count;
+            rt_last_frame = g_machine.frame_counter;
+        } else if ((now - rt_last_wall) >= freq / 2u) {
+            uint64_t dwall   = now - rt_last_wall;
+            uint64_t dcck    = g_machine.tick_count - rt_last_cck;
+            uint64_t dframes = g_machine.frame_counter - rt_last_frame;
+            uint32_t cck_hz  = rigel_get_clock_hz(bellatrix_machine_rigel_ctx());
+            uint64_t fps     = (dframes * freq) / dwall;
+            if (cck_hz != 0u) {
+                uint64_t pct = (dcck * freq * 100ull) / (dwall * (uint64_t)cck_hz);
+                osd_set_realtime_percent((uint32_t)pct);
+                kprintf("[PERF] realtime=%llu%%  fps=%llu\n",
+                        (unsigned long long)pct,
+                        (unsigned long long)fps);
+            }
+            rt_last_wall  = now;
+            rt_last_cck   = g_machine.tick_count;
+            rt_last_frame = g_machine.frame_counter;
+        }
+    }
     /* Runtime launcher screens share the physical framebuffer with Rigel.
      * Keep CPU/chipset/frame accounting alive, but preserve the modal until
      * host reactor closes it; the next frame restores the guest image. */
