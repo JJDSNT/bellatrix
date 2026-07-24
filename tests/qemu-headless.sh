@@ -9,19 +9,28 @@
 #   TIMEOUT=30 ./tests/qemu-headless.sh          # longer capture
 #   KICKSTART=src/roms/KS13.rom ./tests/qemu-headless.sh
 #   BUILD=0 ./tests/qemu-headless.sh             # skip build, run only
+#   BELLATRIX_CPU_BACKEND=musashi BUILD=0 \
+#       KICKSTART=src/roms/KS13.rom ./tests/qemu-headless.sh
 #
 # Exit codes:
-#   0  QEMU ran and produced output
-#   1  build failed or QEMU did not start
+#   0  QEMU ran and guest progress was observed
+#   1  build failed, QEMU did not start, or the guest made no progress
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL="$ROOT/emu68/install-bellatrix-rigel"
+CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
+case "$CPU_BACKEND" in
+    emu68)   INSTALL="$ROOT/emu68/install-bellatrix-rigel" ;;
+    musashi) INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi" ;;
+    *) echo "ERROR: unsupported CPU backend: $CPU_BACKEND"; exit 1 ;;
+esac
 IMAGE="$INSTALL/Emu68.img"
 DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
 TIMEOUT="${TIMEOUT:-10}"
 BUILD="${BUILD:-1}"
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
 
 # ---------------------------------------------------------------------------
 # Build
@@ -59,10 +68,26 @@ else
 fi
 
 echo "[RUN] QEMU headless — capturing serial for ${TIMEOUT}s..."
+echo "[RUN] CPU backend: $CPU_BACKEND"
 echo "---"
 
-# Run QEMU with a hard timeout; always exit 0 (timeout is expected)
-timeout "$TIMEOUT" qemu-system-aarch64 "${QEMU_ARGS[@]}" || true
+# A timeout is the expected way to stop QEMU. Preserve the serial stream so
+# the smoke test can distinguish a slow TCG sample at PERF=0 from a genuinely
+# static chipset timeline.
+set +e
+timeout "$TIMEOUT" qemu-system-aarch64 "${QEMU_ARGS[@]}" 2>&1 | tee "$LOG"
+QEMU_STATUS="${PIPESTATUS[0]}"
+set -e
 
 echo "---"
-echo "[DONE] ${TIMEOUT}s capture complete."
+if [ "$QEMU_STATUS" -ne 0 ] && [ "$QEMU_STATUS" -ne 124 ]; then
+    echo "ERROR: QEMU exited with status $QEMU_STATUS"
+    exit 1
+fi
+
+if ! grep -Eq '\[SC-PROGRESS\] frame=[1-9][0-9]*|\[RIGEL-FRAME\].*frame=[1-9][0-9]*|\[PERF\] realtime=[1-9][0-9]*%' "$LOG"; then
+    echo "ERROR: no guest/chipset progress observed in ${TIMEOUT}s"
+    exit 1
+fi
+
+echo "[DONE] ${TIMEOUT}s capture complete; guest progress observed."

@@ -2,6 +2,7 @@
 
 #include "cpu/cpu_bridge.h"
 #include "cpu/mmio_policy.h"
+#include "cpu/emu68/bellatrix.h"
 #include "cpu/emu68/bellatrix_profile.h"
 
 #include "debug/core_log.h"
@@ -296,7 +297,25 @@ void bellatrix_bridge_publish_cpu_cycles(uint32_t cycles)
 
 void bellatrix_bridge_cpu_progress(uint32_t cycles)
 {
-    bellatrix_bridge_publish_cpu_cycles(cycles);
+    if (cycles == 0u)
+        return;
+
+    /*
+     * A progress notification issued from inside a CPU timeslice must follow
+     * the same ownership rule as cpu_backend_run_selected(): Core 2 consumes
+     * the published horizon in multicore mode, while single-core has no
+     * consumer and therefore advances Rigel synchronously.
+     */
+    if (PAL_Core_IsMulticoreEnabled()) {
+        bellatrix_bridge_publish_cpu_cycles(cycles);
+    } else {
+#if defined(BELLATRIX_HARNESS) && BELLATRIX_HARNESS
+        bellatrix_machine_advance(cycles);
+#else
+        bellatrix_machine_advance_cpu_cycles(cycles);
+#endif
+        PAL_Runtime_Poll();
+    }
 }
 
 void bellatrix_bridge_cpu_sync_ipl(void)
