@@ -245,3 +245,48 @@ HARNESS_MOUSE_LMB_SCRIPT="250:10,1100:10" \
   KICKSTART=src/roms/KS13.rom ADF=src/disks/battle.adf \
   FRAMES=2020 ./run.sh harness
 ```
+
+## Sessão 2026-07-24 — regressão aparente e matriz A/B preservada
+
+Relato: demos que anteriormente funcionavam, em particular `eonA.adf` e
+`3ddemo2.adf`, deixaram de apresentar o comportamento esperado após a entrada
+do chip-bus temporal explícito.
+
+Resultados já obtidos, para não repetir hipóteses:
+
+- `eonA`, `HARNESS_CPU=68000`, frame 1722:
+  - `BELLATRIX_CYCLE_EXACT=1`: frame preto;
+  - `BELLATRIX_CYCLE_EXACT=0`: frame preto;
+  - CPU 68000 com política temporariamente substituída pela política 68040
+    (sem transação/stall): frame preto;
+  - calendário lores temporariamente restaurado para slots adjacentes, também
+    sem a política de stall: frame preto.
+- Os overrides acima foram instrumentação temporária e foram removidos; não
+  fazem parte do produto nem do harness publicado.
+- `HARNESS_CPU=68010` não é um controle equivalente: o demo voltou/reiniciou
+  para a ROM, portanto esse resultado não isola a política de bus.
+- `3ddemo2.adf`, CPU 68000, chegou ao AmigaDOS tanto com cycle-exact ligado
+  quanto desligado. A própria tela do disco instrui executar
+  `AnarchyDemo2.EXE` manualmente quando há Fast RAM. O harness atualmente
+  configura uma board Z2 de 8 MiB, então esse caso pode ser mudança de startup
+  por autoconfig, não falha de rendering ou timing.
+
+Próxima matriz A/B recomendada:
+
+1. `eonA` no último commit visualmente conhecido como bom, preservando juntos o
+   Bellatrix e o SHA Rigel daquele superprojeto; comparar PC, DMACON, INTENA,
+   INTREQ, Copper PC/WAIT e hashes de Chip RAM em checkpoints fixos.
+2. Build atual contra Rigel antigo (`26054ee9...`) e build antigo contra Rigel
+   atual (`000719d...`) em worktrees separados. Isso separa scheduler/Copper
+   de integração CPU sem modificar o checkout principal.
+3. Repetir `eonA` sem Z2 Fast RAM e com o mesmo mapa de memória do registro de
+   2026-07-06.
+4. Para `3ddemo2`, comparar primeiro autoconfig Z2 ligado/desligado e executar
+   explicitamente `AnarchyDemo2.EXE`; só depois tratar como regressão temporal.
+5. Capturar mais de um checkpoint do EON. Um frame preto isolado em 1722 pode
+   representar mudança de fase/velocidade, por isso correlacionar contador do
+   harness, contador Denise/Rigel e PC no mesmo log.
+
+Não concluir ainda que a nova ordem lores ou o stall 68000 sejam inocentes em
+todos os cenários: os A/B negativos acima mostram apenas que desligá-los
+isoladamente no build atual não recuperou o frame 1722.
