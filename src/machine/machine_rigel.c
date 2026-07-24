@@ -21,6 +21,9 @@
 #include "support.h"
 
 #include <string.h>
+#ifdef BELLATRIX_HARNESS
+#include <stdlib.h>   /* getenv — dev-only BELLATRIX_CYCLE_EXACT override */
+#endif
 
 #include "rigel/rigel.h"
 #include "rigel/rigel_audio.h"
@@ -211,6 +214,20 @@ void bellatrix_machine_init(CpuBackend *cpu_backend)
     /* Bypass baud-rate timing so SERDAT writes appear immediately in the TX
      * FIFO. Without this the guest stalls in a TBE polling loop (krnPutC). */
     config.serial.tx_instant = true;
+
+    /* Cycle-exact honest-hybrid cost model (ISSUE-0071): the product runs with
+     * the hardware-calibrated blitter/line costs applied — Rigel owns the mode,
+     * the machine selects it here. Hosted/dev builds can force it off for A/B
+     * comparison against the legacy coarse model with BELLATRIX_CYCLE_EXACT=0. */
+    config.cycle_exact = true;
+#ifdef BELLATRIX_HARNESS
+    {
+        const char *ce = getenv("BELLATRIX_CYCLE_EXACT");
+        if (ce != NULL && ce[0] == '0') {
+            config.cycle_exact = false;
+        }
+    }
+#endif
 
 #ifdef BELLATRIX_HARNESS
     /*

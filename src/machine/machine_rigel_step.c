@@ -912,6 +912,39 @@ void bellatrix_machine_advance(uint32_t ticks)
     machine_step_components(&g_machine, ticks);
 }
 
+uint32_t bellatrix_machine_cpu_chip_access(unsigned int word_transfers,
+                                           unsigned int transfer_cck)
+{
+    uint64_t waited = 0u;
+    unsigned int transfer;
+
+    if (!g_rigel || PAL_Core_IsMulticoreEnabled() ||
+        word_transfers == 0u || transfer_cck == 0u)
+        return 0u;
+
+    machine_flush_for_bus(&g_machine);
+    for (transfer = 0u; transfer < word_transfers; ++transfer) {
+        while (rigel_cpu_would_stall(g_rigel)) {
+            rigel_bus_state_t bus = rigel_get_bus_state(g_rigel);
+            rigel_cycle_t now = rigel_get_time(g_rigel);
+            rigel_cycle_t resume = bus.next_change;
+            rigel_cycle_t delta = resume > now ? resume - now : 1u;
+
+            (void)machine_quantum_step(&g_machine, delta,
+                                       MACHINE_STEP_BUS_CHANGE);
+            waited += delta;
+        }
+
+        /* The grant is the first CCK of the 68000's four-clock bus cycle.
+         * The remaining tail still advances all chipset domains. */
+        (void)machine_quantum_step(&g_machine, transfer_cck,
+                                   MACHINE_STEP_BUS_CHANGE);
+    }
+    s_quantum = machine_next_quantum();
+
+    return waited > UINT32_MAX ? UINT32_MAX : (uint32_t)waited;
+}
+
 void bellatrix_machine_on_frame_skipped(void)
 {
     g_machine.frame_counter++;

@@ -1,6 +1,7 @@
 #include "cpu/musashi/musashi_backend.h"
 
 #include "cpu/cpu_bridge.h"
+#include "cpu/cpu_bus_policy.h"
 #include "cpu/direct_region.h"
 #include "machine/machine.h"
 #include "rigel/rigel_cia.h"
@@ -17,6 +18,58 @@
 #endif
 
 static BellatrixDirectRegionMap s_direct_regions;
+static const CpuBusPolicy *s_bus_policy;
+static int s_run_sync_active;
+static uint32_t s_run_sync_published;
+static uint32_t s_bus_cycles_prepublished;
+
+static void musashi_sync_cpu_progress(void)
+{
+    int ran;
+    uint32_t delta;
+
+    if (!s_run_sync_active)
+        return;
+
+    ran = m68k_cycles_run();
+    if (ran <= 0 || (uint32_t)ran <= s_run_sync_published)
+        return;
+
+    delta = (uint32_t)ran - s_run_sync_published;
+    s_run_sync_published = (uint32_t)ran;
+    if (s_bus_cycles_prepublished != 0u) {
+        uint32_t covered = delta < s_bus_cycles_prepublished
+            ? delta : s_bus_cycles_prepublished;
+        delta -= covered;
+        s_bus_cycles_prepublished -= covered;
+    }
+    if (delta == 0u)
+        return;
+    bellatrix_bridge_cpu_progress(delta);
+}
+
+static void musashi_begin_chip_access(unsigned int size)
+{
+    unsigned int transfers = size == 4u ? 2u : 1u;
+    uint32_t waited;
+    uint32_t wait_cpu_cycles;
+
+    musashi_sync_cpu_progress();
+    if (!s_bus_policy || !s_bus_policy->stalls_on_chip_access)
+        return;
+
+    waited = bellatrix_machine_cpu_chip_access(transfers, 2u);
+
+    /* A 68000 word transfer is already included in Musashi's four-clock
+     * instruction timing, so only pre-publish it to Rigel. Arbitration waits
+     * are additional CPU clocks and must also shorten this timeslice. */
+    s_bus_cycles_prepublished += transfers * 4u;
+    wait_cpu_cycles = waited * 2u;
+    if (wait_cpu_cycles != 0u) {
+        m68k_modify_timeslice(-(int)wait_cpu_cycles);
+        s_run_sync_published += wait_cpu_cycles;
+    }
+}
 
 static int musashi_direct_map(void *opaque,
                               const BellatrixDirectRegion *region)
@@ -126,6 +179,7 @@ static uint32_t musashi_read(uint32_t addr, unsigned int size)
     if (mem->chip_ram &&
         addr < BELLATRIX_MUSASHI_LOW_RAM_SIZE &&
         size <= (BELLATRIX_MUSASHI_LOW_RAM_SIZE - addr)) {
+        musashi_begin_chip_access(size);
         return musashi_chip_read(mem, addr, size);
     }
 
@@ -156,6 +210,7 @@ static void musashi_write(uint32_t addr, uint32_t value, unsigned int size)
     if (mem->chip_ram &&
         addr < BELLATRIX_MUSASHI_LOW_RAM_SIZE &&
         size <= (BELLATRIX_MUSASHI_LOW_RAM_SIZE - addr)) {
+        musashi_begin_chip_access(size);
         musashi_chip_write(mem, addr, value, size);
         return;
     }
@@ -245,8 +300,15 @@ static void musashi_reset(void *ctx)
 
 static int musashi_run(void *ctx, uint32_t cycles)
 {
+    int used;
+
     (void)ctx;
-    return m68k_execute((int)cycles);
+    s_run_sync_active = 1;
+    s_run_sync_published = 0u;
+    used = m68k_execute((int)cycles);
+    musashi_sync_cpu_progress();
+    s_run_sync_active = 0;
+    return used;
 }
 
 static int musashi_map_direct(void *ctx,
@@ -270,6 +332,7 @@ static CpuBackend g_musashi_backend = {
     .run = musashi_run,
     .map_direct = musashi_map_direct,
     .unmap_direct = musashi_unmap_direct,
+    .progress_in_run = 1,
 };
 
 const char *bellatrix_musashi_cpu_model(void)
@@ -299,6 +362,7 @@ void bellatrix_musashi_backend_init(void)
         .unmap = musashi_direct_unmap,
     };
     bellatrix_direct_region_map_init(&s_direct_regions, &direct_ops, NULL);
+    s_bus_policy = cpu_bus_policy_by_name(bellatrix_musashi_cpu_model());
     m68k_init();
     m68k_set_cpu_type(BELLATRIX_MUSASHI_CPU_MODEL);
 }

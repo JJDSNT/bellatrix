@@ -184,6 +184,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/machine_rigel_step.c
     ${SRC}/machine/expansion.c
     ${SRC}/cpu/cpu_bridge.c
+    ${SRC}/cpu/cpu_bus_policy.c
     ${SRC}/cpu/direct_region.c
 
     # Autoconfig + bus fabric
@@ -432,6 +433,15 @@ add_executable(bellatrix_unit_mmio_policy
 target_include_directories(bellatrix_unit_mmio_policy PRIVATE ${SRC})
 target_compile_options(bellatrix_unit_mmio_policy PRIVATE -Wall -Wextra)
 add_test(NAME bellatrix_unit_mmio_policy COMMAND bellatrix_unit_mmio_policy)
+
+add_executable(bellatrix_unit_cpu_bus_policy
+    ${ROOT}/tests/unit/test_cpu_bus_policy.c
+    ${SRC}/cpu/cpu_bus_policy.c
+)
+target_include_directories(bellatrix_unit_cpu_bus_policy PRIVATE ${SRC})
+target_compile_options(bellatrix_unit_cpu_bus_policy PRIVATE -Wall -Wextra -Werror)
+add_test(NAME bellatrix_unit_cpu_bus_policy
+         COMMAND bellatrix_unit_cpu_bus_policy)
 
 add_executable(bellatrix_unit_posted_writes
     ${ROOT}/tests/unit/test_posted_writes.c

@@ -98,6 +98,12 @@ void bellatrix_machine_attach_rom(const uint8_t *rom, uint32_t rom_size);
 /* ------------------------------------------------------------------------- */
 
 void bellatrix_machine_advance(uint32_t ticks);
+/* Execute `word_transfers` 16-bit OCS/ECS CPU bus cycles. Each transfer waits
+ * for a grant and then advances through its complete bus-cycle duration.
+ * Returns CCKs spent waiting before grants; nominal transfer time is not
+ * included. */
+uint32_t bellatrix_machine_cpu_chip_access(unsigned int word_transfers,
+                                           unsigned int transfer_cck);
 void bellatrix_machine_sync_ipl(void);
 uint32_t bellatrix_machine_recommended_cpu_quantum(uint32_t max_cycles);
 

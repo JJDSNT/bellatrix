@@ -9,9 +9,9 @@
 #include "storage/iso/iso_image.h"
 #include "host/pal.h"
 #include "runtime/core_chipset.h"
+#include "runtime/runtime.h"
 #if BELLATRIX_ENABLE_USBSTACK
 #include "io/usb/usb_msc_bellatrix.h"
-#include "runtime/runtime.h"
 #endif
 
 #include <string.h>
