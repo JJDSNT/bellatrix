@@ -1076,7 +1076,10 @@ void bellatrix_machine_on_frame_ready(void)
             uint64_t dwall   = now - rt_last_wall;
             uint64_t dcck    = g_machine.tick_count - rt_last_cck;
             uint64_t dframes = g_machine.frame_counter - rt_last_frame;
-            uint32_t cck_hz  = rigel_get_clock_hz(bellatrix_machine_rigel_ctx());
+            /* Rigel time/beam positions are in CCK (227 per PAL line), while
+             * config.clock_hz is the 68k clock. One CCK is two 68k clocks. */
+            uint32_t cck_hz  =
+                rigel_get_clock_hz(bellatrix_machine_rigel_ctx()) / 2u;
             uint64_t fps     = (dframes * freq) / dwall;
             if (cck_hz != 0u) {
                 uint64_t pct = (dcck * freq * 100ull) / (dwall * (uint64_t)cck_hz);
