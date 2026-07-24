@@ -114,6 +114,15 @@ case "$RELEASE_PROFILE" in
         BELLATRIX_SDCARD_BOARD="1"
         BELLATRIX_RTG_VIDEOCORE="1"
         ;;
+    musashi_68ec020)
+        CPU_BACKEND="musashi"
+        MUSASHI_CPU="68ec020"
+        BELLATRIX_EMU68_BOARDS_MODE="legacy"
+        BELLATRIX_Z3_68040="0"
+        BELLATRIX_DEVICETREE_BOARD="0"
+        BELLATRIX_SDCARD_BOARD="1"
+        BELLATRIX_RTG_VIDEOCORE="0"
+        ;;
     musashi_68000)
         CPU_BACKEND="musashi"
         MUSASHI_CPU="68000"
@@ -126,7 +135,7 @@ case "$RELEASE_PROFILE" in
     "") ;;
     *)
         echo "ERROR: invalid BELLATRIX_RELEASE_PROFILE: $RELEASE_PROFILE"
-        echo "Valid values: emu68, musashi_68040, musashi_68000"
+        echo "Valid values: emu68, musashi_68040, musashi_68ec020, musashi_68000"
         exit 1
         ;;
 esac

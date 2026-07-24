@@ -11,12 +11,14 @@
 //
 // What this is NOT:
 //   - It is NOT a runtime CPU selector. The model is already chosen at build
-//     time (scripts/build.sh musashi_68000 / musashi_68040) or via HARNESS_CPU.
+//     time (scripts/build.sh musashi_68000 / musashi_68ec020 /
+//     musashi_68040) or via HARNESS_CPU.
 //     A backend looks up the policy *for the model it was given*; it does not
 //     switch models at runtime.
 //
 // How it is used:
 //   Musashi-68000 target  -> cpu_bus_policy_68000     (the easiest reference)
+//   Musashi-68EC020 target -> cpu_bus_policy_68ec020  (A500+ timing reference)
 //   Musashi-68040 target  -> cpu_bus_policy_68040
 //   Emu68 target          -> cpu_bus_policy_68040     (Emu68 is a ~68040 class)
 //   The adapter applies the policy's points; Rigel stays CPU-agnostic.
@@ -42,7 +44,7 @@ typedef enum CpuModel {
 } CpuModel;
 
 typedef struct CpuBusPolicy {
-    const char *name;   /* "68000", "68040" */
+    const char *name;   /* "68000", "68ec020", "68040" */
     CpuModel    model;
 
     /* Speed: the CPU clock that converts a backend's per-instruction cycle
@@ -53,10 +55,20 @@ typedef struct CpuBusPolicy {
      * 0 = leave the current fixed ratio untouched. */
     uint32_t    cpu_clock_hz;
 
-    /* Bus contention: when true, a chip-bus access consults Rigel's
-     * cpu_would_stall and the CPU waits for a free slot (classic 68000
-     * behaviour). Default false = today's behaviour (no stall). */
+    /* Whether callbacks execute an explicit chip-bus transaction, and whether
+     * that transaction waits for a CPU-accessible DMA slot. */
+    bool        accounts_chip_access;
     bool        stalls_on_chip_access;
+
+    /* EC020 timing accounts chip-resident program fetches explicitly while
+     * leaving data-transfer cost in Musashi's instruction total. */
+    bool        chip_access_program_only;
+
+    /* Nominal clocks already included by the CPU core for one external word
+     * transfer. The adapter pre-publishes these clocks while executing the
+     * corresponding two-CCK chip-bus transaction, then removes them from the
+     * instruction-retirement delta to avoid charging the access twice. */
+    uint8_t     chip_transfer_cpu_cycles;
 
     /* Interrupt timing: CPU cycles between an IPL raise and the CPU recognising
      * it. 0 = current immediate recognition. */
@@ -67,10 +79,11 @@ typedef struct CpuBusPolicy {
  * against a config-matched reference; each point is validated before it is
  * turned on (ISSUE-0072). */
 extern const CpuBusPolicy cpu_bus_policy_68000;
+extern const CpuBusPolicy cpu_bus_policy_68ec020;
 extern const CpuBusPolicy cpu_bus_policy_68040;
 
 /* Look up the policy for a built model. `name` is the build/HARNESS_CPU string
- * ("68000", "68040"); the enum form is for backends that hold a CpuModel.
+ * ("68000", "68ec020", "68040"); the enum form is for backends that hold a CpuModel.
  * Unknown -> the 68040 profile (Emu68's class, and the historical default). */
 const CpuBusPolicy *cpu_bus_policy_by_name(const char *name);
 const CpuBusPolicy *cpu_bus_policy_for_model(CpuModel model);

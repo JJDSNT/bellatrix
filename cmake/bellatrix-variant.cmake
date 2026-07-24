@@ -257,6 +257,7 @@ list(APPEND BASE_FILES
 if(BELLATRIX_USE_MUSASHI_CPU)
     list(APPEND BASE_FILES
         ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_backend.c
+        ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_bus_timing.c
         ${CMAKE_SOURCE_DIR}/../src/cpu/musashi/musashi_baremetal_stubs.c
         ${CMAKE_SOURCE_DIR}/../external/musashi/m68kcpu.c
         ${CMAKE_SOURCE_DIR}/../external/musashi/m68kdasm.c

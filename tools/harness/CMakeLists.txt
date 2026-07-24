@@ -57,6 +57,7 @@ target_compile_options(musashi PRIVATE
 
 target_compile_definitions(musashi PRIVATE
     BELLATRIX_HARNESS=1
+    M68K_EMULATE_FC=M68K_OPT_ON
 )
 
 # ---------------------------------------------------------------------------
@@ -185,6 +186,7 @@ set(BELLATRIX_SOURCES
     ${SRC}/machine/expansion.c
     ${SRC}/cpu/cpu_bridge.c
     ${SRC}/cpu/cpu_bus_policy.c
+    ${SRC}/cpu/musashi/musashi_bus_timing.c
     ${SRC}/cpu/direct_region.c
 
     # Autoconfig + bus fabric

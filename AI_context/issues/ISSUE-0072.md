@@ -179,10 +179,35 @@ not a detail — otherwise family A/C/D rows are not apples-to-apples.
 
 ## Convergence note
 
-There are currently **two** Musashi integrations: product (`src/cpu/musashi/`) and
-harness (`tools/harness/musashi_backend.c`). "Shared where possible" argues for the
-policy to be a single shared artifact both consume, and eventually for the two
-integrations to converge. Tracked, not done here.
+Product (`src/cpu/musashi/`) and harness (`tools/harness/musashi_backend.c`)
+retain different memory maps and diagnostics, but their temporal integration
+now converges in `src/cpu/musashi/musashi_bus_timing.c`. Progress publication,
+function-code tracking, cycle compensation, explicit transactions and slot
+waits are the same compiled code in both.
+
+## 2026-07-24 — 68EC020 policy and matched-model baseline
+
+Musashi already supported `M68K_CPU_TYPE_68EC020`, but the harness reduced every
+non-68000 model to `cpu_bus_policy_68040`. A distinct `68ec020` policy and
+`musashi_68ec020` release profile now select the real model in both product and
+harness. Function-code emulation is enabled so the shared adapter can
+distinguish program prefetch from data.
+
+The FS-UAE A500+/68EC020 reference rejected applying the 68000 transaction to
+every callback: `cw1024` became about 1.45x slow without DMA and 2.25x slow with
+six planes. The retained initial model accounts chip-resident program fetches
+without synchronously waiting them on DMA. Shift, DBRA, DBRA in slow/chip RAM,
+frame, blitter clear/fill and fill+3bpl are near the reference. Move/multiply
+and several memory rows still diverge; do not add per-opcode fudge factors
+without a matched physical capture.
+
+Validation:
+
+- shared harness build: pass;
+- Bellatrix unit suite plus harness smoke (10 tests): pass;
+- 68000 rows 10/11/12/15/18 remain `073A/09FB/073A/09FB/0739`;
+- `BELLATRIX_RELEASE_PROFILE=musashi_68ec020` cross-build: pass;
+- QEMU KS1.3 smoke: pass, frames 1→10 at 3–4% TCG realtime.
 
 ## Battle Squadron — attribution, not a fix
 

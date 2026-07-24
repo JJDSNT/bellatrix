@@ -913,7 +913,8 @@ void bellatrix_machine_advance(uint32_t ticks)
 }
 
 uint32_t bellatrix_machine_cpu_chip_access(unsigned int word_transfers,
-                                           unsigned int transfer_cck)
+                                           unsigned int transfer_cck,
+                                           int wait_for_slot)
 {
     uint64_t waited = 0u;
     unsigned int transfer;
@@ -924,7 +925,7 @@ uint32_t bellatrix_machine_cpu_chip_access(unsigned int word_transfers,
 
     machine_flush_for_bus(&g_machine);
     for (transfer = 0u; transfer < word_transfers; ++transfer) {
-        while (rigel_cpu_would_stall(g_rigel)) {
+        while (wait_for_slot && rigel_cpu_would_stall(g_rigel)) {
             rigel_bus_state_t bus = rigel_get_bus_state(g_rigel);
             rigel_cycle_t now = rigel_get_time(g_rigel);
             rigel_cycle_t resume = bus.next_change;

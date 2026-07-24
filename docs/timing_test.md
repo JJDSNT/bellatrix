@@ -88,3 +88,29 @@ already line up closely (slow-RAM write, `mul`, frame length). Turning this into
 a true accuracy check means a config-matched run (same CPU/ROM/RAM as a reference
 emulator) and a row-by-row diff — the natural follow-up, now that the reference
 clock itself is trustworthy.
+
+## 68EC020 profile
+
+The harness and bare-metal Musashi backend now share the temporal adapter
+`src/cpu/musashi/musashi_bus_timing.c` and both accept `68ec020`:
+
+```bash
+BELLATRIX_RELEASE_PROFILE=musashi_68ec020 ./scripts/build.sh
+
+HARNESS_CPU=68ec020 bash tests/integration/harness_timing_test.sh \
+    build_harness_rigel/harness src/roms/KS13.rom \
+    external/copperline/timing-test \
+    tests/integration/timing_test_baseline.txt
+```
+
+The harness command intentionally reports a diff against Bellatrix's default
+68040 regression baseline. Compare its first 27 rows with the FS-UAE values in
+`external/copperline/timing-test/compare.py`.
+
+The first matched-model comparison found near matches for shift, DBRA, DBRA
+from slow/chip RAM, frame length, blitter clear/fill, and fill under three
+bitplanes. The EC020 policy accounts chip-resident program fetches but does not
+reuse the 68000 DMA-slot wait: applying the 68000 transaction to all accesses
+made `cw1024` 1.45x too slow without DMA and 2.25x too slow with six planes.
+Remaining move/multiply/access deltas require a matched hardware capture or a
+justified Musashi cycle-table correction, not per-opcode constants.

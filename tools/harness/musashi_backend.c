@@ -20,6 +20,7 @@
 #include "cpu/cpu_bridge.h"
 #include "cpu/cpu_bus_policy.h"
 #include "cpu/direct_region.h"
+#include "cpu/musashi/musashi_bus_timing.h"
 #include "machine/bus/board_registry.h"
 #include "machine/machine.h"
 #include "machine/memory/memory.h"
@@ -63,9 +64,7 @@ static int s_trace_pc_ranges_init = 0;
 static uint32_t s_trace_pc_lo[2] = {0, 0};
 static uint32_t s_trace_pc_hi[2] = {0, 0};
 static int s_trace_pc_enabled[2] = {0, 0};
-static int s_run_sync_active = 0;
-static uint32_t s_run_sync_published = 0;
-static uint32_t s_bus_cycles_prepublished = 0;
+static MusashiBusTiming s_bus_timing;
 
 #define BOOT_DISPLAY_BUF_SIZE 0x00001F40u
 
@@ -168,54 +167,26 @@ static void harness_cck_gap_trace(uint32_t delta)
 
 static uint32_t harness_sync_cpu_progress(void)
 {
-    int ran;
-    uint32_t delta;
+    uint32_t delta = musashi_bus_timing_sync(&s_bus_timing);
 
-    if (!s_run_sync_active)
-        return 0u;
-
-    ran = m68k_cycles_run();
-    if (ran <= 0 || (uint32_t)ran <= s_run_sync_published)
-        return 0u;
-
-    delta = (uint32_t)ran - s_run_sync_published;
-    s_run_sync_published = (uint32_t)ran;
-    if (s_bus_cycles_prepublished != 0u) {
-        uint32_t covered = delta < s_bus_cycles_prepublished
-            ? delta : s_bus_cycles_prepublished;
-        delta -= covered;
-        s_bus_cycles_prepublished -= covered;
-    }
-    if (delta == 0u)
-        return 0u;
-
-    if (harness_cck_gap_trace_enabled())
+    if (delta != 0u && harness_cck_gap_trace_enabled())
         harness_cck_gap_trace(delta);
-
-    bellatrix_bridge_cpu_progress(delta);
     return delta;
 }
 
 static void harness_begin_chip_access(unsigned int size, int is_write)
 {
-    unsigned int transfers = size == 4u ? 2u : 1u;
-    uint32_t delta = harness_sync_cpu_progress();
-    uint32_t waited = 0u;
-    uint32_t wait_cpu_cycles;
+    MusashiBusAccessResult result =
+        musashi_bus_timing_access(&s_bus_timing, size, is_write);
+    uint32_t delta = result.progress_cycles;
+    uint32_t waited = result.waited_cck;
     static int trace = -1;
     static uint64_t accesses;
     static uint64_t stalls;
     static uint64_t waited_cck;
 
-    if (s_bus_policy && s_bus_policy->stalls_on_chip_access) {
-        waited = bellatrix_machine_cpu_chip_access(transfers, 2u);
-        s_bus_cycles_prepublished += transfers * 4u;
-        wait_cpu_cycles = waited * 2u;
-        if (wait_cpu_cycles != 0u) {
-            m68k_modify_timeslice(-(int)wait_cpu_cycles);
-            s_run_sync_published += wait_cpu_cycles;
-        }
-    }
+    if (delta != 0u && harness_cck_gap_trace_enabled())
+        harness_cck_gap_trace(delta);
 
     accesses++;
     if (waited != 0u) {
@@ -2947,11 +2918,9 @@ static int musashi_run(void *ctx, uint32_t cycles)
 
     (void)ctx;
 
-    s_run_sync_active = 1;
-    s_run_sync_published = 0;
+    musashi_bus_timing_begin_run(&s_bus_timing);
     used = m68k_execute((int)cycles);
-    harness_sync_cpu_progress();
-    s_run_sync_active = 0;
+    musashi_bus_timing_end_run(&s_bus_timing);
 
     return used;
 }
@@ -3046,10 +3015,10 @@ void musashi_backend_init(void)
     else if (cpu && strcmp(cpu, "68040") == 0)
         s_cpu_type = M68K_CPU_TYPE_68040;
 
-    s_bus_policy = cpu_bus_policy_by_name(
-        s_cpu_type == M68K_CPU_TYPE_68000 ? "68000" : "68040");
+    s_bus_policy = cpu_bus_policy_by_name(bellatrix_musashi_cpu_model());
     m68k_init();
     m68k_set_cpu_type(s_cpu_type);
+    musashi_bus_timing_init(&s_bus_timing, s_bus_policy);
     printf("[HARNESS] CPU: %s\n",
            s_cpu_type == M68K_CPU_TYPE_68040 ? "68040" :
            s_cpu_type == M68K_CPU_TYPE_68030 ? "68030" :
