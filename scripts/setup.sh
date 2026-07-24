@@ -35,6 +35,28 @@ check_cmd() {
     }
 }
 
+update_submodules_preserving_changes() {
+    local parent="$1"
+    shift
+    local path
+    local -a targets=()
+
+    for path in "$@"; do
+        if git -C "$parent/$path" rev-parse --is-inside-work-tree \
+                >/dev/null 2>&1; then
+            if [ -n "$(git -C "$parent/$path" status --porcelain)" ]; then
+                echo "Preserving modified submodule: ${parent#$ROOT/}/$path"
+                continue
+            fi
+        fi
+        targets+=("$path")
+    done
+
+    if [ "${#targets[@]}" -ne 0 ]; then
+        git -C "$parent" submodule update --init -- "${targets[@]}"
+    fi
+}
+
 apply_patch_if_needed() {
     local patch="$1"
     local name
@@ -323,7 +345,10 @@ check_emu68_patch_applied() {
 if [ "$SETUP_MODE" = "verify" ]; then
     check_cmd git
     cd "$ROOT"
-    git submodule update --init emu68 external/cherryusb external/btstack external/musashi external/rigel external/lide.device external/ODFileSystem >/dev/null 2>&1 || true
+    update_submodules_preserving_changes "$ROOT" \
+        emu68 external/cherryusb external/btstack external/musashi \
+        external/rigel external/lide.device external/ODFileSystem \
+        >/dev/null 2>&1 || true
 
     failed=0
     echo "=== Patch verification ==="
@@ -486,14 +511,17 @@ check_cmd aarch64-linux-gnu-gcc
 
 cd "$ROOT"
 git submodule sync -- external/cherryusb >/dev/null 2>&1 || true
-git submodule update --init emu68 external/musashi external/cherryusb external/btstack external/rigel external/lide.device external/ODFileSystem external/VideoCore.card
+update_submodules_preserving_changes "$ROOT" \
+    emu68 external/musashi external/cherryusb external/btstack external/rigel \
+    external/lide.device external/ODFileSystem external/VideoCore.card
 
 # emu68's own nested submodules — required for the bare-metal build
 # (BELLATRIX_CPU_BACKEND=musashi or emu68) to configure via CMake.
 # Missing these fails with "does not contain a CMakeLists.txt" deep
 # into the build, not at setup time, so it's easy to miss (ISSUE-0035
 # investigation, 2026-07-03).
-git -C emu68 submodule update --init external/capstone external/libdeflate external/tiny-stl
+update_submodules_preserving_changes "$EMU68" \
+    external/capstone external/libdeflate external/tiny-stl
 
 ensure_emu68_gitignore
 
