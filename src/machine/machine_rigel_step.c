@@ -39,9 +39,7 @@
 #endif
 
 #ifdef BELLATRIX_HARNESS
-#ifdef BELLATRIX_HARNESS
 #include "machine/expansions/rtg/rtg.h"
-#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -163,6 +161,7 @@ static uint32_t machine_video_skip_interval(void)
 }
 #endif
 
+#ifndef BELLATRIX_HARNESS
 static uint32_t machine_dirty_line_count(const rigel_frame_t *frame)
 {
     uint32_t count = 0;
@@ -224,7 +223,6 @@ static MachineFrameStats machine_frame_stats_sample(const rigel_frame_t *frame)
     return stats;
 }
 
-#ifndef BELLATRIX_HARNESS
 static void machine_trace_baremetal_video_frame(const rigel_frame_t *frame)
 {
     static uint32_t trace_count;
