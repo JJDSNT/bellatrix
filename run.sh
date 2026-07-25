@@ -4,6 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$ROOT/scripts"
+. "$SCRIPTS/bellatrix-image.sh"
 
 LAUNCHER_DIR="$ROOT/tools/launcher"
 LAUNCHER_BIN="$LAUNCHER_DIR/bin/bellatrix-launcher"
@@ -205,17 +206,21 @@ build_cd_board() {
 }
 
 set_profile_paths() {
+    local image_name
+
     case "$1" in
         bellatrix)
-            INSTALL="$ROOT/emu68/install-bellatrix-rigel"
-            IMAGE="$INSTALL/Emu68.img"
+            image_name="$(bellatrix_image_name emu68 68040 "${BELLATRIX_MULTICORE_BUILD:-0}")"
+            INSTALL="$ROOT/out/firmware"
+            IMAGE="$ROOT/out/images/$image_name"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"
             BELLATRIX_CPU_BACKEND_PROFILE="emu68"
             ;;
         bellatrix-musashi)
-            INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi"
-            IMAGE="$INSTALL/Emu68.img"
+            image_name="$(bellatrix_image_name musashi "${HARNESS_CPU:-${BELLATRIX_MUSASHI_CPU:-68040}}" "${BELLATRIX_MULTICORE_BUILD:-0}")"
+            INSTALL="$ROOT/out/firmware"
+            IMAGE="$ROOT/out/images/$image_name"
             DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
             BUILD_KIND="bellatrix"
             BELLATRIX_CPU_BACKEND_PROFILE="musashi"
@@ -619,6 +624,7 @@ case "$BUILD_KIND" in
         export CORE_LOG="$BELLATRIX_MULTICORE_LOGS"
         "$SCRIPTS/setup.sh"
         "$SCRIPTS/build.sh"
+        set_profile_paths "$EMU_PROFILE"
         ;;
     emu68)
         echo "[BUILD] Profile: emu68"

@@ -56,6 +56,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "$ROOT/scripts/bellatrix-image.sh"
 ROM="${ROM:-$ROOT/src/roms/KS13.rom}"
 FRAME_CAP="${FRAME_CAP:-1500}"
 HARD_CAP="${HARD_CAP:-900}"
@@ -64,12 +65,10 @@ export BELLATRIX_CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
 export BELLATRIX_MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
 export BELLATRIX_RIGEL_TRACE_BUILD=1
 
-if [ "$BELLATRIX_CPU_BACKEND" = "musashi" ]; then
-    INSTALL="$ROOT/emu68/install-bellatrix-rigel-musashi"
-else
-    INSTALL="$ROOT/emu68/install-bellatrix-rigel"
-fi
-IMAGE="$INSTALL/Emu68.img"
+MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-68040}"
+IMAGE_NAME="$(bellatrix_image_name "$BELLATRIX_CPU_BACKEND" "$MUSASHI_CPU" "$BELLATRIX_MULTICORE_BUILD")"
+INSTALL="$ROOT/out/firmware"
+IMAGE="$ROOT/out/images/$IMAGE_NAME"
 DTB="$INSTALL/bcm2710-rpi-3-b.dtb"
 
 inject_execbase_probe() {

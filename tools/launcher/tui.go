@@ -240,11 +240,15 @@ func harnessCPUForBackend(cpuBackend string) string {
 	return ""
 }
 
-func installDirForSelection(cpuBackend string) string {
+func imageNameForSelection(cpuBackend string, multicore bool) string {
+	name := "bellatrix_emu68"
 	if isMusashiCPUBackend(cpuBackend) {
-		return "emu68/install-bellatrix-rigel-musashi"
+		name = "bellatrix_" + strings.ReplaceAll(cpuBackend, "-", "_")
 	}
-	return "emu68/install-bellatrix-rigel"
+	if multicore {
+		name += "_multicore"
+	}
+	return name + ".img"
 }
 
 func nextSerialBackend(current string) string {
@@ -722,9 +726,9 @@ func (m model) renderPanel() string {
 }
 
 func (m model) qemuCommand() string {
-	installDir := installDirForSelection(m.cpuBackend)
-	image := installDir + "/Emu68.img"
-	dtb := installDir + "/bcm2710-rpi-3-b.dtb"
+	imageName := imageNameForSelection(m.cpuBackend, m.multicoreBuild)
+	image := "out/images/" + imageName
+	dtb := "out/firmware/bcm2710-rpi-3-b.dtb"
 
 	bootArgs := buildBootArgs(m.debugMode, m.fpuEnabled, m.timelineMode)
 

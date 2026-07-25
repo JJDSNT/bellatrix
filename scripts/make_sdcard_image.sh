@@ -16,10 +16,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
-INSTALL="$ROOT/emu68/install-bellatrix"
+. "$SCRIPT_DIR/bellatrix-image.sh"
 OUT_DIR="$ROOT/out"
 
-IMAGE_SRC="$INSTALL/Emu68.img"
+CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
+MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-68040}"
+MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
+IMAGE_NAME="$(bellatrix_image_name "$CPU_BACKEND" "$MUSASHI_CPU" "$MULTICORE_BUILD")"
+INSTALL="${BELLATRIX_INSTALL_DIR:-$ROOT/out/firmware}"
+IMAGE_SRC="${BELLATRIX_IMAGE:-$ROOT/out/images/$IMAGE_NAME}"
 CONFIG_SRC="$INSTALL/config.txt"
 
 OUTPUT="${OUTPUT:-$OUT_DIR/sdcard.img}"

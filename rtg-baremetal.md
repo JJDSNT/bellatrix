@@ -134,7 +134,7 @@ quando presente, preservando PiStorm/Framethrower. No Bellatrix não há captura
 CSI: o framebuffer de software substitui somente a fonte do plano nativo.
 
 Com `BELLATRIX_RTG=1`, a build deixa o driver em
-`emu68/install-bellatrix-rigel/VideoCore/VideoCore.card`. Ele ainda precisa ser
+`out/VideoCore/VideoCore.card`. Ele ainda precisa ser
 copiado para `LIBS:Picasso96/` no volume de sistema Amiga.
 
 ---

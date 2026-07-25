@@ -23,48 +23,48 @@ jobs:
             release_profile: musashi_68000
             musashi_cpu: "68000"
             multicore: "0"
-            build_dir: emu68/build-bellatrix-rigel-musashi
-            install_dir: emu68/install-bellatrix-rigel-musashi
+            build_dir: out/build/bellatrix_musashi_68000
+            install_dir: out/firmware
             image: bellatrix_musashi_68000.img
             expected_backend: musashi
           - backend: musashi
             release_profile: musashi_68040
             musashi_cpu: "68040"
             multicore: "0"
-            build_dir: emu68/build-bellatrix-rigel-musashi
-            install_dir: emu68/install-bellatrix-rigel-musashi
+            build_dir: out/build/bellatrix_musashi_68040
+            install_dir: out/firmware
             image: bellatrix_musashi_68040.img
             expected_backend: musashi
           - backend: emu68
             release_profile: emu68
             musashi_cpu: "68040"
             multicore: "0"
-            build_dir: emu68/build-bellatrix-rigel
-            install_dir: emu68/install-bellatrix-rigel
+            build_dir: out/build/bellatrix_emu68
+            install_dir: out/firmware
             image: bellatrix_emu68.img
             expected_backend: "emu68"
           - backend: musashi
             release_profile: musashi_68000
             musashi_cpu: "68000"
             multicore: "1"
-            build_dir: emu68/build-bellatrix-rigel-musashi
-            install_dir: emu68/install-bellatrix-rigel-musashi
+            build_dir: out/build/bellatrix_musashi_68000_multicore
+            install_dir: out/firmware
             image: bellatrix_musashi_68000_multicore.img
             expected_backend: musashi
           - backend: musashi
             release_profile: musashi_68040
             musashi_cpu: "68040"
             multicore: "1"
-            build_dir: emu68/build-bellatrix-rigel-musashi
-            install_dir: emu68/install-bellatrix-rigel-musashi
+            build_dir: out/build/bellatrix_musashi_68040_multicore
+            install_dir: out/firmware
             image: bellatrix_musashi_68040_multicore.img
             expected_backend: musashi
           - backend: emu68
             release_profile: emu68
             musashi_cpu: "68040"
             multicore: "1"
-            build_dir: emu68/build-bellatrix-rigel
-            install_dir: emu68/install-bellatrix-rigel
+            build_dir: out/build/bellatrix_emu68_multicore
+            install_dir: out/firmware
             image: bellatrix_emu68_multicore.img
             expected_backend: "emu68"
 
@@ -108,7 +108,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
 
-          cp "${{ matrix.install_dir }}/Emu68.img" "dist/${{ matrix.image }}"
+          cp "out/images/${{ matrix.image }}" "dist/${{ matrix.image }}"
           if ! grep -aF "[BELA] CPU backend: ${{ matrix.expected_backend }}" "dist/${{ matrix.image }}" >/dev/null; then
             echo "ERROR: ${{ matrix.image }} does not contain expected CPU backend marker: ${{ matrix.expected_backend }}"
             grep -aF "[BELA] CPU backend:" "dist/${{ matrix.image }}" || true
@@ -138,7 +138,7 @@ jobs:
           grep -F "BELLATRIX_ENABLE_DEVICETREE_BOARD:BOOL=$expected_dt" \
             "${{ matrix.build_dir }}/CMakeCache.txt" >/dev/null
           if [ "$expected_rtg" = 1 ]; then
-            card="${{ matrix.install_dir }}/VideoCore/VideoCore.card"
+            card="out/VideoCore/VideoCore.card"
             test -f "$card"
             if [ "${{ matrix.release_profile }}" = "emu68" ] &&
                [ "${{ matrix.multicore }}" = "0" ]; then

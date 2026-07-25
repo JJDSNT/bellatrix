@@ -17,9 +17,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
+. "$SCRIPT_DIR/bellatrix-image.sh"
 EMU68="$ROOT/emu68"
-BUILD="$EMU68/build-bellatrix"
-INSTALL="$EMU68/install-bellatrix"
 TOOLCHAIN="$EMU68/toolchains/aarch64-linux-gnu.cmake"
 BT_FW_CACHE_DIR="$ROOT/.cache/bellatrix/btstack"
 BT_FW_DEVICE="${BELLATRIX_BT_FIRMWARE_DEVICE:-BCM43430A1}"
@@ -94,6 +93,7 @@ hide_modified_files() {
 CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
 MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-${HARNESS_CPU:-68040}}"
 RELEASE_PROFILE="${BELLATRIX_RELEASE_PROFILE:-}"
+MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
 
 case "$RELEASE_PROFILE" in
     emu68)
@@ -142,8 +142,6 @@ esac
 
 case "$CPU_BACKEND" in
     emu68|"")
-        BUILD="$EMU68/build-bellatrix-rigel"
-        INSTALL="$EMU68/install-bellatrix-rigel"
         MUSASHI_CPU_FLAG="OFF"
         ;;
     musashi)
@@ -156,8 +154,6 @@ case "$CPU_BACKEND" in
                 exit 1
                 ;;
         esac
-        BUILD="$EMU68/build-bellatrix-rigel-musashi"
-        INSTALL="$EMU68/install-bellatrix-rigel-musashi"
         MUSASHI_CPU_FLAG="ON"
         ;;
     *)
@@ -167,12 +163,20 @@ case "$CPU_BACKEND" in
         ;;
 esac
 
+IMAGE_NAME="$(bellatrix_image_name "$CPU_BACKEND" "$MUSASHI_CPU" "$MULTICORE_BUILD")"
+VARIANT="${IMAGE_NAME%.img}"
+BUILD="$ROOT/out/build/$VARIANT"
+INSTALL="$ROOT/out/firmware"
+IMAGE_DIR="$ROOT/out/images"
+IMAGE="$IMAGE_DIR/$IMAGE_NAME"
+
 if [ "${1:-}" = "clean" ]; then
     echo "Cleaning build directory..."
-    rm -rf "$BUILD" "$INSTALL"
+    rm -rf "$BUILD"
+    rm -f "$IMAGE"
 fi
 
-mkdir -p "$BUILD" "$INSTALL"
+mkdir -p "$BUILD" "$INSTALL" "$IMAGE_DIR"
 cd "$BUILD"
 
 EXTRA_DEFINES=""
@@ -181,7 +185,6 @@ if [ -n "${BTRACE_FILTER:-}" ]; then
     echo "[BUILD] btrace init filter: ${BTRACE_FILTER}"
 fi
 
-MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
 EMU68_CORE0_REBASELINE="${BELLATRIX_EMU68_CORE0_REBASELINE:-1}"
 MULTICORE_LOGS="${BELLATRIX_MULTICORE_LOGS:-${BELLATRIX_LOGS:-${CORE_LOG:-0}}}"
 if [ "$MULTICORE_BUILD" != "1" ]; then
@@ -468,15 +471,19 @@ cmake "$EMU68" \
 make -j"$(nproc)"
 "$ROOT/scripts/check_bt_irq_abi.sh" "$BUILD/Emu68.elf"
 make install
+mv "$INSTALL/Emu68.img" "$IMAGE"
+# The shared firmware directory cannot select one of the variant kernels.
+# With no explicit kernel entry, Pi firmware uses kernel8.img (the name used
+# by flash.sh); the future U-Boot flow can replace this with its own loader.
+sed -i '/^kernel=Emu68\.img$/d' "$INSTALL/config.txt"
 
 if [ "$RTG_VIDEOCORE_ENABLED" = "1" ]; then
-    # This is a guest P96 driver, not part of Emu68.img.  Keep it beside the
-    # installed image so it can be copied to LIBS:Picasso96/ on the Amiga
-    # system volume.  Its SetSwitch implementation owns the HVS RTG plane.
-    "$ROOT/scripts/build-videocore-card.sh" "$INSTALL/VideoCore"
+    # This is a shared guest P96 driver, not part of a specific kernel image.
+    # It can be copied to LIBS:Picasso96/ on the Amiga system volume.
+    "$ROOT/scripts/build-videocore-card.sh" "$ROOT/out/VideoCore"
 fi
 
 hide_modified_files
 
 echo ""
-echo "Build complete. Image: $INSTALL/Emu68.img"
+echo "Build complete. Image: $IMAGE"

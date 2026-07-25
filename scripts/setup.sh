@@ -172,26 +172,6 @@ apply_submodule_patch_if_needed() {
     exit 1
 }
 
-ensure_gitignore_entry() {
-    local entry="$1"
-
-    touch "$EMU68_GITIGNORE"
-
-    if ! grep -Fxq "$entry" "$EMU68_GITIGNORE"; then
-        echo "Adding $entry to emu68/.gitignore"
-        printf '%s\n' "$entry" >> "$EMU68_GITIGNORE"
-    fi
-}
-
-ensure_emu68_gitignore() {
-    ensure_gitignore_entry "/build-bellatrix/"
-    ensure_gitignore_entry "/install-bellatrix/"
-    ensure_gitignore_entry "/build-bellatrix-rigel/"
-    ensure_gitignore_entry "/install-bellatrix-rigel/"
-    ensure_gitignore_entry "/build-bellatrix-rigel-musashi/"
-    ensure_gitignore_entry "/install-bellatrix-rigel-musashi/"
-}
-
 hide_local_gitignore_change() {
     if [ -f "$EMU68_GITIGNORE" ]; then
         git update-index --assume-unchanged "$EMU68_GITIGNORE" || true
@@ -454,7 +434,6 @@ if [ "$SETUP_MODE" = "reset" ]; then
 
     echo "Submodules reset. Applying patches..."
 
-    ensure_emu68_gitignore
 
     cd "$EMU68"
     for patch in "${EMU68_PATCHES[@]}"; do
@@ -523,7 +502,6 @@ update_submodules_preserving_changes "$ROOT" \
 update_submodules_preserving_changes "$EMU68" \
     external/capstone external/libdeflate external/tiny-stl
 
-ensure_emu68_gitignore
 
 cd "$EMU68"
 

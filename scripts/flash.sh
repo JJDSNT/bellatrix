@@ -10,14 +10,19 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
-INSTALL="${BELLATRIX_INSTALL_DIR:-$ROOT/emu68/install-bellatrix}"
+. "$SCRIPT_DIR/bellatrix-image.sh"
 
 if [ $# -eq 0 ]; then
     echo "Usage: $0 <mount-point>  or  $0 tftp"
     exit 1
 fi
 
-IMAGE="$INSTALL/Emu68.img"
+CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
+MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-68040}"
+MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
+IMAGE_NAME="$(bellatrix_image_name "$CPU_BACKEND" "$MUSASHI_CPU" "$MULTICORE_BUILD")"
+INSTALL="${BELLATRIX_INSTALL_DIR:-$ROOT/out/firmware}"
+IMAGE="${BELLATRIX_IMAGE:-$ROOT/out/images/$IMAGE_NAME}"
 CONFIG="$INSTALL/config.txt"
 
 [ -f "$IMAGE" ] || { echo "ERROR: image not found — run scripts/build.sh first"; exit 1; }

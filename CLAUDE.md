@@ -22,16 +22,16 @@ Emu68 handles M68K→AArch64 JIT translation; Bellatrix replaces only its bus ba
 
 # Four release configurations (CPU backend × core mode):
 
-# Emu68 single-core  →  emu68/install-bellatrix-rigel/
+# Emu68 single-core  →  out/images/bellatrix_emu68.img
 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
 
-# Musashi single-core  →  emu68/install-bellatrix-rigel-musashi/
+# Musashi single-core  →  out/images/bellatrix_musashi_<cpu>.img
 BELLATRIX_CPU_BACKEND=musashi BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
 
-# Emu68 multi-core  →  emu68/install-bellatrix-rigel/
+# Emu68 multi-core  →  out/images/bellatrix_emu68_multicore.img
 BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
 
-# Musashi multi-core  →  emu68/install-bellatrix-rigel-musashi/
+# Musashi multi-core  →  out/images/bellatrix_musashi_<cpu>_multicore.img
 BELLATRIX_CPU_BACKEND=musashi BELLATRIX_MULTICORE_BUILD=1 BELLATRIX_BTSTACK=1 BELLATRIX_USBSTACK=1 ./scripts/build.sh
 
 # Append "clean" for a clean rebuild

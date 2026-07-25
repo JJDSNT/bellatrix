@@ -12,9 +12,15 @@ Six kernel variants are released as GitHub Release assets: Musashi 68000,
 Musashi 68040, and Emu68, each in single-core and multicore form. Their names
 are `bellatrix_musashi_68000.img`, `bellatrix_musashi_68040.img`,
 `bellatrix_emu68.img`, plus the corresponding `_multicore.img` files. Every
-image includes a `.sha256` checksum. The Musashi builds are the stable ones —
-Kickstart 1.3/Workbench 1.3, AROS, USB HID, and Bluetooth HID are functional
-on the Pi. Five areas remain in progress:
+image includes a `.sha256` checksum.
+
+Local builds use the same image names under `out/images/`. Variant-specific
+CMake trees live under `out/build/`; shared Raspberry Pi firmware and DTBs
+live under `out/firmware/`. The entire generated layout is ignored by Git.
+
+The Musashi builds are the stable ones — Kickstart 1.3/Workbench 1.3, AROS,
+USB HID, and Bluetooth HID are functional on the Pi. Five areas remain in
+progress:
 
 - **Emu68 JIT integration** — the Bellatrix adapter reaches the AROS boot
   screen and boots Kickstart with its bus dispatched through Emu68's native
