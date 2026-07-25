@@ -472,15 +472,21 @@ make -j"$(nproc)"
 "$ROOT/scripts/check_bt_irq_abi.sh" "$BUILD/Emu68.elf"
 make install
 mv "$INSTALL/Emu68.img" "$IMAGE"
-# The shared firmware directory cannot select one of the variant kernels.
-# With no explicit kernel entry, Pi firmware uses kernel8.img (the name used
-# by flash.sh); the future U-Boot flow can replace this with its own loader.
-sed -i '/^kernel=Emu68\.img$/d' "$INSTALL/config.txt"
+# The shared firmware directory cannot select one variant kernel directly.
+# Once U-Boot exists, keep it as the stable first-stage loader across later
+# incremental Bellatrix builds.
+sed -i '/^kernel=/d' "$INSTALL/config.txt"
+if [ -f "$INSTALL/u-boot.bin" ]; then
+    printf '\nkernel=u-boot.bin\n' >> "$INSTALL/config.txt"
+fi
 
-if [ "$RTG_VIDEOCORE_ENABLED" = "1" ]; then
+if [ "$RTG_VIDEOCORE_ENABLED" = "1" ] &&
+   [ "${BELLATRIX_BUILD_VIDEOCORE_CARD:-1}" = "1" ]; then
     # This is a shared guest P96 driver, not part of a specific kernel image.
     # It can be copied to LIBS:Picasso96/ on the Amiga system volume.
     "$ROOT/scripts/build-videocore-card.sh" "$ROOT/out/VideoCore"
+elif [ "$RTG_VIDEOCORE_ENABLED" = "1" ]; then
+    echo "[BUILD] VideoCore.card build skipped (BELLATRIX_BUILD_VIDEOCORE_CARD=0)"
 fi
 
 hide_modified_files

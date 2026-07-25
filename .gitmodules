@@ -43,3 +43,6 @@
 [submodule "external/copperline"]
 	path = external/copperline
 	url = https://github.com/LinuxJedi/Copperline
+[submodule "external/u-boot"]
+	path = external/u-boot
+	url = https://source.denx.de/u-boot/u-boot.git

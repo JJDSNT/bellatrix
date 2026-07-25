@@ -25,6 +25,7 @@ CHERRYUSB="$ROOT/external/cherryusb"
 BTSTACK="$ROOT/external/btstack"
 MUSASHI="$ROOT/external/musashi"
 VIDEOCORE="$ROOT/external/VideoCore.card"
+UBOOT="$ROOT/external/u-boot"
 PATCHES="$ROOT/patches"
 EMU68_GITIGNORE="$EMU68/.gitignore"
 
@@ -200,6 +201,7 @@ EMU68_PATCHES=(
     "$PATCHES/0020-emu68-stop-liveness.patch"
     "$PATCHES/0022-bellatrix-bt-normal-irq.patch"
     "$PATCHES/0023-bellatrix-host-only-irq.patch"
+    "$PATCHES/0024-emu68-64bit-initrd-address.patch"
     # 0025-0034 belonged to the retired "public machine API" experiment
     # (explicit JIT access classification). Removed 2026-07-16; full content
     # archived at AI_context/archive/emu68-public-machine-api-2026-07.md.
@@ -432,6 +434,9 @@ if [ "$SETUP_MODE" = "reset" ]; then
     echo "Resetting external/VideoCore.card..."
     git submodule update --force -- external/VideoCore.card
 
+    echo "Resetting external/u-boot..."
+    git submodule update --force -- external/u-boot
+
     echo "Submodules reset. Applying patches..."
 
 
@@ -492,7 +497,8 @@ cd "$ROOT"
 git submodule sync -- external/cherryusb >/dev/null 2>&1 || true
 update_submodules_preserving_changes "$ROOT" \
     emu68 external/musashi external/cherryusb external/btstack external/rigel \
-    external/lide.device external/ODFileSystem external/VideoCore.card
+    external/lide.device external/ODFileSystem external/VideoCore.card \
+    external/u-boot
 
 # emu68's own nested submodules — required for the bare-metal build
 # (BELLATRIX_CPU_BACKEND=musashi or emu68) to configure via CMake.

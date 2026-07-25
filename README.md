@@ -18,6 +18,17 @@ Local builds use the same image names under `out/images/`. Variant-specific
 CMake trees live under `out/build/`; shared Raspberry Pi firmware and DTBs
 live under `out/firmware/`. The entire generated layout is ignored by Git.
 
+Build the complete Raspberry Pi boot environment with:
+
+```sh
+./scripts/build-all.sh
+```
+
+This builds all six kernels plus U-Boot. At boot, the first menu selects the
+CPU/topology variant and the second selects a ROM found under `src/roms/`.
+Generated menu files and copied ROM payloads live under `out/boot/`.
+See [`docs/uboot.md`](docs/uboot.md) for the boot flow and SD-card layout.
+
 The Musashi builds are the stable ones — Kickstart 1.3/Workbench 1.3, AROS,
 USB HID, and Bluetooth HID are functional on the Pi. Five areas remain in
 progress:
@@ -167,7 +178,9 @@ These work both in the launcher and while the emulated machine is running:
 ### Prerequisites (Ubuntu/Debian)
 
 ```bash
-sudo apt-get install -y cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu golang-go libsdl2-dev
+sudo apt-get install -y cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+    golang-go libsdl2-dev bison flex libssl-dev libgnutls28-dev swig \
+    python3-dev device-tree-compiler
 ```
 
 `cmake` and the `aarch64-linux-gnu` cross-compiler are needed to build the Pi image and the Musashi harness; `golang-go` builds the `tools/launcher` ROM/config picker TUI (used by `./run.sh` and `./run.sh harness` whenever `KICKSTART` isn't set). `libsdl2-dev` is recommended for the harness — without it, CMake silently falls back to a headless build (no display window).

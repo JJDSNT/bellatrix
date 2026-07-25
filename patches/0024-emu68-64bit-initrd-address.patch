@@ -1,0 +1,35 @@
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -869,13 +869,29 @@ void boot(uint64_t dtb)
+     if (e)
+     {
+         void *image_start, *image_end;
++        uintptr_t image_start_addr, image_end_addr;
+         of_property_t *p = dt_find_property(e, "linux,initrd-start");
+ 
+         if (p)
+         {
+-            image_start = (void*)(intptr_t)BE32(*(uint32_t*)p->op_value);
++            uint32_t *cells = p->op_value;
++
++            if (p->op_length == 8)
++                image_start_addr = ((uint64_t)BE32(cells[0]) << 32) |
++                    BE32(cells[1]);
++            else
++                image_start_addr = BE32(cells[0]);
++
+             p = dt_find_property(e, "linux,initrd-end");
+-            image_end = (void*)(intptr_t)BE32(*(uint32_t*)p->op_value);
++            cells = p->op_value;
++            if (p->op_length == 8)
++                image_end_addr = ((uint64_t)BE32(cells[0]) << 32) |
++                    BE32(cells[1]);
++            else
++                image_end_addr = BE32(cells[0]);
++
++            image_start = (void *)image_start_addr;
++            image_end = (void *)image_end_addr;
+ 
+             initramfs_size = (uintptr_t)image_end - (uintptr_t)image_start;
+             initramfs_loc = tlsf_malloc(tlsf, initramfs_size);

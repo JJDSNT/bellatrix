@@ -16,16 +16,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$SCRIPT_DIR/.."
-. "$SCRIPT_DIR/bellatrix-image.sh"
 OUT_DIR="$ROOT/out"
 
-CPU_BACKEND="${BELLATRIX_CPU_BACKEND:-emu68}"
-MUSASHI_CPU="${BELLATRIX_MUSASHI_CPU:-68040}"
-MULTICORE_BUILD="${BELLATRIX_MULTICORE_BUILD:-0}"
-IMAGE_NAME="$(bellatrix_image_name "$CPU_BACKEND" "$MUSASHI_CPU" "$MULTICORE_BUILD")"
 INSTALL="${BELLATRIX_INSTALL_DIR:-$ROOT/out/firmware}"
-IMAGE_SRC="${BELLATRIX_IMAGE:-$ROOT/out/images/$IMAGE_NAME}"
 CONFIG_SRC="$INSTALL/config.txt"
+BOOT_DIR="$ROOT/out/boot"
+IMAGES_DIR="$ROOT/out/images"
 
 OUTPUT="${OUTPUT:-$OUT_DIR/sdcard.img}"
 SD_SIZE_MB="${SD_SIZE_MB:-128}"
@@ -68,11 +64,12 @@ require_cmd mkdir
 require_cmd cp
 require_cmd sync
 
-[ -f "$IMAGE_SRC" ] || {
-    echo "ERROR: image not found: $IMAGE_SRC"
-    echo "Run scripts/build.sh first."
+[ -f "$INSTALL/u-boot.bin" ] || {
+    echo "ERROR: U-Boot not found: $INSTALL/u-boot.bin"
+    echo "Run scripts/build-all.sh first."
     exit 1
 }
+[ -f "$BOOT_DIR/boot.scr" ] || { echo "ERROR: boot.scr not found"; exit 1; }
 
 mkdir -p "$OUT_DIR"
 
@@ -91,18 +88,22 @@ LOOP_DEV="$(sudo losetup --find --show "$OUTPUT")"
 echo "[SD] Mounting $LOOP_DEV at $TEMP_MOUNT"
 sudo mount "$LOOP_DEV" "$TEMP_MOUNT"
 
-echo "[SD] Copying kernel"
-sudo cp "$IMAGE_SRC" "$TEMP_MOUNT/kernel8.img"
+echo "[SD] Copying firmware, U-Boot menu, kernels and ROMs"
+sudo cp "$INSTALL"/* "$TEMP_MOUNT/"
+sudo mkdir -p "$TEMP_MOUNT/images" "$TEMP_MOUNT/roms"
+sudo cp "$IMAGES_DIR"/*.img "$TEMP_MOUNT/images/"
+sudo cp "$BOOT_DIR/boot.scr" "$TEMP_MOUNT/boot.scr"
+sudo cp "$BOOT_DIR"/roms/* "$TEMP_MOUNT/roms/"
 
 if [ -f "$CONFIG_SRC" ]; then
-    echo "[SD] Copying config.txt from install-bellatrix"
+    echo "[SD] Using shared config.txt"
     sudo cp "$CONFIG_SRC" "$TEMP_MOUNT/config.txt"
 else
     echo "[SD] No config.txt found in install-bellatrix, generating minimal config"
     cat <<'EOF' | sudo tee "$TEMP_MOUNT/config.txt" >/dev/null
 arm_64bit=1
 enable_uart=1
-kernel=kernel8.img
+kernel=u-boot.bin
 disable_splash=1
 EOF
 fi
