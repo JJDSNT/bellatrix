@@ -213,7 +213,12 @@ ATA/IDE registers, so no DIRECT region can express it. AutoConfig via
 `board_registry` (Zorro II, `map==NULL`); window served per access via
 `expansion.c` `bus_ops`. **This is the sole reason `expansion.c` is kept alive**
 (documented at the top of `src/machine/expansion.h`) — used by `machine_rigel*.c`,
-`lide_cdrom.c`, and `rtg.c`.
+`lide_cdrom.c`, and `rtg.c`. On Raspberry Pi, the same ATA sector-backend
+contract may initially expose the whole SD card instead of an HDF file. The
+LIDE mounter then discovers the MBR `0x76` RDB container and publishes its
+volumes. This keeps SD-card and Bluetooth FAT access under one ARM-side
+controller owner, at the cost of the slower Z2/ATA datapath. See
+`docs/sdcard_rdb.md` and ISSUE-0030.
 
 ---
 

@@ -76,6 +76,7 @@ add_custom_command(
         ${LIDE}/scsi.c
         ${LIDE}/iotask.c
         ${LIDE}/lide_alib.c
+        ${LIDE}/mounter/mounter.c
         ${LIDE}/bootrom/bootldr.S
         ${LIDE}/bootrom/reloc.S
         ${LIDE}/bootrom/mungerom.py

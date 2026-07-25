@@ -233,6 +233,7 @@ MUSASHI_PATCHES=(
 
 LIDE_PATCHES=(
     "$PATCHES/0011-lide-deferred-cdboot.patch"
+    "$PATCHES/0038-lide-mbr-rdb-container.patch"
 )
 
 ODFS_PATCHES=(

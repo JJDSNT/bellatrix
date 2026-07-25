@@ -1,0 +1,117 @@
+diff --git a/mounter/mounter.c b/mounter/mounter.c
+index 304aa00..f1858d7 100644
+--- a/mounter/mounter.c
++++ b/mounter/mounter.c
+@@ -122,6 +122,9 @@ struct MountData
+ 	BOOL wasLastLun;
+ 	BOOL slowSpinup;
+ 	int blocksize;
++	/* Logical window used while scanning a partition table nested in MBR. */
++	ULONG blockoffset;
++	ULONG blocklimit;
+ };
+ 
+ #define SCSI_CD_MAX_TRACKS 100
+@@ -275,8 +278,12 @@ static BOOL readblock(UBYTE *buf, ULONG block, ULONG id, struct MountData *md)
+ 	if (md->slowSpinup)
+ 		max_retries = 15;
+ 
++	if (md->blocklimit && block >= md->blocklimit) {
++		return FALSE;
++	}
++
+ 	request->iotd_Req.io_Command = CMD_READ;
+-	request->iotd_Req.io_Offset = block * md->blocksize;
++	request->iotd_Req.io_Offset = (md->blockoffset + block) * md->blocksize;
+ 	request->iotd_Req.io_Data = buf;
+ 	request->iotd_Req.io_Length = md->blocksize;
+ 	for (i = 0; i < max_retries; i++) {
+@@ -970,6 +977,18 @@ static ULONG ParsePART(UBYTE *buf, ULONG block, ULONG filesysblock, struct Mount
+ 		if (pp) {
+ 			UBYTE len;
+ 			copymem(&pp->de, &part->pb_Environment, (part->pb_Environment[0] + 1) * sizeof(ULONG));
++			if (md->blockoffset) {
++				ULONG blockspercyl = pp->de.de_Surfaces * pp->de.de_BlocksPerTrack;
++				if (!blockspercyl || (md->blockoffset % blockspercyl)) {
++					dbg("Nested RDB offset %"PRIu32" is not aligned to partition geometry (%"PRIu32" blocks/cylinder)\n",
++						md->blockoffset, blockspercyl);
++					FreeMem(pp, sizeof(struct ParameterPacket));
++					return nextpartblock;
++				}
++				ULONG cyl_offset = md->blockoffset / blockspercyl;
++				pp->de.de_LowCyl += cyl_offset;
++				pp->de.de_HighCyl += cyl_offset;
++			}
+ 			struct FileSysEntry *fse = ParseFSHD(buf + md->blocksize, filesysblock, pp->de.de_DosType, md);
+ 			pp->execname = md->devicename;
+ 			pp->unitnum = md->unitnum;
+@@ -1037,6 +1056,60 @@ static LONG ScanRDSK(struct MountData *md)
+ 	return ret;
+ }
+ 
++static LONG ScanNestedRDSK(struct MountData *md, ULONG start, ULONG length)
++{
++	ULONG old_offset = md->blockoffset;
++	ULONG old_limit = md->blocklimit;
++	LONG ret;
++
++	if (!length || start > 0xffffffffUL - old_offset) {
++		return -1;
++	}
++
++	md->blockoffset = old_offset + start;
++	md->blocklimit = length;
++	ret = ScanRDSK(md);
++	md->blockoffset = old_offset;
++	md->blocklimit = old_limit;
++	return ret;
++}
++
++static ULONG read_le32(const UBYTE *p)
++{
++	return (ULONG)p[0] |
++		((ULONG)p[1] << 8) |
++		((ULONG)p[2] << 16) |
++		((ULONG)p[3] << 24);
++}
++
++/* Scan primary MBR entries for the Amiga RDB container type used by Emu68. */
++static LONG ScanMBRRDSK(struct MountData *md)
++{
++	UBYTE entries[4 * 16];
++
++	/* MBR LBAs and partition lengths are expressed in 512-byte sectors. */
++	if (md->blocksize != 512 || !readblock(md->buf, 0, 0xffffffff, md)) {
++		return -1;
++	}
++	if (md->buf[510] != 0x55 || md->buf[511] != 0xaa) {
++		return -1;
++	}
++
++	/* Nested scanning overwrites md->buf, so preserve all four entries. */
++	copymem(entries, md->buf + 446, sizeof(entries));
++	for (UWORD i = 0; i < 4; i++) {
++		const UBYTE *part = entries + i * 16;
++		if (part[4] == 0x76) {
++			ULONG start = read_le32(part + 8);
++			ULONG length = read_le32(part + 12);
++			dbg("MBR RDB container found, start %"PRIu32", length %"PRIu32"\n",
++				start, length);
++			return ScanNestedRDSK(md, start, length);
++		}
++	}
++	return -1;
++}
++
+ static struct FileSysEntry *find_filesystem(ULONG id1, ULONG id2, struct ExecBase *SysBase)
+ {
+ 	struct FileSysResource *FileSysResBase = NULL;
+@@ -1529,6 +1602,8 @@ next_lun:
+ 
+ 								case DG_DIRECT_ACCESS: // DISK
+ 									ret = ScanRDSK(md);
++									if (ret == -1)
++										ret = ScanMBRRDSK(md);
+ #ifdef DISKLABELS
+ 									if (ret==-1)
+ 										ret = ScanMBR(md);
