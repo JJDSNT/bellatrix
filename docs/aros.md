@@ -47,6 +47,34 @@ candidates to send upstream first.
 Applying the series and then the symlink reproduces the reference branch
 exactly: `git diff` between the two, excluding `arch/m68k-emu68`, is empty.
 
+## Building
+
+```bash
+./scripts/build-aros.sh          # incremental
+./scripts/build-aros.sh clean    # wipe, keeping the downloaded tarballs
+```
+
+Output: `out/aros/aros-emu68-m68k.elf` — ELF 32-bit MSB, Motorola m68k,
+about 1.0 MB.
+
+Two things about this build are not obvious and cost time to rediscover:
+
+**It must be serial.** AROS's mmake does not order the crosstools stage against
+generation of the target headers. Under `make -j` the gcc stage can be
+configured before `bin/<target>/AROS/Developer/include` is populated, and gcc's
+configure then fails with `error verifying int64_t uses long long` — a message
+that says nothing about the real cause, roughly fifteen minutes in.
+
+**The metatarget is `kernel-link-emu68-m68k`, not `AROS-emu68-m68k`.** The
+latter only *depends* on the former and additionally builds the whole
+distribution, contrib and boost included. For the ELF it is pure waste.
+
+The first build also builds an m68k-aros cross toolchain (binutils 2.32 and gcc
+6.5.0) from source, which takes far longer than AROS itself. `.installflag-crosstools`
+under `out/build/aros/bin/linux-x86_64/tools/crosstools/` is the marker that it
+finished — the `m68k-aros-gcc` binary appears well before the toolchain is
+actually complete, since libgcc for the target is built in a second phase.
+
 ## Working with it
 
 ```bash
