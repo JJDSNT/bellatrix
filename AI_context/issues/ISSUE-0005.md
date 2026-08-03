@@ -26,7 +26,9 @@ handle access size correctly. Both are in code this project owns, not upstream.
 
 A third defect of the same family — `INTENAR`/`INTREQR` reads claiming any size
 while filling only `*value`, so a 16-byte read handed the guest uninitialised
-data — was found and fixed on 2026-08-03. These two were left.
+data — was found and fixed on 2026-08-03. See
+`AI_context/consolidated/history/ISSUE-0006.md`, which also records the general
+rule the fix produced. These two were left.
 
 # Problem
 
