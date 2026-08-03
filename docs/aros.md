@@ -75,6 +75,51 @@ under `out/build/aros/bin/linux-x86_64/tools/crosstools/` is the marker that it
 finished — the `m68k-aros-gcc` binary appears well before the toolchain is
 actually complete, since libgcc for the target is built in a second phase.
 
+## Running
+
+```bash
+./scripts/make-sdcard.sh     # out/aros/sd.img
+./run-aros.sh                # headless, serial on stdout
+./run-aros.sh --gui          # framebuffer in a window
+./run-aros.sh --debug InitCode
+```
+
+QEMU emulates the Raspberry Pi; Emu68 is the bare-metal owner and loads the
+m68k ELF from `-initrd`. Four pieces have to line up:
+
+| | Built by |
+|---|---|
+| `out/images/Emu68.img` | `scripts/build.sh` |
+| `out/firmware/bcm2710-rpi-3-b.dtb` | `scripts/build.sh` (Emu68's cmake downloads it) |
+| `out/aros/aros-emu68-m68k.elf` | `scripts/build-aros.sh` |
+| `out/aros/sd.img` | `scripts/make-sdcard.sh` |
+
+**The card needs the full distribution tree**, not just the ELF — `C`, `S`,
+`Libs`, `Devs`, `L`, `Classes`, `Fonts`, `System`, `Prefs`, `Storage`,
+`Utilities`, `Tools`, `Locale` and `AROS.boot`. The lean `kernel-link` target
+does not produce them, so `make-sdcard.sh` takes `--dist DIR` to point at a
+tree that has them.
+
+Three constraints are encoded in the scripts rather than left to be
+rediscovered:
+
+- **`Locale` is not optional.** `S:Startup-Sequence` does
+  `Assign "LOCALE:" "SYS:Locale"`; without it the console opens with
+  `Can't find SYS:Locale` and every later `LOCALE:`-relative assign is built
+  on sand.
+- **Do not copy `Developer`.** It is ~291 MB of SDK that nothing in the boot
+  path reads, and a card carrying it stalls the boot between `AROSMonDrvs` and
+  "preparing console".
+- **`nocomposition` is currently required** to see anything on the
+  framebuffer. Without it the boot completes and the screen stays on the Emu68
+  logo — `emu68gfx` is presumably missing something the software compositor
+  expects of a driver it has taken over.
+
+`sysdebug=` is parsed out of the kernel arguments into `SysBase->ex_DebugFlags`,
+so AROS's runtime debug flags work with no rebuild. `InitCode` is the most
+useful during bring-up; the full list is `ExecFlagNames` in
+`rom/exec/exec_flags.c`.
+
 ## Working with it
 
 ```bash
