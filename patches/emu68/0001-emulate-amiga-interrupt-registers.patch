@@ -32,8 +32,8 @@ Emu68-specific code is involved.
 PiStorm builds are untouched.
 ---
  src/aarch64/start.c   |  12 +++++
- src/aarch64/vectors.c | 104 ++++++++++++++++++++++++++++++++++++------
- 2 files changed, 102 insertions(+), 14 deletions(-)
+ src/aarch64/vectors.c | 109 ++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 107 insertions(+), 14 deletions(-)
 
 diff --git a/src/aarch64/start.c b/src/aarch64/start.c
 index 0f8200e..c54a35b 100644
@@ -59,7 +59,7 @@ index 0f8200e..c54a35b 100644
              uint32_t reg[] = {
                  vid_base, vid_memory * 1024*1024
 diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 9c9c85b..8232477 100644
+index 9c9c85b..1e93974 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
 @@ -311,6 +311,22 @@ static int getOPsize(uint32_t opcode)
@@ -152,7 +152,7 @@ index 9c9c85b..8232477 100644
      switch(size)
      {
          case 1:
-@@ -758,7 +801,40 @@ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
+@@ -758,7 +801,45 @@ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
  int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
  {
      D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
@@ -165,8 +165,13 @@ index 9c9c85b..8232477 100644
 +        INTREQR reporting EXTER whenever the ARM side has an interrupt pending
 +        is the part that matters: it lets an unmodified Amiga level-6 handler
 +        conclude that EXTER fired and run its interrupt server chain.
++
++        Byte and word access only, which is all a 16-bit chip register can be
++        read with. Wider accesses fall through to memory as before - claiming
++        one would leave *value2 unset on a 16-byte read and hand the guest a
++        register full of stack garbage.
 +    */
-+    if ((far & ~1) == INTENAR) {
++    if ((far & ~1) == INTENAR && size <= 2) {
 +        uint16_t ena = INT_shadow.INTENA;
 +
 +        if (size == 2)
@@ -177,7 +182,7 @@ index 9c9c85b..8232477 100644
 +        return 1;
 +    }
 +
-+    if ((far & ~1) == INTREQR) {
++    if ((far & ~1) == INTREQR && size <= 2) {
 +        uint16_t req = INT_shadow.INTREQ;
 +
 +        if (INT_shadow.ARMPending)

@@ -1,0 +1,5 @@
+# Build output — everything generated lands under out/
+/out/
+
+# Local caches
+/.cache/

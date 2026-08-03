@@ -101,7 +101,7 @@ index c54a35b..4c9949a 100644
  
          if (vid_base) {
 diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
-index 8232477..9dc84d9 100644
+index 1e93974..a96978c 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
 @@ -327,15 +327,24 @@ enum
@@ -179,7 +179,7 @@ index 8232477..9dc84d9 100644
      switch(size)
      {
          case 1:
-@@ -835,6 +884,29 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
+@@ -840,6 +889,29 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far
          return 1;
      }
  
