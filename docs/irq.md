@@ -78,7 +78,91 @@ Three consequences:
   When a Paula exists here, there will be two candidate owners of the same two
   registers, and the fast path's need to test the enable bits from assembly
   without touching a chipset does not go away. Reconciling those is an open
-  design question, not a detail.
+  design question, not a detail. The next section is the way out of it.
+
+## The alternative: a control register instead of the shadows
+
+The approach above was chosen from two, and the one not taken is worth keeping
+on file because it becomes *more* attractive for this project over time. Both
+are written up in the AROS/m68k-emu68 port's design note,
+`arch/m68k-emu68/doc/host-interrupts.md` on
+`JJDSNT/AROS feature/m68k-emu68-baremetal`, which is where the series in
+`patches/emu68/` came from.
+
+### What already exists
+
+There is no ready-made shadow-free path — PiStorm does not offer one. What
+exists is a **convention**: Emu68 already puts its non-Amiga controls in m68k
+`MOVEC` control registers, and those work identically in PiStorm and stock
+builds.
+
+| Register | Purpose | Verified |
+|---|---|---|
+| `0x0ed` | `DBGCTRL` | `M68k_LINE4.c:2031` (write), `:2295` (read) |
+| `0x0ee` | `DBGADDRLO` | `:2068`, `:2335` |
+| `0x0ef` | `DBGADDRHI` | `:2080`, `:2347` |
+| `0x1e0` | `JITCTRL2` | `:2092`, `:2359` |
+
+`MOVEC` is privileged by the architecture, per-CPU, and collides with no memory
+map. Building a host-interrupt path on it is additive — it touches neither
+`INTF.ARM` nor the PiStorm code.
+
+### The sketch: `HOSTIRQ` at `0x1e1`
+
+**Not implemented.** Estimated at ~40 lines: one field in `struct M68KState`,
+one read and one write case in `M68k_LINE4.c`, the two assembly fast paths, one
+line in arbitration.
+
+```
+ bit  0   PEND      read: host IRQ pending
+                    write 1: acknowledge
+ bit  1   ENA       guest's master enable
+ bit 31   PRESENT   reads 1 on any Emu68 implementing this
+```
+
+`PRESENT` exists because an unknown control register currently raises
+`VECTOR_ILLEGAL_INSTRUCTION`, so feature detection would otherwise mean probing
+around a trap handler. There is deliberately no level field: the contract stays
+"autovector level 6", so the SR-write sites that compare against `5 << SRB_IPL`
+keep comparing against a constant.
+
+The pending bit has somewhere to go. The `INTF` union at `include/M68k.h:164`
+declares five of eight bytes — `ARM`, `ARM_err`, `IPL`, `RESET`, `PPC` —
+leaving `+5`, `+6` and `+7` free, and `M68kReportInterrupt()` carries a comment
+pointing at exactly them. A new `INTF.HOST` there is read by the `ldr64`/`cbz`
+already present in every translated inner loop, and `ExecutionLoop.c`'s
+`if (unlikely(ctx->INT64 != 0))` picks it up unchanged.
+
+### Which one this project should want
+
+The AROS port chose the shadow path, and for it that was right: it has no
+chipset at all, so serving the two Paula registers means the guest is plain
+Amiga code with zero Emu68-specific driver.
+
+**Our situation is different, and the difference cuts the other way.** Bellatrix
+has a chipset, and Paula is meant to own INTENA/INTREQ. Keeping the shadow path
+means Emu68 emulates two chip registers *while our own Paula also implements
+them* — two owners of `0xdff09a` and `0xdff01c`, with the arbitration living
+half in hand-written AArch64 assembly. `HOSTIRQ` sidesteps that completely: it
+is not in chip register space, so Paula keeps the Amiga registers and the host
+interrupt path stops competing for them.
+
+| | Shadow path (current) | `HOSTIRQ` MOVEC |
+|---|---|---|
+| Emu68 delta | ~100 lines, mostly code motion | ~40 lines, all new |
+| Guest-side code | none — plain Amiga idiom | small Emu68-specific driver |
+| Cost per interrupt | page fault + trap | one `MOVEC` |
+| Reserves guest address space | the `0xdff000` page | nothing |
+| Conflicts with a real Paula | yes | no |
+| Status | implemented, verified | sketch |
+
+Costs of the current path, for the same reason they are recorded upstream:
+every arm and every acknowledge is a page fault into `SYSWriteValToAddr()` —
+irrelevant at timer rates, real at network rates — and the whole `0xdff000`
+page traps, so a guest must treat it as MMIO rather than allocatable memory.
+
+No decision is being made here. This section exists so that when the Paula
+ownership question comes due, the alternative is already costed.
 
 ## Intercepts must respect access size
 
@@ -112,9 +196,41 @@ Two things this rule has not yet been applied to:
   reads RAM rather than the shadow — the same as before the series, and wrong
   in the same way.
 
+## Known defects in the surrounding Emu68 code
+
+Found during the AROS port's investigation, re-verified here against pin
+`9b4379a`. None is caused by the series; all three sit next to it.
+
+**`JITCTRL2` bit 29 always reads 0 for fast-path interrupts.** The read path
+does `bfi(reg, tmp, 29, 1)` from `INTF.ARM` — a one-bit field insert
+(`M68k_LINE4.c:2365`). The assembly fast path stores `6` there
+(`vectors.c:165`, and `:190` for the FIQ twin) while `M68kReportInterrupt()`
+stores `1` (`ExecutionLoop.c:558`). `6 & 1 == 0`, so a guest asking "is a host
+interrupt pending?" via `MOVEC` gets 0 for every interrupt delivered through
+the fast path — which is essentially all of them. Delivery itself is
+unaffected, because the dispatch path tests the byte for truthiness. Storing
+`1` instead of `6` would fix it; the value is never used as a level.
+
+**`STOP` does not consult `INT64` on stock builds.** `EMIT_STOP` waits on
+`INT64` only under `PISTORM_ANY_MODEL` (`M68k_LINE4.c:1609`); otherwise it
+masks `DAIF` and issues a bare `wfi()` (`:1611`), which happens to work because
+`wfi` wakes on a masked IRQ. This one matters to us: a guest calling `STOP` is
+an ordinary idle path, not an edge case, and Exec idles that way.
+
+**The core-0 branch of `IRQHandler()` is unreachable.** It acknowledges the GIC
+and reports an interrupt with no `INTENA` gate, but its only caller is
+`IRQonOtherCores`, reached only for cores 1–3. Harmless today; it reads like an
+ungated delivery path and would become a real inconsistency the moment anything
+routes a core-0 interrupt through it.
+
 ## History
 
 The uninitialised `*value2` was present from the first version of the series
 and did not surface for a while: the build that carried it passed
 `-Wno-error=maybe-uninitialized`, so the compiler's report was demoted to a
 warning in a wall of build output. It was found by building the series clean.
+
+Before the series existed, the AROS port reached `INT_shadow` by scanning
+Emu68's compiled instruction stream for the three instructions that touch it,
+decoding the preceding `adrp`/`add` pair, and writing the guest's mask straight
+into the firmware's global. It worked, and it is why the series was written.
