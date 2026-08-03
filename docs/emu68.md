@@ -5,7 +5,7 @@ Emu68 is the M68K→AArch64 JIT this project builds on. It lives at
 [michalsc/Emu68](https://github.com/michalsc/Emu68), pinned at **`9b4379a`**.
 
 **The submodule is never edited in place.** Every change is a patch in
-`patches/`, applied on top of the pinned commit. This keeps the delta against
+`patches/emu68/`, applied on top of the pinned commit. This keeps the delta against
 upstream visible and reviewable at all times, and makes rebasing onto a newer
 Emu68 a matter of re-applying a small, named series.
 
@@ -113,9 +113,9 @@ before the fall-through `switch(size)` that performs the plain memory access:
 
 | # | Patch | Files |
 |---|---|---|
-| 0001 | `emu68-emulate-amiga-interrupt-registers` | `vectors.c`, `start.c` |
-| 0002 | `emu68-offer-zorro3-rom-board` | `vectors.c`, `start.c`, `CMakeLists.txt` |
-| 0003 | `emu68-trim-standalone-module-list` | `emu68rom.c` |
+| 0001 | `emulate-amiga-interrupt-registers` | `vectors.c`, `start.c` |
+| 0002 | `offer-zorro3-rom-board` | `vectors.c`, `start.c`, `CMakeLists.txt` |
+| 0003 | `trim-standalone-module-list` | `emu68rom.c` |
 
 ### Why these cuts
 
@@ -151,7 +151,7 @@ checks every patch against the *original* tree, so 0002 fails:
 
 ```bash
 cd external/emu68
-for p in ../../patches/0*.patch; do git apply "$p" || break; done
+for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
 ```
 
 The series is maintained as a branch in a fork — `feature/host-irq-abi` on
@@ -159,10 +159,11 @@ The series is maintained as a branch in a fork — `feature/host-irq-abi` on
 is pinned to. Edit there, then regenerate:
 
 ```bash
-git -C /path/to/Emu68 format-patch master..feature/host-irq-abi -o /path/to/bellatrix/patches
+git -C /path/to/Emu68 format-patch master..feature/host-irq-abi -o /path/to/bellatrix/patches/emu68
 ```
 
-Rename the output to the `NNNN-<subsystem>-<subject>.patch` form used here.
+Rename the output to the `NNNN-<subject>.patch` form used here — `format-patch`
+derives its filenames from the commit subjects, which are longer.
 
 To prove a regenerated series still reproduces the branch exactly, apply it to
 a pristine submodule and compare tree hashes — these must be equal:

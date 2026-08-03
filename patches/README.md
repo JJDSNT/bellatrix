@@ -1,21 +1,30 @@
 # patches
 
-Changes applied on top of the `external/emu68` submodule, which is pinned to
-upstream michalsc/Emu68 and never edited in place.
+Changes applied on top of the submodules in `external/`, which are pinned to
+their upstreams and never edited in place.
 
-| # | Patch | What it does |
-|---|---|---|
-| 0001 | `emu68-emulate-amiga-interrupt-registers` | Serves INTENA/INTREQ/INTENAR/INTREQR from `INT_shadow` for a guest with no Paula. |
-| 0002 | `emu68-offer-zorro3-rom-board` | Emulates Zorro autoconfig against Emu68's own board list for a guest with no expansion bus. |
-| 0003 | `emu68-trim-standalone-module-list` | Offers a chipset-less guest only the modules it can use. |
+One directory per submodule, mirroring `external/`. Each series is numbered
+from `0001` independently, so adding a patch to one submodule never renumbers
+another's.
 
-Apply in numeric order, one at a time — 0002 depends on 0001, and `git apply`
-given the whole series at once checks every patch against the original tree:
+```
+patches/<submodule>/NNNN-<subject>.patch   ↔   external/<submodule>/
+```
+
+| Series | Submodule | Upstream | Documented in |
+|---|---|---|---|
+| [`emu68/`](emu68/) | `external/emu68` | michalsc/Emu68 | [`docs/emu68.md`](../docs/emu68.md) |
+
+## Applying
+
+Per submodule, in numeric order, one at a time. `git apply` given a whole
+series at once checks every patch against the original tree, so patches that
+build on an earlier one fail:
 
 ```bash
 cd external/emu68
-for p in ../../patches/0*.patch; do git apply "$p" || break; done
+for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
 ```
 
-See **[`docs/emu68.md`](../docs/emu68.md)** for what each patch changes and
-where, why the cuts fall this way, and how to regenerate and verify the series.
+Each submodule's document states what its patches change and where, why the
+cuts fall as they do, and how to regenerate and verify the series.
