@@ -154,23 +154,53 @@ cd external/emu68
 for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
 ```
 
-The series is maintained as a branch in a fork — `feature/host-irq-abi` on
-`github.com/JJDSNT/Emu68`, branched from the same upstream commit the submodule
-is pinned to. Edit there, then regenerate:
+### Editing the series
+
+Everything happens inside the submodule, on a throwaway branch. Nothing outside
+this repository is involved: the only upstream is michalsc/Emu68, and the
+series in `patches/emu68/` is its own source of truth.
+
+`git am` rebuilds the branch from the series, restoring one commit per patch
+with its message intact:
 
 ```bash
-git -C /path/to/Emu68 format-patch master..feature/host-irq-abi -o /path/to/bellatrix/patches/emu68
+cd external/emu68
+PIN=$(git rev-parse HEAD)
+git checkout -b patch-wip
+git am ../../patches/emu68/0*.patch
 ```
 
-Rename the output to the `NNNN-<subject>.patch` form used here — `format-patch`
-derives its filenames from the commit subjects, which are longer.
-
-To prove a regenerated series still reproduces the branch exactly, apply it to
-a pristine submodule and compare tree hashes — these must be equal:
+Edit and commit there — or `git rebase` to reshape the series — then write it
+back out:
 
 ```bash
-cd external/emu68 && git add -A && git write-tree
-git -C /path/to/Emu68 rev-parse feature/host-irq-abi^{tree}
+git format-patch $PIN..patch-wip -o ../../patches/emu68
 ```
 
-For the current series both yield `e17d76c021aa1b9307014d82e0a3ec325cf72e55`.
+Rename the output to the `NNNN-<subject>.patch` form used here; `format-patch`
+derives its filenames from the commit subjects, which are longer. Delete any
+patch files the regenerated series replaced.
+
+Finally return the submodule to the pinned commit, so the parent repository's
+status stays clean:
+
+```bash
+git checkout --detach $PIN && git branch -D patch-wip
+```
+
+### Verifying
+
+The series must reproduce a known tree. Apply it to a pristine submodule and
+compare:
+
+```bash
+cd external/emu68
+for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
+git add -A && git write-tree
+```
+
+For the current series this yields **`e17d76c021aa1b9307014d82e0a3ec325cf72e55`**.
+Update that hash here whenever the series legitimately changes; a mismatch that
+you did not intend means a patch has drifted from what it is documented to do.
+
+Reset with `git reset -q && git checkout -- .` when done.
