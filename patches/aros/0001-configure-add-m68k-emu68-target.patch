@@ -1,0 +1,161 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 3 Aug 2026 18:58:09 -0300
+Subject: [PATCH 1/6] Add the m68k-emu68 target to configure
+
+Registers a m68k target whose architecture is not amiga: an m68k CPU on
+a Raspberry Pi under Emu68, with no Amiga chipset. Everything else in
+this series follows from that distinction being expressible.
+---
+ configure    | 55 ++++++++++++++++++++++++++++++++++++++++++++++++----
+ configure.in | 52 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 102 insertions(+), 5 deletions(-)
+
+diff --git a/configure b/configure
+index 76e310aa1c..efad8865a6 100755
+--- a/configure
++++ b/configure
+@@ -11321,6 +11321,40 @@ printf "%s\n" "$darwin_sdk_path" >&6; }
+         aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Dthumb"
+         ;;
+ 
++    emu68*)
++        aros_flavour="standcompat"
++        aros_target_arch="emu68"
++        aros_shared_default="no"
++
++        case "$target_cpu" in
++            *m68k*)
++                aros_target_cpu="m68k"
++                aros_object_format="m68kelf"
++                gcc_target_cpu="m68000"
++                llvm_target_cpu="M68k"
++                aros_isa_flags="$""(ISA_MC68040_FLAGS)"
++                aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -D__mc68000__ -D__EMU68__"
++                aros_config_cppflags="$aros_config_cppflags -D__EMU68__"
++                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_FREESTANDING) $""(CFLAGS_OMIT_FP) $""(CFLAGS_BUILTIN)"
++                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_OMIT_FP) $""(CFLAGS_BUILTIN)"
++                aros_target_strip_flags="-R.comment --strip-debug"
++                if test "$optimization" = "default"; then
++                    optimization_level=$toolchain_size_opt_lvl
++                fi
++                ;;
++            *)
++                as_fn_error $? "\"Unsupported CPU for Emu68 $target_cpu\"" "$LINENO" 5
++                ;;
++        esac
++
++        aros_kernel_toolchain=$aros_toolchain
++        kernel_toolchain_c_compiler=$toolchain_c_compiler
++        kernel_toolchain_cxx_compiler=$toolchain_cxx_compiler
++        if test "$aros_kernel_toolchain" = "llvm"; then
++            aros_kernel_llvmwrapper=yes
++        fi
++        ;;
++
+     amiga*)
+         # Extract the first word of "gzip", so it can be a program name with args.
+ set dummy gzip; ac_word=$2
+@@ -12457,7 +12491,21 @@ spec_obj_format="-m $aros_object_format"
+ # as well as floating-point ABI.
+ case "$aros_target_cpu" in
+     *m68k*)
+-        gcc_default_cpu="68000"
++        # Emu68 is always a 68040-class machine with a working FPU, so the
++        # guest may as well be built for one. Other m68k targets default to
++        # 68000 and soft float because they have to run on any Amiga; this one
++        # does not, and building 68000 while the CPU underneath is a 68040
++        # makes AttnFlags and the exception frame format disagree.
++        #
++        # Dropping -msoft-float selects the toolchain's hard-float multilib
++        # (m68040;@mcpu=68040 rather than m68040/softfp), so libgcc and the
++        # static libraries come from the matching set.
++        if test "$aros_target_arch" = "emu68" ; then
++            gcc_default_cpu="68040"
++            m68k_isa_extra="ISA_FLOAT_FLAGS               =""$export_newline""ISA_MC68000_FLAGS             = -march=68000 $""(ISA_FLOAT_FLAGS)"
++        else
++            gcc_default_cpu="68000"
++        fi
+         aros_isa_targets="M68K_ISA_TARGETS              :=MC68020 MC68040"
+         aros_isa_extra="$aros_isa_extra$export_newline$aros_isa_targets$export_newline"
+         aros_isa_extra="$aros_isa_extra$m68k_isa_extra$export_newline$m68k_020_isa_extra$export_newline$m68k_030_isa_extra$export_newline$m68k_040_isa_extra$export_newline$m68k_060_isa_extra$export_newline$m68k_ac080_isa_extra$export_newline"
+@@ -21622,7 +21670,6 @@ fi
+ aros_shared_ar="$aros_shared_ld $aros_shared_ldflags -o"
+ 
+ if test -n "$aros_shared_cflags" ; then
+-    echo "SHARED_CFLAGS := $aros_shared_cflags" >> ${aros_hostcfg_dir}/host.cfg
+-    echo "SHARED_AR := $aros_shared_ar" >> ${aros_hostcfg_dir}/host.cfg
++        echo "SHARED_CFLAGS := $aros_shared_cflags" >> ${aros_hostcfg_dir}/host.cfg
++        echo "SHARED_AR := $aros_shared_ar" >> ${aros_hostcfg_dir}/host.cfg
+ fi
+-
+diff --git a/configure.in b/configure.in
+index bd9ca02218..9a873b7332 100644
+--- a/configure.in
++++ b/configure.in
+@@ -2207,6 +2207,42 @@ case "$target_os" in
+         aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Dthumb"
+         ;;
+ 
++    emu68*)
++        aros_flavour="standcompat"
++        aros_target_arch="emu68"
++        aros_shared_default="no"
++
++        case "$target_cpu" in
++            *m68k*)
++                aros_target_cpu="m68k"
++                aros_object_format="m68kelf"
++                gcc_target_cpu="m68000"
++                llvm_target_cpu="M68k"
++                aros_isa_flags="$""(ISA_MC68040_FLAGS)"
++                aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -D__mc68000__ -D__EMU68__"
++                aros_config_cppflags="$aros_config_cppflags -D__EMU68__"
++                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_FREESTANDING) $""(CFLAGS_OMIT_FP) $""(CFLAGS_BUILTIN)"
++                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_OMIT_FP) $""(CFLAGS_BUILTIN)"
++                aros_target_strip_flags="-R.comment --strip-debug"
++                if test "$optimization" = "default"; then
++                    optimization_level=$toolchain_size_opt_lvl
++                fi
++                ;;
++            *)
++                AC_MSG_ERROR("Unsupported CPU for Emu68 $target_cpu")
++                ;;
++        esac
++
++        dnl The in-tree AROS cross toolchain emits both kernel and userspace
++        dnl objects for this freestanding target.
++        aros_kernel_toolchain=$aros_toolchain
++        kernel_toolchain_c_compiler=$toolchain_c_compiler
++        kernel_toolchain_cxx_compiler=$toolchain_cxx_compiler
++        if test "$aros_kernel_toolchain" = "llvm"; then
++            aros_kernel_llvmwrapper=yes
++        fi
++        ;;
++
+     amiga*)
+         AROS_PROG(GZIP,[gzip])
+         host_extra_cfg+="$export_newline""GZIP                          := $GZIP"
+@@ -2759,7 +2795,21 @@ spec_obj_format="-m $aros_object_format"
+ # as well as floating-point ABI.
+ case "$aros_target_cpu" in
+     *m68k*)
+-        gcc_default_cpu="68000"
++        # Emu68 is always a 68040-class machine with a working FPU, so the
++        # guest may as well be built for one. Other m68k targets default to
++        # 68000 and soft float because they have to run on any Amiga; this one
++        # does not, and building 68000 while the CPU underneath is a 68040
++        # makes AttnFlags and the exception frame format disagree.
++        #
++        # Dropping -msoft-float selects the toolchain's hard-float multilib
++        # (m68040;@mcpu=68040 rather than m68040/softfp), so libgcc and the
++        # static libraries come from the matching set.
++        if test "$aros_target_arch" = "emu68" ; then
++            gcc_default_cpu="68040"
++            m68k_isa_extra="ISA_FLOAT_FLAGS               =""$export_newline""ISA_MC68000_FLAGS             = -march=68000 $""(ISA_FLOAT_FLAGS)"
++        else
++            gcc_default_cpu="68000"
++        fi
+         aros_isa_targets="M68K_ISA_TARGETS              :=MC68020 MC68040"
+         aros_isa_extra="$aros_isa_extra$export_newline$aros_isa_targets$export_newline"
+         aros_isa_extra="$aros_isa_extra$m68k_isa_extra$export_newline$m68k_020_isa_extra$export_newline$m68k_030_isa_extra$export_newline$m68k_040_isa_extra$export_newline$m68k_060_isa_extra$export_newline$m68k_ac080_isa_extra$export_newline"

@@ -1,0 +1,556 @@
+/*
+ * Native Emu68 bootstrap.
+ *
+ * Emu68 has already initialized the Raspberry Pi and its m68k execution
+ * environment before entering this code. This layer translates Emu68's
+ * register ABI into persistent state which the AROS kernel can consume.
+ */
+
+#include "boot.h"
+
+#include <aros/kernel.h>
+#include <exec/memory.h>
+#include <exec/resident.h>
+#include <proto/exec.h>
+#include <utility/tagitem.h>
+
+#include "kernel_base.h"
+#include "kernel_romtags.h"
+#include "m68k_exception.h"
+#include "platform.h"
+
+#define FDT_MAGIC       0xd00dfeedUL
+#define FDT_BEGIN_NODE  1
+#define FDT_END_NODE    2
+#define FDT_PROP        3
+#define FDT_NOP         4
+#define FDT_END         9
+
+struct FdtHeader
+{
+    uint32_t magic;
+    uint32_t totalsize;
+    uint32_t off_dt_struct;
+    uint32_t off_dt_strings;
+    uint32_t off_mem_rsvmap;
+    uint32_t version;
+    uint32_t last_comp_version;
+    uint32_t boot_cpuid_phys;
+    uint32_t size_dt_strings;
+    uint32_t size_dt_struct;
+};
+
+struct Emu68BootContext emu68_boot_context;
+
+extern struct TagItem *BootMsg;
+extern char __aros_resident_start[];
+extern char __aros_resident_end[];
+extern void Exec_Supervisor_Trap(void);
+extern void emu68_enter_user(void (*entry)(void), void *stack)
+    __attribute__((noreturn));
+extern void m68k_ExecInstallPreserveAll(struct ExecBase *SysBase);
+extern void SuperstackSwap(void);
+
+/* arch/m68k-amiga/boot/start.c uses the same 8KB. */
+#define SS_STACK_SIZE   0x2000
+
+/* boot/trapprobe.c -- bring-up instrumentation, compiles to an empty table. */
+extern const struct M68KException emu68_exception_table[];
+
+static struct TagItem emu68_boot_tags[9];
+
+void emu68_set_stage(uint32_t stage)
+{
+    struct Emu68BootContext *ctx = &emu68_boot_context;
+
+    ctx->stage = stage;
+
+    /*
+     * The first page is kept out of the allocator. Leave a big-endian marker
+     * immediately above the 68k vector table so a bare-metal monitor can
+     * diagnose boot progress before a console is available.
+     */
+    *(volatile uint32_t *)0x400 = stage;
+}
+
+/*
+ * Run each configured board's DiagPoint.
+ *
+ * Emu68 offers a Zorro III ROM board carrying its own m68k modules and answers
+ * the autoconfig cycles for it at E_EXPANSIONBASE (Emu68
+ * src/aarch64/vectors.c). expansion.library walks that bus itself during its
+ * own init -- it is RTF_SINGLETASK, so this has already happened -- but
+ * enumerating a board is not the same as using it: what registers the modules
+ * a board carries is its DiagArea, and nothing in rom/ processes one.
+ *
+ * Timing is not free choice. An expansion ROM registers through KickTags, and
+ * InitCode() collects those in InitKickTags() at the very start of the
+ * RTF_COLDSTART pass (rom/exec/initcode.c:66), so this has to run before that
+ * call rather than from a resident inside it.
+ */
+/*
+ * Off while the SD path is being debugged against our own driver.
+ *
+ * Turning this on hands the SD controller and the VideoCore mailbox to
+ * Emu68's brcm-sdhc.device and mailbox.resource, so soc/sdcard and soc/mbox
+ * have to come out of CORERESIDENTS at the same time (see boot/mmakefile.src)
+ * -- otherwise two drivers program the same registers.
+ *
+ * expansion.library still enumerates and maps the board either way; this only
+ * governs whether the modules it carries are ever registered.
+ */
+#define EMU68_EXPANSION_ROM 0
+
+static void emu68_configure_expansion(void)
+{
+#if EMU68_EXPANSION_ROM
+    emu68_diag_callroms();
+#endif
+}
+
+static void coldstart_user(void)
+{
+    struct Emu68BootContext *ctx = &emu68_boot_context;
+    ULONG timer_interval_us;
+    APTR ss_stack;
+
+    emu68_set_stage(EMU68_STAGE_COLDSTART);
+    emu68_console_puts("[AROS/Emu68] InitCode COLDSTART in user mode\n");
+
+    /*
+     * Start the platform heartbeat before resident initialization, so
+     * timer.device and the boot animation have a tick source as soon as they
+     * come up.
+     */
+    timer_interval_us = SysBase->VBlankFrequency
+        ? 1000000UL / SysBase->VBlankFrequency
+        : 20000UL;
+    if (timer_interval_us &&
+        platform_timer_start(ctx->fdt, timer_interval_us))
+        emu68_console_puts("[AROS/Emu68] platform timer enabled\n");
+    else
+        emu68_console_puts("[AROS/Emu68] platform timer not found\n");
+
+    emu68_configure_expansion();
+
+    /*
+     * Move off the supervisor stack Emu68 gave us and onto one Exec owns.
+     *
+     * arch/m68k-amiga/boot/start.c does this in doInitCode(), in user mode,
+     * immediately before InitCode(RTF_COLDSTART) -- so this is the same point
+     * in the same boot phase. Until it happens, every trap into supervisor
+     * (Exec/Supervisor(), and therefore the scheduler's KrnSchedule() path)
+     * is pushing onto whatever the bootstrap left in SSP, of unknown size and
+     * unknown ownership.
+     *
+     * MEMF_REVERSE keeps it out of the way of the low allocations the rest of
+     * the boot makes. Amiga page-aligns it for its MMU tables; we have no MMU
+     * of our own to protect it with, so alignment buys nothing here.
+     */
+    ss_stack = AllocMem(SS_STACK_SIZE, MEMF_ANY | MEMF_CLEAR | MEMF_REVERSE);
+    if (ss_stack)
+    {
+        SysBase->SysStkLower = ss_stack;
+        SysBase->SysStkUpper = (UBYTE *)ss_stack + SS_STACK_SIZE;
+        Supervisor((ULONG_FUNC)SuperstackSwap);
+        emu68_console_puts("[AROS/Emu68] supervisor stack swapped\n");
+    }
+    else
+    {
+        emu68_console_puts("[AROS/Emu68] supervisor stack alloc failed\n");
+    }
+
+    /*
+     * This does not return, and every other AROS target relies on that:
+     * dosboot.resource's init function either hands over to dos.library or
+     * loops forever retrying for boot media, so control never comes back.
+     * arch/aarch64-native treats a return as fatal ("System Boot Failed!").
+     *
+     * Boot with "sysdebug=InitCode" to see the resident list and watch each
+     * module initialize.
+     */
+    InitCode(RTF_COLDSTART, 0);
+
+    emu68_console_puts("[AROS/Emu68] InitCode COLDSTART returned -- boot failed\n");
+
+    for (;;)
+        ;
+}
+
+static uint32_t align4(uint32_t value)
+{
+    return (value + 3) & ~3UL;
+}
+
+static int bounded_string_equal(const char *value, uint32_t value_size,
+                                const char *expected)
+{
+    uint32_t i = 0;
+
+    while (expected[i] != '\0')
+    {
+        if (i >= value_size || value[i] != expected[i])
+            return 0;
+        i++;
+    }
+
+    return i < value_size && value[i] == '\0';
+}
+
+static int node_is_memory(const char *name, const uint8_t *limit)
+{
+    static const char prefix[] = "memory";
+    uint32_t i;
+
+    for (i = 0; i < sizeof(prefix) - 1; i++)
+    {
+        if ((const uint8_t *)&name[i] >= limit || name[i] != prefix[i])
+            return 0;
+    }
+
+    return (const uint8_t *)&name[i] < limit &&
+           (name[i] == '\0' || name[i] == '@');
+}
+
+static const char *fdt_string(const uint8_t *strings, uint32_t strings_size,
+                              uint32_t offset)
+{
+    uint32_t i;
+
+    if (offset >= strings_size)
+        return 0;
+
+    for (i = offset; i < strings_size; i++)
+    {
+        if (strings[i] == '\0')
+            return (const char *)&strings[offset];
+    }
+
+    return 0;
+}
+
+static uint32_t cells_to_u32(const uint32_t *cells, uint32_t count)
+{
+    if (count == 0)
+        return 0;
+
+    /*
+     * m68k addresses are 32-bit. For multi-cell FDT values, accept only
+     * ranges whose high cells are zero and return the least significant one.
+     */
+    while (count > 1)
+    {
+        if (*cells++ != 0)
+            return 0;
+        count--;
+    }
+
+    return *cells;
+}
+
+static void parse_fdt(struct Emu68BootContext *ctx)
+{
+    const struct FdtHeader *header = ctx->fdt;
+    const uint8_t *base = ctx->fdt;
+    const uint8_t *structure;
+    const uint8_t *structure_end;
+    const uint8_t *strings;
+    uint32_t address_cells = 1;
+    uint32_t size_cells = 1;
+    uint32_t depth = 0;
+    int in_memory = 0;
+    int in_chosen = 0;
+
+    if (!header || header->magic != FDT_MAGIC ||
+        header->totalsize < sizeof(*header))
+        return;
+
+    if (header->off_dt_struct > header->totalsize ||
+        header->size_dt_struct > header->totalsize - header->off_dt_struct ||
+        header->off_dt_strings > header->totalsize ||
+        header->size_dt_strings > header->totalsize - header->off_dt_strings)
+        return;
+
+    ctx->fdt_size = header->totalsize;
+    ctx->flags |= EMU68_BOOT_FDT_VALID;
+
+    structure = base + header->off_dt_struct;
+    structure_end = structure + header->size_dt_struct;
+    strings = base + header->off_dt_strings;
+
+    while (structure + sizeof(uint32_t) <= structure_end)
+    {
+        uint32_t token = *(const uint32_t *)structure;
+        structure += sizeof(uint32_t);
+
+        if (token == FDT_BEGIN_NODE)
+        {
+            const char *name = (const char *)structure;
+            const uint8_t *cursor = structure;
+
+            while (cursor < structure_end && *cursor != '\0')
+                cursor++;
+            if (cursor == structure_end)
+                return;
+
+            depth++;
+            in_memory = depth == 2 && node_is_memory(name, structure_end);
+            in_chosen = depth == 2 &&
+                        bounded_string_equal(name,
+                                             (uint32_t)(cursor - structure + 1),
+                                             "chosen");
+            structure += align4((uint32_t)(cursor - structure + 1));
+        }
+        else if (token == FDT_END_NODE)
+        {
+            if (depth == 0)
+                return;
+            if (depth == 2)
+            {
+                in_memory = 0;
+                in_chosen = 0;
+            }
+            depth--;
+        }
+        else if (token == FDT_PROP)
+        {
+            uint32_t length;
+            uint32_t name_offset;
+            const char *name;
+            const uint8_t *value;
+
+            if (structure + 2 * sizeof(uint32_t) > structure_end)
+                return;
+
+            length = *(const uint32_t *)structure;
+            name_offset = *(const uint32_t *)(structure + sizeof(uint32_t));
+            structure += 2 * sizeof(uint32_t);
+            if (length > (uint32_t)(structure_end - structure))
+                return;
+
+            value = structure;
+            name = fdt_string(strings, header->size_dt_strings, name_offset);
+            if (!name)
+                return;
+
+            if (depth == 1 && length == sizeof(uint32_t))
+            {
+                if (bounded_string_equal(name, 15, "#address-cells"))
+                    address_cells = *(const uint32_t *)value;
+                else if (bounded_string_equal(name, 12, "#size-cells"))
+                    size_cells = *(const uint32_t *)value;
+            }
+            else if (in_memory &&
+                     bounded_string_equal(name, 4, "reg") &&
+                     length >= (address_cells + size_cells) * sizeof(uint32_t))
+            {
+                const uint32_t *cells = (const uint32_t *)value;
+                uint32_t memory_base = cells_to_u32(cells, address_cells);
+                uint32_t memory_size =
+                    cells_to_u32(cells + address_cells, size_cells);
+
+                if (memory_size != 0)
+                {
+                    ctx->memory_base = memory_base;
+                    ctx->memory_size = memory_size;
+                    ctx->flags |= EMU68_BOOT_MEMORY_VALID;
+                }
+            }
+            else if (in_chosen &&
+                     bounded_string_equal(name, 9, "bootargs") &&
+                     length != 0)
+            {
+                ctx->bootargs = (const char *)value;
+                ctx->bootargs_size = length;
+                ctx->flags |= EMU68_BOOT_BOOTARGS_VALID;
+            }
+
+            structure += align4(length);
+        }
+        else if (token == FDT_NOP)
+        {
+            continue;
+        }
+        else if (token == FDT_END)
+        {
+            return;
+        }
+        else
+        {
+            return;
+        }
+    }
+}
+
+static void add_boot_tag(uint32_t *index, uint32_t tag, uint32_t data)
+{
+    emu68_boot_tags[*index].ti_Tag = tag;
+    emu68_boot_tags[*index].ti_Data = data;
+    (*index)++;
+}
+
+static void start_aros(struct Emu68BootContext *ctx)
+{
+    UWORD *ranges[3];
+    struct MemHeader *memory;
+    struct ExecBase *sys_base;
+    void *user_stack;
+    uint32_t lower;
+    uint32_t upper;
+    uint32_t tag_index = 0;
+
+    if (!(ctx->flags & EMU68_BOOT_MEMORY_VALID))
+        return;
+
+    upper = ctx->memory_base + ctx->memory_size;
+    if (upper < ctx->memory_base)
+        return;
+
+    /*
+     * Keep the vector table and the absolute SysBase slot at address 4 out of
+     * the allocator. Emu68 has already removed its FDT and the loaded ELF from
+     * the top of the advertised memory range.
+     */
+    lower = ctx->memory_base;
+    if (lower < 0x1000)
+        lower = 0x1000;
+    lower = (lower + 15) & ~15UL;
+
+    if (upper <= lower || upper - lower < 0x10000)
+        return;
+
+    add_boot_tag(&tag_index, KRN_KernelBase,
+                 (uint32_t)__aros_resident_start);
+    add_boot_tag(&tag_index, KRN_KernelLowest,
+                 (uint32_t)__aros_resident_start);
+    add_boot_tag(&tag_index, KRN_KernelHighest,
+                 (uint32_t)__aros_resident_end);
+    add_boot_tag(&tag_index, KRN_MEMLower, lower);
+    add_boot_tag(&tag_index, KRN_MEMUpper, upper);
+    add_boot_tag(&tag_index, KRN_OpenFirmwareTree, (uint32_t)ctx->fdt);
+    if (ctx->flags & EMU68_BOOT_BOOTARGS_VALID)
+        add_boot_tag(&tag_index, KRN_CmdLine, (uint32_t)ctx->bootargs);
+    add_boot_tag(&tag_index, TAG_DONE, 0);
+
+    BootMsg = emu68_boot_tags;
+    memory = (struct MemHeader *)lower;
+    krnCreateTLSFMemHeader("System Memory", 0, memory, upper - lower,
+                           MEMF_CHIP | MEMF_FAST | MEMF_PUBLIC |
+                           MEMF_KICK | MEMF_LOCAL);
+
+    ranges[0] = (UWORD *)__aros_resident_start;
+    ranges[1] = (UWORD *)__aros_resident_end;
+    ranges[2] = (UWORD *)~0UL;
+
+    sys_base = krnPrepareExecBase(ranges, memory, BootMsg);
+    if (sys_base)
+    {
+        /*
+         * Tell exec what Emu68 actually emulates.
+         *
+         * Nothing else sets this, so it was left at zero and exec believed it
+         * was running on a bare 68000. That is not a cosmetic mistake: the
+         * size of an exception stack frame depends on it. Emu68 emits frames
+         * with a format word (src/M68k_Exception.c), i.e. 68010 and up, while
+         * Exec_Supervisor_Entry (arch/m68k-all/exec/supervisor.S) pushes that
+         * word only when AFF_68010 is set. With the flag clear, the fake frame
+         * it builds is two bytes short, and the RTE that ends the supervisor
+         * call returns to the wrong address.
+         *
+         * That path is reached whenever Permit() finds a switch pending and
+         * calls KrnSchedule(), which is why it survived the timer/scheduler
+         * selftest: preemption from an interrupt goes through this port's own
+         * trampoline, which pushes and pops symmetrically and never consults
+         * AttnFlags.
+         *
+         * The target is built -march=68040 to match (configure sets
+         * gcc_default_cpu for this arch), so the 68040 variants
+         * m68k_ExecInstallPreserveAll() selects from these flags are built for
+         * the CPU that is actually underneath.
+         *
+         * The FPU is claimed too. Emu68 emulates one, the target is built
+         * against the toolchain's hard-float multilib, and
+         * arch/m68k-all/kernel/fpu{save,restore}context.S already carry the
+         * context handling that goes with saying so.
+         */
+        sys_base->AttnFlags |= AFF_68010 | AFF_68020 | AFF_68030 |
+                               AFF_68040 | AFF_ADDR32 |
+                               AFF_68881 | AFF_68882 | AFF_FPU40;
+
+        m68k_ExecInstallPreserveAll(sys_base);
+        ctx->exec_base = sys_base;
+        ctx->flags |= EMU68_BOOT_EXEC_READY;
+        emu68_set_stage(EMU68_STAGE_EXEC_READY);
+        emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
+
+        emu68_set_stage(EMU68_STAGE_SINGLETASK);
+        emu68_console_puts("[AROS/Emu68] InitCode SINGLETASK\n");
+        InitCode(RTF_SINGLETASK, 0);
+        ctx->flags |= EMU68_BOOT_KERNEL_READY;
+        emu68_set_stage(EMU68_STAGE_KERNEL_READY);
+        emu68_console_puts("[AROS/Emu68] kernel.resource ready\n");
+
+        /*
+         * Populate the m68k exception vectors.
+         *
+         * Until this runs, the only two vectors this port has ever written
+         * are 8 (below) and 30 (level 6, from platform_timer_start()). Every
+         * other vector holds whatever Emu68 left there. Any exception AROS
+         * raises -- an illegal instruction, a trap, a divide by zero, an
+         * unclaimed autovector -- then jumps to an address that was never a
+         * function, and Emu68's JIT starts translating whatever it finds,
+         * typically the vector table itself.
+         *
+         * M68KExceptionInit() points vectors 2..63 at M68KTrapHelper_10,
+         * which routes into AROS's normal exception handling. The table
+         * argument is only for per-vector overrides. arch/m68k-amiga uses it
+         * for its seven autovector levels; we cover those the other way
+         * arch/m68k-amiga also does, writing all seven vectors directly in
+         * platform.c, so ours carries the fault vectors instead.
+         *
+         * Ordering matters and mirrors arch/m68k-amiga/boot/start.c:1026-1030
+         * -- this overwrites vector 8, so Exec_Supervisor_Trap goes back in
+         * afterwards, and level 6 is installed later still.
+         */
+        M68KExceptionInit(emu68_exception_table, sys_base);
+
+        ((volatile void **)0)[8] = Exec_Supervisor_Trap;
+        user_stack = AllocMem(64 * 1024, MEMF_PUBLIC | MEMF_CLEAR);
+        if (user_stack)
+            emu68_enter_user(coldstart_user, user_stack + 64 * 1024);
+
+        emu68_console_puts("[AROS/Emu68] failed to allocate user stack\n");
+    }
+}
+
+void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
+                     uint32_t width, uint32_t height)
+{
+    emu68_boot_context.magic = EMU68_BOOT_MAGIC;
+    emu68_boot_context.abi_version = EMU68_BOOT_ABI;
+    emu68_boot_context.flags = 0;
+    emu68_boot_context.fdt = fdt;
+    emu68_boot_context.fdt_size = 0;
+    emu68_boot_context.framebuffer = framebuffer;
+    emu68_boot_context.framebuffer_pitch = pitch;
+    emu68_boot_context.framebuffer_width = width;
+    emu68_boot_context.framebuffer_height = height;
+    emu68_boot_context.memory_base = 0;
+    emu68_boot_context.memory_size = 0;
+    emu68_boot_context.bootargs = 0;
+    emu68_boot_context.bootargs_size = 0;
+    emu68_boot_context.exec_base = 0;
+    emu68_set_stage(EMU68_STAGE_ENTRY);
+
+    if (framebuffer && pitch && width && height)
+        emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
+
+    emu68_console_init(framebuffer, pitch, width, height);
+    emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");
+
+    parse_fdt(&emu68_boot_context);
+    start_aros(&emu68_boot_context);
+
+    for (;;)
+        __asm__ volatile ("stop #0x2700");
+}

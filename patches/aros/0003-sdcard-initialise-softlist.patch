@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 3 Aug 2026 18:59:05 -0300
+Subject: [PATCH 3/6] sdcard: initialise sdcu_SoftList before AddHead() uses it
+
+cmd_AddChangeInt() does AddHead(&unit->sdcu_SoftList), so the list has
+to be a list first. rom/devs/ata does the same NEWLIST for the
+identically named au_SoftList in ata_unitclass.c; the call was lost on
+the way over.
+
+On a zeroed list AddHead() writes the node through a NULL lh_Head, i.e.
+to address 4. That looks harmless on the ARM ports that have used this
+driver so far. On m68k address 4 is AbsExecBase.
+
+Not specific to any port -- the latent corruption is there for every
+user of this driver.
+---
+ rom/devs/sdcard/sdcard_bus.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/rom/devs/sdcard/sdcard_bus.c b/rom/devs/sdcard/sdcard_bus.c
+index b0956149c7..06471212a0 100644
+--- a/rom/devs/sdcard/sdcard_bus.c
++++ b/rom/devs/sdcard/sdcard_bus.c
+@@ -339,6 +339,20 @@ BOOL FNAME_SDCBUS(RegisterUnit)(struct sdcard_Bus *bus)
+             {
+                 if ((sdcUnit = AllocVecPooled(LIBBASE->sdcard_MemPool, sizeof(struct sdcard_Unit))) != NULL)
+                 {
++                    /*
++                     * cmd_AddChangeInt() does AddHead(&unit->sdcu_SoftList),
++                     * so the list has to be a list first. rom/devs/ata, which
++                     * this driver is derived from, does the same for the
++                     * identically named and identically commented au_SoftList
++                     * in ata_unitclass.c:88; the call was lost on the way over.
++                     *
++                     * On a zeroed list AddHead() writes the node through a
++                     * NULL lh_Head, i.e. to address 4 -- harmless-looking on
++                     * the ARM ports that have used this driver so far, and
++                     * fatal on m68k, where address 4 is AbsExecBase.
++                     */
++                    NEWLIST(&sdcUnit->sdcu_SoftList);
++
+                     sdcUnit->sdcu_Bus = bus;
+                     if ((sdcUnit->sdcu_UnitNum = bus->sdcb_BusUnits->sdcbu_UnitCnt++) > bus->sdcb_BusUnits->sdcbu_UnitMax)
+                     {

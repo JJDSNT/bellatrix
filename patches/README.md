@@ -13,7 +13,15 @@ patches/<submodule>/NNNN-<subject>.patch   ↔   external/<submodule>/
 
 | Series | Submodule | Upstream | Documented in |
 |---|---|---|---|
+| [`aros/`](aros/) | `external/aros` | aros-development-team/AROS | [`docs/aros.md`](../docs/aros.md) |
 | [`emu68/`](emu68/) | `external/emu68` | michalsc/Emu68 | [`docs/emu68.md`](../docs/emu68.md) |
+
+A submodule may also receive whole directories of ours, symlinked in rather
+than carried as patches — a patch is for changing someone else's code, not for
+shipping our own. A top-level directory named after a submodule mirrors its
+tree: `aros/arch/m68k-emu68/` is linked to `external/aros/arch/m68k-emu68`. The
+injection point is the first level that does not already exist upstream, so
+nothing has to be declared.
 
 ## Applying
 

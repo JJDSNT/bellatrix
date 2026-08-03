@@ -1,0 +1,18 @@
+include $(SRCDIR)/config/aros.cfg
+
+#
+# Publish this target's headers into $(GENINCDIR), so they are reachable as
+# <hardware/videocore.h> and friends without every mmakefile having to add an
+# -I of its own. compiler/include/mmakefile.src:88 pulls
+# includes-copy-$(ARCH)-$(CPU) into includes-copy, which is how the hook is
+# named for us.
+#
+# hardware/ holds the SoC descriptions the SD and mailbox code needs; aros/
+# holds bootstruct.h, which exists purely to unblock the inherited Amiga
+# command set -- see the comment in that file.
+#
+INCLUDE_FILES := $(call WILDCARD, *.[hi] aros/*.[hi] hardware/*.[hi])
+
+#MM- includes-copy-emu68-m68k : includes-common-m68k
+
+%copy_includes mmake=includes-copy-emu68-m68k

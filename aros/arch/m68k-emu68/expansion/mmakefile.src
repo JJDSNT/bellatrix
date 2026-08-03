@@ -1,0 +1,28 @@
+include $(SRCDIR)/config/aros.cfg
+
+#
+# Zorro autoconfig for arch/m68k-emu68.
+#
+# rom/expansion's ConfigChain()/ReadExpansionByte() are deliberately stubs --
+# autoconfig is bus-specific, so every target that has one supplies its own.
+# These come from arch/m68k-amiga/expansion, because the bus is the same one:
+# Emu68 answers autoconfig cycles at 0xE80000 itself and offers its Zorro III
+# ROM board carrying brcm-sdhc.device, mailbox.resource, gic400.library and
+# the rest (Emu68 src/aarch64/vectors.c, src/boards/emu68rom.c).
+#
+# Kept as a copy rather than shared with the Amiga tree, the same way
+# soc/sdcard and soc/mbox are.
+#
+USER_INCLUDES     := -I$(SRCDIR)/rom/expansion
+USER_CPPFLAGS     := -DADATE="\"$(shell date '+%d.%m.%Y')\""
+
+# -fno-common: Emu68's ELF loader rejects the whole guest image on the first
+# COMMON symbol it meets (src/ElfLoader.c bails on SHN_COMMON).
+USER_CFLAGS       := -fno-common
+
+FUNCTIONS := readexpansionbyte readexpansionrom configchain configboard \
+             writeexpansionbyte writeexpansionword
+
+%build_archspecific \
+  mainmmake=kernel-expansion maindir=rom/expansion arch=emu68-m68k \
+  files="$(FUNCTIONS)" asmfiles="memorytest" modname=expansion

@@ -1,0 +1,13 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM kernel-m68k-emu68-emu68gfx-kobj : kernel-hidd-gfx-includes
+
+FILES := emu68gfx_init emu68gfx_hiddclass
+
+USER_INCLUDES := -I$(SRCDIR)/arch/m68k-emu68/boot
+USER_CPPFLAGS := -D__EMU68__
+
+%build_module mmake=kernel-m68k-emu68-emu68gfx \
+  modname=emu68gfx modtype=hidd files="$(FILES)"
+
+%common

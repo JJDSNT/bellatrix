@@ -28,10 +28,14 @@ command -v git >/dev/null || { echo "ERROR: git not found" >&2; exit 1; }
 # Tree hash of a submodule's working tree, computed in a scratch index so the
 # real one is left alone.
 worktree_tree() {
-    local repo="$1" idx
+    local repo="$1" dir="$2" idx nf
     idx="$(mktemp)"
     GIT_INDEX_FILE="$idx" git -C "$repo" read-tree HEAD
     GIT_INDEX_FILE="$idx" git -C "$repo" add -A
+    # Files the series creates are in the exclude file so they stay out of the
+    # submodule's status; stage them by name so the tree still reflects them.
+    nf="$(series_new_files "$dir")"
+    [ -n "$nf" ] && GIT_INDEX_FILE="$idx" git -C "$repo" add -f -- $nf 2>/dev/null
     GIT_INDEX_FILE="$idx" git -C "$repo" write-tree
     rm -f "$idx"
 }
@@ -60,7 +64,7 @@ series_tree() {
 series_state() {
     local repo="$1" dir="$2" head cur want
     head="$(git -C "$repo" rev-parse HEAD^{tree})"
-    cur="$(worktree_tree "$repo")"
+    cur="$(worktree_tree "$repo" "$dir")"
     want="$(series_tree "$repo" "$dir")"
 
     case "$want" in BROKEN:*) echo "broken:${want#BROKEN:}"; return ;; esac
@@ -84,6 +88,15 @@ series_files() {
     grep -h '^diff --git' "$1"/[0-9]*.patch | sed 's|^diff --git a/||; s| b/.*||' | sort -u
 }
 
+# Of those, the ones the series creates. They are untracked in the submodule
+# once applied, so skip-worktree cannot quiet them — they go in the exclude
+# file instead, and worktree_tree() force-stages them by name so the tree
+# comparison still sees them.
+series_new_files() {
+    awk '/^diff --git /{f=$4; sub(/^b\//,"",f); next} /^new file mode /{print f}' \
+        "$1"/[0-9]*.patch | sort -u
+}
+
 # Stop git reporting the applied series as local modifications *inside* the
 # submodule. The parent repository is handled by 'ignore = dirty' in
 # .gitmodules; this is the same thing one level down.
@@ -99,6 +112,75 @@ mark_series_files() {
     for f in $(series_files "$dir"); do
         git -C "$repo" update-index "$flag" "$f" 2>/dev/null || true
     done
+}
+
+# Directories of ours that are injected into a submodule as symlinks.
+#
+# A top-level directory named after a submodule mirrors that submodule's tree:
+# aros/arch/m68k-emu68 belongs at external/aros/arch/m68k-emu68. The injection
+# point is the first level that does *not* already exist upstream — `arch` does,
+# `arch/m68k-emu68` does not, so that is what gets linked.
+#
+# Symlinked rather than copied on purpose: there is one copy of these files, and
+# editing them inside the submodule tree edits this repository.
+inject_dirs() {
+    local repo="$1" ours="$2" rel="${3:-}" entry sub
+    for entry in "$ours"/*/; do
+        [ -d "$entry" ] || continue
+        sub="${rel:+$rel/}$(basename "$entry")"
+        if [ -e "$repo/$sub" ] && [ ! -L "$repo/$sub" ]; then
+            inject_dirs "$repo" "$entry" "$sub"     # exists upstream, descend
+        else
+            echo "$sub"                             # injection point
+        fi
+    done
+}
+
+# Register everything the series adds to the submodule in its exclude file:
+# the files the patches create, and the directories we inject. Must happen
+# before series_state() runs: that function stages the working tree to compute
+# a tree hash, and an unexcluded symlink would count as a change and make an
+# otherwise correctly patched submodule look dirty.
+#
+# In a submodule .git is a file pointing elsewhere, so ask git for the path
+# rather than assuming a directory.
+register_excludes() {
+    local repo="$1" dir="$2" ours="$3" sub gitdir excl
+    gitdir="$(cd "$repo" && git rev-parse --absolute-git-dir)" || return 0
+    excl="$gitdir/info/exclude"
+    mkdir -p "$(dirname "$excl")"
+    [ -f "$excl" ] || : > "$excl"
+
+    for sub in $(series_new_files "$dir"); do
+        grep -qxF "/$sub" "$excl" 2>/dev/null || echo "/$sub" >> "$excl"
+    done
+
+    [ -d "$ours" ] || return 0
+    for sub in $(inject_dirs "$repo" "$ours"); do
+        grep -qxF "/$sub" "$excl" 2>/dev/null || echo "/$sub" >> "$excl"
+    done
+}
+
+link_injections() {
+    local repo="$1" ours="$2" sub target
+    for sub in $(inject_dirs "$repo" "$ours"); do
+        target="$(realpath --relative-to="$repo/$(dirname "$sub")" "$ours/$sub")"
+        if [ -L "$repo/$sub" ] && [ "$(readlink "$repo/$sub")" = "$target" ]; then
+            echo "    linked already: $sub"
+        else
+            rm -rf "$repo/$sub"
+            ln -s "$target" "$repo/$sub"
+            echo "    linked $sub -> $target"
+        fi
+    done
+}
+
+unlink_injections() {
+    local repo="$1" ours="$2" sub
+    for sub in $(inject_dirs "$repo" "$ours"); do
+        [ -L "$repo/$sub" ] && rm -f "$repo/$sub"
+    done
+    return 0
 }
 
 # Submodule names are the directory names under patches/.
@@ -129,9 +211,18 @@ for name in "${SERIES[@]}"; do
         git -C "$repo" submodule update --init --recursive >/dev/null
     fi
 
+    ours="$ROOT/$name"
+    register_excludes "$repo" "$dir" "$ours"
+
     if [ "$MODE" = reset ]; then
         echo "    resetting to pinned commit"
         mark_series_files "$repo" "$dir" --no-skip-worktree
+        [ -d "$ours" ] && unlink_injections "$repo" "$ours"
+        # The files the series creates are in the exclude file, so plain
+        # 'git clean -fd' leaves them behind. Remove them by name rather than
+        # reaching for -x, which would also delete a build tree living in the
+        # submodule.
+        for f in $(series_new_files "$dir"); do rm -f "$repo/$f"; done
         git -C "$repo" reset -q --hard
         git -C "$repo" clean -qfd
     fi
@@ -168,6 +259,23 @@ for name in "${SERIES[@]}"; do
             failed=1
             ;;
     esac
+
+    if [ -d "$ours" ] && [ "$state" != "dirty" ]; then
+        case "$state:$MODE" in
+            *:verify)
+                for sub in $(inject_dirs "$repo" "$ours"); do
+                    if [ -L "$repo/$sub" ]; then
+                        echo "    linked $sub"
+                    else
+                        echo "    NOT LINKED $sub"
+                        failed=1
+                    fi
+                done
+                ;;
+            broken:*) ;;
+            *) link_injections "$repo" "$ours" ;;
+        esac
+    fi
 done
 
 echo

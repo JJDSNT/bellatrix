@@ -1,0 +1,314 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 3 Aug 2026 18:58:09 -0300
+Subject: [PATCH 2/6] m68k-all: support an m68k that is not an Amiga
+
+The shared m68k layer assumed Amiga hardware in places where the
+assumption is really about the CPU or about having a chipset at all:
+cache maintenance, dispatch, signalling, task switch and wait.
+
+Adds preserveall.S and preserveall_install.c, which the exec mmakefile
+now builds.
+---
+ arch/m68k-all/exec/cachecleare.c         | 12 +++++++++-
+ arch/m68k-all/exec/cacheclearu.c         |  9 ++++++++
+ arch/m68k-all/exec/dispatch.S            |  2 ++
+ arch/m68k-all/exec/mmakefile.src         |  3 ++-
+ arch/m68k-all/exec/preserveall.S         | 28 ++++++++++++++++++++++++
+ arch/m68k-all/exec/preserveall_install.c | 23 +++++++++++++++++++
+ arch/m68k-all/exec/signal_fast.S         |  8 +++++++
+ arch/m68k-all/exec/switch.S              |  4 ++++
+ arch/m68k-all/exec/wait.S                |  6 +++++
+ arch/m68k-all/kernel/kernel_cpu.c        |  4 ++++
+ 10 files changed, 97 insertions(+), 2 deletions(-)
+ create mode 100644 arch/m68k-all/exec/preserveall.S
+ create mode 100644 arch/m68k-all/exec/preserveall_install.c
+
+diff --git a/arch/m68k-all/exec/cachecleare.c b/arch/m68k-all/exec/cachecleare.c
+index 5acf106afe..249c320675 100644
+--- a/arch/m68k-all/exec/cachecleare.c
++++ b/arch/m68k-all/exec/cachecleare.c
+@@ -28,6 +28,17 @@ AROS_LH3(void, CacheClearE,
+ 
+     void (*func)();
+ 
++#ifdef __EMU68__
++    /*
++     * Emu68 recognizes the 68040 CINVA IC opcode and uses it to invalidate
++     * translated m68k code. There is no physical m68k data cache to manage,
++     * so invalidate the complete translated instruction cache even when the
++     * caller supplied a smaller range.
++     */
++    __asm__ volatile(".word 0xf498" ::: "memory");
++    return;
++#endif
++
+     if (SysBase->LibNode.lib_OpenCnt == 0)
+         return;
+ 
+@@ -57,4 +68,3 @@ AROS_LH3(void, CacheClearE,
+ 
+     AROS_LIBFUNC_EXIT
+ } /* CacheClearE */
+-
+diff --git a/arch/m68k-all/exec/cacheclearu.c b/arch/m68k-all/exec/cacheclearu.c
+index a00cb81280..d90c5a6d4d 100644
+--- a/arch/m68k-all/exec/cacheclearu.c
++++ b/arch/m68k-all/exec/cacheclearu.c
+@@ -25,6 +25,15 @@ AROS_LH0(void, CacheClearU,
+     AROS_LIBFUNC_INIT
+     void (*func)(void);
+ 
++#ifdef __EMU68__
++    /*
++     * CINVA IC is the Emu68-visible synchronization point for self-modifying
++     * m68k code, including Exec library vectors changed by SetFunction().
++     */
++    __asm__ volatile(".word 0xf498" ::: "memory");
++    return;
++#endif
++
+     if (SysBase->LibNode.lib_OpenCnt == 0)
+         /* We were called from PrepareExecBase. AttnFlags isn't set yet.
+          * Do nothing or we would always install 68000 routine.
+diff --git a/arch/m68k-all/exec/dispatch.S b/arch/m68k-all/exec/dispatch.S
+index 5df84810e8..a076fb6ed1 100644
+--- a/arch/m68k-all/exec/dispatch.S
++++ b/arch/m68k-all/exec/dispatch.S
+@@ -45,6 +45,7 @@ __Dispatch_this:
+         move.l  %d0,%a5
+ 
+ 2:
++#ifndef __EMU68__
+         tst.b   IDNestCnt(%a6)
+         bmi.s   3f
+         move.w  #0x4000,0xdff09a
+@@ -52,6 +53,7 @@ __Dispatch_this:
+ 3:
+         move.w  #0xc000,0xdff09a
+ 4:
++#endif
+         lea.l   %a5@(66),%a2
+         move.l  %a2,%usp
+         move.l  %a5@+,%sp@-
+diff --git a/arch/m68k-all/exec/mmakefile.src b/arch/m68k-all/exec/mmakefile.src
+index be24b87aaa..07a85d625a 100644
+--- a/arch/m68k-all/exec/mmakefile.src
++++ b/arch/m68k-all/exec/mmakefile.src
+@@ -17,7 +17,7 @@ PRIV_EXEC_INCLUDES = \
+     $(TARGET_KERNEL_INCLUDES) \
+     -I$(SRCDIR)/rom/kernel
+ 
+-FILES=offsets getcc preparecontext \
++FILES=offsets getcc preparecontext preserveall_install \
+       cachecleare cacheclearu cachepostdma cachepredma \
+       cachecontrol setfunction copymem alert_cpu addmemlist
+ 
+@@ -37,6 +37,7 @@ AFILES=newstackswap stackswap \
+        copymemquick \
+        copymemquick_040 \
+        copymemquick_060 \
++       preserveall \
+        debug
+ 
+ USER_INCLUDES := $(PRIV_EXEC_INCLUDES)
+diff --git a/arch/m68k-all/exec/preserveall.S b/arch/m68k-all/exec/preserveall.S
+new file mode 100644
+index 0000000000..5e07c35b37
+--- /dev/null
++++ b/arch/m68k-all/exec/preserveall.S
+@@ -0,0 +1,28 @@
++/*
++ * m68k Exec ABI wrappers for calls documented to preserve scratch registers.
++ *
++ * The C implementations use the normal AROS register-clobber convention.
++ * Classic m68k callers, however, rely on these Exec vectors preserving
++ * D0-D1/A0-A1.
++ */
++
++#include "aros/m68k/asm.h"
++
++#undef ObtainSemaphore
++#undef ReleaseSemaphore
++
++        .text
++        .balign 4
++
++#define PRESERVE_ALL_WRAPPER(wrapper, function, vector) \
++        .globl wrapper;                                 \
++wrapper:                                                \
++        movem.l %d0-%d1/%a0-%a1,%sp@-;                 \
++        jsr AROS_SLIB_ENTRY(function,Exec,vector);       \
++        movem.l %sp@+,%d0-%d1/%a0-%a1;                 \
++        rts
++
++PRESERVE_ALL_WRAPPER(m68k_Exec_Permit, Permit, 23)
++PRESERVE_ALL_WRAPPER(m68k_Exec_ObtainSemaphore, ObtainSemaphore, 94)
++PRESERVE_ALL_WRAPPER(m68k_Exec_ReleaseSemaphore, ReleaseSemaphore, 95)
++PRESERVE_ALL_WRAPPER(m68k_Exec_ObtainSemaphoreShared, ObtainSemaphoreShared, 113)
+diff --git a/arch/m68k-all/exec/preserveall_install.c b/arch/m68k-all/exec/preserveall_install.c
+new file mode 100644
+index 0000000000..65c9d645e7
+--- /dev/null
++++ b/arch/m68k-all/exec/preserveall_install.c
+@@ -0,0 +1,23 @@
++/*
++ * Install the register-preserving Exec vector wrappers required by the
++ * classic m68k library ABI. Bootstraps call this after ExecBase is complete.
++ */
++
++#include <exec/execbase.h>
++#include <defines/exec_LVO.h>
++
++extern void m68k_Exec_Permit(void);
++extern void m68k_Exec_ObtainSemaphore(void);
++extern void m68k_Exec_ReleaseSemaphore(void);
++extern void m68k_Exec_ObtainSemaphoreShared(void);
++
++void m68k_ExecInstallPreserveAll(struct ExecBase *SysBase)
++{
++    __AROS_SETVECADDR(SysBase, LVOPermit, m68k_Exec_Permit);
++    __AROS_SETVECADDR(SysBase, LVOObtainSemaphore,
++                     m68k_Exec_ObtainSemaphore);
++    __AROS_SETVECADDR(SysBase, LVOReleaseSemaphore,
++                     m68k_Exec_ReleaseSemaphore);
++    __AROS_SETVECADDR(SysBase, LVOObtainSemaphoreShared,
++                     m68k_Exec_ObtainSemaphoreShared);
++}
+diff --git a/arch/m68k-all/exec/signal_fast.S b/arch/m68k-all/exec/signal_fast.S
+index 3cc604cd63..0de5b0a7b6 100644
+--- a/arch/m68k-all/exec/signal_fast.S
++++ b/arch/m68k-all/exec/signal_fast.S
+@@ -27,7 +27,9 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
+         and.l   tc_SigWait(%a1),%d1
+ 
+         /* Protect signal fields and the scheduler lists. */
++#ifndef __EMU68__
+         move.w  #0x4000,0xdff09a
++#endif
+         addq.b  #1,IDNestCnt(%a6)
+         cmp.l   tc_SigRecvd(%a1),%a0
+         bne     .slow
+@@ -79,7 +81,9 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
+         ble.s   .done
+         bset.b  #7,AttnResched+1(%a6)
+         bne.s   .done
++#ifndef __EMU68__
+         move.w  #0x8004,0xdff09c
++#endif
+         bra.s   .done
+ 
+ .signal_only:
+@@ -87,17 +91,21 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
+ 
+ .done:
+         subq.b  #1,IDNestCnt(%a6)
++#ifndef __EMU68__
+         bpl.s   .return
+         move.w  #0xc000,0xdff09a
++#endif
+ .return:
+         rts
+ 
+ .slow:
+         /* Undo our Disable() nesting before entering the original C path. */
+         subq.b  #1,IDNestCnt(%a6)
++#ifndef __EMU68__
+         bpl.s   1f
+         move.w  #0xc000,0xdff09a
+ 1:
++#endif
+ .slow_unlocked:
+         move.l  %a6,%sp@-
+         move.l  %d0,%sp@-
+diff --git a/arch/m68k-all/exec/switch.S b/arch/m68k-all/exec/switch.S
+index 028a5d260a..795549170f 100644
+--- a/arch/m68k-all/exec/switch.S
++++ b/arch/m68k-all/exec/switch.S
+@@ -51,7 +51,9 @@ m68k_VoluntarySwitch:
+          * enabled.  Only the signal recheck and scheduler-list commit below
+          * form the critical section.
+          */
++#ifndef __EMU68__
+         move.w  #0x4000,0xdff09a
++#endif
+         move.l  ThisTask(%a6),%a0
+         move.b  %d3,%d1
+         addq.b  #1,%d1
+@@ -76,7 +78,9 @@ m68k_VoluntarySwitch:
+         move.l  %a5,tc_SPReg(%a0)
+         move.b  %d1,tc_IDNestCnt(%a0)
+         move.b  #-1,IDNestCnt(%a6)
++#ifndef __EMU68__
+         move.w  #0xc000,0xdff09a
++#endif
+         jmp     __Dispatch_this
+ 
+ 1:
+diff --git a/arch/m68k-all/exec/wait.S b/arch/m68k-all/exec/wait.S
+index 15aee6ccc9..6b7fd36e82 100644
+--- a/arch/m68k-all/exec/wait.S
++++ b/arch/m68k-all/exec/wait.S
+@@ -20,7 +20,9 @@ AROS_SLIB_ENTRY(Wait,Exec,53):
+          * Keep the immediate-signal case cheap.  The original nesting value
+          * remains in D3 across a context switch.
+          */
++#ifndef __EMU68__
+         move.w  #0x4000,0xdff09a
++#endif
+         move.b  %d3,%d1
+         addq.b  #1,%d1
+         move.b  %d1,IDNestCnt(%a6)
+@@ -32,10 +34,12 @@ AROS_SLIB_ENTRY(Wait,Exec,53):
+ 
+         /* Reopen interrupts before the trap and context save. */
+         move.b  %d3,IDNestCnt(%a6)
++#ifndef __EMU68__
+         tst.b   %d3
+         bpl.s   2f
+         move.w  #0xc000,0xdff09a
+ 2:
++#endif
+ 
+         lea.l   m68k_VoluntarySwitch,%a5
+         jsr     Supervisor(%a6)
+@@ -49,10 +53,12 @@ AROS_SLIB_ENTRY(Wait,Exec,53):
+ 
+         /* Restore the caller's interrupt nesting state. */
+         move.b  %d3,IDNestCnt(%a6)
++#ifndef __EMU68__
+         tst.b   %d3
+         bpl.s   4f
+         move.w  #0xc000,0xdff09a
+ 4:
++#endif
+         movem.l %sp@+,%d2-%d3/%a2-%a3/%a5
+         rts
+         .endfunc
+diff --git a/arch/m68k-all/kernel/kernel_cpu.c b/arch/m68k-all/kernel/kernel_cpu.c
+index d91c120873..64e6253d9d 100644
+--- a/arch/m68k-all/kernel/kernel_cpu.c
++++ b/arch/m68k-all/kernel/kernel_cpu.c
+@@ -60,7 +60,9 @@ APTR m68k_DispatchFrame(void)
+ 
+         if (SysBase->IDNestCnt >= 0) {
+             SysBase->IDNestCnt = -1;
++#ifndef __EMU68__
+             asm volatile ("move.w #0xc000,0xdff09a\n");
++#endif
+         }
+         asm volatile ("stop #0x2000\n");
+     }
+@@ -75,10 +77,12 @@ APTR m68k_DispatchFrame(void)
+         AROS_UFC1NR(void, AMMXRestoreContext,
+             AROS_UFCA(struct AMMXContext *, &ctx->ammx, A0));
+ 
++#ifndef __EMU68__
+     if (SysBase->IDNestCnt < 0)
+         asm volatile ("move.w #0xc000,0xdff09a\n");
+     else
+         asm volatile ("move.w #0x4000,0xdff09a\n");
++#endif
+ 
+     frame = task->tc_SPReg;
+     if (task->tc_Flags & TF_EXCEPT) {

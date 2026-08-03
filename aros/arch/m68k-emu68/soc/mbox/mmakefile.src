@@ -1,0 +1,7 @@
+include $(SRCDIR)/config/aros.cfg
+
+USER_INCLUDES := -I$(SRCDIR)/arch/m68k-emu68/include
+
+%build_module mmake=kernel-mbox-emu68 \
+  modname=mbox modtype=resource \
+  files="mbox_init"

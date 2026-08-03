@@ -1,0 +1,141 @@
+/*
+ * Temporary bring-up instrumentation: report the CPU exception that stops the
+ * boot, instead of letting it fall into AROS's alert path and go quiet.
+ *
+ * Set EMU68_TRAP_PROBE to 0 -- and this whole file compiles away -- once the
+ * port has a working alert path of its own. The DEBUG build of
+ * arch/m68k-all/kernel/m68k_exception.c would print the same thing, but its
+ * #if DEBUG block calls Exec_MagicResetCode(), which only
+ * arch/m68k-amiga/exec/coldreboot.c defines, so it does not link here.
+ */
+
+#define EMU68_TRAP_PROBE 1
+
+#if EMU68_TRAP_PROBE
+
+#include <exec/types.h>
+#include <exec/execbase.h>
+
+#include "m68k_exception.h"
+
+extern void emu68_console_puts(const char *text);
+
+static void puthex(ULONG value)
+{
+    static const char digits[] = "0123456789abcdef";
+    char buffer[9];
+    int i;
+
+    for (i = 7; i >= 0; i--, value >>= 4)
+        buffer[i] = digits[value & 15];
+    buffer[8] = 0;
+
+    emu68_console_puts(buffer);
+}
+
+static void putreg(const char *name, ULONG value)
+{
+    emu68_console_puts(name);
+    puthex(value);
+    emu68_console_puts("\n");
+}
+
+/*
+ * Called from the stub below with a pointer to everything it saved:
+ *
+ *     regs[0]      USP
+ *     regs[1..8]   D0-D7
+ *     regs[9..15]  A0-A6
+ *     byte 64      SR      (UWORD)
+ *     byte 66      PC      (ULONG)
+ *     byte 70      format  (UWORD, low 12 bits are the vector offset)
+ *
+ * Emu68 prints its own register dump when it takes the fault itself, but with
+ * the vectors populated the guest handles the exception and Emu68 never sees
+ * one -- so this has to carry the same information.
+ *
+ * Does not return: the point is to freeze the machine with the answer on the
+ * serial line rather than let a second fault overwrite it.
+ */
+void emu68_trap_report(ULONG *regs)
+{
+    static const char *const dnames[] = {
+        "  D0 0x", "  D1 0x", "  D2 0x", "  D3 0x",
+        "  D4 0x", "  D5 0x", "  D6 0x", "  D7 0x"
+    };
+    static const char *const anames[] = {
+        "  A0 0x", "  A1 0x", "  A2 0x", "  A3 0x",
+        "  A4 0x", "  A5 0x", "  A6 0x"
+    };
+    const UWORD *frame = (const UWORD *)&regs[16];
+    ULONG pc = ((ULONG)frame[1] << 16) | frame[2];
+    int i;
+
+    emu68_console_puts("[AROS/Emu68] CPU exception vector 0x");
+    puthex(frame[3] & 0x0fff);
+    emu68_console_puts(" at PC 0x");
+    puthex(pc);
+    emu68_console_puts("\n  SR 0x");
+    puthex(frame[0]);
+    emu68_console_puts("\n");
+
+    for (i = 0; i < 8; i++)
+        putreg(dnames[i], regs[1 + i]);
+    for (i = 0; i < 7; i++)
+        putreg(anames[i], regs[9 + i]);
+    putreg(" USP 0x", regs[0]);
+
+    for (;;)
+        ;
+}
+
+/*
+ * tc_TrapCode calling convention, as arch/m68k-amiga/kernel/amiga_irq.c's
+ * DECLARE_TrapCode() uses it: the exception Id is pushed above the frame and
+ * has to be dropped first. What is left is the 68010+ frame --
+ *
+ *     UWORD SR        %sp@(0)
+ *     ULONG PC        %sp@(2)
+ *     UWORD format    %sp@(6)
+ *
+ * -- whose low 12 bits of the format word are the vector number.
+ */
+void emu68_trap_probe(ULONG id);
+asm (
+    "   .text\n"
+    "   .balign 2\n"
+    "   .globl emu68_trap_probe\n"
+    "emu68_trap_probe:\n"
+    "   addq.l  #4,%sp\n"                       /* drop the Id */
+    "   movem.l %d0-%d7/%a0-%a6,%sp@-\n"        /* 15 longs, frame now at 60 */
+    "   move.l  %usp,%a0\n"
+    "   move.l  %a0,%sp@-\n"                    /* USP first, frame now at 64 */
+    "   move.l  %sp,%a0\n"
+    "   move.l  %a0,%sp@-\n"                    /* argument: the block above */
+    "   jsr     emu68_trap_report\n"            /* does not return */
+);
+
+/*
+ * Every vector that means "this code is not going to make sense any more".
+ * Vector 8 is deliberately absent: Exec_Supervisor_Trap owns it, and it is
+ * reinstalled after M68KExceptionInit() anyway.
+ */
+const struct M68KException emu68_exception_table[] = {
+    { .Id =  2, .Handler = emu68_trap_probe },  /* bus error           */
+    { .Id =  3, .Handler = emu68_trap_probe },  /* address error       */
+    { .Id =  4, .Handler = emu68_trap_probe },  /* illegal instruction */
+    { .Id =  5, .Handler = emu68_trap_probe },  /* divide by zero      */
+    { .Id =  6, .Handler = emu68_trap_probe },  /* CHK                 */
+    { .Id =  7, .Handler = emu68_trap_probe },  /* TRAPV               */
+    { .Id = 10, .Handler = emu68_trap_probe },  /* line A              */
+    { .Id = 11, .Handler = emu68_trap_probe },  /* line F              */
+    { .Id =  0, }
+};
+
+#else
+
+const struct M68KException emu68_exception_table[] = {
+    { .Id = 0, }
+};
+
+#endif /* EMU68_TRAP_PROBE */

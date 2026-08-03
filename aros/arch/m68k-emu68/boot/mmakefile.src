@@ -1,0 +1,116 @@
+include $(SRCDIR)/config/aros.cfg
+
+TARGETDIR := $(GENDIR)/$(CURDIR)
+BOOTOBJ   := $(TARGETDIR)/entry.o $(TARGETDIR)/usermode.o $(TARGETDIR)/boot.o \
+             $(TARGETDIR)/console.o $(TARGETDIR)/selftest.o \
+             $(TARGETDIR)/diag.o $(TARGETDIR)/romboot.o \
+             $(TARGETDIR)/superstack_swap.o $(TARGETDIR)/trapprobe.o
+BOOTELF   := $(AROSDIR)/aros-emu68-m68k.elf
+BOOTMAP   := $(GENDIR)/boot/aros-emu68-m68k.elf.map
+COREPUBLIC := $(KOBJSDIR)/kernel_resource.o $(KOBJSDIR)/exec_library.o
+#
+# Link order is ROMTag scan order, and that matters: krnRomTagScanner() jumps
+# to each ROMTag's rt_EndSkip, and dosboot's points at its own second ROMTag
+# ("DOSBoot cleanup", from `addromtag db_Cleanup`) which the linker places far
+# into .rodata -- a span of roughly 70KB. Any module linked after dosboot has
+# its ROMTag silently skipped and never initialises. dosboot_resource stays
+# last; new modules go in ahead of it.
+#
+# aros_library through con_handler are the machine-independent BASE package
+# described in boot/modular_kickstart.txt, plus processor_resource from the
+# minimal BSP list in the same file. Without con_handler and console_device
+# dos.library's cliinit() has no CON: to open the boot Shell on, so the boot
+# reaches "leave InitCode(0x04, 0)" and stops there with nothing to say.
+#
+# shell_resource carries the "CLI" segment as a resident. Without it
+# findseg_cli() falls through to LoadSeg("L:Shell-Seg"), and the
+# distribution does not ship that file -- it ships L:UserShell-Seg -- so the
+# boot Shell never starts and __dos_Boot() stops at "initialising CLI".
+#
+# task_resource backs AllocTaskStorageSlot()/SetTaskStorageSlot(). genmodule
+# emits an OpenResource("task.resource") into the InitLib of every module
+# built with `options peropenerbase` -- stdc.library is one -- and returns
+# NULL from it when the resource is absent. The symptom is not a missing
+# resource but "Could not open version 0 or higher of library "stdc.library""
+# from FixFonts, IPrefs and Wanderer, i.e. no desktop. arch/m68k-amiga has it
+# in its KRSRCS for the same reason.
+#
+# battclock.resource is the one item of that minimal BSP still missing: it
+# needs a machine backend and this target has no battery-backed clock to
+# write one against.
+#
+CORERESIDENTS := timer_device utility_library oop_library hiddclass_hidd \
+                 bootloader_resource aros_library debug_library \
+                 processor_resource task_resource \
+                 gfx_hidd emu68gfx_hidd graphics_library \
+                 layers_library keymap_library inputclass_hidd keyboard_hidd \
+                 mouse_hidd keyboard_device gameport_device input_device \
+                 console_device intuition_library expansion_library \
+                 partition_library mbox_resource sdcard_device \
+                 FileSystem_resource fat_handler lddemon_resource \
+                 ram_handler con_handler shell_resource \
+                 shellcommands_resource dos_library dosboot_resource
+
+#
+# soc/mbox and soc/sdcard drive the same Arasan controller and VideoCore
+# mailbox as Emu68's brcm-sdhc.device and mailbox.resource. Exactly one side
+# may own each: the module names differ, so nothing would clash in the
+# DeviceList to warn us, and both would program the same registers and both
+# call KrnAddIRQHandler(62).
+#
+# Ours are linked; the board's modules are kept out by EMU68_EXPANSION_ROM in
+# boot/boot.c. Flip both together.
+#
+# Note the ELF does not relink on a change to this file alone -- delete it to
+# force the link.
+#
+CORELOCAL := $(addprefix $(KOBJSDIR)/,$(addsuffix .emu68.ko,$(CORERESIDENTS)))
+COREOBJS  := $(COREPUBLIC) $(CORELOCAL)
+CORELIBS  := -L$(AROS_LIB) -larossupport -lautoinit -llibinit -lamiga \
+             -lstdc.static -lgcc
+
+USER_CPPFLAGS := -D__EMU68__ -DADATE="\"$(shell date "+%d.%m.%Y")\""
+USER_CFLAGS   := $(CFLAGS_NO_BUILTIN) -fno-common
+USER_INCLUDES := -I$(SRCDIR)/rom/kernel -I$(SRCDIR)/rom/exec \
+    -I$(SRCDIR)/arch/m68k-emu68/platform \
+    -I$(SRCDIR)/arch/m68k-all/kernel
+
+#MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
+#MM- kernel-link-emu68-m68k-quick : kernel-kernel-kobj-quick kernel-exec-kobj-quick kernel-timer-kobj-quick kernel-utility-kobj-quick kernel-oop-kobj-quick kernel-hidd-kobj-quick kernel-bootloader-kobj-quick kernel-hidd-gfx-kobj-quick kernel-m68k-emu68-emu68gfx-kobj-quick kernel-graphics-kobj-quick kernel-layers-kobj-quick kernel-keymap-kobj-quick kernel-hidd-input-kobj-quick kernel-hidd-kbd-kobj-quick kernel-hidd-mouse-kobj-quick kernel-keyboard-kobj-quick kernel-gameport-kobj-quick kernel-input-kobj-quick kernel-intuition-kobj-quick kernel-expansion-kobj-quick kernel-partition-kobj-quick kernel-mbox-emu68-kobj-quick kernel-sdcard-kobj-quick kernel-filesystem-kobj-quick kernel-fs-fat-kobj-quick kernel-dos-kobj-quick kernel-aros-kobj-quick kernel-debug-kobj-quick kernel-processor-kobj-quick kernel-task-kobj-quick kernel-console-kobj-quick kernel-lddemon-kobj-quick kernel-fs-ram-kobj-quick kernel-fs-con-kobj-quick kernel-shell-kobj-quick kernel-shellcommands-kobj-quick kernel-dosboot-kobj-quick
+#MM kernel-link-emu68-m68k: $(BOOTELF)
+#MM kernel-link-emu68-m68k-quick: $(BOOTELF)
+kernel-link-emu68-m68k: $(BOOTELF)
+kernel-link-emu68-m68k-quick: $(BOOTELF)
+
+$(BOOTELF): $(BOOTOBJ) $(COREOBJS) $(SRCDIR)/$(CURDIR)/emu68.ld
+	@$(MKDIR) $(AROSDIR) $(GENDIR)/boot
+	@$(ECHO) "Linking $@"
+	$(Q)$(KERNEL_CC) -nostdlib -nostartfiles -static \
+		-Wl,-r -Wl,-Map=$(BOOTMAP) \
+		-Wl,--defsym,SysBase=0x4 \
+		-Wl,--defsym,AbsExecBase=0x4 \
+		-Wl,-T,$(SRCDIR)/$(CURDIR)/emu68.ld \
+		-o $@ $(BOOTOBJ) $(COREOBJS) $(CORELIBS)
+	$(Q)$(TARGET_STRIP) $(TARGET_STRIP_FLAGS) $@
+
+$(KOBJSDIR)/%.emu68.ko: $(KOBJSDIR)/%.o
+	$(Q)$(NM_PLAIN) --defined-only $< | cut -d' ' -f3 >$@.sym
+	$(Q)$(OBJCOPY) --localize-symbols $@.sym $< $@
+
+#
+# aros/m68k/asm.h -- which superstack_swap.S needs for the SysBase struct
+# offsets -- is generated, so it only exists under $(GENINCDIR). This is the
+# same pair of flags arch/m68k-amiga/boot/mmakefile.src:267 uses.
+#
+$(TARGETDIR)/%.o: %.S
+	@$(MKDIR) $(@D)
+	%compile_q cmd="$(KERNEL_CC)" opt="$(strip $(AFLAGS) $(TARGET_CFLAGS) $(CPPFLAGS) -I$(AROS_DEVELOPER)/include -I$(GENINCDIR))"
+
+$(TARGETDIR)/%.o: %.c
+	@$(MKDIR) $(@D)
+	%compile_q cmd="$(KERNEL_CC)" opt="$(strip $(CFLAGS) $(CPPFLAGS))"
+
+#MM
+clean ::
+	-$(RM) $(BOOTELF) $(BOOTMAP) $(BOOTOBJ) $(CORELOCAL) \
+	    $(addsuffix .sym,$(CORELOCAL))

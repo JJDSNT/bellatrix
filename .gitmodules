@@ -2,3 +2,7 @@
 	path = external/emu68
 	url = https://github.com/michalsc/Emu68.git
 	ignore = dirty
+[submodule "external/aros"]
+	path = external/aros
+	url = https://github.com/aros-development-team/AROS.git
+	ignore = dirty

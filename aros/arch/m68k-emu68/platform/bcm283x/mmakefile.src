@@ -1,0 +1,27 @@
+include $(SRCDIR)/config/aros.cfg
+
+%set_archincludes mainmmake=kernel-kernel maindir=rom/kernel \
+  modname=kernel pri=2 arch=emu68-m68k \
+  includes="-I$(SRCDIR)/$(CURDIR)"
+
+%get_archincludes modname=kernel \
+    includeflag=TARGET_KERNEL_INCLUDES maindir=rom/kernel
+
+%get_archincludes modname=exec \
+    includeflag=TARGET_EXEC_INCLUDES maindir=rom/exec
+
+PRIV_KERNEL_INCLUDES = \
+    $(TARGET_KERNEL_INCLUDES) \
+    -I$(SRCDIR)/rom/kernel \
+    $(TARGET_EXEC_INCLUDES) \
+    -I$(SRCDIR)/rom/exec
+
+FILES := system_timer interrupt_controller
+
+USER_INCLUDES := $(PRIV_KERNEL_INCLUDES) \
+    -I$(GENINCDIR) -I$(AROS_DEVELOPER)/include
+USER_CFLAGS := -Os
+
+%build_archspecific \
+  mainmmake=kernel-kernel modname=kernel maindir=rom/kernel arch=emu68-m68k \
+  files="$(FILES)" compiler=kernel

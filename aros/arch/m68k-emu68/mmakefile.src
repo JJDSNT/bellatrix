@@ -1,0 +1,12 @@
+#
+# Rules to create the native Emu68 m68k target.
+#
+
+include $(SRCDIR)/config/aros.cfg
+
+#MM- AROS-emu68-m68k : kernel-link-emu68-m68k
+#MM- AROS-emu68-m68k-quick : kernel-link-emu68-m68k-quick
+
+#MM- distfiles-emu68-m68k : AROS-emu68-m68k
+#MM- distfiles-emu68-m68k-quick : AROS-emu68-m68k-quick
+
