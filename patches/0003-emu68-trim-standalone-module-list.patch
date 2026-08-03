@@ -1,0 +1,63 @@
+From 8946834538d4167cd10672ddd91dcd17196588ce Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 1 Aug 2026 16:50:51 -0300
+Subject: [PATCH 3/3] Offer only what a chipset-less guest can use
+
+The ROM board carries eight modules, and most of them assume an Amiga with an
+accelerator plugged in, or hardware the machine has not got: gic400.library
+drives the Pi 4's GIC-400 and would stand as a second interrupt controller
+beside whatever the guest already runs, unicam.resource is the camera,
+powerpc.library is for a PPC board. A standalone guest was being handed all of
+them.
+
+Narrow the standalone list to devicetree.resource and brcm-sdhc.device. The
+PiStorm list is untouched.
+
+This is a bring-up default rather than a policy. The modules carry per-module
+"status" knobs in the device tree overlays, and driving the choice from there
+is the better answer once there is a reason to want more than one.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/boards/emu68rom.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/boards/emu68rom.c b/src/boards/emu68rom.c
+index 89ea5c7..62b4dff 100644
+--- a/src/boards/emu68rom.c
++++ b/src/boards/emu68rom.c
+@@ -32,6 +32,7 @@ static struct {
+     uint32_t rom_size;
+     uint32_t load_size;
+ } roms[] = {
++#ifdef PISTORM_ANY_MODEL
+     { devicetree_resource, sizeof(devicetree_resource), 0},
+     { unicam_resource, sizeof(unicam_resource), 0 },
+     { brcm_sdhc_device, sizeof(brcm_sdhc_device), 0 },
+@@ -40,6 +41,23 @@ static struct {
+     { mailbox_resource, sizeof(mailbox_resource), 0},
+     { powerpc_library, sizeof(powerpc_library), 0 },
+     { gic400_library, sizeof(gic400_library), 0 },
++#else
++    /*
++        A standalone guest is not an Amiga with an accelerator plugged in, and
++        most of the list above assumes it is or assumes hardware it has not
++        got. gic400.library drives the Pi 4's GIC-400 and would be a second
++        interrupt controller next to whatever the guest already runs;
++        unicam.resource is the camera; powerpc.library is for a PPC board. So
++        only what a chipset-less guest can actually use is offered here.
++
++        This is a bring-up default, not a policy: the modules carry per-module
++        "status" knobs in the device tree (the .dts files under src/overlays), and driving the
++        choice from there rather than from this list is the better answer once
++        there is a reason to want more than one of them.
++    */
++    { devicetree_resource, sizeof(devicetree_resource), 0},
++    { brcm_sdhc_device, sizeof(brcm_sdhc_device), 0 },
++#endif
+     { NULL, 0, 0 }
+ };
+ 
+-- 
+2.43.0
+
