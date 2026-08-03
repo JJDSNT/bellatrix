@@ -74,95 +74,129 @@ Three consequences:
 - **`INTREQR` reads back a value that was never stored.** Bit 13 is forced on
   whenever `ARMPending`, so the guest can conclude EXTER fired. The bit is
   synthesised at read time, not held in `INTREQ`.
-- **Ownership is unresolved.** The architecture says Paula owns INTREQ/INTENA.
-  When a Paula exists here, there will be two candidate owners of the same two
-  registers, and the fast path's need to test the enable bits from assembly
-  without touching a chipset does not go away. Reconciling those is an open
-  design question, not a detail. The next section is the way out of it.
+- **Ownership is unresolved.** On a real Amiga these registers belong to Paula.
+  Nothing here implements one yet, and no decision has been taken about what
+  will. Whenever something does, it and Emu68's shadow become two candidate
+  owners of the same two addresses — and the fast path's need to test the
+  enable bits from assembly, without calling into anything, does not go away.
+  The next section lays out the mechanisms that choice is between.
 
-## The alternative: a control register instead of the shadows
+## Three mechanisms for delivering a host interrupt
 
-The approach above was chosen from two, and the one not taken is worth keeping
-on file because it becomes *more* attractive for this project over time. Both
-are written up in the AROS/m68k-emu68 port's design note,
+Emu68 offers three ways to get a host interrupt into the m68k. One is
+implemented here, one is the interface PiStorm itself uses, and one is a
+sketch recorded for completeness. **Which one this project should use is not
+decided, and cannot be decided until there is a chipset** — the choice turns
+entirely on who ends up owning the interrupt state.
+
+The first two are written up in the AROS/m68k-emu68 port's design note,
 `arch/m68k-emu68/doc/host-interrupts.md` on
 `JJDSNT/AROS feature/m68k-emu68-baremetal`, which is where the series in
 `patches/emu68/` came from.
 
-### What already exists
+| | Owner of the interrupt state | What Emu68 is handed | Cost per interrupt | Size | Status |
+|---|---|---|---|---|---|
+| **Shadow registers** | Emu68 itself | guest writes to `0xdff09a` etc. | page fault + trap | ~100 lines | implemented here |
+| **IPL injection** | something outside Emu68 | a level, already decided | a struct field write | ~13 lines | used by PiStorm; tried in the previous incarnation |
+| **`HOSTIRQ` MOVEC** | nobody, in Amiga terms | guest `MOVEC` | one `MOVEC` | ~40 lines | sketch only |
 
-There is no ready-made shadow-free path — PiStorm does not offer one. What
-exists is a **convention**: Emu68 already puts its non-Amiga controls in m68k
-`MOVEC` control registers, and those work identically in PiStorm and stock
-builds.
+### 1. Shadow registers — what this repository does today
 
-| Register | Purpose | Verified |
-|---|---|---|
-| `0x0ed` | `DBGCTRL` | `M68k_LINE4.c:2031` (write), `:2295` (read) |
-| `0x0ee` | `DBGADDRLO` | `:2068`, `:2335` |
-| `0x0ef` | `DBGADDRHI` | `:2080`, `:2347` |
-| `0x1e0` | `JITCTRL2` | `:2092`, `:2359` |
+Described above. Emu68 impersonates Paula's four interrupt registers, backed by
+`INT_shadow`. The guest is unmodified Amiga code: it arms with a write to
+`INTENA` and acknowledges with a write to `INTREQ`.
 
-`MOVEC` is privileged by the architecture, per-CPU, and collides with no memory
-map. Building a host-interrupt path on it is additive — it touches neither
-`INTF.ARM` nor the PiStorm code.
+Its costs are the flip side of that: every arm and every acknowledge is a page
+fault into `SYSWriteValToAddr()` — irrelevant at timer rates, real at network
+rates — and the whole `0xdff000` page traps, so a guest must treat it as MMIO
+rather than allocatable memory.
 
-### The sketch: `HOSTIRQ` at `0x1e1`
+### 2. IPL injection — the interface PiStorm uses
 
-**Not implemented.** Estimated at ~40 lines: one field in `struct M68KState`,
-one read and one write case in `M68k_LINE4.c`, the two assembly fast paths, one
-line in arbitration.
+`INTF.IPL` in `struct M68KState` is how an *external* interrupt controller
+hands the CPU a level. On a real PiStorm that controller is the Amiga's own
+Paula, read off the IPL0-2 lines
+(`src/pistorm/ps_protocol.c:2252`, `ps_classic_protocol.c:879`). No register is
+emulated, no address space is reserved, and the arbitration in
+`ExecutionLoop.c:325` already honours the SR IPL mask like a real 68k.
+
+It does not work on a stock build as shipped. The arbitration takes a
+PiStorm-shaped branch:
+
+```c
+#if defined(PISTORM)                 /* PiStorm32: use INTF.IPL directly */
+    if (ctx->INTF.IPL > level) level = ctx->INTF.IPL;
+#else                                /* a stock build lands here */
+    if (ctx->INTF.IPL) {
+        ipl_level = GetIPLLevel();   /* → return 0 on non-PISTORM_CLASSIC */
+        if (ipl_level > level) level = ipl_level;
+    }
+#endif
+```
+
+`GetIPLLevel()` is a `return 0` stub outside `PISTORM_CLASSIC`
+(`ExecutionLoop.c:296`), so writing `INTF.IPL` opens the `if` and then loses
+the level. Reaching it needs a patch, roughly thirteen lines — far smaller than
+the shadow series.
+
+The trade is the mirror of option 1: an IPL is a level, not a register, so
+whoever writes it must already have made the INTENA/INTREQ decision. On its
+own it gives an unmodified Amiga guest nothing to program — writes to
+`0xdff09a` land in RAM.
+
+**It was tried in the previous incarnation of this project and did not settle
+the problem.** That build patched the arbitration to accept `INTF.IPL`
+directly, and single-core Emu68 still hung in Exec idle at `pc=0xfc0f90`,
+polling INTREQ, across 400 chipset frames and ~125M instructions with `ipl=0`
+and `int32=0` throughout — VERTB generated underneath and never delivered. The
+same symptom is on record from an earlier investigation still, and the
+multicore path delivered correctly with the same interface. It was never
+closed.
+
+The lesson worth carrying: **choosing the mechanism does not settle delivery.**
+The failure was not in `INTF.IPL` as an interface but in when the write happens
+relative to the JIT's execution window, and two delivery paths built on the
+same interface behaved differently. Whatever is chosen, that question is
+separate and has to be answered on its own.
+
+### 3. `HOSTIRQ` MOVEC — for completeness
+
+**Not implemented, and not proposed.** Recorded because it is the third thing
+Emu68's shape allows, not because it is a candidate.
+
+Emu68 already puts its non-Amiga controls in m68k `MOVEC` control registers,
+which work identically in PiStorm and stock builds: `DBGCTRL` `0x0ed`,
+`DBGADDRLO` `0x0ee`, `DBGADDRHI` `0x0ef`, `JITCTRL2` `0x1e0` (read and write
+cases in `M68k_LINE4.c`). A `HOSTIRQ` at `0x1e1` would follow that convention:
 
 ```
- bit  0   PEND      read: host IRQ pending
-                    write 1: acknowledge
+ bit  0   PEND      read: host IRQ pending; write 1: acknowledge
  bit  1   ENA       guest's master enable
  bit 31   PRESENT   reads 1 on any Emu68 implementing this
 ```
 
-`PRESENT` exists because an unknown control register currently raises
+`PRESENT` exists because an unknown control register raises
 `VECTOR_ILLEGAL_INSTRUCTION`, so feature detection would otherwise mean probing
-around a trap handler. There is deliberately no level field: the contract stays
-"autovector level 6", so the SR-write sites that compare against `5 << SRB_IPL`
-keep comparing against a constant.
+around a trap handler. The pending bit has room: the `INTF` union
+(`include/M68k.h:164`) declares five of eight bytes, leaving `+5`, `+6` and
+`+7`.
 
-The pending bit has somewhere to go. The `INTF` union at `include/M68k.h:164`
-declares five of eight bytes — `ARM`, `ARM_err`, `IPL`, `RESET`, `PPC` —
-leaving `+5`, `+6` and `+7` free, and `M68kReportInterrupt()` carries a comment
-pointing at exactly them. A new `INTF.HOST` there is read by the `ldr64`/`cbz`
-already present in every translated inner loop, and `ExecutionLoop.c`'s
-`if (unlikely(ctx->INT64 != 0))` picks it up unchanged.
+Against it: a new ABI someone has to own forever, and a guest-side driver where
+today there is none.
 
-### Which one this project should want
+### What has to be decided later
 
-The AROS port chose the shadow path, and for it that was right: it has no
-chipset at all, so serving the two Paula registers means the guest is plain
-Amiga code with zero Emu68-specific driver.
+Not which mechanism is nicer in the abstract, but:
 
-**Our situation is different, and the difference cuts the other way.** Bellatrix
-has a chipset, and Paula is meant to own INTENA/INTREQ. Keeping the shadow path
-means Emu68 emulates two chip registers *while our own Paula also implements
-them* — two owners of `0xdff09a` and `0xdff01c`, with the arbitration living
-half in hand-written AArch64 assembly. `HOSTIRQ` sidesteps that completely: it
-is not in chip register space, so Paula keeps the Amiga registers and the host
-interrupt path stops competing for them.
-
-| | Shadow path (current) | `HOSTIRQ` MOVEC |
-|---|---|---|
-| Emu68 delta | ~100 lines, mostly code motion | ~40 lines, all new |
-| Guest-side code | none — plain Amiga idiom | small Emu68-specific driver |
-| Cost per interrupt | page fault + trap | one `MOVEC` |
-| Reserves guest address space | the `0xdff000` page | nothing |
-| Conflicts with a real Paula | yes | no |
-| Status | implemented, verified | sketch |
-
-Costs of the current path, for the same reason they are recorded upstream:
-every arm and every acknowledge is a page fault into `SYSWriteValToAddr()` —
-irrelevant at timer rates, real at network rates — and the whole `0xdff000`
-page traps, so a guest must treat it as MMIO rather than allocatable memory.
-
-No decision is being made here. This section exists so that when the Paula
-ownership question comes due, the alternative is already costed.
+- **Who owns INTENA/INTREQ** once there is a chipset. Option 1 answers "Emu68
+  does"; option 2 answers "something else does, and only hands over a level".
+  That is the real fork.
+- **How the core-0 assembly fast path learns the enable state.** It reads
+  `INT_shadow.INTENA` inline and decides without calling anything. Anything
+  that moves ownership out of `INT_shadow` has to answer where that read goes
+  instead — or accept that host interrupts stop using the fast path.
+- **When the level is published relative to the JIT's quantum**, which is the
+  part the previous attempt got wrong and never fixed.
 
 ## Intercepts must respect access size
 
