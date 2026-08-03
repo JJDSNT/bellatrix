@@ -17,14 +17,16 @@ patches/<submodule>/NNNN-<subject>.patch   ↔   external/<submodule>/
 
 ## Applying
 
-Per submodule, in numeric order, one at a time. `git apply` given a whole
-series at once checks every patch against the original tree, so patches that
-build on an earlier one fail:
-
 ```bash
-cd external/emu68
-for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
+./scripts/setup.sh            # apply every series (idempotent)
+./scripts/setup.sh --verify   # report state, exit 1 if anything is not applied
+./scripts/setup.sh --reset    # discard submodule changes and re-apply
 ```
 
-Each submodule's document states what its patches change and where, why the
-cuts fall as they do, and how to regenerate and verify the series.
+The script discovers series from this directory's layout, so adding one means
+adding a directory — there is nothing to register. It applies each series in
+numeric order, since a patch may build on an earlier one, and checks the result
+by tree hash derived from the patches themselves rather than recorded anywhere.
+
+Each submodule's document under `docs/` states what its patches change and
+where.

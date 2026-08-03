@@ -1,4 +1,4 @@
-From fc4abdc6259b15eedb5ae57e0928fb9a3f79dbee Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Sat, 1 Aug 2026 16:02:37 -0300
 Subject: [PATCH 2/3] Offer the Zorro III ROM board to non-PiStorm guests
@@ -209,6 +209,3 @@ index 8232477..9dc84d9 100644
      switch(size)
      {
          case 1:
--- 
-2.43.0
-

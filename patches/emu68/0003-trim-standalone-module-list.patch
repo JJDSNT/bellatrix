@@ -1,4 +1,4 @@
-From 8946834538d4167cd10672ddd91dcd17196588ce Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Sat, 1 Aug 2026 16:50:51 -0300
 Subject: [PATCH 3/3] Offer only what a chipset-less guest can use
@@ -58,6 +58,3 @@ index 89ea5c7..62b4dff 100644
      { NULL, 0, 0 }
  };
  
--- 
-2.43.0
-

@@ -1,115 +1,85 @@
 # Emu68
 
 Emu68 is the M68K→AArch64 JIT this project builds on. It lives at
-`external/emu68` as a git submodule tracking upstream
+`external/emu68`, a submodule tracking upstream
 [michalsc/Emu68](https://github.com/michalsc/Emu68), pinned at **`9b4379a`**.
 
-**The submodule is never edited in place.** Every change is a patch in
-`patches/emu68/`, applied on top of the pinned commit. This keeps the delta against
-upstream visible and reviewable at all times, and makes rebasing onto a newer
-Emu68 a matter of re-applying a small, named series.
+The submodule is never edited in place. Every change below comes from a patch
+in `patches/emu68/`, applied by `scripts/setup.sh`.
 
-## Why any changes are needed
+## Why anything is modified
 
-Emu68 was built to run on a PiStorm: a real Amiga is on the other side of the
-bus, and the accelerator reaches it through `ps_protocol`. Two consequences run
-through the source as `#ifdef PISTORM_ANY_MODEL`:
+Emu68 was built to run on a PiStorm, with a real Amiga on the other side of the
+bus. Two consequences run through the source as `#ifdef PISTORM_ANY_MODEL`:
+every Amiga address is unmapped and therefore faults into
+`SYSReadValFromAddr()` / `SYSWriteValToAddr()` to be forwarded to the bus, and a
+real chipset answers on the far end.
 
-- **Every Amiga address faults.** On PiStorm the whole Amiga address space is
-  unmapped, so each guest access traps into `SYSReadValFromAddr()` /
-  `SYSWriteValToAddr()` and is forwarded to the bus. Standalone, that space is
-  plain RAM — nothing faults, so nothing can be intercepted.
-- **A real chipset answers.** Paula owns the interrupt registers and the
-  expansion bus answers autoconfig. Standalone, nobody does.
+Standalone, that address space is plain RAM — nothing faults, so nothing can be
+intercepted — and nobody answers. A guest with no Amiga hardware therefore
+cannot arm an interrupt or discover an expansion board, though Emu68 already
+carries the machinery for both. The series closes exactly that gap. None of it
+is specific to this project; all of it is a candidate for upstreaming.
 
-The result is that a guest with no Amiga hardware cannot arm an interrupt or
-discover an expansion board, even though Emu68 already carries the machinery
-for both. The patch series closes exactly that gap — nothing in it is specific
-to this project, and all of it is a candidate for upstreaming.
+## What is modified
 
-## Change inventory
-
-Four files. Line numbers are as of pin `9b4379a` with the full series applied,
-and are given for orientation only — the anchors are the named regions.
+Line numbers are as of pin `9b4379a` with the full series applied, for
+orientation only — the anchors are the named regions.
 
 ### `src/aarch64/vectors.c`
 
-The file is split into a PiStorm implementation (`#ifdef PISTORM_ANY_MODEL`,
-L344) and a standalone one (`#else`, L736–L932). Both provide
-`SYSWriteValToAddr()` and `SYSReadValFromAddr()`.
+The file has a PiStorm implementation (`#ifdef PISTORM_ANY_MODEL`, L344) and a
+standalone one (`#else`, L736–L932), each with its own `SYSWriteValToAddr()`
+and `SYSReadValFromAddr()`. **All new interception is in the standalone half**,
+so a PiStorm build is unaffected.
 
-**Shared region, L311–L343** — moved *above* the `#ifdef`, out of the PiStorm
-branch, so both variants see them:
-
-| Moved out | Was | Now |
+| Where | Change | From |
 |---|---|---|
-| `enum { CIAAPRA, CIABPRB, VPOSR, INTENA, INTENAR, INTREQ, INTREQR }` | PiStorm only | shared |
-| `#include <boards.h>`, `int board_idx`, `struct ExpansionBoard **board` | PiStorm only | shared |
+| L311–L343, above the `#ifdef` | The Amiga register `enum` (`CIAAPRA`, `VPOSR`, `INTENA`, `INTENAR`, `INTREQ`, `INTREQR`, …) moved out of the PiStorm branch into shared scope | 0001 |
+| L311–L343 | `#include <boards.h>`, `int board_idx`, `struct ExpansionBoard **board` moved out likewise; `AUTOCONFIG_BASE`/`AUTOCONFIG_END` (`0xE80000`–`0xE8FFFF`) added | 0002 |
+| L756, write | `INTENA` — set/clear `INT_shadow.INTENA` (bit 15 = set vs. clear), then re-evaluate `ctx->INTF.ARM`, which the core-0 IRQ fast path in `__stub_vectors()` gates on | 0001 |
+| L771, write | `INTREQ` — same over `INT_shadow.INTREQ`. Clearing EXTER (`(value & 0xa000) == 0x2000`) also drops `ctx->INTF.ARM` and `INT_shadow.ARMPending`: this is how the guest acknowledges a host interrupt | 0001 |
+| L862, read | `INTENAR` — served from `INT_shadow.INTENA`, word or either byte half | 0001 |
+| L873, read | `INTREQR` — served from `INT_shadow.INTREQ`, **plus bit 13 (EXTER) forced on whenever `INT_shadow.ARMPending`** | 0001 |
+| L802, write | Autoconfig — writing the base address at `0xe80044` (Z3) or `0xe80048` (Z2) maps the current board and advances `board_idx`; "shut up" (`0xe8004c`/`0xe8004e`) skips it | 0002 |
+| L895, read | Autoconfig — byte reads return the current board's ROM, skipping boards whose `enabled` is clear | 0002 |
 
-Added in the same region: `AUTOCONFIG_BASE` (`0xE80000`) and `AUTOCONFIG_END`
-(`0xE8FFFF`).
-
-This is pure code motion — no behaviour changes for a PiStorm build.
-
-**Standalone `SYSWriteValToAddr()`, L738** — three new intercepts, all placed
-before the fall-through `switch(size)` that performs the plain memory access:
-
-- **L756, `INTENA`** — set/clear bits of `INT_shadow.INTENA` per the Amiga
-  convention (bit 15 = set vs. clear). When `INT_shadow.ARMPending` is live,
-  re-evaluates `ctx->INTF.ARM`, which is what the core-0 IRQ fast path in
-  `__stub_vectors()` gates on.
-- **L771, `INTREQ`** — same set/clear convention over `INT_shadow.INTREQ`.
-  Clearing EXTER (`(value & 0xa000) == 0x2000`) also drops `ctx->INTF.ARM` and
-  `INT_shadow.ARMPending`, which is how the guest acknowledges a host interrupt.
-- **L802, autoconfig write** — `AUTOCONFIG_BASE..AUTOCONFIG_END`. Writing the
-  base address at `0xe80044` (Z3) or `0xe80048` (Z2) maps the current board and
-  advances `board_idx`; writing "shut up" (`0xe8004c`/`0xe8004e`) skips it.
-
-**Standalone `SYSReadValFromAddr()`, L850** — three matching intercepts:
-
-- **L862, `INTENAR`** — served from `INT_shadow.INTENA`; handles word and both
-  byte halves.
-- **L873, `INTREQR`** — served from `INT_shadow.INTREQ`, **plus bit 13 (EXTER)
-  forced on whenever `INT_shadow.ARMPending`**. This is the load-bearing line
-  of the series: it lets an unmodified Amiga level-6 handler conclude that
-  EXTER fired and run its interrupt server chain, with no Emu68-aware code in
-  the guest.
-- **L895, autoconfig read** — byte reads return the current board's autoconfig
-  ROM, skipping boards whose `enabled` is clear.
+The forced EXTER bit is the load-bearing line: it lets an unmodified Amiga
+level-6 handler conclude that EXTER fired and run its interrupt server chain,
+with no Emu68-aware code in the guest.
 
 ### `src/aarch64/start.c`
 
-- **L22** — `#include "boards.h"`.
-- **L1376–L1409**, a new `#ifndef PISTORM_ANY_MODEL` block in `boot()` (master
-  already has unrelated `#ifndef` blocks further down, now at L1613 and L2316):
-  - `mmu_map(0x00dff000, ..., 4096, 0, 0)` — carves the custom-chip register
-    page out of the flat mapping so accesses to it fault and reach the
-    intercepts above. The rest of the page still behaves like memory.
-  - `mmu_map(0x00e80000, ..., 4096, 0, 0)` — same, for autoconfig space.
-  - Initialises `board = &__boards_start; board_idx = 0`. On PiStorm the
-    protocol code does this after a bus reset; standalone there is no reset, so
-    it happens once at boot.
+A new `#ifndef PISTORM_ANY_MODEL` block in `boot()` at L1376–L1409 (master's own
+`#ifndef` blocks are unrelated, now at L1613 and L2316), plus `#include
+"boards.h"` at L22.
+
+| Where | Change | From |
+|---|---|---|
+| L1385 | `mmu_map(0x00dff000, …, 4096, 0, 0)` — carves the custom-chip register page out of the flat mapping so accesses fault and reach the intercepts above. The rest of the page still behaves like memory | 0001 |
+| L1394 | `mmu_map(0x00e80000, …, 4096, 0, 0)` — the same for autoconfig space | 0002 |
+| L1402 | `board = &__boards_start; board_idx = 0`. On PiStorm the protocol code does this after a bus reset; standalone there is no reset, so it happens once at boot | 0002 |
 
 ### `src/boards/emu68rom.c`
 
-- **L35–L60** — the module list becomes `#ifdef PISTORM_ANY_MODEL` (the full
-  list, unchanged) / `#else` (`devicetree.resource` and `brcm-sdhc.device`
-  only). The omitted modules assume hardware a chipset-less guest does not
-  have: `gic400.library` would be a second interrupt controller,
-  `unicam.resource` is the Pi camera, `powerpc.library` is for a PPC board.
+| Where | Change | From |
+|---|---|---|
+| L35–L60 | The module list becomes `#ifdef PISTORM_ANY_MODEL` (full list, unchanged) / `#else` (`devicetree.resource` and `brcm-sdhc.device` only) | 0003 |
 
-  This is a bring-up default, not a policy. The modules carry per-module
-  `status` knobs in the device tree (`src/overlays/*.dts`), and driving the
-  choice from there is the better answer once there is a reason to want more.
+The omitted modules assume hardware a chipset-less guest does not have:
+`gic400.library` would be a second interrupt controller, `unicam.resource` is
+the Pi camera, `powerpc.library` is for a PPC board. This is a bring-up
+default, not a policy — the modules carry per-module `status` knobs in the
+device tree (`src/overlays/*.dts`), which is the better place to drive the
+choice from once there is a reason to want more.
 
 ### `CMakeLists.txt`
 
-- **L283** — adds `src/boards/emu68rom.c` to `BASE_FILES` in the `else()`
-  branch of the variant block, i.e. for standalone builds. `z2ram.c` is
-  deliberately left out: it exists to offer Zorro II RAM to a real Amiga, and a
-  standalone guest already has all of memory.
+| Where | Change | From |
+|---|---|---|
+| L283 | `src/boards/emu68rom.c` added to `BASE_FILES` in the `else()` branch of the variant block, i.e. standalone builds. `z2ram.c` is deliberately left out: it offers Zorro II RAM to a real Amiga, and a standalone guest already has all of memory | 0002 |
 
-## The patch series
+## The series
 
 | # | Patch | Files |
 |---|---|---|
@@ -117,90 +87,28 @@ before the fall-through `switch(size)` that performs the plain memory access:
 | 0002 | `offer-zorro3-rom-board` | `vectors.c`, `start.c`, `CMakeLists.txt` |
 | 0003 | `trim-standalone-module-list` | `emu68rom.c` |
 
-### Why these cuts
+Applied in numeric order by `scripts/setup.sh`, which is idempotent and
+verifies the result by tree hash. The order is required: 0002 edits two regions
+0001 reshapes. That coupling is textual, not logical — the two features are
+independent, but making the patches independent would mean three separate
+`#ifndef PISTORM_ANY_MODEL` blocks in `start.c` instead of one.
 
-Each patch is one coherent capability, and the series has no churn: no patch
-removes or rewrites anything an earlier patch in the series added. Verified by
-intersecting each patch's removed lines against every earlier patch's added
-lines — the intersection is empty. The only lines any patch removes are
-upstream lines being moved:
+No patch in the series undoes an earlier one. The only lines any of them remove
+are upstream lines being moved: 0001 moves the register `enum` out of the
+PiStorm branch, 0002 moves `#ifdef PISTORM_ANY_MODEL` and `#include
+"ps_protocol.h"` below the board declarations.
 
-- 0001 removes 12 — the Amiga register `enum`, moved out of the PiStorm branch.
-- 0002 removes 3 — `#ifdef PISTORM_ANY_MODEL` and `#include "ps_protocol.h"`,
-  moved *below* the board declarations so those become shared.
-- 0003 removes 1 — a blank line.
-
-### The ordering constraint
-
-0001 and 0003 apply to a pristine tree on their own; **0002 does not** — it
-must follow 0001. The dependency is textual, not logical: interrupt emulation
-and autoconfig emulation are independent features, but 0002 edits two regions
-0001 has already reshaped (the declaration block in `vectors.c`, and the
-`#ifndef PISTORM_ANY_MODEL` block in `start.c` that 0001 opens).
-
-Making the three mutually independent would mean each opening its own
-`#ifndef PISTORM_ANY_MODEL` block in `start.c` rather than sharing one — worse
-code in exchange for a property a patch series is not expected to have. Ordered
-application is the normal contract (it is what `git am` does), so the series
-keeps the better code shape and documents the order instead.
-
-## Working with the series
-
-Apply one at a time, in order. `git apply` handed the whole series at once
-checks every patch against the *original* tree, so 0002 fails:
-
-```bash
-cd external/emu68
-for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
-```
-
-### Editing the series
-
-Everything happens inside the submodule, on a throwaway branch. Nothing outside
-this repository is involved: the only upstream is michalsc/Emu68, and the
-series in `patches/emu68/` is its own source of truth.
-
-`git am` rebuilds the branch from the series, restoring one commit per patch
-with its message intact:
+To edit the series, rebuild it as commits inside the submodule and write it
+back out:
 
 ```bash
 cd external/emu68
 PIN=$(git rev-parse HEAD)
-git checkout -b patch-wip
-git am ../../patches/emu68/0*.patch
-```
-
-Edit and commit there — or `git rebase` to reshape the series — then write it
-back out:
-
-```bash
-git format-patch $PIN..patch-wip -o ../../patches/emu68
-```
-
-Rename the output to the `NNNN-<subject>.patch` form used here; `format-patch`
-derives its filenames from the commit subjects, which are longer. Delete any
-patch files the regenerated series replaced.
-
-Finally return the submodule to the pinned commit, so the parent repository's
-status stays clean:
-
-```bash
+git checkout -b patch-wip && git am ../../patches/emu68/0*.patch
+# edit and commit, or git rebase to reshape
+git format-patch --zero-commit --no-signature $PIN..patch-wip -o ../../patches/emu68
 git checkout --detach $PIN && git branch -D patch-wip
 ```
 
-### Verifying
-
-The series must reproduce a known tree. Apply it to a pristine submodule and
-compare:
-
-```bash
-cd external/emu68
-for p in ../../patches/emu68/0*.patch; do git apply "$p" || break; done
-git add -A && git write-tree
-```
-
-For the current series this yields **`e17d76c021aa1b9307014d82e0a3ec325cf72e55`**.
-Update that hash here whenever the series legitimately changes; a mismatch that
-you did not intend means a patch has drifted from what it is documented to do.
-
-Reset with `git reset -q && git checkout -- .` when done.
+Rename the output to the `NNNN-<subject>.patch` form used here, then confirm
+with `./scripts/setup.sh --reset`.
