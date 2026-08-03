@@ -46,7 +46,9 @@ so a PiStorm build is unaffected.
 
 The forced EXTER bit is the load-bearing line: it lets an unmodified Amiga
 level-6 handler conclude that EXTER fired and run its interrupt server chain,
-with no Emu68-aware code in the guest.
+with no Emu68-aware code in the guest. [`irq.md`](irq.md) covers the mechanism
+these intercepts plug into, and what it means that `INT_shadow` is now the
+guest-visible interrupt state rather than a cache of Paula's.
 
 Every intercept is gated on access size, and must be: claiming an access means
 returning without filling `*value2`, which on a 16-byte read hands the guest a
