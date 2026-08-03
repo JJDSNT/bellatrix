@@ -79,6 +79,28 @@ apply_series() {
     done
 }
 
+# The files a series touches, read off the patches themselves.
+series_files() {
+    grep -h '^diff --git' "$1"/[0-9]*.patch | sed 's|^diff --git a/||; s| b/.*||' | sort -u
+}
+
+# Stop git reporting the applied series as local modifications *inside* the
+# submodule. The parent repository is handled by 'ignore = dirty' in
+# .gitmodules; this is the same thing one level down.
+#
+# The bit must come off before any reset: 'git reset --hard' silently skips
+# skip-worktree entries, so leaving it set turns --reset into a no-op that
+# still prints as though it worked.
+#
+# This only changes what git reports, never what is on disk, so series_state()
+# is unaffected — it reads the working tree through a scratch index.
+mark_series_files() {
+    local repo="$1" dir="$2" flag="$3" f
+    for f in $(series_files "$dir"); do
+        git -C "$repo" update-index "$flag" "$f" 2>/dev/null || true
+    done
+}
+
 # Submodule names are the directory names under patches/.
 mapfile -t SERIES < <(find "$PATCHES" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 [ "${#SERIES[@]}" -gt 0 ] || { echo "no patch series found in $PATCHES" >&2; exit 1; }
@@ -109,6 +131,7 @@ for name in "${SERIES[@]}"; do
 
     if [ "$MODE" = reset ]; then
         echo "    resetting to pinned commit"
+        mark_series_files "$repo" "$dir" --no-skip-worktree
         git -C "$repo" reset -q --hard
         git -C "$repo" clean -qfd
     fi
@@ -123,6 +146,7 @@ for name in "${SERIES[@]}"; do
             ;;
         applied)
             echo "    already applied ($(ls "$dir"/[0-9]*.patch | wc -l) patches)"
+            [ "$MODE" = verify ] || mark_series_files "$repo" "$dir" --skip-worktree
             ;;
         pristine)
             if [ "$MODE" = verify ]; then
@@ -130,8 +154,12 @@ for name in "${SERIES[@]}"; do
                 failed=1
             else
                 apply_series "$repo" "$dir"
-                [ "$(series_state "$repo" "$dir")" = applied ] \
-                    || { echo "    ERROR: series did not produce the expected tree"; failed=1; }
+                if [ "$(series_state "$repo" "$dir")" = applied ]; then
+                    mark_series_files "$repo" "$dir" --skip-worktree
+                else
+                    echo "    ERROR: series did not produce the expected tree"
+                    failed=1
+                fi
             fi
             ;;
         dirty)

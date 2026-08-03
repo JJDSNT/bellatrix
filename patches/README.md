@@ -28,5 +28,18 @@ adding a directory — there is nothing to register. It applies each series in
 numeric order, since a patch may build on an earlier one, and checks the result
 by tree hash derived from the patches themselves rather than recorded anywhere.
 
+**An applied series does not show up in `git status`, at either level.** The
+parent repository ignores submodule working-tree changes (`ignore = dirty` in
+`.gitmodules`), and `setup.sh` marks the patched files `skip-worktree` inside
+the submodule. Both are deliberate: the applied series is the normal working
+state, not a pending change.
+
+That hides genuine local edits too, so use `./scripts/setup.sh --verify` rather
+than `git status` to ask whether a submodule is in the expected state — it
+reads the working tree through a scratch index and reports `dirty` for anything
+that is neither pristine nor exactly the series. `--reset` clears the
+`skip-worktree` bits before resetting, because `git reset --hard` silently
+skips entries that carry it.
+
 Each submodule's document under `docs/` states what its patches change and
 where.
