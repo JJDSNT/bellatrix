@@ -1,3 +1,4 @@
 [submodule "external/emu68"]
 	path = external/emu68
 	url = https://github.com/michalsc/Emu68.git
+	ignore = dirty
