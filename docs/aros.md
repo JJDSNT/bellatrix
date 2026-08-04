@@ -79,9 +79,10 @@ actually complete, since libgcc for the target is built in a second phase.
 
 ```bash
 ./scripts/make-sdcard.sh     # out/aros/sd.img
-./run-aros.sh                # headless, serial on stdout
-./run-aros.sh --gui          # framebuffer in a window
-./run-aros.sh --debug InitCode
+./run.sh                     # headless, serial on stdout
+./run.sh --gui               # framebuffer in a window
+./run.sh --debug InitCode    # sysdebug flags
+./run.sh --no-aros           # Emu68 alone
 ```
 
 QEMU emulates the Raspberry Pi; Emu68 is the bare-metal owner and loads the

@@ -1,26 +1,43 @@
 #!/usr/bin/env bash
 #
-# Set up, build and run, in one command. From a fresh clone:
+# Build if needed and boot under QEMU.
 #
-#   ./run.sh
+#   ./run.sh                boot whatever is built — AROS if its ELF exists,
+#                           otherwise Emu68 on its own
+#   ./run.sh --no-aros      Emu68 alone, even if the AROS ELF is there
+#   ./run.sh --no-sd        AROS without an SD card
+#   ./run.sh --sd PATH      a different card
+#   ./run.sh --gui          framebuffer in a window (default is headless)
+#   ./run.sh --debug FLAGS  adds sysdebug=FLAGS to the kernel arguments
+#   ./run.sh --clean        rebuild Emu68 from scratch first
+#   ./run.sh --no-build     skip the Emu68 build
+#   ./run.sh -- <args...>   everything after -- goes to qemu
 #
-# Options:
-#   --no-build      run whatever is already in out/images/
-#   --clean         wipe the build directory first
-#   --gui           open the QEMU window (default is headless, serial only)
-#   -- <args...>    everything after -- goes to qemu-system-aarch64
+# QEMU emulates the Raspberry Pi. Emu68 is the bare-metal owner; when AROS is
+# in play, Emu68 loads its m68k ELF from -initrd. Ctrl-A X quits.
 #
-# Serial goes to stdout; Ctrl-A X quits QEMU.
+# Pieces, and what builds them:
+#   out/images/Emu68.img          scripts/build.sh      (built here if missing)
+#   out/firmware/bcm2710-*.dtb    scripts/build.sh
+#   out/aros/aros-emu68-m68k.elf  scripts/build-aros.sh (never built here — it
+#                                 also builds a cross toolchain)
+#   out/aros/sd.img               scripts/make-sdcard.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="$ROOT/out/images/Emu68.img"
+KERNEL="$ROOT/out/images/Emu68.img"
 DTB="$ROOT/out/firmware/bcm2710-rpi-3-b.dtb"
+INITRD="$ROOT/out/aros/aros-emu68-m68k.elf"
+SD="$ROOT/out/aros/sd.img"
+MONITOR="${BELLATRIX_QEMU_MONITOR:-/tmp/emu68-monitor.sock}"
 
 BUILD=1
 CLEAN=""
 DISPLAY_ARG="none"
+WANT_AROS="auto"
+USE_SD=1
+DEBUG=""
 EXTRA=()
 
 while [ $# -gt 0 ]; do
@@ -28,33 +45,68 @@ while [ $# -gt 0 ]; do
         --no-build) BUILD=0 ;;
         --clean)    CLEAN="clean" ;;
         --gui)      DISPLAY_ARG="gtk" ;;
+        --no-aros)  WANT_AROS="no" ;;
+        --no-sd)    USE_SD=0 ;;
+        --sd)       SD="$2"; shift ;;
+        --debug)    DEBUG="$2"; shift ;;
         --)         shift; EXTRA=("$@"); break ;;
-        -h|--help)  sed -n '2,15p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)  sed -n '2,25p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
 done
 
-if [ "$BUILD" = 1 ]; then
-    "$ROOT/scripts/build.sh" ${CLEAN:+$CLEAN}
-fi
+[ "$BUILD" = 1 ] && "$ROOT/scripts/build.sh" ${CLEAN:+$CLEAN}
 
-[ -f "$IMAGE" ] || { echo "ERROR: $IMAGE not found — run without --no-build" >&2; exit 1; }
-[ -f "$DTB" ]   || { echo "ERROR: $DTB not found — run without --no-build" >&2; exit 1; }
+for f in "$KERNEL" "$DTB"; do
+    [ -f "$f" ] || { echo "ERROR: missing $f — run scripts/build.sh" >&2; exit 1; }
+done
 
 command -v qemu-system-aarch64 >/dev/null \
     || { echo "ERROR: qemu-system-aarch64 not found" >&2; exit 1; }
 
-# On raspi3b the first -serial is the PL011 that Emu68 logs to, and the second
-# is the mini-UART. Getting the order wrong is silence, not an error.
-echo "[run] qemu raspi3b — Ctrl-A X to quit"
-exec qemu-system-aarch64 \
-    -M raspi3b \
-    -accel tcg,tb-size=64 \
-    -kernel "$IMAGE" \
-    -dtb "$DTB" \
-    -serial stdio \
-    -serial null \
-    -display "$DISPLAY_ARG" \
-    -append "${BOOTARGS:-enable_cache}" \
-    "${EXTRA[@]}"
+case "$WANT_AROS" in
+    no)   AROS=0 ;;
+    auto) [ -f "$INITRD" ] && AROS=1 || AROS=0 ;;
+esac
+
+QEMU=(
+    qemu-system-aarch64
+    -M raspi3b
+    -accel tcg,tb-size=64
+    -kernel "$KERNEL"
+    -dtb "$DTB"
+    # On raspi3b the first -serial is the PL011 that Emu68 logs to. Getting the
+    # order wrong is silence, not an error.
+    -serial stdio
+    -display "$DISPLAY_ARG"
+    -no-reboot
+    -monitor "unix:$MONITOR,server,nowait"
+)
+
+if [ "$AROS" = 1 ]; then
+    # nocomposition is currently required to see anything on the framebuffer.
+    # Without it DEVS:Monitors/Compositor installs successfully and then nothing
+    # reaches the display: the boot runs to completion, Wanderer loads
+    # muimaster.library and its Zune icon classes, and the screen stays on the
+    # Emu68 logo.
+    BOOTARGS="${BOOTARGS:-nocomposition}"
+    QEMU+=(-initrd "$INITRD")
+    if [ "$USE_SD" = 1 ]; then
+        [ -f "$SD" ] || { echo "ERROR: missing $SD — run scripts/make-sdcard.sh" >&2; exit 1; }
+        QEMU+=(-drive "file=$SD,if=sd,format=raw")
+    fi
+    WHAT="Emu68 + AROS"
+    [ "$USE_SD" = 1 ] && WHAT="$WHAT + $(basename "$SD")"
+else
+    BOOTARGS="${BOOTARGS:-enable_cache}"
+    WHAT="Emu68 alone"
+    [ -f "$INITRD" ] || echo "[run] no AROS ELF — run scripts/build-aros.sh to boot it too"
+fi
+
+[ -n "$DEBUG" ] && BOOTARGS="$BOOTARGS sysdebug=$DEBUG"
+QEMU+=(-append "$BOOTARGS")
+
+echo "[run] $WHAT | append: $BOOTARGS"
+echo "[run] Ctrl-A X to quit; 'nc -U $MONITOR' for the QEMU monitor"
+exec "${QEMU[@]}" "${EXTRA[@]}"

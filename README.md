@@ -18,13 +18,14 @@ cd bellatrix
 ./scripts/build.sh          # Emu68        → out/images/Emu68.img
 ./scripts/build-aros.sh     # AROS m68k    → out/aros/aros-emu68-m68k.elf
 ./scripts/make-sdcard.sh    # boot media   → out/aros/sd.img
-./run-aros.sh               # boot the lot under QEMU
+./run.sh                    # boot the lot under QEMU
 ```
 
 The first `build-aros.sh` also builds an m68k cross toolchain from source and
 takes considerably longer than everything else combined.
 
-`./run.sh` boots Emu68 on its own, without AROS.
+`run.sh` boots whatever is built: AROS if its ELF is there, otherwise Emu68 on
+its own. `--no-aros` forces the latter.
 
 Prerequisites: `gcc-aarch64-linux-gnu`, `cmake`, `flex`, `bison`, `gperf`,
 `python3`, `mtools`, `qemu-system-arm`.
@@ -40,8 +41,7 @@ patches/emu68/        3 patches on Emu68
 patches/aros/         6 patches on AROS
 
 scripts/            setup, build, build-aros, make-sdcard
-run.sh              Emu68 alone, in QEMU
-run-aros.sh         Emu68 + AROS + SD card, in QEMU
+run.sh              boot under QEMU (Emu68, or Emu68 + AROS + SD card)
 out/                everything generated (git-ignored)
 
 docs/               reference documentation
