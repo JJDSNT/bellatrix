@@ -79,8 +79,8 @@ actually complete, since libgcc for the target is built in a second phase.
 
 ```bash
 ./scripts/make-sdcard.sh     # out/aros/sd.img
-./run.sh                     # headless, serial on stdout
-./run.sh --gui               # framebuffer in a window
+./run.sh                     # framebuffer in a window, serial on stdout
+./run.sh --headless          # serial only
 ./run.sh --debug InitCode    # sysdebug flags
 ./run.sh --no-aros           # Emu68 alone
 ```

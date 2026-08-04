@@ -25,7 +25,7 @@ The first `build-aros.sh` also builds an m68k cross toolchain from source and
 takes considerably longer than everything else combined.
 
 `run.sh` boots whatever is built: AROS if its ELF is there, otherwise Emu68 on
-its own. `--no-aros` forces the latter.
+its own. `--no-aros` forces the latter, `--headless` drops the window.
 
 Prerequisites: `gcc-aarch64-linux-gnu`, `cmake`, `flex`, `bison`, `gperf`,
 `python3`, `mtools`, `qemu-system-arm`.

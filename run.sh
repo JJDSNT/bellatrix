@@ -7,7 +7,8 @@
 #   ./run.sh --no-aros      Emu68 alone, even if the AROS ELF is there
 #   ./run.sh --no-sd        AROS without an SD card
 #   ./run.sh --sd PATH      a different card
-#   ./run.sh --gui          framebuffer in a window (default is headless)
+#   ./run.sh --headless     serial only, no window
+#   ./run.sh --gui          force a window even with no display detected
 #   ./run.sh --debug FLAGS  adds sysdebug=FLAGS to the kernel arguments
 #   ./run.sh --clean        rebuild Emu68 from scratch first
 #   ./run.sh --no-build     skip the Emu68 build
@@ -34,7 +35,14 @@ MONITOR="${BELLATRIX_QEMU_MONITOR:-/tmp/emu68-monitor.sock}"
 
 BUILD=1
 CLEAN=""
-DISPLAY_ARG="none"
+# A window by default when there is a display to put it on — AROS is a
+# graphical system and the framebuffer is usually the point. Falls back to
+# serial-only automatically, so this still works over SSH or in CI.
+if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    DISPLAY_ARG="gtk"
+else
+    DISPLAY_ARG="none"
+fi
 WANT_AROS="auto"
 USE_SD=1
 DEBUG=""
@@ -45,6 +53,7 @@ while [ $# -gt 0 ]; do
         --no-build) BUILD=0 ;;
         --clean)    CLEAN="clean" ;;
         --gui)      DISPLAY_ARG="gtk" ;;
+        --headless) DISPLAY_ARG="none" ;;
         --no-aros)  WANT_AROS="no" ;;
         --no-sd)    USE_SD=0 ;;
         --sd)       SD="$2"; shift ;;
@@ -107,6 +116,6 @@ fi
 [ -n "$DEBUG" ] && BOOTARGS="$BOOTARGS sysdebug=$DEBUG"
 QEMU+=(-append "$BOOTARGS")
 
-echo "[run] $WHAT | append: $BOOTARGS"
+echo "[run] $WHAT | display: $DISPLAY_ARG | append: $BOOTARGS"
 echo "[run] Ctrl-A X to quit; 'nc -U $MONITOR' for the QEMU monitor"
 exec "${QEMU[@]}" "${EXTRA[@]}"
