@@ -52,6 +52,14 @@
  * GPU IRQ 62, the Arasan SD controller -- which is exactly how this was
  * found. arch/arm-native and arch/aarch64-native avoid it by scanning only
  * eight bits of this bank; so do we.
+ *
+ * The same trap exists one level down, for the real bit rather than its
+ * mirror: a source with no handler is never acknowledged whatever bank it
+ * fired in. GPU IRQ 62 reaches GPUIRQ_PEND1 bit 30 as soon as the SD driver
+ * writes SDHCI_SIGNAL_ENABLE, and nothing on this port registers a handler
+ * for it -- the driver polls INT_STATUS instead. So every pending bank is
+ * masked with its enable register before dispatch: what a driver has not
+ * unmasked through KrnAddIRQHandler() is not ours to acknowledge.
  */
 #define ARMIRQ_REAL_BITS 8
 
@@ -140,9 +148,10 @@ static void intc_dispatch(struct KernelBase *KernelBase)
     for (;;)
     {
         pending_arm = intc_read(ARMIRQ_PEND) &
+                      intc_read(ARMIRQ_ENBL) &
                       ((1UL << ARMIRQ_REAL_BITS) - 1);
-        pending0 = intc_read(GPUIRQ_PEND0);
-        pending1 = intc_read(GPUIRQ_PEND1);
+        pending0 = intc_read(GPUIRQ_PEND0) & intc_read(GPUIRQ_ENBL0);
+        pending1 = intc_read(GPUIRQ_PEND1) & intc_read(GPUIRQ_ENBL1);
 
         if (!(pending_arm || pending0 || pending1))
             break;

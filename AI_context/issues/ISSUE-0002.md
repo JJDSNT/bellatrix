@@ -2,11 +2,11 @@
 id: ISSUE-0002
 title: "STOP does not consult INT64 on stock builds"
 status: backlog
-priority: medium
+priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-03
-updated_at: 2026-08-03
+updated_at: 2026-08-05
 tags:
   - emu68
   - irq
@@ -83,6 +83,16 @@ diagnosed as a delivery-window problem rather than a `STOP` problem, but the
 two are adjacent enough that this issue should be re-read when that ground is
 covered again.
 
+Raised to `high` on 2026-08-05: this is no longer only adjacent. The port's own
+idle path executes `STOP` — `arch/m68k-emu68/kernel/context.c` does
+`asm volatile ("stop #0x2000")` whenever `core_Dispatch()` returns no runnable
+task — and ISSUE-0007 is stalled on a boot that stops making progress while
+timer interrupts keep arriving. A `STOP` that sleeps without consulting `INT64`
+on a stock build is a candidate cause of exactly that shape, and it sits
+directly on the failing path rather than near it.
+
 # Execution log
 
 - 2026-08-03 — verified against pin `9b4379a`; issue opened, no work started.
+- 2026-08-05 — raised to `high` and linked to ISSUE-0007: the m68k-emu68 idle
+  path uses `STOP`, so this defect is on the path currently under investigation.

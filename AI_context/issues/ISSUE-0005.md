@@ -94,7 +94,20 @@ comment.
 
 Worth doing together — same file, same family, one regeneration of the patch.
 
+Assessed against ISSUE-0007 on 2026-08-05 and left at `medium`. The intercepts
+are on the failing path — the `INTENA` shadow is what gates level-6 delivery —
+but neither open item can produce the observed failure. `Platform_Init()` and
+`Platform_Autovector()` access `INTENA`/`INTREQ`/`INTENAR` as words only, so the
+ungated write side and the unhandled 32-bit span across `0xdff01c` are both
+unreachable from our own code. The serial log confirms it from the other end:
+level-6 entries keep arriving after the stall, so the shadow is not the thing
+that stopped. Fix these when the patch is next regenerated — which ISSUE-0008
+requires anyway — rather than as part of chasing the desktop.
+
 # Execution log
 
 - 2026-08-03 — the read-side defect found by building the series clean and
   fixed the same day; these two identified alongside it and left open.
+- 2026-08-05 — reviewed for relevance to ISSUE-0007 and kept at `medium`: both
+  open items are unreachable from the port's own word-sized accesses. Coupled to
+  ISSUE-0008, which has to regenerate `patches/emu68/0001` regardless.
