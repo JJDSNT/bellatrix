@@ -298,6 +298,61 @@ Wanderer on the card carries no tracing: `workbench/system/Wanderer/main.c` has
 `#define DEBUG 1` in the tree, but the binary on the card predates it. A traced
 Wanderer has been built and not yet installed — that is the next measurement.
 
+# The screen was being swallowed by Emu68 (found and removed 2026-08-05)
+
+The Emu68 submodule was never audited against its own series — ISSUE-0008 looked
+only at `external/aros`. Doing it the same way (pinned `9b4379a5` plus
+`patches/emu68/` in a scratch worktree, `diff -rq`) found one drifted file,
+`src/aarch64/vectors.c`, carrying an open-bus guard that exists in no patch:
+
+```c
+/* write side */
+if (far >= 0x01000000 && !is_system_memory(far, size))
+    return 1;
+
+/* read side */
+if (far >= 0x01000000 && !is_system_memory(far, size)) {
+    if (value) *value = UINT64_MAX;
+    ...
+}
+```
+
+`is_system_memory()` walks `sys_memory`, which the boot log gives as
+`0x00000000-0x347fffff`. The framebuffer is at `0x3c100000` — **outside it**.
+So every guest write that reached the fault handler for the framebuffer was
+silently discarded. The machine booted, Wanderer ran, and nothing could ever
+appear.
+
+Restoring `vectors.c` to what the series produces and rebuilding Emu68:
+
+```
+[clean1] top colours: #989898:297558 #e8ece8:7956 #000000:1608
+```
+
+`#989898` is the Workbench screen, against `#787878` for the Emu68 logo. The
+screendump shows the Workbench screen with its title bar — *"Wanderer 832.62M
+graphics mem 832.62M other mem"* — and the mouse pointer.
+
+Two things follow, and neither should be overstated.
+
+**The desktop is empty.** No volume icons. That is the symptom this issue was
+opened for, now reached again rather than solved.
+
+**It is intermittent: one run in three.** `clean2` and `clean3`, identical
+configuration on an idle machine, stopped at the logo. So removing the guard
+restored the *possibility* of the screen, not its reliability. The intermittency
+was always the real subject of this issue and is now, again, the only thing in
+the way.
+
+The configuration that reached it: the 2026-08-03 ELF from
+`/home/jaime/aros-build-emu68-m68k`, a card regenerated from that same
+distribution, and Emu68 built from the clean series. The removed guard is parked
+as `AI_context/codex-2026-08-05/emu68-submodule-drift.patch`.
+
+The current `out/build/aros` ELF did **not** reach the screen in two tries under
+the same clean Emu68, so there is a second regression on the AROS side to find,
+separately from the intermittency.
+
 # Why Wanderer exits: no Workbench screen
 
 Traced with `DEBUG` on in `workbench/system/Wanderer/{main,wanderer}.c`, rebuilt
@@ -533,6 +588,10 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   result yet; the question is now open where before it was assumed settled.
 - 2026-08-05 — parked the unreviewed working state on branch
   `codex-2026-08-05`; `main` keeps only measured changes.
+- 2026-08-05 — audited the Emu68 submodule against its series for the first
+  time. One drifted file, an open-bus guard swallowing every write above 16 MB
+  that is not system memory -- including the framebuffer at 0x3c100000.
+  Removed; the Workbench screen appears. Empty, and in one run of three.
 - 2026-08-05 — compared `/home/jaime/AROS` (`feature/m68k-emu68-baremetal`)
   against this tree file by file. One substantive commit had never been
   imported: `d3baf6ed82`, the system-timer compare race. Imported.

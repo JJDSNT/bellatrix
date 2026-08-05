@@ -1,0 +1,96 @@
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -340,6 +340,7 @@
+ 
+ int board_idx;
+ struct ExpansionBoard **board;
++extern int zorro_disable;
+ 
+ #ifdef PISTORM_ANY_MODEL
+ 
+@@ -356,7 +357,6 @@
+ uint32_t move_slow_to_chip = 0;
+ 
+ int block_c0;
+-extern int zorro_disable;
+ extern int disable_scsi;
+ extern int beamcon0_pal_clear;
+ extern int beamcon0_pal_set;
+@@ -735,10 +735,25 @@
+ 
+ #else
+ 
++static int is_system_memory(uint64_t address, int access_size)
++{
++    for (const struct MemoryBlock *block = sys_memory;
++         block && block->mb_Size; block++) {
++        if (address >= block->mb_Base) {
++            uint64_t offset = address - block->mb_Base;
++            if (offset < block->mb_Size &&
++                (uint64_t)access_size <= block->mb_Size - offset)
++                return 1;
++        }
++    }
++
++    return 0;
++}
++
+ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
+ {
+     D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
+-    
++
+     if (far == 0xdeadbeef && size == 1) {
+         kprintf("%c", value);
+         return 1;
+@@ -799,7 +814,8 @@
+         whether the autoconfig cycles come off a real Amiga bus or are trapped
+         here.
+     */
+-    if (far >= AUTOCONFIG_BASE && far <= AUTOCONFIG_END && board && board[board_idx])
++    if (!zorro_disable && far >= AUTOCONFIG_BASE && far <= AUTOCONFIG_END &&
++        board && board[board_idx])
+     {
+         if (board[board_idx]->is_z3) {
+             if (far == 0xe80044) {
+@@ -824,6 +840,12 @@
+         return 1;
+     }
+ 
++    /* Unmapped Zorro III space must not fall through to the direct physical
++       alias. On bare metal that can turn a guest probe into an ARM external
++       abort inside this page-fault handler, recursively exhausting its stack. */
++    if (far >= 0x01000000 && !is_system_memory(far, size))
++        return 1;
++
+     switch(size)
+     {
+         case 1:
+@@ -897,7 +919,8 @@
+         so the guest only ever sees the ones actually on offer. Byte-sized
+         access only, which is what the autoconfig protocol uses.
+     */
+-    if (far >= AUTOCONFIG_BASE && far <= AUTOCONFIG_END && size == 1 && board)
++    if (!zorro_disable && far >= AUTOCONFIG_BASE && far <= AUTOCONFIG_END &&
++        size == 1 && board)
+     {
+         while (board[board_idx] && !board[board_idx]->enabled) {
+             board_idx++;
+@@ -912,6 +935,17 @@
+         }
+     }
+ 
++    /* See the write-side guard above. Return an open-bus value for an
++       unconfigured Zorro III address instead of touching arbitrary ARM
++       physical space through the direct-map alias. */
++    if (far >= 0x01000000 && !is_system_memory(far, size)) {
++        if (value)
++            *value = UINT64_MAX;
++        if (value2)
++            *value2 = UINT64_MAX;
++        return 1;
++    }
++
+     switch(size)
+     {
+         case 1:
