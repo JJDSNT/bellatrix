@@ -298,6 +298,70 @@ Wanderer on the card carries no tracing: `workbench/system/Wanderer/main.c` has
 `#define DEBUG 1` in the tree, but the binary on the card predates it. A traced
 Wanderer has been built and not yet installed — that is the next measurement.
 
+# Why Wanderer exits: no Workbench screen
+
+Traced with `DEBUG` on in `workbench/system/Wanderer/{main,wanderer}.c`, rebuilt
+and installed onto the card the same way IPrefs was:
+
+```
+[Wanderer] main: Handing control over to Zune ..
+[Wanderer] Wanderer__MUIM_Application_Execute: Creating 'Workbench' Window..
+[Wanderer] Wanderer__MUIM_Wanderer_CreateDrawerWindow: Couldn't lock screen!
+[Wanderer] main: Returned from Zune's control ..
+```
+
+`CreateDrawerWindow` calls `LockPubScreen(NULL)` and gets NULL, so it disposes
+itself and Zune's loop ends. `LockPubScreen(NULL)` resolves to
+`IntuitionBase->WorkBench`, and when that is NULL it calls `OpenWorkBench()`
+itself and retries — so the real statement is **`OpenWorkBench()` fails**.
+
+## The screen size was wrong, and that is fixed
+
+With `DEBUG` on in `rom/intuition/openworkbench.c`:
+
+```
+[OpenWorkbench] Requested size: 800x600, depth: 4, ModeID: 0xFFFFFFFF
+[OpenWorkbench] Invalid ModeID given
+[OpenWorkbench] Size: 800x600 ... ModeID 0xFFFFFFFF     (no 800x600 mode exists)
+[OpenWorkbench] Size: 640x480, depth: 4, ModeID 0x00100000
+[OpenWorkbench] Maximum size: 16384x16384
+[OpenWorkbench] Corrected size: 800x600 4bpp
+```
+
+The 800x600 is intuition's compiled-in `ScreenModePrefs` default — there is no
+`screenmode.prefs` on the card. `openworkbench.c` bounds the requested size by
+`DTAG_DIMS`, whose maximum comes from the display driver's `aHidd_Sync_HMax` /
+`VMax`. `emu68gfx_hiddclass.c` filled `HDisp`/`VDisp` from the real framebuffer
+at runtime but left `HMax`/`VMax` at a hardcoded 16384, so the clamp did nothing
+and intuition asked for an 800x600 screen on a 640x480 framebuffer.
+
+Fixed by reporting the real size in `HMax`/`VMax`: this driver owns one linear
+framebuffer handed over by the firmware and cannot raster anything larger.
+Verified in two runs — `Maximum size: 640x480`, `Corrected size: 640x480 4bpp`.
+
+## And it is still not enough
+
+`OpenScreen` still fails, so `Couldn't lock screen!` still follows. The next
+datum needed is why, and `DEBUG_OPENSCREEN` cannot supply it: it is defined as
+`;` in `rom/intuition/intuition_intern.h:1231`, unconditionally, so the
+`DEBUG_OpenScreen` switch at the top of `openscreen.c` controls nothing.
+Explicit `D(bug())` calls at that function's failure exits are needed instead —
+`DEBUG 1` is already set in the file.
+
+Worth suspecting, in order: depth 4 against a driver that publishes only a
+16-bit truecolor pixfmt with no CLUT; and the mixture of build trees described
+below.
+
+# Two build trees are being mixed
+
+The card is generated from `/home/jaime/aros-build-emu68-m68k` — the tree that
+produced the media which reached Wanderer on 2026-08-03 — while the ROM, IPrefs
+and Wanderer now come from `out/build/aros`. A new intuition against old
+`Classes`, `Devs` and `Libs` is exactly the kind of mixture that can break the
+display path, and it is not currently controlled for. Either build a full
+distribution in `out/build/aros` and generate the card from it, or keep every
+binary from the old tree. Do not keep straddling both.
+
 # A/B on the Emu68 Exec backend
 
 Prompted by the observation that the port reached the desktop before that backend

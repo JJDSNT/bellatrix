@@ -70,6 +70,17 @@ OOP_Object *Emu68Gfx__Root__New(OOP_Class *cl, OOP_Object *o,
     sync_tags[1].ti_Data = XSD(cl)->width;
     sync_tags[2].ti_Data = XSD(cl)->width;
     sync_tags[3].ti_Data = XSD(cl)->height;
+    /*
+     * HMax/VMax are what intuition clamps a requested screen size against:
+     * openworkbench.c bounds the size it asks for by DTAG_DIMS, which comes
+     * from these. This driver owns one linear framebuffer, handed over by the
+     * firmware at a fixed size -- it cannot raster anything larger, so saying
+     * 16384 makes intuition ask OpenScreen() for the 800x600 its built-in
+     * ScreenModePrefs default wants and get nothing back. Report the size we
+     * actually have and the request is clamped to it instead.
+     */
+    sync_tags[4].ti_Data = XSD(cl)->width;
+    sync_tags[5].ti_Data = XSD(cl)->height;
 
     new_tags[3].ti_Data = (IPTR)msg->attrList;
     if (!msg->attrList)
