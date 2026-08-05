@@ -253,6 +253,68 @@ references `emu68_SwitchTail`. `m68k_DispatchFrame` and `m68k_SwitchTail` — th
 in 1306 linked objects. They come along only because `kernel_cpu.o` also defines
 `cpu_Exception`. The 66 is dead code and debt to clean up, not the defect.
 
+The 68 itself is internally consistent. `arch/m68k-emu68/exec/dispatch.S` lays
+the frame out as PC(0), SR(4), format(6), registers(8..67), and `context.c`
+reads the format word at offset 6 to match — that is the 68010+ format-0 frame a
+68040 pushes on interrupt, where 66 is the 68000 frame with no format word. But
+consistency between two files written together is not evidence that the format
+word is needed: **the port reached the desktop before this backend existed**,
+through the 66-byte `m68k-all` path.
+
+`emu68_CheckTaskFrame()` never printed `[EMU68-FRAME] BAD` in any run, which
+looks like support for the 68-byte layout and is weaker than it looks: the
+validator only runs on the slow dispatch path, which handled **five** context
+switches in a whole boot. Everything else goes through the inline fast path in
+`dispatch.S`, which validates nothing.
+
+# Where it actually stops now
+
+Wanderer does not hang. It runs, loads `muimaster.library`, `muiscreen.library`,
+`Zune/IconDrawerList.mui` and `Zune/IconVolumeList.mui` — its own icon classes —
+and then:
+
+```
+[Shell] returned 0 (0): WANDERER:Wanderer
+```
+
+It exits, cleanly, code 0. The machine stays up and goes idle: `Decorator`,
+`PUBSCREEN handler`, `Workbench Handler`, `IPrefs`, `ConClip`,
+`Intuition menu handler`, `console.device` all sitting in `TS_WAIT`, with
+`input.device` and `SDCARD0P0` still being woken on every tick. Nothing is
+stuck. The display simply never changes: the framebuffer stays on the Emu68
+logo, `#787878`.
+
+The graphics driver is not obviously at fault — with `DEBUG` restored in
+`emu68gfx_init.c` it reports:
+
+```
+[emu68gfx] Init: flags 0x0000003f fb 0x3c100000 640x480 pitch 1280
+[emu68gfx] Init: AddDisplayDriver() => 0
+[emu68gfx] Init: display driver registered
+```
+
+So the question is why Wanderer gives up rather than opening its screen. The
+Wanderer on the card carries no tracing: `workbench/system/Wanderer/main.c` has
+`#define DEBUG 1` in the tree, but the binary on the card predates it. A traced
+Wanderer has been built and not yet installed — that is the next measurement.
+
+# A/B on the Emu68 Exec backend
+
+Prompted by the observation that the port reached the desktop before that backend
+existed. Disabling `arch/m68k-emu68/exec/mmakefile.src` and clearing the stale
+objects makes the 66-byte `m68k-all` path link again — verified in the object,
+`lea %a5@(66),%a2`, and `switch.o` then references `m68k_SwitchTail`.
+
+| build | lines | JIT faults | Wanderer |
+|---|---|---|---|
+| Codex backend | 4430 | 55 | crashed: `0x207f` at `0x23f8`, `A6=0x2340` |
+| Codex backend | 4548 | 0 | `returned 0` |
+| Codex backend | 4484 | 0 | `returned 0` |
+| m68k-all, 66-byte | 4363 | 0 | still running at cutoff |
+
+One run without the backend is not a result. It is enough to say the question is
+open and worth settling, which it was not before.
+
 # The reference build no longer exists
 
 Every artifact that had been treated as a known-good oracle was rebuilt or
@@ -314,26 +376,24 @@ specific transferred port.
 
 # Plan to get the desktop back
 
-The goal is the Workbench screen with its icons, reached repeatedly. With no
-oracle left, the only way back is to rebuild one.
+The goal is the Workbench screen with its icons, reached repeatedly.
 
-1. Rebuild from the committed state — `HEAD` plus both series as they stand in
-   `patches/`, with none of the uncommitted work. That state is what the
-   2026-08-03 session was running when it reached Wanderer, so it is the closest
-   thing to a baseline that still exists. If it reaches the desktop, it is the
-   oracle; if it does not, the cause is outside this repository and every
-   conclusion drawn from artifact comparison so far has to be re-examined.
-2. Fix ISSUE-0008 first, or the baseline cannot be built by the scripts at all
-   and any result is unreproducible.
-3. Re-apply the uncommitted work in slices, measuring each: the interrupt
-   controller enable mask; the 68-byte frame backend
-   (`arch/m68k-emu68/exec/` + `kernel/context.c`); the `movem.l` rewrite in
-   `switch.S`; the removal of the `#ifndef __EMU68__` chipset guards; the Emu68
-   open-bus guard in patch 0002. Each of these is independently revertible and
-   each changes behaviour on the path that is failing.
-4. Measure to the discipline this issue has already paid for twice: serial runs,
-   idle machine, minimum three per configuration, `screendump` and dominant
-   colour rather than a glance at the window.
+1. ~~Rebuild from the committed state.~~ Done differently and better: the
+   unreviewed working state is parked on branch `codex-2026-08-05`, and `main`
+   now carries only what has been measured — the `intc_dispatch()` enable mask
+   and the `systimer_arm()` import. **Caveat:** switching branches does not
+   touch a submodule's working tree, so `external/aros` still physically carries
+   all nineteen drifted files and a build from `main` still compiles them.
+2. Find why Wanderer exits instead of opening its screen. Install the traced
+   Wanderer on the card, the same way the traced IPrefs was installed. This is
+   the only thing between here and the goal.
+3. Settle the Exec-backend question with three runs per side, not one.
+4. Convert the FAT fix to `patches/aros/`, then revert the rest of the submodule
+   drift, so a build from `main` matches what `main` says it is. Without this,
+   step 3's result is not attributable.
+5. Measure to the discipline this issue has already paid for three times: serial
+   runs, idle machine, minimum three per configuration, `screendump` and
+   dominant colour rather than a glance at the window.
 
 # What is left
 
@@ -392,7 +452,23 @@ oracle left, the only way back is to rebuild one.
   the 2026-08-03 intermittency.
 - 2026-08-05 — opened ISSUE-0008: four files inside `external/aros` carry edits
   belonging to no patch, and two Emu68 patch files are corrupt, so the state
-  being measured cannot be rebuilt from the repository.
+  being measured cannot be rebuilt from the repository. Later the same day the
+  count turned out to be nineteen, not four.
+- 2026-08-05 — restored `patches/aros/0006`. The boot was never stopping after
+  SD initialisation; it was running a thousand lines further with nothing to
+  print. Deleting that patch cost a day.
+- 2026-08-05 — found the root cause of the regression: the card generates its
+  font indexes at boot and an earlier boot wrote them through the unfixed
+  fat-handler, byte-swapping size, cluster and date. Six entries affected.
+  `OpenDiskFont` then never returns. Card regenerated.
+- 2026-08-05 — with a clean card the boot runs the whole of `S:Startup-Sequence`
+  and starts Wanderer, which loads its icon classes and exits 0. The system
+  stays up and idle; the framebuffer never leaves the Emu68 logo.
+- 2026-08-05 — A/B on the Emu68 Exec backend: one run with the 66-byte
+  `m68k-all` path, no JIT faults, Wanderer still running at cutoff. Not a
+  result yet; the question is now open where before it was assumed settled.
+- 2026-08-05 — parked the unreviewed working state on branch
+  `codex-2026-08-05`; `main` keeps only measured changes.
 - 2026-08-05 — compared `/home/jaime/AROS` (`feature/m68k-emu68-baremetal`)
   against this tree file by file. One substantive commit had never been
   imported: `d3baf6ed82`, the system-timer compare race. Imported.
