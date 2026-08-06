@@ -121,6 +121,47 @@ the autoconfig window and being answered as if it were a probe, which would be a
 symptom of exactly the lost context this issue is named after. One run is not
 evidence of a mechanism, but it is a concrete thing to look for.
 
+## The Zorro III board is out of the build (2026-08-06)
+
+`patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
+narrowed what it carried. Both are removed from the series. The reasoning, in
+the order it was established:
+
+- **This port never asked for it.** No `expansion.library`, no autoconfig sweep,
+  zero occurrences of `expansion`/`zorro`/`autoconfig` in any serial log. The
+  FDT arrives in `A6` from Emu68's initramfs loader (`boot/entry.S`), and the SD
+  card is driven by our own `soc/sdcard`. Nothing consumes the board.
+- **The fork history agrees.** `JJDSNT/Emu68 feature/host-irq-abi` is exactly
+  three commits over upstream `9b4379a`, all dated 2026-08-01. The first
+  bring-up had no Zorro at all; the board came later, and the reason for it —
+  reusing Emu68's `brcm-sdhc.device` — never happened, because this port has its
+  own driver.
+- **Offered, it stops a fault and starts answering.** With the board present the
+  64 KB window at `0xe80000` no longer faults: an access there is absorbed,
+  advances `board_idx`, and can configure a board. One run caught it doing
+  exactly that — `Mapping ZIII Emu68 ROM board at address 00000000`, followed by
+  ~74 KB of module images copied over guest memory from `0x1000`. Removing the
+  board restores the fault, which is what a wild pointer should meet.
+
+**The measurement does not support a stronger claim than that.** Zorro on: 8
+`icons` in 24 runs (33%). Zorro out: 5 in 10 (50%). Fisher exact, two-sided,
+p = 0.45. The removal is justified by surface area, not by a change in the
+failure rate, and the failure rate is unchanged as far as anyone can tell.
+
+Two things found on the way, both worth keeping:
+
+- **`z3_disable` is unreachable on a stock build.** `parse_cmdline()` reads the
+  token inside `#ifdef PISTORM_ANY_MODEL` (`start.c:667`), so the off switch for
+  a board that `patches/emu68/0002` had made reachable was itself not. The first
+  A/B run against it therefore measured nothing; those eight runs are counted
+  above as ordinary Zorro-on samples. Same shape as ISSUE-0004.
+- **Removing a patch orphans the files only it touched.** `setup.sh --reset`
+  clears `skip-worktree` from the *current* series file list, so files that only
+  the removed patch touched (`CMakeLists.txt`, `src/boards/emu68rom.c`) kept the
+  bit and their old contents — invisible to `git status` at both levels, and
+  enough to make `--verify` report a state that matched neither pristine nor
+  applied. Clear the bit across the whole index before reasoning about it.
+
 The two defects this issue originally proved are in a different state than the
 paragraph below claims, and the correction matters. The FAT endian change is
 **not** a working fix: promoted to a patch and measured, it failed three runs of
@@ -724,3 +765,8 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   The harness now keeps the serial log unconditionally — the first ten runs
   measured the rate and discarded every byte of it, so this question needed the
   series run again.
+- 2026-08-06 — removed the Zorro III board from the build (patches 0002 and
+  0003) after establishing that nothing in this port consumes it and that
+  offering it turns a faulting window into one that answers. Ten runs after:
+  5/10 against 8/24 before, p = 0.45 — no demonstrable change in the
+  intermittency. Kept for the surface area, not for the rate.
