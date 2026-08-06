@@ -30,6 +30,14 @@ meaningful if the reproduction is checked, so it is:
 `./scripts/setup.sh --verify` reporting `already applied` for both submodules is
 the mechanical form of this claim, and it is the only one worth trusting.
 
+**One deliberate divergence, 2026-08-06.** `main` no longer carries the Emu68
+fork's Zorro III commits: `patches/emu68/` is one patch, not three. Nothing in
+this port consumes the board — no `expansion.library`, no autoconfig sweep — and
+while it is offered, the 64 KB window at `0xe80000` stops faulting and starts
+answering stray accesses. The reference pair is still the reference for
+everything else; this is the one place `main` is intentionally smaller than it,
+and the reasoning is in `AI_context/issues/ISSUE-0007.md`.
+
 ## How to check you are on it
 
 ```bash
