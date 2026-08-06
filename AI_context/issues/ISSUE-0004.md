@@ -1,8 +1,8 @@
 ---
 id: ISSUE-0004
 title: "INTF.IPL is inert on stock builds — the IPL delivery mechanism is unreachable"
-status: backlog
-priority: medium
+status: ready
+priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-03
@@ -105,3 +105,13 @@ is exactly the kind of thing that costs a day when it is discovered mid-task.
 # Execution log
 
 - 2026-08-03 — verified against pin `9b4379a`; issue opened, no work started.
+
+# Update 2026-08-06: decided, and this is now step one of the port
+
+The question this issue leaves open — "does this project want the IPL mechanism
+at all?" — is answered: yes, it is the mechanism the port is moving to. See
+ISSUE-0010 for the reasoning and `docs/irq.md` for the corrected write-up.
+
+Making the arbitration branch reachable is inert on its own, because nothing
+writes `INTF.IPL` yet. That makes it a safe first commit and the natural first
+step of the port rather than a separate piece of work.

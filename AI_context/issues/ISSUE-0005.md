@@ -1,8 +1,8 @@
 ---
 id: ISSUE-0005
 title: "Access-size handling gaps in our interrupt-register intercepts"
-status: backlog
-priority: medium
+status: ready
+priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-03
@@ -111,3 +111,24 @@ requires anyway — rather than as part of chasing the desktop.
 - 2026-08-05 — reviewed for relevance to ISSUE-0007 and kept at `medium`: both
   open items are unreachable from the port's own word-sized accesses. Coupled to
   ISSUE-0008, which has to regenerate `patches/emu68/0001` regardless.
+
+# Update 2026-08-06: this is the shape of the boot failure's suspect
+
+ISSUE-0007 found that the dominant boot failure is Emu68's ARM stack collapsing
+from ~700 bytes of normal use to fully exhausted between two five-second
+samples — unbounded recursion through `curr_el_spx_sync`, the synchronous
+exception vector every intercepted access goes through. In two of the first
+three captured stalls the guest address in flight was `0xdff01e`, INTREQR.
+
+The second gap listed above is the right shape for that: a 32-bit access
+spanning `INTENAR`+`INTREQR` (`0xdff01c`–`0xdff01f`) matches neither intercept,
+because both require `size <= 2`, and falls through. **Whether that fall-through
+can itself fault is the question** — if it can, the handler re-enters itself and
+the stack goes in milliseconds.
+
+Two things keep this honest. Nothing has proven the fall-through faults; the
+note above concludes it reads RAM, which would be wrong-but-harmless. And the
+port is moving to IPL injection (ISSUE-0010), which removes these intercepts
+entirely and would make the question moot rather than answered. Worth resolving
+anyway: if a fall-through inside the fault handler can fault, that is a defect
+independent of which registers are intercepted.

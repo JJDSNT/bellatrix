@@ -2,7 +2,7 @@
 id: ISSUE-0002
 title: "STOP does not consult INT64 on stock builds"
 status: backlog
-priority: high
+priority: low
 type: bug
 owner: unassigned
 created_at: 2026-08-03
@@ -96,3 +96,20 @@ directly on the failing path rather than near it.
 - 2026-08-03 — verified against pin `9b4379a`; issue opened, no work started.
 - 2026-08-05 — raised to `high` and linked to ISSUE-0007: the m68k-emu68 idle
   path uses `STOP`, so this defect is on the path currently under investigation.
+
+# Update 2026-08-06: not the boot failure
+
+Measured, so this is not a matter of opinion. The stalls investigated in
+ISSUE-0007 are not an idle guest waiting on a `STOP`: the ARM sits at
+`curr_el_spx_sync+0` with its stack exhausted, in an exception loop. A guest
+parked in `wfi` would look completely different, and none of the captured
+stalls do.
+
+The defect described above is still real and still worth fixing — `STOP` on a
+stock build does not consult the interrupt state the delivery machinery uses.
+It is simply not what is breaking the boot, and it should not be worked on for
+that reason. Priority dropped accordingly.
+
+The dependency stated below still holds: what the stock branch should wait on
+depends on the delivery mechanism, and that is now decided — IPL injection, see
+ISSUE-0010.

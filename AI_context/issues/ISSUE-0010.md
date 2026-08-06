@@ -133,10 +133,19 @@ question:
   (`platform.c:375-376`, and `expansion/memorytest.S:91-98` already probes
   exactly this), and under the IPL path it reads RAM.
 
-**2. Answer the de-assert question before writing code.** This is the real
-design work, not the plumbing. `INTF.ARM` is edge-shaped and the guest drops it
-by acknowledging EXTER. `INTF.IPL` is level-shaped: something has to lower it,
-and there is no Paula to do so. Candidate answers, to be written down and chosen:
+**2. The de-assert is one line, not a protocol — correcting this issue's own
+estimate.** Reading `ExecutionLoop.c:411-435`: once the arbitration decides to
+take the exception it pushes the frame, writes the level into SR's IPL mask, and
+loads the vector. It clears **nothing** — not even `INTF.ARM`, which the guest
+drops later by writing INTREQ. The SR mask is what prevents re-entry at the same
+level until the guest's `RTE` lowers it.
+
+So for IPL the equivalent is clearing `INTF.IPL` at that same point. With a
+single host source, and a driver (`bcm283x/interrupt_controller.c`) whose
+`intc_dispatch()` already loops until every enabled pending bit is handled, edge
+semantics on the level interface are very likely correct. The candidates below
+were written before that code was read and are kept for the case where a second
+source makes the simple answer wrong:
 
 - Emu68 clears `INTF.IPL` when the m68k takes the exception (edge semantics on a
   level interface — simple, and wrong if two sources are pending);
