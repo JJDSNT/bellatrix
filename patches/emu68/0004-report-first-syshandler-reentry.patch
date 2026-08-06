@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 6 Aug 2026 17:15:00 -0300
+Subject: [PATCH 4/4] Report the first re-entry of SYSHandler, not the last
+
+A synchronous exception taken while SYSHandler is already running is
+unbounded recursion. Each turn pushes a 160-byte frame at the vector, so
+512 KB of ARM stack is gone in a few thousand of them -- fast enough that a
+five-second sample sees a machine go from ~700 bytes of stack used to none.
+What is left is a stack of near-identical frames and a PC parked on the
+vector's first instruction, which says that it happened and nothing at all
+about why: the registers that described the fault which started it were
+overwritten thousands of times over.
+
+So report on the way in, while ELR, ESR and FAR still describe the first
+fault, and halt at depth 8 rather than riding it down to the floor.
+
+Costs nothing on the normal path -- the depth is zero there and the test is
+a load and a compare. Per-core, so a stray fault on a core that is not
+running the JIT cannot corrupt the count.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -2314,6 +2314,47 @@
+    
+     cpu_id &= 3;
+ 
++    /*
++     * Report the *first* re-entry, not the last.
++     *
++     * A synchronous exception taken while this handler is already running is
++     * unbounded recursion: each turn pushes a 160-byte frame at the vector,
++     * and 512 KB of ARM stack is gone in a few thousand of them -- fast enough
++     * that a five-second sample sees a machine going from ~700 bytes of stack
++     * used to none. What is left afterwards is a stack of near-identical
++     * frames and a PC parked on the vector's first instruction, which says
++     * that it happened and nothing about why.
++     *
++     * So say so on the way in, while the interesting registers still describe
++     * the fault that started it. The depth is per-core, and only core 0 runs
++     * the JIT, but the array keeps a stray fault on another core from
++     * corrupting the count.
++     *
++     * Printing costs nothing on the normal path: depth is 0 there, and the
++     * test is one load and a compare against an already-loaded value.
++     */
++    static volatile uint32_t sys_depth[4];
++    static volatile uint32_t sys_reported[4];
++
++    if (sys_depth[cpu_id] != 0)
++    {
++        if (sys_reported[cpu_id] == 0)
++        {
++            sys_reported[cpu_id] = 1;
++            kprintf("[JIT:SYS] RE-ENTERED at depth %d on core %d\n",
++                    sys_depth[cpu_id], (int)cpu_id);
++            kprintf("[JIT:SYS]   vector=%08x ELR=%p ESR=%08x FAR=%p SPSR=%08x\n",
++                    vector, elr, esr, far, spsr);
++        }
++        if (sys_depth[cpu_id] > 8)
++        {
++            kprintf("[JIT:SYS] runaway exception recursion, halting core %d\n",
++                    (int)cpu_id);
++            while (1) { __asm__ volatile("wfe"); }
++        }
++    }
++    sys_depth[cpu_id]++;
++
+     if ((vector & 0x1ff) == 0x00 && (esr & 0xf8000000) == 0x90000000)
+     {
+         int writeFault = (esr & (1 << 6)) != 0;
+@@ -2486,6 +2527,8 @@
+         
+         while(1) { __asm__ volatile("wfe"); };
+     }
++
++    sys_depth[cpu_id]--;
+ }
+ 
+ void IRQHandler(uint32_t , uint64_t *)

@@ -283,6 +283,61 @@ stuck in the exception loop looks like. Something clears the bit that static
 inspection does not show, most likely emitted by the JIT at run time and so
 absent from the ELF. The worry was unfounded.
 
+## The first fault, caught — two defects, not one (2026-08-06)
+
+A depth guard in `SYSHandler` (`patches/emu68/0004`) reports the **first**
+re-entry instead of leaving 3200 identical frames behind, and it caught the same
+thing in three stalls out of three:
+
+```
+[JIT:SYS] RE-ENTERED at depth 1 on core 0
+[JIT:SYS]   vector=00000200 ELR=0xffffff80000853d8 ESR=96000010
+            FAR=0xffffff9064656275 SPSR=600003c5
+```
+
+`ESR 0x96000010` decodes as a data abort at the same EL, **write**, DFSC 0x10 —
+a synchronous external abort, which is what an unassigned physical address
+produces. And `FAR` is the guest-memory alias base `0xffffff9000000000` plus a
+guest address:
+
+| run | guest address | as bytes |
+|---|---|---|
+| 1 | `0x64656275` | `64 65 62 75` = **"debu"** |
+| 2 | `0xc0000058` | |
+| 3 | `0xfeb80051` | |
+
+`0x64656275` is a pointer to the string "debug" being used as an address. The
+other two are equally out of range — the machine has 840 MB.
+
+So the chain is: the guest writes to a wild address; the write faults into
+`SYSHandler`; `SYSWriteValToAddr()` emulates it through the linear alias
+(`*(uint8_t*)(far + 0xffffff9000000000) = value`); that address is unmapped;
+the handler faults; recursion. Nothing about the interrupt path, which is why
+moving to IPL did not change it.
+
+**That separates two defects that have been one problem all along.**
+
+**A — the guest goes wild.** A pointer holding string data is used as an
+address. This is the lost context this issue is named after, and it is on the
+AROS side. It is what has to be fixed for the boot to be reliable.
+
+**B — Emu68 turns a wild guest write into an unbounded recursion.** A real 68k
+would take a bus error the guest could trap. Here the handler dereferences the
+faulting address without checking it is mapped, so the machine silently
+destroys its own stack instead.
+
+B is worth fixing on its own merits: it is what makes A undebuggable, and it
+would do the same to any future wild pointer. And it is recognisable — this is
+the **open-bus guard** that had drifted into `vectors.c` and was removed on
+2026-08-05 because it made the desktop unreachable. The idea was right; the
+implementation rejected anything outside `sys_memory` above 16 MB, which
+included the framebuffer at `0x3c100000`, so every write to the display was
+discarded. A correct version rejects what is genuinely unmapped and lets the
+framebuffer and the peripheral window through.
+
+With the guard in place the stack no longer collapses — `sp_used` is 4640 bytes
+instead of 524416 — and the machine halts with a message rather than hanging.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -950,3 +1005,9 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   8-byte format-0 frame, so 68 is right. That series returned 0 icons in 3,
   against 4 in 4 two series earlier — the variance is wide and no single series
   should be read as a rate.
+- 2026-08-06 — added a re-entry guard to SYSHandler and caught the first fault
+  in 3 of 3 stalls: a guest write to a wild address (once literally the bytes
+  of the string "debug"), emulated through the unmapped part of the linear
+  alias, faulting inside the handler. Two defects, now separable: the guest
+  going wild (AROS side, this issue) and Emu68 recursing instead of reporting a
+  bus error (a corrected open-bus guard).
