@@ -32,9 +32,30 @@ related_files:
 
 QEMU sometimes reaches Wanderer but does not draw volume icons; other runs
 fail at different points of `startup-sequence`, with corrupt PC/A6 or an
-Emu68 exception. The investigation has proven two independent defects: FAT
-directory fields were written in host big endian, and the fast m68k scheduler
-saved a 68000-sized frame although Emu68 produces a 68010 format-0 frame.
+Emu68 exception.
+
+**Status 2026-08-05, end of day.** The desktop is reachable again, with icons,
+from a build made by this repository — see `docs/known-good-baseline.md`. Two
+regressions were found and removed, neither of them the subject of this issue:
+
+1. An open-bus guard drifted into `external/emu68/src/aarch64/vectors.c`,
+   discarding every access above 16 MB outside `sys_memory`. The framebuffer is
+   at `0x3c100000`; every write to the display was thrown away.
+2. The card generates its font indexes at boot and an earlier boot wrote them
+   through an unfixed fat-handler, byte-swapping size, cluster and date. After
+   that every boot hangs in `OpenDiskFont` with nothing on the serial.
+
+The original subject — **the intermittency** — is untouched and is now the only
+thing left. No rate has been measured on the restored baseline; do not quote one
+until it has been.
+
+The two defects this issue originally proved are in a different state than the
+paragraph below claims, and the correction matters. The FAT endian change is
+**not** a working fix: promoted to a patch and measured, it failed three runs of
+three, against two of two for its absence. Only its write half is worth keeping,
+untested so far. The 66-versus-68 frame question is genuinely open — the port
+reached the desktop before the 68-byte backend existed, and that backend is now
+parked on `codex-2026-08-05`.
 
 # Problem
 
@@ -592,6 +613,24 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   time. One drifted file, an open-bus guard swallowing every write above 16 MB
   that is not system memory -- including the framebuffer at 0x3c100000.
   Removed; the Workbench screen appears. Empty, and in one run of three.
+- 2026-08-05 — aligned `external/aros` to the reference fork verifiably: of the
+  78 files it changes, 53 of the 57 under `arch/m68k-emu68` match byte for byte
+  and the other 21 are reproduced by `patches/aros/`. Drift went from nineteen
+  files to zero.
+- 2026-08-05 — `setup.sh --verify` reports `all series applied` for both
+  submodules for the first time; `build-aros.sh` runs without being bypassed.
+  ISSUE-0008 closed.
+- 2026-08-05 — **the desktop is back, with icons.** RAM Disk and Aros drawn,
+  title `Wanderer 832.96M graphics mem`, from this repository's own build.
+  Wanderer needs roughly eight minutes under QEMU; a run cut at 200 s shows an
+  empty screen still loading `Zune/IconListview.mui` and reads as failure.
+- 2026-08-05 — the FAT endian change was promoted to `patches/aros/0007` and
+  measured: three runs, three failures. Reverted: two runs, two desktops. It is
+  a regression. Its read half converts a second time on a path that already
+  converts; only the write half is worth taking, and it is still untested.
+- 2026-08-05 — protocol note that cost a day to learn: the unfixed handler
+  poisons the card, so one run contaminates the next. Regenerate the card before
+  every single run of any A/B that touches the FAT path.
 - 2026-08-05 — compared `/home/jaime/AROS` (`feature/m68k-emu68-baremetal`)
   against this tree file by file. One substantive commit had never been
   imported: `d3baf6ed82`, the system-timer compare race. Imported.
