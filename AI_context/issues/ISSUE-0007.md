@@ -414,6 +414,51 @@ in the handler dereferences before reaching the guarded fall-through.
 other dereferences besides. Finding and guarding the first one is the remaining
 half.
 
+## The guest addresses are string fragments (2026-08-06)
+
+The first version of the open-bus guard tried to predict which addresses are
+backed, with `at s1e1r` and `PAR_EL1`. It does not work, and the reason is worth
+keeping: the alias is mapped as one blanket range, so translation always
+succeeds. The abort comes from the **bus**, not the page tables — ESR DFSC 0x10,
+a synchronous external abort, which is what unassigned physical space answers
+with. No translation check could ever have seen it coming, and the `isb` it cost
+on every emulated access bought nothing.
+
+The working version does not predict. It catches the abort where it lands
+inside `SYSHandler`, gives the guest all ones on a read and nothing on a write,
+steps over the faulting instruction and carries on. With that, the reports name
+**guest** addresses instead of alias-shaped ones, and they say something:
+
+```
+open bus read: guest 0x616c6e75      "alnu"
+open bus read: guest 0x6b657400      "ket\0"
+open bus read: guest 0x6b65740e      "ket\x0e"
+open bus write: guest 0x6761e410     "ga.."
+open bus read: guest 0xd080d080  /  0xd080d06e  /  0xffffffff
+```
+
+**The guest is dereferencing string data as pointers**, and the same string at
+two offsets two bytes apart — `"ket\0"` and `"ket\x0e"`. A longword read
+misaligned by two bytes returns exactly that: the tail of one value glued to the
+head of the next, which for text is ASCII fragments.
+
+That is what a two-byte frame error produces, and it is the strongest
+corroboration so far for the 66-versus-68 hypothesis. It is corroboration, not
+proof: nothing here shows *where* the misalignment comes from.
+
+**State of the guard.** Most cases now recover and the boot carries on. Some
+still reach the depth limit and halt deliberately (`runaway exception recursion,
+halting core 0`) — an abort outside the alias window, or an instruction form the
+step-over does not handle. Stack use stays at 736–4784 bytes either way, against
+524416 before, so the emulator survives in both.
+
+**Rate: 1 of 8 in this series**, against 3 of 8 in the previous one and a spread
+from 0/3 to 4/4 across the day. That is noise at these sample sizes and should
+not be read as the guard helping or hurting. One real risk is worth naming
+rather than buried: stepping over a faulting instruction skips any side effect
+it had, such as an addressing-mode writeback, so a wrong step-over could corrupt
+where the old behaviour merely hung.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -1099,3 +1144,9 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   self-contained: pushes 8, pops 8, with no reliance on a leftover on the
   supervisor stack. That is strictly more robust than the 66-byte scheme, which
   balances only while entry and exit are paired.
+- 2026-08-06 — replaced the predictive open-bus guard with a recovering one, and
+  the reports now carry guest addresses: "alnu", "ket\0", "ket\x0e", "ga..".
+  The guest is dereferencing string data as pointers, and the same string at
+  two offsets two bytes apart -- the signature of a longword read misaligned by
+  two. Strongest corroboration yet for 66-versus-68, and still corroboration
+  rather than proof.

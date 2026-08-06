@@ -1,31 +1,36 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
-Date: Thu, 6 Aug 2026 18:00:00 -0300
+Date: Thu, 6 Aug 2026 18:45:00 -0300
 Subject: [PATCH 5/5] Answer unmapped guest addresses with open bus, not a fault
 
-An access that reaches the fall-through in SYSWriteValToAddr() or
-SYSReadValFromAddr() is emulated by touching the linear alias of the guest
+Emulating a guest access means touching the linear alias of the guest
 address space. When the guest address is one the machine does not have --
-a pointer went wild, or software is sizing memory -- that alias is not
-mapped, so the access faults *inside the fault handler*, which re-enters
-itself. 512 KB of ARM stack is gone in a few thousand turns and the machine
-hangs with its PC parked on the exception vector.
+a pointer went wild, or software is sizing memory -- that access faults
+*inside the fault handler*, which re-enters itself. 512 KB of ARM stack is
+gone in a few thousand turns and the machine hangs with its PC parked on
+the exception vector.
 
 Measured, not hypothetical: three stalls out of three in one series, all
-first faulting on a guest write, once to 0x64656275 -- the bytes "debu",
+first faulting on a guest access, once to 0x64656275 -- the bytes "debu",
 a pointer to the string "debug" being used as an address.
 
-A real 68k board answers an unclaimed address with open bus. Do that:
-swallow the write, read back all ones, and say so on the console with the
-report count capped so a memory-sizing sweep cannot become the bottleneck.
+Predicting which addresses are backed does not work, and two attempts have
+failed at it. A table of regions rejected the framebuffer at 0x3c100000
+along with everything else outside sys_memory, and the machine booted
+perfectly with nothing ever appearing on screen. Asking the MMU with
+`at s1e1r` does not help either: the alias is mapped as one blanket range,
+so translation always succeeds. The abort comes from the bus, not the page
+tables, and arrives as ESR DFSC 0x10 -- a synchronous external abort.
 
-Whether an address is backed is asked of the MMU, not of a table of regions.
-`at s1e1r`/`s1e1w` puts the address through the same stage-1 translation the
-load or store would use and reports in PAR_EL1. That cannot disagree with
-reality, which a region list can and did: an earlier attempt at this guard
-rejected everything outside sys_memory above 16 MB, which included the
-framebuffer at 0x3c100000 -- the machine booted perfectly and nothing could
-ever appear on screen.
+So do not predict. Recover. Catch that abort where it lands, give the guest
+what a 68k board gives an unclaimed address -- all ones on a read, nothing
+on a write -- step over the instruction that faulted, and carry on. Nothing
+has to know the memory map, and a backed address costs nothing: there is no
+test on the fast path.
+
+Guarded twice over: only while already inside SYSHandler, and only for an
+abort in the alias window. An external abort anywhere else keeps its old
+behaviour, which is to be reported as the real fault it is.
 
 This does not fix the guest going wild. It makes that failure survivable and
 reportable instead of destroying the emulator that would have to diagnose it.
@@ -34,7 +39,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -317,6 +317,67 @@
+@@ -317,6 +317,55 @@
      INTREQR = 0xDFF01E,
  };
  
@@ -52,31 +57,19 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 + * A real 68k board answers an unclaimed address with open bus, or raises a bus
 + * error the guest can trap. Either is better than destroying the emulator.
 + *
-+ * Whether an address is backed is asked of the MMU rather than of a table of
-+ * regions. `at s1e1r`/`s1e1w` runs the address through the same stage-1
-+ * translation the load or store would use and reports the result in PAR_EL1,
-+ * bit 0 set meaning it faulted. That cannot disagree with reality, which a
-+ * hand-maintained region list can and did: an earlier attempt at this guard
-+ * rejected everything outside `sys_memory` above 16 MB, which included the
-+ * framebuffer at 0x3c100000 -- the machine booted perfectly and nothing could
-+ * ever appear on screen.
++ * Predicting which addresses are backed does not work, and two attempts have
++ * now failed at it. A table of regions rejected the framebuffer at 0x3c100000
++ * along with everything else outside `sys_memory`, and the machine booted
++ * perfectly with nothing ever appearing on screen. Asking the MMU with
++ * `at s1e1r` does not help either: the alias is mapped as one blanket range, so
++ * translation always succeeds -- the abort comes from the bus, not the page
++ * tables, and arrives as ESR DFSC 0x10, a synchronous external abort.
++ *
++ * So do not predict. Recover: catch that abort where it lands, hand the guest
++ * open bus, step over the instruction that faulted and carry on. Nothing has to
++ * know the memory map, and an address that is backed costs nothing at all --
++ * there is no test on the fast path.
 + */
-+static inline int alias_readable(uint64_t addr)
-+{
-+    uint64_t par;
-+    __asm__ volatile("at s1e1r, %1; isb; mrs %0, PAR_EL1"
-+                     : "=r"(par) : "r"(addr) : "memory");
-+    return (par & 1) == 0;
-+}
-+
-+static inline int alias_writable(uint64_t addr)
-+{
-+    uint64_t par;
-+    __asm__ volatile("at s1e1w, %1; isb; mrs %0, PAR_EL1"
-+                     : "=r"(par) : "r"(addr) : "memory");
-+    return (par & 1) == 0;
-+}
-+
 +/*
 + * Report, but do not drown. A guest looping over unmapped addresses -- memory
 + * sizing does exactly that -- would otherwise turn the serial console into the
@@ -102,33 +95,45 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  #ifdef PISTORM_ANY_MODEL
  
  #include "ps_protocol.h"
-@@ -765,6 +826,12 @@
-         return 1;
-     }
+@@ -2336,6 +2385,41 @@
+     static volatile uint32_t sys_depth[4];
+     static volatile uint32_t sys_reported[4];
  
-+    if (!alias_writable(far + 0xffffff9000000000))
++    /*
++     * Open bus, caught where it actually lands.
++     *
++     * This is the emulation of a guest access having faulted on the linear
++     * alias -- a guest address the machine does not have. ESR DFSC 0x10 is a
++     * synchronous external abort, which is what unassigned physical space
++     * answers with; the page tables mapped it fine, so no translation check
++     * could have seen this coming.
++     *
++     * Give the guest what a 68k board gives an unclaimed address: all ones on a
++     * read, nothing on a write. Then step over the instruction that faulted and
++     * return. The destination register is taken from the opcode -- bit 22
++     * distinguishes load from store and the low five bits are Rt, which covers
++     * the plain loads and stores the fall-through emits.
++     *
++     * Only inside SYSHandler, and only in the alias window. An external abort
++     * anywhere else is a real fault and must keep its old behaviour.
++     */
++    if (sys_depth[cpu_id] != 0 &&
++        (esr & 0xf8000000) == 0x90000000 && (esr & 0x3f) == 0x10 &&
++        far >= 0xffffff9000000000 && far < 0xffffff9100000000)
 +    {
-+        open_bus_report("write", far, size, value);
-+        return 1;
++        uint32_t opcode = LE32(*(uint32_t *)elr);
++        uint64_t guest = far - 0xffffff9000000000;
++
++        open_bus_report((opcode & (1 << 22)) ? "read" : "write", guest, 0, 0);
++
++        if (opcode & (1 << 22))
++            SYSPutValueToReg(~(uint64_t)0, opcode & 31, ctx);
++
++        elr += 4;
++        __asm__ volatile("msr ELR_EL1, %0"::"r"(elr));
++        return;
 +    }
 +
-     switch(size)
+     if (sys_depth[cpu_id] != 0)
      {
-         case 1:
-@@ -830,6 +897,16 @@
-         return 1;
-     }
- 
-+    if (!alias_readable(far + 0xffffff9000000000))
-+    {
-+        open_bus_report("read", far, size, 0);
-+        /* Open bus floats high on a 68k board with nothing driving it. */
-+        *value = ~(uint64_t)0;
-+        if (size == 16)
-+            *value2 = ~(uint64_t)0;
-+        return 1;
-+    }
-+
-     switch(size)
-     {
-         case 1:
+         if (sys_reported[cpu_id] == 0)
