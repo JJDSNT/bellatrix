@@ -338,6 +338,48 @@ framebuffer and the peripheral window through.
 With the guard in place the stack no longer collapses — `sp_used` is 4640 bytes
 instead of 524416 — and the machine halts with a message rather than hanging.
 
+## The 66-byte frame: fragile by pairing, not obviously broken
+
+Worth writing down before it is tested, because the obvious reading is wrong.
+
+`dispatch.S:57-62` rebuilds a **6-byte** frame and executes `rte`:
+
+```
+lea.l   %a5@(66),%a2      /* USP = frame + 66 */
+move.l  %a5@+,%sp@-       /* PC (4) */
+move.w  %a5@+,%sp@-       /* SR (2) */
+movem.l %a5@,%d0-%d7/%a0-%a6
+rte
+```
+
+Emu68 pushes an 8-byte format-0 frame (`ExecutionLoop.c:424-426`) and its `RTE`
+consumes 8. Six pushed against eight popped looks like an immediate two-byte
+error — but `switch.S:19-23` only ever *removes* six from the supervisor stack
+when it saves:
+
+```
+move.l  %sp@+,%a5@(13*4)  /* PC */
+move.w  %sp@+,%a5@-       /* SR */
+```
+
+so the format word is left sitting on the supervisor stack, and the `rte` that
+follows the next dispatch consumes exactly that. **Entry and exit balance, as
+long as they are paired.** That is why the port has been reaching the desktop at
+all with a 66-byte context, and it is the answer to "it worked before without
+the 68-byte change".
+
+What it does not survive is a dispatch whose supervisor stack does not carry the
+matching leftover — a task dispatched for the first time from a synthetic frame
+(`kernel_cpu.c:100-107` builds 66 bytes), or any path where entry and exit are
+not the same depth. Then `rte` reads the format word from whatever is below,
+and the supervisor stack pointer moves by two.
+
+Which makes it a **candidate for defect A**, not a proven cause: intermittent by
+construction, and its failure mode is a wrong PC or a shifted stack — the shape
+of the wild writes actually observed. It should be tested against the measured
+rate rather than reasoned about further, and the 68-byte backend parked on
+`codex-2026-08-05` is one way to test it.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
