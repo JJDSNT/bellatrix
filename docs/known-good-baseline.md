@@ -71,10 +71,23 @@ little-endian conversion, their size, cluster and date fields are byte-swapped:
 `OpenDiskFont` with nothing on the serial. `mdel` hangs too, walking the same
 bogus chain.
 
-`mdir -i out/aros/sd.img@@1M ::/Fonts` shows it immediately. The remedy is to
-regenerate the card. The fat-handler fix is parked on branch
-`codex-2026-08-05` as part of `aros-extras-drift.patch` and is the first thing
-that should become a patch on top of this baseline.
+`mdir -i out/aros/sd.img@@1M ::/Fonts` shows it immediately. The remedy today is
+to regenerate the card.
+
+The obvious repair does not work, and this was measured rather than reasoned
+about. The fat-handler change parked on branch `codex-2026-08-05` as part of
+`aros-extras-drift.patch` was made into `patches/aros/0007`, applied through
+the normal path, and built: **three runs, three failures**, one of them stopping
+as early as `IPrefs`. Reverted, on the same freshly generated card, two runs and
+two Workbench screens. It is a regression, not a fix.
+
+The change bundles two different things: little-endian conversion at the *write*
+sites, which is what stops the corruption, and substituting `FIRST_FILE_CLUSTER()`
+plus `AROS_LE2WORD` at the *read* sites. If the handler already converts on the
+way in, the read half converts a second time and breaks every lookup. Splitting
+the two and taking only the write side is the next thing to try — with the same
+protocol, since the unfixed handler poisons the card and one run therefore
+contaminates the next: **regenerate the card before every single run.**
 
 ## What is not fixed
 
