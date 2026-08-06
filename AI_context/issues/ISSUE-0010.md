@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0010
-title: "Gate the host-IRQ delivery mechanism: INTENA shadow or PiStorm's IPL injection"
-status: backlog
+title: "Move host-IRQ delivery to PiStorm's IPL injection; keep the Paula shadow for the chipset era"
+status: ready
 priority: high
 type: research
 owner: unassigned
@@ -164,9 +164,29 @@ place the answer belongs.
 
 # Decisions taken
 
-The shadow path stays the default. This issue adds an alternative and the
-ability to measure it; it does not switch the project onto the IPL path on the
-strength of the argument.
+**2026-08-06 — the project goes to IPL injection.** This issue was written as a
+gate between two candidates, to be measured. It is now a port: for a machine
+with no chipset there is nothing for a guest to program, an interrupt is a
+level, and `INTF.IPL` is the interface built to carry one.
+
+**The Paula shadow is not deleted and not a dead end.** It answers a different
+question — the one that arrives with a chipset, when something really does own
+INTENA/INTREQ and an unmodified Amiga guest expects to arm and acknowledge
+through `0xdff09a`/`0xdff09c`. It stays as `patches/emu68/0001` and stays
+documented in `docs/irq.md`.
+
+What tipped it was not the architecture argument. ISSUE-0007 measured the
+dominant boot failure as Emu68's ARM stack collapsing from ~700 bytes of normal
+use to fully exhausted between two samples — unbounded recursion through
+`curr_el_spx_sync`, the vector every shadow access goes through, with `0xdff01e`
+in flight in two of the first three captured stalls. That is not proof the
+shadow path is what recurses, and must not be quoted as proof. It is reason
+enough to prefer a mechanism that takes no page fault per interrupt-register
+access.
+
+**A gate is still wanted, just not as a permanent fixture.** Both paths must be
+buildable while the change is being measured, or the comparison that justifies
+it cannot be made.
 
 # Acceptance criteria
 
@@ -194,3 +214,8 @@ not check a reordering for you.
 - 2026-08-06 — opened. Both mechanisms are described in `docs/irq.md`; only the
   shadow one can be built today, and the previous attempt at the other was never
   closed.
+- 2026-08-06 — reframed from "gate and choose" to "port to IPL, keep the shadow
+  for the chipset era", on the user's decision and on ISSUE-0007's finding that
+  the dominant failure is unbounded recursion through the exception vector that
+  every shadow access uses. The open design work is unchanged and is still the
+  hard part: `INTF.IPL` is a level with nothing to lower it.

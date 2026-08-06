@@ -10,14 +10,17 @@
 # Records are appended to out/boot-timing.jsonl. See AI_context/issues/ISSUE-0011.md.
 #
 # Each record carries its whole sample timeline as [t, state, title_delta,
-# delta, arm_pc, pc_moved], which is what makes the verdict auditable after the
-# fact rather than something to take on trust. A run that does not reach the
+# delta, arm_pc, pc_moved, arm_sp], which is what makes the verdict auditable
+# after the fact rather than something to take on trust. A run that does not reach the
 # icons also leaves a stall.txt beside its serial log: ARM state for all four
 # cores and the instructions around the PC.
 #
-# The PC pair answers the question that splits the whole stall investigation --
-# is the guest executing, or waiting? -- and it is sampled always, rather than
-# behind a flag, because the run is the expensive part. See ISSUE-0007.
+# The PC pair answered the question that split the whole stall investigation --
+# is the guest executing, or waiting? Neither: the stalls sit at
+# curr_el_spx_sync+0 with Emu68's ARM stack exhausted. SP is sampled alongside
+# for the follow-up question, which is whether that stack drains steadily or
+# collapses at one moment. Always on, not behind a flag: the run is the
+# expensive part. See ISSUE-0007.
 #
 # Why Python and not bash, when every other script here is bash: this drives a
 # process, talks a protocol over a socket and reads pixels, and splitting that
@@ -101,6 +104,11 @@ TITLE_FRACTION = 0.10
 # which is what separates a guest that is executing from one that is waiting.
 PC_PROBE_GAP = 0.2
 
+# Where Emu68's ARM stack starts, as it reports at boot ("ARM stack top at
+# 0xffffff8000080000"). Only used to turn a raw SP into "bytes consumed", which
+# is the number worth reading.
+ARM_STACK_TOP = 0xffffff8000080000
+
 
 # --------------------------------------------------------------------------
 # QEMU monitor
@@ -131,23 +139,29 @@ class Monitor:
         self.sock.sendall(line.encode() + b"\n")
         return self._read_to_prompt()
 
-    def arm_pc(self):
-        """Core 0's ARM PC, or None.
+    def arm_state(self):
+        """Core 0's ARM PC and SP, or (None, None).
 
-        Emu68 runs the m68k on core 0, so this is where the JIT is. What the
-        value is worth: a PC that moves between two reads says the guest is
-        executing; one that does not says it is parked -- and if it is parked on
-        the `wfi` that EMIT_STOP emits on a stock build, the guest is in STOP
-        waiting for an interrupt that is not coming. See ISSUE-0002.
+        Emu68 runs the m68k on core 0, so this is where the JIT is. A PC that
+        moves between two reads says the guest is executing; one that does not
+        says it is parked.
+
+        SP is here because of what the PC probe found: stalls sit at
+        `curr_el_spx_sync+0` with the ARM stack exhausted, and whether that
+        stack drains steadily (a leak on some handler path) or collapses at one
+        moment (genuine recursion) is a different defect with a different fix.
+        The stack runs down from 0xffffff8000080000; watching the value across a
+        whole run answers it. See ISSUE-0007.
         """
         try:
             out = self.cmd("info registers")
         except (OSError, ConnectionError, socket.timeout):
-            return None
+            return None, None
         # The monitor echoes the command back with terminal escapes, so match
-        # the value rather than trusting the line layout.
-        m = re.search(r"\bPC=([0-9a-fA-F]+)", out)
-        return m.group(1) if m else None
+        # the values rather than trusting the line layout.
+        pc = re.search(r"\bPC=([0-9a-fA-F]+)", out)
+        sp = re.search(r"\bSP=([0-9a-fA-F]+)", out)
+        return (pc.group(1) if pc else None), (sp.group(1) if sp else None)
 
     def close(self):
         try:
@@ -384,14 +398,14 @@ def one_run(args, workdir):
             # enough (two monitor round trips per frame) that it is always on,
             # so a stall carries its own diagnosis instead of needing the whole
             # series run again.
-            pc1 = mon.arm_pc()
+            pc1, sp1 = mon.arm_state()
             time.sleep(PC_PROBE_GAP)
-            pc2 = mon.arm_pc()
+            pc2, _ = mon.arm_state()
 
             now = round(time.monotonic() - t0, 1)
             state = screen_state(frame)
             samples.append([now, state, frame["title_delta"], frame["delta"],
-                            pc1, pc1 != pc2])
+                            pc1, pc1 != pc2, sp1])
             record["size"] = frame["size"]
 
             if state == "screen":
@@ -423,6 +437,16 @@ def one_run(args, workdir):
             record["pc_last"] = tail[-1][4]
             record["pc_distinct_tail"] = len({s[4] for s in tail})
 
+        # Stack headroom over the whole run, in bytes below the top Emu68
+        # reports at boot. A value that shrinks steadily is a leak; one that
+        # holds and then collapses is recursion.
+        sps = [int(s[6], 16) for s in samples if len(s) > 6 and s[6]]
+        if sps:
+            record["sp_first"] = "%x" % sps[0]
+            record["sp_last"] = "%x" % sps[-1]
+            record["sp_min"] = "%x" % min(sps)
+            record["sp_used_max"] = ARM_STACK_TOP - min(sps)
+
         # A stall is worth a closer look while the machine is still up: full
         # ARM state for every core, and the instructions around the PC. If the
         # guest is parked on a `wfi`, this is where that shows.
@@ -434,6 +458,13 @@ def one_run(args, workdir):
                 if record.get("pc_last"):
                     addr = "0x" + record["pc_last"]
                     dump += [f"=== x/8i {addr} ===", mon.cmd(f"x/8i {addr}")]
+                # The stall is unbounded recursion through the exception vector,
+                # so the stack is thousands of copies of one 160-byte frame.
+                # Two windows into it are enough to read what keeps faulting;
+                # taken well away from the ends so neither is the ragged edge.
+                for off in (0x20000, 0x40000):
+                    where = "0x%x" % (ARM_STACK_TOP - off)
+                    dump += [f"=== x/64gx {where} ===", mon.cmd(f"x/64gx {where}")]
                 with open(os.path.join(workdir, "stall.txt"), "w") as fh:
                     fh.write("\n".join(dump))
             except (OSError, ConnectionError, socket.timeout) as exc:

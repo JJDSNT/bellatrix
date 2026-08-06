@@ -85,9 +85,11 @@ Three consequences:
 
 Emu68 offers three ways to get a host interrupt into the m68k. One is
 implemented here, one is the interface PiStorm itself uses, and one is a
-sketch recorded for completeness. **Which one this project should use is not
-decided, and cannot be decided until there is a chipset** — the choice turns
-entirely on who ends up owning the interrupt state.
+sketch recorded for completeness. This section used to say the choice could not
+be made until there was a chipset; **it was made on 2026-08-06 and the reasoning
+is below** — for a machine with no chipset at all, the question of who owns the
+interrupt state has a trivial answer, and the measurement that settled it is in
+ISSUE-0007.
 
 The first two are written up in the AROS/m68k-emu68 port's design note,
 `arch/m68k-emu68/doc/host-interrupts.md` on
@@ -184,7 +186,39 @@ around a trap handler. The pending bit has room: the `INTF` union
 Against it: a new ABI someone has to own forever, and a guest-side driver where
 today there is none.
 
-### What has to be decided later
+## Decided, 2026-08-06: IPL is the target, the shadow is for the chipset era
+
+The choice this section calls open has been made, for the current goal — AROS
+booting stably with no chipset at all.
+
+**IPL injection is what this port aims at.** With no Paula and no chipset, there
+is nothing for the guest to program: an interrupt is a level, and `INTF.IPL` is
+the interface built to carry one. It costs no page fault per access and reserves
+no address space.
+
+**The shadow registers stay documented and are not deleted.** They are the right
+answer to a different question — the one that arrives with a chipset, when
+something really does own INTENA/INTREQ and an unmodified Amiga guest expects to
+arm and acknowledge through `0xdff09a`/`0xdff09c`. That work becomes relevant
+again then, and the series in `patches/emu68/0001` is where it lives.
+
+What tipped it was not elegance. Measurement (ISSUE-0007) found that the
+dominant boot failure is Emu68's ARM stack collapsing from ~700 bytes of normal
+use to fully exhausted between two five-second samples — unbounded recursion
+through `curr_el_spx_sync`, the synchronous exception vector that every shadow
+access goes through. In two of the three first-captured stalls the guest address
+in flight was `0xdff01e`, INTREQR. That does not prove the shadow path is what
+recurses, and it should not be read as proof; but a mechanism that removes a
+page fault from every interrupt-register access is worth having on its own, and
+it removes this whole family of accesses from the faulting window.
+
+**Still true, and still the hard part:** choosing the mechanism does not settle
+delivery. `INTF.IPL` is a level with nothing to lower it, and the previous
+incarnation's attempt hung in Exec idle with the interface working. The
+de-assert protocol has to be designed before code is written — see
+ISSUE-0010.
+
+## What has to be decided later
 
 Not which mechanism is nicer in the abstract, but:
 

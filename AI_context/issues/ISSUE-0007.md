@@ -212,6 +212,49 @@ And the ISSUE-0010 question — Paula shadow versus IPL injection — stops bein
 architectural preference: the shadow's cost is a page fault per interrupt-register
 access, and those faults are what the register dump shows at the moment of death.
 
+## Not a leak, a collapse — and both populations share it
+
+SP was added to the probe next to PC, because "the stack is exhausted" leaves
+two very different defects on the table: a leak on some handler path, or genuine
+recursion. Six runs settle it.
+
+| | ARM stack used |
+|---|---|
+| normal operation, whole run | **704–1568 bytes**, flat, no drift |
+| after the failure | **524416 bytes** = 512 KB + 128, the entire stack and past the floor |
+
+The transition happens **between two five-second samples**. From about 700 bytes
+to fully exhausted. That is not a leak — a leak would show as a downward drift
+across the run and would drain a 512 KB stack long before 45 s at MMIO rates. It
+is unbounded recursion, roughly 3200 nested 160-byte frames, effectively
+instantaneous.
+
+**And the `logo` run in that series carries the same signature.** So the two
+populations separated earlier are very likely one defect firing at different
+moments, not two mechanisms. It is not tied to Wanderer or to `LoadSeg`; those
+are just where the boot happened to be.
+
+The frame layout, from the disassembly, for anyone reading a stack dump:
+
+```
+curr_el_spx_sync:
+  +0    stp x0, x1, [sp, #-160]!     <- where a stalled run is parked
+  +16   x2,x3   +32 x4,x5   +48 x6,x7   +64 x8,x9
+  +80   x10,x11 +96 x12,x13 +112 x14,x15 +128 x16,x17  +144 x18,x30
+  +0x28 mov x0, #0x200 ; mov x1, sp ; bl SYSHandler ; b ExceptionExit
+```
+
+`X00 = 0x200` in every stall dump is that constant, and `X30 = ...1a4234` is the
+return address after the `bl`. One captured stall has `X30` inside `SYSHandler`
+itself (`ffffff8000089f14`), which places the re-entry inside the handler rather
+than at its entry.
+
+`x4` sits at offset 32 of each frame, so a stack dump shows what every nested
+frame was working on. The harness now captures two 64-quadword windows into the
+stack on any non-`icons` run — but no stall has been caught since it was added
+(the following series returned 4 `icons` out of 4, which is itself a reminder of
+how wide the variance is).
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -867,3 +910,9 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   Paula INTREQR shadow) as the guest address in flight in two of them. The
   fourth is a separate population, executing inside the JIT arena with a healthy
   stack. Every future stall now carries its own register dump in stall.txt.
+- 2026-08-06 — SP sampling added. Normal operation uses 704-1568 bytes of ARM
+  stack, flat; the failure jumps to 524416 between two samples. Collapse, not
+  leak. The `logo` population shows the same signature, so the two failure
+  classes are probably one defect. Stack-window capture added to stall.txt; the
+  next series returned 4/4 icons and caught nothing, which is its own reminder
+  about variance.
