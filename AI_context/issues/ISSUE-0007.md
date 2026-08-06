@@ -121,6 +121,97 @@ the autoconfig window and being answered as if it were a probe, which would be a
 symptom of exactly the lost context this issue is named after. One run is not
 evidence of a mechanism, but it is a concrete thing to look for.
 
+## Next: the one question that splits this issue in two
+
+**Is a stalled guest executing, or is it waiting?** Everything else follows from
+the answer, and it has never been asked. If it is waiting, this is a lost
+wakeup — an interrupt that never arrives. If it is executing, this is lost
+context, a wild PC, which is what the issue is named after. Two disjoint
+investigations, treated as one until now.
+
+**The probe.** The QEMU monitor reports ARM state (`info registers` →
+`PC=fffffff00014f254`, `info cpus` → the four cores), and
+`scripts/boot-timing.py` already holds that socket open for the whole run. Add
+PC sampling to it and the answer arrives with every future stall, at no extra
+cost — the lesson already paid for once today by discarding the serial logs.
+
+What makes it decisive is `EMIT_STOP`: on a stock build it emits a bare `wfi()`
+(ISSUE-0002). So if the ARM PC on a stalled run parks at that `wfi`, the guest
+executed `STOP` and is waiting for something that never comes. One run would
+promote ISSUE-0002 from suspect to mechanism. If the PC keeps moving inside the
+JIT arena, ISSUE-0002 is out of the way and the other branch opens.
+
+**Branch A — waiting.** ISSUE-0002 is the target, not by analogy: `STOP` is
+literally where an idle guest sits, and `wfi` wakes on a masked IRQ without ever
+consulting the `INT64` state the rest of the delivery machinery is built on. It
+drags along a cheap check of ISSUE-0005 (a 32-bit access spanning
+`INTENAR`+`INTREQR` falls through to memory instead of the shadow). Only after
+that does ISSUE-0010/ISSUE-0004 become worth its cost, because then the
+delivery-mechanism question has a concrete symptom to explain.
+
+**Branch B — executing.** The frame question returns — 66 versus 68 — and with
+it the `arch/m68k-emu68/exec/` backend parked on `codex-2026-08-05`, now
+assessable piece by piece against a base that works and an instrument that
+measures.
+
+One data point already leans to B: in run `2026-08-06T144412Z` Emu68 mapped the
+Z3 board *after* AROS had stopped, which means the guest performed an access at
+`0xe80000` — it was executing, and executing wrong code. That is one run, and
+the two populations (`logo` and `workbench`) may well have two mechanisms. The
+probe distinguishes those too.
+
+**A target, so "stable" stops being an impression.** 10 of 10 runs under the
+current protocol — fresh card, idle machine, verdict from pixels. The standing
+figure is 13 of 34.
+
+## Answer: the guest is neither executing nor waiting — Emu68's ARM stack is gone
+
+The probe was added to `scripts/boot-timing.py` and answered on its first
+series. Six runs, 2 `icons` / 4 `workbench`. Three of the four stalls are the
+same thing, and it is not what either branch predicted:
+
+```
+PC = ffffff80001a4200    curr_el_spx_sync + 0      (AArch64 sync exception vector)
+SP = ffffff7fffffff80    below ffffff8000000000
+SP = ffffff8000000040    0x40 above the floor
+X04= 0000000000dff01e    INTREQR
+```
+
+Emu68 reports `ARM stack top at 0xffffff8000080000` at boot, and the stack grows
+down into the 512 KB below it. In these runs it is **exhausted** — one run 64
+bytes short of the floor, two already past it. `curr_el_spx_sync` opens with
+`stp x0, x1, [sp, #-160]!`, so once the stack is gone that push faults, which
+takes another synchronous exception, which does the same push, which faults. A
+two-instruction loop, which is why the PC sits at exactly `+0` in every sample
+(`pc_distinct_tail` = 1 across the whole tail). One run carries `X04 =
+0x96000044`, which read as an ESR is *data abort at the same EL, write,
+translation fault level 0* — the push itself.
+
+**In two of the three, the guest address in flight is `0xdff01e` — INTREQR.**
+That register is served from `INT_shadow` by `patches/emu68/0001`, through a
+page fault into this very vector. Every INTENA/INTREQ access the guest makes is
+one trip through `curr_el_spx_sync`; 512 KB at 160 bytes a frame is about 3200
+nested exceptions, which is not a slow leak but genuine unbounded recursion.
+
+A candidate is already written down and marked untested in ISSUE-0005: a 32-bit
+access spanning `INTENAR`+`INTREQR` (`0xdff01c`–`0xdff01f`) is one access to two
+registers, and it **falls through to memory** — but `0xdff000` is the trapped
+page, so the fall-through is itself in the faulting window. That is the right
+shape. It is not yet proven to be the path.
+
+**The fourth stall is a different animal**: PC inside the JIT arena
+(`fffffff000715b40`), moving between samples, stack healthy at
+`ffffff800007fd40`. So the two populations the pixels suggested really do have
+two mechanisms, and the earlier run that mapped the Z3 board after AROS stopped
+belongs to this second one.
+
+**What this means for the queue.** ISSUE-0002 (`STOP`/`wfi`) is not implicated in
+the majority failure — the guest is not idle-waiting, it is drowning in
+exceptions. ISSUE-0005 moves from a tidiness item to the first thing to look at.
+And the ISSUE-0010 question — Paula shadow versus IPL injection — stops being an
+architectural preference: the shadow's cost is a page fault per interrupt-register
+access, and those faults are what the register dump shows at the moment of death.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -770,3 +861,9 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   offering it turns a faulting window into one that answers. Ten runs after:
   5/10 against 8/24 before, p = 0.45 — no demonstrable change in the
   intermittency. Kept for the surface area, not for the rate.
+- 2026-08-06 — added ARM PC sampling to the harness and got an answer in one
+  series: 3 of 4 stalls are an Emu68 ARM stack overflow, parked at
+  curr_el_spx_sync+0 in a two-instruction exception loop, with 0xdff01e (the
+  Paula INTREQR shadow) as the guest address in flight in two of them. The
+  fourth is a separate population, executing inside the JIT arena with a healthy
+  stack. Every future stall now carries its own register dump in stall.txt.

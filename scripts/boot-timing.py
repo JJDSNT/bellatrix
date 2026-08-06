@@ -10,8 +10,14 @@
 # Records are appended to out/boot-timing.jsonl. See AI_context/issues/ISSUE-0011.md.
 #
 # Each record carries its whole sample timeline as [t, state, title_delta,
-# delta], which is what makes the verdict auditable after the fact rather than
-# something to take on trust.
+# delta, arm_pc, pc_moved], which is what makes the verdict auditable after the
+# fact rather than something to take on trust. A run that does not reach the
+# icons also leaves a stall.txt beside its serial log: ARM state for all four
+# cores and the instructions around the PC.
+#
+# The PC pair answers the question that splits the whole stall investigation --
+# is the guest executing, or waiting? -- and it is sampled always, rather than
+# behind a flag, because the run is the expensive part. See ISSUE-0007.
 #
 # Why Python and not bash, when every other script here is bash: this drives a
 # process, talks a protocol over a socket and reads pixels, and splitting that
@@ -90,6 +96,11 @@ GREY_TOLERANCE = 12
 # the backdrop count gets the same answer without an OCR dependency.
 TITLE_FRACTION = 0.10
 
+# How far apart the two ARM PC reads in one sample are taken. Two reads are
+# enough to say "moving" or "not moving" without waiting for the next frame,
+# which is what separates a guest that is executing from one that is waiting.
+PC_PROBE_GAP = 0.2
+
 
 # --------------------------------------------------------------------------
 # QEMU monitor
@@ -119,6 +130,24 @@ class Monitor:
     def cmd(self, line):
         self.sock.sendall(line.encode() + b"\n")
         return self._read_to_prompt()
+
+    def arm_pc(self):
+        """Core 0's ARM PC, or None.
+
+        Emu68 runs the m68k on core 0, so this is where the JIT is. What the
+        value is worth: a PC that moves between two reads says the guest is
+        executing; one that does not says it is parked -- and if it is parked on
+        the `wfi` that EMIT_STOP emits on a stock build, the guest is in STOP
+        waiting for an interrupt that is not coming. See ISSUE-0002.
+        """
+        try:
+            out = self.cmd("info registers")
+        except (OSError, ConnectionError, socket.timeout):
+            return None
+        # The monitor echoes the command back with terminal escapes, so match
+        # the value rather than trusting the line layout.
+        m = re.search(r"\bPC=([0-9a-fA-F]+)", out)
+        return m.group(1) if m else None
 
     def close(self):
         try:
@@ -351,9 +380,18 @@ def one_run(args, workdir):
                 samples.append([round(time.monotonic() - t0, 1), "error", str(exc)])
                 continue
 
+            # Two PC reads a moment apart: "pc" and whether it changed. Cheap
+            # enough (two monitor round trips per frame) that it is always on,
+            # so a stall carries its own diagnosis instead of needing the whole
+            # series run again.
+            pc1 = mon.arm_pc()
+            time.sleep(PC_PROBE_GAP)
+            pc2 = mon.arm_pc()
+
             now = round(time.monotonic() - t0, 1)
             state = screen_state(frame)
-            samples.append([now, state, frame["title_delta"], frame["delta"]])
+            samples.append([now, state, frame["title_delta"], frame["delta"],
+                            pc1, pc1 != pc2])
             record["size"] = frame["size"]
 
             if state == "screen":
@@ -376,6 +414,31 @@ def one_run(args, workdir):
                 verdict = "dead"
             record["delta"] = samples[-1][3] if samples else None
 
+        # What the PC probe says about the last stretch of the run. Restricted
+        # to the tail because a run that made progress and then stopped would
+        # otherwise be averaged with the part where it was working.
+        tail = [s for s in samples[-6:] if len(s) > 5 and s[4] is not None]
+        if tail:
+            record["pc_moving"] = any(s[5] for s in tail)
+            record["pc_last"] = tail[-1][4]
+            record["pc_distinct_tail"] = len({s[4] for s in tail})
+
+        # A stall is worth a closer look while the machine is still up: full
+        # ARM state for every core, and the instructions around the PC. If the
+        # guest is parked on a `wfi`, this is where that shows.
+        if verdict != "icons":
+            try:
+                dump = ["=== info status ===", mon.cmd("info status"),
+                        "=== info cpus ===", mon.cmd("info cpus"),
+                        "=== info registers -a ===", mon.cmd("info registers -a")]
+                if record.get("pc_last"):
+                    addr = "0x" + record["pc_last"]
+                    dump += [f"=== x/8i {addr} ===", mon.cmd(f"x/8i {addr}")]
+                with open(os.path.join(workdir, "stall.txt"), "w") as fh:
+                    fh.write("\n".join(dump))
+            except (OSError, ConnectionError, socket.timeout) as exc:
+                record["stall_dump_error"] = str(exc)
+
         record["verdict"] = verdict
         record["signal"] = "backdrop-delta"
         record["t_workbench"] = t_workbench
@@ -397,7 +460,7 @@ def one_run(args, workdir):
         keep = os.path.join(ROOT, "out", "boot-timing",
                             record["run"].replace(":", ""))
         os.makedirs(keep, exist_ok=True)
-        wanted = ["serial.log"] + (["frame.ppm"] if args.keep else [])
+        wanted = ["serial.log", "stall.txt"] + (["frame.ppm"] if args.keep else [])
         for name in wanted:
             src = os.path.join(workdir, name)
             if os.path.exists(src):
