@@ -648,6 +648,32 @@ cannot satisfy the request either.
 defect with a confirmed mechanism; that is not the same as being the cause of
 the intermittency, and the day's record is full of reasons not to conflate them.
 
+## The reference is no better: 5 of 13 (2026-08-06)
+
+The premise underneath this issue — that something was lost and the reference
+pair reaches the desktop — had never been measured. It is now, with the same
+harness, the same card protocol and an idle machine, against
+`/home/jaime/Emu68` `8946834` plus the ELF from
+`/home/jaime/aros-build-emu68-m68k`:
+
+| | n | icons | rate |
+|---|---|---|---|
+| reference pair | 13 | 5 | **38%** |
+| this repository | 101 | ~38 | **~38%** |
+
+Same rate. Same two failure modes, `logo` and `workbench`. All thirteen runs
+carry identical build hashes, so it is one clean set rather than a mixture.
+
+**So there is no regression, and this issue's title is misleading.** Nothing was
+lost; the port has never booted reliably. That does not make the three defects
+closed today less real — they were real, and one of them (the ELF loader serving
+uninitialised memory) is a genuine upstream AROS bug. It does mean the framing
+that drove much of this work, *find what broke*, was the wrong one, and the
+right one is *finish what was never finished*.
+
+The reference is a little faster to the icons — 38.6–49.3 s against 46–55 s here
+— which is worth noting and is not the question.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.

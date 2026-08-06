@@ -7,7 +7,7 @@ repository.
 ## What it is
 
 The state that boots AROS/m68k under Emu68 to the Workbench screen **with volume
-icons drawn**. Two upstream forks define it:
+icons drawn** — sometimes. Two upstream forks define it:
 
 | | branch |
 |---|---|
@@ -142,6 +142,23 @@ never exercised.
 The lesson worth keeping is not about FAT: **a measurement of a bundled change
 attributes to all of it.** The verdict recorded here was honest and still wrong,
 because the thing measured was not the thing named.
+
+## The reference is no better, and that settles what this work is
+
+Measured 2026-08-06, because it never had been: the reference pair itself —
+`/home/jaime/Emu68` `8946834` and the ELF from `/home/jaime/aros-build-emu68-m68k`
+— reaches the icons in **5 runs out of 13, 38%**, with the same two failure
+modes (`logo` and `workbench`) this repository sees. Identical build hashes
+across all thirteen, so it is one clean set.
+
+That is the same rate this repository gets. **There is no regression to hunt.**
+The desktop appearing was never reliable; what the earlier text here called a
+known-good state is a state that works about four times in ten, and the
+difference between "we broke something" and "this was never finished" matters
+for what work is worth doing. This is bring-up.
+
+The reference is slightly faster to the icons — 38.6–49.3 s against 46–55 s
+here — which is worth knowing but is not the question.
 
 ## What is not fixed
 
