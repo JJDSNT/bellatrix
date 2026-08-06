@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 6 Aug 2026 16:30:00 -0300
+Subject: [PATCH 3/3] Deliver host interrupts as an IPL, not through a shadow Paula
+
+The core-0 IRQ fast path tested an emulated INTENA and, if the guest had
+armed INTEN+EXTER, set INTF.ARM. That made an unmodified Amiga guest able
+to arm and acknowledge host interrupts the ordinary way, which is the right
+answer for a machine that has a chipset.
+
+This one has none. There is no Paula for those registers to belong to, so
+serving them costs a page fault on every arm and every acknowledge, and the
+whole 0xdff000 page has to be trapped for it. A guest with no chipset has
+nothing to program: the level is already decided by the time the CPU could
+be told about it.
+
+So write the level into INTF.IPL instead -- the same field an external
+interrupt controller writes on PiStorm, honoured against the SR mask by the
+arbitration the previous commit made reachable. Fewer instructions than the
+shadow test, no register emulation, and no address space reserved.
+
+INTF.IPL is a level rather than a latch. On PiStorm it mirrors a line Paula
+holds until acknowledged; here nothing would ever lower it, and leaving it
+set re-fires the moment the guest's RTE drops the SR mask. So the
+arbitration drops it as it takes the exception, guarded so PiStorm builds
+keep their line-mirroring semantics, and only when the level being taken is
+the one IPL asked for -- ARM_err at level 7 must not swallow a pending IPL.
+
+The shadow registers themselves stay in patches/emu68/0001: they are what a
+chipset-era guest will want, and nothing here needs them to be removed.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -153,18 +153,14 @@
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
+-"       adrp x1, INT_shadow             \n" // Load INTENA shadow
+-"       add x1, x1, :lo12:INT_shadow    \n"
+-"       ldrh w0, [x1, #%[intena]]       \n"
+-"       and w0, w0, #0x6000             \n" // Check if INTEN and EXTER are active
+-"       cmp w0, #0x6000                 \n"
+-"       mov w0, #1                      \n" // Set ARM int pending so that we can fake INTREQ
+-"       strb w0, [x1, #%[armpend]]      \n"
+-"       b.ne 1f                         \n" // Skip setting pint register if interrupt was not enabled
++// Hand the CPU a level through INTF.IPL, the same field an external
++// interrupt controller writes on PiStorm. No INTENA test and no shadow:
++// with no Paula in the machine there is nothing for a guest to arm, and
++// no register access has to fault to deliver an interrupt.
+ "       mov x1, "CTX_POINTER_ASM"       \n" // Load CPU context
+ "       mov w0, #6                      \n" // Set level 6 IRQ
+-"       strb w0, [x1, #%[pint]]         \n"
+-"1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
++"       strb w0, [x1, #%[ipl]]          \n"
++"       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "2:     ldp x0, x1, [sp], #16           \n"
+ "       b IRQonOtherCores               \n"
+@@ -178,18 +174,11 @@
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x0c0              \n" // Disable IRQ and FIQ interrupts so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
+-"       adrp x1, INT_shadow             \n" // Load INTENA shadow
+-"       add x1, x1, :lo12:INT_shadow    \n"
+-"       ldrh w0, [x1, #%[intena]]       \n"
+-"       and w0, w0, #0x6000             \n" // Check if INTEN and EXTER are active
+-"       cmp w0, #0x6000                 \n"
+-"       mov w0, #1                      \n" // Set ARM int pending so that we can fake INTREQ
+-"       strb w0, [x1, #%[armpend]]      \n"
+-"       b.ne 1f                         \n" // Skip setting pint register if interrupt was not enabled
++// Same as the IRQ path above: a level into INTF.IPL, no shadow.
+ "       mov x1, "CTX_POINTER_ASM"       \n" // Load CPU context
+ "       mov w0, #6                      \n" // Set level 6 IRQ
+-"       strb w0, [x1, #%[pint]]         \n"
+-"1:     ldp x0, x1, [sp], #16           \n" // Restore scratch registers
++"       strb w0, [x1, #%[ipl]]          \n"
++"       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "                                       \n"
+ "       .balign 0x80                    \n"
+@@ -282,6 +271,7 @@
+ :
+ :[pint]"i"(__builtin_offsetof(struct M68KState, INTF.ARM)),
+  [perr]"i"(__builtin_offsetof(struct M68KState, INTF.ARM_err)),
++ [ipl]"i"(__builtin_offsetof(struct M68KState, INTF.IPL)),
+  [intena]"i"(__builtin_offsetof(struct INT_shadow, INTENA)),
+  [armpend]"i"(__builtin_offsetof(struct INT_shadow, ARMPending))
+ 

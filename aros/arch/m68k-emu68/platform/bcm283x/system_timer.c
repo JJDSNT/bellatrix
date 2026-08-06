@@ -195,10 +195,10 @@ static void systimer_enable(void)
         platform_trace(clo >= target
             ? "[systimer] CLO passed target\n"
             : "[systimer] CLO did NOT reach target\n");
-        /* With the compare latched and CS still unacknowledged, the IRQ line
-         * is asserted. If Emu68 saw it, its INTREQR alias reports EXTER
-         * pending; if it did not, the break is upstream of the bridge. */
-        platform_trace_val("[exter] INTREQR    ", *(volatile UWORD *)0xdff01e);
+        /* The INTREQR probe that used to sit here is gone with the Paula
+         * shadow: interrupts arrive as a level in INTF.IPL now, and there is
+         * no guest-visible register that says whether Emu68 saw the line.
+         * Reading 0xdff01e would just read RAM and look like "no interrupt". */
         platform_trace_val("[intc] ENBL0 (raw) ",
                            *(volatile ULONG *)0xf200b210);
         platform_trace_val("[intc] PEND0 (raw) ",

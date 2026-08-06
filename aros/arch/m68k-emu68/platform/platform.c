@@ -24,47 +24,24 @@
  * Emu68's ARM -> m68k interrupt bridge.
  *
  * A real physical IRQ that none of Emu68's own virtual devices claims is
- * handed to the guest over the Amiga EXTER channel rather than over a
- * vector of its own. Emu68's core-0 IRQ fast path (Emu68
- * src/aarch64/vectors.c, "curr_el_spx_irq") drives that channel off the
- * INTENA/INTREQ shadow it maintains for us, and the protocol has two halves
- * the guest must honour:
+ * handed to the guest as m68k autovector level 6. Emu68's core-0 IRQ fast
+ * path (Emu68 src/aarch64/vectors.c, "curr_el_spx_irq") writes that level
+ * straight into INTF.IPL -- the same field an external interrupt
+ * controller writes on PiStorm -- and the arbitration in ExecutionLoop.c
+ * honours it against the SR mask exactly like a real 68k.
  *
- *  - The fast path always records its internal ARMPending flag, but only
- *    raises the m68k level-6 line when the shadow has *both* INTEN and
- *    EXTER set. The channel therefore has to be armed once at startup, or
- *    the physical IRQ arrives and is silently dropped.
+ * There is nothing for this port to arm and nothing to acknowledge. That
+ * is the whole point of the mechanism: an IPL is a level, not a register,
+ * so the decision has already been made by the time the CPU sees it. Emu68
+ * drops the level as it takes the exception, and the SR mask keeps it from
+ * re-entering until our RTE.
  *
- *  - It clears ARMPending (and drops the level-6 line) only on a guest
- *    write to INTREQ with the SET/CLR bit clear and EXTER set. Every
- *    level-6 entry must therefore acknowledge the bridge *in addition* to
- *    whatever the peripheral that fired needs, exactly the way
- *    arch/m68k-amiga/kernel/amiga_irq.c's PAULA_IRQ_ACK does after running
- *    a server chain. Acknowledging only the peripheral leaves the level-6
- *    line asserted.
- *
- * These are ordinary Amiga custom-chip writes; Emu68 traps them and they
- * never reach real silicon.
+ * This replaced an emulated Paula: INTENA/INTREQ served from a shadow, one
+ * page fault per arm and per acknowledge. That path is not gone -- it is
+ * the right answer once there is a chipset that really owns those
+ * registers, and it is kept in patches/emu68/0001 and documented in
+ * docs/irq.md. It is simply not what a machine with no chipset needs.
  */
-/*
- * Both halves are ordinary Amiga custom-chip writes. Emu68 traps them and
- * they never reach silicon -- there is none. This is the same idiom
- * arch/m68k-amiga/kernel/amiga_irq.c uses against real Paula, which is the
- * point: nothing here is Emu68-specific.
- */
-#define CUSTOM_INTENA ((volatile UWORD *)0x00dff09aUL)
-#define CUSTOM_INTREQ ((volatile UWORD *)0x00dff09cUL)
-
-static inline void emu68_exter_enable(void)
-{
-    *CUSTOM_INTENA = INTF_SETCLR | INTF_INTEN | INTF_EXTER;
-}
-
-static inline void emu68_exter_ack(void)
-{
-    /* SET/CLR clear -> clear EXTER, which is what drops the level-6 line. */
-    *CUSTOM_INTREQ = INTF_EXTER;
-}
 
 extern const struct PlatformDriver bcm283x_system_timer_driver;
 extern const struct PlatformDriver bcm283x_armctrl_ic_driver;
@@ -308,12 +285,10 @@ BOOL Platform_Autovector(void)
     if (g_intc_ops)
         g_intc_ops->Dispatch(KernelBase);
 
-    /* Acknowledge the bridge only once Dispatch() has drained every source
-     * it can see -- the same ordering arch/m68k-amiga uses for a server
-     * chain. Emu68 keeps the host IRQ masked for the whole of this handler,
-     * so nothing can set ARMPending again behind us and be lost here. */
-    emu68_exter_ack();
-
+    /* No bridge acknowledge: Emu68 dropped the level as it took the
+     * exception, and our RTE lowers the SR mask. Dispatch() has already
+     * drained every source the controller can see, which is the only
+     * acknowledging this port owes anyone. */
     return TRUE;
 }
 
@@ -339,15 +314,6 @@ BOOL platform_timer_start(const void *fdt, ULONG interval_us)
     if (!dt_parse(fdt))
         return FALSE;
 
-    /*
-     * Arm before discover(): the timer driver's Init() registers its handler,
-     * which unmasks the source at the controller. Emu68's fast path masks ARM
-     * IRQs on return and nothing re-enables them, so if an IRQ lands while the
-     * shadow is still clear that is the only one we ever get -- it records
-     * ARMPending, skips INTF.ARM, and leaves the CPU deaf.
-     */
-    emu68_exter_enable();
-
     if (!discover())
         return FALSE;
 
@@ -372,8 +338,6 @@ BOOL platform_timer_start(const void *fdt, ULONG interval_us)
             vectors[24 + level] = Platform_Autovector_Direct;
     }
 
-    /* INTENAR (0xdff01c) reads back the mask Emu68 is holding for us. */
-    platform_trace_val("[exter] INTENAR    ", *(volatile UWORD *)0x00dff01cUL);
     platform_trace_val("[soc] periiobase   ", platform_periiobase);
 
     g_timer_ops->SetPeriod(interval_us);

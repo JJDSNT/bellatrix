@@ -23,7 +23,7 @@ yet. It is the step that makes writing it mean something.
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
-index f968d72..50e38fb 100644
+index f968d72..5caefed 100644
 --- a/src/ExecutionLoop.c
 +++ b/src/ExecutionLoop.c
 @@ -348,8 +348,23 @@ void MainLoop()
@@ -52,3 +52,32 @@ index f968d72..50e38fb 100644
                  if (ctx->INTF.IPL > level)
                  {
                      level = ctx->INTF.IPL;
+@@ -428,6 +443,28 @@ void MainLoop()
+                 /* Set SR */
+                 setSR(SR);
+ 
++#if !defined(PISTORM_ANY_MODEL)
++                /*
++                 * The level has been consumed, so drop it.
++                 *
++                 * On PiStorm INTF.IPL mirrors a physical line that Paula holds
++                 * until the guest acknowledges, so clearing it here would be
++                 * wrong -- hence the guard. Standalone there is no line and no
++                 * Paula: the field is written by Emu68's own core-0 IRQ path,
++                 * once per host interrupt, and nothing else would ever lower
++                 * it. Leaving it set would re-fire the moment the guest's RTE
++                 * drops the SR mask, forever.
++                 *
++                 * Only when the level being taken is the one IPL asked for --
++                 * a higher-priority source (ARM_err at 7) must not swallow a
++                 * pending IPL.
++                 */
++                if (ctx->INTF.IPL && level == ctx->INTF.IPL)
++                {
++                    ctx->INTF.IPL = 0;
++                }
++#endif
++
+                 /* Get VBR */
+                 vbr = ctx->VBR;
+ 
