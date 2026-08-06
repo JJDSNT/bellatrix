@@ -389,15 +389,20 @@ def one_run(args, workdir):
         if record["serial_bytes"] == 0 and verdict != "icons":
             record["verdict"] = "dead"
 
-        if args.keep:
-            keep = os.path.join(ROOT, "out", "boot-timing",
-                                record["run"].replace(":", ""))
-            os.makedirs(keep, exist_ok=True)
-            for name in ("serial.log", "frame.ppm"):
-                src = os.path.join(workdir, name)
-                if os.path.exists(src):
-                    shutil.copy2(src, keep)
-            record["kept"] = os.path.relpath(keep, ROOT)
+        # The serial log is always kept, and this was learned the expensive way:
+        # the first ten runs measured the failure rate and threw away every byte
+        # of serial with the temporary directory, so the follow-up question --
+        # *where* does a stalled boot stop -- needed the whole series run again.
+        # The run is the expensive part; the evidence is ~130 KB.
+        keep = os.path.join(ROOT, "out", "boot-timing",
+                            record["run"].replace(":", ""))
+        os.makedirs(keep, exist_ok=True)
+        wanted = ["serial.log"] + (["frame.ppm"] if args.keep else [])
+        for name in wanted:
+            src = os.path.join(workdir, name)
+            if os.path.exists(src):
+                shutil.copy2(src, keep)
+        record["kept"] = os.path.relpath(keep, ROOT)
 
         return record
     finally:

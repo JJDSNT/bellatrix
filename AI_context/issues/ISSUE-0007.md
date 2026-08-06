@@ -82,6 +82,45 @@ The suspects worth taking to this, in order: ISSUE-0002 (`STOP` does not consult
 finished opening a screen would be sitting), then the delivery-mechanism
 question in ISSUE-0004/ISSUE-0010.
 
+## Where the stall actually happens (2026-08-06, six runs with serial kept)
+
+The pixel measurement above says *when*; this says *where*. Six more runs, serial
+logs kept — 1 `icons`, 5 `workbench`. Comparing the tails:
+
+**Every stall is at a different point, and every one is inside the library
+loader.** This is the objective form of the long-standing impression that it
+"stops in random places":
+
+| run | last thing on the serial |
+|---|---|
+| 143507 | `[LDDemon] Lddemon_0_OpenLibrary()` / `LDRequestObject()` |
+| 143711 | `[LDLoadSeg] name=libs/z1.library` |
+| 143915 | `[LDDemon] Lddemon_0_OpenLibrary()` / `LDRequestObject()` |
+| 144208 | `[LDLoadSeg] name=SYS:Classes/datatypes/picture.datatype` |
+| 144412 | `[BOARD] Loaded module to 7defb548...` — see below |
+
+**It is not a particular library.** The successful run loads `z1.library`,
+`png.library` and `picture.datatype` to completion, and every run — successful or
+not — reaches `IconListview.mui` the same number of times. All six get to the
+same depth by every milestone that can be counted. The failing ones simply stop,
+mid-load, somewhere different each time.
+
+**It is late, and after the screen.** The screen opens at 42–48 s; the stalls are
+after Wanderer has already loaded its MUI classes and is pulling in more code.
+So "the intermittency lives after Intuition has a screen" can be sharpened: the
+boot keeps making real progress past the screen and then dies during `LoadSeg`
+— which is the DOS → fat-handler → sdcard path, not the graphics path.
+
+**One run shows something worth chasing.** In 144412, the last five lines are
+Emu68 constructing an FDT and *mapping the Zorro III ROM board* — the board from
+`patches/emu68/0002` — immediately after AROS had finished initialising
+`IconListview.mui`. Those lines appear **nowhere else**: not earlier in that run,
+and not at all in the successful run or in the other stalls. A Zorro III
+autoconfig sweep does not belong there. The shape fits a wild access landing in
+the autoconfig window and being answered as if it were a probe, which would be a
+symptom of exactly the lost context this issue is named after. One run is not
+evidence of a mechanism, but it is a concrete thing to look for.
+
 The two defects this issue originally proved are in a different state than the
 paragraph below claims, and the correction matters. The FAT endian change is
 **not** a working fix: promoted to a patch and measured, it failed three runs of
@@ -677,3 +716,11 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   runs split into two distinct populations, and the stalled ones stay stalled
   through 900 s rather than finishing late. The card is ruled out mechanically:
   regenerated before every run, with a distinct image hash per record.
+- 2026-08-06 — six runs with the serial kept, to ask *where* rather than *how
+  often*. Five stalls, five different stopping points, all inside the library
+  loader and all after Wanderer had loaded its MUI classes. No library is
+  implicated: the successful run loads all of them. One stall is followed by
+  Emu68 mapping the Zorro III ROM board, which happens in no other run.
+  The harness now keeps the serial log unconditionally — the first ten runs
+  measured the rate and discarded every byte of it, so this question needed the
+  series run again.
