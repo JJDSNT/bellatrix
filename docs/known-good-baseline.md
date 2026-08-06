@@ -44,10 +44,39 @@ The lean `kernel-link-<target>` build produces only the ELF. A bootable card
 needs a full distribution tree; `/home/jaime/aros-build-emu68-m68k/bin/emu68-m68k/AROS`
 is the one these measurements used.
 
-**Wanderer takes minutes to draw the icons.** A run cut off at 200 seconds shows
-an empty Workbench screen with the plain "Workbench Screen" title, still loading
-`Zune/IconListview.mui`. Around 480 seconds under QEMU it finishes and the title
-becomes `Wanderer <n>M graphics mem`. Judging a run too early reads as failure.
+To ask the same question without watching it, and without counting by hand:
+
+```bash
+BELLATRIX_SD_DIST=<full distribution tree> scripts/boot-timing.py -n 10
+```
+
+One record per run in `out/boot-timing.jsonl`, a verdict of `icons`,
+`workbench`, `blank`, `logo` or `dead`, and a summary at the end. It regenerates
+the card before every run, refuses to start with another QEMU alive, and keeps
+the whole frame-by-frame timeline in each record. See
+`AI_context/issues/ISSUE-0011.md`.
+
+**Correction, 2026-08-06: the boot is not slow, it is intermittent.** This
+section used to say Wanderer took around 480 seconds to draw the icons and that
+a run cut at 200 seconds was being judged too early. Measured with
+`scripts/boot-timing.py` over ten runs on an idle machine, each on a freshly
+generated card, that is wrong:
+
+| | |
+|---|---|
+| Workbench screen opens | 39–48 s, in every run that got that far |
+| icons drawn | 46–53 s, in the runs that finished |
+| runs that finished | 4 of 10 |
+| runs that stalled on an empty Workbench | 4 of 10 — two held for a full 900 s with the backdrop unchanged |
+| runs that never left the Emu68 logo | 2 of 10 |
+
+So a run that has not drawn icons by ~60 s is not slow; it is stuck, and waiting
+eight minutes for it changes nothing. What the old text described as "still
+loading `Zune/IconListview.mui`" is one of the stall states, not a phase.
+
+Opening the screen is very nearly deterministic — the spread is nine seconds
+across ten runs, whatever the outcome. What is intermittent is Wanderer
+finishing after that. See `AI_context/issues/ISSUE-0007.md`.
 
 ## Two ways this baseline has been lost before
 

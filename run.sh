@@ -9,6 +9,7 @@
 #   ./run.sh --sd PATH      a different card
 #   ./run.sh --headless     serial only, no window
 #   ./run.sh --gui          force a window even with no display detected
+#   ./run.sh --serial FILE  send the serial console to a file instead of stdio
 #   ./run.sh --debug FLAGS  adds sysdebug=FLAGS to the kernel arguments
 #   ./run.sh --clean        rebuild Emu68 from scratch first
 #   ./run.sh --no-build     skip the Emu68 build
@@ -46,6 +47,10 @@ fi
 WANT_AROS="auto"
 USE_SD=1
 DEBUG=""
+# Where the PL011 goes. stdio for a human; a file for anything unattended, which
+# is what scripts/boot-timing.py uses so it can read the log while the run is
+# still going.
+SERIAL="stdio"
 EXTRA=()
 
 while [ $# -gt 0 ]; do
@@ -54,12 +59,13 @@ while [ $# -gt 0 ]; do
         --clean)    CLEAN="clean" ;;
         --gui)      DISPLAY_ARG="gtk" ;;
         --headless) DISPLAY_ARG="none" ;;
+        --serial)   SERIAL="file:$2"; shift ;;
         --no-aros)  WANT_AROS="no" ;;
         --no-sd)    USE_SD=0 ;;
         --sd)       SD="$2"; shift ;;
         --debug)    DEBUG="$2"; shift ;;
         --)         shift; EXTRA=("$@"); break ;;
-        -h|--help)  sed -n '2,25p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)  sed -n '2,26p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
@@ -87,7 +93,7 @@ QEMU=(
     -dtb "$DTB"
     # On raspi3b the first -serial is the PL011 that Emu68 logs to. Getting the
     # order wrong is silence, not an error.
-    -serial stdio
+    -serial "$SERIAL"
     -display "$DISPLAY_ARG"
     -no-reboot
     -monitor "unix:$MONITOR,server,nowait"

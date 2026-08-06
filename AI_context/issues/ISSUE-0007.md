@@ -6,7 +6,7 @@ priority: critical
 type: bug
 owner: agent
 created_at: 2026-08-04
-updated_at: 2026-08-05
+updated_at: 2026-08-06
 tags:
   - aros
   - emu68
@@ -48,6 +48,39 @@ regressions were found and removed, neither of them the subject of this issue:
 The original subject — **the intermittency** — is untouched and is now the only
 thing left. No rate has been measured on the restored baseline; do not quote one
 until it has been.
+
+**Status 2026-08-06: measured, and it is sharper than expected.** Ten runs with
+`scripts/boot-timing.py` (ISSUE-0011), idle machine, a freshly generated card
+before each — so the card is mechanically ruled out, each run has its own image
+hash in `out/boot-timing.jsonl`:
+
+| verdict | runs | |
+|---|---|---|
+| `icons` | 4 | 46.1 / 51.1 / 51.8 / 53.3 s |
+| `workbench` | 4 | screen at 42.5–47.9 s, then nothing |
+| `logo` | 2 | never left Emu68; ~79 KB serial against ~127 KB |
+
+Three things follow, and they narrow this issue considerably.
+
+**Opening the screen is very nearly deterministic.** Across all eight runs that
+got there, the Workbench screen appeared between 39 and 48 s — including in
+every run that later failed. Whatever is intermittent happens *after* Intuition
+has a screen.
+
+**The stall is a stall, not slowness.** Two runs were given a 900 s timeout and
+sat on an empty backdrop for the whole of it, with the non-modal pixel count
+exactly 0 — not a pixel changed in fifteen minutes. This also corrects a figure
+this repository carried: the icons were documented as taking ~480 s. They take
+about 50 s, and what was being read as "still loading" was this stall.
+
+**There are two distinct failures, not one.** `logo` runs die much earlier, with
+a third less serial output; `workbench` runs get all the way to a drawn screen
+and then stop. Attributing them together is a mistake.
+
+The suspects worth taking to this, in order: ISSUE-0002 (`STOP` does not consult
+`INT64` on stock builds — and `STOP` is exactly where an idle guest that has
+finished opening a screen would be sitting), then the delivery-mechanism
+question in ISSUE-0004/ISSUE-0010.
 
 The two defects this issue originally proved are in a different state than the
 paragraph below claims, and the correction matters. The FAT endian change is
@@ -638,3 +671,9 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   machine. All three stop after `[SDBus00] MMC0: [256MB Capacity]`; dominant
   colour `#787878` (Emu68 logo) in each. The heartbeat now runs to `0x1000`
   ticks, so the interrupt path is ruled out as the thing that stops.
+- 2026-08-06 — the intermittency measured for the first time, with the harness
+  from ISSUE-0011: 4 of 10 reach the icons. The number matters less than the
+  shape it revealed — screen-open is nearly deterministic at 39-48 s, the failing
+  runs split into two distinct populations, and the stalled ones stay stalled
+  through 900 s rather than finishing late. The card is ruled out mechanically:
+  regenerated before every run, with a distinct image hash per record.
