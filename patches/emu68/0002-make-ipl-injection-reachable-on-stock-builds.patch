@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 6 Aug 2026 16:00:00 -0300
+Subject: [PATCH 2/2] Make IPL injection reachable on stock builds
+
+INTF.IPL is how an external interrupt controller hands the CPU a level --
+the interface PiStorm itself uses. On a stock build, writing it has no
+effect: the arbitration accepts the field only through a branch whose level
+source, GetIPLLevel(), is a `return 0` stub outside PISTORM_CLASSIC. The
+field opens the `if` and the level is then discarded.
+
+That is the same shape as the interrupt registers before this series
+existed: the machinery is all present, and one variant holds the only key.
+
+A standalone build wants the PiStorm32 branch, not the classic one, and for
+the same reason PiStorm32 does: INTF.IPL already holds a level decided by
+something else, so there is nothing to fetch. Here that something else is
+Emu68's own core-0 IRQ path rather than Paula over the IPL lines.
+
+This is inert on its own -- nothing writes INTF.IPL on a standalone build
+yet. It is the step that makes writing it mean something.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+index f968d72..50e38fb 100644
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -348,8 +348,23 @@ void MainLoop()
+                 }
+ 
+                 /* Now, if Higher-level interrupt was coming from Paula, report it */
+-#if defined(PISTORM)
+-                /* On PiStorm32 IPL level is obtained by second CPU core from the GPIO directly */
++#if defined(PISTORM) || !defined(PISTORM_ANY_MODEL)
++                /*
++                 * On PiStorm32 IPL level is obtained by second CPU core from the GPIO directly.
++                 *
++                 * A standalone build takes the same branch, and for the same
++                 * reason: INTF.IPL is written by something that has already
++                 * decided the level. On PiStorm that is Paula over the IPL
++                 * lines; here it is Emu68's own core-0 IRQ path. Either way the
++                 * field already holds a level and there is nothing to fetch.
++                 *
++                 * The #else below is the PISTORM_CLASSIC path, which reads the
++                 * level from a status register through GetIPLLevel(). That
++                 * function is a `return 0` stub on any other build, so a
++                 * standalone build landing there would open the `if` and then
++                 * discard the level -- which is exactly what made INTF.IPL
++                 * unusable outside PiStorm.
++                 */
+                 if (ctx->INTF.IPL > level)
+                 {
+                     level = ctx->INTF.IPL;
