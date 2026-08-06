@@ -155,12 +155,23 @@ answer. The answer is the plane, and it arrives with the VideoCore work.
 
 # Notes
 
-**This cannot be validated under QEMU.** `raspi3b` provides a mailbox-driven
-simple framebuffer and no HVS; the cursor property tags are expected not to be
-implemented, and that expectation is worth checking before anyone spends a day
-wondering why nothing appears. A firmware that silently returns success on an
-unimplemented tag would look exactly like a working driver with an invisible
-cursor.
+**This cannot be validated under QEMU, and that is now checked rather than
+assumed.** `raspi3b` provides a mailbox-driven simple framebuffer and no HVS.
+The binary (`qemu-system-aarch64` 8.2.2) carries
+`bcm2835_property: unhandled tag 0x%08x` and no BCM2835 cursor handling at all,
+so `0x8010`/`0x8011` land in the unhandled-tag branch.
+
+That is exactly the dangerous shape: the property interface reports overall
+success on a message whose individual tag was ignored, so a driver written
+against it looks like it works and shows nothing. **The cheap positive test is
+`-d guest_errors`** — the unhandled tag is logged by name, which turns "nothing
+appeared" into "the tag never ran". Worth wiring into whatever run is used
+before concluding anything about the driver.
+
+The `vc4gfx` reference happens to be defensive here: it checks that the
+firmware wrote a result back into the request buffer rather than trusting the
+message-level status. Keeping that check is the difference between a silent
+failure and a diagnosable one.
 
 The `nocomposition` boot argument is currently required to see anything on the
 framebuffer at all. Whatever is done here has to hold under that, and a cursor
@@ -171,3 +182,14 @@ that only works with compositing enabled is not yet usable.
 - 2026-08-06 — opened. Found while writing it that the mailbox cursor is already
   implemented in this tree for `arch/arm-native`, which turns step 1 from a
   driver to be invented into a port of a working one.
+- 2026-08-06 — checked the QEMU claim against the binary instead of leaving it
+  as an expectation: no BCM2835 cursor handling, and an unhandled-tag log path
+  that `-d guest_errors` makes visible. Recorded as the positive test.
+
+# Position in the queue
+
+Deliberately not next. The port's open problem is that 6 of 10 boots do not
+reach the desktop at all (ISSUE-0007), and nothing here moves that. This is also
+the only open issue that cannot be advanced under QEMU — every step needs a Pi,
+so it is naturally the work to batch with other hardware-only questions rather
+than to interleave with what can be measured locally.
