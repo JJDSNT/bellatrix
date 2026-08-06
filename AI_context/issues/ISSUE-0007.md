@@ -380,6 +380,40 @@ of the wild writes actually observed. It should be tested against the measured
 rate rather than reasoned about further, and the 68-byte backend parked on
 `codex-2026-08-05` is one way to test it.
 
+## Defect B fixed: open bus instead of a fault (2026-08-06)
+
+`patches/emu68/0005` checks the guest address against the MMU — `at s1e1r` /
+`at s1e1w` and `PAR_EL1`, not a table of regions, so it cannot disagree with
+what is actually mapped the way the earlier attempt did when it rejected the
+framebuffer. An unmapped address is answered the way a 68k board answers an
+unclaimed one: writes swallowed, reads all ones, reported on the console with
+the count capped so a memory-sizing sweep cannot become the bottleneck.
+
+Eight runs after:
+
+| | before | after |
+|---|---|---|
+| ARM stack used, worst case | 524416 bytes (exhausted) | **720–1584 bytes** |
+| PC at a stall | `curr_el_spx_sync+0`, frozen | inside the JIT arena, **moving** |
+| icons | 3/6 | 3/8 |
+
+**The emulator no longer destroys itself.** Every stall now leaves a guest that
+is still executing, which is defect A in its pure form and, for the first time,
+something that can be debugged rather than a machine that has already
+overwritten the evidence.
+
+**The rate is unchanged, and that is the expected result** — this fixes
+survivability, not the guest bug.
+
+**Not finished.** A single bounded re-entry still occurs (`RE-ENTERED at depth
+1`, never `runaway`), and the addresses in the open-bus reports are
+alias-shaped — `0xffffff908a100003` rather than `0x8a100003`. That means the
+guard is catching the *second-level* fault, not preventing the first: something
+in the handler dereferences before reaching the guarded fall-through.
+`SYSPageFaultWriteHandler` opens with `LE32(*(uint32_t *)elr)` and there are
+other dereferences besides. Finding and guarding the first one is the remaining
+half.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -1053,3 +1087,15 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   alias, faulting inside the handler. Two defects, now separable: the guest
   going wild (AROS side, this issue) and Emu68 recursing instead of reporting a
   bus error (a corrected open-bus guard).
+- 2026-08-06 — open-bus guard (patches/emu68/0005), asked of the MMU rather
+  than a region table. ARM stack use at a stall drops from 524416 bytes to
+  720-1584, and every stall now leaves the guest executing inside the JIT arena
+  instead of frozen on the exception vector. Rate unchanged at 3/8, as expected
+  for a survivability fix. Remaining: one bounded re-entry still happens, and
+  the reported addresses are alias-shaped, so the guard is catching the second
+  fault rather than preventing the first.
+- 2026-08-06 — read the parked 68-byte backend on codex-2026-08-05. It saves
+  and restores all eight bytes including the format/vector word and is
+  self-contained: pushes 8, pops 8, with no reliance on a leftover on the
+  supervisor stack. That is strictly more robust than the 66-byte scheme, which
+  balances only while entry and exit are paired.
