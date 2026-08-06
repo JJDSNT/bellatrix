@@ -1,0 +1,116 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 7 Aug 2026 00:30:00 -0300
+Subject: [PATCH 9/9] dos: do not serve ELF loads from an unfilled buffer
+
+elf_read_block() caches small reads in a 4 KB buffer. It fills that buffer
+with a 4096-byte read that is allowed to come up short -- near end of file it
+always does -- and then discards the result. The buffer comes from
+AllocMem(MEMF_ANY) and is never cleared, and the cache-hit test bounds
+requests by LOADSEG_SMALL_READ rather than by how much was actually read. A
+request reaching past the filled part is served from uninitialised memory,
+handed to the ELF loader as file contents, with no error raised anywhere.
+
+Not hypothetical. Tracing every read of an AROS boot on m68k-emu68 found it
+happening twice per boot, at the same offsets in all three runs traced:
+
+  off=7412  size=400  buffer filled from 5688, 1904 valid ->  220 bytes past
+  off=32292 size=520  buffer filled from 30344, 1172 valid -> 1296 bytes past
+
+The port crashes inside InternalLoadSeg_ELF with the guest PC in a
+zero-filled region of a freshly loaded segment. See
+AI_context/issues/ISSUE-0007.md.
+
+The fix records how much the fill actually delivered and bounds the cache by
+that. A short fill stays what it is -- normal at end of file, not an error --
+and only limits what may be served. A request the file genuinely cannot
+satisfy now reports ERROR_BAD_HUNK instead of inventing the bytes.
+
+The recursive re-read is gone with it: the fill starts at the requested
+offset, so the request is at the head of the buffer and can be copied
+directly. That also removes the possibility of recursing forever when the
+refill cannot satisfy the request either.
+
+Upstream defect, latent wherever the filesystem happens not to read short.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/rom/dos/internalloadseg_elf.c
++++ b/rom/dos/internalloadseg_elf.c
+@@ -52,6 +52,7 @@
+ {
+     ULONG   srb_FileOffset;
+     APTR    srb_Buffer;
++    ULONG   srb_Valid;      /* bytes actually read into srb_Buffer */
+ };
+ 
+ static int elf_read_block
+@@ -67,8 +68,22 @@
+ {
+     D(bug("[ELF Loader] elf_read_block (offset=%d, size=%d)\n", offset, size));
+ 
++    /*
++     * srb_Valid, not LOADSEG_SMALL_READ.
++     *
++     * The buffer is filled with a 4 KB read that is allowed to come up short --
++     * near end of file it always does -- and the fill's result was discarded.
++     * srb_Buffer comes from AllocMem(MEMF_ANY) and is never cleared, so serving
++     * a request that reaches past what was actually read hands the loader
++     * whatever was in that memory, as file contents, with no error anywhere.
++     *
++     * Not hypothetical: tracing every read of an AROS boot on m68k found it
++     * happening twice per boot at fixed offsets, delivering 220 and 1296 bytes
++     * of uninitialised memory into loaded modules. See
++     * AI_context/issues/ISSUE-0007.md.
++     */
+     if (size <= LOADSEG_SMALL_READ && (offset >= srb->srb_FileOffset) &&
+-            ((offset + size) <= (srb->srb_FileOffset + LOADSEG_SMALL_READ)) &&
++            ((offset + size) <= (srb->srb_FileOffset + srb->srb_Valid)) &&
+             srb->srb_Buffer != NULL)
+     {
+         CopyMem(srb->srb_Buffer + (offset - srb->srb_FileOffset), buffer, size);
+@@ -83,13 +98,40 @@
+         {
+             if (srb->srb_Buffer == NULL)
+                 srb->srb_Buffer = AllocMem(LOADSEG_SMALL_READ, MEMF_ANY);
++            if (srb->srb_Buffer == NULL)
++                return read_block(file, buffer, size, funcarray, DOSBase);
+ 
++            /* Fill the buffer, recording how much actually arrived. A short
++             * read here is normal at end of file and is not an error; it only
++             * bounds what the cache may serve. */
+             srb->srb_FileOffset = offset;
++            srb->srb_Valid = 0;
++            while (srb->srb_Valid < LOADSEG_SMALL_READ)
++            {
++                LONG got = ilsRead(file, srb->srb_Buffer + srb->srb_Valid,
++                    LOADSEG_SMALL_READ - srb->srb_Valid);
++
++                if (got <= 0)
++                    break;
++
++                srb->srb_Valid += got;
++            }
++
++            if (size > srb->srb_Valid)
++            {
++                /* The file really does not have that many bytes here. Report it
++                 * the way read_block would rather than inventing them. */
++                if (DOSBase)
++                {
++                    struct Process *me = (struct Process *)FindTask(NULL);
++                    me->pr_Result2 = ERROR_BAD_HUNK;
++                }
++                return 1;
++            }
+ 
+-            /* Fill the buffer */
+-            read_block(file, srb->srb_Buffer, LOADSEG_SMALL_READ, funcarray, DOSBase);
+-            /* Re-read, now srb will be used */
+-            return elf_read_block(file, offset, buffer, size, funcarray, srb, DOSBase);
++            /* The fill started at `offset`, so the request is at its head. */
++            CopyMem(srb->srb_Buffer, buffer, size);
++            return 0;
+         }
+         else
+         {

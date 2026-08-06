@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build if needed and boot under QEMU.
+# Boot under QEMU. Does not build unless asked.
 #
 #   ./run.sh                boot whatever is built — AROS if its ELF exists,
 #                           otherwise Emu68 on its own
@@ -11,15 +11,16 @@
 #   ./run.sh --gui          force a window even with no display detected
 #   ./run.sh --serial FILE  send the serial console to a file instead of stdio
 #   ./run.sh --debug FLAGS  adds sysdebug=FLAGS to the kernel arguments
-#   ./run.sh --clean        rebuild Emu68 from scratch first
-#   ./run.sh --no-build     skip the Emu68 build
+#   ./run.sh --build        build Emu68 first (not done by default)
+#   ./run.sh --clean        rebuild Emu68 from scratch first (implies --build)
+#   ./run.sh --no-build     accepted and ignored; building is already off
 #   ./run.sh -- <args...>   everything after -- goes to qemu
 #
 # QEMU emulates the Raspberry Pi. Emu68 is the bare-metal owner; when AROS is
 # in play, Emu68 loads its m68k ELF from -initrd. Ctrl-A X quits.
 #
 # Pieces, and what builds them:
-#   out/images/Emu68.img          scripts/build.sh      (built here if missing)
+#   out/images/Emu68.img          scripts/build.sh      (--build, or run it)
 #   out/firmware/bcm2710-*.dtb    scripts/build.sh
 #   out/aros/aros-emu68-m68k.elf  scripts/build-aros.sh (never built here — it
 #                                 also builds a cross toolchain)
@@ -34,7 +35,10 @@ INITRD="$ROOT/out/aros/aros-emu68-m68k.elf"
 SD="$ROOT/out/aros/sd.img"
 MONITOR="${BELLATRIX_QEMU_MONITOR:-/tmp/emu68-monitor.sock}"
 
-BUILD=1
+# Off by default. Booting and building are different intentions, and a run
+# that silently rebuilds takes an unpredictable amount of time -- which matters
+# when the thing being measured is how long a boot takes.
+BUILD=0
 CLEAN=""
 # A window by default when there is a display to put it on — AROS is a
 # graphical system and the framebuffer is usually the point. Falls back to
@@ -55,8 +59,9 @@ EXTRA=()
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --build)    BUILD=1 ;;
         --no-build) BUILD=0 ;;
-        --clean)    CLEAN="clean" ;;
+        --clean)    CLEAN="clean"; BUILD=1 ;;
         --gui)      DISPLAY_ARG="gtk" ;;
         --headless) DISPLAY_ARG="none" ;;
         --serial)   SERIAL="file:$2"; shift ;;
@@ -65,7 +70,7 @@ while [ $# -gt 0 ]; do
         --sd)       SD="$2"; shift ;;
         --debug)    DEBUG="$2"; shift ;;
         --)         shift; EXTRA=("$@"); break ;;
-        -h|--help)  sed -n '2,26p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)  sed -n '2,27p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift

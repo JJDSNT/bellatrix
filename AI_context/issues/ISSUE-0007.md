@@ -616,6 +616,38 @@ cleared. On a filesystem that reads short for any reason other than EOF, that
 hands uninitialised memory to the loader as file contents. This port is exactly
 the environment where a filesystem might do that — see ISSUE-0009.
 
+## Confirmed: the ELF loader serves uninitialised memory as file contents
+
+The suspicion recorded above — that a cached read might reach past the filled
+part of the small-read buffer — is now established, from the logs already
+captured rather than from new runs. A correct detector, tracking how many bytes
+each 4 KB fill actually delivered, finds it **twice per boot at the same offsets
+in all three traced runs**:
+
+```
+off=7412  size=400  buffer filled from 5688,  1904 valid  ->  220 bytes past
+off=32292 size=520  buffer filled from 30344, 1172 valid  -> 1296 bytes past
+```
+
+`elf_read_block()` bounds its cache by `LOADSEG_SMALL_READ` instead of by how
+much was read, `srb_Buffer` comes from `AllocMem(MEMF_ANY)` and is never
+cleared, and the fill's return value is discarded. So 220 and 1296 bytes of
+whatever was in that memory are handed to the ELF loader as file contents, with
+no error raised anywhere. That is a mechanism for a loaded module containing
+something other than the file — which is what the crash looks like.
+
+`patches/aros/0009` records how much the fill delivered and bounds the cache by
+that. A short fill stays what it is, normal at end of file, and only limits what
+may be served; a request the file genuinely cannot satisfy now reports
+`ERROR_BAD_HUNK` rather than inventing the bytes. The recursive re-read goes with
+it — the fill starts at the requested offset, so the request is at the head of
+the buffer — which also removes the chance of recursing forever when a refill
+cannot satisfy the request either.
+
+**Whether it changes the boot rate is not measured yet.** It is a confirmed
+defect with a confirmed mechanism; that is not the same as being the cause of
+the intermittency, and the day's record is full of reasons not to conflate them.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
