@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0008
 title: "Uncommitted work sits outside both patch series and cannot be rebuilt"
-status: doing
+status: done
 priority: critical
 type: infra
 owner: agent
@@ -132,10 +132,10 @@ disagree.
 
 # Acceptance criteria
 
-- [ ] `./scripts/setup.sh --verify` exits 0
-- [ ] `./scripts/build-aros.sh` runs without bypassing setup
-- [ ] No file in either submodule differs from what its series produces
-- [ ] The snapshot directory is redundant and can be deleted
+- [x] `./scripts/setup.sh --verify` exits 0 — *"all series applied", 2026-08-05*
+- [x] `./scripts/build-aros.sh` runs without bypassing setup
+- [x] No file in either submodule differs from what its series produces
+- [x] The snapshot directory is redundant and can be deleted
 
 # Notes
 
@@ -148,3 +148,9 @@ changing any of this.
 - 2026-08-05 — found both defects while investigating ISSUE-0007; snapshotted
   the uncommitted state; confirmed `--recount` isolates the patch corruption to
   hunk headers.
+- 2026-08-05 — closed. Both submodules verify clean for the first time. The
+  count was nineteen files in `external/aros`, not four, plus one in
+  `external/emu68` that had never been audited at all — and that one, an
+  open-bus guard, was what made the desktop unreachable. Everything removed is
+  on branch `codex-2026-08-05` as three patches, none of it discarded. The
+  baseline it restores is written down in `docs/known-good-baseline.md`.
