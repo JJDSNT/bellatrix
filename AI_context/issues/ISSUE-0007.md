@@ -255,6 +255,34 @@ stack on any non-`icons` run — but no stall has been caught since it was added
 (the following series returned 4 `icons` out of 4, which is itself a reminder of
 how wide the variance is).
 
+## Two questions closed by reading the arbitration (2026-08-06)
+
+**66 versus 68 is settled: 68 is right.** `ExecutionLoop.c:424-426` pushes the
+interrupt frame itself:
+
+```c
+strh SRcopy, [sp, #-8]!     /* SR   at +0 */
+str  PC,     [sp, #2]       /* PC   at +2 */
+strh vector, [sp, #6]       /* format/vector at +6 */
+```
+
+Eight bytes — a 68010-style format-0 frame, not the 68000's six. A scheduler
+saving 60 bytes of registers plus the frame therefore needs **68**, and a
+66-byte save is assuming a 6-byte frame this machine never produces. The change
+parked on `codex-2026-08-05` was right about this specific point; that says
+nothing about the rest of that backend, which is still unassessed.
+
+**ARM interrupts are not left masked.** The IRQ fast path sets `SPSR.I` before
+`eret`, and the only `msr daifclr` in the whole 4 MB binary is inside
+`StartupPPC` — the PowerPC path. That looked like host interrupts could only
+ever be delivered once. Measured instead of argued: sampling `PSTATE` across
+runs shows `0x...0205` (I clear, interrupts enabled) throughout normal
+execution, `0x...0285` occasionally when a sample lands inside the handler, and
+`0x...03c5` — all of DAIF masked — only after the collapse, which is what being
+stuck in the exception loop looks like. Something clears the bit that static
+inspection does not show, most likely emitted by the JIT at run time and so
+absent from the ELF. The worry was unfounded.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -916,3 +944,9 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   classes are probably one defect. Stack-window capture added to stall.txt; the
   next series returned 4/4 icons and caught nothing, which is its own reminder
   about variance.
+- 2026-08-06 — PSTATE added to the probe. Normal execution runs with ARM
+  interrupts enabled; the all-masked value appears only after the collapse. Also
+  settled the 66-vs-68 frame question from the arbitration code: Emu68 pushes an
+  8-byte format-0 frame, so 68 is right. That series returned 0 icons in 3,
+  against 4 in 4 two series earlier — the variance is wide and no single series
+  should be read as a rate.

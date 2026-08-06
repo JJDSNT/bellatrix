@@ -10,8 +10,8 @@
 # Records are appended to out/boot-timing.jsonl. See AI_context/issues/ISSUE-0011.md.
 #
 # Each record carries its whole sample timeline as [t, state, title_delta,
-# delta, arm_pc, pc_moved, arm_sp], which is what makes the verdict auditable
-# after the fact rather than something to take on trust. A run that does not reach the
+# delta, arm_pc, pc_moved, arm_sp, pstate], which is what makes the verdict
+# auditable after the fact rather than something to take on trust. A run that does not reach the
 # icons also leaves a stall.txt beside its serial log: ARM state for all four
 # cores and the instructions around the PC.
 #
@@ -140,7 +140,7 @@ class Monitor:
         return self._read_to_prompt()
 
     def arm_state(self):
-        """Core 0's ARM PC and SP, or (None, None).
+        """Core 0's ARM PC, SP and PSTATE, or (None, None, None).
 
         Emu68 runs the m68k on core 0, so this is where the JIT is. A PC that
         moves between two reads says the guest is executing; one that does not
@@ -156,12 +156,14 @@ class Monitor:
         try:
             out = self.cmd("info registers")
         except (OSError, ConnectionError, socket.timeout):
-            return None, None
+            return None, None, None
         # The monitor echoes the command back with terminal escapes, so match
         # the values rather than trusting the line layout.
         pc = re.search(r"\bPC=([0-9a-fA-F]+)", out)
         sp = re.search(r"\bSP=([0-9a-fA-F]+)", out)
-        return (pc.group(1) if pc else None), (sp.group(1) if sp else None)
+        ps = re.search(r"\bPSTATE=([0-9a-fA-F]+)", out)
+        return (pc.group(1) if pc else None), (sp.group(1) if sp else None), \
+               (ps.group(1) if ps else None)
 
     def close(self):
         try:
@@ -398,14 +400,14 @@ def one_run(args, workdir):
             # enough (two monitor round trips per frame) that it is always on,
             # so a stall carries its own diagnosis instead of needing the whole
             # series run again.
-            pc1, sp1 = mon.arm_state()
+            pc1, sp1, pstate1 = mon.arm_state()
             time.sleep(PC_PROBE_GAP)
-            pc2, _ = mon.arm_state()
+            pc2, _, _ = mon.arm_state()
 
             now = round(time.monotonic() - t0, 1)
             state = screen_state(frame)
             samples.append([now, state, frame["title_delta"], frame["delta"],
-                            pc1, pc1 != pc2, sp1])
+                            pc1, pc1 != pc2, sp1, pstate1])
             record["size"] = frame["size"]
 
             if state == "screen":
@@ -440,6 +442,17 @@ def one_run(args, workdir):
         # Stack headroom over the whole run, in bytes below the top Emu68
         # reports at boot. A value that shrinks steadily is a leak; one that
         # holds and then collapses is recursion.
+        # PSTATE bit 7 is the IRQ mask. Emu68's IRQ fast path sets it in SPSR
+        # before eret, and the only `msr daifclr` in the whole binary is in the
+        # PowerPC path -- so how ARM interrupts are ever re-enabled on the m68k
+        # side is an open question, and any delivery mechanism depends on the
+        # answer. Counting how often a healthy run is sampled with IRQs masked
+        # is the cheap way to ask it.
+        psts = [int(s[7], 16) for s in samples if len(s) > 7 and s[7]]
+        if psts:
+            record["pstate_irq_masked"] = sum(1 for p in psts if p & 0x80)
+            record["pstate_samples"] = len(psts)
+
         sps = [int(s[6], 16) for s in samples if len(s) > 6 and s[6]]
         if sps:
             record["sp_first"] = "%x" % sps[0]
