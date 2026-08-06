@@ -109,6 +109,11 @@ PC_PROBE_GAP = 0.2
 # is the number worth reading.
 ARM_STACK_TOP = 0xffffff8000080000
 
+# Where Emu68 maps the guest's whole address space linearly, so guest memory can
+# be read from the monitor. Used to capture the instruction a guest CPU
+# exception froze on.
+GUEST_ALIAS_BASE = 0xffffff9000000000
+
 
 # --------------------------------------------------------------------------
 # QEMU monitor
@@ -317,6 +322,9 @@ def one_run(args, workdir):
         "loadavg": round(os.getloadavg()[0], 2),
     }
 
+    # Refuse immediately rather than waiting one out. A live QEMU here is
+    # somebody else's -- the harness kills its own before returning -- and
+    # measuring alongside it is the contamination this check exists to stop.
     strays = other_qemus()
     record["other_qemus"] = strays
     if strays != 0:
@@ -478,6 +486,45 @@ def one_run(args, workdir):
                 for off in (0x20000, 0x40000):
                     where = "0x%x" % (ARM_STACK_TOP - off)
                     dump += [f"=== x/64gx {where} ===", mon.cmd(f"x/64gx {where}")]
+
+                # If the guest reported a CPU exception, its trap handler froze
+                # the machine with the m68k PC on the serial. Read the guest's
+                # own memory there through the linear alias, so the instruction
+                # that faulted is captured with the run that faulted rather
+                # than needing the whole thing reproduced later.
+                try:
+                    with open(serial_path, "rb") as fh:
+                        text = fh.read().decode("utf-8", "replace")
+                except OSError:
+                    text = ""
+                for m in re.finditer(r"exception vector 0x([0-9a-f]+) at PC 0x([0-9a-f]+)",
+                                     text):
+                    record["guest_exception"] = {"vector": m.group(1),
+                                                 "pc": m.group(2)}
+                    addr = int(m.group(2), 16) & ~0xf
+                    where = "0x%x" % (GUEST_ALIAS_BASE + addr - 16)
+                    dump += [f"=== guest code at m68k PC 0x{m.group(2)} "
+                             f"(alias {where}) ===", mon.cmd(f"x/16xh {where}")]
+
+                # The trap handler prints the guest's registers, and the user
+                # stack is where the return addresses are. Those *are* code, so
+                # they symbolise against the m68k ELF this repository built --
+                # which turns "the PC went somewhere" into a call chain.
+                usp = re.search(r"USP 0x([0-9a-f]+)", text)
+                if usp:
+                    record["guest_usp"] = usp.group(1)
+                    where = "0x%x" % (GUEST_ALIAS_BASE + int(usp.group(1), 16))
+                    dump += [f"=== guest stack at USP 0x{usp.group(1)} ===",
+                             mon.cmd(f"x/48xw {where}")]
+                regs = dict(re.findall(r"\b(A[0-6]) 0x([0-9a-f]+)", text))
+                record["guest_aregs"] = regs
+                for name in ("A6", "A2", "A0"):
+                    v = regs.get(name)
+                    if not v:
+                        continue
+                    where = "0x%x" % (GUEST_ALIAS_BASE + (int(v, 16) & ~3))
+                    dump += [f"=== guest memory at {name} 0x{v} ===",
+                             mon.cmd(f"x/8xw {where}")]
                 with open(os.path.join(workdir, "stall.txt"), "w") as fh:
                     fh.write("\n".join(dump))
             except (OSError, ConnectionError, socket.timeout) as exc:

@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 6 Aug 2026 23:50:00 -0300
+Subject: [PATCH 7/8] Raise the m68k default task stack to match the other targets
+
+16 KB made m68k the outlier in this tree by a factor of two and a half:
+i386, ppc, riscv and x86_64 all use 40960, MorphOS 32768, m68k 16384. It is
+a figure from machines with 512 KB of RAM in them, and this target has 840 MB.
+
+It is also not enough. With a frame validator in the scheduler,
+WANDERER:Wanderer was caught writing its persistent task frame below
+tc_SPLower -- outside its own stack -- 97 times in one boot. Everything the
+scheduler saved and restored from there belonged to something else, which is
+why pointers read back out of it were fragments of strings.
+
+Measured at 64 KB, deliberately above every other target so the test had
+headroom: validator reports went from 97 in a run to zero across eight, and
+runaway exception recursion from one to none. Landed at 40960, because
+agreeing with the other targets is a better argument than any number chosen
+for this port.
+
+It does not change the boot rate; that was measured too, and said so.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/arch/m68k-all/include/aros/cpu.h
++++ b/arch/m68k-all/include/aros/cpu.h
+@@ -116,7 +116,24 @@
+     Not so much, I think (schulz) ;-))
+ */
+ 
+-#define AROS_STACKSIZE  0x4000
++/*
++ * 16 KB made m68k the outlier in this tree by a factor of two and a half:
++ *
++ *     i386-all     40960      ppc-all      40960
++ *     riscv-all    40960      x86_64-all   40960
++ *     ppc-morphos  32768      m68k-all     16384
++ *
++ * It is a figure from machines with 512 KB of RAM in them, and this target has
++ * 840 MB. With a frame validator in the scheduler, WANDERER:Wanderer was caught
++ * writing its persistent task frame below tc_SPLower -- outside its own stack
++ * -- 97 times in one boot, after which everything the scheduler saved and
++ * restored belonged to something else. See AI_context/issues/ISSUE-0014.md.
++ *
++ * 40960 matches every target here that is not MorphOS. The measurement that
++ * justified raising it at all was taken at 64 KB, deliberately above them so
++ * the test had headroom to walk back from.
++ */
++#define AROS_STACKSIZE  0xA000
+ 
+ //#define AROS_NEEDS___MAIN
+ 

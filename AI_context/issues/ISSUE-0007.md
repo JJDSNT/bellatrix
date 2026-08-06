@@ -459,6 +459,182 @@ rather than buried: stepping over a faulting instruction skips any side effect
 it had, such as an addressing-mode writeback, so a wrong step-over could corrupt
 where the old behaviour merely hung.
 
+## What the failures look like once the emulator survives (2026-08-06)
+
+With the open-bus recovery, the 68-byte frame and a 64 KB task stack in place,
+the emulator no longer destroys itself and the **guest's own trap handler**
+catches the failure and freezes with a register dump. That changes what there is
+to look at.
+
+Across one series of eight: **every failing run reports a CPU exception and
+every successful run reports none.** All of them vector `0x2c` — which
+`boot/trapprobe.c` prints as `frame[3] & 0x0fff`, the vector *offset*, so 0x2c/4
+= vector 11, Line 1111 Emulator.
+
+Two signatures:
+
+| runs | PC | |
+|---|---|---|
+| 3 × `logo` | `0x0088520a`, identical, with identical registers | deterministic |
+| 1 × `workbench` | `0xfffffe62` | wild |
+| 1 × later run | `0x345fee1c` | wild |
+
+**F-line here is a symptom, not an FPU gap, and the correction matters.** The
+guest memory at `0x345fee1c` was read back through the alias:
+
+```
+ffffff90345fee10: 0x0000 0x7c49 0x0000 0x4000 0x0000 0x984c 0xffff 0xfcff
+                                                            ^ PC
+```
+
+Zeros and scattered values — **data, not code**. The word at the PC happens to
+be `0xffff`, which is in the F-line range, so the CPU raises vector 11. The
+exception is what a wild PC produces when it lands on data whose bytes decode
+that way. Nothing here says an FPU instruction was involved.
+
+So this is defect A, unchanged in nature and much better instrumented: the PC
+goes somewhere it should not, and now the guest says so with registers instead
+of the emulator dying. The `logo` case is the more promising of the two to
+chase, because it is **deterministic** — same PC, same registers, three runs out
+of three.
+
+## Chasing 0x0088520a: what the wild PC looks like up close
+
+**`0xc0000058` is the first wrong thing, and it is specific.** Read exactly once
+in each of the three `logo` failures and in **none** of the five successes, at
+the same point every time -- inside a `Lddemon` library open, immediately after
+`LDRequestObject()`, while the Shell is running the `If EXISTS "C:Decoration"`
+builtin. It is not a legitimate probe, which is what the earlier note guessed
+from seeing it in other series. The chain is: something computes
+`0xc0000058`, reads it, gets open bus, and the PC goes wild.
+
+**The F-line vector is a consequence of the open-bus policy, not a clue.** Two
+more wild PCs were captured with guest memory:
+
+| PC | guest memory there |
+|---|---|
+| `0x4cf40010` | `Cannot access memory` |
+| `0x6c695fcc` | `Cannot access memory` — bytes `6c 69 5f` = `"li_"` |
+
+Both are unmapped, so the instruction fetch returns open bus, which is all ones,
+which is `0xFFFF` -- an F-line opcode. Vector 0x2c is therefore what *any* wild
+PC into unmapped space now produces. That is a designed property and a good one:
+it turns a wild jump into an immediate trap the guest reports with registers,
+instead of the emulator hanging. It says nothing about why the PC was wrong.
+
+`0x6c695fcc` is another string fragment, like the open-bus addresses before it.
+
+**`0x0088520a` remains the best target** precisely because it is unlike these:
+it is inside mapped RAM at 8.9 MB, above every library load address seen in the
+same run (`0x0027`–`0x003a`), and it repeats exactly, with identical registers,
+three runs out of three. Registers worth carrying forward:
+
+```
+A6 0x00002b58   A2 0x00002f04   A0 0x0000000b   <- far too low to be pointers
+A1 0x0032904c = D3             A3 0x00355728   A4 0x003558bc  <- library region
+D0 0x000008ff  D2 0x000008e3   D4 0x0000000c   D5 0x00000004
+```
+
+A6 holds a library base in this ABI, and `0x2b58` is not one.
+
+## Root cause direction: the crash is inside InternalLoadSeg_ELF
+
+The guest's trap handler prints USP, and the return addresses on the user stack
+are code, so they symbolise against the m68k ELF this repository builds. The AROS
+image loads at `0x34600000` (`[BOOT] Loading ELF executable ... to
+0x0000000034600000`), so `addr - 0x34600000` indexes it directly. QEMU's `x/w`
+reads little-endian, so the words need swapping first — without that the stack
+looks like noise.
+
+```
+004041d8: 346aa5fc   InternalLoadSeg_ELF+0x336
+0040425c: 346a340a   Dos_7_Read+0x3e
+00404260: 7f454c46   "\x7fELF"
+00404264: 0102010f   ELF32, MSB, version 1
+00404270: 00010004   e_type = 1 (ET_REL), e_machine = 4 (EM_68K)
+```
+
+**The failure is inside `InternalLoadSeg_ELF`, loading a module from disk**, with
+that module's ELF header sitting in a buffer on the stack. That matches the
+serial exactly: the LDDemon was opening a library.
+
+Two earlier readings of mine are wrong and are corrected here:
+
+- **`A6 = 0x00002b58` is not corruption.** The same value is on the stack at
+  `0x4041d4`, deliberately saved. It is 11096 — a size. In a stretch of compiled
+  C, A6 is not a library base.
+- **`0x0088520a` is not a random address.** At 8.9 MB it is in the region
+  `InternalLoadSeg_ELF` allocates segments into.
+
+**The hypothesis this supports**, and it is a hypothesis: the loader allocates a
+segment, the read does not fill it, the segment stays zero, and the entry point
+is jumped into anyway. Running through zeros to the first non-zero word is
+exactly what the memory dump shows.
+
+If that is right, the defect is in what `Dos_7_Read` returns — which is the
+fat-handler path, and therefore **ISSUE-0009**. The two investigations may be
+one.
+
+## What to do next, without more runs
+
+- Instrument `InternalLoadSeg_ELF`'s read results rather than sampling boots:
+  the sizes requested and returned, per section. A short read proves it.
+- The recovery path's `open_bus_report` is called with `size` 0, so the width of
+  the `0xc0000058` access is not recorded. One line, and it narrows what code
+  could be making it.
+
+## What the ELF-loader trace says (2026-08-06)
+
+`patches/aros/0008` traces every read the loader makes: each `ilsRead` request
+and result, each `elf_read_block` with the small-read buffer's state, and each
+section load with its file offset, size and destination. Three runs, ~1600-2600
+trace lines each.
+
+**Established, and it kills the simple version of the hypothesis:**
+
+- **No section load is ever short.** `read_block` returns the full count on
+  every direct read, in all three runs. A `load_hunk` of 4326 bytes reads 4326.
+  So "the segment was allocated and not filled" is **not** what happens — at
+  least not through a short read.
+- **The 4 KB small-read fills fail constantly and benignly.** 127 failures in
+  one run, every one of them at end of file: a fill of 4096 at offset 4378 gets
+  3434 and then 0, because the file is 7812 bytes long. `elf_read_block`
+  discards that result, and `srb_Buffer` comes from `AllocMem(MEMF_ANY)`, so the
+  tail is uninitialised. Every cached read seen by hand afterwards lands inside
+  the part that was validly read.
+
+**Suspected, and explicitly not established:** whether *any* cached read reaches
+past the validly-filled part of the small-read buffer. A crude scan of the trace
+flags 193-312 candidates per run, but the scan's tracking of how much of the
+buffer is valid is unreliable across refills and should not be quoted. Making
+that detector correct is the next concrete step, and it is analysis of logs
+already captured, not more boots.
+
+The shape of the upstream defect is worth stating plainly whatever the answer:
+`elf_read_block` ignores the return of the fill, and the buffer it fills is not
+cleared. On a filesystem that reads short for any reason other than EOF, that
+hands uninitialised memory to the loader as file contents. This port is exactly
+the environment where a filesystem might do that — see ISSUE-0009.
+
+## Where this work lives, 2026-08-06
+
+Not all of the day's findings are on `main`, and the split is deliberate.
+
+**On `main`:** the IPL delivery path (`patches/emu68/0002`, `0003`), the
+`SYSHandler` re-entry guard (`0004`), the open-bus recovery (`0005`), the task
+stack raised to 40960 (`patches/aros/0007`), the FAT byte-order fix
+(`patches/aros/0008`), and the harness with all of its probes.
+
+**On `experiment/frame-68`, and not promoted:** the 68-byte Exec backend with
+its frame validator, and `patches/aros/0009`, the ELF-loader read tracing. The
+backend is more correct than the 66-byte scheme — self-contained, where that one
+balances only while entry and exit are paired — but it **does not change the
+boot rate**, and the validator that made it worth running has already produced
+its finding (ISSUE-0014). The tracing is diagnostic and marked for removal.
+
+Anything quoting a `[EMU68-FRAME]` or `[LSREAD]` line in this issue was measured
+on that branch, not on `main`.
+
 ## The Zorro III board is out of the build (2026-08-06)
 
 `patches/emu68/0002` offered the Z3 ROM board to a standalone guest and `0003`
@@ -1150,3 +1326,27 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   two offsets two bytes apart -- the signature of a longword read misaligned by
   two. Strongest corroboration yet for 66-versus-68, and still corroboration
   rather than proof.
+- 2026-08-06 — the harness now reads guest memory at the m68k PC whenever the
+  guest's trap handler reports an exception. First use corrected a reading of
+  mine: the vector-11 F-line exceptions are not an FPU gap, they are a wild PC
+  landing on data whose bytes happen to decode as F-line. Every failing run in
+  a series of eight reported an exception; every successful run reported none.
+  The `logo` signature is deterministic -- same PC 0x0088520a and identical
+  registers across three runs -- and is the better one to chase.
+- 2026-08-06 — 0xc0000058 is read in 3 of 3 logo failures and 0 of 5 successes,
+  at the same point each time, and is the first wrong thing in that chain. The
+  F-line vector turns out to be a consequence of open bus reading as all ones
+  when the PC lands in unmapped memory, not a clue about the cause. 0x0088520a
+  stays the target: mapped RAM, deterministic, identical registers, and an A6
+  of 0x2b58 that cannot be a library base.
+- 2026-08-06 — correction: the "other qemu-system process" that blocked the last
+  run of the chase series was a deliberate one of the user's, and it affected
+  only that run. The other five are clean and the two wild PCs captured in them
+  stand. A commit message from that moment says the series may be contaminated;
+  it is wrong and this is the correction.
+- 2026-08-06 — symbolised the guest's user stack against our own m68k ELF
+  (base 0x34600000, byte-swap the monitor's little-endian words first). The
+  crash is inside InternalLoadSeg_ELF calling Dos_7_Read, with the module's ELF
+  header on the stack. Corrects two earlier readings: A6=0x2b58 is a saved size,
+  not a corrupt library base, and 0x0088520a is in the loader's own segment
+  allocation region. Points at the disk read path, i.e. ISSUE-0009.

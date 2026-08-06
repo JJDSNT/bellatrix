@@ -108,26 +108,49 @@ little-endian conversion, their size, cluster and date fields are byte-swapped:
 `OpenDiskFont` with nothing on the serial. `mdel` hangs too, walking the same
 bogus chain.
 
-`mdir -i out/aros/sd.img@@1M ::/Fonts` shows it immediately. The remedy today is
-to regenerate the card.
+`mdir -i out/aros/sd.img@@1M ::/Fonts` shows it immediately.
 
-The obvious repair does not work, and this was measured rather than reasoned
-about. The fat-handler change parked on branch `codex-2026-08-05` as part of
-`aros-extras-drift.patch` was made into `patches/aros/0007`, applied through
-the normal path, and built: **three runs, three failures**, one of them stopping
-as early as `IPrefs`. Reverted, on the same freshly generated card, two runs and
-two Workbench screens. It is a regression, not a fix.
+**Fixed 2026-08-06, and the earlier verdict here was wrong.** This section used
+to say the repair had been measured as a regression — three runs, three
+failures. It had been, and the measurement was misattributed: the change was
+promoted as part of `aros-extras-drift.patch`, which bundles the FAT fix with
+MUI and Wanderer tracing (`#define DEBUG 1` in four files, dozens of traces per
+redraw). The failures are far more likely to have been that.
 
-The change bundles two different things: little-endian conversion at the *write*
-sites, which is what stops the corruption, and substituting `FIRST_FILE_CLUSTER()`
-plus `AROS_LE2WORD` at the *read* sites. If the handler already converts on the
-way in, the read half converts a second time and breaks every lookup. Splitting
-the two and taking only the write side is the next thing to try — with the same
-protocol, since the unfixed handler poisons the card and one run therefore
-contaminates the next: **regenerate the card before every single run.**
+The real defect was located by looking at the bytes. A boot wrote a 17-byte file
+and copied a 1944-byte binary to the card; on the host, the *sizes* read back as
+`0x11000000` and `0x98070000` — byte-reversed — and the year as 2028, while the
+file **contents** were byte-identical to the originals, all 1944 bytes. So the
+block path is clean and the SD backend is innocent: the loss is entirely in how
+the directory-entry fields are composed. `rom/filesys/fat` converts cluster and
+size on read and not on write, and the dates on neither side.
+
+`patches/aros/0008` converts them, with the date conversion inside
+`ConvertFATDate`/`ConvertDOSDate` so the halves cannot drift apart again. After
+it: sizes 17 and 1944, correct dates, and `mcopy` — which previously failed with
+`Fat problem while decoding` — reads both files back byte for byte.
+
+This is an upstream AROS defect on every big-endian target; `m68k-amiga`,
+`ppc-native` and `ppc-morphos` share the code.
+
+**It does not change the boot rate, and should not be expected to.** Every run
+measured here is on a freshly generated card, whose files were written correctly
+by `mcopy`; the read path already converted. What the bug broke was the *second*
+boot, on files the first boot wrote — which the regenerate-every-run protocol
+never exercised.
+
+The lesson worth keeping is not about FAT: **a measurement of a bundled change
+attributes to all of it.** The verdict recorded here was honest and still wrong,
+because the thing measured was not the thing named.
 
 ## What is not fixed
 
-Reaching the desktop is intermittent. Reliability has not been measured on this
-baseline yet — see `AI_context/issues/ISSUE-0007.md`, and the measurement
-discipline in `CLAUDE.md` before quoting any rate.
+Reaching the desktop is intermittent, at roughly 38% over 101 measured runs on
+2026-08-06, and **nothing changed that rate all day** — every configuration
+tried sits inside every other one's confidence interval. Three real defects were
+closed and the failure became diagnosable rather than silent, which is a
+different achievement and should not be reported as this one.
+
+The failure now surfaces as a wild guest PC inside `InternalLoadSeg_ELF`. See
+`AI_context/issues/ISSUE-0007.md`, and the measurement discipline in `CLAUDE.md`
+before quoting any rate.

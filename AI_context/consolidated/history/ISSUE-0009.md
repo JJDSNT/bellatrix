@@ -1,8 +1,8 @@
 ---
 id: ISSUE-0009
 title: "Locate the FAT byte-order defect: filesystem handler or SD card backend"
-status: backlog
-priority: high
+status: done
+priority: critical
 type: research
 owner: unassigned
 created_at: 2026-08-06
@@ -178,3 +178,90 @@ at 200 s shows an empty screen and reads as a failure; see
 - 2026-08-06 — opened. The both-sides FAT change is already measured as a
   regression (3 runs / 3 failures, against 2 runs / 2 desktops reverted); the
   layer at fault has never been established from the bytes.
+
+# Update 2026-08-06: this may be the same investigation as ISSUE-0007
+
+The boot failure in ISSUE-0007 was traced to a crash inside
+`InternalLoadSeg_ELF`, calling `Dos_7_Read`, with the PC landing in a
+zero-filled region of the loader's own segment allocation area. That is the disk
+read path, which is this issue's path.
+
+The loader trace (`patches/aros/0008`) then showed that **no section load is
+short** — every direct read returns its full count. So the two are not obviously
+the same defect, and the connection is a hypothesis rather than a finding.
+
+What keeps them linked: `elf_read_block` fills a 4 KB buffer with
+`AllocMem(MEMF_ANY)` memory, ignores whether the fill succeeded, and serves
+small reads out of it. Anything that makes a read return the wrong *content* —
+as opposed to the wrong count — would be invisible to the trace and would reach
+the loader as file data. Byte-order handling in the FAT path is exactly a
+wrong-content defect.
+
+So the discriminating experiment in this issue is now worth more than it was
+when it was only about a poisoned card: **does a file read back byte for byte
+what was written?** The content check answers ISSUE-0007's open question too.
+
+# ANSWERED 2026-08-06: the FAT handler, and the fix is verified
+
+The discriminating experiment was run. A boot wrote a 17-byte text file and
+copied `C:Echo` (1944 bytes) to the card; the image was then read on the host.
+
+**Before:**
+
+| | on disk | reversed |
+|---|---|---|
+| `BYTEORD.TST` | 285212672 = `0x11000000` | **17** |
+| `ECHOCOPY.BIN` | 2550595584 = `0x98070000` | **1944** |
+| year | 2028 | |
+
+**And the contents were byte-perfect.** `ECHOCOPY.BIN`'s data on the raw image
+was identical to `C:Echo` — all 1944 bytes, zero differing — and the text file
+read `0123456789ABCDEF\n` forward. Searching the image for the 4-byte-reversed
+form of a chunk from the middle of the binary found nothing.
+
+**So it is candidate A.** The block path is clean and the SD backend is
+innocent; the loss is entirely in how the directory-entry fields are composed.
+
+**After `patches/aros/0009`:**
+
+```
+BYTEORD  TST        17 2026-08-06  17:13
+ECHOCOPY BIN      1944 2026-08-06  17:13
+mcopy OK; ECHOCOPY.BIN is byte-identical to C:Echo
+```
+
+Sizes, dates and cluster chains all correct, and `mcopy` — which previously
+failed with `Fat problem while decoding` — reads both files.
+
+## Correction: the earlier "the fix is a regression" verdict was misattributed
+
+`docs/known-good-baseline.md` and ISSUE-0007 recorded, as measured fact, that
+the both-sides FAT conversion is a regression: three runs, three failures.
+Comparing the parked work line by line shows why that is wrong.
+
+Codex's cluster and size changes are **identical to the ones now applied** —
+same call, same sites. The only difference is `date.c`, where it converts on
+both sides, which is symmetric and correct. But
+`AI_context/codex-2026-08-05/aros-extras-drift.patch` **bundles FAT with MUI and
+Wanderer**, including `#define DEBUG 1` in four files and dozens of
+`[EMU68-META-DIAG]` traces on every redraw. Promoting that patch turned all of
+that on. The three failures are far more likely to have been the tracing.
+
+The lesson is not about FAT: **a measurement of a bundled change attributes to
+all of it.** The verdict was recorded honestly and was still wrong, because the
+thing measured was not the thing named.
+
+## What is left
+
+- The date conversion is now inside `ConvertFATDate`/`ConvertDOSDate` rather
+  than at the call sites, so read and write cannot drift apart again. Worth
+  keeping in mind as the shape of the original defect.
+- This is an upstream AROS bug on every big-endian target — `m68k-amiga`,
+  `ppc-native`, `ppc-morphos` share the code — and is latent there only because
+  writing FAT from them is rare. It deserves an upstream submission.
+- Whether it changes the boot rate is **not** established and should not be
+  assumed. It stops the card poisoning itself, which is a different claim.
+
+# Closed
+
+Closed 2026-08-06. Answered by inspection of the bytes -- the FAT handler, not the SD backend -- and fixed by `patches/aros/0008`, verified end to end: sizes, dates and cluster chains correct, and a 1944-byte binary copied by AROS reads back byte-identical on the host.

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0010
 title: "Move host-IRQ delivery to PiStorm's IPL injection; keep the Paula shadow for the chipset era"
-status: ready
+status: done
 priority: high
 type: research
 owner: unassigned
@@ -228,3 +228,7 @@ not check a reordering for you.
   the dominant failure is unbounded recursion through the exception vector that
   every shadow access uses. The open design work is unchanged and is still the
   hard part: `INTF.IPL` is a level with nothing to lower it.
+
+# Closed
+
+Closed 2026-08-06. The port is done: `patches/emu68/0002` and `0003`. The Paula shadow stays in `patches/emu68/0001` for the chipset era, and `docs/irq.md` carries the decision.

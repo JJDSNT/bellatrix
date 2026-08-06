@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0004
 title: "INTF.IPL is inert on stock builds — the IPL delivery mechanism is unreachable"
-status: ready
+status: done
 priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-03
-updated_at: 2026-08-03
+updated_at: 2026-08-06
 tags:
   - emu68
   - irq
@@ -115,3 +115,7 @@ ISSUE-0010 for the reasoning and `docs/irq.md` for the corrected write-up.
 Making the arbitration branch reachable is inert on its own, because nothing
 writes `INTF.IPL` yet. That makes it a safe first commit and the natural first
 step of the port rather than a separate piece of work.
+
+# Closed
+
+Closed 2026-08-06. The arbitration branch is reachable on stock builds as `patches/emu68/0002`, and the port now delivers host interrupts through `INTF.IPL` (`patches/emu68/0003`). AROS boots to the desktop with no Paula registers in the machine.
