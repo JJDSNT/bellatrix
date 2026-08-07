@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Bernie Innocenti <bernie@codewiz.org>
+Date: Mon, 3 Aug 2026 00:00:00 -0300
+Subject: [PATCH 15/17] iprefs: Detach before the first prefs pass
+
+Upstream AROS 7416119e73, imported verbatim. Our pin d0370bd757 predates it.
+
+Verified present in our tree before importing -- workbench/c/iprefs/main.c:
+
+    StartNotifications();
+    PreparePatches();
+    HandleNotify();     /* first prefs pass */
+    Detach();           /* only now */
+    HandleAll();
+
+Upstream: "IPrefs held the Startup-Sequence open until it had applied every
+preference. The font pass can sit in a requester loop waiting for the user to
+close windows so the Workbench screen can be reset, and nothing later in the
+sequence runs until it gives up."
+
+That is the shape of a failure ISSUE-0007 has recorded more than once: IPrefs
+is the last thing the Startup-Sequence reports before the boot goes quiet,
+which is why the parked 2026-08-05 tree carried IPrefs tracing at all. Nothing
+in HandleNotify() writes to the standard streams, so detaching first costs
+nothing.
+
+Goes with 0016, which removes the requester that causes the loop. They address
+the same failure from opposite ends.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+diff --git a/workbench/c/iprefs/global.h b/workbench/c/iprefs/global.h
+index 800e5ced41..328748939d 100644
+--- a/workbench/c/iprefs/global.h
++++ b/workbench/c/iprefs/global.h
+@@ -188,8 +188,7 @@ struct IPrefsSem
+ 
+ /* main.c */
+ 
+-void Cleanup(STRPTR msg);
+-WORD ShowMessage(STRPTR title, STRPTR text, STRPTR gadtext);
++LONG ShowMessage(STRPTR title, STRPTR text, STRPTR gadtext);
+ 
+ /* patches.c */
+ 
+diff --git a/workbench/c/iprefs/main.c b/workbench/c/iprefs/main.c
+index 0bc2f31c26..84e1de037a 100644
+--- a/workbench/c/iprefs/main.c
++++ b/workbench/c/iprefs/main.c
+@@ -58,7 +58,7 @@
+ 
+ /*********************************************************************************************/
+ 
+-static struct libinfo
++static const struct libinfo
+ {
+     APTR        var;
+     STRPTR      name;
+@@ -118,7 +118,7 @@ static void KillNotifications(void);
+ 
+ /*********************************************************************************************/
+ 
+-WORD ShowMessage(STRPTR title, STRPTR text, STRPTR gadtext)
++LONG ShowMessage(STRPTR title, STRPTR text, STRPTR gadtext)
+ {
+     struct EasyStruct es;
+ 
+@@ -132,7 +132,7 @@ WORD ShowMessage(STRPTR title, STRPTR text, STRPTR gadtext)
+ }
+ /*********************************************************************************************/
+ 
+-void Cleanup(STRPTR msg)
++static void Cleanup(STRPTR msg)
+ {
+     if (msg)
+     {
+@@ -156,7 +156,7 @@ void Cleanup(STRPTR msg)
+ 
+ static void OpenLibs(void)
+ {
+-    struct libinfo *li;
++    const struct libinfo *li;
+ 
+     for (li = libtable; li->var; li++)
+     {
+@@ -173,7 +173,7 @@ static void OpenLibs(void)
+ 
+ static void CloseLibs(void)
+ {
+-    struct libinfo *li;
++    const struct libinfo *li;
+ 
+     for(li = libtable; li->var; li++)
+     {
+@@ -358,8 +358,10 @@ int main(void)
+     GetENVName();
+     StartNotifications();
+     PreparePatches();
++
++    Detach();  // No more console I/O beyond this point.
++
+     HandleNotify();
+-    Detach();
+     HandleAll();
+     Cleanup(NULL);
+ 

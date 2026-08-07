@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gareth Davidson <gareth@aros.org>
+Date: Mon, 3 Aug 2026 00:00:00 -0300
+Subject: [PATCH 16/17] IPrefs: avoid Workbench reset requester during startup
+
+Upstream AROS e92efb9ee4, imported verbatim. Our pin d0370bd757 predates it.
+
+Loading the initial font preferences can attempt to close the Workbench screen
+while the startup Shell still has an open window. If CloseWorkBench fails,
+IPrefs puts up a Retry/Cancel requester and stops applying the rest of the
+preferences -- on a machine nobody is sitting at, that is a stall with no way
+out.
+
+Marks only the initial notification batch as an initial load and cancels the
+screen reset without a requester during that phase; the normal requester stays
+for live preference changes afterwards.
+
+This is the other end of 0015, and does not apply to the pinned tree without
+it -- 0015 reshapes main.c first. Numeric order in this series is therefore
+load-bearing, which it already was.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+diff --git a/workbench/c/iprefs/fontprefs.c b/workbench/c/iprefs/fontprefs.c
+index f2a84230ad..750805fd30 100644
+--- a/workbench/c/iprefs/fontprefs.c
++++ b/workbench/c/iprefs/fontprefs.c
+@@ -129,12 +129,23 @@ void FontPrefs_Handler(STRPTR filename)
+                                 {
+                                     closed = CloseWorkBench();
+                                     if (!closed)
+-                                        cancel = ShowMessage("System Request",
+-                                            "Intuition is attempting to reset"
+-                                            " the Workbench Screen.\n"
+-                                            "Please close all windows,"
+-                                            " except drawers.",
+-                                            "Retry|Cancel") == 0;
++                                    {
++                                        /* An initial preference load can run
++                                         * while the startup Shell still prevents
++                                         * CloseWorkBench(). Do not wedge IPrefs
++                                         * in an unanswerable requester and leave
++                                         * later preferences unapplied. Live
++                                         * changes retain the normal requester. */
++                                        if (initial_load)
++                                            cancel = TRUE;
++                                        else
++                                            cancel = ShowMessage("System Request",
++                                                "Intuition is attempting to reset"
++                                                " the Workbench Screen.\n"
++                                                "Please close all windows,"
++                                                " except drawers.",
++                                                "Retry|Cancel") == 0;
++                                    }
+                                 }
+                                 if (closed)
+                                     OpenWorkBench();
+diff --git a/workbench/c/iprefs/main.c b/workbench/c/iprefs/main.c
+index 84e1de037a..ed49d93eac 100644
+--- a/workbench/c/iprefs/main.c
++++ b/workbench/c/iprefs/main.c
+@@ -361,7 +361,9 @@ int main(void)
+ 
+     Detach();  // No more console I/O beyond this point.
+ 
++    initial_load = TRUE;
+     HandleNotify();
++    initial_load = FALSE;
+     HandleAll();
+     Cleanup(NULL);
+ 
+@@ -369,5 +371,3 @@ int main(void)
+ }
+ 
+ /*********************************************************************************************/
+-
+-
+diff --git a/workbench/c/iprefs/vars.h b/workbench/c/iprefs/vars.h
+index 276a7b51fa..1d78fe477f 100644
+--- a/workbench/c/iprefs/vars.h
++++ b/workbench/c/iprefs/vars.h
+@@ -47,3 +47,4 @@ VAR UBYTE   	    	    	pointerprefsname[256];
+ VAR UBYTE   	    	    	overscanprefsname[256];
+ 
+ VAR BOOL    	    	    	patches_installed;
++VAR BOOL    	    	    	initial_load;
