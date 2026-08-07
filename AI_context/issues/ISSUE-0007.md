@@ -981,7 +981,36 @@ The rule this earns: **an override that replaces a policy must replace it in
 every module that carries a copy**, or the old one ships alongside the new one
 and reads as current to whoever looks next.
 
-## The caller, named: a symbol-set entry that is garbage (2026-08-06)
+## Correction: the "symbol-set entry" attribution does not hold (2026-08-07)
+
+The section below concluded, from one sample, that the caller was
+`set_call_devfuncs` walking a module symbol set and calling a garbage entry.
+**It is wrong, and the method that produced it is the reason.**
+
+The return address was taken as the longword at the guest's A7. That is only
+the return address for a leaf call with nothing else pushed; otherwise A7 points
+at something else entirely. Across more samples the value is frequently `0` —
+not an address at all. One sample happened to land on something that resolved
+inside a module, and I read a mechanism into it.
+
+Tested directly rather than argued: `set_call_devfuncs` was instrumented to dump
+the set it walks, the module rebuilt with it (the *reference distribution*
+supplies every module, so ours had to be installed over it), and three runs
+produced **zero** dumps. The function is never called — a `.mui` class is a
+library and uses a different entry point.
+
+So the caller of the bad pointer is still unknown. What survives from that
+section is only what was measured: the guest PC at the fault, which names the
+victim.
+
+**Two things worth keeping from the attempt.** A7 is unreliable as a return
+address and should not be reported as one. And a fact that had gone unnoticed
+all day: the kernel ELF is built here, but **every module on the card comes from
+the reference distribution** — `patches/aros/*` touching module code has no
+effect on what boots unless the module is rebuilt and installed over the
+reference tree.
+
+## Superseded: the caller, named (2026-08-06)
 
 `patches/emu68/0005` now also reads the guest's A7 — which lives in an ARM
 register while the JIT runs, so it is read from there rather than from the
