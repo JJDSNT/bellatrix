@@ -265,3 +265,18 @@ Two things, both found here and absent there:
   Folded into `0014`. The lesson is narrow and worth keeping: this audit
   verified that each defect was real in our tree, which is not the same as
   verifying the fix builds. Nothing measured yet.
+- 2026-08-07 — first boot against the five: **they do not touch the failure.**
+  One run, killed before a verdict but after the guest died, reproduces the
+  signature byte for byte — open bus at `0x404a32ec/f0/f4`, nine accesses, then
+  `CPU exception vector 0x00000010 at PC 0x0000210d` with `A6 0x000022ff`. Same
+  region, same odd PC, same odd A6 as the sample recorded before any of this was
+  imported. The boot reached `Assign "WANDERER:"` in the Startup-Sequence, so it
+  is not failing early.
+  **The informative part is a zero:** `patches/aros/0012`'s `[FreeVecPooled]
+  REFUSED` never fired. The bad pointer is not arriving as an out-of-pool free
+  on that path, which is the mechanism `b553067c52` (`0013`) would have fixed.
+  So either AllocBitMap's failure paths do not run here, or this is not their
+  damage. `ret 002a32e8` repeats identically across all nine accesses — the same
+  caller every time, and the next thing to chase.
+  The five stay: each is a real defect verified in our tree, and this is a
+  negative result about *this* failure, not about them.
