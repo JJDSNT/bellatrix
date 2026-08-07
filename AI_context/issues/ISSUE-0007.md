@@ -651,9 +651,20 @@ it — the fill starts at the requested offset, so the request is at the head of
 the buffer — which also removes the chance of recursing forever when a refill
 cannot satisfy the request either.
 
-**Whether it changes the boot rate is not measured yet.** It is a confirmed
-defect with a confirmed mechanism; that is not the same as being the cause of
-the intermittency, and the day's record is full of reasons not to conflate them.
+**The fix was verified against the marker, on `experiment/frame-68`** — the same
+change carried on top of the LSREAD tracing, so the count could be read directly
+rather than inferred. Three runs: reads past the filled part go from **2 per boot
+to 0**, and no request is refused for want of bytes. The loader stops receiving
+uninitialised memory as file contents.
+
+**Whether it changes the boot rate is not measured yet, and those three runs do
+not say.** All three failed to reach the icons, and that is not a rate: the build
+carried ~2000 lines of tracing per boot plus the 68-byte backend and a 64 KB
+stack, so it is not comparable to `main`, and three failures at a ~38% base rate
+happen a quarter of the time anyway. What is established is a confirmed defect,
+a confirmed mechanism, and a fix confirmed to remove it — none of which is the
+same as being the cause of the intermittency. The day's record is full of reasons
+not to conflate them.
 
 ## The reference is no better: 5 of 13 (2026-08-06)
 
@@ -1207,6 +1218,17 @@ its finding (ISSUE-0014). The tracing is diagnostic and marked for removal.
 
 Anything quoting a `[EMU68-FRAME]` or `[LSREAD]` line in this issue was measured
 on that branch, not on `main`.
+
+> **Overtaken by events, 2026-08-07.** Both were promoted afterwards: the 68-byte
+> backend is on `main` in `aros/arch/m68k-emu68/exec/` — with the INTENA writes
+> stripped, the per-task tracing removed, and a `kernel_cpu.c` that keeps the
+> dead 66-byte pair out of the ELF — and the ELF-loader fix is `patches/aros/0009`
+> there, in a clean form the branch's version does not have. Audited 2026-08-07:
+> `main` is a strict superset of that branch on every shared file. The only thing
+> left on it is `0008-debug-trace-elf-loader-reads.patch`, the LSREAD instrument
+> itself, which is scaffolding that has already produced its finding — the
+> verification it produced is recorded above, under "Confirmed: the ELF loader
+> serves uninitialised memory as file contents".
 
 ## The Zorro III board is out of the build (2026-08-06)
 
@@ -1937,6 +1959,16 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   shared its fate. Restoring it is undoing an over-broad revert, not importing
   someone else's work. The general lesson is filed above: a patch file is the
   unit of revert, so bundling is how a good change inherits a bad verdict.
+- 2026-08-07 — audited `experiment/frame-68` the same way. `main` is a strict
+  superset of it on every shared file: its FAT patch is the pre-cut version now
+  covered by `0008` plus `0011`, its ELF-loader patch is the tracing-carrying
+  draft of `main`'s `0009`, its stack patch uses 64 KB where `main` uses the
+  measured 40960, and its open-bus patch predates the guest-PC reporting that
+  named `tlsf_freevec`. Its `ISSUE-0007` has no line `main`'s lacks. One finding
+  was owed and is now carried: the ELF-loader fix was verified there to take the
+  reads-past-the-fill from 2 per boot to 0. Those three runs all failed to reach
+  icons and say nothing about the rate — the build carried ~2000 lines of tracing
+  per boot, the 68-byte backend and a 64 KB stack.
 - 2026-08-07 — `codex-2026-08-05` deleted, local and `origin`, and not tagged.
   It was scaffolding for a working tree the repository could not represent, not
   an archive of a code line; `legacy` is the latter and keeps its tag. The
