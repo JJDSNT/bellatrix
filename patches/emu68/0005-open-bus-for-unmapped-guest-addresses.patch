@@ -45,7 +45,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -317,6 +317,61 @@
+@@ -317,6 +317,79 @@
      INTREQR = 0xDFF01E,
  };
  
@@ -95,8 +95,26 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 +    seen++;
 +    if (seen <= 8)
 +    {
-+        kprintf("[JIT:SYS] open bus %s: guest %p size %d value %p m68kPC %08x (#%d)\n",
-+                what, far, size, value, m68k ? m68k->PC : 0, seen);
++        /*
++         * The guest's A7 lives in an ARM register while the JIT runs
++         * (REG_A7 in M68k.h), so read it from there rather than from the
++         * saved context, which is stale here. The longword at the top of the
++         * stack is the return address of a leaf call -- which is what
++         * identifies the *caller* passing the bad pointer, where m68kPC only
++         * names the victim.
++         *
++         * Guarded by range: reading through the alias is what open bus exists
++         * to survive, and doing it from inside the open-bus path would
++         * recurse.
++         */
++        uint32_t a7 = 0, ret = 0;
++        __asm__ volatile("mov %w0, w29\n":"=r"(a7));
++        if (a7 >= 4 && a7 < 0x34000000)
++            ret = *(volatile uint32_t *)(0xffffff9000000000ULL + a7);
++
++        kprintf("[JIT:SYS] open bus %s: guest %p size %d value %p m68kPC %08x"
++                " A7 %08x ret %08x (#%d)\n",
++                what, far, size, value, m68k ? m68k->PC : 0, a7, ret, seen);
 +    }
 +    else if (seen == 9)
 +    {
@@ -107,7 +125,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  #ifdef PISTORM_ANY_MODEL
  
  #include "ps_protocol.h"
-@@ -2336,6 +2391,41 @@
+@@ -2336,6 +2409,41 @@
      static volatile uint32_t sys_depth[4];
      static volatile uint32_t sys_reported[4];
  

@@ -981,6 +981,48 @@ The rule this earns: **an override that replaces a policy must replace it in
 every module that carries a copy**, or the old one ships alongside the new one
 and reads as current to whoever looks next.
 
+## The caller, named: a symbol-set entry that is garbage (2026-08-06)
+
+`patches/emu68/0005` now also reads the guest's A7 — which lives in an ARM
+register while the JIT runs, so it is read from there rather than from the
+stale saved context — and the longword at the top of that stack, which for a
+leaf call is the return address. That names the **caller**, where the guest PC
+only names the victim.
+
+One failing run, six events, all the same:
+
+```
+open bus read: guest a3e7fd78  m68kPC a3e7fd78  ret 0053abc2
+```
+
+The PC is already lost. The return address is not, and it resolves:
+
+```
+0x0053abc2 = IconListview.mui seg 0x53a818 + 0x13aa
+0x13aa     -> set_call_devfuncs+0x40   (spans 0x136a..0x1400)
+```
+
+`set_call_devfuncs` is from `compiler/libinit/libinit.c` — the generated module
+startup glue linked into every module — and what it does is **walk a symbol set
+and call each function pointer in it**.
+
+So the mechanism is: a module is loaded, its init walks its symbol set, calls an
+entry, and **the entry is garbage**. The PC lands in nowhere and everything after
+that is consequence.
+
+Symbol sets are arrays of function pointers the linker places in dedicated
+sections. They depend entirely on the ELF loader handling sections and
+relocations correctly — which is where a real defect was already found and fixed
+today (`patches/aros/0009`, uninitialised buffer served as file contents). That
+one is fixed; whether the sets are still being built wrong is the next question,
+and it is a much narrower one than "the boot is intermittent".
+
+**Why this took all day to reach**, worth recording as method rather than
+excuse: the failure destroyed its own evidence. Each layer of instrumentation
+made the next one possible — open-bus recovery so the machine survives, the
+guest PC so the victim has a name, the guest A7 so the caller does. None of
+those could have been written first.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
