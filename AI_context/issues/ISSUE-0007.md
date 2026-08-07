@@ -1089,6 +1089,20 @@ source of every module regressed nothing.
 
 `scripts/build-aros.sh full` builds it; `make-sdcard.sh` now defaults to it.
 
+**First attempt was three libraries short, and said nothing about it.** The tree
+came out with 59 libraries against the reference's 62, missing
+`posixc.library`, `stdcio.library` and `openurl.library` — they hang off the
+generic `AROS` metatarget (`#MM- AROS : compiler-posixc`) rather than off
+`AROS-<target>`, so `workbench-complete workbench` never reaches them. Naming
+them explicitly fixes it, and the `Libs` listing now matches the reference
+exactly, 61 `.library` files on the card and in the tree.
+
+Worth keeping for the shape of it: **24k lines of build log, zero errors, and
+three files short.** The symptom surfaced 350 MB later as a boot stopping while
+waiting for `posixc.library`. A build that succeeds is not a build that is
+complete, and on this target the difference is invisible until something tries
+to run.
+
 **What this unblocks.** Every patch in `patches/aros/` that touches a library, a
 Zune class or a command now reaches what boots. Most of the day's instrumentation
 could not have worked, and one attempt at it silently did not.

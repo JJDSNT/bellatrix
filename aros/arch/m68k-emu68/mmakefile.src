@@ -17,10 +17,17 @@ include $(SRCDIR)/config/aros.cfg
 #
 # Shaped after arch/m68k-amiga, minus the Amiga-specific packaging and demos.
 #
+# compiler-posixc, compiler-stdcio and external-openurl-lib are named
+# explicitly because they hang off the generic `AROS` metatarget rather than
+# off AROS-<target>, so `workbench-complete workbench` does not reach them.
+# Their absence is not a build error: the tree simply comes out with 59
+# libraries instead of 62, and the boot stops waiting for posixc.library.
+#
 #MM- AROS-emu68-m68k : kernel-link-emu68-m68k software-emu68-m68k
 #MM- AROS-emu68-m68k-quick : kernel-link-emu68-m68k-quick
 
-#MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k
+#MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k \
+#MM                         compiler-posixc compiler-stdcio external-openurl-lib
 #MM- workbench-emu68-m68k : workbench-complete workbench
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k
