@@ -49,7 +49,14 @@ The original subject — **the intermittency** — is untouched and is now the o
 thing left. No rate has been measured on the restored baseline; do not quote one
 until it has been.
 
-**Status 2026-08-06: measured, and it is sharper than expected.** Ten runs with
+**Status 2026-08-06, end of day.** The rate is ~38% and nothing moved it. Three
+real defects were closed (`patches/aros/0007`, `0008`, `0009`) and one was
+found and deliberately *not* fixed, because fixing it makes the boot worse: the
+FAT cluster comparison, which has been masking an uninitialised environment.
+The failure is now diagnosable end to end and reproducible deterministically.
+See the sections below, newest first.
+
+**Earlier that day: measured, and it is sharper than expected.** Ten runs with
 `scripts/boot-timing.py` (ISSUE-0011), idle machine, a freshly generated card
 before each — so the card is mechanically ruled out, each run has its own image
 hash in `out/boot-timing.jsonl`:
@@ -754,6 +761,55 @@ it working.
 That is where the next session starts, and it starts from a deterministic
 reproduction rather than a 38% one: apply the read-side fix, and the failure is
 guaranteed.
+
+## The whole chain, and a minimal boot that splits the failure (2026-08-06)
+
+Tracing the parent-dir path with the FAT read fix applied gave the complete
+causal chain, and it ends somewhere none of the day's hypotheses pointed:
+
+1. `rom/filesys/fat`'s cluster comparison puts a little-endian field against a
+   native value, so on big-endian it **never matches**. `GetParentDir()` fails
+   for anything two or more levels deep, and with it `OpLockParent()` — which
+   DOS calls **860 to 1709 times per boot**.
+2. `Copy >NIL: "ENVARC:" "ENV:" ALL` (Startup-Sequence line 61) therefore
+   copies little or nothing, and `ENV:` stays empty.
+3. `If EXISTS "ENV:SYS/theme.var"` is false, so the boot takes the `Else` and
+   assigns `THEME:` to `THEMES:AROSDefault`.
+4. Fix the comparison and the copy works — measured: the deep search succeeds
+   76 to 193 times per boot, with the right names (`PREFS`, `ENV-AR~1`,
+   `CLASSES`) and zero errors. `theme.var` now exists and names `THEMES:Ice`.
+5. `C:Decoration` loads that theme, and the boot dies there. Every time, 13 of
+   13.
+
+Confirmed by the difference in the logs: working runs count `AROSDefault` four
+times (the `Else` ran), failing runs count it zero (the `If` ran). And switching
+`theme.var` to `AROSDefault` with the fix still applied changes the outcome —
+from 13 of 13 dying early to reaching the Workbench screen — so the theme is a
+large part of it, though not all.
+
+**So the broken comparison has been holding the boot up by leaving half the
+system uninitialised.** Fixing FAT does not introduce bugs; it exposes ones that
+were always there in code this port has never run.
+
+## The minimal boot
+
+`AI_context/bringup/Startup-Sequence.minimal` — 25 lines against the stock 120,
+the assigns Wanderer needs and nothing else. Six runs:
+
+| | stock | minimal |
+|---|---|---|
+| screen opens | 38–50 s | **17–22 s** |
+| icons | 46–55 s | **33–39 s** |
+| `logo` failures | common | **none** |
+| icons | ~38% | 2 of 6 |
+
+It does not make the boot reliable, and it **splits the failure in two**: every
+early death comes from the discretionary part of the startup sequence, and what
+is left is one late failure — Wanderer opens its screen, always and much
+sooner, then does not draw icons.
+
+Next step, and it needs no new tooling: add the removed steps back one at a
+time until `logo` returns.
 
 ## Where this work lives, 2026-08-06
 

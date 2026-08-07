@@ -1,0 +1,25 @@
+; Minimal Startup-Sequence for bring-up measurement.
+; The stock one is kept as Startup-Sequence.full next to it.
+; Goal: reach Wanderer with icons as reliably as this port can, with the
+; smallest set of steps, so that anything added back can be measured.
+FailAt 21
+
+MakeDir >NIL: "RAM:T"
+MakeDir >NIL: "RAM:ENV"
+Assign "ENV:"     "RAM:ENV"
+Assign "T:"       "RAM:T"
+
+Assign "LOCALE:"  "SYS:Locale"
+Assign "LIBS:"    "SYS:Classes" ADD
+Assign "FONTS:"   "SYS:Fonts"
+Assign "THEMES:"  "SYS:Prefs/Presets/Themes" >NIL:
+Assign "THEME:"   "THEMES:AROSDefault"
+Assign "IMAGES:"  "SYS:System/Images" DEFER
+Assign "WANDERER:" "SYS:System/Wanderer" DEFER
+
+If EXISTS "WANDERER:Wanderer"
+    WANDERER:Wanderer
+    If NOT ERROR
+        EndCLI
+    EndIf
+EndIf
