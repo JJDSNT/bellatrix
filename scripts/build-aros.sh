@@ -3,10 +3,12 @@
 # Build the AROS m68k image for the Emu68 target. Runs setup.sh first if the
 # submodules are not prepared, so a fresh clone needs nothing else.
 #
-#   ./scripts/build-aros.sh            incremental
+#   ./scripts/build-aros.sh            incremental, ELF only
 #   ./scripts/build-aros.sh clean      wipe the build directory first
+#   ./scripts/build-aros.sh full       the whole distribution, not just the ELF
 #
-# Output: out/aros/aros-emu68-m68k.elf
+# Output: out/aros/aros-emu68-m68k.elf, and with `full` a complete
+#         distribution tree under out/build/aros/bin/<target>/AROS/
 #
 # The first build also builds an m68k-aros cross toolchain (binutils and gcc)
 # from source, which takes considerably longer than the AROS build itself.
@@ -30,6 +32,22 @@ ELF="bin/$TARGET/AROS/aros-$TARGET.elf"
 # contrib, boost, the lot. kernel-link-<target> is the ELF and its objects.
 METATARGET="kernel-link-$TARGET"
 
+# `full` builds the distribution, which is what the SD card is made from.
+#
+# This matters more than it looks. The lean target produces the kernel ELF and
+# the modules that link into it; every *other* module -- libraries, Zune
+# classes, the commands in C: -- comes from whatever tree make-sdcard.sh is
+# pointed at. Until 2026-08-07 that was always the reference distribution, so a
+# patch touching module code changed nothing that booted, silently. See
+# AI_context/issues/ISSUE-0007.md.
+#
+# It drags in contrib and fetches external sources, so it is not the default.
+for arg in "$@"; do
+    if [ "$arg" = "full" ]; then
+        METATARGET="AROS-$TARGET"
+    fi
+done
+
 if [ "${1:-}" = "clean" ]; then
     # Keep the downloaded toolchain tarballs — they are ~110 MB and re-fetching
     # them is the slowest part of starting over.
@@ -45,8 +63,8 @@ if [ "${1:-}" = "clean" ]; then
         echo "[aros] wiping $BUILD"
         rm -rf "$BUILD"
     fi
-elif [ -n "${1:-}" ]; then
-    echo "usage: $0 [clean]" >&2
+elif [ -n "${1:-}" ] && [ "${1:-}" != "full" ]; then
+    echo "usage: $0 [clean] [full]" >&2
     exit 2
 fi
 

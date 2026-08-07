@@ -38,8 +38,16 @@ Everything generated lands under `out/`, which is git-ignored.
 - The first `build-aros.sh` also builds an m68k-aros cross toolchain from source
   and takes longer than everything else combined. `clean` keeps the downloaded
   tarballs.
-- The metatarget is `kernel-link-<target>`, not `AROS-<target>` — the latter
-  drags in contrib, boost and the whole distribution.
+- `build-aros.sh` builds `kernel-link-<target>` by default: the ELF and the
+  modules linked into it. **`build-aros.sh full` builds `AROS-<target>`**, the
+  whole distribution — slower, drags in contrib and fetches external sources,
+  and it is what the SD card should be made from.
+- **The lean build is not enough to test a change to module code.** Libraries,
+  Zune classes and the commands in `C:` are separate files on the card, taken
+  from whatever tree `make-sdcard.sh --dist` points at. Until 2026-08-07 that
+  was always a foreign reference tree, so patches touching those never reached
+  what booted — silently. If a change is not in the kernel ELF, check where the
+  module on the card came from.
 - `run.sh` opens a QEMU monitor on `/tmp/emu68-monitor.sock`; `nc -U` it and use
   `screendump` to capture the framebuffer headlessly.
 

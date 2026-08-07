@@ -19,6 +19,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="$ROOT/out/build/aros/bin/emu68-m68k/AROS"
+
+# The default is this repository's own build, which requires
+# `./scripts/build-aros.sh full` -- the lean build produces the ELF and the
+# modules linked into it, and nothing else. Pointing --dist at a foreign
+# distribution is supported and was the norm until 2026-08-07, but it means the
+# card carries that tree's modules: every library, Zune class and C: command.
+# A patch touching module code then changes nothing that boots, silently.
 OUT="$ROOT/out/aros/sd.img"
 SIZE="256M"
 
