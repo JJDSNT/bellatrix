@@ -137,3 +137,17 @@ index 8d58e03609..979dca67fb 100644
      /* Obtain a lock on the file. We need an exclusive lock as we don't want
       * to delete the file if it's in use */
      if ((err = LockFileByName(dirlock, name, namelen, EXCLUSIVE_LOCK, &lock,
+diff --git a/rom/filesys/fat/lock.c b/rom/filesys/fat/lock.c
+index 79716315a8..b1a269dcd7 100644
+--- a/rom/filesys/fat/lock.c
++++ b/rom/filesys/fat/lock.c
+@@ -402,9 +402,6 @@ void FreeLock(struct ExtFileLock *fl, struct Globals *glob)
+         fl->node.mln_Succ = fl->node.mln_Pred = NULL;
+     }
+ 
+-    if (IsListEmpty(&fl->gl->locks) && fl->gl->node.mln_Succ == NULL)
+-            fl->gl->dir_cluster, fl->gl->dir_entry);
+-
+     if (IsListEmpty(&fl->gl->locks) && fl->gl->node.mln_Succ != NULL)
+     {
+         REMOVE(fl->gl);
