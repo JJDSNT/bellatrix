@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 7 Aug 2026 08:30:00 -0300
+Subject: [PATCH 12/12] exec: name the caller that frees outside the pool
+
+patches/aros/0010 refuses a free whose pointer is outside the allocator's
+areas, which stops the corruption but says nothing about who is responsible.
+By the time TLSF notices, the code that passed the pointer has returned. The
+open question in ISSUE-0007 has been "who", for days, and every attempt to
+answer it from the guest's A7 was retracted.
+
+Answer it one frame earlier instead. FreeVecPooled is the only door into
+mhe_FreeVec from outside the allocator, and it is a library entry point
+reached through a jump table, so __builtin_return_address(0) is the caller
+itself -- not a trampoline.
+
+That level matters on m68k. The intended instrument was the frame-pointer
+walk upstream calls from tlsf.c (KrnBacktraceFromFrame, added 2026-08-02),
+but there is no m68k implementation of it and rom/kernel/backtracefromframe.c
+returns 0. Writing one would not help either: the kernel builds with -Os and
+carries no frames at all -- 23 functions in tlsf.o, not one linkw %fp. Level
+0 needs no frame, and here it is enough.
+
+The test is the allocator's own: mhe_InBounds, which TLSF implements as
+tlsf_in_bounds() by walking its area list -- the same walk 0010 does. So this
+asks rather than duplicates, and a pool with no InBounds is left alone.
+
+Costs one indirect call per FreeVecPooled and prints only when a free is
+refused.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/rom/exec/freevecpooled.c
++++ b/rom/exec/freevecpooled.c
+@@ -2,6 +2,7 @@
+     Copyright (C) 2003-2013, The AROS Development Team. All rights reserved.
+ */
+ 
++#include <aros/debug.h>
+ #include <aros/libcall.h>
+ #include <proto/exec.h>
+ #include <exec/memheaderext.h>
+@@ -58,6 +59,37 @@
+ 
+     if (IsManagedMem(mhe))
+     {
++        /*
++         * Name the caller before handing the pointer to the allocator.
++         *
++         * A bad free is noticed inside the allocator, long after whoever
++         * passed the pointer has returned, and the block address on its own
++         * says nothing about who is responsible. Here the caller is still
++         * one frame away: this is a library entry point reached through a
++         * jump table, so __builtin_return_address(0) is the caller itself.
++         * That matters on m68k, where the build omits frame pointers and
++         * there is no walk to fall back on -- level 0 is all there is, and
++         * it is enough because this is the only door into mhe_FreeVec.
++         *
++         * mhe_InBounds is the allocator's own answer, so this asks rather
++         * than assumes: TLSF walks its area list (tlsf_in_bounds), which is
++         * the same check that refusing the free inside tlsf_freevec makes.
++         */
++        if (mhe->mhe_InBounds && !mhe->mhe_InBounds(mhe, memory, memory))
++        {
++            struct Task *task = SysBase->ThisTask;
++
++            bug("[FreeVecPooled] REFUSED %p: not in pool %p '%s'"
++                " -- caller %p, task %p '%s'\n",
++                memory, mhe,
++                mhe->mhe_MemHeader.mh_Node.ln_Name ?
++                    mhe->mhe_MemHeader.mh_Node.ln_Name : "<unnamed>",
++                __builtin_return_address(0), task,
++                (task && task->tc_Node.ln_Name) ?
++                    task->tc_Node.ln_Name : "<unnamed>");
++            return;
++        }
++
+         if (mhe->mhe_FreeVec)
+             mhe->mhe_FreeVec(mhe, memory);
+     }
