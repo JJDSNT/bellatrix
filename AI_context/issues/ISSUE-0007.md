@@ -853,6 +853,43 @@ Same address, same site, every time. That is not random corruption — it looks
 like one field read before it is initialised. Being deterministic, it is far
 easier to chase than the destructive form, and it may be the same defect.
 
+## The 68-byte context removes the deterministic bad free (2026-08-06)
+
+Measured with the marker rather than the rate, which is what the earlier
+judgement got wrong. Six runs each on the minimal boot:
+
+| | runs containing `0xc0000058` | occurrences |
+|---|---|---|
+| 66-byte frame | **4 of 6** | 4 |
+| 68-byte frame | **0 of 6** | 0 |
+
+The deterministic bad pointer reaching `tlsf_freevec+0x11e` — present in every
+successful run under the 66-byte scheme, always the same address, always the
+same site — **is gone entirely** with the 68-byte context.
+
+**The mechanism fits what was already established.** The 66-byte scheme balances
+only while entry and exit are paired; when they are not, the restored frame is
+shifted by two bytes, and a register block read two bytes off yields registers
+holding halves of adjacent values. That is exactly the signature seen all day —
+`"ket\0"` and `"ket\x0e"`, the same string at two offsets two bytes apart, and
+pointers whose contents are text.
+
+**And it corrects an earlier judgement in this issue.** The 68-byte backend was
+dismissed on 3-of-8 against 4-of-8 icons. At a ~40% base rate, n=8 cannot
+resolve anything; that was the rate protocol being violated one hour after it
+was written down. A marker going 4/6 to 0/6 answers in six runs what the rate
+could not answer in sixteen.
+
+Two things it does **not** do, and both matter:
+
+- **The icon rate does not visibly improve** — 3 of 6 against 4 of 6, noise.
+- **Bad pointers still reach the allocator**, at other addresses:
+  `0xc2a80053`, `0x44f40000`, `0x6d74616e` (`"mtan"`), `0xf3000201`. So the
+  frame is one source of them, not the only one.
+
+`frame_bad` from the validator is 0 across all six, so with `AROS_STACKSIZE` at
+40960 no frame lands outside its task's stack either.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.

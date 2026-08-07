@@ -1,0 +1,27 @@
+# Emu68-specific Exec context backend.
+
+include $(SRCDIR)/config/aros.cfg
+
+%get_archincludes modname=kernel \
+    includeflag=TARGET_KERNEL_INCLUDES maindir=rom/kernel
+
+%get_archincludes modname=exec \
+    includeflag=TARGET_EXEC_INCLUDES maindir=rom/exec
+
+PRIV_EXEC_INCLUDES = \
+    $(TARGET_EXEC_INCLUDES) \
+    -I$(SRCDIR)/rom/exec \
+    $(TARGET_KERNEL_INCLUDES) \
+    -I$(SRCDIR)/rom/kernel
+
+USER_INCLUDES := $(PRIV_EXEC_INCLUDES)
+USER_AFLAGS := -I$(GENINCDIR)
+TARGET_ISA_AFLAGS := $(ISA_MC68060_FLAGS)
+
+%build_archspecific \
+  mainmmake=kernel-exec modname=exec maindir=rom/exec \
+  files="preparecontext" \
+  asmfiles="switch dispatch" \
+  arch=emu68-m68k
+
+%common
