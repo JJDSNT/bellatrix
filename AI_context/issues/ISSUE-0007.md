@@ -720,6 +720,41 @@ Two corrections to this issue's own record follow:
   attributes to all of it, and promoting three patches together after measuring
   none of them together is the same error in the other direction.
 
+## What the raw comparison was masking (2026-08-06)
+
+Traced with the read-side fix deliberately re-applied, because that makes the
+failure deterministic — 0 of 13 — and a failure that happens every time is where
+tracing is worth spending. (Blanket FAT tracing was tried first: 70k lines, so
+slow the boot never reached the failure. The instrument changed the thing being
+measured. Surgical tracing on the parent-dir path only, four `bug()` calls, gave
+the answer.)
+
+**The fix is correct and works.** `OpLockParent` is called **860 to 1709 times
+per boot** — DOS leans on `ParentDir()` constantly — and with the corrected
+comparison the deep search succeeds 76 to 193 times, with the right names and
+zero errors:
+
+```
+search for cluster 23061 in grandparent 2     -> err=0 name='PREFS'
+search for cluster 23209 in grandparent 23061 -> err=0 name='ENV-AR~1'
+search for cluster 23212 in grandparent 23209 -> err=0 name='CLASSES'
+```
+
+**And that is exactly why the boot breaks.** Those paths are
+`SYS:Prefs/Env-Archive/Classes` — the persistent environment-variable tree.
+Before the fix, `ParentDir()` failed for everything two or more levels deep, so
+that traversal aborted immediately and the boot carried on. With FAT correct the
+traversal proceeds, and what breaks is *in the traversal*, not in FAT.
+
+**So the broken comparison was holding the boot up by masking a second defect.**
+Two bugs stacked: parent-directory resolution has never worked on any
+big-endian AROS target, and whatever walks the Env-Archive tree cannot survive
+it working.
+
+That is where the next session starts, and it starts from a deterministic
+reproduction rather than a 38% one: apply the read-side fix, and the failure is
+guaranteed.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
