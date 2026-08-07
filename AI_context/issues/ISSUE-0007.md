@@ -1177,8 +1177,17 @@ taken:**
 The 4-line difference in `patches/emu68/0001` between the branches is hunk
 offsets, not content.
 
-The branch can stay as a historical capture. It no longer holds anything owed to
-`main`.
+**The branch is deleted**, locally and on `origin`, and deliberately *not* kept
+as a tag. It was scaffolding from the start — a place to put a working tree that
+the repository could not represent, so that a rebuild would not destroy it
+silently. That job is done. This is not the `legacy` branch, which is an archive
+of a real code line and is tagged `legacy-2026-08-03` because it is meant to be
+retrievable; nothing about codex was meant to be kept.
+
+Earlier sections of this issue and the closed ISSUE-0008 and ISSUE-0009 still
+name the branch. Those references are historical and stay as written — they
+record where something was at the time, and the table above records where each
+piece of it ended up.
 
 ## Where this work lives, 2026-08-06
 
@@ -1928,3 +1937,7 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   shared its fate. Restoring it is undoing an over-broad revert, not importing
   someone else's work. The general lesson is filed above: a patch file is the
   unit of revert, so bundling is how a good change inherits a bad verdict.
+- 2026-08-07 — `codex-2026-08-05` deleted, local and `origin`, and not tagged.
+  It was scaffolding for a working tree the repository could not represent, not
+  an archive of a code line; `legacy` is the latter and keeps its tag. The
+  audit above is what survives it.
