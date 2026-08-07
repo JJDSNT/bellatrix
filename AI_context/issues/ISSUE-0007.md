@@ -674,6 +674,52 @@ right one is *finish what was never finished*.
 The reference is a little faster to the icons — 38.6–49.3 s against 46–55 s here
 — which is worth noting and is not the question.
 
+## The raw cluster comparison is accidentally load-bearing (2026-08-06)
+
+Promoting three fixes to `main` without measuring them together took the boot
+from ~38% to **0 of 13**. A bisect found it, and it was not what either of us
+guessed:
+
+| configuration | icons |
+|---|---|
+| 0007 + 0008 (full FAT) + 0009 | 0 / 13 |
+| 0007 + 0008 (full FAT) | 0 / 6 |
+| 0007 + 0008 without `date.c` | 0 / 6 |
+| 0007 alone | 3 / 6 |
+| 0007 + 0008 **write side only** | 3 / 6 |
+| 0007 + 0008 write-only + 0009 | 2 / 5 |
+
+**The FAT patch, and inside it neither the date conversion nor the write
+conversion — the read-side substitution.** Replacing
+
+```c
+if (de->e.entry.first_cluster_hi == (cluster >> 16)
+    && de->e.entry.first_cluster_lo == (cluster & 0xffff))
+```
+
+with `FIRST_FILE_CLUSTER(de) == cluster` in `GetDirEntryByCluster`, and the
+matching one in Rename, is what does it. Those comparisons put a
+little-endian field against a native value, so on a big-endian host they
+**never match**: `GetParentDir`'s search has always failed silently here.
+Making it correct wakes a code path that has never run on this port and does
+not work.
+
+So the wrong comparison is holding the boot up. Fixing it is a separate
+problem, and a real one — parent-directory resolution is broken on every
+big-endian AROS target and has presumably never been exercised.
+
+Two corrections to this issue's own record follow:
+
+- `docs/known-good-baseline.md` said, from the beginning, that only the write
+  half of the FAT change is worth keeping. **That was right.** The
+  reinterpretation written earlier today — that the original three-of-three
+  failure had been misattributed to bundled MUI tracing — was itself wrong, or
+  at least incomplete: the FAT change does break the boot, and the bundling was
+  a red herring.
+- The lesson stands and is now doubled. A measurement of a bundled change
+  attributes to all of it, and promoting three patches together after measuring
+  none of them together is the same error in the other direction.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.

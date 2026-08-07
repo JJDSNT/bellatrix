@@ -483,6 +483,8 @@ def one_run(args, workdir):
                 # so the stack is thousands of copies of one 160-byte frame.
                 # Two windows into it are enough to read what keeps faulting;
                 # taken well away from the ends so neither is the ragged edge.
+                # ARM-side memory: the host and the ARM agree on byte order,
+                # so words are fine here. Only *guest* memory needs bytes.
                 for off in (0x20000, 0x40000):
                     where = "0x%x" % (ARM_STACK_TOP - off)
                     dump += [f"=== x/64gx {where} ===", mon.cmd(f"x/64gx {where}")]
@@ -503,8 +505,13 @@ def one_run(args, workdir):
                                                  "pc": m.group(2)}
                     addr = int(m.group(2), 16) & ~0xf
                     where = "0x%x" % (GUEST_ALIAS_BASE + addr - 16)
+                    # Bytes, not halfwords or words. The guest is big-endian
+                    # and the monitor reads little-endian, so anything wider
+                    # comes back byte-swapped -- which cost one wrong reading
+                    # already (0x80ff read as an opcode when the guest sees
+                    # 0xff80). Bytes have no byte order to get wrong.
                     dump += [f"=== guest code at m68k PC 0x{m.group(2)} "
-                             f"(alias {where}) ===", mon.cmd(f"x/16xh {where}")]
+                             f"(alias {where}) ===", mon.cmd(f"x/32xb {where}")]
 
                 # The trap handler prints the guest's registers, and the user
                 # stack is where the return addresses are. Those *are* code, so
@@ -515,7 +522,7 @@ def one_run(args, workdir):
                     record["guest_usp"] = usp.group(1)
                     where = "0x%x" % (GUEST_ALIAS_BASE + int(usp.group(1), 16))
                     dump += [f"=== guest stack at USP 0x{usp.group(1)} ===",
-                             mon.cmd(f"x/48xw {where}")]
+                             mon.cmd(f"x/192xb {where}")]
                 regs = dict(re.findall(r"\b(A[0-6]) 0x([0-9a-f]+)", text))
                 record["guest_aregs"] = regs
                 for name in ("A6", "A2", "A0"):
@@ -524,7 +531,7 @@ def one_run(args, workdir):
                         continue
                     where = "0x%x" % (GUEST_ALIAS_BASE + (int(v, 16) & ~3))
                     dump += [f"=== guest memory at {name} 0x{v} ===",
-                             mon.cmd(f"x/8xw {where}")]
+                             mon.cmd(f"x/32xb {where}")]
                 with open(os.path.join(workdir, "stall.txt"), "w") as fh:
                     fh.write("\n".join(dump))
             except (OSError, ConnectionError, socket.timeout) as exc:

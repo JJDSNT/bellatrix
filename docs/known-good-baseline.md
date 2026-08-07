@@ -110,12 +110,12 @@ bogus chain.
 
 `mdir -i out/aros/sd.img@@1M ::/Fonts` shows it immediately.
 
-**Fixed 2026-08-06, and the earlier verdict here was wrong.** This section used
-to say the repair had been measured as a regression — three runs, three
-failures. It had been, and the measurement was misattributed: the change was
-promoted as part of `aros-extras-drift.patch`, which bundles the FAT fix with
-MUI and Wanderer tracing (`#define DEBUG 1` in four files, dozens of traces per
-redraw). The failures are far more likely to have been that.
+**Fixed 2026-08-06 — and this section's original verdict was right after all.**
+It said only the *write* half of the repair is worth keeping. A correction
+written earlier that day claimed the three-of-three failure had been
+misattributed to bundled MUI tracing; a bisect then showed the FAT change does
+break the boot on its own, and specifically its read-side half. The bundling was
+a red herring and the original caution was correct.
 
 The real defect was located by looking at the bytes. A boot wrote a 17-byte file
 and copied a 1944-byte binary to the card; on the host, the *sizes* read back as
@@ -125,10 +125,16 @@ block path is clean and the SD backend is innocent: the loss is entirely in how
 the directory-entry fields are composed. `rom/filesys/fat` converts cluster and
 size on read and not on write, and the dates on neither side.
 
-`patches/aros/0008` converts them, with the date conversion inside
-`ConvertFATDate`/`ConvertDOSDate` so the halves cannot drift apart again. After
-it: sizes 17 and 1944, correct dates, and `mcopy` — which previously failed with
-`Fat problem while decoding` — reads both files back byte for byte.
+`patches/aros/0008` converts the **write** sites only. After it: sizes 17 and
+1944, and `mcopy` — which previously failed with `Fat problem while decoding` —
+reads both files back byte for byte.
+
+The read-side raw comparisons stay as upstream has them, and that boundary is
+measured. Substituting them takes the boot from 3 of 6 to 0 of 6: they never
+match on a big-endian host, so `GetParentDir`'s search silently always fails,
+and making it succeed wakes a code path that has never run here. Parent-directory
+resolution is broken on every big-endian AROS target; fixing it is its own
+problem. The dates are left alone for the same reason — measured, not assumed.
 
 This is an upstream AROS defect on every big-endian target; `m68k-amiga`,
 `ppc-native` and `ppc-morphos` share the code.
