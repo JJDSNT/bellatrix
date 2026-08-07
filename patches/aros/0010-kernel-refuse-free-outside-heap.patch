@@ -1,0 +1,67 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 7 Aug 2026 07:00:00 -0300
+Subject: [PATCH 10/10] kernel: refuse to free a pointer outside the heap, and say who
+
+MEM_TO_BHDR(ptr) computes a header address from the caller pointer and the
+code reads it; a pointer that is not ours makes that a read of whatever the
+arithmetic produced. Report the caller and decline.
+
+Bounds are the area list, not mh_Lower/mh_Upper -- those describe only the
+MemHeader the pool started from and TLSF adds areas beyond it. The first
+version of this check used them and reported four legitimate frees per boot
+as bad, declining them.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/rom/kernel/tlsf.c
++++ b/rom/kernel/tlsf.c
+@@ -670,6 +670,48 @@
+     if (unlikely(!ptr))
+         return;
+ 
++    /*
++     * [TLSF-BAD] Refuse to dereference a pointer that is in none of this
++     * heap's areas.
++     *
++     * MEM_TO_BHDR(ptr) computes a block header address from the caller's
++     * pointer and the code then reads it. A pointer that is not ours makes
++     * that a read of whatever the arithmetic produced. On the m68k-emu68 port
++     * those reads have been observed landing in unmapped space with values
++     * that are fragments of text -- a pointer variable holding string data at
++     * the moment it is freed. See AI_context/issues/ISSUE-0007.md.
++     *
++     * The bound is the area list, not mh_Lower/mh_Upper: those describe only
++     * the MemHeader this pool started from, and TLSF adds areas beyond it.
++     * Checking against them reports every allocation in an added area as bad,
++     * which is how the first version of this check produced four false
++     * positives per boot and, worse, declined four legitimate frees.
++     */
++    {
++        tlsf_area_t *a;
++        BOOL known = FALSE;
++
++        for (a = tlsf->memory_area; a != NULL; a = a->next)
++        {
++            /* An area runs from its own header to its end block. */
++            if ((APTR)ptr > (APTR)a && (APTR)ptr < (APTR)a->end)
++            {
++                known = TRUE;
++                break;
++            }
++        }
++
++        if (!known)
++        {
++            static unsigned int tlsf_bad_seen;
++
++            if (tlsf_bad_seen++ < 16)
++                bug("[TLSF-BAD] free of %p in no area of this pool,"
++                    " caller %p\n", ptr, __builtin_return_address(0));
++            return;
++        }
++    }
++
+     fb = MEM_TO_BHDR(ptr);
+ 
+     BOOL sem_protected = !!(((ULONG)(IPTR)mhe->mhe_MemHeader.mh_First) & MEMF_SEM_PROTECTED);

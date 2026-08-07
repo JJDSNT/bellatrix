@@ -916,6 +916,43 @@ rather than corrupting a stack quietly.
 
 A good hypothesis, closed by measurement rather than left hanging.
 
+## The remaining bad pointers: several sites, one signature (2026-08-06)
+
+`patches/aros/0010` validates the pointer in `tlsf_freevec` against the pool's
+**area list** and reports the caller. The first version of that check used
+`mh_Lower`/`mh_Upper` and was wrong — those describe only the MemHeader the pool
+started from, and TLSF adds areas beyond it, so it reported four *legitimate*
+frees per boot as bad and declined them. Corrected, it reports nothing: no bad
+pointer reaches `tlsf_freevec` from outside the heap.
+
+With the guest PC on every open-bus access, the remaining events name several
+independent sites:
+
+```
+  8x  strcmp+0x0
+  6x  PC fffffd5a (already lost)
+  3x  tlsf_freevec+0x104
+  2x  tlsf_freevec+0x214
+  2x  do_render_with_gc+0x2d4
+  1x  do_render_with_gc+0x1b6
+```
+
+The allocator, string comparison, and graphics rendering — **independent
+consumers**, which means general memory corruption rather than one bad caller.
+The `tlsf_freevec` ones now pass the area check, so the pointer is in the heap
+and the *block header* is corrupt.
+
+**And the addresses carry a signature.** Five of the eight `strcmp` pointers are
+`0x8a2c0000`, `0x6c5c0000`, `0xb51c0000`, `0x974c0000`, `0x41940000` — the low
+word is zero in each. That is `(16-bit value) << 16`: a longword read **two
+bytes past** where the pointer is, taking the pointer's low half as its high
+half and a zero word after it.
+
+Two bytes off, again. The 68-byte context removed one source of that; **there is
+another**, and it is the next thing to find. The signature is specific enough to
+recognise: pointers of the form `0xNNNN0000`, and text fragments at two offsets
+two bytes apart.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
