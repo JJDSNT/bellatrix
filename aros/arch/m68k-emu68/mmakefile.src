@@ -4,8 +4,24 @@
 
 include $(SRCDIR)/config/aros.cfg
 
-#MM- AROS-emu68-m68k : kernel-link-emu68-m68k
+#
+# AROS-<target> is the whole distribution, not just the ELF.
+#
+# It used to be declared as depending on kernel-link alone, which made
+# `make AROS-emu68-m68k` a slow way of rebuilding the same ELF and left the
+# distribution tree without S/, Fonts/, Storage/, Utilities/, Tools/ or
+# AROS.boot. The SD card was therefore always made from a foreign tree, and
+# every module on it -- libraries, Zune classes, the commands in C: -- came
+# from there rather than from this build. A patch touching module code changed
+# nothing that booted, silently. See AI_context/issues/ISSUE-0007.md.
+#
+# Shaped after arch/m68k-amiga, minus the Amiga-specific packaging and demos.
+#
+#MM- AROS-emu68-m68k : kernel-link-emu68-m68k software-emu68-m68k
 #MM- AROS-emu68-m68k-quick : kernel-link-emu68-m68k-quick
+
+#MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k
+#MM- workbench-emu68-m68k : workbench-complete workbench
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k
 #MM- distfiles-emu68-m68k-quick : AROS-emu68-m68k-quick

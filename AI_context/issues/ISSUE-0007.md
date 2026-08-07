@@ -1052,6 +1052,47 @@ made the next one possible — open-bus recovery so the machine survives, the
 guest PC so the victim has a name, the guest A7 so the caller does. None of
 those could have been written first.
 
+## The distribution is built here now (2026-08-07)
+
+The finding that ended 2026-08-06 was that **the kernel ELF was built here and
+every module on the card came from a foreign reference tree** — libraries, Zune
+classes, the commands in `C:`. Any patch touching module code changed nothing
+that booted, and said nothing about it. That was discovered by instrumenting
+`libinit.c` and getting no output at all: the module carrying the change was
+never on the card.
+
+The cause was in this repository's own `arch/m68k-emu68/mmakefile.src`:
+
+```
+#MM- AROS-emu68-m68k : kernel-link-emu68-m68k
+```
+
+`AROS-<target>` — the whole-distribution metatarget — was declared as depending
+on the link and nothing else. `make AROS-emu68-m68k` was therefore an expensive
+way to rebuild the same ELF, and the distribution tree never gained `S/`,
+`Fonts/`, `Storage/`, `Utilities/`, `Tools/` or `AROS.boot`.
+
+Fixed by declaring what the other targets declare, shaped after
+`arch/m68k-amiga` minus the Amiga packaging and demos:
+
+```
+#MM- AROS-emu68-m68k : kernel-link-emu68-m68k software-emu68-m68k
+#MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k
+#MM- workbench-emu68-m68k : workbench-complete workbench
+```
+
+It builds clean — 24k lines of log, zero errors, including external ports
+(zstd, bzip2, freetype2, openurl) that had never been built for this target.
+The result is 361 MB against the reference's 364 MB, and **a card made from it
+boots**: 2 of 6 to icons, the same band as everything else, so changing the
+source of every module regressed nothing.
+
+`scripts/build-aros.sh full` builds it; `make-sdcard.sh` now defaults to it.
+
+**What this unblocks.** Every patch in `patches/aros/` that touches a library, a
+Zune class or a command now reaches what boots. Most of the day's instrumentation
+could not have worked, and one attempt at it silently did not.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
