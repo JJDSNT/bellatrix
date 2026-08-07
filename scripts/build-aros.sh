@@ -101,6 +101,28 @@ fi
 echo "[aros] building $METATARGET (serial — see comment in this script)"
 make "$METATARGET"
 
+# A good kickstart ELF has no unresolved symbols at all — measured, not assumed.
+#
+# This is not belt-and-braces. On 2026-08-07 a full rebuild let arch/m68k-all's
+# Exec backend win a race against ours (they build into the same object path;
+# see patches/aros/0018), and the ELF shipped with m68k_SwitchTail and
+# m68k_DispatchFrame unresolved because our kernel_cpu.c removes them on
+# purpose. The guest jumped to address zero 570 ms in. Emu68's loader printed
+# "[ELF] Undefined symbol ..." at load time and nobody was reading it, so the
+# failure was diagnosed from a register dump instead of from the sentence that
+# named it.
+#
+# Fail here, where it is cheap, rather than 45 minutes into a boot harness.
+NM="$BUILD/bin/linux-x86_64/tools/crosstools/m68k-aros-nm"
+if [ -x "$NM" ]; then
+    undef="$("$NM" -u "$BUILD/$ELF" 2>/dev/null || true)"
+    if [ -n "$undef" ]; then
+        echo "ERROR: $ELF has unresolved symbols — it will not run:" >&2
+        echo "$undef" | sed 's/^/    /' >&2
+        exit 1
+    fi
+fi
+
 mkdir -p "$OUT"
 cp "$BUILD/$ELF" "$OUT/"
 echo "[aros] out/aros/$(basename "$ELF")  ($(stat -c%s "$OUT/$(basename "$ELF")") bytes)"

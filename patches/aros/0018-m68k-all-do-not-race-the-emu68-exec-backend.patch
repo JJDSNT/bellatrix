@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 7 Aug 2026 10:00:00 -0300
+Subject: [PATCH 18/18] m68k-all: do not race the emu68 Exec backend
+
+arch/m68k-all/exec and arch/m68k-emu68/exec both declare %build_archspecific
+for switch, dispatch and preparecontext, and both write to the same object
+path -- gen/rom/exec/exec/arch/switch.o. %build_archspecific has no notion of
+one overriding another, so this is not an override, it is a race: whichever
+rule runs last wins.
+
+We had been winning it by accident. On 2026-08-07 a full rebuild reversed the
+order for the first time. The 66-byte objects went into the ELF beside a
+kernel_cpu.c that deliberately removes m68k_SwitchTail and m68k_DispatchFrame
+as dead code, so the references could not resolve, and the guest jumped to
+address zero 570 ms after start -- PC = 0x00000000, five kilobytes of serial
+where there are normally thousands of lines.
+
+Emu68's loader had reported it in plain text at load time:
+
+    [ELF] Undefined symbol 'm68k_DispatchFrame' in section '.text'
+    [ELF] Undefined symbol 'm68k_SwitchTail' in section '.text'
+
+Zero occurrences of that line in every previous boot log, and nothing was
+reading it. scripts/build-aros.sh now fails on an ELF with any unresolved
+symbol, because a good one has none.
+
+The fix is to stop offering the files for this target rather than to try to
+win the race harder. m68k-amiga needs nothing of the sort: this is the first
+m68k target to want a different scheduler, which is why a collision that has
+been latent in the build for as long as our backend has existed only surfaced
+now.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/arch/m68k-all/exec/mmakefile.src
++++ b/arch/m68k-all/exec/mmakefile.src
+@@ -40,6 +40,27 @@
+        preserveall \
+        debug
+ 
++# The Emu68 port replaces the Exec context backend -- arch/m68k-emu68/exec
++# carries a 68-byte task frame that is self-contained, where the scheme here
++# balances only while entry and exit are paired.
++#
++# Both mmakefiles build into the same object path, and %build_archspecific has
++# no notion of one overriding the other: they race, and whichever rule runs
++# last wins. That is not a theoretical concern. On 2026-08-07 a full rebuild
++# reversed the order for the first time, the 66-byte objects went into the ELF
++# next to a kernel_cpu.c that had deliberately removed m68k_SwitchTail and
++# m68k_DispatchFrame, and the boot jumped to address zero 570 ms in. Emu68's
++# loader had said so plainly -- "Undefined symbol 'm68k_DispatchFrame'" -- and
++# nothing was reading it.
++#
++# So do not offer them at all for this target. m68k-amiga needs no such thing:
++# this is the first m68k target to want a different scheduler, which is why
++# the collision had never surfaced.
++ifeq ($(ARCH),emu68)
++FILES  := $(filter-out preparecontext,$(FILES))
++AFILES := $(filter-out switch dispatch,$(AFILES))
++endif
++
+ USER_INCLUDES := $(PRIV_EXEC_INCLUDES)
+ USER_AFLAGS := -I$(GENINCDIR)
+ TARGET_ISA_AFLAGS:=$(ISA_MC68060_FLAGS)
