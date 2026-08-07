@@ -953,6 +953,34 @@ another**, and it is the next thing to find. The signature is specific enough to
 recognise: pointers of the form `0xNNNN0000`, and text fragments at two offsets
 two bytes apart.
 
+## Dead 66-byte code was being linked into every image (2026-08-06)
+
+`arch/m68k-all/kernel/kernel_cpu.c` carries three things: the `cpu_Exception`
+trampoline, and `m68k_SwitchTail`/`m68k_DispatchFrame` — the 66-byte scheduler
+policy, including the literal `for (i = 0; i < 66; i++)` frame copy.
+
+This port replaces the scheduler in `rom/exec` (`arch/m68k-emu68/exec/`), and
+`%build_archspecific` overrides by writing the same object path, so
+`switch.o`/`dispatch.o` there are ours. But `kernel_cpu.c` belongs to the
+**kernel** module, which the exec-side override does not reach. Both 66-byte
+functions were therefore linked into every image, with no caller.
+
+**That is not merely wasteful.** Reading `for (i = 0; i < 66; i++)` in a linked
+object sent this investigation down a blind alley: the 66-byte copy looked live
+and was a plausible second source of two-byte drift, and it took disassembling
+`__Dispatch_this` (`lea %a5@(68)`) and `m68k_VoluntarySwitch` to establish that
+neither is reached.
+
+Fixed by giving the kernel module its own `kernel_cpu.c` for this target, with
+`cpu_Exception` and nothing else. `cpu_Exception` is genuinely live —
+`context.c` installs it as the return address of a shifted frame when a task has
+`TF_EXCEPT`. Confirmed: `m68k_DispatchFrame` and `m68k_SwitchTail` are gone from
+the image, `cpu_Exception` remains, and 4 runs behave as before.
+
+The rule this earns: **an override that replaces a policy must replace it in
+every module that carries a copy**, or the old one ships alongside the new one
+and reads as current to whoever looks next.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
