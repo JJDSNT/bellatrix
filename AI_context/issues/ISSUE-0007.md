@@ -1118,6 +1118,34 @@ to run.
 Zune class or a command now reaches what boots. Most of the day's instrumentation
 could not have worked, and one attempt at it silently did not.
 
+## A candidate for the remaining corruption, from upstream (2026-08-07)
+
+Auditing 359 upstream commits since our pin turned up `b553067c52`, and it
+describes this issue's open blocker in its own words:
+
+> A short free leaves the allocator's chunk boundaries out of step with the real
+> allocations, so the damage lands on an unrelated free much later, **as a block
+> that belongs to no MemHeader or one that overlaps its neighbour**.
+
+`AllocBitMap()` reserves room for the extra plane pointers a HIDD bitmap needs,
+and each of its cleanup paths frees only `sizeof(struct BitMap)` — 32 bytes short
+on m68k. Verified present in our tree at `rom/graphics/allocbitmap.c:480`, `:515`
+and `:534`. `freebitmap.c` has the sizes right, so it fires only when creating a
+bitmap *fails*.
+
+That is the same shape as "The remaining bad pointers: several sites, one
+signature": damage far from its cause, in consumers with nothing in common.
+
+**Not established: that those failure paths run during our boot.** Plausible on a
+machine with no chipset and a display path that has been marginal throughout, but
+plausible is not measured. Testable the ordinary way — take it alone, three runs,
+see whether the bad-pointer reports stop.
+
+Three other defects were verified present in our tree at the same time, including
+`workbench/c/iprefs/main.c` running its first prefs pass *before* `Detach()` —
+which is the shape of the boot going quiet after IPrefs, recorded here more than
+once. The full ledger, with what to take and what to skip, is **ISSUE-0015**.
+
 ## The parked branch is now empty of unincorporated work (2026-08-07)
 
 `codex-2026-08-05` was audited item by item against `main`. It is a park, not a
