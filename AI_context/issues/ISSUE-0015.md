@@ -68,21 +68,42 @@ trusting the commit message. Rows below say which were verified that way.
 
 | Commit | Date | Subject | In our tree? | Disposition |
 |---|---|---|---|---|
-| `b553067c52` | 08-04 | graphics: free a bitmap with the size it was allocated with | **verified present** | **take first** |
-| `647791ec7a` | 08-03 | fat: free a lock into its own volume, and bound the cluster walk | **verified present** | take |
-| `7416119e73` | 08-03 | iprefs: Detach before the first prefs pass | **verified present** | take |
-| `f9ccd4078d` | 08-05 | gfx: size framebuffer rows from the mode being entered | **verified present** | take |
-| `e92efb9ee4` | 08-03 | IPrefs: avoid Workbench reset requester during startup | not verified | take with `7416119e73` |
+| `b553067c52` | 08-04 | graphics: free a bitmap with the size it was allocated with | **verified present** | **TAKEN** — `patches/aros/0013` |
+| `647791ec7a` + `921b33af58` | 08-03 | fat: free a lock into its own volume, bound the cluster walk, and the repair that makes it compile | **verified present** | **TAKEN** — `patches/aros/0014` |
+| `7416119e73` | 08-03 | iprefs: Detach before the first prefs pass | **verified present** | **TAKEN** — `patches/aros/0015` |
+| `e92efb9ee4` | 08-03 | IPrefs: avoid Workbench reset requester during startup | not verified | **TAKEN** — `patches/aros/0016` |
+| `f9ccd4078d` | 08-05 | gfx: size framebuffer rows from the mode being entered | **verified present** | **TAKEN** — `patches/aros/0017` |
 | `7957a02d64` | 08-05 | exec: name the caller when a free goes wrong | n/a — new code | take (instrument) |
 | `5243044724` + `df1305075b` | 08-02/03 | kernel: tlsf corruption reporter, and make it link on m68k | n/a — new code | take partially, see below |
 | `c4780bddbd` | 07-28 | dosboot, intuition: boot on NTSC-only display databases | not verified | evaluate |
-| `921b33af58`, `0f85c52a72`, `384f838042` | 07-29..08-03 | fat: BPB parsing shared into a linklib | n/a — refactor | evaluate on pin bump |
+| `0f85c52a72`, `384f838042` | 07-29..07-30 | fat: BPB parsing shared into a linklib | n/a — refactor | evaluate on pin bump |
 | `442d33b4b9` | 08-03 | dos: a short read is not a successful one | — | **already superset**, see below |
 | `29a07bec58` | 08-05 | Wanderer: queue a lister's removal only once | present | **skip**, see below |
 | `887b06db1c` | 07-30 | dos64: don't corrupt fib_Size in ExamineFH64 | — | **skip** — emul-handler; we use FAT |
 | amigavideo, p96gfx, pcixhci, nvme, riscv64, SMP x86_64 | — | — | — | **skip** — no chipset, no such hardware |
 
-Nothing in this table has been taken yet.
+**Five taken on 2026-08-07**, as `patches/aros/0013`–`0017`, imported verbatim
+and each its own unit of revert. Not yet measured.
+
+## A dependency the first pass missed
+
+`647791ec7a` **does not compile.** Upstream shipped it with an orphaned
+continuation line where a diagnostic had been removed:
+
+```c
+    if (IsListEmpty(&fl->gl->locks) && fl->gl->node.mln_Succ == NULL)
+            fl->gl->dir_cluster, fl->gl->dir_entry);
+```
+
+`lock.c:406`, *expected ';' before ')' token*. `921b33af58` is the repair, same
+day and same author — and this table filed it under "evaluate on pin bump",
+which was wrong. It is folded into `0014` rather than added after it, so no
+state of our series fails to build.
+
+Found by building, not by reading. **Verifying that a defect is real is not the
+same as verifying that the fix compiles**, and the audit method above only did
+the first. Any future row taken from this table gets built before it is
+believed.
 
 # The one to take first
 
@@ -218,10 +239,12 @@ Two things, both found here and absent there:
 
 # Acceptance criteria
 
-- [ ] `b553067c52` taken as a patch and measured alone, three runs
-- [ ] `647791ec7a` taken
-- [ ] `7416119e73` and `e92efb9ee4` taken together
-- [ ] `f9ccd4078d` taken
+- [x] `b553067c52` taken — `patches/aros/0013`
+- [x] `647791ec7a` taken, with `921b33af58` — `patches/aros/0014`
+- [x] `7416119e73` and `e92efb9ee4` taken together — `0015`, `0016`
+- [x] `f9ccd4078d` taken — `patches/aros/0017`
+- [ ] the five measured: distribution rebuilt, card regenerated, three runs
+- [ ] if the rate moves, bisect the five — they are separate patches for this
 - [ ] `7957a02d64` taken
 - [ ] tlsf checks taken without the backtrace calls
 - [ ] `c4780bddbd` evaluated against our display database
@@ -236,3 +259,9 @@ Two things, both found here and absent there:
   files: the bitmap short free, the unsigned cluster walk, the IPrefs detach
   ordering, and the bytesPerRow ordering. Emu68 needs nothing — it is at
   upstream HEAD. Nothing taken yet.
+- 2026-08-07 — five taken as `patches/aros/0013`-`0017`. `647791ec7a` did not
+  compile: upstream left an orphaned continuation line at `lock.c:406`, and
+  `921b33af58` is its repair, filed in this table as "evaluate on pin bump".
+  Folded into `0014`. The lesson is narrow and worth keeping: this audit
+  verified that each defect was real in our tree, which is not the same as
+  verifying the fix builds. Nothing measured yet.
