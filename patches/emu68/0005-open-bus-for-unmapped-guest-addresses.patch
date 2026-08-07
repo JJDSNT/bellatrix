@@ -35,11 +35,17 @@ behaviour, which is to be reported as the real fault it is.
 This does not fix the guest going wild. It makes that failure survivable and
 reportable instead of destroying the emulator that would have to diagnose it.
 
+The report carries the guest PC, which is what makes it useful: Emu68 keeps the
+m68k context in a reserved register, and the AROS image loads at a known base,
+so the address resolves against the ELF. That is how the persistent
+0xc0000058 access was finally attributed -- to tlsf_freevec, the allocator's
+free path, following a pointer that is not one.
+
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
-@@ -317,6 +317,55 @@
+@@ -317,6 +317,61 @@
      INTREQR = 0xDFF01E,
  };
  
@@ -79,12 +85,18 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 +static void open_bus_report(const char *what, uint64_t far, int size, uint64_t value)
 +{
 +    static uint32_t seen = 0;
++    struct M68KState *m68k;
++
++    /* The guest PC is what identifies the code doing this. Emu68 keeps the
++     * m68k context in a reserved register, and the AROS image loads at a known
++     * base, so the address resolves against the ELF this repository builds. */
++    __asm__ volatile("mov %0, "CTX_POINTER_ASM"\n":"=r"(m68k));
 +
 +    seen++;
 +    if (seen <= 8)
 +    {
-+        kprintf("[JIT:SYS] open bus %s: guest %p size %d value %p (#%d)\n",
-+                what, far, size, value, seen);
++        kprintf("[JIT:SYS] open bus %s: guest %p size %d value %p m68kPC %08x (#%d)\n",
++                what, far, size, value, m68k ? m68k->PC : 0, seen);
 +    }
 +    else if (seen == 9)
 +    {
@@ -95,7 +107,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  #ifdef PISTORM_ANY_MODEL
  
  #include "ps_protocol.h"
-@@ -2336,6 +2385,41 @@
+@@ -2336,6 +2391,41 @@
      static volatile uint32_t sys_depth[4];
      static volatile uint32_t sys_reported[4];
  

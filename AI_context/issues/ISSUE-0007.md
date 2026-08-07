@@ -811,6 +811,48 @@ sooner, then does not draw icons.
 Next step, and it needs no new tooling: add the removed steps back one at a
 time until `logo` returns.
 
+## Named at last: bad pointers reaching tlsf_freevec (2026-08-06)
+
+`patches/emu68/0005` now prints the **guest PC** alongside every open-bus
+access. Emu68 keeps the m68k context in a reserved register and the AROS image
+loads at `0x34600000`, so the address resolves against the ELF this repository
+builds. That turns the most persistent artefact of the whole investigation into
+a function name.
+
+Six runs on the minimal boot, 4 `icons` / 2 `workbench`:
+
+```
+icons      guest=0xc0000058  m68kPC=3460379a  tlsf_freevec+0x11e
+workbench  guest=0x70ff4e81  m68kPC=3460388a  tlsf_freevec+0x20e
+workbench  guest=0x69b0dde0  m68kPC=3460377a  tlsf_freevec+0xfe
+workbench  guest=0x42617274  m68kPC=3460388a  tlsf_freevec+0x20e   "Bart"
+workbench  guest=0x70742052  m68kPC=346b2eb4  LibNextTagItem+0x0    "pt R"
+workbench  guest=0xfffffd64  m68kPC=fffffd64  (PC already lost)
+```
+
+**It is the allocator.** `rom/kernel/tlsf.c:663`, `tlsf_freevec(mhe, ptr)`, does
+`fb = MEM_TO_BHDR(ptr)` and then reads the block header. A garbage `ptr` gives a
+garbage header address, and reading it is the open-bus access.
+
+So the diagnosis is sharper than "heap corruption": **something calls free with a
+pointer that is not one** — and the values are text (`"Bart"`, `"pt R"`), so a
+pointer variable is holding string data when it is freed. Uninitialised, or used
+after free, or read from the wrong offset of a structure.
+
+That accounts for the whole shape of the intermittency: which block is hit
+depends on where the heap happens to lie, so it fails in different places on
+different runs, with pointers that look like fragments of strings.
+
+**And `patches/emu68/0005` is why any of this is visible.** Before the open-bus
+recovery, the first such free hung the machine with 3200 nested exceptions and
+no evidence. Now it survives, reports, and names the caller.
+
+**The strongest single lead is the benign case.** Every *successful* run makes
+exactly one of these, always the same: `0xc0000058` from `tlsf_freevec+0x11e`.
+Same address, same site, every time. That is not random corruption — it looks
+like one field read before it is initialised. Being deterministic, it is far
+easier to chase than the destructive form, and it may be the same defect.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
