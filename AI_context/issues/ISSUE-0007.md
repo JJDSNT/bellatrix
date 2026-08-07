@@ -890,6 +890,32 @@ Two things it does **not** do, and both matter:
 `frame_bad` from the validator is 0 across all six, so with `AROS_STACKSIZE` at
 40960 no frame lands outside its task's stack either.
 
+## Other frame formats: a real defect, but latent (2026-08-06)
+
+Emu68 generates more than one exception frame size. `M68k_Exception.c` builds
+format 0 (8 bytes), and format 2 (12 bytes) for exactly three vectors —
+`VECTOR_DIVIDE_BY_ZERO`, `VECTOR_CHK`, `VECTOR_TRAPcc` — with formats 3 and 4
+also implemented. Its `RTE` validates the format nibble and accepts 0 and 2,
+raising `VECTOR_FORMAT_ERROR` otherwise (`M68k_LINE4.c:1672`).
+
+**`EMU68_SAVE_FRAME` assumes 8 bytes always.** It copies the format word
+verbatim and does `lea.l %sp@(8),%sp`. Given a format-2 frame it would save 8
+of 12 bytes while keeping a format word that says twelve, so the restore pushes
+8 and the `RTE` pops 12 — four bytes of drift, the same class of defect as the
+66-versus-68 one in a different size.
+
+**Measured, and it does not happen.** A check in `EMU68_SAVE_FRAME` reports any
+frame whose format nibble is not 0; three runs, **zero reports**. Divide by
+zero, `CHK` and `TRAPcc` are error conditions and none of them reaches a task
+switch in this boot.
+
+So it is latent, not the source of the remaining bad pointers. The check stays —
+it costs two instructions on a path that already touches that word, is silent
+unless something changes, and the day this port executes a `CHK` it will say so
+rather than corrupting a stack quietly.
+
+A good hypothesis, closed by measurement rather than left hanging.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.

@@ -56,6 +56,21 @@ static void emu68_CheckTaskFrame(const char *where, struct Task *task,
             task->tc_Flags, task->tc_State);
 }
 
+/*
+ * Called from EMU68_SAVE_FRAME when the frame it just saved is not format 0.
+ * Eight bytes were saved and the format word says otherwise; see the note in
+ * switch.S. Capped, because if it happens at all it will happen often.
+ */
+void emu68_ReportFrameFormat(APTR frame)
+{
+    static unsigned int seen;
+    UWORD fmt = *(const UWORD *)((const UBYTE *)frame + 6);
+
+    if (seen++ < 8)
+        bug("[EMU68-FRAME] non-zero frame format %04x (format %u) at %p\n",
+            fmt, fmt >> 12, frame);
+}
+
 void emu68_SwitchTail(APTR frame)
 {
     struct Task *task = SysBase->ThisTask;

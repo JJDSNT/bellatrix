@@ -20,6 +20,26 @@
         move.w  %sp@,%a5@(4)
         move.w  %sp@(6),%a5@(6)
         lea.l   %sp@(8),%sp
+
+        /*
+         * The frame this saved is assumed to be eight bytes -- a 68010
+         * format-0 frame. Emu68 also generates format 2, which is twelve, for
+         * VECTOR_DIVIDE_BY_ZERO, VECTOR_CHK and VECTOR_TRAPcc
+         * (src/M68k_Exception.c), and its RTE accepts both. Saving eight bytes
+         * of a twelve-byte frame while keeping the format word that says
+         * "twelve" makes the restore push eight and the RTE pop twelve.
+         *
+         * Report rather than handle: whether such a frame ever reaches a task
+         * switch on this port is a question, not an assumption. D0 is already
+         * in the frame at this point, so clobbering it is free.
+         */
+        move.w  %a5@(6),%d0
+        and.w   #0xf000,%d0
+        beq.s   9f
+        move.l  %a5,%sp@-
+        jsr     emu68_ReportFrameFormat
+        addq.l  #4,%sp
+9:
         .endm
 
         .func AROS_SLIB_ENTRY(Switch,Exec,9)
