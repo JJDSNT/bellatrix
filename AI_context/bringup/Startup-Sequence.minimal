@@ -1,5 +1,5 @@
 ; Minimal Startup-Sequence for bring-up measurement.
-; The stock one is kept as Startup-Sequence.full next to it.
+; The stock one is kept as S:Startup-Sequence.stock next to it.
 ; Goal: reach Wanderer with icons as reliably as this port can, with the
 ; smallest set of steps, so that anything added back can be measured.
 FailAt 21

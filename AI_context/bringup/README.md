@@ -10,10 +10,14 @@ needs and nothing else. Everything discretionary is out — `SetClock`,
 `Automount`, `Mount`, `Path`, `Copy ENVARC: ENV: ALL`, `IPrefs`,
 `AddDataTypes`, `ConClip`, `Decoration`.
 
-**To use it:** copy over `S/Startup-Sequence` in the distribution tree that
-`make-sdcard.sh --dist` reads, keep the original, and put it back afterwards.
-Leaving it in place is exactly the invisible drift this repository has been
-bitten by twice.
+**In place as of 2026-08-06** in
+`/home/jaime/aros-build-emu68-m68k/bin/emu68-m68k/AROS/S/Startup-Sequence`,
+with the stock one alongside as `S/Startup-Sequence.stock`.
+
+That is a deliberate, recorded state, not drift — but it *is* a modified
+reference distribution, so **any measurement taken against it is measuring the
+minimal boot**, and comparisons with earlier numbers in ISSUE-0007 are not
+like-for-like unless they say so. Swap the two files to go back.
 
 **What it measured** (6 runs, 2026-08-06, against the stock sequence):
 
