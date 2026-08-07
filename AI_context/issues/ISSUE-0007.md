@@ -6,7 +6,7 @@ priority: critical
 type: bug
 owner: agent
 created_at: 2026-08-04
-updated_at: 2026-08-06
+updated_at: 2026-08-07
 tags:
   - aros
   - emu68
@@ -1107,6 +1107,79 @@ to run.
 Zune class or a command now reaches what boots. Most of the day's instrumentation
 could not have worked, and one attempt at it silently did not.
 
+## The parked branch is now empty of unincorporated work (2026-08-07)
+
+`codex-2026-08-05` was audited item by item against `main`. It is a park, not a
+proposal — two commits over the merge base `2329b18`, while `main` has moved a
+long way past it. **One thing in it was missing from `main`**, and it is now
+`patches/aros/0011`.
+
+**`rom/filesys/fat/date.c` — the directory dates were exchanged in host order,
+and we had already fixed this once and then lost it.** That correction matters
+more than the fix. The history:
+
+- `1772a01` (2026-08-06) added `0008-fat-convert-on-disk-fields-little-endian`,
+  covering `date.c`, `direntry.c` and `ops.c`.
+- `c169cd9`, later the same day — *"keep only the write half, the read
+  substitution breaks the boot"* — deleted that patch and wrote today's `0008`
+  in its place. **`date.c` went with it as collateral.** What the 13-of-13
+  measurement condemned was the read-side `FIRST_FILE_CLUSTER` substitution;
+  `date.c` was in the same patch file and was cut with it.
+- `c169cd9`'s own message says so: *"Converting them was measured too, and is
+  not what broke the boot."* It knew, and cut anyway.
+
+So this is not codex work being adopted. It is our own work being restored after
+a retreat took more ground than it needed to. **A patch file is the unit of
+revert, so anything bundled into one shares its verdict** — which is the same
+attribution failure `1772a01` had already caught once, in the other direction,
+when MUI tracing bundled with a FAT change made the FAT change look like a
+regression.
+
+`0008` stopping where it does is still right on its own terms: the date and time
+words are *symmetrically* unconverted, so AROS round-trips them among itself and
+the boot never noticed. Nothing else that reads the card can. Every timestamp we
+write is byte-swapped on disk, and every timestamp written by anything else reads
+back here as a nonsense date.
+
+It is not a boot blocker and is not promoted as one. The failure is graceful by
+construction: `ConvertFATDate` range-checks the decoded fields and substitutes
+01-01-1978 when they are impossible, which a swapped date almost always is. The
+symptom is uniformly wrong file dates, not a hang.
+
+The conversion goes *inside* `ConvertFATDate` and `ConvertDOSDate` rather than at
+their call sites, and that placement is what makes it complete. Every producer
+and consumer of these fields in `rom/filesys/fat` goes through those two —
+`direntry.c:570,683`, `volume.c:506`, `ops.c:1179`. The other mentions of
+`write_date`, `create_date` and `last_access_date` are field-to-field copies
+(`Rename`, `ops.c:601-606`) or local temporaries holding the on-disk value
+between a read and a write-back (`direntry.c:568-578`, `ops.c:1177-1183`). None
+interprets the value, so the symmetry AROS relied on survives. Verified to build:
+`make kernel-fs-fat` relinks `L/fat-handler`.
+
+This does **not** answer the standing oddity that AROS stamps files with the real
+host wall-clock time although the Pi has no RTC and `readbattclock.c` returns 0
+for this architecture. That is about the *value*, not the byte order, and stays
+open.
+
+**Everything else on that branch is accounted for, and none of it should be
+taken:**
+
+| what | why not |
+|---|---|
+| `direntry.c` read side (`FIRST_FILE_CLUSTER` substitution) | excluded by measurement — it is the change that took the boot to 13 of 13 failures; see "The raw cluster comparison is accidentally load-bearing" |
+| MUI, Wanderer, Shell, IPrefs — 12 files | pure `bug()` tracing and `#define DEBUG 1`, no logic |
+| `arch/m68k-all/{signal_fast,wait,switch}.S`, `kernel_cpu.c` | removes the `#ifndef __EMU68__` guards, i.e. restores the Paula `INTENA` writes — superseded by the `arch/m68k-emu68/exec/` backend and the IPL decision |
+| `platform.c`, `system_timer.c` EXTER arm/ack | the Paula-shadow protocol that was abandoned for IPL |
+| `interrupt_controller.c` +18, `PLATFORM_TRACE_BRINGUP 1` | debug scaffolding (IRQ62 counter, Arasan registers) |
+| `patches/emu68/0002-offer-zorro3-rom-board`, `0003-trim-standalone-module-list` | moot: `src/boards/emu68rom.c` only enters `BASE_FILES` inside the PiStorm branch of `CMakeLists.txt:266-267`, so the standalone variant never compiles it |
+| `emu68-submodule-drift.patch`, both docs, ISSUE-0004 and ISSUE-0008 | already on `main`; the two issues are closed and in `consolidated/history/` |
+
+The 4-line difference in `patches/emu68/0001` between the branches is hunk
+offsets, not content.
+
+The branch can stay as a historical capture. It no longer holds anything owed to
+`main`.
+
 ## Where this work lives, 2026-08-06
 
 Not all of the day's findings are on `main`, and the split is deliberate.
@@ -1841,3 +1914,17 @@ The goal is the Workbench screen with its icons, reached repeatedly.
   header on the stack. Corrects two earlier readings: A6=0x2b58 is a saved size,
   not a corrupt library base, and 0x0088520a is in the loader's own segment
   allocation region. Points at the disk read path, i.e. ISSUE-0009.
+- 2026-08-07 — audited `codex-2026-08-05` against `main` item by item. One piece
+  was missing from `main`: the FAT date/time byte order in
+  `rom/filesys/fat/date.c`, now `patches/aros/0011`. Everything else on that
+  branch is diagnostics, the read-side FAT change that measurement rejected, the
+  Paula path that IPL superseded, or already on `main`. The branch owes `main`
+  nothing further. The date fix is correctness on disk, not a boot fix, and is
+  not claimed to change the rate.
+- 2026-08-07 — correction, and the user caught it: `date.c` had **not** merely
+  never been carried, it was on `main` on 2026-08-06 in `1772a01` and was deleted
+  by `c169cd9` when that commit cut `0008` back to its write half. The read-side
+  substitution was the measured regression; `date.c` shared its patch file and
+  shared its fate. Restoring it is undoing an over-broad revert, not importing
+  someone else's work. The general lesson is filed above: a patch file is the
+  unit of revert, so bundling is how a good change inherits a bad verdict.

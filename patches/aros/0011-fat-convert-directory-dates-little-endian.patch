@@ -1,0 +1,80 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 7 Aug 2026 12:00:00 -0300
+Subject: [PATCH 11/11] fat: convert directory dates little-endian
+
+The last field family in the FAT directory entry still exchanged in host
+order -- and this is a restoration, not a new fix. The conversion was on main
+on 2026-08-06 in 1772a01, in a patch that covered date.c, direntry.c and
+ops.c together. Later that day c169cd9 cut 0008 back to its write half
+because the read-side FIRST_FILE_CLUSTER substitution had measured 13 boot
+failures out of 13, and date.c was deleted with it: same patch file, same
+fate. That commit's own message says the date conversion "was measured too,
+and is not what broke the boot". A patch file is the unit of revert, so
+anything bundled into one inherits its verdict.
+
+0008 stopping where it does is still right on its own terms. The date and
+time words are *symmetrically* unconverted -- ConvertDOSDate composes a
+native UWORD and ConvertFATDate is handed the raw field back -- so AROS
+round-trips them among itself and the boot never noticed. Nothing else that
+reads the card can, which is why it is still a defect: every timestamp we
+write is byte-swapped on disk, and every timestamp written by anything else
+reads back here as a nonsense date.
+
+This is not a boot blocker and is not claimed to be one. The failure is
+graceful by construction: ConvertFATDate range-checks the decoded fields and
+substitutes 01-01-1978 when they are impossible, which a swapped date almost
+always is. The visible symptom is uniformly wrong file dates, not a hang.
+
+The conversion goes inside the two functions rather than at their call sites,
+and that placement is what makes the change complete. Every producer and
+consumer of these fields in rom/filesys/fat goes through ConvertFATDate or
+ConvertDOSDate -- direntry.c:570,683, volume.c:506, ops.c:1179. The remaining
+mentions of write_date, create_date and last_access_date are field-to-field
+copies (Rename, ops.c:601-606) or local temporaries holding the on-disk
+representation between a read and a write-back (direntry.c:568-578,
+ops.c:1177-1183). None of them interprets the value, so none needs to know
+the byte order changed, and the symmetry AROS relied on is preserved.
+
+Also the last piece of the parked codex-2026-08-05 working state that was
+neither a diagnostic nor superseded, which is how it was found again. See
+AI_context/issues/ISSUE-0007.md.
+
+Upstream defect on every big-endian AROS target; m68k-amiga, ppc-native and
+ppc-morphos share this code.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/rom/filesys/fat/date.c
++++ b/rom/filesys/fat/date.c
+@@ -24,6 +24,12 @@ void ConvertFATDate(UWORD date, UWORD time, struct DateStamp *ds,
+     ULONG year, month, day, hours, mins, secs;
+     struct ClockData clock_data;
+ 
++    /* The fields arrive raw from the directory entry, which is little-endian
++     * on disk whatever the host is. Decode before unpacking the bitfields,
++     * not after -- the masks below are defined on the FAT value. */
++    date = AROS_LE2WORD(date);
++    time = AROS_LE2WORD(time);
++
+     /* Date bits: yyyy yyym mmmd dddd */
+     year = (date & 0xfe00) >> 9;    /* Bits 15-9 */
+     month = (date & 0x01e0) >> 5;   /* bits 8-5 */
+@@ -93,10 +99,15 @@ void ConvertDOSDate(struct DateStamp *ds, UWORD * date, UWORD * time,
+ 
+     /* All that remains is to bit-encode the whole lot */
+ 
++    /* Encoded last, so the caller may store the result straight into the
++     * directory entry. See ConvertFATDate for the other half. */
++
+     /* Date bits: yyyy yyym mmmd dddd */
+-    *date = (((ULONG) year) << 9) | (((ULONG) month) << 5) | day;
++    *date = AROS_WORD2LE((((ULONG) year) << 9) |
++        (((ULONG) month) << 5) | day);
+ 
+     /* Time bits: hhhh hmmm mmms ssss */
+-    *time = (((ULONG) hours) << 11) | (((ULONG) mins) << 5) | secs;
++    *time = AROS_WORD2LE((((ULONG) hours) << 11) |
++        (((ULONG) mins) << 5) | secs);
+ }
+ 
