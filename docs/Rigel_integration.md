@@ -2,7 +2,8 @@ Bellatrix / Rigel Integration Specification
 
 Host Interface, MMIO, Timing, Interrupts, DMA, Memory, and Lifecycle
 
-Status: Proposed Integration Specification
+Status: Architectural Integration Baseline
+Version: 1
 
 This document defines the integration contract between Bellatrix and librigel.
 
@@ -484,7 +485,50 @@ It MUST NOT mean elapsed host time.
 
 ⸻
 
-17. No Wall-Clock-Driven Chipset
+17. Canonical Chipset Timeline
+
+Rigel owns its internal chipset timeline.
+
+Bellatrix MAY maintain execution-progress accounting required to synchronize CPU execution with that timeline.
+
+Bellatrix MUST NOT independently maintain authoritative chipset time.
+
+Conceptually:
+
+Bellatrix
+    │
+    │ execution-progress accounting
+    ▼
+Rigel
+    │
+    │ authoritative chipset timeline
+    ├── beam
+    ├── DMA
+    ├── Copper
+    ├── Blitter
+    ├── Paula
+    └── CIA
+
+This distinction is fundamental.
+
+A Bellatrix-side progress counter represents how much execution has been reported or remains to be synchronized.
+
+It does not become a second authoritative representation of:
+
+* beam time;
+* E-clock state;
+* DMA slot position;
+* Copper time;
+* Paula time;
+* CIA time.
+
+The governing principle remains:
+
+The CPU reports progress. The chipset owns chipset time.
+
+⸻
+
+18. No Wall-Clock-Driven Chipset
 
 Rigel correctness MUST NOT be driven directly by:
 
@@ -509,7 +553,7 @@ This distinction is required for deterministic execution and reproducible testin
 
 ⸻
 
-18. Progress Delivery
+19. Progress Delivery
 
 Bellatrix MAY accumulate execution progress before advancing Rigel.
 
@@ -535,7 +579,7 @@ Bellatrix MUST NOT use arbitrary batching that allows CPU execution to proceed i
 
 ⸻
 
-19. Synchronization Deadline
+20. Synchronization Deadline
 
 Rigel MAY expose the next synchronization deadline beyond which the host MUST NOT advance execution without giving Rigel an opportunity to update its state.
 
@@ -580,7 +624,29 @@ The public contract SHOULD NOT require the host to classify the event behind the
 
 ⸻
 
-20. Deadline-Based Execution
+21. Deadline Representation
+
+The public ABI MUST explicitly define how a synchronization deadline is represented.
+
+In particular, it MUST define whether a returned deadline is:
+
+absolute virtual timestamp
+
+or:
+
+delta from current Rigel time
+
+This specification does not mandate either representation.
+
+That choice belongs to the concrete public ABI.
+
+Implementations MUST NOT infer whether a deadline is absolute or relative from call context.
+
+The representation must be explicit, stable, and documented.
+
+⸻
+
+22. Deadline-Based Execution
 
 The preferred execution relationship is deadline based.
 
@@ -614,7 +680,7 @@ The CPU reports progress. The chipset owns chipset time.
 
 ⸻
 
-21. Overshoot
+23. Overshoot
 
 The integration MUST correctly handle execution progress that passes a previously reported Rigel deadline.
 
@@ -637,7 +703,7 @@ The existence of overshoot support MUST NOT be interpreted as permission for arb
 
 ⸻
 
-22. Rigel Interrupt Ownership
+24. Rigel Interrupt Ownership
 
 Rigel owns classic Amiga interrupt state.
 
@@ -670,7 +736,7 @@ classic priority resolution
 
 ⸻
 
-23. IPL Interface
+25. IPL Interface
 
 Rigel SHOULD expose its currently asserted M68K interrupt priority level.
 
@@ -685,7 +751,7 @@ Bellatrix does not need to know which internal Rigel source produced that level.
 
 ⸻
 
-24. IPL Observation
+26. IPL Observation
 
 Bellatrix must be able to observe Rigel IPL transitions at the synchronization points required to preserve CPU-visible M68K interrupt semantics.
 
@@ -701,7 +767,7 @@ Bellatrix must not allow CPU execution to proceed incorrectly beyond a point at 
 
 ⸻
 
-25. Native and Rigel IPL Arbitration
+27. Native and Rigel IPL Arbitration
 
 Bellatrix may simultaneously observe:
 
@@ -739,7 +805,7 @@ The arbitration layer MUST NOT merge the underlying interrupt state.
 
 ⸻
 
-26. Interrupt Acceptance and Acknowledgement
+28. Interrupt Acceptance and Acknowledgement
 
 CPU acceptance of an interrupt level is not equivalent to acknowledgement or clearing of the originating hardware source.
 
@@ -761,7 +827,7 @@ Likewise, Rigel MUST NOT acknowledge, mask, or clear native BCM interrupt-contro
 
 ⸻
 
-27. Interrupt Re-evaluation
+29. Interrupt Re-evaluation
 
 When either interrupt domain changes, the effective CPU-visible IPL may need to be re-evaluated.
 
@@ -785,7 +851,7 @@ The native and compatibility domains remain independent even though their CPU-vi
 
 ⸻
 
-28. Address-Space Model
+30. Address-Space Model
 
 The integration must distinguish different address representations explicitly.
 
@@ -800,7 +866,7 @@ They MUST NOT be treated as interchangeable simply because an implementation can
 
 ⸻
 
-29. Chipset-Visible Address Translation
+31. Chipset-Visible Address Translation
 
 For classic chipset DMA, the conceptual translation is:
 
@@ -826,7 +892,7 @@ This distinction applies regardless of whether the eventual implementation uses 
 
 ⸻
 
-30. Chip RAM Ownership
+32. Chip RAM Ownership
 
 Bellatrix owns guest physical memory allocation and mapping.
 
@@ -852,7 +918,38 @@ Bellatrix MUST NOT reproduce Agnus or other chipset-specific address-generation 
 
 ⸻
 
-31. DMA Memory Boundary
+33. Chip RAM Configuration Semantics
+
+Configuration fields such as:
+
+uint32_t chip_ram_size;
+
+describe the chipset-visible memory topology presented to Rigel.
+
+They do not transfer guest-memory allocation or mapping ownership to Rigel.
+
+Normative rule:
+
+chip_ram_size and equivalent configuration fields describe the chipset-visible memory topology. They do not transfer guest-memory allocation, backing, or mapping ownership to Rigel.
+
+The conceptual relationship remains:
+
+Bellatrix allocates/maps guest memory
+            │
+            ▼
+Guest physical memory
+            │
+            ▼
+Rigel is configured with the chipset-visible topology
+            │
+            ▼
+Rigel determines how Agnus/chipset logic can access it
+
+A configuration value describing Chip RAM capacity MUST NOT be interpreted as a request for librigel to allocate machine memory.
+
+⸻
+
+34. DMA Memory Boundary
 
 Rigel requires access to guest memory for classic chipset DMA.
 
@@ -889,7 +986,7 @@ Rigel MUST NOT depend on Bellatrix internal memory structures.
 
 ⸻
 
-32. DMA Address Semantics
+35. DMA Address Semantics
 
 DMA addresses produced by classic chipset registers are interpreted by Rigel according to the hardware model.
 
@@ -921,7 +1018,7 @@ Bellatrix MUST NOT duplicate chipset address-generation rules.
 
 ⸻
 
-33. DMA Access API
+36. DMA Access API
 
 The initial host memory interface MAY use callbacks such as:
 
@@ -946,7 +1043,7 @@ The address passed to these operations represents a guest physical address, not:
 
 ⸻
 
-34. Direct Memory Windows
+37. Direct Memory Windows
 
 For performance, a future interface MAY expose validated direct guest-memory windows.
 
@@ -971,7 +1068,7 @@ Direct mappings MUST NOT cause Rigel to depend on:
 
 ⸻
 
-35. DMA and MMIO Separation
+38. DMA and MMIO Separation
 
 Rigel DMA and M68K MMIO represent opposite directions across the integration boundary.
 
@@ -998,7 +1095,7 @@ In particular, Rigel DMA MUST NOT be implemented by recursively issuing M68K MMI
 
 ⸻
 
-36. Memory Coherency
+39. Memory Coherency
 
 CPU and Rigel must observe a coherent guest-memory model.
 
@@ -1022,7 +1119,7 @@ It belongs to Bellatrix/Emu68 integration, not to Rigel hardware semantics.
 
 ⸻
 
-37. DMA-Written Executable Memory
+40. DMA-Written Executable Memory
 
 Rigel DMA may write to guest memory containing M68K executable code.
 
@@ -1042,7 +1139,7 @@ The host memory backend must perform whatever invalidation or synchronization th
 
 ⸻
 
-38. Reset Model
+41. Reset Model
 
 The integration must distinguish at least:
 
@@ -1058,7 +1155,7 @@ A Rigel reset MUST NOT implicitly reset unrelated Raspberry Pi hardware.
 
 ⸻
 
-39. Rigel Cold Reset
+42. Rigel Cold Reset
 
 A Rigel cold reset returns the classic hardware model to its defined power-on state.
 
@@ -1083,7 +1180,7 @@ Bellatrix MUST NOT duplicate them.
 
 ⸻
 
-40. Rigel Warm Reset
+43. Rigel Warm Reset
 
 A warm reset represents the appropriate classic-machine reset semantics without reconstructing unrelated host platform state.
 
@@ -1097,7 +1194,7 @@ Bellatrix MUST NOT encode those chipset rules independently.
 
 ⸻
 
-41. Initialization Sequence
+44. Initialization Sequence
 
 When:
 
@@ -1137,7 +1234,7 @@ Rigel initialization MUST NOT require native platform drivers to masquerade as c
 
 ⸻
 
-42. Shutdown
+45. Shutdown
 
 If Bellatrix supports controlled shutdown or Rigel reinitialization, shutdown ordering must prevent callbacks after host resources have become invalid.
 
@@ -1159,7 +1256,7 @@ rigel_destroy() MUST NOT assume Bellatrix process semantics or operating-system 
 
 ⸻
 
-43. Configuration
+46. Configuration
 
 Rigel-specific configuration SHOULD be passed explicitly when a Rigel instance is created.
 
@@ -1174,7 +1271,11 @@ struct rigel_config {
 
 Configuration describes the classic hardware environment being instantiated.
 
-It MUST NOT describe unrelated Bellatrix native hardware.
+Fields describing memory capacity or topology describe Rigel’s chipset-visible hardware view.
+
+They do not change the memory-ownership rules defined by this specification.
+
+Configuration MUST NOT describe unrelated Bellatrix native hardware.
 
 For example:
 
@@ -1187,7 +1288,7 @@ do not belong in rigel_config.
 
 ⸻
 
-44. PAL and NTSC
+47. PAL and NTSC
 
 Classic video standard selection belongs to Rigel configuration because it affects chipset timing.
 
@@ -1209,7 +1310,7 @@ Bellatrix MUST NOT independently implement PAL or NTSC chipset timing.
 
 ⸻
 
-45. Video Output Boundary
+48. Video Output Boundary
 
 Rigel owns classic video-generation semantics.
 
@@ -1251,7 +1352,7 @@ Bellatrix MUST NOT implement Denise behavior.
 
 ⸻
 
-46. Audio Output Boundary
+49. Audio Output Boundary
 
 The same ownership principle applies to audio.
 
@@ -1292,7 +1393,7 @@ Rigel MUST NOT depend directly on:
 
 ⸻
 
-47. Input Boundary
+50. Input Boundary
 
 Native input devices belong to Bellatrix.
 
@@ -1325,7 +1426,7 @@ Translation from native host input to the appropriate classic hardware abstracti
 
 ⸻
 
-48. Logging
+51. Logging
 
 Rigel MAY expose diagnostic output through an optional host logging callback.
 
@@ -1352,9 +1453,9 @@ Logging MUST NOT introduce timing semantics into the hardware model.
 
 ⸻
 
-49. Determinism
+52. Determinism
 
-Given identical:
+Given identical defined:
 
 * initial Rigel configuration;
 * initial guest memory;
@@ -1362,10 +1463,10 @@ Given identical:
 * Rigel-facing input sequence;
 * execution-progress sequence;
 
-Rigel SHOULD produce identical:
+Rigel MUST produce identical defined:
 
 * guest-memory effects;
-* chipset state;
+* chipset state transitions;
 * event ordering;
 * interrupt state;
 * video state;
@@ -1373,11 +1474,15 @@ Rigel SHOULD produce identical:
 
 Host wall-clock timing MUST NOT affect this result.
 
-This property is required for reliable standalone harness testing.
+An explicitly documented future mode MAY intentionally introduce nondeterministic behavior.
+
+Such a mode MUST be opt-in and MUST NOT redefine the deterministic semantics of the normal Rigel execution model.
+
+Determinism is part of the integration contract because it enables reliable standalone harness testing and reproducible debugging.
 
 ⸻
 
-50. Standalone Harness
+53. Standalone Harness
 
 The standalone Rigel harness MUST use the same public interface as Bellatrix.
 
@@ -1407,7 +1512,7 @@ The purpose of the harness is to exercise production librigel.
 
 ⸻
 
-51. Harness Capabilities
+54. Harness Capabilities
 
 The standalone harness SHOULD eventually support:
 
@@ -1425,11 +1530,13 @@ The standalone harness SHOULD eventually support:
 * event tracing;
 * reproducible scripted tests.
 
-The existing Bellatrix workflow already treats harness-generated logs and direct source-level investigation as primary debugging tools. This remains the preferred validation model.
+The existing Bellatrix development workflow already emphasizes harness-generated logs and direct source-level investigation during debugging.
+
+That workflow remains the preferred basis for validating the integration.
 
 ⸻
 
-52. Integration Diagnostics
+55. Integration Diagnostics
 
 Bellatrix integration diagnostics SHOULD make it possible to distinguish at least:
 
@@ -1456,7 +1563,7 @@ The important property is that logs preserve architectural ownership and make it
 
 ⸻
 
-53. Threading and Core Placement
+56. Threading and Core Placement
 
 The public Rigel API MUST NOT encode a particular Raspberry Pi CPU-core topology.
 
@@ -1480,7 +1587,7 @@ Those are host implementation details.
 
 ⸻
 
-54. Concurrency
+57. Concurrency
 
 Unless explicitly documented otherwise, a Rigel instance SHOULD initially be treated as single-thread-affine.
 
@@ -1501,7 +1608,7 @@ Bellatrix synchronization primitives MUST NOT leak into the host-independent Rig
 
 ⸻
 
-55. Performance Optimizations
+58. Performance Optimizations
 
 The integration boundary MAY later support optimizations such as:
 
@@ -1526,7 +1633,7 @@ into Bellatrix.
 
 ⸻
 
-56. Error Handling
+59. Error Handling
 
 Public Rigel operations that can fail SHOULD return explicit status information.
 
@@ -1542,7 +1649,7 @@ Runtime behavior representing valid classic hardware semantics SHOULD NOT be con
 
 ⸻
 
-57. Versioning
+60. Versioning
 
 The public librigel interface SHOULD expose an API version.
 
@@ -1563,7 +1670,7 @@ This allows Bellatrix and Rigel to evolve independently.
 
 ⸻
 
-58. Build Boundary
+61. Build Boundary
 
 The intended build relationship is:
 
@@ -1587,7 +1694,7 @@ If host-specific adapters are eventually added to the Rigel repository, they MUS
 
 ⸻
 
-59. Compile-Time Integration
+62. Compile-Time Integration
 
 Bellatrix controls Rigel integration using a build option such as:
 
@@ -1609,7 +1716,7 @@ Rigel-specific conditionals SHOULD NOT spread through unrelated native platform 
 
 ⸻
 
-60. Architectural Non-Goals
+63. Architectural Non-Goals
 
 The integration layer is not intended to:
 
@@ -1628,7 +1735,7 @@ The integration layer is not intended to:
 
 ⸻
 
-61. Integration Invariants
+64. Integration Invariants
 
 The following rules are normative.
 
@@ -1658,6 +1765,12 @@ Bellatrix MUST provide virtual execution progress.
 
 Rigel MUST interpret that progress as classic chipset time.
 
+Canonical chipset timeline
+
+Rigel MUST own its internal authoritative chipset timeline.
+
+Bellatrix MAY maintain synchronization accounting but MUST NOT independently maintain authoritative chipset time.
+
 Wall clock
 
 Rigel chipset correctness MUST NOT depend on host wall-clock time.
@@ -1669,6 +1782,12 @@ Rigel MAY define synchronization deadlines.
 Bellatrix MUST give Rigel an opportunity to update its state when such a deadline is reached or crossed.
 
 The host MUST NOT need to understand why the deadline exists.
+
+Deadline representation
+
+The public ABI MUST explicitly define whether synchronization deadlines are absolute virtual timestamps or deltas relative to current Rigel time.
+
+This distinction MUST NOT be inferred from call context.
 
 Overshoot
 
@@ -1708,6 +1827,12 @@ Bellatrix MUST own guest physical memory allocation and mapping.
 
 Rigel MUST own the chipset-visible interpretation of the guest-memory subset exposed as Chip RAM.
 
+Chip RAM configuration
+
+Chip RAM size and equivalent configuration values MUST describe chipset-visible memory topology only.
+
+They MUST NOT transfer allocation, backing, or mapping ownership to Rigel.
+
 Address spaces
 
 Chipset-visible DMA addresses, guest physical addresses, MMIO addresses, and host pointers MUST remain conceptually distinct.
@@ -1738,6 +1863,10 @@ Non-reentrancy
 
 Unless explicitly documented otherwise, a callback invoked by Rigel MUST NOT re-enter the same Rigel instance.
 
+Determinism
+
+Given identical defined inputs and configuration, normal Rigel operation MUST produce identical defined outputs and state transitions.
+
 Harness equivalence
 
 The standalone harness MUST exercise the same production librigel interface used by Bellatrix.
@@ -1748,7 +1877,7 @@ Disabling Rigel MUST leave a functional Bellatrix Core platform.
 
 ⸻
 
-62. Minimal Initial Integration
+65. Minimal Initial Integration
 
 The first implementation does not need every possible optimization or presentation interface.
 
@@ -1794,7 +1923,7 @@ Video, audio, input, diagnostics, optimized memory windows, and asynchronous not
 
 ⸻
 
-63. Recommended Implementation Order
+66. Recommended Implementation Order
 
 The first implementation SHOULD proceed in dependency order:
 
@@ -1814,27 +1943,31 @@ The first implementation SHOULD proceed in dependency order:
           │
 8. Select canonical execution-progress unit
           │
-9. Implement advance/deadline contract
+9. Define authoritative Rigel timeline semantics
           │
-10. Expose Rigel IPL
+10. Define absolute-vs-relative deadline ABI semantics
           │
-11. Implement Bellatrix IPL arbitration/re-evaluation
+11. Implement advance/deadline contract
           │
-12. Validate interrupt acceptance semantics
+12. Expose Rigel IPL
           │
-13. Validate DMA coherency and JIT interaction
+13. Implement Bellatrix IPL arbitration/re-evaluation
           │
-14. Add host-independent video/audio boundaries
+14. Validate interrupt acceptance semantics
           │
-15. Add native input adaptation
+15. Validate DMA coherency and JIT interaction
+          │
+16. Add host-independent video/audio boundaries
+          │
+17. Add native input adaptation
 
 The standalone harness appears deliberately early.
 
-This makes Rigel independence a demonstrated implementation property rather than merely an architectural statement.
+This makes Rigel independence and determinism demonstrated implementation properties rather than merely architectural statements.
 
 ⸻
 
-64. Validation Criteria
+67. Validation Criteria
 
 The integration SHOULD NOT be considered complete merely because AROS boots with Rigel enabled.
 
@@ -1883,9 +2016,17 @@ Timing ownership
 
 Changing host pacing does not change deterministic Rigel behavior for an identical execution-progress sequence.
 
+Timeline ownership
+
+Bellatrix synchronization counters can be changed or reorganized without creating an independent source of authoritative chipset time.
+
 Deadline correctness
 
 Crossing a Rigel synchronization deadline results in deterministic state updates.
+
+Deadline representation
+
+The public ABI unambiguously documents whether deadlines are absolute or relative.
 
 Overshoot correctness
 
@@ -1894,6 +2035,10 @@ A controlled amount of execution overshoot produces the same logical result as e
 Chip RAM ownership
 
 Bellatrix remains responsible for physical guest-memory allocation while Rigel controls chipset-visible access semantics.
+
+Chip RAM configuration
+
+Changing chip_ram_size or equivalent topology configuration does not cause librigel to assume ownership of guest-memory allocation or mapping.
 
 DMA correctness
 
@@ -1907,13 +2052,17 @@ Reset correctness
 
 Rigel can be reset without reconstructing unrelated native platform state.
 
+Determinism
+
+Repeated harness runs with identical defined inputs produce identical defined Rigel outputs and state transitions.
+
 Harness equivalence
 
 Behavior observed through the harness uses the same production Rigel implementation and API used by Bellatrix.
 
 ⸻
 
-65. Review Criteria
+68. Review Criteria
 
 Future patches affecting Bellatrix/Rigel integration SHOULD be reviewed against the following questions:
 
@@ -1922,31 +2071,35 @@ Future patches affecting Bellatrix/Rigel integration SHOULD be reviewed against 
 3. Is Rigel acquiring a dependency on Bellatrix?
 4. Is native hardware being represented unnecessarily through Amiga hardware mechanisms?
 5. Is chipset timing being computed outside Rigel?
-6. Is a host wall clock being allowed to define chipset state?
-7. Is native interrupt state entering INTENA or INTREQ?
-8. Is Rigel interrupt state entering the BCM interrupt domain?
-9. Is CPU exception acceptance being confused with hardware-source acknowledgement?
-10. Does the IPL implementation correctly re-evaluate remaining sources after a level changes?
-11. Does Bellatrix need to understand why a Rigel synchronization deadline exists?
-12. Is deadline overshoot being tolerated for correctness without becoming the default batching strategy?
-13. Are chipset-visible addresses being confused with guest physical addresses?
-14. Are guest physical addresses being confused with host pointers?
-15. Is Chip RAM allocation ownership remaining in Bellatrix?
-16. Is chipset address-generation behavior remaining in Rigel?
-17. Is chipset DMA behavior being duplicated in the host?
-18. Is Rigel becoming aware of Emu68 JIT internals?
-19. Is a generic callback being introduced where a narrower contract would suffice?
-20. Can a Rigel callback accidentally re-enter the same Rigel instance?
-21. Does video/audio output remain independent of native presentation hardware?
-22. Does Rigel remain unaware of USB, Bluetooth and native HID objects?
-23. Does the change preserve standalone Rigel testing?
-24. Does CONFIG_RIGEL=n remain a first-class supported configuration?
+6. Is Bellatrix creating a second authoritative chipset timeline?
+7. Is a host wall clock being allowed to define chipset state?
+8. Is native interrupt state entering INTENA or INTREQ?
+9. Is Rigel interrupt state entering the BCM interrupt domain?
+10. Is CPU exception acceptance being confused with hardware-source acknowledgement?
+11. Does the IPL implementation correctly re-evaluate remaining sources after a level changes?
+12. Does Bellatrix need to understand why a Rigel synchronization deadline exists?
+13. Is the public ABI explicit about absolute versus relative deadline representation?
+14. Is deadline overshoot being tolerated for correctness without becoming the default batching strategy?
+15. Are chipset-visible addresses being confused with guest physical addresses?
+16. Are guest physical addresses being confused with host pointers?
+17. Is Chip RAM allocation ownership remaining in Bellatrix?
+18. Is chip_ram_size being incorrectly treated as an allocation request?
+19. Is chipset address-generation behavior remaining in Rigel?
+20. Is chipset DMA behavior being duplicated in the host?
+21. Is Rigel becoming aware of Emu68 JIT internals?
+22. Is a generic callback being introduced where a narrower contract would suffice?
+23. Can a Rigel callback accidentally re-enter the same Rigel instance?
+24. Does video/audio output remain independent of native presentation hardware?
+25. Does Rigel remain unaware of USB, Bluetooth, and native HID objects?
+26. Is deterministic behavior preserved for identical defined inputs?
+27. Does the change preserve standalone Rigel testing?
+28. Does CONFIG_RIGEL=n remain a first-class supported configuration?
 
 If a patch cannot answer these questions cleanly, the integration boundary should be reconsidered before acceptance.
 
 ⸻
 
-66. Final Integration Model
+69. Final Integration Model
 
 The complete relationship is:
 
@@ -2034,10 +2187,13 @@ The timing relationship is:
 Emu68 execution
       │
       ▼
+Bellatrix progress accounting
+      │
+      ▼
 virtual execution progress
       │
       ▼
-Rigel
+Rigel authoritative chipset timeline
       │
       ├── chipset state
       └── next synchronization deadline
@@ -2045,9 +2201,29 @@ Rigel
                     ▼
                 Bellatrix
 
+The complete cross-boundary relationship is:
+
+                 Bellatrix                  Rigel
+                     │                        │
+CPU execution        ├──── progress ─────────►│
+                     │                        │
+MMIO                 ├──── transaction ─────►│
+                     │                        │
+Guest memory         │◄──── DMA access ──────┤
+                     │                        │
+Interrupt            │◄──── rigel_ipl ───────┤
+                     │                        │
+Scheduling           │◄──── deadline ────────┤
+                     │                        │
+Input                ├──── classic input ────►│
+                     │                        │
+Presentation         │◄──── video/audio ─────┤
+
+None of these relationships requires either side to know the implementation of the other.
+
 ⸻
 
-67. Integration Definition
+70. Integration Definition
 
 The Bellatrix/Rigel integration can be summarized as follows:
 
@@ -2063,7 +2239,7 @@ Bellatrix provides:
 * memory allocation and mapping;
 * native hardware;
 * native interrupts;
-* execution progress;
+* execution-progress accounting;
 * native presentation;
 * host input.
 
@@ -2071,6 +2247,7 @@ Rigel provides:
 
 * classic chipset semantics;
 * classic MMIO;
+* the authoritative chipset timeline;
 * chipset timing;
 * synchronization deadlines;
 * chipset-visible memory semantics;
@@ -2087,7 +2264,7 @@ This boundary is the implementation contract that preserves the architecture def
 
 ⸻
 
-68. Specification Hierarchy
+71. Specification Hierarchy
 
 The intended documentation hierarchy is:
 
@@ -2106,9 +2283,10 @@ Bellatrix-Rigel-Integration.md
     │
     │ defines
     ▼
-integration contract
+cross-boundary behavioral contract
 MMIO
 time
+timeline ownership
 deadlines
 IPL
 DMA
@@ -2128,4 +2306,6 @@ rigel.h SHOULD materialize the integration specification rather than create new 
 
 If implementation work reveals the need for a new cross-boundary abstraction, that abstraction SHOULD first be incorporated into this specification and only then exposed through the public C API.
 
-This keeps implementation decisions subordinate to the architecture rather than allowing the API to redefine it accidentally.
+The public header must therefore be a consequence of the specification rather than the place where the architecture is discovered during implementation.
+
+This keeps implementation decisions subordinate to the architecture and prevents the concrete ABI from accidentally redefining the integration boundary.
