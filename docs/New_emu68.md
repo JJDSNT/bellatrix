@@ -1,3 +1,15 @@
+
+Sim — provavelmente apenas dois patches funcionais:
+
+1. Generic host bus hook — expõe o fault/MMIO do Emu68 para src/amiga/bus.c.
+2. Standalone IPL input — permite que o Rigel publique o IPL clássico via INTF.IPL.
+
+O caminho de host IRQ já existente:
+
+INTF.ARM → level 6
+
+deve ser preservado como está, sem patch adicional, salvo se os testes mostrarem algum problema específico no standalone.
+
 # Bellatrix / Emu68 Minimal Patch Plan
 
 ## Host Bus, Amiga IPL and 24-bit Address-Space Integration
