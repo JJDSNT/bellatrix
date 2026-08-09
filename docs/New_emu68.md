@@ -1,22 +1,10 @@
-
-Sim — provavelmente apenas dois patches funcionais:
-
-1. Generic host bus hook — expõe o fault/MMIO do Emu68 para src/amiga/bus.c.
-2. Standalone IPL input — permite que o Rigel publique o IPL clássico via INTF.IPL.
-
-O caminho de host IRQ já existente:
-
-INTF.ARM → level 6
-
-deve ser preservado como está, sem patch adicional, salvo se os testes mostrarem algum problema específico no standalone.
-
 # Bellatrix / Emu68 Minimal Patch Plan
 
-## Host Bus, Amiga IPL and 24-bit Address-Space Integration
+## Host Bus, Amiga IPL, Host IRQ and 24-bit Address-Space Integration
 
 **Status:** Proposed scaffold baseline  
 **Goal:** Minimize Bellatrix-specific changes to Emu68  
-**Target:** New Bellatrix architecture using Emu68 as the CPU engine and Rigel as the Amiga chipset
+**Target:** New Bellatrix architecture using Emu68 as the primary CPU engine and Rigel as a secondary Amiga chipset subsystem
 
 ---
 
@@ -27,14 +15,40 @@ This document defines the minimal Emu68 patch set required by the new Bellatrix 
 The central architectural rule is:
 
 ~~~
-Emu68 implements the CPU, MMU and exception machinery.
+Emu68 implements:
+    CPU execution
+    MMU
+    exception machinery
+    CPU interrupt arbitration
 
-Bellatrix defines and composes the machine.
+Bellatrix defines:
+    the machine
+    the ARM platform
+    memory policy
+    subsystem composition
 
-Rigel implements the Amiga chipset.
+Rigel implements:
+    the classic Amiga chipset subsystem
 ~~~
 
-The Emu68 patch set should therefore expose only the generic boundaries required by Bellatrix.
+An important distinction from PiStorm is that the Amiga chipset is not the machine hosting Emu68.
+
+In Bellatrix:
+
+~~~
+Bellatrix / ARM platform
+        = primary machine
+
+Emu68 + AROS
+        = primary CPU/OS environment
+
+Rigel
+        = secondary Amiga hardware subsystem
+~~~
+
+Therefore the Bellatrix platform interrupt architecture must not depend on Amiga chipset semantics.
+
+The Emu68 patch set should expose only the generic boundaries required by Bellatrix.
 
 No Emu68 patch should implement:
 
@@ -50,69 +64,168 @@ Autoconfig
 24-bit machine policy
 ~~~
 
-The current Bellatrix patch series contains transitional solutions from the stage where standalone Bellatrix did not yet have a real Paula/Rigel implementation.
+---
 
-In particular, the existing patches use `INT_shadow` to emulate parts of the Amiga interrupt controller.
+# 2. Why the Previous Interrupt Architecture Must Change
 
-That architecture should not be carried forward.
+During the initial AROS port, Bellatrix did not yet have Rigel.
 
-With Rigel present:
+The Emu68 `INTF.ARM` path was inherited from an architecture where the external interrupt lifecycle was coupled to Amiga/PiStorm interrupt semantics.
+
+Conceptually:
 
 ~~~
-Rigel owns:
-    INTENA
-    INTREQ
-    Amiga interrupt resolution
-
-Bellatrix owns:
-    machine composition
-    Amiga bus wiring
-    CPU/chipset wiring
-
-Emu68 owns:
-    CPU execution
-    MMU
-    fault machinery
-    IPL presentation to the 68k CPU
+external interrupt
+       ↓
+INTF.ARM asserted
+       ↓
+68k level 6
+       ↓
+Amiga EXTER handling
+       ↓
+INTREQ acknowledgement
+       ↓
+INTF.ARM cleared
 ~~~
+
+This was inappropriate for a standalone AROS port because there was no real Paula/Rigel interrupt controller owning `INTENA`, `INTREQ` and `EXTER`.
+
+Bellatrix therefore temporarily bypassed that lifecycle and injected the desired CPU level through:
+
+~~~
+INTF.IPL
+~~~
+
+This allowed:
+
+~~~
+ARM/platform IRQ
+       ↓
+Bellatrix decides level 6
+       ↓
+INTF.IPL = 6
+       ↓
+68k
+~~~
+
+without requiring a synthetic Paula merely to acknowledge Raspberry Pi interrupts.
+
+That solution was appropriate as a transitional mechanism.
+
+It should not define the final architecture.
 
 ---
 
-# 2. Target Architecture
+# 3. The New Interrupt Model
+
+With Rigel present, Bellatrix has two genuinely independent interrupt domains.
+
+## Primary Bellatrix platform interrupts
+
+Examples:
+
+~~~
+BCM283x timer
+SD/eMMC
+USB
+other ARM peripherals
+~~~
+
+These belong to the primary Bellatrix machine.
+
+Their path should be:
+
+~~~
+ARM peripheral
+      ↓
+BCM283x interrupt controller
+      ↓
+Bellatrix host IRQ
+      ↓
+INTF.ARM
+      ↓
+Emu68
+      ↓
+68k level 6
+      ↓
+AROS platform IRQ dispatcher
+~~~
+
+## Secondary Amiga chipset interrupts
+
+These belong to Rigel.
+
+Their path should be:
+
+~~~
+Rigel event
+    ↓
+INTREQ / INTENA
+    ↓
+Rigel resolves Amiga IPL
+    ↓
+INTF.IPL
+    ↓
+Emu68
+    ↓
+68k IPL
+~~~
+
+Therefore:
+
+~~~
+                 Emu68
+              ┌────┴────┐
+              │         │
+          INTF.ARM    INTF.IPL
+              ▲         ▲
+              │         │
+       Bellatrix ARM   Rigel
+          platform      Amiga
+              │        subsystem
+              │
+           PRIMARY     SECONDARY
+~~~
+
+Neither interrupt domain should depend on the other.
+
+---
+
+# 4. Target Architecture
 
 The intended high-level architecture is:
 
 ~~~
                          Emu68
-                 ┌─────────┴─────────┐
-                 │                   │
-                MMU            ExecutionLoop
-                 │                   ▲
-                 │                   │
-          Data Abort             Amiga IPL
-                 │                   │
-                 ▼                   │
-             vectors.c               │
-                 │                   │
-          generic bus hook           │
-                 │                   │
-                 ▼                   │
-              Bellatrix
-        ┌────────┴────────┐
-        │                 │
- src/amiga/bus.c    src/amiga/irq.c
-        │                 ▲
-        │                 │
-        └────── Rigel ────┘
-
-
- src/machine/machine.c
-        │
-        └── uses the existing Emu68 MMU interface
-            to construct the Bellatrix memory policy
+              ┌────────────┼────────────┐
+              │            │            │
+             MMU        INTF.ARM     INTF.IPL
+              │            ▲            ▲
+              │            │            │
+         Data Abort     host IRQ      Amiga IPL
+              │            │            │
+              ▼            │            │
+          vectors.c        │            │
+              │            │            │
+       generic bus hook    │            │
+              │            │            │
+              ▼            │            │
+                    Bellatrix
+              ┌────────┼────────┐
+              │        │        │
+          machine   host IRQ   amiga/
+              │                 │
+              │            ┌────┴────┐
+              │            │         │
+              │          bus.c     irq.c
+              │            │         ▲
+              │            │         │
+              │            └─ Rigel ─┘
+              │
+              └── MMU policy
 ~~~
 
-This produces three distinct boundaries:
+This produces four distinct boundaries:
 
 ~~~
 Memory policy:
@@ -121,13 +234,16 @@ Memory policy:
 CPU MMIO:
     Emu68 fault → amiga/bus.c → Rigel
 
-Chipset interrupts:
-    Rigel → amiga/irq.c → Emu68 IPL
+Amiga chipset interrupts:
+    Rigel → amiga/irq.c → INTF.IPL
+
+Bellatrix platform interrupts:
+    ARM IRQ controller → INTF.ARM
 ~~~
 
 ---
 
-# 3. Bellatrix Source Scaffold
+# 5. Bellatrix Source Scaffold
 
 The initial Bellatrix-side scaffold should be:
 
@@ -180,7 +296,7 @@ unknown range    → unhandled/open-bus policy
 
 ## `src/amiga/irq.c`
 
-Owns the Amiga IPL boundary between Rigel and Emu68.
+Owns only the Amiga chipset IPL boundary.
 
 Conceptually:
 
@@ -191,18 +307,29 @@ resolved Amiga IPL
   ↓
 amiga_irq_set_ipl()
   ↓
+INTF.IPL
+  ↓
 Emu68
   ↓
 68k CPU
 ~~~
 
-It does not implement `INTENA` or `INTREQ`.
+It does not implement:
 
-Those belong to Rigel.
+~~~
+ARM platform IRQs
+BCM interrupt dispatch
+INTENA
+INTREQ
+~~~
+
+`INTENA` and `INTREQ` belong to Rigel.
+
+ARM platform interrupts belong to the Bellatrix platform.
 
 ---
 
-# 4. 24-bit Memory Policy
+# 6. 24-bit Memory Policy
 
 Bellatrix should initially treat the complete classic 24-bit address domain as inaccessible to direct CPU loads/stores:
 
@@ -235,14 +362,14 @@ low 24-bit
 
 $000000-$1FFFFF    Chip RAM      → direct
 ...
-$BFDxxx             CIA-B         → fault
-$BFExxx             CIA-A         → fault
+$BFDxxx            CIA-B         → fault
+$BFExxx            CIA-A         → fault
 ...
-$C00000-$C7FFFF     Slow RAM      → direct, if later required
+$C00000-$C7FFFF    Slow RAM      → direct, if later required
 ...
-$DFFxxx             Custom        → fault
+$DFFxxx            Custom        → fault
 ...
-unknown holes                      → fault
+unknown holes                     → fault
 ~~~
 
 The exact map is deliberately not assumed in advance.
@@ -251,7 +378,7 @@ The initial protected configuration is intended to expose what software actually
 
 ---
 
-# 5. Direct Memory Access
+# 7. Direct Memory Access
 
 A range classified as normal RAM should eventually be mapped directly through the Emu68 MMU.
 
@@ -293,7 +420,7 @@ The fault mechanism is not intended to remain in the path for ordinary RAM.
 
 ---
 
-# 6. Faulted Bus Access
+# 8. Faulted Bus Access
 
 MMIO regions remain deliberately inaccessible through normal MMU mappings.
 
@@ -343,7 +470,7 @@ The CPU therefore does not receive a direct ARM memory mapping for the chipset r
 
 ---
 
-# 7. Unknown Address Handling
+# 9. Unknown Address Handling
 
 During the discovery phase, an unknown low-24 access should remain visible.
 
@@ -361,7 +488,7 @@ amiga_bus_read()
 unknown
 ~~~
 
-Bellatrix can then record information such as:
+Bellatrix can record information such as:
 
 ~~~
 operation
@@ -398,15 +525,15 @@ Only normal memory should normally be promoted to a direct MMU mapping.
 
 ---
 
-# 8. The Existing $DFF000 4 KiB Hole
+# 10. The Existing $DFF000 4 KiB Hole
 
-The current Bellatrix integration creates a special faulting page around:
+The previous Bellatrix integration created a special faulting page around:
 
 ~~~
 $DFF000-$DFFFFF
 ~~~
 
-because the rest of the standalone low address space is directly accessible.
+because the rest of the standalone low address space was directly accessible.
 
 The new architecture reverses this policy.
 
@@ -449,7 +576,7 @@ do NOT map:
 
 ---
 
-# 9. Emu68 Patch Philosophy
+# 11. Emu68 Patch Philosophy
 
 The goal is not to make Emu68 understand Bellatrix.
 
@@ -469,6 +596,8 @@ INTENA
 INTREQ
 CIAA
 CIAB
+Zorro
+Autoconfig
 ~~~
 
 should return no integration logic.
@@ -477,7 +606,7 @@ Those concepts belong outside Emu68.
 
 ---
 
-# 10. Patch 1 — Generic Host Bus Hook
+# 12. Patch 1 — Generic Host Bus Hook
 
 Suggested patch:
 
@@ -560,7 +689,7 @@ int M68kHostBusWrite(...)
 }
 ~~~
 
-Bellatrix then supplies the actual host implementation.
+Bellatrix supplies the actual host implementation.
 
 Conceptually:
 
@@ -578,7 +707,7 @@ Rigel
 
 ---
 
-# 11. What Patch 1 Must Not Do
+# 13. What Patch 1 Must Not Do
 
 The Emu68 patch must not contain address-specific Amiga logic.
 
@@ -612,9 +741,9 @@ The Bellatrix side answers that question.
 
 ---
 
-# 12. Remove the Transitional INT_shadow Register Emulation
+# 14. Remove Transitional `INT_shadow` Register Emulation
 
-The existing standalone Bellatrix patches contain logic for:
+The previous standalone Bellatrix patches contained logic for:
 
 ~~~
 INTENA
@@ -625,7 +754,7 @@ INTREQR
 
 using `INT_shadow`.
 
-That logic existed because standalone Bellatrix did not yet have the chipset implementation owning those registers.
+That logic existed because standalone Bellatrix did not yet have a chipset implementation owning those registers.
 
 With Rigel:
 
@@ -644,7 +773,7 @@ vectors.c
 INT_shadow
 ~~~
 
-should become:
+becomes:
 
 ~~~
 $DFF09A
@@ -662,7 +791,7 @@ There must not be two independent owners of the same chipset state.
 
 ---
 
-# 13. Patch 2 — Standalone Amiga IPL Input
+# 15. Patch 2 — Standalone Amiga IPL Input
 
 Suggested patch:
 
@@ -672,7 +801,7 @@ Suggested patch:
 
 ## Purpose
 
-Allow standalone Emu68 to consume an externally resolved Amiga IPL through its existing IPL state.
+Allow standalone Emu68 to consume an externally resolved Amiga IPL through its existing `INTF.IPL` state.
 
 The path becomes:
 
@@ -714,7 +843,7 @@ current chipset IPL
 
 ---
 
-# 14. IPL Must Be Level-Driven
+# 16. Rigel IPL Must Be Level-Driven
 
 The Rigel IPL is not a one-shot notification.
 
@@ -760,116 +889,211 @@ If no interrupt remains:
 INTF.IPL = 0
 ~~~
 
-Therefore Emu68 must not automatically turn a Rigel IPL into a one-shot event and permanently clear it after entering the exception.
+Therefore Emu68 must not automatically convert a Rigel IPL into a one-shot event and permanently clear it after entering the exception.
 
-The chipset owns assertion and deassertion.
+The chipset owns assertion and deassertion of the chipset IPL.
 
 ---
 
-# 15. Host IRQs Must Remain Separate
+# 17. `INTF.ARM` Has a Different Lifecycle Problem
 
-Bellatrix has another interrupt domain:
+`INTF.ARM` is conceptually the correct channel for Bellatrix platform interrupts.
 
-~~~
-Raspberry Pi / ARM platform interrupts
-~~~
+However, the existing Emu68 lifecycle cannot simply be reused unchanged.
 
-Examples include:
+The important distinction is:
 
 ~~~
-hardware timer
-SD/eMMC
-USB
-other BCM283x devices
+INTF.ARM already exists.
+
+INTF.ARM already produces level 6.
+
+The missing piece is independent ownership
+of its assert/deassert lifecycle.
 ~~~
 
-These are not Amiga chipset interrupts.
-
-They should therefore remain on the Emu68 host/platform interrupt path.
+In the inherited PiStorm-oriented model, clearing the external interrupt is coupled to Amiga interrupt acknowledgement.
 
 Conceptually:
 
 ~~~
-BCM283x interrupt
-       ↓
-Bellatrix host IRQ path
-       ↓
-INTF.ARM
-       ↓
-Emu68
-       ↓
-fixed level 6
-       ↓
-AROS platform interrupt dispatcher
-       ↓
-determines real hardware source
+INTF.ARM = 1
+     ↓
+level 6
+     ↓
+Amiga EXTER handling
+     ↓
+INTREQ acknowledgement
+     ↓
+INTF.ARM = 0
 ~~~
 
-This must remain independent from:
+That is appropriate when Emu68 participates in an existing Amiga hardware interrupt model.
+
+It is not appropriate when Bellatrix itself owns the primary ARM platform.
+
+Bellatrix requires:
 
 ~~~
-Rigel
- ↓
-INTF.IPL
+ARM IRQ arrives
+     ↓
+assert host interrupt
+     ↓
+INTF.ARM = 1
+     ↓
+AROS receives level 6
+     ↓
+AROS/platform code services BCM source
+     ↓
+host interrupt no longer pending
+     ↓
+INTF.ARM = 0
 ~~~
 
-The architecture therefore has:
-
-~~~
-                 Emu68
-              ┌────┴────┐
-              │         │
-          INTF.ARM    INTF.IPL
-              │         │
-             L6      Amiga 1..6
-              ▲         ▲
-              │         │
-        ARM platform   Rigel
-~~~
-
-The two paths may eventually produce the same numerical 68k level, but they represent different interrupt domains and must not share ownership state.
+No Amiga `INTREQ` acknowledgement should be required.
 
 ---
 
-# 16. Patch 3 — Preserve Host IRQ Separation
+# 18. Patch 3 — Independent Host IRQ Assert/Deassert
 
 Suggested patch:
 
 ~~~
-0003-keep-host-irqs-on-arm-channel.patch
+0003-add-host-irq-assert-deassert.patch
 ~~~
 
-Its purpose is not to introduce a new interrupt architecture.
+## Purpose
 
-Its purpose is to ensure that the standalone Bellatrix host IRQ path continues to use:
+Expose a clean lifecycle for the existing `INTF.ARM` host interrupt channel.
 
-~~~
-INTF.ARM
-~~~
+This patch does **not** create another interrupt mechanism.
 
-rather than reusing:
+It makes the existing mechanism usable independently from PiStorm/Amiga acknowledgement semantics.
 
-~~~
-INTF.IPL
-~~~
-
-for platform IRQ delivery.
-
-The rule is:
+The conceptual API can be as small as:
 
 ~~~
-INTF.ARM
-    = Bellatrix/ARM platform interrupt channel
-
-INTF.IPL
-    = Amiga chipset IPL channel
+void M68kSetHostInterrupt(int asserted);
 ~~~
 
-No `INT_shadow` state should be necessary to bridge those two domains.
+or explicitly:
+
+~~~
+void M68kAssertHostInterrupt(void);
+void M68kClearHostInterrupt(void);
+~~~
+
+Internally:
+
+~~~
+assert
+    ↓
+INTF.ARM = 1
+    ↓
+wake execution if necessary
+
+
+deassert
+    ↓
+INTF.ARM = 0
+~~~
+
+For example:
+
+~~~
+void M68kSetHostInterrupt(int asserted)
+{
+    M68KState *ctx = getCTX();
+
+    ctx->INTF.ARM = asserted ? 1 : 0;
+
+    if (asserted)
+        wake_cpu_if_required();
+}
+~~~
+
+The exact implementation should follow the existing Emu68 synchronization/wakeup conventions rather than introducing a parallel mechanism.
 
 ---
 
-# 17. No Low-24 Emu68 Patch
+# 19. What Patch 3 Must Not Do
+
+Patch 3 must not introduce:
+
+~~~
+INTENA
+INTREQ
+EXTER
+INT_shadow
+Rigel
+Amiga register access
+~~~
+
+The lifecycle is owned by the Bellatrix platform.
+
+The conceptual relationship is:
+
+~~~
+Bellatrix platform IRQ state
+          ↓
+M68kSetHostInterrupt()
+          ↓
+INTF.ARM
+          ↓
+Emu68 level 6
+~~~
+
+The source of truth remains the actual ARM/platform interrupt state.
+
+---
+
+# 20. Why `INTF.ARM` and `INTF.IPL` Must Remain Independent
+
+The two fields describe fundamentally different things.
+
+~~~
+INTF.ARM
+
+    Bellatrix primary platform interrupt
+
+    source:
+        BCM283x / ARM platform
+
+    CPU presentation:
+        fixed level 6
+
+
+INTF.IPL
+
+    secondary Amiga chipset interrupt level
+
+    source:
+        Rigel
+
+    CPU presentation:
+        Amiga IPL 1..6
+~~~
+
+Therefore:
+
+~~~
+ARM platform ─────→ INTF.ARM
+                       │
+                       ▼
+                     level 6
+
+
+Rigel ─────────────→ INTF.IPL
+                       │
+                       ▼
+                   Amiga IPL
+~~~
+
+Neither path should clear, acknowledge or manipulate the other.
+
+---
+
+# 21. No Low-24 Emu68 Patch
 
 There should deliberately be no patch named something like:
 
@@ -885,7 +1109,7 @@ low 24-bit starts faulting
 
 is Bellatrix machine policy.
 
-It therefore belongs in:
+It belongs in:
 
 ~~~
 src/machine/machine.c
@@ -907,7 +1131,7 @@ existing Emu68 mmu_map()
 construct Bellatrix mappings
 ~~~
 
-This preserves the architectural direction:
+This preserves:
 
 ~~~
 mechanism → Emu68
@@ -917,9 +1141,9 @@ policy → Bellatrix
 
 ---
 
-# 18. `machine.c` Memory Construction
+# 22. `machine.c` Memory Construction
 
-Conceptually, `machine.c` performs:
+Conceptually:
 
 ~~~
 machine_init()
@@ -958,13 +1182,13 @@ static void machine_setup_memory(void)
 }
 ~~~
 
-The actual implementation should use the existing Emu68 MMU primitives and their existing memory attributes.
+The actual implementation should use the existing Emu68 MMU primitives and existing memory attributes.
 
 Bellatrix should not duplicate the Emu68 page-table implementation.
 
 ---
 
-# 19. Progressive Mapping Strategy
+# 23. Progressive Mapping Strategy
 
 The initial state is:
 
@@ -1051,7 +1275,7 @@ There is no requirement to fill holes in the 24-bit address space.
 
 ---
 
-# 20. Rigel DMA Is Not the CPU Bus
+# 24. Rigel DMA Is Not the CPU Bus
 
 CPU access to the chipset and chipset DMA are separate paths.
 
@@ -1086,11 +1310,51 @@ Likewise, Bellatrix platform `dma.resource` is a different concern and should no
 
 ---
 
-# 21. Open-Bus and Fault Reentry Safety
+# 25. No Zorro or Autoconfig Port
+
+The new patch series must start from the clean Emu68 bare-metal baseline.
+
+The old Bellatrix patches that brought PiStorm Zorro/Autoconfig infrastructure into the standalone build must not be applied.
+
+In particular, the new architecture does not require:
+
+~~~
+Zorro II
+Zorro III
+Autoconfig
+$E80000 Autoconfig handling
+board enumeration
+emu68rom Zorro board
+PiStorm expansion infrastructure
+~~~
+
+Therefore:
+
+~~~
+$E80000
+   ↓
+no Autoconfig implementation
+   ↓
+remains part of protected low-24
+   ↓
+fault
+   ↓
+Bellatrix bus
+   ↓
+unhandled unless explicitly implemented later
+~~~
+
+The absence of a device in that region is not wasted address space.
+
+It is simply an unmapped part of the Amiga address domain.
+
+---
+
+# 26. Open-Bus and Fault Reentry Safety
 
 The existing Bellatrix/Emu68 work includes protection against fault-handler reentry when an address falls through to a guest alias that has no physical backing.
 
-That protection should be preserved.
+That protection should be evaluated independently from the architectural patches.
 
 Conceptually:
 
@@ -1115,13 +1379,13 @@ backing exists?
                 open bus
 ~~~
 
-This is a safety mechanism beneath the Bellatrix bus boundary.
+If this protection is still required with the new memory policy, it should remain as a safety fix.
 
-It should not be replaced with a second Bellatrix memory-map database.
+It is not part of the Bellatrix bus contract itself.
 
 ---
 
-# 22. Debug Instrumentation
+# 27. Debug Instrumentation
 
 During the initial low-24 discovery phase, additional instrumentation may be useful.
 
@@ -1146,134 +1410,116 @@ hit count
 
 This instrumentation is diagnostic.
 
-It should not become part of the permanent architectural contract between Emu68 and Bellatrix unless there is a clear long-term use for it.
+It should not become part of the permanent Emu68/Bellatrix contract unless there is a clear long-term requirement.
 
 ---
 
-# 23. Proposed Emu68 Patch Series
+# 28. Proposed Emu68 Patch Series
 
-The target patch series should conceptually be:
+The target functional patch series is now:
 
 ~~~
 patches/emu68/
 
 0001-add-generic-host-bus-hook.patch
 
-    Files:
-        src/aarch64/vectors.c
-        possibly a small public host-hook header/source
-
     Purpose:
-        expose faulted guest transactions to the host
+        expose faulted guest transactions to Bellatrix
 
-    Must not contain:
-        Bellatrix knowledge
-        Rigel knowledge
-        Amiga register decoding
+    Primary area:
+        src/aarch64/vectors.c
+
+    Boundary:
+        Emu68 fault
+            ↓
+        generic callback
+            ↓
+        Bellatrix amiga/bus.c
 
 
 0002-enable-standalone-amiga-ipl.patch
 
-    Files:
+    Purpose:
+        allow Rigel to publish its resolved Amiga IPL
+
+    Primary area:
         src/ExecutionLoop.c
-        possibly public CPU API/header
+
+    Boundary:
+        Rigel
+            ↓
+        Bellatrix amiga/irq.c
+            ↓
+        INTF.IPL
+            ↓
+        Emu68
+
+
+0003-add-host-irq-assert-deassert.patch
 
     Purpose:
-        allow externally resolved INTF.IPL in standalone mode
-        preserve level-triggered semantics
+        make the existing INTF.ARM channel independently
+        assertable and deassertable by the Bellatrix platform
 
-
-0003-keep-host-irqs-on-arm-channel.patch
-
-    Files:
-        only the existing host IRQ integration points as required
-
-    Purpose:
-        platform IRQ → INTF.ARM
-        Rigel IPL    → INTF.IPL
-
-        keep the two domains independent
-
-
-0004-report-first-syshandler-reentry.patch
-
-    Status:
-        diagnostic / optional
-
-    Purpose:
-        help diagnose recursive fault handling
-
-
-0005-open-bus-for-unmapped-guest-addresses.patch
-
-    Status:
-        safety mechanism
-
-    Purpose:
-        prevent recursive external aborts from destroying
-        the ARM stack when no backing exists
+    Boundary:
+        Bellatrix platform IRQ
+            ↓
+        host IRQ API
+            ↓
+        INTF.ARM
+            ↓
+        Emu68 level 6
 ~~~
 
-There is deliberately no:
+These are the **three functional integration patches**.
+
+Additional patches such as:
 
 ~~~
-low24.patch
-rigel.patch
-custom-register.patch
-cia.patch
-zorro.patch
-autoconfig.patch
+fault reentry diagnostics
+open-bus safety
+debug instrumentation
 ~~~
+
+should be treated separately as diagnostics or robustness fixes rather than architectural integration boundaries.
 
 ---
 
-# 24. Migration from the Current Patch Series
+# 29. Migration from the Old Patch Series
 
-The existing patches should be converged rather than continuously extended.
+The new series should be rebuilt from the clean Emu68 bare-metal baseline.
 
-## Current shadow-register patch
+Do not layer it on top of the old Bellatrix integration series.
 
-Current concept:
+## Old Custom interrupt shadow handling
+
+Remove:
 
 ~~~
-$DFF09A/$DFF09C
-        ↓
+$DFFxxx
+   ↓
 vectors.c
-        ↓
+   ↓
 INT_shadow
 ~~~
 
 Replace with:
 
 ~~~
-$DFF09A/$DFF09C
-        ↓
+$DFFxxx
+   ↓
 fault
-        ↓
-generic host bus hook
-        ↓
+   ↓
+generic host bus
+   ↓
 amiga/bus.c
-        ↓
+   ↓
 Rigel
 ~~~
 
-## Current standalone IPL patch
+## Old host IRQ injection
 
-Keep the concept:
-
-~~~
-external resolved IPL
-        ↓
-INTF.IPL
-        ↓
-Emu68
-~~~
-
-but ensure that IPL behaves as a level rather than an automatically consumed pulse.
-
-## Current host IRQ → IPL patch
-
-Replace:
+Remove the transitional use of:
 
 ~~~
 host IRQ
@@ -1281,31 +1527,84 @@ host IRQ
 INTF.IPL = 6
 ~~~
 
-with:
+Restore the conceptual ownership:
 
 ~~~
 host IRQ
    ↓
 INTF.ARM
+~~~
+
+but add the missing independent lifecycle:
+
+~~~
+assert
+deassert
+~~~
+
+without requiring:
+
+~~~
+INTREQ
+EXTER
+INT_shadow
+~~~
+
+## Rigel interrupt path
+
+Use:
+
+~~~
+Rigel
    ↓
-Emu68 level 6
-~~~
-
-Reserve:
-
-~~~
 INTF.IPL
 ~~~
 
-for Rigel.
+exclusively for the secondary Amiga chipset subsystem.
 
-## Reentry/open-bus patches
+## Old Zorro patches
 
-Keep them unless the underlying issue is solved more cleanly in the new integration.
+Do not apply them.
+
+Do not port their functionality into the new series.
 
 ---
 
-# 25. Final Ownership Model
+# 30. Final Interrupt Ownership
+
+The final interrupt topology should be:
+
+~~~
+                         Emu68
+                   interrupt arbiter
+                    /             \
+                   /               \
+             INTF.ARM            INTF.IPL
+                 ▲                   ▲
+                 │                   │
+                 │                   │
+        Bellatrix platform         Rigel
+                 │                   │
+       BCM283x peripherals      INTENA/INTREQ
+                 │                   │
+             host IRQ            Amiga IRQ
+                 │                   │
+             PRIMARY             SECONDARY
+~~~
+
+The important rule is:
+
+> Rigel does not own Bellatrix interrupts.
+
+And conversely:
+
+> Bellatrix platform IRQ handling does not own Rigel interrupt state.
+
+They meet only at the Emu68 CPU interrupt arbitration boundary.
+
+---
+
+# 31. Final Ownership Model
 
 After the refactoring:
 
@@ -1317,7 +1616,9 @@ Emu68
 ├── MMU implementation
 ├── exception machinery
 ├── Data Abort decoding
-├── host bus callback boundary
+├── generic host bus callback boundary
+├── INTF.ARM host interrupt input
+├── INTF.IPL chipset interrupt input
 └── CPU interrupt arbitration
 
 
@@ -1328,9 +1629,16 @@ Bellatrix machine
 └── component initialization
 
 
+Bellatrix platform
+├── BCM283x hardware
+├── physical interrupt controller
+├── host IRQ dispatch
+└── INTF.ARM lifecycle
+
+
 Bellatrix Amiga boundary
 ├── CPU-visible Amiga bus
-└── Amiga IPL bridge
+└── Rigel IPL bridge
 
 
 Rigel
@@ -1346,7 +1654,7 @@ Rigel
 
 ---
 
-# 26. Architectural Acceptance Criteria
+# 32. Architectural Acceptance Criteria
 
 The scaffold is considered correctly implemented when:
 
@@ -1371,43 +1679,71 @@ The scaffold is considered correctly implemented when:
 
 9. Rigel can assert and deassert the Amiga IPL.
 
-10. Emu68 does not automatically consume Rigel IPL as a
-    one-shot event.
+10. INTF.IPL is level-driven by Rigel.
 
-11. ARM/platform interrupts use INTF.ARM.
+11. Bellatrix ARM/platform interrupts use INTF.ARM.
 
-12. Rigel chipset interrupts use INTF.IPL.
+12. INTF.ARM can be asserted and deasserted without
+    INTREQ, EXTER or INT_shadow.
 
-13. Rigel DMA does not pass through the CPU fault/bus path.
+13. Rigel chipset interrupts use INTF.IPL.
 
-14. No Zorro or Autoconfig infrastructure is required by
-    the core machine scaffold.
+14. INTF.ARM and INTF.IPL remain independent.
 
-15. PiStorm-specific behavior remains isolated from the
-    standalone Bellatrix architecture.
+15. Rigel DMA does not pass through the CPU fault/bus path.
+
+16. No Zorro or Autoconfig infrastructure is introduced
+    into the standalone build.
+
+17. PiStorm-specific interrupt acknowledgement semantics
+    are not required by Bellatrix.
+
+18. The new patches are applied to the clean Emu68
+    bare-metal baseline, not on top of the old Bellatrix
+    Zorro/shadow patch series.
 ~~~
 
 ---
 
-# 27. Guiding Principle
+# 33. Guiding Principle
 
 The entire integration should be judged against one rule:
 
 > **Patch Emu68 to expose mechanisms and boundaries; keep Bellatrix machine policy outside Emu68.**
 
-This produces the desired relationship:
+The resulting architecture is:
 
 ~~~
-              Bellatrix
-           defines the machine
-                  │
-        ┌─────────┴─────────┐
-        │                   │
-      Emu68                Rigel
-    CPU engine             chipset
-        │                   │
-        └──── src/amiga ────┘
-               glue
+                       Bellatrix
+                  defines the machine
+                         │
+             ┌───────────┼───────────┐
+             │           │           │
+        ARM platform    Emu68       Rigel
+          PRIMARY      CPU engine   SECONDARY
+             │           │           │
+             │      ┌────┴────┐      │
+             └─────►│INTF.ARM │      │
+                    │         │      │
+                    │INTF.IPL │◄─────┘
+                    └─────────┘
 ~~~
 
-The resulting Emu68 changes should therefore become smaller as the Bellatrix architecture becomes more complete, not larger.
+Or, in its shortest form:
+
+~~~
+Bellatrix host IRQ
+    → INTF.ARM
+
+Rigel Amiga IPL
+    → INTF.IPL
+
+68k MMIO fault
+    → Bellatrix bus
+    → Rigel
+
+Bellatrix memory policy
+    → Emu68 MMU
+~~~
+
+This keeps the primary Bellatrix platform independent from the secondary Amiga chipset subsystem while reusing the mechanisms already present in Emu68 wherever possible.
