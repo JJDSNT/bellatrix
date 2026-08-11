@@ -1,1140 +1,1281 @@
-Emu68 Target Boundary Architecture
+# Emu68 Machine Boundary Architecture
 
-Synchronizing MMU Mapping and Fault Semantics Across PiStorm, Bare-Metal, and Bellatrix
+## Execution Environments, Machine Policies, MMU/Fault Synchronization, and Bellatrix Transactions
 
-Status: Proposed Refactoring Baseline
-Scope: Emu68 target organization and Bellatrix integration
-Related: Bellatrix.md, docs/Rigel_integration.md, docs/Expansion.md
+**Status:** Proposed Architectural Baseline  
+**Scope:** Emu68 machine organization and Bellatrix integration  
+**Related:** `Bellatrix.md`, `docs/Rigel_integration.md`, `docs/Expansion.md`  
+**Historical reference:** Bellatrix legacy branch
 
-⸻
+---
 
-1. Purpose
+# 1. Purpose
 
-This document defines the recommended architectural boundary between the Emu68 execution core and the machine environments in which it operates.
+This document defines the architectural boundary between the Emu68 execution core and the machine environments in which it operates.
 
-The central observation is that Emu68 currently supports conceptually distinct execution environments whose memory and fault semantics differ.
+The architecture deliberately distinguishes two concepts:
 
-For the Bellatrix integration, these environments should be treated explicitly as three targets:
+~~~text
+execution environment
+        │
+        └── how and where Emu68 runs
 
+machine policy
+        │
+        └── what M68K-visible machine Emu68 exposes
+~~~
+
+These concepts MUST NOT be unnecessarily conflated.
+
+At the broadest level, Emu68 currently operates in conceptually distinct execution environments such as:
+
+~~~text
 Emu68
   │
   ├── PiStorm
   │
-  ├── Bare-metal non-PiStorm
-  │
-  └── Bellatrix
+  └── Standalone
+~~~
 
-The target is the architectural unit that defines how the M68K-visible machine address space is realized.
-
-In particular, a target must define consistently:
-
-* which address ranges are directly mapped by the MMU;
-* which address ranges are intentionally left without direct translation;
-* what a fault in such a range means;
-* how a trapped M68K-visible access is resolved;
-* which machine semantics exist behind that access.
-
-The primary invariant is:
-
-Target MMU policy and target fault policy MUST describe the same machine.
-
-⸻
-
-2. Architectural Principle
-
-Emu68 Core should implement execution mechanisms.
-
-The selected target should define machine semantics.
+Within the standalone environment, more than one machine policy may exist.
 
 Conceptually:
 
-                    Emu68 Core
-                        │
-            ┌───────────┼───────────┐
-            │           │           │
-        execution      MMU       exceptions
-            │           │           │
-            └───────────┼───────────┘
-                        │
-                  target boundary
-                        │
-          ┌─────────────┼─────────────┐
-          │             │             │
-       PiStorm       Bare-metal    Bellatrix
-                    non-PiStorm
-
-This distinction prevents target-specific machine behavior from becoming embedded implicitly inside generic execution machinery.
-
-⸻
-
-3. The Three Targets
-
-The target model reflects three distinct machine environments.
-
-3.1 PiStorm
-
-PiStorm executes M68K code while interacting with an external Amiga machine environment.
-
-Its target semantics may include:
-
-* physical Amiga bus access;
-* PiStorm-specific address handling;
-* Zorro/Autoconfig support;
-* PiStorm virtual boards;
-* fallback to physical Amiga hardware;
-* PiStorm-specific MMIO behavior.
-
-Conceptually:
-
-PiStorm
-   │
-   ├── Emu68 translated execution
-   ├── target-specific MMU policy
-   ├── target-specific fault policy
-   └── physical / virtual Amiga environment
-
-⸻
-
-3.2 Bare-Metal Non-PiStorm
-
-The existing bare-metal Emu68 target operates without a physical Amiga bus.
-
-Its machine model primarily consists of directly mapped memory and the native Raspberry Pi environment required by Emu68.
-
-Conceptually:
-
-Bare-metal non-PiStorm
-        │
-        ├── directly mapped guest memory
-        ├── native Raspberry Pi environment
-        └── no PiStorm physical-bus semantics
-
-This target must remain independently supported.
-
-Bellatrix MUST NOT silently redefine the existing bare-metal target.
-
-⸻
-
-3.3 Bellatrix
-
-Bellatrix is a separate first-class Emu68 target.
-
-It defines a native M68K execution platform whose machine semantics are controlled by Bellatrix rather than by PiStorm or the generic bare-metal environment.
-
-Conceptually:
-
-Bellatrix
-    │
-    ├── Bellatrix guest-memory model
-    ├── Bellatrix native hardware
-    ├── Bellatrix interrupt architecture
-    ├── classic Expansion / Autoconfig
-    └── optional compatibility components
-
-Bellatrix therefore requires its own coherent MMU and fault policies.
-
-⸻
-
-4. MMU Policy and Fault Policy Are Complementary
-
-A target’s memory architecture consists of two complementary classes of address ranges.
-
-Target address space
-        │
-        ├── directly mapped
-        │       │
-        │       ▼
-        │   normal memory access
-        │
-        └── intentionally trapped
-                │
-                ▼
-            Data Abort
-                │
-                ▼
-          target semantics
-
-A directly mapped address is resolved through the MMU without invoking machine-level fault handling.
-
-An intentionally trapped address has no direct MMU translation because access to that address represents a hardware transaction or another target-defined machine operation.
-
-These are not independent decisions.
-
-⸻
-
-5. Fundamental Mapping Invariant
-
-For every target:
-
-MMU definition
+~~~text
+Standalone Emu68
       │
-      │ MUST MATCH
-      ▼
-fault definition
+      └── machine policy
+             │
+             ├── generic bare-metal
+             └── Bellatrix
+~~~
 
-The following state is invalid:
+The exact compile-time or runtime representation of these concepts is an implementation detail.
 
-MMU:
-$E80000 → ordinary mapped RAM
-Fault policy:
-$E80000 → Expansion
+The architecture does NOT require PiStorm, generic bare-metal, and Bellatrix to be represented as three equivalent first-class targets.
 
-because the Expansion handler will never observe the access.
+The central requirement is instead:
 
-The inverse is also invalid:
+> **The selected machine policy MUST define a coherent M68K-visible machine.**
 
-MMU:
-$E80000 → intentionally trapped
-Fault policy:
-no defined handling
+In particular, it must consistently determine:
 
-because a deliberate machine address would fall into an undefined exception path.
+- which address ranges are directly mapped;
+- which address ranges intentionally trap;
+- which ranges have no machine semantics;
+- what trapped accesses mean;
+- which machine components own those semantics.
 
-The correct relationship is:
+For Bellatrix specifically, intentionally trapped M68K hardware accesses enter the machine through one explicit synchronous transaction boundary:
 
-Target definition
-       │
-       ├── mapping decision
-       │
-       └── matching fault semantics
+~~~text
+Emu68 fault reconstruction
+          │
+          ▼
+Bellatrix machine hook
+          │
+          ▼
+Bellatrix Bus
+          │
+          ▼
+Bellatrix machine semantics
+~~~
 
-⸻
+The central architectural rules are:
 
-6. Explicitly Trapped Does Not Mean Architecturally Unmapped
+> **Emu68 owns execution mechanisms. The selected machine policy owns machine semantics.**
 
-A critical distinction must be preserved.
+and:
 
-no MMU translation
-        ≠
-no machine semantics
+> **MMU policy and fault semantics MUST describe the same machine.**
 
-For example, Bellatrix may deliberately leave:
+For Bellatrix:
 
-$00E80000-$00E8FFFF
+> **Emu68 reconstructs the access. Bellatrix interprets the machine transaction.**
 
-without direct MMU translation.
+---
 
-At the ARM/MMU level:
+# 2. Architectural Model
 
-translation:
-    absent
+The intended architecture is:
 
-At the M68K machine level:
+~~~text
+                         Emu68 Core
+                             │
+                ┌────────────┼────────────┐
+                │            │            │
+            execution       MMU       exceptions
+                │            │            │
+                └────────────┼────────────┘
+                             │
+                  execution environment
+                             │
+                 ┌───────────┴───────────┐
+                 │                       │
+              PiStorm                Standalone
+                                         │
+                                         ▼
+                                  machine policy
+                                         │
+                            ┌────────────┴────────────┐
+                            │                         │
+                    generic bare-metal            Bellatrix
+                                                      │
+                                                      ▼
+                                               Bellatrix Bus
+                                                      │
+                                                      ▼
+                                               machine semantics
+~~~
 
-meaning:
-    Expansion / Autoconfig
+This organization avoids inventing separate top-level targets when the underlying distinction is only a machine policy inside the same standalone execution environment.
 
-Therefore the correct terminology is preferably:
+---
 
-intentionally trapped address range
+# 3. Core Architectural Principle
 
-rather than simply:
+Emu68 Core implements mechanisms.
 
-unmapped address range
+The execution environment defines how Emu68 is hosted.
 
-The latter can incorrectly suggest that the address has no architectural owner.
+The machine policy defines what machine is visible to M68K software.
 
-⸻
+The distinction is:
 
-7. Legacy Bellatrix Precedent
-
-The Bellatrix legacy architecture already demonstrated this general pattern.
-
-Conceptually, its Emu68 path behaved as:
-
-M68K JIT access
-      │
-      ▼
-address without direct MMU mapping
-      │
-      ▼
-Data Abort
-      │
-      ▼
-Emu68 vectors / fault machinery
-      │
-      ▼
-Bellatrix-specific boundary
-      │
-      ▼
-bellatrix_bus_access()
-      │
-      ▼
-Bellatrix machine decode
-
-Classic hardware regions including:
-
-* custom-chip space;
-* CIA;
-* Autoconfig;
-
-were intentionally reached through this path rather than through ordinary memory mappings.
-
-This precedent demonstrates that Bellatrix-specific machine semantics can be attached below Emu68 fault handling without modifying the M68K software using those addresses.
-
-⸻
-
-8. What Should Be Preserved from Legacy
-
-The important legacy idea is:
-
-A trapped Emu68 access crosses one Bellatrix-specific boundary and enters the Bellatrix machine definition.
-
-That concept should be preserved.
-
-The new architecture does not necessarily need to restore every implementation detail of the legacy Bellatrix Bus.
-
-In particular, this document does not require restoring:
-
-* the complete old bellatrix_bus_access() implementation;
-* the old VirtualBus model;
-* the old multicore synchronization architecture;
-* the old machine decode implementation;
-* obsolete device abstractions.
-
-The reusable architectural principle is the boundary itself.
-
-⸻
-
-9. What Should Not Be Preserved Automatically
-
-The existence of the old Bellatrix Bus does not imply that the new implementation requires a generic bus framework.
-
-The following architecture is not required:
-
-generic bus
-    │
-    ├── provider registration
-    ├── generic device callbacks
-    ├── dynamic ownership tables
-    └── abstract provider lifecycle
-
-Bellatrix is a defined machine target.
-
-Its address semantics may be explicit and static.
-
-The goal is not to turn Bellatrix into a generic emulator framework.
-
-⸻
-
-10. Target as the Aggregating Abstraction
-
-The architectural aggregation point should be the target.
-
-Not:
-
-generic provider system
-      │
-      ├── Expansion
-      ├── native hardware
-      ├── compatibility hardware
-      └── ...
-
-But:
-
-Emu68 target
-    │
-    ├── PiStorm
-    │
-    ├── Bare-metal
-    │
-    └── Bellatrix
-            │
-            ├── memory semantics
-            ├── fault semantics
-            ├── Expansion
-            ├── native platform
-            └── optional compatibility
-
-This reflects the actual organization of the machine environments.
-
-⸻
-
-11. Core Versus Target Responsibilities
-
-The recommended ownership boundary is:
-
+~~~text
 Emu68 Core
-────────────────────────────
+────────────────────────────────
 M68K execution
 JIT translation
 exception entry
 ARM context management
-ESR/FAR handling
-faulting instruction decode
-MMU primitives
+fault reconstruction
+generic MMU primitives
 page-table implementation
 TLB management
-Target
-────────────────────────────
-machine address-space policy
-which ranges are directly mapped
-which ranges intentionally trap
+
+Execution Environment
+────────────────────────────────
+host/platform integration
+physical machine context
+standalone versus PiStorm topology
+environment-specific transport where required
+
+Machine Policy
+────────────────────────────────
+M68K-visible address-space policy
+direct mapping policy
+intentional trap policy
 meaning of trapped accesses
-target-specific hardware semantics
+machine-specific semantics
+~~~
 
-The target should not reimplement generic Emu68 exception machinery.
+These responsibilities may be represented by different files, build options, or internal structures.
 
-The Emu68 core should not encode Bellatrix machine semantics.
+The architecture does not mandate a particular source layout.
 
-⸻
+---
 
-12. Fault Reconstruction Boundary
+# 4. Execution Environments
 
-The generic Emu68 exception path should reconstruct enough information to describe the trapped operation.
+The architecture distinguishes execution environments only where the hosting model is fundamentally different.
+
+## 4.1 PiStorm
+
+PiStorm operates in conjunction with an external Amiga machine environment.
+
+Its behavior may include:
+
+- physical Amiga bus access;
+- PiStorm-specific address handling;
+- PiStorm virtual hardware;
+- physical hardware fallback;
+- PiStorm-specific memory behavior;
+- PiStorm-specific MMIO semantics.
 
 Conceptually:
 
-Data Abort
+~~~text
+PiStorm
+   │
+   ├── Emu68 execution
+   ├── physical / virtual Amiga environment
+   └── PiStorm-specific machine integration
+~~~
+
+PiStorm-specific behavior MUST remain isolated from generic standalone behavior.
+
+---
+
+## 4.2 Standalone
+
+Standalone Emu68 operates without the PiStorm physical Amiga environment.
+
+Conceptually:
+
+~~~text
+Standalone
+    │
+    ├── Emu68 execution
+    ├── native host platform
+    └── selected machine policy
+~~~
+
+The standalone environment may support more than one M68K-visible machine definition.
+
+For example:
+
+~~~text
+Standalone
+    │
+    ├── generic bare-metal policy
+    └── Bellatrix policy
+~~~
+
+This distinction is architectural.
+
+Bellatrix does not need to become a completely separate Emu68 execution environment merely because its machine map differs from generic bare-metal.
+
+---
+
+# 5. Machine Policies
+
+A machine policy defines the M68K-visible machine presented by a given execution environment.
+
+Conceptually:
+
+~~~text
+machine policy
+     │
+     ├── address classification
+     ├── direct mapping rules
+     ├── intentional trap rules
+     ├── trapped-access semantics
+     └── machine-specific components
+~~~
+
+The important property is coherence.
+
+A machine policy MUST define both:
+
+~~~text
+what maps directly
+        +
+what trapped accesses mean
+~~~
+
+These two decisions must never drift apart.
+
+---
+
+# 6. Generic Bare-Metal Policy
+
+The generic standalone bare-metal policy represents the existing non-PiStorm Emu68 machine behavior.
+
+Conceptually:
+
+~~~text
+Standalone
     │
     ▼
-Emu68 exception handling
+generic bare-metal policy
     │
-    ├── FAR
-    ├── access direction
-    ├── access width
-    ├── value where applicable
-    └── execution context required
-    │
-    ▼
-target access boundary
+    ├── directly mapped guest memory
+    ├── native Raspberry Pi environment
+    └── existing standalone semantics
+~~~
 
-The exact C representation does not need to be frozen by this document.
+Bellatrix MUST NOT silently redefine this policy.
 
-The important distinction is:
+Changes required only by Bellatrix belong to the Bellatrix machine policy.
 
-Emu68:
-    determine what access occurred
-Target:
-    determine what that access means
+---
 
-⸻
+# 7. Bellatrix Machine Policy
 
-13. Target Access Flow
+Bellatrix is a machine policy within the standalone Emu68 execution environment.
 
-The resulting flow should conceptually become:
+Conceptually:
 
-M68K execution
-      │
-      ▼
-Emu68 translated instruction
-      │
-      ▼
-MMU
-      │
-     / \
-    /   \
-mapped   trapped
-  │        │
-  ▼        ▼
-normal   Data Abort
-memory      │
-            ▼
-        vectors.c
-            │
-            ▼
-       access decode
-            │
-            ▼
-      selected target
-            │
-     ┌──────┼──────┐
-     │      │      │
- PiStorm BareMetal Bellatrix
+~~~text
+Standalone Emu68
+       │
+       ▼
+Bellatrix machine policy
+       │
+       ├── Bellatrix memory model
+       ├── Bellatrix native hardware
+       ├── Bellatrix interrupt architecture
+       ├── Bellatrix MMU policy
+       ├── Bellatrix trapped-access policy
+       ├── Bellatrix Bus
+       └── optional compatibility components
+~~~
 
-⸻
+Bellatrix owns its M68K-visible machine semantics.
 
-14. Bellatrix Target Flow
+It does not require PiStorm semantics.
+
+It must not redefine generic bare-metal behavior.
+
+---
+
+# 8. Machine Policy as the Aggregating Abstraction
+
+Within the standalone environment, the machine policy is the aggregation point for the machine definition.
 
 For Bellatrix:
 
+~~~text
+Bellatrix machine policy
+      │
+      ├── memory semantics
+      ├── fault semantics
+      ├── native platform semantics
+      ├── Bellatrix Bus
+      └── optional compatibility
+~~~
+
+The architecture should not be reorganized around a speculative generic provider framework.
+
+The Bellatrix Bus is subordinate to the Bellatrix machine policy.
+
+---
+
+# 9. Address Classification
+
+A machine policy may conceptually classify M68K-visible addresses into three categories:
+
+~~~text
+DIRECT
+    ordinary memory represented by direct MMU translation
+
+TRAPPED
+    architecturally valid machine transaction
+    intentionally lacking direct translation
+
+INVALID
+    no defined machine semantics
+~~~
+
+For example:
+
+~~~text
+guest RAM
+    → DIRECT
+
+hardware MMIO
+    → TRAPPED
+
+true address hole
+    → INVALID
+~~~
+
+The selected machine policy owns this classification.
+
+Generic Emu68 machinery must not independently invent it.
+
+---
+
+# 10. MMU/Fault Synchronization
+
+For every machine policy:
+
+~~~text
+MMU policy
+    │
+    │ MUST MATCH
+    ▼
+fault semantics
+~~~
+
+The following is invalid:
+
+~~~text
+MMU:
+hardware address → directly mapped RAM
+
+Fault semantics:
+same address → hardware transaction
+~~~
+
+because the hardware path will never see the access.
+
+The inverse is also invalid:
+
+~~~text
+MMU:
+address → intentionally trapped
+
+Fault semantics:
+undefined
+~~~
+
+because an intentional machine transaction would fall into an undefined exception path.
+
+The machine policy must define both sides together.
+
+---
+
+# 11. Shared Machine Selection
+
+MMU setup and fault handling MUST use the same selected machine policy.
+
+Conceptually:
+
+~~~text
+              selected machine policy
+                       │
+             ┌─────────┴─────────┐
+             │                   │
+             ▼                   ▼
+        MMU decisions       fault semantics
+             │                   │
+             └─────────┬─────────┘
+                       │
+                       ▼
+               same machine model
+~~~
+
+Independent build-time conditions capable of making these disagree are architecturally invalid.
+
+---
+
+# 12. Fault Reconstruction Boundary
+
+Generic Emu68 exception machinery should reconstruct enough information to describe the trapped M68K access.
+
+Conceptually:
+
+~~~text
+Data Abort
+    │
+    ▼
+Emu68 exception machinery
+    │
+    ├── faulting address
+    ├── read/write direction
+    ├── access width
+    ├── write value where applicable
+    ├── read-result return mechanism
+    └── required execution context
+    │
+    ▼
+machine-policy boundary
+~~~
+
+The ownership rule is:
+
+~~~text
+Emu68:
+    determine what access occurred
+
+Machine policy:
+    determine what that access means
+~~~
+
+---
+
+# 13. Standalone Machine Flow
+
+For standalone execution:
+
+~~~text
+M68K execution
+      │
+      ▼
+Emu68
+      │
+      ▼
+selected standalone machine policy
+      │
+      ├── DIRECT
+      │      │
+      │      ▼
+      │   normal memory
+      │
+      └── TRAPPED
+             │
+             ▼
+         Data Abort
+             │
+             ▼
+      Emu68 reconstruction
+             │
+             ▼
+      machine-policy hook
+~~~
+
+If the selected policy is generic bare-metal, existing standalone behavior applies.
+
+If the selected policy is Bellatrix, the access enters Bellatrix.
+
+---
+
+# 14. Bellatrix Machine Boundary
+
+For Bellatrix:
+
+~~~text
 M68K access
     │
     ▼
-Bellatrix MMU policy
+Bellatrix machine policy
     │
-    ├── mapped memory
+    ├── DIRECT
     │      │
     │      ▼
-    │   direct access
+    │   normal access
     │
-    └── trapped range
+    └── TRAPPED
            │
            ▼
        Data Abort
            │
            ▼
-       Emu68 decode
+    Emu68 reconstruction
            │
            ▼
-    Bellatrix target
+    Bellatrix machine hook
            │
            ▼
-    machine semantics
+    Bellatrix machine
+~~~
 
-The Bellatrix target becomes the point where intentionally trapped addresses acquire meaning.
+This hook is the boundary between generic Emu68 mechanism and Bellatrix semantics.
 
-⸻
+---
 
-15. Expansion Example
+# 15. Bellatrix Bus
 
-Expansion is the clearest initial example.
-
-Bellatrix defines:
-
-$00E80000-$00E8FFFF
-
-as classic Expansion/Autoconfig space.
-
-The target memory policy therefore states:
-
-Bellatrix:
-$E80000-$E8FFFF
-    → intentionally trapped
-    → no direct RAM backing
-
-The corresponding target fault policy states:
-
-Bellatrix:
-fault at $E80000-$E8FFFF
-    → Expansion / Autoconfig access
-
-Complete flow:
-
-AROS expansion.library
-        │
-        ▼
-M68K access $E80000
-        │
-        ▼
-Bellatrix target MMU policy
-        │
-        ▼
-no direct translation
-        │
-        ▼
-Data Abort
-        │
-        ▼
-Emu68 fault machinery
-        │
-        ▼
-decoded M68K access
-        │
-        ▼
-Bellatrix target semantics
-        │
-        ▼
-Expansion / Autoconfig
-
-⸻
-
-16. AROS Remains Unaware of the Mechanism
-
-AROS should not know that the Expansion access is implemented through an ARM Data Abort.
-
-From the operating system perspective:
-
-read/write $E80000
-        │
-        ▼
-classic machine hardware
-
-The underlying implementation may be:
-
-MMU
-  │
-  ▼
-Data Abort
-  │
-  ▼
-Emu68
-  │
-  ▼
-Bellatrix
-
-This implementation mechanism must remain below the guest-visible architecture.
-
-⸻
-
-17. Relationship to AROS Expansion
-
-This target boundary supports the intended AROS architecture:
-
-AROS m68k-emu68
-        │
-        ▼
-shared m68k-amiga
-Expansion implementation
-        │
-        ▼
-standard Autoconfig accesses
-        │
-        ▼
-$E80000
-        │
-        ▼
-Bellatrix target
-
-No third Emu68-specific AROS Expansion algorithm is required.
-
-The target supplies the machine semantics that allow the standard implementation to operate.
-
-⸻
-
-18. Relationship to Rigel
-
-The target boundary also prevents unrelated machine domains from becoming incorrectly coupled.
-
-For example, Bellatrix may eventually define:
-
-Bellatrix target
-      │
-      ├── native platform semantics
-      ├── Expansion semantics
-      └── optional Rigel integration
-
-Expansion remains independent from Rigel.
-
-The target is the common machine environment containing both.
+Within Bellatrix, trapped M68K-visible machine transactions enter through the Bellatrix Bus.
 
 Conceptually:
 
-                     Bellatrix target
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-           native       Expansion     Rigel
-           machine      Autoconfig    optional
-```
-Rigel is not the aggregator.
-Expansion is not the aggregator.
-Bellatrix is.
+~~~text
+Emu68 fault reconstruction
+          │
+          ▼
+Bellatrix machine hook
+          │
+────────────────────────────────
+      Emu68 / Bellatrix
+          boundary
+────────────────────────────────
+          │
+          ▼
+Bellatrix Bus
+          │
+          ▼
+machine semantics
+~~~
+
+The Bellatrix Bus is:
+
+> a synchronous Bellatrix machine transaction boundary for intentionally trapped M68K-visible hardware accesses.
+
+It is not:
+
+- a generic Emu68 bus;
+- an execution environment;
+- a provider framework;
+- an interrupt controller;
+- a DMA transport;
+- a timing authority.
+
 ---
-# 19. Relationship to Native Hardware
-The same principle applies to native Bellatrix hardware.
-A native address may be:
-* directly mapped;
-* intentionally trapped;
-* handled through another Bellatrix mechanism;
-depending on its architecture.
-The decision belongs to the Bellatrix target.
-The MMU mechanism is subordinate to that machine definition.
+
+# 16. Machine Hook Versus Bellatrix Bus
+
+The Bellatrix machine hook and Bellatrix Bus are conceptually distinct.
+
+The hook belongs to Emu68/Bellatrix integration:
+
+~~~text
+Emu68
+   │
+   ▼
+Bellatrix machine hook
+~~~
+
+The Bus belongs inside Bellatrix:
+
+~~~text
+Bellatrix
+   │
+   ▼
+Bellatrix Bus
+   │
+   ▼
+machine semantics
+~~~
+
+Conceptually:
+
+~~~text
+Emu68
+   │
+   ▼
+bellatrix_machine_access()
+   │
+────────────────────────────
+ Emu68 / Bellatrix boundary
+────────────────────────────
+   │
+   ▼
+bellatrix_bus_access()
+   │
+   ▼
+Bellatrix machine
+~~~
+
+The exact function names are illustrative.
+
 ---
-# 20. Recommended `vectors.c` Refactoring
-The purpose of refactoring `vectors.c` should not simply be to reduce its size.
-The desired separation is:
+
+# 17. Bellatrix Transaction Model
+
+The initial Bellatrix Bus should be synchronous and minimal.
+
+A transaction must preserve at least:
+
+- M68K-visible address;
+- access direction;
+- access width;
+- write value where applicable;
+- read result where applicable;
+- transaction result.
+
+Conceptually:
+
+~~~c
+struct bellatrix_bus_transaction {
+    uint32_t address;
+    enum bellatrix_bus_direction direction;
+    enum bellatrix_bus_width width;
+    uint32_t value;
+};
+~~~
+
+and:
+
+~~~c
+bellatrix_bus_result_t
+bellatrix_bus_access(
+    struct bellatrix_bus *bus,
+    struct bellatrix_bus_transaction *transaction);
+~~~
+
+These definitions are illustrative and should only be finalized after inspection of the current and historical Emu68 fault paths.
+
+---
+
+# 18. Preserve the M68K Transaction
+
+Bellatrix receives an M68K-visible machine transaction.
+
+The boundary MUST preserve:
+
+- address;
+- width;
+- direction;
+- logical value;
+- occurrence;
+- ordering;
+- side effects.
+
+For example:
+
+~~~text
+WRITE.W $8200,$DFF096
+          │
+          ▼
+        Emu68
+          │
+          ▼
+Bellatrix machine hook
+          │
+          ▼
+Bellatrix Bus
+
+address   = $DFF096
+width     = 16
+direction = write
+value     = $8200
+~~~
+
+Host ARM byte ordering must not redefine the logical M68K transaction.
+
+---
+
+# 19. vectors.c Responsibility
+
+`vectors.c` should remain generic Emu68 exception machinery.
+
+It should not accumulate Bellatrix machine decode.
+
+Avoid:
+
+~~~text
+vectors.c
+    ├── if Bellatrix hardware A...
+    ├── if Bellatrix hardware B...
+    └── ...
+~~~
+
+Prefer:
+
 ~~~text
 vectors.c
     │
-    └── generic exception machinery
-fault/access decode
+    ▼
+fault reconstruction
     │
-    └── reconstruct trapped access
-target boundary
+    ▼
+selected machine-policy hook
+~~~
+
+For Bellatrix:
+
+~~~text
+vectors.c
     │
-    ├── PiStorm semantics
-    ├── bare-metal semantics
-    └── Bellatrix semantics
+    ▼
+Bellatrix machine hook
+    │
+    ▼
+Bellatrix Bus
+~~~
 
-Target-specific hardware policy should gradually leave the generic exception machinery.
+---
 
-⸻
+# 20. mmu.c Responsibility
 
-21. Recommended mmu.c Refactoring
-
-Likewise, mmu.c should remain responsible for generic MMU implementation.
+`mmu.c` remains generic MMU machinery.
 
 Conceptually:
 
+~~~text
 mmu.c
     │
-    ├── page-table creation
+    ├── page-table implementation
     ├── mapping primitives
     ├── translation helpers
     ├── memory attributes
     └── TLB management
+~~~
 
-The target determines what should be mapped.
+The selected machine policy determines what to map.
 
-Conceptually:
-
-selected target
+~~~text
+machine policy
       │
       ▼
-target memory policy
+mapping decisions
       │
       ▼
 generic mmu.c machinery
+~~~
+
+Machine-specific semantics must not become hidden inside generic MMU implementation.
+
+---
+
+# 21. Legacy Bellatrix Precedent
+
+The Bellatrix legacy branch already demonstrated the essential dependency direction:
+
+~~~text
+M68K access
       │
       ▼
-actual translation tables
-
-Target-specific memory semantics should not become hidden inside generic MMU code.
-
-⸻
-
-22. Shared Target Selection
-
-MMU setup and fault handling MUST use the same target selection.
-
-Conceptually:
-
-                    build target
-                        │
-             ┌──────────┴──────────┐
-             │                     │
-             ▼                     ▼
-      target MMU setup      target fault handling
-             │                     │
-             └──────────┬──────────┘
-                        │
-                        ▼
-               same machine model
-
-This is a normative requirement.
-
-There must not be independent compile-time conditions capable of causing MMU policy and fault policy to disagree.
-
-⸻
-
-23. Possible Source Organization
-
-The exact filesystem layout is not normative.
-
-A possible minimal organization is:
-
-src/aarch64/
-│
-├── vectors.c
-├── mmu.c
-├── fault_decode.c
-│
-└── targets/
-    ├── pistorm.c
-    ├── baremetal.c
-    └── bellatrix.c
-
-with corresponding headers where required.
-
-Another valid organization may keep target implementation closer to the existing Emu68 layout.
-
-The important property is conceptual ownership, not directory aesthetics.
-
-⸻
-
-24. Bellatrix Internal Decomposition
-
-If Bellatrix target logic becomes large, it may later be decomposed internally.
-
-For example:
-
-targets/bellatrix/
-│
-├── target.c
-├── memory.c
-├── expansion.c
-└── ...
-
-This does not create a generic provider architecture.
-
-The ownership remains:
-
-Bellatrix target
-      │
-      └── internal implementation modules
-
-The Bellatrix target remains the architectural aggregation point.
-
-⸻
-
-25. PiStorm Preservation
-
-The refactoring MUST NOT require PiStorm to adopt Bellatrix semantics.
-
-PiStorm may continue to implement behavior such as:
-
-* physical Amiga bus fallback;
-* PiStorm-specific Zorro handling;
-* PiStorm boards;
-* PiStorm-specific memory behavior.
-
-The goal is to isolate this policy behind the PiStorm target boundary.
-
-Conceptually:
-
-same Emu68 core
-      │
-      ├── PiStorm machine definition
-      └── Bellatrix machine definition
-
-not:
-
-Bellatrix replaces PiStorm architecture
-
-⸻
-
-26. Bare-Metal Preservation
-
-The existing non-PiStorm bare-metal environment must likewise remain independently defined.
-
-Bellatrix must not become the default meaning of “non-PiStorm”.
-
-The three targets remain peers:
-
-PiStorm
-Bare-metal non-PiStorm
-Bellatrix
-
-This distinction is important for maintaining compatibility with upstream Emu68 behavior.
-
-⸻
-
-27. Refactoring Strategy
-
-The refactoring should proceed without initially changing machine behavior.
-
-Recommended sequence:
-
-Phase 1
-    │
-    ▼
-identify target-specific logic
-currently embedded in vectors.c / mmu.c
-    │
-    ▼
-Phase 2
-    │
-    ▼
-introduce explicit target boundary
-    │
-    ▼
-Phase 3
-    │
-    ▼
-move PiStorm policy behind PiStorm target
-without changing behavior
-    │
-    ▼
-Phase 4
-    │
-    ▼
-move bare-metal policy behind
-bare-metal target
-without changing behavior
-    │
-    ▼
-Phase 5
-    │
-    ▼
-move existing Bellatrix behavior behind
-Bellatrix target
-without changing behavior
-    │
-    ▼
-Phase 6
-    │
-    ▼
-validate all three targets
-    │
-    ▼
-Phase 7
-    │
-    ▼
-begin architectural changes such as
-Bellatrix Expansion
-
-Refactoring and semantic change should not be combined unnecessarily.
-
-⸻
-
-28. Behavioral Preservation Requirement
-
-Before introducing new Bellatrix semantics:
-
-PiStorm before refactor
-        ==
-PiStorm after refactor
-Bare-metal before refactor
-        ==
-Bare-metal after refactor
-Bellatrix before refactor
-        ==
-Bellatrix after refactor
-
-where == means equivalent defined behavior.
-
-Only after this is demonstrated should the new Bellatrix Expansion semantics be introduced.
-
-⸻
-
-29. Expansion Implementation Phase
-
-Once the target boundary exists, Expansion becomes a Bellatrix target change rather than an Emu68-core change.
-
-Conceptually:
-
-Bellatrix target
-      │
-      ├── MMU:
-      │      $E80000-$E8FFFF
-      │      intentionally trapped
-      │
-      └── fault semantics:
-             Expansion / Autoconfig
-
-Then AROS can migrate from its transitional m68k-emu68 Expansion implementation to the shared Amiga implementation.
-
-⸻
-
-30. No Generic Provider Requirement
-
-This architecture deliberately does not introduce a generic provider system.
-
-No architectural requirement exists for concepts such as:
-
-register_provider()
-provider_ops
-provider_context
-provider_priority
-dynamic provider matching
-
-Such an abstraction should only be introduced later if multiple concrete requirements demonstrate that it is useful.
-
-It must not be introduced merely to route a small number of known machine domains.
-
-⸻
-
-31. Architectural Invariants
-
-The following rules are normative.
-
-Core ownership
-
-Emu68 Core owns execution, generic MMU machinery, and generic exception machinery.
-
-Target ownership
-
-The target owns machine-specific memory and fault semantics.
-
-Three targets
-
-PiStorm, bare-metal non-PiStorm, and Bellatrix are distinct first-class target environments.
-
-MMU/fault synchronization
-
-A target’s direct-mapping policy and fault-handling policy MUST describe the same address-space model.
-
-Intentional traps
-
-An address may be architecturally valid while intentionally lacking direct MMU translation.
-
-Bellatrix ownership
-
-Bellatrix is the aggregation point for Bellatrix machine semantics.
-
-Expansion ownership
-
-Expansion belongs to the Bellatrix machine definition when enabled.
-
-It does not belong to Rigel.
-
-No third AROS Expansion model
-
-Bellatrix should expose hardware semantics that allow reuse of the standard AROS Amiga Expansion implementation.
-
-PiStorm isolation
-
-PiStorm-specific machine semantics MUST NOT become generic Emu68 semantics.
-
-Bare-metal isolation
-
-Bellatrix-specific machine semantics MUST NOT redefine the existing non-PiStorm bare-metal target.
-
-No provider framework requirement
-
-The architecture does not require a generic provider abstraction.
-
-⸻
-
-32. Review Checklist
-
-Future changes to Emu68/Bellatrix target handling should answer:
-
-1. Is this code generic Emu68 mechanism or target-specific machine policy?
-2. If target-specific, which target owns it?
-3. Does MMU setup use the same target definition as fault handling?
-4. Can an intentionally trapped address accidentally become directly mapped?
-5. Can an intentionally trapped address reach the fault path without defined semantics?
-6. Is an architecturally valid hardware range being mislabeled as generic unmapped memory?
-7. Is PiStorm-specific behavior leaking into generic Emu68 code?
-8. Is Bellatrix-specific behavior leaking into the bare-metal target?
-9. Is bare-metal behavior being assumed to define Bellatrix?
-10. Is vectors.c interpreting device semantics that belong to a target?
-11. Is mmu.c independently defining target-specific machine semantics?
-12. Is a new generic abstraction being introduced without a concrete need?
-13. Is Expansion being incorrectly attached to Rigel?
-14. Could AROS use its standard classic hardware implementation against the resulting Bellatrix machine?
-15. Does the change preserve behavior for targets not being modified?
-
-If these questions cannot be answered cleanly, the target boundary should be reconsidered.
-
-⸻
-
-33. Target Architecture
-
-The intended final relationship is:
-
-                          Emu68 Core
-                              │
-                 ┌────────────┼────────────┐
-                 │            │            │
-             execution       MMU       exceptions
-                 │            │            │
-                 └────────────┼────────────┘
-                              │
-                       target boundary
-                              │
-              ┌───────────────┼───────────────┐
-              │               │               │
-           PiStorm         Bare-metal      Bellatrix
-                           non-PiStorm
-              │               │               │
-         machine map      machine map      machine map
-              │               │               │
-         fault policy     fault policy     fault policy
-                                              │
-                                  ┌───────────┼───────────┐
-                                  │           │           │
-                               native     Expansion    optional
-                               platform    Autoconfig  compatibility
-
-The Bellatrix path is:
-
-M68K execution
+intentional translation fault
       │
       ▼
-Emu68
+Emu68 fault machinery
       │
       ▼
-Bellatrix target MMU
+Bellatrix-specific hook
       │
-      ├── direct mapping
-      │      │
-      │      ▼
-      │   normal access
+      ▼
+bellatrix_bus_access()
       │
-      └── intentional trap
-              │
-              ▼
-          Data Abort
-              │
-              ▼
-        Emu68 fault decode
-              │
-              ▼
-        Bellatrix target
-              │
-              ▼
-       machine semantics
+      ▼
+machine semantics
+~~~
 
-⸻
+The legacy branch should therefore be used to recover:
 
-34. Relationship to the Legacy Bellatrix Bus
+- the proven hook location;
+- access reconstruction details;
+- read-result handling;
+- write-value extraction;
+- relevant MMU behavior.
 
-The legacy Bellatrix implementation can be understood as an earlier instance of the same architectural idea:
+It should not be copied mechanically.
 
+---
+
+# 22. What Should Not Be Restored from Legacy
+
+The new architecture does not require automatically restoring:
+
+- historical VirtualBus;
+- old multicore synchronization;
+- request/response queues;
+- epochs;
+- WFE/SEV protocols;
+- old timing synchronization;
+- historical execution topology;
+- obsolete device abstractions.
+
+The architectural property worth preserving is simply:
+
+~~~text
 Emu68 fault
      │
      ▼
 Bellatrix boundary
      │
      ▼
-bellatrix_bus_access()
-     │
-     ▼
-machine semantics
+machine transaction
+~~~
 
-The new architecture should preserve:
+---
 
-one explicit Bellatrix boundary below Emu68 fault handling
+# 23. Rigel Integration
 
-without necessarily preserving:
+Rigel remains an optional Bellatrix component.
 
-the complete historical Bellatrix Bus implementation
+The desired relationship is:
 
-The distinction is important.
-
-The legacy branch provides evidence that the boundary works.
-
-It does not dictate the internal architecture of the new Bellatrix machine.
-
-⸻
-
-35. Final Decision
-
-The recommended direction is:
-
-Refactor Emu68 around explicit target boundaries.
-
-The three targets are:
-
-PiStorm
-Bare-metal non-PiStorm
-Bellatrix
-
-Each target owns a coherent pair:
-
-memory-map policy
-        +
-fault semantics
-
-The generic Emu68 core remains responsible for:
-
-execution
-MMU mechanisms
-exception mechanisms
-fault reconstruction
-
-Bellatrix remains responsible for:
-
-Bellatrix machine semantics
-```
-The legacy Bellatrix Bus demonstrates the correct direction of dependency:
 ~~~text
 Emu68
    │
    ▼
-Bellatrix boundary
+Bellatrix machine hook
    │
    ▼
-Bellatrix machine
+Bellatrix Bus
+   │
+   ▼
+Rigel adapter
+   │
+   ▼
+public Rigel API
+   │
+   ▼
+librigel
+~~~
 
-The new implementation should preserve that boundary while simplifying its internal architecture.
+Generic Emu68 machinery MUST NOT know Rigel register semantics.
 
-For Expansion specifically:
+Bellatrix should only know enough to route a transaction to the Rigel compatibility domain.
 
-AROS
- │
- ▼
-standard Amiga Expansion
- │
- ▼
-$E80000
- │
- ▼
-Bellatrix target MMU
- │
- ▼
-intentional fault
- │
- ▼
-Emu68 fault machinery
- │
- ▼
-Bellatrix target semantics
- │
- ▼
-Autoconfig
+Detailed chipset semantics belong to Rigel.
 
-This provides a clean basis for removing the independent m68k-emu68 Expansion implementation and exposing the classic machine semantics that the standard AROS implementation already expects.
+---
+
+# 24. Timing, Interrupts, and DMA Remain Separate
+
+The Bellatrix Bus owns only CPU-visible machine transaction routing.
+
+It does not own:
+
+~~~text
+timing
+interrupt generation/arbitration
+DMA
+~~~
+
+For example:
+
+~~~text
+CPU MMIO
+    → Bellatrix Bus
+
+Rigel execution progress
+    → Rigel temporal API
+
+Rigel IPL
+    → Bellatrix interrupt path
+
+Rigel DMA
+    → guest physical memory backend
+~~~
+
+These paths must remain architecturally distinct.
+
+---
+
+# 25. Synchronous First
+
+The initial Bellatrix Bus should be synchronous:
+
+~~~text
+Emu68 fault
+     │
+     ▼
+Bellatrix Bus
+     │
+     ▼
+machine component
+     │
+     ▼
+result
+     │
+     ▼
+Emu68 resumes
+~~~
+
+Do not initially introduce:
+
+- asynchronous completion;
+- worker cores;
+- queues;
+- epochs;
+- WFE/SEV synchronization;
+
+unless correctness requires them.
+
+Execution topology must not be encoded into the transaction contract.
+
+---
+
+# 26. Possible Source Organization
+
+The exact filesystem layout is not normative.
+
+Conceptually:
+
+~~~text
+Emu68
+│
+├── vectors.c
+├── mmu.c
+├── fault reconstruction
+│
+├── PiStorm environment
+│
+└── Standalone environment
+        │
+        └── machine policy
+               │
+               ├── generic bare-metal
+               └── Bellatrix
+                       │
+                       ▼
+                Bellatrix machine hook
+
+Bellatrix
+│
+├── machine/
+│   ├── memory.c
+│   ├── bus.c
+│   └── ...
+│
+└── optional compatibility
+    └── Rigel adapter
+~~~
+
+Ownership and dependency direction matter more than filenames.
+
+---
+
+# 27. Refactoring Strategy
+
+The refactoring should avoid introducing artificial top-level targets.
+
+Recommended sequence:
+
+~~~text
+Phase 1
+    │
+    ▼
+identify current PiStorm-specific
+and standalone-specific behavior
+    │
+    ▼
+Phase 2
+    │
+    ▼
+separate execution-environment policy
+from generic Emu68 mechanisms
+    │
+    ▼
+Phase 3
+    │
+    ▼
+preserve PiStorm behavior unchanged
+    │
+    ▼
+Phase 4
+    │
+    ▼
+preserve existing standalone behavior
+as generic bare-metal machine policy
+    │
+    ▼
+Phase 5
+    │
+    ▼
+introduce Bellatrix as a standalone
+machine policy
+    │
+    ▼
+Phase 6
+    │
+    ▼
+recover the proven legacy
+Bellatrix fault hook
+    │
+    ▼
+Phase 7
+    │
+    ▼
+introduce minimal synchronous
+Bellatrix Bus
+    │
+    ▼
+Phase 8
+    │
+    ▼
+synchronize Bellatrix MMU
+and trapped-access semantics
+    │
+    ▼
+Phase 9
+    │
+    ▼
+validate PiStorm unchanged
+    │
+    ▼
+Phase 10
+    │
+    ▼
+validate generic standalone unchanged
+    │
+    ▼
+Phase 11
+    │
+    ▼
+integrate additional Bellatrix
+machine domains
+~~~
+
+---
+
+# 28. Architectural Invariants
+
+The following rules are normative.
+
+## Core Ownership
+
+Emu68 Core owns generic execution, MMU mechanisms, exception mechanisms, and fault reconstruction.
+
+## Execution Environment Ownership
+
+The execution environment owns fundamentally different hosting behavior such as PiStorm versus standalone operation.
+
+## Machine Policy Ownership
+
+The selected machine policy owns the M68K-visible machine definition.
+
+## No Mandatory Three-Target Model
+
+The architecture does NOT require PiStorm, generic bare-metal, and Bellatrix to be represented as three equivalent Emu68 targets.
+
+## Standalone Policies
+
+Generic bare-metal and Bellatrix may exist as separate machine policies within the same standalone execution environment.
+
+## MMU/Fault Synchronization
+
+The selected machine policy's mapping decisions and fault semantics MUST describe the same machine.
+
+## Bellatrix Ownership
+
+Bellatrix owns Bellatrix-specific machine semantics.
+
+## Bellatrix Bus Ownership
+
+The Bellatrix Bus belongs to Bellatrix, not to generic Emu68.
+
+## Transaction Reconstruction
+
+Emu68 reconstructs trapped M68K accesses.
+
+Bellatrix interprets their machine meaning.
+
+## PiStorm Isolation
+
+PiStorm-specific behavior MUST NOT become generic standalone semantics.
+
+## Bare-Metal Preservation
+
+Bellatrix MUST NOT silently redefine generic bare-metal standalone behavior.
+
+## Rigel Independence
+
+Rigel remains optional and independent of Emu68 exception internals.
+
+## No Provider Requirement
+
+No generic provider framework is required.
+
+---
+
+# 29. Review Checklist
+
+Future changes should answer:
+
+1. Is this generic Emu68 mechanism, execution-environment behavior, or machine-policy behavior?
+2. Does this genuinely require a distinct execution environment?
+3. Could this instead be represented as a machine policy within standalone?
+4. Is Bellatrix being unnecessarily promoted into a completely separate top-level target?
+5. Does MMU setup use the same machine selection as fault handling?
+6. Can a trapped address accidentally become directly mapped?
+7. Can a trapped address reach the machine hook without defined semantics?
+8. Is PiStorm-specific behavior leaking into standalone?
+9. Is Bellatrix-specific behavior leaking into generic bare-metal?
+10. Is generic bare-metal behavior being assumed to define Bellatrix?
+11. Is `vectors.c` interpreting Bellatrix hardware?
+12. Is `mmu.c` independently defining Bellatrix semantics?
+13. Does Emu68 reconstruct accesses without interpreting the machine?
+14. Does Bellatrix interpret accesses without duplicating ARM fault decoding?
+15. Is the Bellatrix Bus becoming a generic Emu68 abstraction unnecessarily?
+16. Is execution topology leaking into the Bus contract?
+17. Are timing, interrupts, or DMA being incorrectly assigned to the Bus?
+18. Has the legacy hook been inspected before inventing a new mechanism?
+19. Are PiStorm and existing standalone behavior preserved?
+20. Is the resulting architecture simpler than introducing three artificial peer targets?
+
+---
+
+# 30. Final Architecture
+
+The preferred architectural model is:
+
+~~~text
+                         M68K software
+                              │
+                              ▼
+                         Emu68 Core
+                              │
+                    execution / MMU /
+                 exception reconstruction
+                              │
+                              ▼
+                   execution environment
+                              │
+                 ┌────────────┴────────────┐
+                 │                         │
+              PiStorm                 Standalone
+                                           │
+                                           ▼
+                                    machine policy
+                                           │
+                              ┌────────────┴────────────┐
+                              │                         │
+                      generic bare-metal            Bellatrix
+                                                        │
+                                                        ▼
+                                              Bellatrix machine hook
+                                                        │
+                                                        ▼
+                                                  Bellatrix Bus
+                                                        │
+                                      ┌─────────────────┼─────────────────┐
+                                      │                 │                 │
+                                   native           optional           other
+                                  semantics           Rigel            domains
+                                                        │
+                                                        ▼
+                                                  Rigel adapter
+                                                        │
+                                                        ▼
+                                                     librigel
+~~~
+
+The corresponding ownership model is:
+
+~~~text
+Emu68 Core
+    owns generic execution mechanisms
+
+Execution Environment
+    owns fundamentally different hosting models
+
+Machine Policy
+    owns the M68K-visible machine definition
+
+Bellatrix Machine Policy
+    owns Bellatrix-specific mappings and fault semantics
+
+Bellatrix Bus
+    routes intentionally trapped Bellatrix machine transactions
+~~~
+
+---
+
+# 31. Final Decision
+
+The architecture should NOT require three equivalent Emu68 targets merely to represent:
+
+~~~text
+PiStorm
+generic bare-metal
+Bellatrix
+~~~
+
+Instead, it should distinguish:
+
+~~~text
+execution environment
+        from
+machine policy
+~~~
+
+A suitable model is:
+
+~~~text
+Emu68
+  │
+  ├── PiStorm
+  │
+  └── Standalone
+         │
+         └── machine policy
+                ├── generic bare-metal
+                └── Bellatrix
+~~~
+
+The exact implementation may differ if the current Emu68 build organization makes another representation simpler.
+
+What is normative is the semantic separation, not the number of compile-time targets.
+
+The central rules remain:
+
+> **Emu68 reconstructs the access. The selected machine policy interprets it.**
+
+> **MMU mapping decisions and fault semantics MUST always describe the same machine.**
+
+For Bellatrix:
+
+~~~text
+Emu68
+   │
+   ▼
+fault reconstruction
+   │
+   ▼
+Bellatrix machine hook
+   │
+   ▼
+Bellatrix Bus
+   │
+   ▼
+Bellatrix machine semantics
+~~~
+
+Bellatrix therefore becomes a distinct machine definition without unnecessarily becoming a completely separate Emu68 execution environment.
