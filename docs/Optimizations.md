@@ -20,7 +20,44 @@ The purpose is simply to identify areas worth investigating, measuring, and pote
 
 The general principle is:
 
-> **Preserve Rigel as the authority for classic hardware semantics while minimizing unnecessary transitions through expensive generic paths.**
+> **Preserve Rigel as the sole authority for classic hardware semantics while minimizing unnecessary transitions through expensive generic paths.**
+
+A second important principle is:
+
+> **Fault avoidance and shadow state are separate concepts.**
+
+An Emu68 optimization may avoid an MMU fault without requiring Emu68 to maintain a duplicate representation of Rigel-owned hardware state.
+
+Where possible, the preferred optimization model is:
+
+~~~text
+Emu68 recognizes operation
+          │
+          ▼
+direct optimized route
+          │
+          ▼
+        Rigel
+~~~
+
+rather than:
+
+~~~text
+Emu68 recognizes operation
+          │
+          ▼
+local hardware shadow
+          │
+          ▼
+shadow synchronization
+          │
+          ▼
+        Rigel
+~~~
+
+The existing Emu68 `INT_shadow` mechanism is therefore interesting primarily as evidence of an existing specialized/fault-avoidance path.
+
+Preserving the shadow itself is not currently an optimization requirement.
 
 ---
 
@@ -101,6 +138,21 @@ Areas worth investigating include:
 * elimination of intermediate buffers;
 * efficient address translation;
 * avoiding redundant coherency operations.
+
+The desired relationship is:
+
+~~~text
+                    Chip RAM backing
+                    ▲              ▲
+                    │              │
+                    │              │
+                 M68K CPU       Rigel DMA
+               direct access    host memory
+~~~
+
+CPU access to Chip RAM is not Rigel MMIO.
+
+Rigel DMA access to Chip RAM is not an Emu68 CPU fault.
 
 ---
 
@@ -245,7 +297,7 @@ because MMIO reads and writes may have observable side effects.
 
 # 7. Specialized MMIO Fast Paths
 
-Frequently accessed Rigel registers may justify specialized paths.
+Frequently accessed Rigel registers may justify specialized routing paths.
 
 Conceptually:
 
@@ -253,13 +305,13 @@ Conceptually:
 M68K access
      │
      ▼
-recognized hot register
+Emu68 recognizes operation
      │
      ▼
-specialized Rigel entry
+pre-resolved Bellatrix/Rigel path
      │
      ▼
-Rigel semantics
+canonical Rigel semantics
 ~~~
 
 instead of:
@@ -277,83 +329,234 @@ fault reconstruction
 Bellatrix Bus
      │
      ▼
-generic MMIO dispatcher
+generic provider lookup
      │
      ▼
 Rigel
 ~~~
 
+The optimization should preferably eliminate routing overhead rather than duplicate hardware behavior.
+
 Candidates should be identified through profiling rather than assumed in advance.
 
 ---
 
-# 8. Preserve `INT_shadow`
+# 8. Investigate the Existing `INT_shadow` Fault-Avoidance Path
 
-The existing Emu68 `INT_shadow` mechanism should be investigated as a potential fault-avoidance optimization for:
+The existing Emu68 `INT_shadow` implementation should be investigated carefully.
+
+The important question is not initially:
+
+~~~text
+How can Bellatrix preserve INT_shadow?
+~~~
+
+The more useful question is:
+
+~~~text
+What mechanism allows the existing
+INTENA / INTREQ path to avoid the
+generic MMU fault?
+~~~
+
+These are separate concerns:
+
+~~~text
+FAULT AVOIDANCE
+      │
+      ▼
+specialized Emu68 recognition/routing
+
+
+SHADOW STATE
+      │
+      ▼
+INT_shadow
+~~~
+
+Bellatrix may benefit from the first without requiring the second.
+
+The investigation should determine:
+
+* where `INTENA` and `INTREQ` are recognized;
+* whether recognition occurs before the generic fault path;
+* which accesses actually avoid faults;
+* whether the fault avoidance depends intrinsically on `INT_shadow`;
+* whether the specialized path can invoke Bellatrix/Rigel directly;
+* whether the shadow can be removed from Bellatrix builds while retaining the optimized access path.
+
+---
+
+# 9. Prefer Direct Rigel Fast Routing Over Interrupt Shadow Duplication
+
+If Emu68 can recognize an `INTENA` or `INTREQ` access without generating a generic MMU fault, the preferred Bellatrix optimization candidate is:
+
+~~~text
+M68K INTENA / INTREQ access
+             │
+             ▼
+      Emu68 recognition
+             │
+             ▼
+      Bellatrix fast hook
+             │
+             ▼
+   canonical/direct Rigel write
+             │
+             ▼
+           Rigel
+~~~
+
+For example:
+
+~~~text
+M68K write $DFF09A
+        │
+        ▼
+Emu68 recognizes INTENA
+        │
+        ▼
+no generic MMU fault
+        │
+        ▼
+Bellatrix optimized route
+        │
+        ▼
+rigel_write16($DFF09A, value)
+        │
+        ▼
+Rigel INTENA semantics
+~~~
+
+This avoids:
+
+~~~text
+MMU fault
+
+fault exception handling
+
+fault reconstruction
+
+generic Bellatrix Bus dispatch
+
+provider lookup
+~~~
+
+without introducing a second interrupt-state authority.
+
+---
+
+# 10. `INT_shadow` Is Not Required for Fault Avoidance
+
+The integration should not assume:
+
+~~~text
+avoid fault
+    =
+maintain INT_shadow
+~~~
+
+The preferred possibility to investigate is:
+
+~~~text
+avoid fault
+    =
+recognize operation early
+    +
+route directly to Rigel
+~~~
+
+Therefore:
+
+> **Preserving the existing Emu68 fault-avoidance mechanism may be valuable. Preserving `INT_shadow` itself is not a requirement.**
+
+If the shadow exists only because of PiStorm-specific hardware integration requirements, Bellatrix may not need it.
+
+---
+
+# 11. Avoid Duplicate Interrupt State
+
+Rigel already owns:
 
 ~~~text
 INTENA
 
 INTREQ
+
+interrupt sources
+
+interrupt priority resolution
+
+classic IPL
 ~~~
 
-Possible desired path:
+Maintaining another authoritative or continuously synchronized representation in Emu68 creates additional complexity:
 
 ~~~text
-M68K INT access
-       │
-       ▼
-Emu68 specialized path
-       │
-       ▼
-INT_shadow
-       │
-       ▼
-minimal Rigel semantic update
-       │
-       ▼
-Rigel
+Rigel INTENA/INTREQ
+         │
+         ↕
+ synchronization
+         ↕
+Emu68 INT_shadow
 ~~~
 
-The objective would be to avoid the generic MMU fault and Bellatrix Bus path while preserving Rigel ownership of interrupt semantics.
+This becomes particularly important because `INTREQ` changes can originate internally inside Rigel:
+
+~~~text
+VBlank ─────┐
+CIA ────────┤
+Paula ──────┤
+Copper ─────┤
+Blitter ────┤
+            ▼
+          Rigel
+            │
+            ▼
+          INTREQ
+~~~
+
+A shadow would therefore require coherence not only for CPU writes but also for Rigel-originated state transitions.
+
+If the optimized Emu68 path can route directly to Rigel, avoiding this duplicated state may itself be a performance and complexity optimization.
 
 ---
 
-# 9. Lazy Shadow Synchronization
+# 12. Conditional Shadow Retention
 
-If Emu68 shadows must remain coherent with Rigel state, immediate synchronization after every internal Rigel event may not always be necessary.
+`INT_shadow` should not be removed merely for architectural purity if measurements demonstrate that it provides an optimization that cannot be retained otherwise.
 
-A possible optimization is:
+The decision should therefore be empirical.
+
+Possible outcomes include:
 
 ~~~text
-Rigel state changes
-       │
-       ▼
-mark shadow dirty
-       │
-       ▼
-continue execution
-       │
-       ▼
-shadow actually needed
-       │
-       ▼
-refresh
+A. specialized path requires INT_shadow
+             │
+             ▼
+retain and synchronize shadow
 ~~~
 
-This should only be used where observable behavior remains correct.
+~~~text
+B. specialized path can call Rigel directly
+             │
+             ▼
+remove/bypass shadow in Bellatrix
+~~~
 
-Possible techniques include:
+~~~text
+C. shadow provides additional measurable benefit
+             │
+             ▼
+evaluate cost of synchronization
+against performance gain
+~~~
 
-* dirty flags;
-* generation counters;
-* invalidation;
-* lazy refresh;
-* derived shadow state.
+The preferred implementation is the simplest model that preserves the useful fault-avoidance behavior.
 
 ---
 
-# 10. IPL Change-Driven Updates
+# 13. IPL Change-Driven Updates
 
 Rigel IPL should ideally not require expensive recomputation or synchronization after every CPU execution block.
 
@@ -387,7 +590,7 @@ Interrupt-relevant events include:
 
 ---
 
-# 11. Avoid Excessive IPL Polling
+# 14. Avoid Excessive IPL Polling
 
 A potential performance problem would be:
 
@@ -415,11 +618,57 @@ Possible alternatives include:
 * cached resolved IPL;
 * checking only at required synchronization boundaries.
 
-The appropriate mechanism should be determined from the actual Emu68 execution model.
+The important distinction is:
+
+~~~text
+CPU writes INTENA / INTREQ
+           │
+           ▼
+          Rigel
+
+
+Rigel resolves classic IPL
+           │
+           ▼
+       Emu68 INT.IPL
+~~~
+
+Rigel does not need to receive an IPL from Emu68.
+
+It receives state-changing hardware transactions and produces the resolved classic IPL.
 
 ---
 
-# 12. Deadline-Based Rigel Advancement
+# 15. Cached Resolved IPL
+
+Rigel may benefit from keeping the currently resolved IPL as derived state.
+
+Conceptually:
+
+~~~text
+INTENA / INTREQ changes
+          │
+          ▼
+recalculate priority
+          │
+          ▼
+cached resolved IPL
+~~~
+
+Then:
+
+~~~text
+rigel_get_ipl()
+      │
+      ▼
+cheap state read
+~~~
+
+rather than recomputing interrupt priority on every query.
+
+---
+
+# 16. Deadline-Based Rigel Advancement
 
 Rigel should avoid requiring synchronization after every M68K instruction or very small execution quantum.
 
@@ -461,7 +710,7 @@ The goal is to reduce host/Rigel boundary crossings while preserving chipset tim
 
 ---
 
-# 13. Larger Safe Execution Quanta
+# 17. Larger Safe Execution Quanta
 
 The deadline mechanism may permit Emu68 to execute larger batches of translated code when Rigel guarantees that no externally relevant chipset event occurs before a known point.
 
@@ -488,7 +737,7 @@ The maximum safe quantum must remain constrained by observable chipset timing.
 
 ---
 
-# 14. JIT MMIO Fast Paths
+# 18. JIT MMIO Fast Paths
 
 A more aggressive optimization could allow Emu68 JIT translation to recognize constant MMIO addresses.
 
@@ -530,9 +779,51 @@ Rigel
 
 This could be particularly useful for frequently accessed fixed hardware registers.
 
+Importantly, this optimization does not require Emu68 to implement `DMACON` semantics.
+
+The desired model remains:
+
+~~~text
+Emu68 recognizes address
+        │
+        ▼
+Rigel executes semantics
+~~~
+
 ---
 
-# 15. JIT Provider Binding
+# 19. Generalize Fault Avoidance Beyond `INTENA` / `INTREQ`
+
+If investigation of the existing Emu68 interrupt path reveals a reusable mechanism for avoiding faults, it may be applicable to other frequently accessed Rigel registers.
+
+Conceptually:
+
+~~~text
+MOVE.W D0,$DFF096
+        │
+        ▼
+Emu68 recognizes Rigel MMIO
+        │
+        ▼
+direct Bellatrix/Rigel path
+        │
+        ▼
+rigel_write16()
+~~~
+
+The same model could potentially apply to other hot constant-address accesses.
+
+This would turn the PiStorm interrupt optimization investigation into a more general:
+
+~~~text
+Rigel MMIO fast-path investigation
+~~~
+
+rather than an `INT_shadow`-specific feature.
+
+---
+
+# 20. JIT Provider Binding
 
 A translated block could potentially remember that a constant address belongs to a specific provider.
 
@@ -547,7 +838,7 @@ $DFF096
 known Rigel target
    │
    ▼
-direct specialized call
+direct Rigel path
 ~~~
 
 This would avoid repeated address classification.
@@ -556,7 +847,7 @@ Such binding would require an invalidation strategy if the relevant mapping or p
 
 ---
 
-# 16. Stable Classic MMIO Regions
+# 21. Stable Classic MMIO Regions
 
 Some classic MMIO mappings may remain stable for the lifetime of the machine.
 
@@ -573,13 +864,14 @@ Stable regions are particularly attractive candidates for:
 * pre-resolution;
 * JIT classification;
 * direct handler binding;
-* elimination of repeated provider lookup.
+* elimination of repeated provider lookup;
+* fault avoidance.
 
 The exact set of stable regions should be determined by Bellatrix machine policy.
 
 ---
 
-# 17. Fast Path / Generic Path Separation
+# 22. Fast Path / Generic Path Separation
 
 The implementation may benefit from explicitly distinguishing:
 
@@ -608,14 +900,12 @@ Conceptually:
                    M68K access
                        │
                        ▼
-                 known hot path?
+                 known fast path?
                     /      \
                   yes       no
                    │         │
                    ▼         ▼
-               fast path   generic path
-                   │         │
-                   │      MMU fault
+             direct route   MMU fault
                    │         │
                    │    Bellatrix Bus
                    │         │
@@ -628,9 +918,65 @@ The generic path should optimize for completeness.
 
 Hot paths may optimize for bypassing generic overhead.
 
+Neither path should duplicate Rigel hardware semantics.
+
 ---
 
-# 18. Reduce Cross-Layer Calls
+# 23. Fast Path and Shadow State Must Remain Separate Concepts
+
+Future implementation work should explicitly distinguish:
+
+~~~text
+FAST PATH
+    =
+optimized route to authoritative semantics
+~~~
+
+from:
+
+~~~text
+SHADOW
+    =
+cached/duplicated derived state
+~~~
+
+A fast path does not inherently require a shadow.
+
+For Bellatrix, the preferred model is generally:
+
+~~~text
+M68K
+ │
+ ▼
+Emu68 fast recognition
+ │
+ ▼
+Rigel
+~~~
+
+rather than:
+
+~~~text
+M68K
+ │
+ ▼
+Emu68 fast recognition
+ │
+ ▼
+Emu68 hardware shadow
+ │
+ ▼
+synchronization
+ │
+ ▼
+Rigel
+~~~
+
+unless the latter provides a demonstrated performance advantage.
+
+---
+
+# 24. Reduce Cross-Layer Calls
 
 The integration should measure how often execution crosses boundaries such as:
 
@@ -658,34 +1004,87 @@ This should be driven by profiling.
 
 ---
 
-# 19. Narrow Fast-Path APIs
+# 25. Canonical MMIO May Already Be a Suitable Fast Target
 
-If generic canonical MMIO becomes expensive for known hot operations, narrowly defined optimized Rigel entry points may be considered.
+Before introducing specialized Rigel APIs, the implementation should measure the cost of calling the existing canonical MMIO operation directly.
+
+For example:
+
+~~~text
+Emu68 fast recognition
+        │
+        ▼
+rigel_write16(address, value)
+        │
+        ▼
+Rigel
+~~~
+
+may already be sufficiently cheap.
+
+This would allow both:
+
+~~~text
+generic path
+    │
+    ▼
+rigel_write16()
+~~~
+
+and:
+
+~~~text
+fast path
+    │
+    ▼
+rigel_write16()
+~~~
+
+to share exactly the same semantic implementation.
+
+Only the route to that implementation would differ.
+
+---
+
+# 26. Narrow Fast-Path APIs
+
+If profiling demonstrates that canonical MMIO dispatch itself becomes significant, narrowly defined optimized Rigel entry points may be considered.
 
 Conceptually:
 
 ~~~text
 generic:
 
-rigel_mmio_write16(address, value)
+rigel_write16(address, value)
 ~~~
 
 versus a possible internal optimized equivalent:
 
 ~~~text
-pre-resolved operation
+pre-resolved Rigel operation
         │
         ▼
-Rigel register semantics
+register implementation
 ~~~
 
 The public API should not be expanded prematurely.
 
-Fast-path interfaces should only be introduced after profiling demonstrates a useful benefit.
+The preferred sequence is:
+
+~~~text
+first:
+    bypass fault and Bus
+
+then measure:
+    canonical Rigel MMIO cost
+
+only then:
+    consider specialized Rigel entry
+~~~
 
 ---
 
-# 20. Avoid Duplicate Address Translation
+# 27. Avoid Duplicate Address Translation
 
 The integration should investigate whether the same address is unnecessarily translated multiple times.
 
@@ -713,7 +1112,7 @@ This is particularly relevant for high-frequency DMA and Chip RAM operations.
 
 ---
 
-# 21. Avoid Unnecessary Memory Copies
+# 28. Avoid Unnecessary Memory Copies
 
 Potential copy points should be inventoried.
 
@@ -759,7 +1158,7 @@ provided ownership and lifetime remain explicit.
 
 ---
 
-# 22. Video Batching
+# 29. Video Batching
 
 Classic video generation may involve high-frequency internal operations.
 
@@ -776,7 +1175,7 @@ Any optimization must preserve timing-visible chipset behavior where required.
 
 ---
 
-# 23. Audio Batching
+# 30. Audio Batching
 
 Paula audio may benefit from generating samples in blocks rather than performing excessive host transitions for individual samples or very small units.
 
@@ -800,31 +1199,31 @@ The block size must balance:
 
 ---
 
-# 24. Dirty-State Tracking
+# 31. Dirty-State Tracking
 
-Many Rigel subsystems may benefit from explicit dirty-state tracking.
+Rigel subsystems may benefit from explicit dirty-state tracking where derived state is expensive to recompute.
 
-Examples:
+Examples may include:
 
 ~~~text
-interrupt state dirty
+interrupt result dirty
 
-video state dirty
-
-shadow dirty
-
-output dirty
+video output dirty
 
 routing cache dirty
+
+presentation state dirty
 ~~~
 
-This may allow expensive derived-state calculations to occur only when required.
+Shadow-specific dirty state should only exist if a shadow is actually retained.
+
+The implementation should not introduce shadow synchronization infrastructure merely because the PiStorm implementation currently contains a shadow.
 
 ---
 
-# 25. Generation Counters
+# 32. Generation Counters
 
-Generation counters may be useful where multiple cached or derived representations exist.
+Generation counters may be useful where multiple cached or derived representations genuinely exist.
 
 Conceptually:
 
@@ -850,9 +1249,11 @@ refresh required
 
 This may provide a cheap coherency mechanism for selected optimization state.
 
+It should not be introduced where direct authoritative access is cheaper.
+
 ---
 
-# 26. Avoid Premature Fine-Grained Optimization
+# 33. Avoid Premature Fine-Grained Optimization
 
 Not every MMIO register requires a specialized path.
 
@@ -878,7 +1279,7 @@ Optimization should be driven by observed cost.
 
 ---
 
-# 27. Instrumentation
+# 34. Instrumentation
 
 The integration should provide enough instrumentation to measure:
 
@@ -887,10 +1288,14 @@ The integration should provide enough instrumentation to measure:
 * MMIO accesses by region;
 * MMIO accesses by register;
 * Bellatrix Bus dispatch count;
+* direct Rigel fast-path count;
 * fast-path hit count;
 * fast-path miss count;
-* `INT_shadow` hits;
 * canonical MMIO calls;
+* `INTENA` accesses;
+* `INTREQ` accesses;
+* existing Emu68 `INT_shadow` path hits during investigation;
+* faults avoided by specialized Emu68 paths;
 * DMA memory operations;
 * DMA bytes transferred;
 * `rigel_advance()` calls;
@@ -905,7 +1310,7 @@ Without these measurements, optimization priorities will remain speculative.
 
 ---
 
-# 28. Fault Cost Measurement
+# 35. Fault Cost Measurement
 
 The complete cost of a Rigel-related fault should be measured.
 
@@ -941,9 +1346,56 @@ return
 
 This provides the baseline against which fast paths should be evaluated.
 
+A direct path can then be compared against:
+
+~~~text
+M68K access
+     │
+     ▼
+Emu68 recognition
+     │
+     ▼
+direct Rigel MMIO
+     │
+     ▼
+return
+~~~
+
 ---
 
-# 29. Optimization Priority Candidates
+# 36. `INT_shadow` Investigation Benchmark
+
+The existing Emu68 path should be benchmarked in terms of its individual components.
+
+The investigation should distinguish:
+
+~~~text
+cost avoided by specialized recognition
+
+cost avoided by bypassing the MMU fault
+
+cost avoided by INT_shadow itself
+~~~
+
+This distinction is important.
+
+It may reveal that most of the performance advantage comes from:
+
+~~~text
+early recognition + fault bypass
+~~~
+
+rather than:
+
+~~~text
+duplicated interrupt state
+~~~
+
+If so, Bellatrix should preserve the former without necessarily preserving the latter.
+
+---
+
+# 37. Optimization Priority Candidates
 
 Initial candidates worth measuring include:
 
@@ -954,20 +1406,26 @@ Initial candidates worth measuring include:
 
 3. Pre-resolved MMIO routing
 
-4. INT_shadow fault avoidance
+4. Existing Emu68 fault-avoidance mechanism
 
-5. Cached/resolved IPL
+5. Direct Rigel MMIO fast routing
 
-6. Deadline-based Rigel advancement
+6. Cached/resolved IPL
 
-7. DMA batching / direct memory spans
+7. Deadline-based Rigel advancement
 
-8. MMIO classification cache
+8. DMA batching / direct memory spans
 
-9. Specialized hot-register handlers
+9. MMIO classification cache
 
-10. JIT MMIO fast paths
+10. Specialized hot-register routing
+
+11. JIT MMIO fast paths
 ~~~
+
+`INT_shadow` itself is deliberately not listed as an optimization objective.
+
+Instead, it is an implementation mechanism to investigate in order to determine which useful optimization properties can be reused.
 
 This ordering is not normative.
 
@@ -975,7 +1433,7 @@ Profiling should determine the actual implementation priority.
 
 ---
 
-# 30. Possible Long-Term Execution Model
+# 38. Possible Long-Term Execution Model
 
 A highly optimized implementation might eventually resemble:
 
@@ -988,7 +1446,7 @@ A highly optimized implementation might eventually resemble:
           ┌────────────────┼─────────────────┐
           │                │                 │
           ▼                ▼                 ▼
-    direct memory      JIT MMIO          generic
+    direct memory      JIT/MMIO          generic
        mapping          fast path         fallback
           │                │                 │
           ▼                │             MMU fault
@@ -1008,18 +1466,65 @@ A highly optimized implementation might eventually resemble:
              deadlines         guest memory        INT.IPL
 ~~~
 
-The generic path remains available for correctness and complete coverage.
+For interrupt-register writes:
 
-The common paths progressively avoid unnecessary generic overhead.
+~~~text
+M68K
+ │
+ │ INTENA / INTREQ
+ ▼
+Emu68
+ │
+ │ specialized recognition
+ ▼
+Bellatrix fast route
+ │
+ ▼
+Rigel canonical MMIO
+ │
+ ├── INTENA
+ ├── INTREQ
+ └── priority resolution
+        │
+        ▼
+     Rigel IPL
+        │
+        ▼
+   Emu68 INT.IPL
+~~~
+
+No Emu68 interrupt shadow is inherently required by this model.
+
+The generic path remains:
+
+~~~text
+M68K
+ │
+ ▼
+unoptimized access
+ │
+ ▼
+MMU fault
+ │
+ ▼
+Bellatrix Bus
+ │
+ ▼
+Rigel canonical MMIO
+~~~
+
+The common paths progressively avoid unnecessary generic overhead without moving classic hardware state out of Rigel.
 
 ---
 
-# 31. Optimization Invariants
+# 39. Optimization Invariants
 
 Any optimization should preserve:
 
 ~~~text
 Rigel hardware authority
+
+single authoritative classic hardware state
 
 M68K-visible behavior
 
@@ -1042,27 +1547,146 @@ generic fallback
 
 Performance optimization must not create a second implementation of classic hardware semantics inside Bellatrix or Emu68.
 
+In particular:
+
+~~~text
+fault avoidance
+    !=
+hardware-state duplication
+~~~
+
+and:
+
+~~~text
+fast path
+    !=
+shadow
+~~~
+
 ---
 
-# 32. Guiding Principle
+# 40. Investigation Sequence for the Emu68 Interrupt Path
+
+Before deciding whether `INT_shadow` belongs in Bellatrix, the existing implementation should be decomposed experimentally.
+
+Recommended investigation:
+
+~~~text
+1. Locate INT_shadow accesses.
+
+2. Locate INTENA / INTREQ recognition.
+
+3. Determine whether recognition occurs
+   before the generic fault handler.
+
+4. Determine exactly which accesses
+   avoid faults.
+
+5. Determine what role INT_shadow
+   actually plays in fault avoidance.
+
+6. Separate:
+      access recognition
+      fault bypass
+      shadow storage
+      interrupt calculation
+      CPU IPL delivery
+
+7. Determine whether Bellatrix can reuse:
+      recognition + fault bypass
+
+   without reusing:
+      shadow state
+
+8. Route the recognized operation
+   directly to Rigel.
+
+9. Compare behavior against
+   canonical fault/Bus routing.
+
+10. Benchmark both paths.
+
+11. Retain INT_shadow only if it provides
+    an additional demonstrated benefit.
+~~~
+
+This avoids making the current PiStorm implementation structure an architectural requirement for Bellatrix.
+
+---
+
+# 41. Guiding Principle
 
 The optimization strategy can be summarized as:
 
-> **Keep the generic path complete, then make common operations avoid it where doing so is measurably useful and semantically safe.**
+> **Keep the generic path complete, then make common operations reach Rigel more directly where doing so is measurably useful and semantically safe.**
 
-Or:
+For memory:
 
 ~~~text
-cold / unusual operation
+M68K
+ │
+ ▼
+direct mapping
+~~~
+
+For optimized MMIO:
+
+~~~text
+M68K
+ │
+ ▼
+Emu68 recognition
+ │
+ ▼
+direct Rigel route
+~~~
+
+For generic MMIO:
+
+~~~text
+M68K
+ │
+ ▼
+MMU fault
+ │
+ ▼
+Bellatrix Bus
+ │
+ ▼
+Rigel
+~~~
+
+For DMA:
+
+~~~text
+Rigel
+ │
+ ▼
+guest memory
+~~~
+
+For timing:
+
+~~~text
+Emu68 progress
+ │
+ ▼
+Rigel advance/deadline
+~~~
+
+For interrupts:
+
+~~~text
+CPU INTENA/INTREQ writes
           │
           ▼
-generic complete path
-
-
-hot / predictable operation
+         Rigel
           │
           ▼
-validated optimized path
+      resolved IPL
+          │
+          ▼
+     Emu68 INT.IPL
 ~~~
 
 The target is not:
@@ -1078,12 +1702,33 @@ force everything through
 the generic path
 ~~~
 
+nor:
+
+~~~text
+preserve every PiStorm-specific
+optimization data structure
+~~~
+
 The target is:
 
 ~~~text
 complete correctness
         +
+single Rigel hardware authority
+        +
 measured specialization
+        +
+fault avoidance where useful
+        +
+minimal duplicated state
         +
 minimal unnecessary overhead
 ~~~
+
+The specific lesson from `INT_shadow` is therefore:
+
+> **Investigate and preserve the useful fault-avoidance mechanism, not necessarily the shadow that happens to accompany it in the existing Emu68/PiStorm implementation.**
+
+And the broader optimization direction is:
+
+> **Emu68 should accelerate the path to Rigel rather than duplicate Rigel hardware state.**
