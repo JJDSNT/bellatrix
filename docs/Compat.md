@@ -38,9 +38,9 @@ AROS m68k kernel
 
 In all three cases, **AROS remains the resident operating-system foundation**.
 
-Bellatrix does not boot a Commodore/Amiga Kickstart ROM in order to run an AmigaOS installation.
+Bellatrix does not require a proprietary Kickstart ROM in order to run an AmigaOS installation.
 
-Instead, AROS assumes the role normally provided by the resident Kickstart components.
+Instead, the AROS m68k resident system assumes the role normally provided by the Kickstart-resident operating-system components.
 
 ---
 
@@ -48,7 +48,7 @@ Instead, AROS assumes the role normally provided by the resident Kickstart compo
 
 The compatibility objective is:
 
-> **One kernel, multiple compatible 68k userlands.**
+> **One resident kernel, multiple compatible 68k userlands.**
 
 Bellatrix shall not implement separate machine targets for AROS and AmigaOS.
 
@@ -67,7 +67,7 @@ Emu68
 AROS m68k kernel
 ~~~
 
-The selected system volume then determines which userland is initialized:
+The selected system volume and bootstrap environment then determine which userland is initialized:
 
 ~~~text
                          AROS m68k kernel
@@ -82,7 +82,7 @@ The selected system volume then determines which userland is initialized:
         AROS userland      BCPL path       DOS/CLI path
 ~~~
 
-This distinction belongs primarily to the **AROS DOS/bootstrap compatibility layer**, not to the Bellatrix machine architecture.
+This distinction belongs primarily to the **AROS DOS/bootstrap compatibility layer**, not to separate Bellatrix machine implementations.
 
 ---
 
@@ -90,7 +90,7 @@ This distinction belongs primarily to the **AROS DOS/bootstrap compatibility lay
 
 When running an AmigaOS installation, Bellatrix shall not replace AROS with another kernel.
 
-Resident services continue to be provided by AROS, including the fundamental equivalents of the components historically supplied by Kickstart.
+Resident operating-system services continue to be provided by AROS, including equivalents of components historically supplied by Kickstart.
 
 Conceptually:
 
@@ -120,7 +120,7 @@ AROS m68k
     ├── dos.library
     ├── graphics.library
     ├── devices/resources
-    └── Bellatrix platform support
+    └── resident platform support
              │
              ▼
        selected system disk
@@ -130,7 +130,7 @@ AROS m68k
      AROS       AmigaOS
 ~~~
 
-Therefore, an AmigaOS installation is treated as an **Amiga-compatible userland running on the AROS resident system**, rather than as a second kernel.
+An AmigaOS installation is therefore treated as an **Amiga-compatible userland running on the AROS resident system**, rather than as a second kernel.
 
 ---
 
@@ -156,7 +156,7 @@ AROS Startup-Sequence
 AROS userland
 ~~~
 
-This path remains the reference implementation and must not regress as AmigaOS compatibility is added.
+This path remains the reference implementation and must not regress as AmigaOS compatibility is extended.
 
 ---
 
@@ -182,7 +182,7 @@ The AROS m68k DOS implementation already contains portions of this compatibility
 
 The objective is therefore **not to create a second DOS implementation**.
 
-The objective is to identify, complete and validate the existing AROS BCPL compatibility path sufficiently for a legacy AmigaOS/Workbench installation to bootstrap correctly.
+The objective is to identify, complete and validate the existing AROS BCPL compatibility path sufficiently for legacy AmigaOS/Workbench installations to bootstrap correctly.
 
 Conceptually:
 
@@ -210,11 +210,11 @@ Workbench / AmigaOS userland
 
 ---
 
-# 5. Later AmigaOS / Workbench
+## 4.3 Later AmigaOS / Workbench
 
 Later AmigaOS versions use the evolved DOS/CLI environment rather than depending entirely on the original BCPL implementation.
 
-Bellatrix shall support this environment through the normal AROS m68k compatibility interfaces wherever possible.
+Bellatrix shall support this environment through the existing AROS m68k compatibility interfaces wherever possible.
 
 Conceptually:
 
@@ -241,7 +241,7 @@ Compatibility should be implemented by improving the existing AROS interfaces ra
 
 ---
 
-# 6. Common Filesystem Bootstrap
+# 5. Common Filesystem Bootstrap
 
 All environments should converge on the same general system-volume model.
 
@@ -288,9 +288,9 @@ The system-volume mechanism itself should remain generic.
 
 ---
 
-# 7. Compatibility Boundary
+# 6. Compatibility Boundary
 
-The primary compatibility boundary is:
+The primary operating-system compatibility boundary is:
 
 ~~~text
              AROS kernel
@@ -328,7 +328,7 @@ They should **not** introduce parallel Bellatrix implementations of:
 
 ---
 
-# 8. Existing AROS Foundation
+# 7. Existing AROS Foundation
 
 The current AROS implementation already provides significant portions of the required infrastructure, including mechanisms for:
 
@@ -366,7 +366,7 @@ Compatibility work should be evidence-driven and based on actual boot failures.
 
 ---
 
-# 9. No Duplicate DOS Implementation
+# 8. No Duplicate DOS Implementation
 
 A fundamental constraint is:
 
@@ -402,9 +402,11 @@ Code duplication at this boundary should be avoided.
 
 ---
 
-# 10. Bellatrix Hardware Independence
+# 9. Native Raspberry Pi Hardware Access
 
-The userland compatibility mechanism must remain separate from Bellatrix hardware support.
+Bellatrix does **not** require the AmigaOS userland to be isolated from Raspberry Pi hardware.
+
+Because the execution environment is m68k and platform drivers can themselves be implemented as m68k code, Bellatrix may expose native Raspberry Pi devices through drivers following Amiga-compatible operating-system interfaces.
 
 For example:
 
@@ -412,61 +414,218 @@ For example:
 AmigaOS application
         │
         ▼
-Amiga-compatible OS API
+Amiga-compatible device API
         │
         ▼
-AROS resident component
+m68k Bellatrix driver
         │
         ▼
-Bellatrix driver
+Raspberry Pi MMIO / platform interface
         │
         ▼
-hardware
+Raspberry Pi hardware
 ~~~
 
-An AmigaOS application should not need to know that storage, graphics, networking or other platform services ultimately come from Raspberry Pi/Bellatrix hardware.
+The same principle applies to AROS applications:
 
-Likewise, the DOS compatibility layer should not need Bellatrix-specific knowledge unless strictly required by the boot medium.
+~~~text
+AROS application
+        │
+        ▼
+AROS / Amiga-compatible API
+        │
+        ▼
+m68k Bellatrix driver
+        │
+        ▼
+Raspberry Pi hardware
+~~~
+
+Therefore, the relevant distinction is not whether the userland is AROS or AmigaOS.
+
+The relevant distinction is whether a driver depends exclusively on AROS-specific interfaces or exposes an ABI usable by Amiga-compatible software.
 
 ---
 
-# 11. Relationship with Rigel
+# 10. Shared m68k Platform Drivers
 
-Rigel solves a different compatibility problem.
+Where practical, Bellatrix should prefer m68k platform drivers that can operate in both environments.
 
-AROS provides the **operating-system ABI compatibility environment**.
-
-Rigel provides the **classic Amiga hardware compatibility environment** where required.
-
-Therefore:
+The ideal path is:
 
 ~~~text
-                  Amiga software
+                    m68k driver
+                         │
+              Amiga-compatible ABI
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+          AROS userland        AmigaOS userland
+~~~
+
+Such drivers may directly manage Raspberry Pi hardware.
+
+Examples may include:
+
+~~~text
+storage
+timers
+interrupt controllers
+network interfaces
+input devices
+graphics
+mailbox/property interfaces
+other SoC peripherals
+~~~
+
+A driver that requires AROS-specific facilities remains valid, but is then considered an AROS-only platform driver rather than a generally Amiga-compatible Bellatrix driver.
+
+This distinction should be explicit:
+
+~~~text
+                 Bellatrix m68k drivers
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+     Amiga-compatible            AROS-specific
+             │                       │
+       AROS + AmigaOS               AROS
+~~~
+
+---
+
+# 11. Hardware Model
+
+Bellatrix therefore exposes two fundamentally different classes of hardware to 68k software.
+
+## 11.1 Native Bellatrix / Raspberry Pi Hardware
+
+Native platform hardware may be accessed through m68k drivers.
+
+~~~text
+68k software
+     │
+     ▼
+OS device/resource/HIDD API
+     │
+     ▼
+m68k platform driver
+     │
+     ▼
+Raspberry Pi hardware
+~~~
+
+This path does not require Rigel.
+
+---
+
+## 11.2 Classic Amiga Hardware
+
+Software that requires classic Amiga chipset semantics is handled through the Bellatrix machine bus and Rigel.
+
+~~~text
+68k software
+     │
+     ▼
+classic hardware access
+     │
+     ▼
+Bellatrix bus
+     │
+     ▼
+Rigel
+     │
+     ▼
+Amiga chipset model
+~~~
+
+These two mechanisms coexist.
+
+They should not be conflated.
+
+---
+
+# 12. Relationship with Rigel
+
+Rigel solves a different compatibility problem from the AROS operating-system compatibility layer.
+
+AROS provides the **operating-system ABI and resident-system compatibility environment**.
+
+Bellatrix m68k drivers provide access to **native platform hardware**.
+
+Rigel provides the **classic Amiga hardware compatibility environment**.
+
+The resulting architecture is:
+
+~~~text
+                       68k software
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+         OS-level access           direct/classic
+              │                    hardware access
+              ▼                           │
+     Amiga-compatible API                 ▼
+              │                     Bellatrix bus
+              ▼                           │
+       m68k device driver                 ▼
+              │                         Rigel
+              ▼                           │
+   Raspberry Pi hardware          Amiga chipset model
+~~~
+
+This separation is fundamental.
+
+Rigel must not become an abstraction layer for native Raspberry Pi hardware.
+
+Likewise, native Bellatrix drivers must not emulate classic Amiga hardware when a real operating-system device interface is sufficient.
+
+---
+
+# 13. AmigaOS and Native Bellatrix Devices
+
+An AmigaOS userland running over the AROS resident system may use native Bellatrix devices when the corresponding m68k driver exposes a compatible interface.
+
+For example:
+
+~~~text
+AmigaOS program
+      │
+      ▼
+OpenDevice()
+      │
+      ▼
+Bellatrix m68k device
+      │
+      ▼
+native Raspberry Pi hardware
+~~~
+
+This means that Bellatrix is not merely reproducing an old Amiga machine.
+
+It can expose hardware capabilities that did not exist in classic Amiga systems while retaining the Amiga programming model.
+
+Conceptually:
+
+~~~text
+             Bellatrix 68k environment
                        │
           ┌────────────┴────────────┐
           │                         │
-      OS-friendly              hardware-aware
-      software                   software
+   native Pi devices         classic Amiga devices
           │                         │
-          ▼                         ▼
-     AROS APIs               chipset accesses
+   m68k drivers                    Rigel
           │                         │
-          ▼                         ▼
- Bellatrix drivers          Bellatrix bus
-                                    │
-                                    ▼
-                                  Rigel
+          └────────────┬────────────┘
+                       │
+                 68k software
 ~~~
 
-The ability to boot an AmigaOS installation must not imply that Rigel is required for every operation.
-
-Software using normal operating-system APIs should remain capable of operating through AROS and Bellatrix native services.
-
-Rigel is required only where classic Amiga hardware semantics are actually needed.
+This is an intentional property of the platform.
 
 ---
 
-# 12. Boot Selection
+# 14. Boot Selection
 
 The eventual Bellatrix boot policy should allow the system volume or boot configuration to select the desired environment.
 
@@ -486,17 +645,17 @@ select boot volume
       ├── legacy AmigaOS installation
       │
       └── later AmigaOS installation
-```
+~~~
 
 This selection must not require different Emu68 targets or different Bellatrix machine implementations.
 
 ---
 
-# 13. Compatibility Milestones
+# 15. Compatibility Milestones
 
 Development should proceed incrementally.
 
-### Milestone 1 — Native AROS
+## Milestone 1 — Native AROS
 
 ~~~text
 AROS kernel
@@ -508,15 +667,23 @@ AROS userland
 
 This is the baseline and regression target.
 
-### Milestone 2 — Amiga executable compatibility
+---
+
+## Milestone 2 — Amiga Executable Compatibility
 
 Validate loading and execution of Amiga HUNK binaries from an Amiga filesystem under the normal AROS environment.
 
-### Milestone 3 — Later AmigaOS bootstrap
+---
+
+## Milestone 3 — Later AmigaOS Bootstrap
 
 Use an AmigaOS system volume as `SYS:` and identify the first incompatibility encountered while executing its normal boot environment.
 
-### Milestone 4 — Legacy BCPL bootstrap
+The objective is to fix compatibility at the existing AROS ABI/bootstrap boundary rather than introduce a parallel implementation.
+
+---
+
+## Milestone 4 — Legacy BCPL Bootstrap
 
 Validate the historical process/CLI environment, including:
 
@@ -529,92 +696,135 @@ CliInit
 Shell-Seg
 ~~~
 
-and complete only the missing compatibility semantics.
+Complete only the compatibility semantics demonstrated to be missing.
 
-### Milestone 5 — Workbench
+---
+
+## Milestone 5 — Workbench
 
 Reach a functional Workbench environment from both supported AmigaOS bootstrap families.
 
-### Milestone 6 — Application compatibility
+The resident operating-system foundation remains AROS in both cases.
+
+---
+
+## Milestone 6 — Shared Native Drivers
+
+Validate that selected Bellatrix m68k drivers can be used from both AROS and AmigaOS-compatible userlands.
+
+The initial objective should be to prove the model with a small number of devices rather than make every Bellatrix driver immediately cross-compatible.
+
+---
+
+## Milestone 7 — Mixed Hardware Compatibility
 
 Validate representative software in three categories:
 
 ~~~text
 OS-friendly applications
         │
-        ├── normal AmigaOS APIs
+        ▼
+AROS / Amiga-compatible APIs
         │
         ▼
-       AROS
+native Bellatrix m68k drivers
+
 
 mixed applications
         │
-        ├── OS APIs
-        └── limited hardware access
-                 │
-                 ▼
-              AROS + Rigel
+        ├── OS APIs ──────────► native drivers
+        │
+        └── chipset access ───► Rigel
+
 
 hardware-oriented applications
         │
         ▼
-       Rigel
+Bellatrix bus
+        │
+        ▼
+Rigel
 ~~~
 
 ---
 
-# 14. Non-Goals
+# 16. Non-Goals
 
 This objective does **not** require:
 
 * booting a proprietary Kickstart ROM;
 * replacing the AROS kernel with AmigaOS;
-* implementing separate Bellatrix machine targets for each OS;
+* implementing separate Bellatrix machine targets for each userland;
 * cloning AmigaDOS inside Bellatrix;
 * duplicating AROS DOS;
 * implementing Zorro merely to boot AmigaOS;
-* making AmigaOS aware of Raspberry Pi hardware;
-* replacing native Bellatrix drivers with classic Amiga hardware emulation.
+* routing native Raspberry Pi hardware through Rigel;
+* hiding Raspberry Pi hardware from AmigaOS-compatible software;
+* requiring all Bellatrix drivers to be AROS-specific;
+* requiring every native Bellatrix driver to be immediately compatible with every AmigaOS environment.
 
 ---
 
-# 15. Architectural Invariant
+# 17. Architectural Invariants
 
-The central invariant is:
+The central operating-system invariant is:
 
 > **AROS remains the resident operating-system foundation regardless of which compatible 68k userland is booted.**
 
-Therefore:
+The central hardware invariant is:
+
+> **Native Raspberry Pi hardware and classic Amiga hardware are separate hardware domains. Native hardware is exposed through Bellatrix m68k drivers; classic hardware semantics are provided through Rigel.**
+
+Together:
 
 ~~~text
-                  Bellatrix
-                      │
-                    Emu68
-                      │
-                AROS m68k
-                      │
-        ┌─────────────┼─────────────┐
-        │             │             │
-       AROS       AmigaOS        AmigaOS
-     userland      legacy          later
-        │             │             │
-        └─────────────┼─────────────┘
-                      │
-            Bellatrix platform
-                      │
-             ┌────────┴────────┐
-             │                 │
-      native hardware        Rigel
-                              │
-                       classic chipset
+                         Bellatrix
+                             │
+                           Emu68
+                             │
+                       AROS m68k
+                             │
+          ┌──────────────────┼──────────────────┐
+          │                  │                  │
+       AROS             AmigaOS            AmigaOS
+     userland            legacy              later
+          │                  │                  │
+          └──────────────────┼──────────────────┘
+                             │
+                   Amiga-compatible APIs
+                             │
+             ┌───────────────┴───────────────┐
+             │                               │
+       m68k native drivers            classic HW access
+             │                               │
+             ▼                               ▼
+    Raspberry Pi hardware              Bellatrix bus
+                                             │
+                                             ▼
+                                           Rigel
+                                             │
+                                             ▼
+                                    Amiga chipset model
 ~~~
 
 ---
 
-# 16. Project Objective
+# 18. Project Objective
 
 Bellatrix shall ultimately provide a single coherent m68k platform in which:
 
-> **AROS m68k acts as the resident system and compatibility foundation, while native AROS software and both historical families of AmigaOS userland can execute from their respective system installations without requiring a proprietary Kickstart ROM.**
+> **AROS m68k acts as the resident operating-system and compatibility foundation; native AROS software and both historical families of AmigaOS userland can execute from their respective system installations without requiring a proprietary Kickstart ROM; and m68k drivers may expose native Raspberry Pi hardware directly through Amiga-compatible operating-system interfaces, while Rigel independently provides classic Amiga hardware semantics where required.**
 
-This is an explicit Bellatrix compatibility objective and should guide future work on the AROS m68k DOS/bootstrap compatibility layer.
+This is an explicit Bellatrix architectural objective and should guide future work on:
+
+~~~text
+AROS m68k DOS/bootstrap compatibility
+AmigaOS ABI compatibility
+Bellatrix m68k platform drivers
+native Raspberry Pi hardware access
+Rigel/classic chipset integration
+~~~
+
+The intended result is not merely an emulated classic Amiga.
+
+The intended result is a **native m68k Bellatrix platform with AROS as its resident system, capable of running AROS and AmigaOS-compatible userlands while combining native Raspberry Pi devices with optional classic Amiga hardware compatibility.**
