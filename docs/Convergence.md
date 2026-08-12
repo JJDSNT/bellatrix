@@ -10,7 +10,7 @@
 
 # 1. Purpose
 
-This document defines the recommended refinement of the existing Rigel public API so that the boundary between Rigel and its hosts is explicit, minimal, host-neutral, optimization-friendly, and suitable for long-term use by Bellatrix and the standalone harness.
+This document defines the recommended refinement of the existing Rigel public API so that the boundary between Rigel and its hosts is explicit, minimal, host-neutral, and suitable for long-term use by Bellatrix and the standalone harness.
 
 The authority chain remains:
 
@@ -36,578 +36,43 @@ The objective is therefore **not to redesign Rigel**.
 
 The objective is:
 
-> Preserve the existing Rigel execution and hardware boundary. Refine only those public interfaces where the current API exposes implementation details, mixes host and hardware concerns, requires the host to understand Rigel-owned semantics, or permits CPU-visible Rigel hardware to become inaccessible to M68K software.
+> Preserve the existing Rigel execution and hardware boundary while refining the public host interface so that every CPU-visible classic hardware access implemented by Rigel remains correctly reachable from M68K software.
 
-A critical requirement is:
+The fundamental compatibility requirement is:
 
-> **Every M68K CPU-visible classic hardware access supported by Rigel MUST remain functionally reachable through Bellatrix.**
+> **No M68K software may fail merely because it accesses a CPU-visible classic hardware address implemented by Rigel that Bellatrix failed to expose or route correctly.**
 
-This requirement defines **semantic visibility**, not a mandatory implementation path.
+This requirement concerns **semantic reachability**, not a mandatory physical dispatch path.
 
-It does **not** require every access to pass through:
-
-* an MMU fault;
-* the generic Bellatrix Bus dispatcher;
-* a generic Rigel MMIO router;
-* the same lookup mechanism;
-* the same code path.
-
-Bellatrix and Rigel remain free to use:
+Bellatrix and Emu68 remain free to implement:
 
 * caches;
-* fast paths;
 * shadows;
-* direct dispatch;
-* pre-resolved providers;
-* lookup tables;
-* region coalescing;
-* specialized register paths;
-* direct mappings where semantically valid;
-* other transparent optimizations.
+* fast paths;
+* direct paths;
+* specialized handlers;
+* MMU interception;
+* fault-based dispatch;
+* generic bus dispatch;
 
-The invariant is:
+provided that these mechanisms preserve the observable Rigel hardware semantics.
 
-> **Complete address visibility is mandatory. The access path is not.**
+Therefore:
 
-Conceptually:
+> **Complete hardware visibility is mandatory. A particular implementation path is not.**
+
+---
+
+# 2. Core Compatibility Invariant
+
+Let:
 
 ~~~text
-M68K access to X
-        │
-        ▼
-Does Rigel support X?
-        │
-       yes
-        │
-        ▼
-X MUST remain functionally reachable
-        │
-        ▼
-correct Rigel-visible semantics
-~~~
-
-The following must never occur:
-
-~~~text
-M68K accesses X
-        │
-        ▼
-Rigel supports X
-        │
-        ▼
-Bellatrix integration omitted X
-        │
-        ▼
-unmapped / incorrect / invisible
-~~~
-
-The primary areas requiring attention are:
-
-* public API organization;
-* separation of hardware configuration from host services;
-* opaque host context semantics;
-* explicit guest-physical memory semantics;
-* canonical M68K-visible MMIO semantics;
-* authoritative Rigel CPU-visible address coverage;
-* complete functional reachability of every CPU-visible Rigel address;
-* optimization-safe host integration;
-* MMU and Bus policy without imposing mandatory slow paths;
-* MMIO width, alignment, ordering, side-effect, and result semantics;
-* removal of direct host access to Rigel internals;
-* explicit lifecycle and reset semantics;
-* explicit execution/concurrency contract without constraining host topology;
-* preservation of Rigel's authoritative chipset timeline;
-* preservation of Rigel IPL ownership;
-* preservation of DMA and Chip RAM ownership rules;
-* formalization of video output as host-consumable classic chipset output;
-* separation of integration APIs from diagnostic and advanced APIs;
-* preservation of existing observable behavior during API refinement.
-
----
-
-# 2. Classification Model
-
-Every proposed API change should first be classified into one of four categories:
-
-~~~text
-PRESERVE
-
-    The current implementation and host boundary are already
-    architecturally correct.
-
-FORMALIZE
-
-    The current behavior is already correct, but its public
-    contract is implicit or insufficiently documented.
-
-CHANGE
-
-    The current public API requires host/chipset responsibility
-    leakage, mixes unrelated concerns, exposes an unsuitable
-    host-facing abstraction, or allows CPU-visible Rigel
-    hardware to become functionally unreachable.
-
-INTERNALIZE
-
-    The functionality may remain useful internally, for tests,
-    inspection, or tooling, but should not remain part of the
-    normal host integration contract.
-~~~
-
-The existence of a topic in this document does not imply that the current Rigel implementation is deficient in that area.
-
----
-
-# 3. Guiding Principles
-
-The convergence work should follow these rules:
-
-> Preserve working Rigel semantics.
-
-> Refine the API boundary rather than rewriting the chipset.
-
-> Do not treat already-correct host/Rigel ownership as a migration task.
-
-> A host-side boundary violation does not automatically justify expanding the Rigel API.
-
-> The Rigel API defines operation semantics and ordering requirements. The host decides where and how those operations execute.
-
-> Rigel must support host freedom without becoming aware of host execution topology.
-
-> Bellatrix must not interpret classic hardware semantics that belong to Rigel.
-
-> Rigel must not acquire Bellatrix, Emu68, Raspberry Pi, AROS, VC4, scheduler, or core-specific knowledge.
-
-> **Every CPU-visible classic hardware address supported by Rigel must remain semantically reachable to M68K software.**
-
-> **Bellatrix must never accidentally expose only a subset of Rigel's CPU-visible hardware.**
-
-> **Visibility is a semantic invariant, not an implementation-shape invariant.**
-
-> No CPU-visible Rigel address may become inaccessible merely because the optimized execution path bypasses the generic dispatcher.
-
-> Caches, fast paths, shadows, direct paths, and other optimizations are valid provided they preserve observable classic hardware behavior.
-
-> Rigel should remain authoritative for what CPU-visible classic hardware it implements.
-
----
-
-# 4. Existing Rigel Architecture
-
-The current Rigel implementation already contains the major classic hardware domains expected from the compatibility component.
-
-Conceptually:
-
-~~~text
-Rigel
-│
-├── public API
-│
-├── chipset composition
-│   ├── Agnus
-│   ├── Denise
-│   ├── Paula
-│   ├── CIA
-│   └── related devices
-│
-├── hardware domains
-│   ├── beam
-│   ├── DMA
-│   ├── Copper
-│   ├── Blitter
-│   ├── interrupts
-│   ├── audio
-│   ├── disk
-│   ├── serial
-│   └── input
-│
-├── deterministic timing
-├── bus observation
-├── classic video generation
-└── harness / tests
-~~~
-
-This organization should remain.
-
-Hardware domains represent ownership of chipset state and behavior.
-
-They must not be confused with host execution threads, ARM cores, queues, schedulers, MMU implementation details, dispatcher topology, or Bellatrix runtime policy.
-
----
-
-# 5. What Should Be Preserved
-
-## 5.1 Host-independent chipset implementation
-
-Rigel should remain independent from:
-
-* Bellatrix;
-* Raspberry Pi hardware;
-* Emu68 internals;
-* VC4;
-* BCM interrupt controllers;
-* USB;
-* Bluetooth;
-* AROS;
-* host scheduler topology;
-* host core numbering;
-* host synchronization primitives;
-* host MMU implementation details;
-* host dispatch implementation details.
-
-No Bellatrix-specific dependency should enter the Rigel core.
-
----
-
-## 5.2 Deterministic execution model
-
-Given identical defined configuration, guest memory, MMIO accesses, input, and execution progress, Rigel should produce identical defined hardware state transitions and outputs.
-
-Host wall-clock timing remains outside chipset correctness.
-
-Host optimization strategy must not change defined observable Rigel behavior.
-
----
-
-## 5.3 Temporal model
-
-Rigel owns the authoritative classic chipset timeline.
-
-~~~text
-Rigel
-  │
-  ▼
-next deadline
-  │
-  ▼
-Host executes CPU
-  │
-  ▼
-execution progress
-  │
-  ▼
-Rigel step/advance
-~~~
-
-This ownership should remain unchanged.
-
----
-
-## 5.4 Interrupt ownership
-
-Rigel owns:
-
-~~~text
-INTREQ
-INTENA
-classic interrupt sources
-classic priority resolution
-Rigel IPL
-~~~
-
-Bellatrix consumes the resulting IPL.
-
----
-
-## 5.5 DMA ownership
-
-Rigel owns:
-
-* Agnus DMA semantics;
-* Paula DMA semantics;
-* Copper and Blitter memory behavior;
-* chipset-generated address interpretation;
-* classic Chip RAM visibility rules.
-
-Bellatrix provides memory services but must not reproduce classic DMA semantics.
-
----
-
-## 5.6 Host-provided memory
-
-Rigel operates on host-provided guest memory.
-
-Rigel does not allocate Bellatrix guest physical memory.
-
----
-
-## 5.7 Host-controlled execution topology
-
-Bellatrix may execute Rigel:
-
-~~~text
-same core
-
-different ARM core
-
-worker thread
-
-queue consumer
-
-serialized remote context
-~~~
-
-without changing Rigel semantics.
-
----
-
-## 5.8 Host-controlled access optimization
-
-Bellatrix may optimize access delivery using:
-
-~~~text
-generic dispatcher
-
-cached provider lookup
-
-fast path
-
-shadow
-
-direct provider call
-
-specialized path
-
-region coalescing
-
-validated direct mapping
-~~~
-
-provided the optimization preserves the same defined observable hardware semantics.
-
-No optimization may make a valid Rigel-supported CPU access disappear.
-
----
-
-## 5.9 Standalone harness
-
-The standalone harness remains a first-class consumer of the production API.
-
-~~~text
-Bellatrix ──┐
-            ├──► public Rigel API ──► librigel
-Harness ────┘
-~~~
-
----
-
-# 6. Behavioral Preservation
-
-Before changing the public boundary, establish a behavioral baseline covering:
-
-* CPU-visible address decode;
-* MMIO accesses;
-* MMIO side effects;
-* timing;
-* deadlines;
-* IPL transitions;
-* DMA;
-* reset;
-* video;
-* audio;
-* bus behavior where relevant.
-
-The baseline should verify semantic behavior rather than requiring identical internal execution paths.
-
-For example:
-
-~~~text
-generic dispatcher path
-        │
-        ▼
-observable result X
-
-
-optimized fast path
-        │
-        ▼
-observable result X
-~~~
-
-is valid.
-
-API refinement or optimization must not silently change classic hardware behavior.
-
----
-
-# 7. Public API Boundary
-
-The public API should be conceptually divided into:
-
-~~~text
-Rigel API
-   │
-   ├── Host Integration API
-   │      lifecycle
-   │      CPU-visible coverage
-   │      MMIO
-   │      progress
-   │      deadlines
-   │      IPL
-   │      guest memory
-   │      video
-   │      audio
-   │      input
-   │
-   └── Advanced / Inspection API
-          bus inspection
-          beam inspection
-          snapshots
-          diagnostics
-          testing controls
-~~~
-
-Bellatrix should normally depend only on the Host Integration API.
-
----
-
-# 8. Opaque Rigel Instance
-
-The primary Rigel object should remain opaque:
-
-~~~c
-struct rigel;
-~~~
-
-Bellatrix must not directly access internal chipset structures.
-
----
-
-# 9. Configuration and Host Services
-
-Hardware configuration and host services should remain distinct.
-
-Conceptually:
-
-~~~c
-struct rigel_config {
-    enum rigel_chipset chipset;
-    enum rigel_video_standard video_standard;
-    uint32_t chip_ram_size;
-};
-
-struct rigel_host_ops {
-    uint8_t  (*mem_read8)(void *ctx, uint32_t addr);
-    uint16_t (*mem_read16)(void *ctx, uint32_t addr);
-    uint32_t (*mem_read32)(void *ctx, uint32_t addr);
-
-    void (*mem_write8)(void *ctx, uint32_t addr, uint8_t value);
-    void (*mem_write16)(void *ctx, uint32_t addr, uint16_t value);
-    void (*mem_write32)(void *ctx, uint32_t addr, uint32_t value);
-
-    void (*log)(void *ctx, int level, const char *message);
-};
-~~~
-
-Exact signatures are not normative.
-
----
-
-# 10. Host Context
-
-The host context is opaque.
-
-Rigel receives it from the host and returns it unchanged to host callbacks.
-
-Rigel never interprets its contents.
-
----
-
-# 11. Chip RAM Ownership
-
-Chip RAM configuration describes chipset-visible memory topology.
-
-It does not imply allocation ownership.
-
-~~~text
-Bellatrix
-    │
-    ├── allocates
-    ├── maps
-    └── backs guest memory
-            │
-            ▼
-          Rigel
-            │
-            └── applies classic
-                Chip RAM semantics
-~~~
-
-This is separate from CPU-visible Rigel MMIO coverage.
-
----
-
-# 12. Memory Address Semantics
-
-Addresses passed to host memory callbacks are guest physical addresses.
-
-~~~text
-chipset-generated address
-        │
-        ▼
-Rigel classic address rules
-        │
-        ▼
-guest physical address
-        │
-        ▼
-host memory callback
-~~~
-
-These addresses must not be confused with CPU-visible MMIO addresses.
-
----
-
-# 13. Host Memory as Coherency Boundary
-
-Rigel DMA writes pass through the host memory interface.
-
-The host may perform required coherency actions, including Emu68 JIT invalidation where necessary.
-
-Rigel remains unaware of JIT internals.
-
----
-
-# 14. CPU-Visible Rigel Hardware
-
-Rigel must define the CPU-visible classic hardware interface that it supports.
-
-Conceptually:
-
-~~~text
-Rigel-supported CPU-visible interface
-                    │
-                    ▼
-          host integration knowledge
-                    │
-                    ▼
-       complete functional reachability
-~~~
-
-The essential invariant is:
-
-> If Rigel supports the defined semantics of a CPU-visible M68K hardware access, Bellatrix must provide a valid execution path for that access.
-
-This does not require a one-address-per-entry representation.
-
-It does not require every address to fault.
-
-It does not require every access to pass through a generic dispatcher.
-
-It requires only that no supported access become invisible.
-
----
-
-# 15. Semantic Reachability
-
-Define:
-
-~~~text
-R = set of CPU-visible classic hardware accesses
-    whose semantics are supported by Rigel
-
-H = set of CPU-visible accesses that Bellatrix
-    can correctly deliver to Rigel-equivalent semantics
+R = CPU-visible classic hardware accesses
+    implemented by Rigel
+
+H = CPU-visible accesses that Bellatrix/Emu68
+    can execute with correct Rigel semantics
 ~~~
 
 The required invariant is:
@@ -616,161 +81,570 @@ The required invariant is:
 R ⊆ H
 ~~~
 
-This is the fundamental address-visibility requirement.
-
-It deliberately does not define:
+For every access supported by Rigel:
 
 ~~~text
-R = MMU faults
-
-R = Bellatrix Bus calls
-
-R = generic dispatcher calls
+access ∈ R
+     │
+     ▼
+Bellatrix / Emu68
+     │
+     ├── shadow
+     ├── cache
+     ├── fast path
+     ├── specialized path
+     ├── MMU/fault path
+     └── generic Bus path
+              │
+              ▼
+     correct Rigel semantics
 ~~~
 
-because those are implementation mechanisms.
+No address or transaction supported by Rigel may become inaccessible merely because it is absent from one particular optimization or dispatch mechanism.
 
 ---
 
-# 16. Visibility Versus Access Path
+# 3. Semantic Reachability, Not Mandatory Routing
 
-The following distinction is normative.
+The architecture MUST NOT require:
 
 ~~~text
-VISIBILITY
-    mandatory
+every Rigel access
+        │
+        ▼
+MMU fault
+        │
+        ▼
+Bellatrix Bus
+        │
+        ▼
+generic dispatcher
+        │
+        ▼
+Rigel
+~~~
 
-SEMANTIC REACHABILITY
-    mandatory
+That path is valid, but it is not mandatory.
 
-OBSERVABLE HARDWARE BEHAVIOR
-    mandatory
+The actual implementation may instead be:
 
+~~~text
+M68K access
+     │
+     ▼
+Bellatrix / Emu68
+     │
+     ├── fast path ───────────────┐
+     │                            │
+     ├── cache ──────────────────┤
+     │                            │
+     ├── shadow ─────────────────┤
+     │                            │
+     ├── specialized handler ────┤
+     │                            │
+     └── generic fault / Bus ────┤
+                                  │
+                                  ▼
+                         Rigel-equivalent
+                       observable semantics
+~~~
 
-GENERIC DISPATCH
-    implementation choice
+The optimization is valid when:
 
-MMU FAULT
-    implementation choice
+~~~text
+observable(optimized path)
+        =
+observable(reference Rigel semantics)
+~~~
 
-CACHE
-    implementation choice
+---
 
-FAST PATH
-    implementation choice
+# 4. Rigel Defines Hardware Semantics
 
-SHADOW
-    implementation choice
+Rigel remains authoritative for the classic hardware semantics it implements.
 
-DIRECT PATH
-    implementation choice
+Bellatrix must not independently redefine:
+
+* custom register semantics;
+* CIA semantics;
+* Paula semantics;
+* Agnus semantics;
+* Denise semantics;
+* `INTENA`;
+* `INTREQ`;
+* classic interrupt priority;
+* DMA behavior;
+* chipset timing.
+
+Conceptually:
+
+~~~text
+Rigel
+   │
+   ├── defines classic hardware semantics
+   │
+   └── defines CPU-visible compatibility behavior
+            │
+            ▼
+Bellatrix / Emu68
+            │
+            └── may optimize how those semantics
+                are reached
+~~~
+
+---
+
+# 5. Existing Emu68 Optimization Mechanisms
+
+Emu68 already contains specialized handling and optimization mechanisms associated with classic Amiga hardware operation.
+
+These mechanisms are not inherently incompatible with Rigel.
+
+They should be treated as:
+
+~~~text
+Emu68 implementation mechanisms
+~~~
+
+rather than:
+
+~~~text
+authoritative definitions
+of classic hardware semantics
+~~~
+
+Examples include conceptually:
+
+~~~text
+fast paths
+
+specialized MMIO handling
+
+cached state
+
+shadow state
+
+INT_shadow
+
+JIT optimizations
+
+fault bypasses
+~~~
+
+Bellatrix integration should preserve useful Emu68 optimizations wherever they remain semantically correct.
+
+The objective is **not** to force all classic hardware traffic through a slow generic dispatcher.
+
+---
+
+# 6. Emu68 `INT_shadow`
+
+Emu68 contains shadow handling associated with classic interrupt registers, including the existing handling around:
+
+~~~text
+INTENA
+
+INTREQ
+~~~
+
+This mechanism is relevant to Bellatrix/Rigel integration because Rigel itself owns the authoritative classic interrupt state.
+
+The required authority relationship is:
+
+~~~text
+                  Rigel
+                    │
+          authoritative interrupt
+               semantics/state
+                    │
+          ┌─────────┴─────────┐
+          │                   │
+          ▼                   ▼
+       INTENA               INTREQ
+          │                   │
+          └─────────┬─────────┘
+                    │
+                    ▼
+               Rigel IPL
+~~~
+
+Any Emu68 shadow associated with these registers must therefore be treated as:
+
+~~~text
+optimization / mirror / acceleration state
+~~~
+
+and not as:
+
+~~~text
+a second authoritative interrupt controller
+~~~
+
+---
+
+# 7. Shadow Authority Rule
+
+The fundamental rule for shadows is:
+
+> **A shadow may accelerate access to Rigel-owned state, but it must not become an independent source of classic hardware truth.**
+
+Conceptually:
+
+~~~text
+                 authoritative
+                    Rigel
+                      │
+                      ▼
+                 INTENA/INTREQ
+                      │
+          ┌───────────┴───────────┐
+          │                       │
+          ▼                       ▼
+   normal Rigel path        synchronized
+                             Emu68 shadow
+                                  │
+                                  ▼
+                              fast path
+~~~
+
+The invalid architecture is:
+
+~~~text
+Rigel INTENA/INTREQ          Emu68 INT_shadow
+        │                           │
+        ▼                           ▼
+   state machine A             state machine B
+        │                           │
+        └──────── disagreement ─────┘
+~~~
+
+There must not be two independently evolving interpretations of classic interrupt state.
+
+---
+
+# 8. `INT_shadow` Must Not Define Coverage
+
+The existence or absence of an address in `INT_shadow` must never determine whether that address is CPU-visible.
+
+This is forbidden:
+
+~~~text
+address represented by INT_shadow
+        │
+        ▼
+visible
+
+address not represented by INT_shadow
+        │
+        ▼
+invisible
+~~~
+
+Instead:
+
+~~~text
+Rigel supports access?
+        │
+       / \
+     yes  no
+     │
+     ▼
+must remain reachable
+     │
+     ├── shadow path if available
+     │
+     └── fallback path otherwise
 ~~~
 
 Therefore:
 
-> **Complete address visibility is mandatory; the access path is not.**
+> **Shadow coverage may be incomplete. Hardware visibility may not be incomplete.**
 
 ---
 
-# 17. Canonical MMIO Boundary
+# 9. Shadow Miss Must Fall Back Correctly
 
-Rigel should expose a canonical host-facing M68K-visible MMIO transaction interface capable of representing the complete CPU-visible classic hardware semantics supported by Rigel.
+If an optimized Emu68 path does not recognize a Rigel-supported access, that must not make the access disappear.
 
 Conceptually:
 
 ~~~text
-M68K-visible transaction
-        │
-        ├── address
-        ├── width
-        ├── direction
-        └── value
+M68K access
+     │
+     ▼
+optimized path?
+     │
+    / \
+  yes  no
+   │    │
+   ▼    ▼
+fast   fallback
+path    path
+   │      │
+   └──┬───┘
+      │
+      ▼
+correct Rigel semantics
+~~~
+
+A shadow miss is therefore not equivalent to:
+
+~~~text
+unmapped hardware
+~~~
+
+It means only:
+
+~~~text
+this optimization did not handle
+the transaction
+~~~
+
+The generic integration path must remain capable of handling the transaction when Rigel supports it.
+
+---
+
+# 10. `INTENA` / `INTREQ` Special Case
+
+`INTENA` and `INTREQ` require particular care because they directly influence classic interrupt state.
+
+The ownership model is:
+
+~~~text
+M68K write/read
+      │
+      ▼
+Bellatrix / Emu68
+      │
+      ├── optimized/shadow path
+      │
+      └── generic path
+              │
+              ▼
+             Rigel
+              │
+        INTENA / INTREQ
+              │
+              ▼
+       priority resolution
+              │
+              ▼
+          Rigel IPL
+~~~
+
+Regardless of the path used, the resulting state must be equivalent to the state produced by the authoritative Rigel implementation.
+
+---
+
+# 11. Shadow Synchronization
+
+If `INT_shadow` remains active in Bellatrix builds, its synchronization semantics must be explicit.
+
+At minimum, the implementation must establish:
+
+~~~text
+who updates the shadow
+
+when the shadow is updated
+
+whether reads may be satisfied from it
+
+whether writes may be absorbed by it
+
+how Rigel-originated changes are reflected
+
+how reset initializes it
+
+how asynchronous interrupt-source changes
+affect its validity
+~~~
+
+The critical invariant is:
+
+~~~text
+shadow-visible state
         │
         ▼
+must never contradict
+authoritative Rigel behavior
+~~~
+
+---
+
+# 12. Prefer Derived or Invalidatable Shadows
+
+Where practical, shadow state should behave as:
+
+~~~text
+derived state
+~~~
+
+rather than:
+
+~~~text
+parallel hardware state
+~~~
+
+Conceptually:
+
+~~~text
+Rigel authoritative state
+          │
+          ▼
+     shadow refresh
+          │
+          ▼
+      Emu68 shadow
+          │
+          ▼
+       fast read
+~~~
+
+or:
+
+~~~text
+state change
+     │
+     ▼
+invalidate shadow
+     │
+     ▼
+next access refreshes
+from authoritative state
+~~~
+
+The exact implementation is not prescribed.
+
+What matters is maintaining one semantic authority.
+
+---
+
+# 13. Optimized Writes
+
+A fast or shadowed write path is permitted.
+
+For example:
+
+~~~text
+M68K write INTENA
+       │
+       ▼
+Emu68 optimized path
+       │
+       ├── update acceleration state
+       │
+       └── preserve Rigel write semantics
+                    │
+                    ▼
+               authoritative
+                  Rigel
+~~~
+
+The optimization must not merely update an Emu68-local shadow while leaving Rigel unaware of a hardware-visible state change.
+
+Unless the optimization is formally implemented as part of a coherent Rigel transaction mechanism, the authoritative Rigel state must observe the operation.
+
+---
+
+# 14. Rigel-Originated Interrupt Changes
+
+Not all interrupt-state changes originate from CPU writes.
+
+Classic devices may generate interrupt requests.
+
+Conceptually:
+
+~~~text
+Paula / CIA / Blitter / etc.
+             │
+             ▼
+           Rigel
+             │
+             ▼
+           INTREQ
+             │
+             ▼
+        resolved IPL
+~~~
+
+Therefore an Emu68 shadow cannot assume that interrupt state changes only when the CPU accesses `INTREQ` or `INTENA`.
+
+Any cached or shadowed representation must account for Rigel-originated state transitions.
+
+This is one reason why the shadow cannot be authoritative.
+
+---
+
+# 15. Rigel IPL Remains Authoritative
+
+Bellatrix must consume Rigel's resolved compatibility IPL.
+
+Conceptually:
+
+~~~text
+Rigel interrupt sources
+        │
+        ▼
+INTREQ / INTENA
+        │
+        ▼
+Rigel priority resolution
+        │
+        ▼
+rigel_get_ipl()
+        │
+        ▼
+Bellatrix IPL arbitration
+        │
+        ├── native IPL
+        └── Rigel IPL
+        │
+        ▼
+Emu68 / M68K
+~~~
+
+Bellatrix must not reconstruct Rigel IPL from `INT_shadow`.
+
+`INT_shadow` may participate in optimization, but:
+
+> **Rigel IPL is the architectural interrupt result.**
+
+---
+
+# 16. Canonical MMIO as Semantic Reference
+
+Rigel should provide a canonical M68K-visible MMIO interface.
+
+Conceptually:
+
+~~~text
+address
+width
+direction
+value
+     │
+     ▼
 canonical Rigel MMIO
-        │
-        ▼
+     │
+     ▼
 classic hardware semantics
 ~~~
 
-Example:
+This interface defines the normal semantic boundary.
 
-~~~text
-address = 0x00DFF096
-width   = 16
-write   = 0x8200
-~~~
+However:
 
-Bellatrix must not need to convert this into:
+> **Canonical MMIO is a semantic reference path, not necessarily the physical path taken by every optimized access.**
 
-~~~text
-DMACON
-custom register 0x096
-Agnus-specific operation
-~~~
-
-before entering the Rigel compatibility domain.
+An optimized path is permitted when it remains observationally equivalent.
 
 ---
 
-# 18. Canonical MMIO Is the Semantic Reference Path
+# 17. CPU-Visible Hardware Coverage
 
-Canonical MMIO defines the normal public semantic boundary.
-
-It does not imply that every optimized host access must physically execute through the generic canonical dispatcher.
+Rigel should provide an authoritative description of its CPU-visible classic hardware coverage.
 
 Conceptually:
-
-~~~text
-                    M68K access
-                        │
-                        ▼
-                host access resolution
-                        │
-       ┌────────────────┼────────────────┐
-       │                │                │
-       ▼                ▼                ▼
- generic MMIO       cached path       fast path
-       │                │                │
-       │                ▼                │
-       │             shadow              │
-       │                │                │
-       └────────────────┼────────────────┘
-                        ▼
-              Rigel-defined semantics
-~~~
-
-All paths must remain semantically equivalent where the contract requires equivalence.
-
----
-
-# 19. No Hidden CPU-Visible Hardware
-
-A CPU-visible Rigel capability must not exist only behind:
-
-~~~text
-internal subsystem API
-
-test API
-
-debug API
-
-private helper
-~~~
-
-if doing so makes that hardware inaccessible to M68K software hosted by Bellatrix.
-
-Internal helpers are valid.
-
-Internal-only CPU-visible reachability is not.
-
----
-
-# 20. Authoritative Coverage Description
-
-Rigel should provide enough host-neutral information for Bellatrix to guarantee complete CPU-visible reachability.
-
-A possible representation is:
 
 ~~~c
 struct rigel_mmio_region {
@@ -782,395 +656,262 @@ struct rigel_mmio_region {
 
 The exact representation is not normative.
 
-The region description may be:
-
-* fine-grained;
-* coarse-grained;
-* coalesced;
-* generated;
-* static;
-* optimized.
-
-Its purpose is not to prescribe the dispatch implementation.
-
-Its purpose is to prevent Bellatrix from accidentally omitting CPU-visible Rigel hardware.
-
----
-
-# 21. Coverage Description Is Not a Mandatory Slow Path
-
-The authoritative coverage description tells the host:
+This description defines:
 
 ~~~text
-which CPU-visible address space must remain valid
+what CPU-visible classic hardware Rigel supports
 ~~~
 
-It does not tell the host:
+It does not prescribe:
 
 ~~~text
-how every access must be executed
-~~~
-
-For example:
-
-~~~text
-Rigel coverage
-      │
-      ▼
-Bellatrix policy
-      │
-      ├── generic Bus route
-      ├── cached provider
-      ├── fast path
-      ├── shadow path
-      └── other validated optimization
-~~~
-
-All are valid.
-
----
-
-# 22. Region Holes and Subdecode
-
-Rigel may advertise larger regions containing internal holes.
-
-For example:
-
-~~~text
-advertised region:
-
-1 2 3 4 5 6 7 8
-      │
-      ▼
-Rigel subdecode:
-
-1 register
-2 register
-3 hole
-4 register
-5 open bus
-6 register
-7 ignored write
-8 register
-~~~
-
-Bellatrix does not need to understand those distinctions.
-
-If an access reaches Rigel's canonical path, Rigel determines the classic behavior.
-
-An optimized path may avoid generic subdecode only if it preserves equivalent observable behavior.
-
----
-
-# 23. Bellatrix Knows Ownership, Not Meaning
-
-Bellatrix may know:
-
-~~~text
-this address belongs to the Rigel compatibility domain
-~~~
-
-Bellatrix should not need to know:
-
-~~~text
-this is DMACON
-
-this is INTENA
-
-this is CIAA PRA
-
-this starts Paula DMA
-~~~
-
-The normal responsibility boundary remains:
-
-~~~text
-Bellatrix
-    │
-    │ resolves ownership / access path
-    ▼
-Rigel
-    │
-    │ defines classic hardware meaning
-    ▼
-chipset implementation
+how every access must physically travel
+through Bellatrix/Emu68
 ~~~
 
 ---
 
-# 24. MMU Policy
+# 18. Coverage and Optimization Are Separate Concepts
 
-The Emu68 MMU is one mechanism Bellatrix may use to make Rigel regions interceptable.
+These concepts must remain distinct:
+
+~~~text
+COVERAGE
+    what hardware accesses exist
+
+SEMANTICS
+    what those accesses mean
+
+ROUTING
+    where accesses are sent
+
+OPTIMIZATION
+    how efficiently they are handled
+~~~
+
+Rigel primarily owns:
+
+~~~text
+COVERAGE
+SEMANTICS
+~~~
+
+Bellatrix/Emu68 primarily own:
+
+~~~text
+ROUTING
+OPTIMIZATION
+~~~
+
+subject to preservation of Rigel semantics.
+
+---
+
+# 19. MMU Policy
+
+Bellatrix may use existing Emu68 MMU mechanisms to intercept Rigel accesses.
+
+But not every Rigel access must necessarily fault through the MMU.
 
 Conceptually:
 
 ~~~text
-Rigel coverage
-      │
-      ▼
-Bellatrix machine policy
-      │
-      ▼
-Emu68 MMU map/unmap facilities
-      │
-      ▼
-fault/interception where required
+Rigel-supported access
+        │
+        ▼
+optimized direct handling available?
+       / \
+     yes  no
+      │    │
+      ▼    ▼
+   optimized   MMU/fault
+      │           │
+      │           ▼
+      │      Bellatrix Bus
+      │           │
+      └─────┬─────┘
+            ▼
+      Rigel semantics
 ~~~
 
-Bellatrix should reuse existing Emu68 MMU mechanisms wherever sufficient.
+The MMU is therefore a mechanism for reachability, not the definition of hardware visibility.
 
-Bellatrix should not create a parallel MMU implementation.
+---
+
+# 20. Bellatrix Bus
+
+The Bellatrix Bus remains the generic host dispatch mechanism for accesses requiring host dispatch.
+
+It must provide a complete fallback path for Rigel-supported accesses that are assigned to it.
 
 However:
 
-> MMU faulting is not itself part of the Rigel semantic contract.
+> **The Bellatrix Bus does not need to observe every transaction if another validated path already preserves the same Rigel semantics.**
 
-An optimized path may avoid a fault where correctness is preserved.
+This permits:
 
----
-
-# 25. Bellatrix Bus
-
-The Bellatrix Bus provides the generic routing mechanism for accesses that require generic host dispatch.
-
-Conceptually:
-
-~~~text
-M68K access
-    │
-    ▼
-MMU/fault or other generic entry
-    │
-    ▼
-Bellatrix Bus
-    │
-    ▼
-Rigel
-~~~
-
-But the Bus is not required to be the physical execution path for every optimized Rigel access.
-
-The requirement is:
-
-> Any access that falls back to the generic Bellatrix Bus path must remain routable to the correct Rigel provider.
+* shadows;
+* fast paths;
+* cached provider lookup;
+* specialized handlers;
+* future optimizations.
 
 ---
 
-# 26. Generic Fallback Must Be Complete
-
-Optimizations may exist above the generic dispatcher.
-
-However, the generic fallback should remain capable of resolving the complete Rigel coverage for which it is responsible.
-
-Conceptually:
-
-~~~text
-M68K access
-     │
-     ▼
-optimized path available?
-     │
-    / \
-  yes  no
-  │     │
-  ▼     ▼
-fast   generic
-path   dispatcher
-  │     │
-  └──┬──┘
-     ▼
-correct semantics
-~~~
-
-This ensures that an optimization is not required merely to make an otherwise invisible address work.
-
----
-
-# 27. Fast Paths
+# 21. Fast Paths
 
 Fast paths are explicitly permitted.
 
-A fast path may:
-
-* avoid repeated provider lookup;
-* avoid generic Bus traversal;
-* use pre-decoded routing metadata;
-* call a specialized Rigel entry point;
-* use validated direct access;
-* exploit stable region ownership.
-
-A fast path is valid if:
+A fast path may bypass:
 
 ~~~text
-observable(fast_path(X))
-        =
-observable(reference_semantics(X))
+generic provider lookup
+
+generic Bus traversal
+
+fault reconstruction
+
+some generic MMIO wrapper layers
 ~~~
 
-for all behavior required by the contract.
+provided that:
+
+~~~text
+fast-path semantics
+        =
+canonical Rigel semantics
+~~~
+
+Fast paths must have a correct fallback mechanism for accesses they do not handle.
 
 ---
 
-# 28. Caches
+# 22. Caches
 
-Caching routing information is explicitly permitted.
+Caches are explicitly permitted.
 
 Examples include:
 
 ~~~text
-address → provider cache
+provider lookup cache
 
-region → provider cache
+region cache
 
-decoded access metadata cache
+dispatch cache
 
-JIT block → Rigel access metadata
+derived-state cache
 
-pre-resolved MMIO target
+JIT-side MMIO classification cache
 ~~~
 
-Caching must not incorrectly survive changes that invalidate the cached assumptions.
-
-Cache invalidation belongs to the component owning the optimization.
-
-Rigel must not become aware of Emu68 JIT cache internals.
-
----
-
-# 29. Shadows
-
-Shadows are explicitly permitted where they preserve required semantics.
-
-A shadow may represent:
-
-* cached host-visible state;
-* mirrored state;
-* optimized read state;
-* precomputed routing state;
-* another validated representation.
-
-But:
-
-> A shadow is an optimization or representation mechanism, not a second independent authority for classic hardware semantics.
-
-Where Rigel owns the authoritative classic hardware state, the shadow must remain coherent with Rigel according to the defined contract.
-
-A shadow must never make the original CPU-visible address inaccessible.
-
----
-
-# 30. Direct Paths
-
-Direct paths are permitted where the hardware semantics make them safe.
-
-Conceptually:
+Caches may accelerate:
 
 ~~~text
-M68K access
-     │
-     ▼
-validated direct path
-     │
-     ▼
-Rigel-equivalent semantics
+where should this access go?
 ~~~
 
-A direct path must not bypass required:
+or, when semantically safe:
 
+~~~text
+what result can be reused?
+~~~
+
+They must not incorrectly cache hardware operations whose reads or writes have observable side effects.
+
+---
+
+# 23. Shadows
+
+Shadows are explicitly permitted when they preserve Rigel semantics.
+
+A shadow is conceptually:
+
+~~~text
+authoritative Rigel state
+        │
+        ▼
+derived / synchronized representation
+        │
+        ▼
+optimized host access
+~~~
+
+A shadow must not become:
+
+~~~text
+a competing hardware implementation
+~~~
+
+The existing Emu68 `INT_shadow` should be reviewed under precisely this rule.
+
+---
+
+# 24. Observable Equivalence
+
+Every optimized path must satisfy observable equivalence.
+
+For a transaction `T`:
+
+~~~text
+reference_result =
+    Rigel_semantics(T)
+
+optimized_result =
+    optimized_path(T)
+~~~
+
+Required:
+
+~~~text
+observable(reference_result)
+        =
+observable(optimized_result)
+~~~
+
+Observable state includes, where applicable:
+
+* returned value;
+* register state;
+* interrupt state;
+* IPL;
+* DMA state;
 * side effects;
 * ordering;
-* timing visibility;
-* interrupt changes;
-* DMA interactions;
-* read semantics;
-* write semantics.
+* timing-visible consequences;
+* subsequent hardware behavior.
 
 ---
 
-# 31. Optimization Must Be Transparent
+# 25. MMIO Width and Ordering
 
-The correctness test for an optimization is behavioral.
+Optimization must preserve:
 
-Conceptually:
-
-~~~text
-reference path
-     │
-     ▼
-observable behavior
-     │
-     =
-
-optimized path
-     │
-     ▼
-observable behavior
-~~~
-
-Implementation identity is not required.
-
-Semantic equivalence is.
-
----
-
-# 32. MMIO Width, Alignment, and Ordering
-
-Before API Version 1, the MMIO contract must define:
-
-* supported widths;
-* alignment;
-* misaligned accesses;
-* wider access decomposition;
-* operation ordering;
+* M68K transaction width;
+* alignment semantics;
+* access ordering;
 * side effects;
-* unsupported-width behavior.
+* repeated accesses;
+* read/write distinctions;
+* decomposition semantics.
 
-These rules apply equally to generic and optimized paths.
-
-An optimization must not change transaction semantics merely because it avoids generic dispatch.
-
----
-
-# 33. MMIO Is Observable
-
-The host or execution engine must not freely:
-
-* eliminate;
-* duplicate;
-* cache values;
-* reorder;
-* combine;
-* split;
-
-Rigel MMIO transactions unless the contract explicitly permits that transformation.
-
-Routing metadata may be cached.
-
-Observable hardware transactions may not be incorrectly optimized away.
-
----
-
-# 34. MMIO Results
-
-The canonical MMIO interface should distinguish concepts equivalent to:
+The execution engine must not freely:
 
 ~~~text
-HANDLED
-
-UNHANDLED
-
-INVALID_ACCESS
-
-HOST_FAILURE
+eliminate
+duplicate
+combine
+split
+reorder
+cache
 ~~~
 
-For an access that Rigel defines as supported CPU-visible behavior, failure solely because Bellatrix did not provide a route is an integration error.
+hardware transactions unless the Rigel contract explicitly permits it.
 
 ---
 
-# 35. Address Namespace Separation
+# 26. Address Namespace Separation
 
-The public contract must distinguish:
+The API must distinguish:
 
 ~~~text
 M68K CPU-visible MMIO address
@@ -1182,77 +923,120 @@ guest physical address
 host pointer
 ~~~
 
-These namespaces must never be conflated.
+`INT_shadow` and other optimization state do not alter these namespaces.
 
 ---
 
-# 36. Temporal Model
+# 27. Memory Boundary
 
-Rigel remains authoritative for chipset time.
+Rigel DMA uses host-provided guest physical memory operations.
+
+~~~text
+Rigel DMA
+    │
+    ▼
+guest physical address
+    │
+    ▼
+host memory operations
+    │
+    ▼
+Bellatrix guest memory
+~~~
+
+This is independent from CPU MMIO routing.
+
+---
+
+# 28. Host Memory and JIT Coherency
+
+Bellatrix owns host-specific memory coherency.
+
+For example:
+
+~~~text
+Rigel DMA write
+      │
+      ▼
+host mem_write
+      │
+      ▼
+Bellatrix
+      │
+      ├── update guest RAM
+      └── invalidate Emu68 translation
+          if required
+~~~
+
+Rigel must not acquire knowledge of Emu68 JIT internals.
+
+---
+
+# 29. Timing
+
+Rigel remains authoritative for classic chipset time.
 
 ~~~text
 host CPU progress
-      │
-      ▼
-Rigel step
-      │
-      ▼
-chipset timeline
+       │
+       ▼
+Rigel advance
+       │
+       ▼
+classic chipset timeline
 ~~~
 
-The host must not introduce a second authoritative classic chipset clock.
-
-Optimized MMIO paths must preserve whatever timing interaction the Rigel contract requires.
+Optimization mechanisms must not introduce an independent classic hardware timeline.
 
 ---
 
-# 37. IPL
+# 30. Interrupt Ownership
 
-Rigel continues to expose resolved classic IPL.
-
-~~~c
-unsigned rigel_get_ipl(const struct rigel *rigel);
-~~~
-
-Bellatrix consumes it as one source in its interrupt arbitration.
-
----
-
-# 38. INTREQ and INTENA
-
-Detailed interrupt state may remain available for diagnostics and testing.
-
-Bellatrix must not reconstruct Rigel IPL from those registers.
-
-A shadow of interrupt-related state, if used for optimization, must not become an independent interrupt authority.
-
----
-
-# 39. DMA
-
-DMA remains separate from CPU-visible MMIO.
+Rigel owns:
 
 ~~~text
-CPU MMIO
-   │
-   ▼
-host-selected access path
-   │
-   ▼
-Rigel
+classic interrupt sources
 
+INTREQ
 
-Rigel DMA
-   │
-   ▼
-guest physical memory API
+INTENA
+
+priority resolution
+
+Rigel IPL
 ~~~
 
-DMA is not reverse Bellatrix Bus traffic.
+Emu68 may contain optimized representations associated with interrupt handling.
+
+Those representations remain subordinate to Rigel's authoritative semantics in Bellatrix/Rigel integration.
 
 ---
 
-# 40. Video
+# 31. Native and Rigel Interrupt Domains
+
+Bellatrix keeps native and classic interrupt domains distinct.
+
+~~~text
+native host interrupt domain
+           │
+           ├──────────┐
+           │          │
+           ▼          ▼
+       native IPL   arbitration
+                      ▲
+                      │
+                  Rigel IPL
+                      ▲
+                      │
+                Rigel interrupt
+                    domain
+~~~
+
+The existing Emu68 interrupt optimization mechanisms must not collapse these ownership domains.
+
+---
+
+# 32. Video
 
 Rigel continues to own classic video generation.
 
@@ -1267,16 +1051,21 @@ classic pixels
    │
    ▼
 host-consumable output
-   │
-   ▼
-Bellatrix presentation
 ~~~
 
-Rigel remains independent of RTG, P96, VC4, and AROS native graphics.
+Rigel remains independent from:
+
+~~~text
+RTG
+P96
+VC4
+AROS native graphics
+physical framebuffer
+~~~
 
 ---
 
-# 41. Audio and Input
+# 33. Audio and Input
 
 Audio:
 
@@ -1296,46 +1085,61 @@ Input:
 native input
     │
     ▼
-Bellatrix adaptation
+Bellatrix
     │
     ▼
-Rigel classic input state
+classic input representation
+    │
+    ▼
+Rigel
 ~~~
 
 ---
 
-# 42. Concurrency Contract
+# 34. Concurrency
 
-Rigel should define serialization and reentrancy requirements without defining host topology.
+Rigel defines serialization requirements, not host placement.
 
-Correct principle:
+The baseline rule is:
 
 > A Rigel instance is non-concurrent unless otherwise documented. The host is responsible for serialization.
 
-Rigel must remain usable under same-core or cross-core execution without API changes.
+Bellatrix may execute Rigel:
 
-Optimized access paths remain subject to the same ordering and serialization requirements.
+~~~text
+same core
+
+different ARM core
+
+worker thread
+
+queue consumer
+~~~
+
+without changing the Rigel API.
 
 ---
 
-# 43. Bellatrix Adapter Responsibilities
+# 35. Bellatrix Adapter Responsibilities
 
 The Bellatrix adapter should:
 
 ~~~text
 create/configure Rigel
 
-obtain enough information to guarantee
-complete Rigel CPU-visible reachability
+obtain Rigel CPU-visible coverage
 
-configure Emu68 MMU interception
-where interception is required
+guarantee complete semantic reachability
+
+configure required MMU interception
 
 register generic Bus fallback coverage
 
-forward canonical MMIO
+forward canonical MMIO where required
 
-support validated optimized paths
+permit validated optimized paths
+
+preserve fallback behavior
 
 provide guest memory
 
@@ -1345,435 +1149,543 @@ consume deadlines
 
 obtain Rigel IPL
 
-consume video/audio output
+consume video/audio
 
 adapt input
 ~~~
 
-It must not contain:
+It must not implement:
 
 ~~~text
-partial manually maintained Rigel coverage
+Amiga register semantics
 
-independent Amiga hardware semantics
+independent INTENA semantics
+
+independent INTREQ semantics
 
 Copper semantics
 
 Blitter semantics
 
-Paula semantics
-
 CIA semantics
 
-INTREQ/INTENA authority
+Paula semantics
 
-Agnus DMA rules
+Agnus DMA semantics
 ~~~
 
 ---
 
-# 44. Bellatrix Access Architecture
+# 36. Emu68 Optimization Responsibilities
 
-The intended access architecture is:
+Emu68 may provide:
 
 ~~~text
-                         M68K access
-                              │
-                              ▼
-                     Bellatrix access policy
-                              │
-          ┌───────────────────┼───────────────────┐
-          │                   │                   │
-          ▼                   ▼                   ▼
-       fast path            cache              shadow
-          │                   │                   │
-          └─────────────┬─────┴─────────────┬─────┘
-                        │                   │
-                        ▼                   ▼
-                 resolved access      generic fallback
-                                            │
-                                            ▼
-                                      MMU / fault
-                                            │
-                                            ▼
-                                      Bellatrix Bus
-                                            │
-                                            ▼
-                                      canonical MMIO
-                        │                   │
-                        └─────────┬─────────┘
-                                  ▼
-                         Rigel semantics
+JIT-side fast paths
+
+MMIO classification caches
+
+shadows
+
+specialized register handling
+
+fault bypass
+
+provider caches
 ~~~
 
-Not every access must traverse every layer.
+provided that Bellatrix integration guarantees:
 
-Every supported access must reach the correct semantics.
+~~~text
+optimization hit
+      │
+      ▼
+correct Rigel semantics
+
+optimization miss
+      │
+      ▼
+correct fallback
+      │
+      ▼
+correct Rigel semantics
+~~~
+
+An optimization must never turn a supported Rigel transaction into an inaccessible transaction.
 
 ---
 
-# 45. Required Semantic Invariant
+# 37. `INT_shadow` Integration Requirement
 
-Define:
+The existing Emu68 `INT_shadow` handling must be explicitly reviewed during Bellatrix integration.
+
+The review must determine:
+
+1. Which `INTENA` and `INTREQ` accesses use the shadow.
+2. Whether reads are satisfied from shadow state.
+3. Whether writes modify shadow state.
+4. Whether writes also reach authoritative Rigel semantics.
+5. How Rigel-generated interrupt requests update or invalidate the shadow.
+6. How reset synchronizes the shadow.
+7. Whether shadow state influences IPL calculation.
+8. Whether any path can cause Rigel and `INT_shadow` to diverge.
+9. Whether a shadow miss correctly reaches the generic Rigel path.
+10. Whether removing the shadow would alter correctness or only performance.
+
+The desired result is:
 
 ~~~text
-R = CPU-visible accesses supported by Rigel
+                 Rigel
+                   │
+             authoritative
+            INTENA / INTREQ
+                   │
+          ┌────────┴────────┐
+          │                 │
+          ▼                 ▼
+    canonical path      synchronized
+                         INT_shadow
+                             │
+                             ▼
+                          fast path
+~~~
 
-H = CPU-visible accesses for which Bellatrix
-    provides a correct execution path
+not:
+
+~~~text
+Rigel interrupts       Emu68 interrupts
+      │                       │
+      ▼                       ▼
+ authority A              authority B
+~~~
+
+---
+
+# 38. Optimization Correctness Test
+
+For every optimized transaction class:
+
+~~~text
+run through reference path
+           │
+           ▼
+capture observable result
+
+run through optimized path
+           │
+           ▼
+capture observable result
+
+compare
 ~~~
 
 Required:
 
 ~~~text
-R ⊆ H
+equivalent
 ~~~
 
-This is the normative coverage invariant.
-
-No equality between:
+This is particularly important for:
 
 ~~~text
-Rigel coverage
+INTENA
 
-MMU faults
+INTREQ
 
-Bus routes
+interrupt acknowledgement
 
-generic MMIO calls
+IPL transitions
+
+repeated register reads
+
+side-effecting registers
 ~~~
-
-is required.
-
-Those sets may differ because optimizations may bypass generic mechanisms.
 
 ---
 
-# 46. Reference Path and Optimized Paths
+# 39. Coverage Correctness Test
 
-The architecture should maintain a conceptual reference path:
-
-~~~text
-M68K access
-    │
-    ▼
-generic host resolution
-    │
-    ▼
-canonical Rigel MMIO
-    │
-    ▼
-Rigel semantics
-~~~
-
-Optimized paths may replace portions of that execution:
+Let:
 
 ~~~text
-M68K access
-    │
-    ├──► fast path ───────┐
-    │                     │
-    ├──► cached path ─────┤
-    │                     ├──► equivalent semantics
-    ├──► shadow path ─────┤
-    │                     │
-    └──► generic path ────┘
+R = Rigel-supported CPU-visible transactions
 ~~~
 
-The reference path defines semantic expectations.
+For every representative transaction in `R`:
 
-It does not define mandatory runtime topology.
+~~~text
+optimized path available?
+       │
+      / \
+    yes  no
+     │    │
+     ▼    ▼
+ optimized fallback
+     │      │
+     └──┬───┘
+        ▼
+correct result
+~~~
+
+A test must fail if a Rigel-supported access reaches:
+
+~~~text
+unmapped
+
+unhandled
+
+silent drop
+~~~
+
+merely because an optimization table does not contain it.
 
 ---
 
-# 47. Example of the Visibility Requirement
+# 40. Shadow Correctness Test
 
-Assume Rigel supports CPU-visible accesses to:
+For `INT_shadow`, tests should explicitly exercise:
 
 ~~~text
-1 2 3 4 5 6 7 8 9 10
+CPU writes INTENA
+
+CPU writes INTREQ
+
+CPU reads relevant state
+
+Rigel device raises interrupt
+
+Rigel device clears interrupt
+
+interrupt acknowledgement
+
+reset
+
+rapid interrupt transitions
+
+shadow hit
+
+shadow miss
+
+fallback path
 ~~~
 
-Bellatrix must ensure that software can correctly access:
+At each observation point:
 
 ~~~text
-1 2 3 4 5 6 7 8 9 10
-~~~
-
-But the implementation may look like:
-
-~~~text
-1 ──► fast path
-
-2 ──► cache ──► Rigel
-
-3 ──► generic Bus ──► Rigel
-
-4 ──► shadow
-
-5 ──► generic Bus ──► Rigel
-
-6 ──► direct Rigel path
-
-7 ──► cache ──► Rigel
-
-8 ──► generic Bus ──► Rigel
-
-9 ──► fast path
-
-10 ─► generic Bus ──► Rigel
-~~~
-
-provided:
-
-~~~text
-observable semantics
+CPU-visible behavior
         =
-Rigel-defined semantics
+Rigel-defined behavior
 ~~~
-
-for every required access.
-
-The forbidden result is:
-
-~~~text
-1 2 3 4 5   7 8 9 10
-          ^
-          │
-      6 invisible
-~~~
-
-The problem is not that `6` avoided the dispatcher.
-
-The problem is if `6` has no correct CPU-visible path at all.
 
 ---
 
-# 48. Migration Strategy
+# 41. Performance Is a Design Requirement
+
+Correctness does not imply forcing every hardware access through the most generic path.
+
+The architecture should explicitly preserve the ability to optimize:
+
+~~~text
+correctness
+    │
+    ▼
+semantic reference
+    │
+    ▼
+validated optimization
+    │
+    ▼
+performance
+~~~
+
+The wrong model is:
+
+~~~text
+correctness
+    =
+everything must fault
+    =
+everything must traverse generic Bus
+~~~
+
+The correct model is:
+
+~~~text
+correctness
+    =
+all supported hardware remains semantically reachable
+```
+
+while:
+
+~~~text
+implementation
+    =
+free to optimize
+~~~
+
+---
+
+# 42. Migration Strategy
 
 Recommended sequence:
 
 ~~~text
 1. Capture behavioral baseline
 
-2. Inventory Rigel CPU-visible behavior
+2. Inventory Rigel CPU-visible hardware
 
-3. Establish authoritative Rigel coverage information
+3. Establish authoritative Rigel coverage
 
-4. Establish canonical MMIO semantics
+4. Establish canonical Rigel MMIO semantics
 
-5. Verify complete functional reachability
+5. Inventory existing Emu68 specialized paths
 
-6. Establish generic Bellatrix fallback routing
+6. Identify caches, shadows and fast paths
 
-7. Integrate with existing Emu68 MMU mechanisms
+7. Explicitly inspect INT_shadow behavior
 
-8. Validate that no supported Rigel access is omitted
+8. Classify each optimized path:
 
-9. Remove manually selected incomplete coverage
+      preserve
+      adapt
+      synchronize
+      invalidate
+      replace
+      remove
 
-10. Formalize cache / fast-path / shadow rules
+9. Establish generic fallback coverage
 
-11. Validate optimized paths against reference behavior
+10. Configure MMU interception where required
 
-12. Formalize memory, timing, IPL,
-    lifecycle and concurrency
+11. Configure Bellatrix Bus fallback
 
-13. Migrate harness
+12. Preserve validated fast paths
 
-14. Migrate Bellatrix
+13. Validate optimization misses
 
-15. Freeze API Version 1
+14. Validate INTENA/INTREQ synchronization
 
-16. Optimize further only while preserving
-    semantic equivalence
+15. Validate Rigel IPL ownership
+
+16. Migrate harness
+
+17. Migrate Bellatrix
+
+18. Compare optimized and reference behavior
+
+19. Freeze API Version 1
 ~~~
 
 ---
 
-# 49. Conformance Tests
+# 43. Conformance Invariants
 
-## Complete CPU-visible reachability
-
-Every CPU-visible hardware access supported by Rigel must have a valid Bellatrix execution path.
-
-## No invisible supported address
-
-A test must fail if:
+## Visibility
 
 ~~~text
-Rigel supports X
-        │
-        ▼
-M68K software cannot correctly access X
+Rigel supports transaction T
+        =>
+Bellatrix can execute T correctly
 ~~~
 
-## Canonical reference behavior
-
-The canonical MMIO path must provide the reference host-facing semantics for Rigel CPU-visible hardware.
-
-## Generic fallback completeness
-
-Addresses relying on generic dispatch must remain routable through the generic Bellatrix path.
-
-## Optimization equivalence
-
-Where both reference and optimized paths exist:
+## Path independence
 
 ~~~text
-observable(reference)
-        =
-observable(optimized)
+correctness(T)
+does not depend on
+T using one specific dispatch path
 ~~~
 
-for the behavior covered by the contract.
+## Optimization fallback
 
-## Cache correctness
+~~~text
+optimization miss
+        !=
+hardware absent
+~~~
 
-Cached routing must not make previously valid accesses stale, invisible, or incorrectly routed.
+## Shadow authority
 
-## Fast-path correctness
+~~~text
+shadow
+    !=
+independent hardware authority
+~~~
 
-Fast paths must preserve required side effects, ordering, timing interaction, and hardware semantics.
+## Interrupt authority
 
-## Shadow correctness
+~~~text
+Rigel
+    owns INTENA / INTREQ semantics
+    and resolved classic IPL
+~~~
 
-Shadows must remain coherent with authoritative Rigel state according to their defined contract.
+## Emu68 optimization freedom
 
-## MMU independence
-
-A valid optimization must not fail conformance merely because it avoids an MMU fault.
-
-## Bus independence
-
-A valid optimization must not fail conformance merely because it avoids generic Bellatrix Bus traversal.
-
-## No host-side semantic duplication
-
-Bellatrix must not become an independent implementation of classic Amiga hardware merely to optimize dispatch.
+~~~text
+Emu68 may optimize
+provided observable Rigel semantics
+are preserved
+~~~
 
 ---
 
-# 50. Review Checklist
+# 44. Review Checklist
 
 Every relevant patch should answer:
 
 1. Does Rigel support this CPU-visible access?
-2. Can M68K software still perform it correctly?
-3. Could the address become invisible because Bellatrix omitted it?
-4. Does a generic fallback exist where required?
-5. Is the optimization preserving observable semantics?
-6. Is an MMU fault genuinely required, or merely one implementation mechanism?
-7. Is generic Bus traversal genuinely required, or merely one implementation mechanism?
-8. Can provider lookup safely be cached?
-9. Does the cache have correct invalidation semantics?
-10. Does a fast path preserve side effects?
-11. Does a fast path preserve ordering?
-12. Does a fast path preserve required timing interaction?
-13. Is a shadow coherent with Rigel's authoritative state?
-14. Has a shadow accidentally become a second hardware authority?
-15. Is a CPU-visible address accessible only through a private API?
-16. Is Bellatrix maintaining a manually selected incomplete subset?
-17. Is Bellatrix interpreting classic hardware semantics unnecessarily?
-18. Are region holes still given correct Rigel-defined behavior?
-19. Are M68K MMIO and guest physical memory kept distinct?
-20. Does the optimization preserve IPL behavior?
-21. Does the optimization preserve DMA interaction?
-22. Does the optimization preserve deterministic behavior?
-23. Can the harness exercise the reference semantics?
-24. Can optimized and reference paths be compared?
-25. Does the change preserve host-topology neutrality?
+2. Can M68K software still perform it?
+3. Which path handles it?
+4. Is that path generic or optimized?
+5. What happens on an optimization miss?
+6. Is there a correct fallback?
+7. Is an MMU fault actually required?
+8. Is generic Bus traversal actually required?
+9. Could a fast path preserve semantics more efficiently?
+10. Could a cache alter observable MMIO behavior?
+11. Does a shadow represent derived state or independent state?
+12. Can shadow and Rigel state diverge?
+13. Does `INT_shadow` affect `INTENA`?
+14. Does `INT_shadow` affect `INTREQ`?
+15. How is `INT_shadow` synchronized?
+16. Can Rigel-originated interrupt changes invalidate shadow state?
+17. Is Rigel IPL still authoritative?
+18. Is Bellatrix reconstructing IPL from shadow state?
+19. Does an optimization accidentally define hardware coverage?
+20. Does an absent optimization entry make hardware inaccessible?
+21. Are MMIO width and ordering preserved?
+22. Are side effects preserved?
+23. Are timing-visible consequences preserved?
+24. Are guest physical addresses separate from CPU MMIO addresses?
+25. Does Rigel remain host-independent?
+26. Can the harness exercise the reference semantics?
+27. Can optimized and reference paths be compared?
+28. Does the optimization improve implementation without changing hardware behavior?
 
 ---
 
-# 51. Target Architecture
+# 45. Target Architecture
 
 ~~~text
-                         Rigel
-                           │
-                  CPU-visible hardware
-                     semantics/coverage
+                        M68K CPU
                            │
                            ▼
-                       Bellatrix
+                    Bellatrix / Emu68
                            │
-                   host access policy
+          ┌────────────────┼─────────────────┐
+          │                │                 │
+          ▼                ▼                 ▼
+       caches          fast paths          shadows
+                                             │
+                                        INT_shadow
+          │                │                 │
+          └────────────────┼─────────────────┘
                            │
-        ┌──────────────────┼──────────────────┐
-        │                  │                  │
-        ▼                  ▼                  ▼
-     fast path           cache              shadow
-        │                  │                  │
-        └───────────┬──────┴───────────┬──────┘
-                    │                  │
-                    │           generic fallback
-                    │                  │
-                    │          ┌───────┴───────┐
-                    │          ▼               ▼
-                    │      Emu68 MMU      Bellatrix Bus
-                    │          │               │
-                    │          └───────┬───────┘
-                    │                  ▼
-                    │          canonical MMIO
-                    │                  │
-                    └──────────┬───────┘
-                               ▼
-                       Rigel-defined behavior
+                     handled correctly?
+                           │
+                         /   \
+                       yes    no
+                        │      │
+                        │      ▼
+                        │   generic path
+                        │      │
+                        │      ▼
+                        │  MMU / fault
+                        │      │
+                        │      ▼
+                        │ Bellatrix Bus
+                        │      │
+                        └──┬───┘
+                           │
+                           ▼
+                    Rigel semantics
+                           │
+           ┌───────────────┼───────────────┐
+           │               │               │
+           ▼               ▼               ▼
+        custom            CIA            other
+        hardware        hardware        hardware
+           │
+           └───────────────┬───────────────┘
+                           │
+                           ▼
+                 authoritative classic
+                    hardware state
 ~~~
 
-The critical property is:
+For interrupts specifically:
 
 ~~~text
-Rigel supports X
-       │
-       ▼
-Bellatrix knows X must remain valid
-       │
-       ▼
-host chooses an access mechanism
-       │
-       ├── generic
-       ├── cached
-       ├── fast
-       ├── shadow
-       └── direct
-       │
-       ▼
-correct observable semantics
+                     M68K access
+                         │
+                         ▼
+                       Emu68
+                         │
+                ┌────────┴────────┐
+                │                 │
+                ▼                 ▼
+          INT_shadow path     generic path
+                │                 │
+                └────────┬────────┘
+                         │
+                         ▼
+                       Rigel
+                         │
+                  ┌──────┴──────┐
+                  ▼             ▼
+               INTENA         INTREQ
+                  │             │
+                  └──────┬──────┘
+                         ▼
+                priority resolution
+                         │
+                         ▼
+                     Rigel IPL
+                         │
+                         ▼
+              Bellatrix arbitration
+                         │
+                         ▼
+                       M68K
 ~~~
 
-There must be no requirement that every access traverse the same path.
+The exact optimized path may differ.
 
-There must be a requirement that every supported access remains valid.
+The authority relationship may not.
 
 ---
 
-# 52. Definition of Done for Rigel API Version 1
+# 46. Definition of Done for Rigel API Version 1
 
 API Version 1 should not be frozen until:
 
-* Rigel has an authoritative definition or discoverable description sufficient to identify its CPU-visible classic hardware coverage;
-* every CPU-visible access supported by Rigel remains functionally reachable through Bellatrix;
-* canonical MMIO provides a complete semantic reference interface;
-* Bellatrix does not maintain a manually selected incomplete subset of Rigel hardware;
-* the generic fallback can route all accesses assigned to it;
-* Emu68 MMU mechanisms are reused where interception is required;
-* MMU faults are not incorrectly treated as mandatory for every Rigel access;
-* Bellatrix Bus traversal is not incorrectly treated as mandatory for every Rigel access;
-* caches are explicitly permitted;
-* fast paths are explicitly permitted;
-* shadows are explicitly permitted;
-* direct paths are explicitly permitted where semantically valid;
-* optimized paths preserve required observable behavior;
-* shadows do not become independent classic hardware authorities;
-* no CPU-visible Rigel hardware exists only behind an inaccessible private path;
-* Bellatrix does not unnecessarily interpret classic register semantics;
-* guest-memory address semantics remain explicit;
-* Rigel remains authoritative for classic timing and interrupts;
+* Rigel has an authoritative CPU-visible hardware definition;
+* every Rigel-supported CPU-visible access remains reachable;
+* canonical MMIO defines reference semantics;
+* canonical MMIO is not unnecessarily mandated as the physical path for every access;
+* Bellatrix has a complete generic fallback;
+* MMU interception is used where required rather than universally mandated;
+* Bellatrix Bus routing is used where required rather than universally mandated;
+* caches remain possible;
+* fast paths remain possible;
+* shadows remain possible;
+* specialized Emu68 paths remain possible;
+* optimization misses correctly fall back;
+* optimized paths preserve observable Rigel semantics;
+* `INT_shadow` has been explicitly reviewed;
+* `INT_shadow` cannot become an independent interrupt authority;
+* `INTENA` semantics remain Rigel-owned;
+* `INTREQ` semantics remain Rigel-owned;
+* Rigel-generated interrupt changes cannot silently diverge from shadow state;
+* Rigel IPL remains authoritative for the classic interrupt domain;
+* Bellatrix does not reconstruct classic IPL from Emu68 shadow state;
 * DMA ownership remains unchanged;
+* timing ownership remains unchanged;
 * Rigel remains host-topology neutral;
-* harness and Bellatrix use the same production semantic interface;
-* behavioral equivalence has been validated.
+* harness and Bellatrix use compatible production semantics;
+* optimized and reference paths have behavioral equivalence tests.
 
 For Version 1:
 
@@ -1781,184 +1693,113 @@ For Version 1:
 
 ---
 
-# 53. Relationship to the Integration Specification
+# 47. Final Recommendation
 
-The authority hierarchy remains:
+The Rigel/Bellatrix/Emu68 relationship should be governed by three independent concepts:
 
 ~~~text
-Bellatrix.md
-      │
-      ▼
-architecture
-      │
-      ▼
-Rigel_integration.md
-      │
-      ▼
-cross-boundary behavioral contract
-      │
-      ▼
-Rigel API Convergence Plan
-      │
-      ▼
-API refinement
-      │
-      ▼
-public Rigel headers
-      │
-      ▼
-librigel
+1. HARDWARE AUTHORITY
+
+       Rigel
+         │
+         ▼
+   classic hardware
+      semantics
+
+
+2. REACHABILITY
+
+      Bellatrix
+         │
+         ▼
+   guarantees every
+   Rigel-supported
+   CPU-visible access
+   remains usable
+
+
+3. OPTIMIZATION
+
+       Emu68
+         │
+         ├── caches
+         ├── fast paths
+         ├── shadows
+         ├── INT_shadow
+         └── specialized paths
 ~~~
 
-This document does not redefine `Rigel_integration.md`.
+These concepts must not be collapsed into one another.
 
-Its purpose is to identify which parts of the current Rigel boundary should be:
+In particular:
+
+> **Rigel defines what the classic hardware means.**
+
+> **Bellatrix guarantees that supported hardware remains reachable.**
+
+> **Emu68 remains free to optimize how accesses are executed.**
+
+For `INTENA` and `INTREQ`:
 
 ~~~text
-preserved
-
-formalized
-
-changed
-
-internalized
+                  Rigel
+                    │
+               authoritative
+              interrupt semantics
+                    │
+             ┌──────┴──────┐
+             ▼             ▼
+          INTENA         INTREQ
+             │             │
+             └──────┬──────┘
+                    ▼
+                Rigel IPL
 ~~~
 
-while ensuring complete CPU-visible compatibility without preventing future optimization.
-
----
-
-# 54. Final Recommendation
-
-The existing Rigel implementation should remain the foundation of `librigel`.
-
-Its working:
-
-* chipset implementation;
-* deterministic execution model;
-* temporal model;
-* interrupt model;
-* DMA behavior;
-* bus infrastructure;
-* Denise renderer;
-* chunky video output;
-* harness;
-
-should remain intact wherever they already satisfy the required contract.
-
-The primary refinement is the public host boundary.
-
-The central CPU-visible invariant is:
-
-> **Every M68K CPU-visible classic hardware access supported by Rigel must remain functionally reachable through Bellatrix.**
-
-The central optimization invariant is:
-
-> **Complete address visibility is mandatory; the access path is not.**
-
-Therefore the architecture explicitly permits:
+while:
 
 ~~~text
-generic dispatcher
+                Emu68
+                  │
+                  ▼
+              INT_shadow
+                  │
+                  ▼
+          optimization / mirror
+```
 
-MMU interception
+must remain subordinate to that authority.
 
-cached provider lookup
+Therefore the final compatibility rule is:
 
-fast paths
+> **No software should fail because it accessed a Rigel-supported classic hardware address that was missing from a Bellatrix or Emu68 optimization path.**
 
-shadows
+And the corresponding performance rule is:
 
-direct paths
+> **Satisfying complete Rigel hardware visibility must not require disabling valid Emu68 caches, fast paths, shadows, or specialized handlers.**
 
-region coalescing
-
-specialized dispatch
-
-future transparent optimizations
-~~~
-
-provided that:
-
-~~~text
-observable optimized behavior
-            =
-required Rigel-defined behavior
-~~~
-
-The intended relationship is:
+The desired architecture is therefore:
 
 ~~~text
-Rigel
-    defines classic hardware semantics
-    and supported CPU-visible behavior
-
-Bellatrix
-    guarantees that supported behavior
-    remains reachable
-
+M68K software
+     │
+     ▼
 Bellatrix / Emu68
-    choose how each access is transported
-    and optimized
-
-Rigel
-    remains authoritative for classic
-    hardware meaning
+     │
+     ├── cache
+     ├── fast path
+     ├── shadow
+     │     └── INT_shadow
+     ├── specialized handler
+     └── generic MMU/Bus fallback
+              │
+              ▼
+       Rigel-defined semantics
+              │
+              ▼
+       classic Amiga hardware
 ~~~
 
-The architecture must therefore avoid both extremes.
+with one non-negotiable invariant:
 
-This is too restrictive:
-
-~~~text
-every Rigel access
-      MUST
-fault through MMU
-      MUST
-enter generic Bus
-      MUST
-enter generic dispatcher
-~~~
-
-because it unnecessarily prevents optimization.
-
-This is incorrect:
-
-~~~text
-Rigel supports address X
-
-but Bellatrix has no path for X
-~~~
-
-because it breaks compatibility.
-
-The desired model is:
-
-~~~text
-                         M68K
-                           │
-                     access to X
-                           │
-                           ▼
-                  Bellatrix / Emu68
-                           │
-                    choose best path
-                           │
-          ┌────────────────┼────────────────┐
-          │                │                │
-        cache           fast path         generic
-          │                │                │
-        shadow          direct path      MMU / Bus
-          │                │                │
-          └────────────────┼────────────────┘
-                           ▼
-                   correct Rigel semantics
-~~~
-
-Thus the final rule for Rigel API Version 1 is:
-
-> **Rigel defines what classic CPU-visible hardware behavior exists. Bellatrix guarantees that none of that behavior becomes inaccessible to M68K software, while remaining free to use caches, fast paths, shadows, direct paths, MMU interception, generic dispatch, or future optimizations to implement that visibility.**
-
-Or, in its shortest form:
-
-> **Semantic reachability is mandatory. Dispatch topology is an optimization choice.**
+> **Optimization may change the path. It may never change which Rigel-supported hardware the M68K CPU can correctly access.**
