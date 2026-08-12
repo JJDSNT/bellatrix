@@ -10,7 +10,7 @@
 
 # 1. Purpose
 
-This document defines the recommended refinement of the existing Rigel public API so that the boundary between Rigel and its hosts is explicit, minimal, host-neutral, and suitable for long-term use by Bellatrix and the standalone harness.
+This document defines the recommended refinement of the existing Rigel public API so that the boundary between Rigel and its hosts is explicit, minimal, host-neutral, optimization-friendly, and suitable for long-term use by Bellatrix and the standalone harness.
 
 The authority chain remains:
 
@@ -36,11 +36,15 @@ The objective is therefore **not to redesign Rigel**.
 
 The objective is:
 
-> Preserve the existing Rigel execution and hardware boundary while refining the public host interface so that every CPU-visible classic hardware access implemented by Rigel remains correctly reachable from M68K software.
+> Preserve the existing Rigel execution and hardware boundary while refining the public host interface so that every CPU-visible classic hardware access implemented by Rigel remains correctly reachable from M68K software, without unnecessarily disabling existing Emu68 optimization mechanisms.
 
 The fundamental compatibility requirement is:
 
 > **No M68K software may fail merely because it accesses a CPU-visible classic hardware address implemented by Rigel that Bellatrix failed to expose or route correctly.**
+
+The corresponding optimization requirement is:
+
+> **Preserving complete Rigel hardware visibility must not require every access to traverse the generic MMU-fault and Bellatrix Bus path.**
 
 This requirement concerns **semantic reachability**, not a mandatory physical dispatch path.
 
@@ -51,15 +55,22 @@ Bellatrix and Emu68 remain free to implement:
 * fast paths;
 * direct paths;
 * specialized handlers;
+* pre-resolved providers;
 * MMU interception;
 * fault-based dispatch;
-* generic bus dispatch;
+* generic Bus dispatch;
 
 provided that these mechanisms preserve the observable Rigel hardware semantics.
+
+In particular, existing Emu68 optimizations such as `INT_shadow` should be preserved where they avoid unnecessary fault handling and can remain coherent with Rigel ownership.
 
 Therefore:
 
 > **Complete hardware visibility is mandatory. A particular implementation path is not.**
+
+And:
+
+> **Optimization may bypass the generic fault path. It may not bypass the required hardware semantics.**
 
 ---
 
@@ -102,6 +113,8 @@ Bellatrix / Emu68
 
 No address or transaction supported by Rigel may become inaccessible merely because it is absent from one particular optimization or dispatch mechanism.
 
+Likewise, no optimization must be removed merely because it bypasses the generic path, provided it remains semantically correct.
+
 ---
 
 # 3. Semantic Reachability, Not Mandatory Routing
@@ -124,7 +137,9 @@ generic dispatcher
 Rigel
 ~~~
 
-That path is valid, but it is not mandatory.
+That path is the generic fallback path.
+
+It is not the only valid path.
 
 The actual implementation may instead be:
 
@@ -156,6 +171,16 @@ observable(optimized path)
         =
 observable(reference Rigel semantics)
 ~~~
+
+The generic path therefore serves two roles:
+
+~~~text
+correctness fallback
+
+semantic reference
+~~~
+
+It must not be interpreted as a mandatory runtime route for every transaction.
 
 ---
 
@@ -192,6 +217,21 @@ Bellatrix / Emu68
                 are reached
 ~~~
 
+The distinction is:
+
+~~~text
+SEMANTIC AUTHORITY
+        │
+        ▼
+       Rigel
+
+
+EXECUTION / OPTIMIZATION POLICY
+        │
+        ▼
+Bellatrix / Emu68
+~~~
+
 ---
 
 # 5. Existing Emu68 Optimization Mechanisms
@@ -203,13 +243,13 @@ These mechanisms are not inherently incompatible with Rigel.
 They should be treated as:
 
 ~~~text
-Emu68 implementation mechanisms
+Emu68 execution optimizations
 ~~~
 
 rather than:
 
 ~~~text
-authoritative definitions
+independent definitions
 of classic hardware semantics
 ~~~
 
@@ -220,7 +260,7 @@ fast paths
 
 specialized MMIO handling
 
-cached state
+cached routing/state
 
 shadow state
 
@@ -235,11 +275,15 @@ Bellatrix integration should preserve useful Emu68 optimizations wherever they r
 
 The objective is **not** to force all classic hardware traffic through a slow generic dispatcher.
 
+In particular:
+
+> **An existing optimization that safely avoids an MMU fault is valuable and should not be removed merely to simplify the conceptual architecture.**
+
 ---
 
 # 6. Emu68 `INT_shadow`
 
-Emu68 contains shadow handling associated with classic interrupt registers, including the existing handling around:
+Emu68 contains `INT_shadow` handling associated with the classic interrupt registers:
 
 ~~~text
 INTENA
@@ -247,48 +291,117 @@ INTENA
 INTREQ
 ~~~
 
-This mechanism is relevant to Bellatrix/Rigel integration because Rigel itself owns the authoritative classic interrupt state.
+This mechanism has direct performance relevance to Bellatrix.
 
-The required authority relationship is:
+Its important property is not merely that it mirrors interrupt state.
 
-~~~text
-                  Rigel
-                    │
-          authoritative interrupt
-               semantics/state
-                    │
-          ┌─────────┴─────────┐
-          │                   │
-          ▼                   ▼
-       INTENA               INTREQ
-          │                   │
-          └─────────┬─────────┘
-                    │
-                    ▼
-               Rigel IPL
-~~~
-
-Any Emu68 shadow associated with these registers must therefore be treated as:
+Its important property is that specialized handling may allow accesses to these registers to avoid the generic:
 
 ~~~text
-optimization / mirror / acceleration state
+MMU fault
+    │
+    ▼
+fault reconstruction
+    │
+    ▼
+Bellatrix Bus
+    │
+    ▼
+Rigel MMIO
 ~~~
 
-and not as:
+path.
+
+Conceptually:
 
 ~~~text
-a second authoritative interrupt controller
+M68K INTENA / INTREQ access
+             │
+             ▼
+         Emu68 recognizes
+       optimized interrupt path
+             │
+             ▼
+          INT_shadow
+             │
+             ▼
+      avoid generic fault path
 ~~~
+
+This optimization should therefore be treated as potentially valuable and preserved unless profiling or correctness analysis proves otherwise.
+
+However, Rigel remains authoritative for the classic interrupt semantics.
 
 ---
 
-# 7. Shadow Authority Rule
+# 7. `INT_shadow` and `INT.IPL` Solve Different Problems
+
+`INT_shadow` and `INT.IPL` must not be treated as alternatives.
+
+They solve different problems.
+
+~~~text
+INT_shadow
+    │
+    ▼
+optimize CPU access to
+INTENA / INTREQ
+and potentially avoid faults
+
+
+Rigel IPL / Emu68 INT.IPL
+    │
+    ▼
+deliver the already-resolved
+classic interrupt level to the CPU
+~~~
+
+The desired architecture may therefore use both:
+
+~~~text
+CPU access INTENA / INTREQ
+           │
+           ▼
+      Emu68 fast path
+           │
+       INT_shadow
+           │
+           ▼
+   preserve Rigel semantics
+           │
+           ▼
+          Rigel
+           │
+     INTENA / INTREQ
+           │
+           ▼
+   priority resolution
+           │
+           ▼
+        Rigel IPL
+           │
+           ▼
+      Emu68 INT.IPL
+           │
+           ▼
+          M68K
+~~~
+
+Thus:
+
+> **`INT_shadow` is an access optimization. `INT.IPL` is an interrupt-delivery boundary.**
+
+They are complementary.
+
+---
+
+# 8. Shadow Authority Rule
 
 The fundamental rule for shadows is:
 
 > **A shadow may accelerate access to Rigel-owned state, but it must not become an independent source of classic hardware truth.**
 
-Conceptually:
+The preferred relationship is:
 
 ~~~text
                  authoritative
@@ -300,8 +413,8 @@ Conceptually:
           ┌───────────┴───────────┐
           │                       │
           ▼                       ▼
-   normal Rigel path        synchronized
-                             Emu68 shadow
+   generic/reference        synchronized
+        path                Emu68 shadow
                                   │
                                   ▼
                               fast path
@@ -322,7 +435,55 @@ There must not be two independently evolving interpretations of classic interrup
 
 ---
 
-# 8. `INT_shadow` Must Not Define Coverage
+# 9. Preserve `INT_shadow` as an Optimization
+
+For Bellatrix, the recommended baseline is:
+
+~~~text
+KEEP:
+    INT_shadow optimization
+
+KEEP:
+    Rigel ownership of INTENA
+
+KEEP:
+    Rigel ownership of INTREQ
+
+KEEP:
+    Rigel interrupt-source ownership
+
+KEEP:
+    Rigel priority resolution
+
+USE:
+    Rigel IPL → Emu68 INT.IPL
+~~~
+
+The objective is not:
+
+~~~text
+remove INT_shadow
+because Rigel owns interrupts
+~~~
+
+The objective is:
+
+~~~text
+retain INT_shadow
+because it may avoid faults
+
+while
+
+preventing INT_shadow
+from becoming the authority
+for classic interrupt state
+~~~
+
+This distinction is central.
+
+---
+
+# 10. `INT_shadow` Must Not Define Coverage
 
 The existence or absence of an address in `INT_shadow` must never determine whether that address is CPU-visible.
 
@@ -351,9 +512,11 @@ Rigel supports access?
      ▼
 must remain reachable
      │
-     ├── shadow path if available
+     ├── optimized shadow path
+     │      if available
      │
-     └── fallback path otherwise
+     └── generic fallback
+            otherwise
 ~~~
 
 Therefore:
@@ -362,7 +525,7 @@ Therefore:
 
 ---
 
-# 9. Shadow Miss Must Fall Back Correctly
+# 11. Shadow Miss Must Fall Back Correctly
 
 If an optimized Emu68 path does not recognize a Rigel-supported access, that must not make the access disappear.
 
@@ -372,14 +535,14 @@ Conceptually:
 M68K access
      │
      ▼
-optimized path?
+optimized handler available?
      │
     / \
   yes  no
    │    │
    ▼    ▼
-fast   fallback
-path    path
+fast   generic
+path   fallback
    │      │
    └──┬───┘
       │
@@ -387,41 +550,89 @@ path    path
 correct Rigel semantics
 ~~~
 
-A shadow miss is therefore not equivalent to:
-
-~~~text
-unmapped hardware
-~~~
-
-It means only:
+A shadow or fast-path miss means only:
 
 ~~~text
 this optimization did not handle
 the transaction
 ~~~
 
-The generic integration path must remain capable of handling the transaction when Rigel supports it.
+It must not mean:
+
+~~~text
+hardware does not exist
+~~~
+
+For a Rigel-supported transaction, fallback must remain available.
 
 ---
 
-# 10. `INTENA` / `INTREQ` Special Case
+# 12. Generic Fallback and Fast Path
 
-`INTENA` and `INTREQ` require particular care because they directly influence classic interrupt state.
+The architecture should explicitly maintain both concepts:
 
-The ownership model is:
+~~~text
+FAST PATH
+    for performance
+
+GENERIC FALLBACK
+    for complete reachability
+~~~
+
+For example:
+
+~~~text
+                     M68K access
+                         │
+                         ▼
+                  optimized path?
+                      /     \
+                    yes      no
+                     │        │
+                     ▼        ▼
+                 INT_shadow  MMU fault
+                     │        │
+                     │        ▼
+                     │   Bellatrix Bus
+                     │        │
+                     │        ▼
+                     │   canonical MMIO
+                     │        │
+                     └────┬───┘
+                          ▼
+                   Rigel semantics
+~~~
+
+This preserves both:
+
+~~~text
+performance
+
+and
+
+complete compatibility
+~~~
+
+---
+
+# 13. `INTENA` / `INTREQ` Special Case
+
+`INTENA` and `INTREQ` directly influence classic interrupt state.
+
+The intended ownership model is:
 
 ~~~text
 M68K write/read
       │
       ▼
-Bellatrix / Emu68
+Emu68 / Bellatrix
       │
-      ├── optimized/shadow path
+      ├── INT_shadow fast path
       │
       └── generic path
               │
               ▼
-             Rigel
+      Rigel interrupt semantics
               │
         INTENA / INTREQ
               │
@@ -430,39 +641,121 @@ Bellatrix / Emu68
               │
               ▼
           Rigel IPL
+              │
+              ▼
+        Emu68 INT.IPL
 ~~~
 
-Regardless of the path used, the resulting state must be equivalent to the state produced by the authoritative Rigel implementation.
+Regardless of the physical path used, the resulting externally observable behavior must match Rigel semantics.
 
 ---
 
-# 11. Shadow Synchronization
+# 14. Optimized CPU Writes
+
+CPU writes to `INTENA` or `INTREQ` may use the optimized Emu68 path.
+
+For example:
+
+~~~text
+M68K write INTENA
+       │
+       ▼
+Emu68 optimized handling
+       │
+       ├── avoid generic fault
+       ├── maintain optimization state
+       └── apply authoritative
+           Rigel-visible semantics
+                    │
+                    ▼
+                 Rigel
+~~~
+
+The optimization must not merely update an Emu68-local shadow while leaving Rigel unaware of a hardware-visible state transition.
+
+The result must remain equivalent to the canonical Rigel transaction.
+
+---
+
+# 15. Rigel-Originated Interrupt Changes
+
+Not all interrupt-state changes originate from CPU writes.
+
+Classic devices may generate interrupt requests.
+
+~~~text
+Paula
+CIA
+Blitter
+Copper
+VBlank
+other sources
+      │
+      ▼
+     Rigel
+      │
+      ▼
+    INTREQ
+      │
+      ▼
+priority resolution
+      │
+      ▼
+   Rigel IPL
+~~~
+
+This creates an important asymmetry:
+
+~~~text
+CPU → INTENA/INTREQ
+    may use INT_shadow fast path
+
+Rigel device → INTREQ
+    originates inside Rigel
+~~~
+
+Therefore, any shadow state that is observable or required by the optimized CPU path must remain coherent with Rigel-originated changes.
+
+The shadow cannot assume that interrupt state changes only occur through M68K register writes.
+
+---
+
+# 16. Shadow Synchronization Contract
 
 If `INT_shadow` remains active in Bellatrix builds, its synchronization semantics must be explicit.
 
-At minimum, the implementation must establish:
+The implementation must establish:
 
 ~~~text
-who updates the shadow
+what state INT_shadow represents
+
+who writes the shadow
 
 when the shadow is updated
 
-whether reads may be satisfied from it
+which accesses can be satisfied from it
 
-whether writes may be absorbed by it
+whether writes can be handled entirely
+through the optimized path
 
-how Rigel-originated changes are reflected
+how authoritative Rigel state is updated
 
-how reset initializes it
+how Rigel-originated INTREQ changes
+are reflected or invalidate the shadow
 
-how asynchronous interrupt-source changes
-affect its validity
+how reset initializes shadow state
+
+whether asynchronous interrupt changes
+invalidate cached assumptions
+
+whether shadow state participates in
+any CPU-facing read behavior
 ~~~
 
 The critical invariant is:
 
 ~~~text
-shadow-visible state
+shadow-visible behavior
         │
         ▼
 must never contradict
@@ -471,115 +764,106 @@ authoritative Rigel behavior
 
 ---
 
-# 12. Prefer Derived or Invalidatable Shadows
+# 17. Shadow Synchronization Must Not Reintroduce the Fault
+
+The purpose of preserving `INT_shadow` is partly to avoid generic fault overhead.
+
+Therefore the synchronization design should not accidentally reduce the optimization to:
+
+~~~text
+INT_shadow hit
+     │
+     ▼
+still trigger generic MMU fault
+     │
+     ▼
+Bellatrix Bus
+~~~
+
+for every transaction.
+
+The preferred goal is:
+
+~~~text
+M68K access
+     │
+     ▼
+INT_shadow / specialized Emu68 path
+     │
+     ▼
+minimal Rigel integration action
+     │
+     ▼
+correct authoritative semantics
+~~~
+
+The exact synchronization mechanism is implementation-defined.
+
+Possible designs may include:
+
+* direct specialized Rigel entry;
+* shared coherent state;
+* narrow callback;
+* deferred synchronization where semantically valid;
+* derived state;
+* explicit invalidation;
+* another optimized integration mechanism.
+
+The API should not prescribe one prematurely.
+
+---
+
+# 18. Prefer Derived or Invalidatable Shadows
 
 Where practical, shadow state should behave as:
 
 ~~~text
-derived state
+derived / accelerated state
 ~~~
 
 rather than:
 
 ~~~text
-parallel hardware state
+parallel hardware authority
 ~~~
 
-Conceptually:
+Possible relationships include:
 
 ~~~text
 Rigel authoritative state
           │
           ▼
-     shadow refresh
+      shadow refresh
           │
           ▼
       Emu68 shadow
           │
           ▼
-       fast read
+       fast access
 ~~~
 
 or:
 
 ~~~text
-state change
-     │
-     ▼
-invalidate shadow
-     │
-     ▼
-next access refreshes
-from authoritative state
-~~~
-
-The exact implementation is not prescribed.
-
-What matters is maintaining one semantic authority.
-
----
-
-# 13. Optimized Writes
-
-A fast or shadowed write path is permitted.
-
-For example:
-
-~~~text
-M68K write INTENA
+Rigel state change
        │
        ▼
-Emu68 optimized path
+invalidate shadow
        │
-       ├── update acceleration state
-       │
-       └── preserve Rigel write semantics
-                    │
-                    ▼
-               authoritative
-                  Rigel
+       ▼
+next optimized access
+refreshes required state
 ~~~
 
-The optimization must not merely update an Emu68-local shadow while leaving Rigel unaware of a hardware-visible state change.
+or another coherent optimization.
 
-Unless the optimization is formally implemented as part of a coherent Rigel transaction mechanism, the authoritative Rigel state must observe the operation.
+The exact implementation is not normative.
 
 ---
 
-# 14. Rigel-Originated Interrupt Changes
+# 19. Rigel IPL Remains Authoritative
 
-Not all interrupt-state changes originate from CPU writes.
-
-Classic devices may generate interrupt requests.
-
-Conceptually:
-
-~~~text
-Paula / CIA / Blitter / etc.
-             │
-             ▼
-           Rigel
-             │
-             ▼
-           INTREQ
-             │
-             ▼
-        resolved IPL
-~~~
-
-Therefore an Emu68 shadow cannot assume that interrupt state changes only when the CPU accesses `INTREQ` or `INTENA`.
-
-Any cached or shadowed representation must account for Rigel-originated state transitions.
-
-This is one reason why the shadow cannot be authoritative.
-
----
-
-# 15. Rigel IPL Remains Authoritative
-
-Bellatrix must consume Rigel's resolved compatibility IPL.
-
-Conceptually:
+Bellatrix must consume Rigel's resolved compatibility-domain IPL.
 
 ~~~text
 Rigel interrupt sources
@@ -600,18 +884,35 @@ Bellatrix IPL arbitration
         └── Rigel IPL
         │
         ▼
-Emu68 / M68K
+Emu68 INT.IPL
+        │
+        ▼
+M68K
 ~~~
 
-Bellatrix must not reconstruct Rigel IPL from `INT_shadow`.
+Bellatrix must not reconstruct the compatibility IPL from `INT_shadow`.
 
-`INT_shadow` may participate in optimization, but:
+`INT_shadow` may accelerate register access.
 
-> **Rigel IPL is the architectural interrupt result.**
+It does not replace:
+
+~~~text
+Rigel interrupt resolution
+~~~
+
+or:
+
+~~~text
+Rigel IPL
+~~~
+
+Therefore:
+
+> **Rigel IPL is the architectural classic interrupt result. `INT_shadow` is an optimization of register access.**
 
 ---
 
-# 16. Canonical MMIO as Semantic Reference
+# 20. Canonical MMIO as Semantic Reference
 
 Rigel should provide a canonical M68K-visible MMIO interface.
 
@@ -630,19 +931,31 @@ canonical Rigel MMIO
 classic hardware semantics
 ~~~
 
-This interface defines the normal semantic boundary.
+This interface defines the normal semantic reference.
 
 However:
 
-> **Canonical MMIO is a semantic reference path, not necessarily the physical path taken by every optimized access.**
+> **Canonical MMIO is not necessarily the physical path taken by every optimized access.**
 
-An optimized path is permitted when it remains observationally equivalent.
+For example:
+
+~~~text
+INTENA write
+   │
+   ├── generic path
+   │      └── canonical MMIO
+   │
+   └── Emu68 INT_shadow fast path
+          └── equivalent Rigel semantics
+~~~
+
+Both are valid when observable behavior is equivalent.
 
 ---
 
-# 17. CPU-Visible Hardware Coverage
+# 21. CPU-Visible Hardware Coverage
 
-Rigel should provide an authoritative description of its CPU-visible classic hardware coverage.
+Rigel should provide an authoritative description sufficient for the host to know which CPU-visible classic hardware behavior must remain reachable.
 
 Conceptually:
 
@@ -656,260 +969,345 @@ struct rigel_mmio_region {
 
 The exact representation is not normative.
 
-This description defines:
+The description defines:
 
 ~~~text
-what CPU-visible classic hardware Rigel supports
+what CPU-visible classic hardware
+must remain reachable
 ~~~
 
-It does not prescribe:
+It does not define:
 
 ~~~text
-how every access must physically travel
-through Bellatrix/Emu68
+which accesses must fault
+
+which accesses must traverse the Bus
+
+which accesses may use fast paths
+
+which accesses may be shadowed
 ~~~
 
 ---
 
-# 18. Coverage and Optimization Are Separate Concepts
+# 22. Coverage and Optimization Are Separate Concepts
 
-These concepts must remain distinct:
-
-~~~text
-COVERAGE
-    what hardware accesses exist
-
-SEMANTICS
-    what those accesses mean
-
-ROUTING
-    where accesses are sent
-
-OPTIMIZATION
-    how efficiently they are handled
-~~~
-
-Rigel primarily owns:
+The architecture must keep these concepts distinct:
 
 ~~~text
 COVERAGE
+    what CPU-visible hardware behavior exists
+
 SEMANTICS
+    what that hardware behavior means
+
+ROUTING
+    where the access is sent
+
+OPTIMIZATION
+    how the access is accelerated
 ~~~
 
-Bellatrix/Emu68 primarily own:
+Rigel owns:
 
 ~~~text
-ROUTING
-OPTIMIZATION
+hardware semantics
+classic behavior
+interrupt authority
 ~~~
 
-subject to preservation of Rigel semantics.
+Bellatrix/Emu68 own:
+
+~~~text
+routing policy
+MMU policy
+fault handling
+fast paths
+caches
+shadows
+dispatch optimization
+~~~
+
+subject to semantic equivalence.
 
 ---
 
-# 19. MMU Policy
+# 23. MMU Policy
 
 Bellatrix may use existing Emu68 MMU mechanisms to intercept Rigel accesses.
 
-But not every Rigel access must necessarily fault through the MMU.
+For generic accesses:
+
+~~~text
+M68K access
+     │
+     ▼
+MMU fault
+     │
+     ▼
+Bellatrix Bus
+     │
+     ▼
+Rigel
+~~~
+
+is valid.
+
+But not every Rigel access must necessarily fault.
+
+For example:
+
+~~~text
+INTENA / INTREQ
+       │
+       ▼
+existing optimized Emu68 path
+       │
+       ▼
+avoid MMU fault
+       │
+       ▼
+preserve Rigel semantics
+~~~
+
+Therefore:
+
+> **MMU interception is a fallback and routing mechanism, not a requirement that every Rigel transaction generate a fault.**
+
+---
+
+# 24. Bellatrix Bus
+
+The Bellatrix Bus remains the generic host dispatch mechanism for accesses requiring generic host routing.
+
+It must provide a complete fallback for Rigel-supported transactions assigned to the generic path.
+
+However:
+
+> **The Bellatrix Bus does not need to observe every transaction if a validated optimized path already preserves the required Rigel semantics.**
+
+This explicitly permits the preservation of `INT_shadow`.
+
+---
+
+# 25. Generic Fallback Completeness
+
+The generic fallback must be complete enough that optimization coverage does not define hardware visibility.
 
 Conceptually:
 
 ~~~text
-Rigel-supported access
-        │
+Rigel supports X
+       │
+       ▼
+fast path handles X?
+      / \
+    yes  no
+     │    │
+     ▼    ▼
+   fast   generic
+   path   fallback
+     │      │
+     └──┬───┘
         ▼
-optimized direct handling available?
-       / \
-     yes  no
-      │    │
-      ▼    ▼
-   optimized   MMU/fault
-      │           │
-      │           ▼
-      │      Bellatrix Bus
-      │           │
-      └─────┬─────┘
-            ▼
-      Rigel semantics
+correct semantics
 ~~~
 
-The MMU is therefore a mechanism for reachability, not the definition of hardware visibility.
+Therefore:
+
+~~~text
+optimization miss
+        !=
+unmapped hardware
+~~~
 
 ---
 
-# 20. Bellatrix Bus
-
-The Bellatrix Bus remains the generic host dispatch mechanism for accesses requiring host dispatch.
-
-It must provide a complete fallback path for Rigel-supported accesses that are assigned to it.
-
-However:
-
-> **The Bellatrix Bus does not need to observe every transaction if another validated path already preserves the same Rigel semantics.**
-
-This permits:
-
-* shadows;
-* fast paths;
-* cached provider lookup;
-* specialized handlers;
-* future optimizations.
-
----
-
-# 21. Fast Paths
+# 26. Fast Paths
 
 Fast paths are explicitly permitted.
 
 A fast path may bypass:
 
 ~~~text
+MMU fault
+
+fault reconstruction
+
 generic provider lookup
 
 generic Bus traversal
 
-fault reconstruction
-
-some generic MMIO wrapper layers
+generic MMIO wrapper layers
 ~~~
 
 provided that:
 
 ~~~text
-fast-path semantics
+observable(fast path)
         =
-canonical Rigel semantics
+observable(reference semantics)
 ~~~
 
-Fast paths must have a correct fallback mechanism for accesses they do not handle.
+`INT_shadow` should be evaluated as one such specialized fast path.
 
 ---
 
-# 22. Caches
+# 27. Caches
 
 Caches are explicitly permitted.
 
 Examples include:
 
 ~~~text
-provider lookup cache
+provider cache
 
 region cache
 
-dispatch cache
+JIT MMIO classification cache
 
-derived-state cache
+pre-resolved target
 
-JIT-side MMIO classification cache
+derived register-state cache
 ~~~
 
-Caches may accelerate:
+Caches must not eliminate hardware accesses whose reads or writes are semantically observable.
 
-~~~text
-where should this access go?
-~~~
-
-or, when semantically safe:
-
-~~~text
-what result can be reused?
-~~~
-
-They must not incorrectly cache hardware operations whose reads or writes have observable side effects.
+Caching routing metadata is distinct from caching hardware results.
 
 ---
 
-# 23. Shadows
+# 28. Shadows
 
-Shadows are explicitly permitted when they preserve Rigel semantics.
+Shadows are explicitly permitted.
 
-A shadow is conceptually:
-
-~~~text
-authoritative Rigel state
-        │
-        ▼
-derived / synchronized representation
-        │
-        ▼
-optimized host access
-~~~
-
-A shadow must not become:
+The intended relationship is:
 
 ~~~text
-a competing hardware implementation
+classic hardware authority
+        │
+        ▼
+       Rigel
+        │
+        ▼
+derived / synchronized
+optimization state
+        │
+        ▼
+       shadow
 ~~~
 
-The existing Emu68 `INT_shadow` should be reviewed under precisely this rule.
+For Bellatrix:
+
+~~~text
+INT_shadow
+    =
+valuable Emu68 optimization
+for INTENA / INTREQ access
+when it avoids fault overhead
+~~~
+
+provided that:
+
+~~~text
+INT_shadow
+    !=
+independent interrupt controller
+~~~
 
 ---
 
-# 24. Observable Equivalence
+# 29. Direct and Specialized Paths
+
+Specialized direct paths are permitted where semantically valid.
+
+Conceptually:
+
+~~~text
+M68K access
+     │
+     ▼
+specialized Emu68 handling
+     │
+     ▼
+narrow Rigel integration
+     │
+     ▼
+correct classic behavior
+~~~
+
+A specialized path may be preferable to forcing:
+
+~~~text
+specialized Emu68 handling
+     │
+     ▼
+generic fault
+     │
+     ▼
+generic Bus
+     │
+     ▼
+generic MMIO
+~~~
+
+after the optimization has already identified the transaction.
+
+---
+
+# 30. Observable Equivalence
 
 Every optimized path must satisfy observable equivalence.
 
-For a transaction `T`:
+For transaction `T`:
 
 ~~~text
-reference_result =
-    Rigel_semantics(T)
+reference =
+    canonical Rigel semantics(T)
 
-optimized_result =
-    optimized_path(T)
+optimized =
+    optimized path(T)
 ~~~
 
 Required:
 
 ~~~text
-observable(reference_result)
+observable(reference)
         =
-observable(optimized_result)
+observable(optimized)
 ~~~
 
-Observable state includes, where applicable:
+Observable effects may include:
 
-* returned value;
+* return value;
 * register state;
 * interrupt state;
 * IPL;
 * DMA state;
 * side effects;
-* ordering;
-* timing-visible consequences;
-* subsequent hardware behavior.
+* access ordering;
+* timing-visible effects;
+* subsequent chipset behavior.
 
 ---
 
-# 25. MMIO Width and Ordering
+# 31. MMIO Width and Ordering
 
-Optimization must preserve:
+All paths must preserve:
 
 * M68K transaction width;
 * alignment semantics;
-* access ordering;
-* side effects;
 * repeated accesses;
-* read/write distinctions;
-* decomposition semantics.
+* read/write distinction;
+* side effects;
+* transaction ordering;
+* valid decomposition rules.
 
-The execution engine must not freely:
-
-~~~text
-eliminate
-duplicate
-combine
-split
-reorder
-cache
-~~~
-
-hardware transactions unless the Rigel contract explicitly permits it.
+An optimized path does not gain permission to change M68K hardware semantics.
 
 ---
 
-# 26. Address Namespace Separation
+# 32. Address Namespace Separation
 
 The API must distinguish:
 
@@ -923,13 +1321,15 @@ guest physical address
 host pointer
 ~~~
 
-`INT_shadow` and other optimization state do not alter these namespaces.
+`INT_shadow` is host optimization state.
+
+It does not create a new guest-visible address namespace.
 
 ---
 
-# 27. Memory Boundary
+# 33. Memory Boundary
 
-Rigel DMA uses host-provided guest physical memory operations.
+Rigel DMA continues to use host-provided guest physical memory operations.
 
 ~~~text
 Rigel DMA
@@ -944,15 +1344,13 @@ host memory operations
 Bellatrix guest memory
 ~~~
 
-This is independent from CPU MMIO routing.
+This is separate from CPU MMIO routing and shadow optimization.
 
 ---
 
-# 28. Host Memory and JIT Coherency
+# 34. Host Memory and JIT Coherency
 
 Bellatrix owns host-specific memory coherency.
-
-For example:
 
 ~~~text
 Rigel DMA write
@@ -968,11 +1366,11 @@ Bellatrix
           if required
 ~~~
 
-Rigel must not acquire knowledge of Emu68 JIT internals.
+Rigel must not acquire JIT-specific knowledge.
 
 ---
 
-# 29. Timing
+# 35. Timing
 
 Rigel remains authoritative for classic chipset time.
 
@@ -986,57 +1384,405 @@ Rigel advance
 classic chipset timeline
 ~~~
 
-Optimization mechanisms must not introduce an independent classic hardware timeline.
+Caches, shadows, and fast paths must not create an independent chipset timeline.
 
 ---
 
-# 30. Interrupt Ownership
+# 36. Interrupt Ownership
 
 Rigel owns:
 
 ~~~text
 classic interrupt sources
 
-INTREQ
+INTREQ semantics
 
-INTENA
+INTENA semantics
 
-priority resolution
+classic priority resolution
 
 Rigel IPL
 ~~~
 
-Emu68 may contain optimized representations associated with interrupt handling.
-
-Those representations remain subordinate to Rigel's authoritative semantics in Bellatrix/Rigel integration.
-
----
-
-# 31. Native and Rigel Interrupt Domains
-
-Bellatrix keeps native and classic interrupt domains distinct.
+Emu68 may own:
 
 ~~~text
-native host interrupt domain
-           │
-           ├──────────┐
-           │          │
-           ▼          ▼
-       native IPL   arbitration
-                      ▲
-                      │
-                  Rigel IPL
-                      ▲
-                      │
-                Rigel interrupt
-                    domain
+INT_shadow implementation
+
+optimized access recognition
+
+fast-path execution machinery
+
+CPU interrupt input plumbing
 ~~~
 
-The existing Emu68 interrupt optimization mechanisms must not collapse these ownership domains.
+The distinction is:
+
+~~~text
+hardware meaning
+    = Rigel
+
+optimized delivery
+    = Emu68 / Bellatrix
+~~~
 
 ---
 
-# 32. Video
+# 37. Native and Rigel Interrupt Domains
+
+Bellatrix keeps native and compatibility interrupt domains distinct.
+
+~~~text
+native interrupt domain
+         │
+         ▼
+      native IPL
+          │
+          ├──────┐
+                 ▼
+           IPL arbitration
+                 ▲
+                 │
+             Rigel IPL
+                 ▲
+                 │
+        classic Rigel domain
+~~~
+
+Then:
+
+~~~text
+effective IPL
+      │
+      ▼
+Emu68 CPU interrupt input
+~~~
+
+`INT_shadow` must not collapse the native and classic domains.
+
+---
+
+# 38. `INT_shadow` Integration Requirement
+
+The existing Emu68 `INT_shadow` path should be **preserved provisionally as a performance optimization**, then adapted as required for Rigel ownership.
+
+The integration review must determine:
+
+1. Which `INTENA` and `INTREQ` transactions use `INT_shadow`.
+2. Which transactions avoid an MMU fault because of this path.
+3. Which reads are served from shadow state.
+4. Which writes update shadow state.
+5. What minimum action is required to reflect those writes in Rigel.
+6. Whether a narrow Rigel fast-path API would preserve the optimization better than generic MMIO.
+7. How Rigel-originated `INTREQ` changes affect the shadow.
+8. How reset establishes coherence.
+9. Whether the shadow participates in CPU-visible reads.
+10. Whether the shadow influences IPL calculation today.
+11. How to ensure Rigel IPL remains authoritative.
+12. Whether a miss falls back to the generic MMU/Bus path.
+13. Whether any synchronization design accidentally reintroduces the fault being avoided.
+14. Whether the resulting optimized path materially improves performance relative to generic dispatch.
+
+The preferred direction is:
+
+~~~text
+                 CPU INT access
+                       │
+                       ▼
+               Emu68 INT_shadow
+                   fast path
+                       │
+                       ▼
+             narrow/coherent Rigel
+               semantic update
+                       │
+                       ▼
+                     Rigel
+                       │
+                INTENA / INTREQ
+                       │
+                       ▼
+                  Rigel IPL
+                       │
+                       ▼
+                 Emu68 INT.IPL
+~~~
+
+with generic fallback:
+
+~~~text
+shadow path unavailable
+         │
+         ▼
+      MMU fault
+         │
+         ▼
+   Bellatrix Bus
+         │
+         ▼
+ canonical Rigel MMIO
+~~~
+
+---
+
+# 39. Avoid Defeating `INT_shadow`
+
+The Bellatrix integration must not preserve `INT_shadow` only nominally while forcing every shadowed access to perform the complete generic fault-equivalent path anyway.
+
+That would provide:
+
+~~~text
+complexity of shadow synchronization
+        +
+cost of generic dispatch
+~~~
+
+without preserving the performance benefit.
+
+The desired design is:
+
+~~~text
+INT_shadow hit
+      │
+      ▼
+cheap optimized path
+      │
+      ▼
+correct Rigel semantics
+~~~
+
+while:
+
+~~~text
+INT_shadow miss
+      │
+      ▼
+generic fallback
+~~~
+
+The exact mechanism should be selected after inspecting the existing Emu68 implementation and profiling the integration.
+
+---
+
+# 40. Optimization Correctness Tests
+
+For every optimized transaction class:
+
+~~~text
+reference path
+      │
+      ▼
+capture observable behavior
+
+optimized path
+      │
+      ▼
+capture observable behavior
+
+compare
+~~~
+
+Required:
+
+~~~text
+equivalent
+~~~
+
+This is particularly important for:
+
+~~~text
+INTENA writes
+
+INTREQ writes
+
+INTREQ reads where applicable
+
+interrupt acknowledgement
+
+Rigel-generated requests
+
+IPL transitions
+
+reset
+
+repeated accesses
+~~~
+
+---
+
+# 41. Fault-Avoidance Test
+
+For optimized paths intended to avoid fault overhead, correctness alone is not sufficient.
+
+The test should also establish that the intended optimization remains effective.
+
+For example:
+
+~~~text
+M68K access INTENA
+        │
+        ▼
+INT_shadow fast path
+        │
+        ▼
+no generic MMU fault
+        │
+        ▼
+correct Rigel semantics
+~~~
+
+The implementation should be able to demonstrate separately:
+
+~~~text
+semantic correctness
+
+and
+
+fault avoidance
+~~~
+
+where fault avoidance is the purpose of the optimization.
+
+---
+
+# 42. Coverage Correctness Test
+
+Let:
+
+~~~text
+R = Rigel-supported CPU-visible transactions
+~~~
+
+For every representative transaction in `R`:
+
+~~~text
+optimized path available?
+       │
+      / \
+    yes  no
+     │    │
+     ▼    ▼
+optimized fallback
+     │      │
+     └──┬───┘
+        ▼
+correct result
+~~~
+
+A test must fail if a supported access reaches:
+
+~~~text
+unmapped
+
+incorrect provider
+
+silent drop
+
+host fault with no valid fallback
+~~~
+
+merely because an optimization does not cover it.
+
+---
+
+# 43. Shadow Correctness Test
+
+For `INT_shadow`, tests should explicitly exercise:
+
+~~~text
+CPU writes INTENA
+
+CPU writes INTREQ
+
+repeated INTENA/INTREQ accesses
+
+Rigel device raises interrupt
+
+Rigel device clears interrupt
+
+interrupt acknowledgement
+
+reset
+
+rapid interrupt transitions
+
+shadow hit
+
+shadow miss
+
+generic fallback
+
+Rigel IPL changes
+~~~
+
+At each observation point:
+
+~~~text
+CPU-visible behavior
+        =
+Rigel-defined behavior
+~~~
+
+Where the optimized path is intended to avoid faults, tests should additionally confirm:
+
+~~~text
+shadow hit
+        =>
+generic MMU fault avoided
+~~~
+
+---
+
+# 44. Performance Is a Design Requirement
+
+Correctness does not imply forcing every hardware access through the generic path.
+
+The architecture should explicitly preserve the ability to optimize:
+
+~~~text
+correctness
+    │
+    ▼
+semantic reference
+    │
+    ▼
+validated optimization
+    │
+    ▼
+performance
+~~~
+
+The wrong model is:
+
+~~~text
+correctness
+    =
+everything must fault
+    =
+everything must traverse Bellatrix Bus
+~~~
+
+The correct model is:
+
+~~~text
+correctness
+    =
+all supported hardware remains semantically reachable
+~~~
+
+while:
+
+~~~text
+implementation
+    =
+free to optimize
+~~~
+
+For `INTENA` and `INTREQ`, this means that preserving the existing fault-avoidance behavior of `INT_shadow` is a legitimate design goal.
+
+---
+
+# 45. Video
 
 Rigel continues to own classic video generation.
 
@@ -1065,7 +1811,7 @@ physical framebuffer
 
 ---
 
-# 33. Audio and Input
+# 46. Audio and Input
 
 Audio:
 
@@ -1096,7 +1842,7 @@ Rigel
 
 ---
 
-# 34. Concurrency
+# 47. Concurrency
 
 Rigel defines serialization requirements, not host placement.
 
@@ -1118,9 +1864,11 @@ queue consumer
 
 without changing the Rigel API.
 
+Fast paths and shadow integration must respect the same serialization contract.
+
 ---
 
-# 35. Bellatrix Adapter Responsibilities
+# 48. Bellatrix Adapter Responsibilities
 
 The Bellatrix adapter should:
 
@@ -1131,15 +1879,21 @@ obtain Rigel CPU-visible coverage
 
 guarantee complete semantic reachability
 
-configure required MMU interception
+configure MMU interception where required
 
 register generic Bus fallback coverage
 
 forward canonical MMIO where required
 
-permit validated optimized paths
+preserve validated Emu68 fast paths
 
-preserve fallback behavior
+preserve INT_shadow fault avoidance
+where semantically valid
+
+provide narrow optimized integration
+where justified
+
+preserve generic fallback behavior
 
 provide guest memory
 
@@ -1149,6 +1903,8 @@ consume deadlines
 
 obtain Rigel IPL
 
+publish Rigel IPL to Emu68 CPU input
+
 consume video/audio
 
 adapt input
@@ -1157,11 +1913,11 @@ adapt input
 It must not implement:
 
 ~~~text
-Amiga register semantics
+independent Amiga register semantics
 
-independent INTENA semantics
+independent INTENA authority
 
-independent INTREQ semantics
+independent INTREQ authority
 
 Copper semantics
 
@@ -1176,7 +1932,7 @@ Agnus DMA semantics
 
 ---
 
-# 36. Emu68 Optimization Responsibilities
+# 49. Emu68 Optimization Responsibilities
 
 Emu68 may provide:
 
@@ -1185,7 +1941,9 @@ JIT-side fast paths
 
 MMIO classification caches
 
-shadows
+INT_shadow
+
+other shadows
 
 specialized register handling
 
@@ -1194,13 +1952,17 @@ fault bypass
 provider caches
 ~~~
 
-provided that Bellatrix integration guarantees:
+provided that:
 
 ~~~text
 optimization hit
       │
       ▼
 correct Rigel semantics
+      │
+      ▼
+avoid unnecessary generic overhead
+
 
 optimization miss
       │
@@ -1215,218 +1977,7 @@ An optimization must never turn a supported Rigel transaction into an inaccessib
 
 ---
 
-# 37. `INT_shadow` Integration Requirement
-
-The existing Emu68 `INT_shadow` handling must be explicitly reviewed during Bellatrix integration.
-
-The review must determine:
-
-1. Which `INTENA` and `INTREQ` accesses use the shadow.
-2. Whether reads are satisfied from shadow state.
-3. Whether writes modify shadow state.
-4. Whether writes also reach authoritative Rigel semantics.
-5. How Rigel-generated interrupt requests update or invalidate the shadow.
-6. How reset synchronizes the shadow.
-7. Whether shadow state influences IPL calculation.
-8. Whether any path can cause Rigel and `INT_shadow` to diverge.
-9. Whether a shadow miss correctly reaches the generic Rigel path.
-10. Whether removing the shadow would alter correctness or only performance.
-
-The desired result is:
-
-~~~text
-                 Rigel
-                   │
-             authoritative
-            INTENA / INTREQ
-                   │
-          ┌────────┴────────┐
-          │                 │
-          ▼                 ▼
-    canonical path      synchronized
-                         INT_shadow
-                             │
-                             ▼
-                          fast path
-~~~
-
-not:
-
-~~~text
-Rigel interrupts       Emu68 interrupts
-      │                       │
-      ▼                       ▼
- authority A              authority B
-~~~
-
----
-
-# 38. Optimization Correctness Test
-
-For every optimized transaction class:
-
-~~~text
-run through reference path
-           │
-           ▼
-capture observable result
-
-run through optimized path
-           │
-           ▼
-capture observable result
-
-compare
-~~~
-
-Required:
-
-~~~text
-equivalent
-~~~
-
-This is particularly important for:
-
-~~~text
-INTENA
-
-INTREQ
-
-interrupt acknowledgement
-
-IPL transitions
-
-repeated register reads
-
-side-effecting registers
-~~~
-
----
-
-# 39. Coverage Correctness Test
-
-Let:
-
-~~~text
-R = Rigel-supported CPU-visible transactions
-~~~
-
-For every representative transaction in `R`:
-
-~~~text
-optimized path available?
-       │
-      / \
-    yes  no
-     │    │
-     ▼    ▼
- optimized fallback
-     │      │
-     └──┬───┘
-        ▼
-correct result
-~~~
-
-A test must fail if a Rigel-supported access reaches:
-
-~~~text
-unmapped
-
-unhandled
-
-silent drop
-~~~
-
-merely because an optimization table does not contain it.
-
----
-
-# 40. Shadow Correctness Test
-
-For `INT_shadow`, tests should explicitly exercise:
-
-~~~text
-CPU writes INTENA
-
-CPU writes INTREQ
-
-CPU reads relevant state
-
-Rigel device raises interrupt
-
-Rigel device clears interrupt
-
-interrupt acknowledgement
-
-reset
-
-rapid interrupt transitions
-
-shadow hit
-
-shadow miss
-
-fallback path
-~~~
-
-At each observation point:
-
-~~~text
-CPU-visible behavior
-        =
-Rigel-defined behavior
-~~~
-
----
-
-# 41. Performance Is a Design Requirement
-
-Correctness does not imply forcing every hardware access through the most generic path.
-
-The architecture should explicitly preserve the ability to optimize:
-
-~~~text
-correctness
-    │
-    ▼
-semantic reference
-    │
-    ▼
-validated optimization
-    │
-    ▼
-performance
-~~~
-
-The wrong model is:
-
-~~~text
-correctness
-    =
-everything must fault
-    =
-everything must traverse generic Bus
-~~~
-
-The correct model is:
-
-~~~text
-correctness
-    =
-all supported hardware remains semantically reachable
-```
-
-while:
-
-~~~text
-implementation
-    =
-free to optimize
-~~~
-
----
-
-# 42. Migration Strategy
+# 50. Migration Strategy
 
 Recommended sequence:
 
@@ -1439,47 +1990,59 @@ Recommended sequence:
 
 4. Establish canonical Rigel MMIO semantics
 
-5. Inventory existing Emu68 specialized paths
+5. Inventory existing Emu68 optimized paths
 
-6. Identify caches, shadows and fast paths
+6. Inspect INT_shadow implementation in detail
 
-7. Explicitly inspect INT_shadow behavior
+7. Determine exactly which faults INT_shadow avoids
 
-8. Classify each optimized path:
+8. Identify its current INTENA/INTREQ semantics
 
-      preserve
-      adapt
-      synchronize
-      invalidate
-      replace
-      remove
+9. Separate:
+      hardware authority
+      shadow state
+      CPU interrupt input
 
-9. Establish generic fallback coverage
+10. Preserve Rigel ownership of:
+      INTENA
+      INTREQ
+      interrupt sources
+      priority resolution
+      Rigel IPL
 
-10. Configure MMU interception where required
+11. Preserve INT_shadow as an optimization
+    where correctness allows
 
-11. Configure Bellatrix Bus fallback
+12. Define the cheapest coherent Rigel interaction
+    for INT_shadow hits
 
-12. Preserve validated fast paths
+13. Ensure shadow hits do not unnecessarily
+    fall back through the full fault path
 
-13. Validate optimization misses
+14. Establish generic MMU/Bus fallback
 
-14. Validate INTENA/INTREQ synchronization
+15. Validate shadow misses
 
-15. Validate Rigel IPL ownership
+16. Validate Rigel-originated INTREQ changes
 
-16. Migrate harness
+17. Validate reset coherence
 
-17. Migrate Bellatrix
+18. Validate Rigel IPL → Emu68 INT.IPL
 
-18. Compare optimized and reference behavior
+19. Benchmark fault avoidance
 
-19. Freeze API Version 1
+20. Migrate harness
+
+21. Migrate Bellatrix
+
+22. Compare optimized and reference behavior
+
+23. Freeze API Version 1
 ~~~
 
 ---
 
-# 43. Conformance Invariants
+# 51. Conformance Invariants
 
 ## Visibility
 
@@ -1493,8 +2056,8 @@ Bellatrix can execute T correctly
 
 ~~~text
 correctness(T)
-does not depend on
-T using one specific dispatch path
+does not require
+one specific physical route
 ~~~
 
 ## Optimization fallback
@@ -1505,20 +2068,45 @@ optimization miss
 hardware absent
 ~~~
 
+## Fault avoidance
+
+~~~text
+optimized path intended to avoid fault
+        =>
+should not unnecessarily re-enter
+the generic fault path
+~~~
+
 ## Shadow authority
 
 ~~~text
-shadow
+INT_shadow
+    =
+optimization
+
+INT_shadow
     !=
-independent hardware authority
+independent interrupt authority
 ~~~
 
 ## Interrupt authority
 
 ~~~text
-Rigel
-    owns INTENA / INTREQ semantics
-    and resolved classic IPL
+Rigel owns:
+    INTENA semantics
+    INTREQ semantics
+    interrupt sources
+    priority resolution
+    classic IPL
+~~~
+
+## CPU interrupt delivery
+
+~~~text
+Rigel IPL
+    │
+    ▼
+Emu68 INT.IPL
 ~~~
 
 ## Emu68 optimization freedom
@@ -1531,59 +2119,67 @@ are preserved
 
 ---
 
-# 44. Review Checklist
+# 52. Review Checklist
 
 Every relevant patch should answer:
 
 1. Does Rigel support this CPU-visible access?
-2. Can M68K software still perform it?
+2. Can M68K software still perform it correctly?
 3. Which path handles it?
 4. Is that path generic or optimized?
-5. What happens on an optimization miss?
-6. Is there a correct fallback?
-7. Is an MMU fault actually required?
-8. Is generic Bus traversal actually required?
-9. Could a fast path preserve semantics more efficiently?
-10. Could a cache alter observable MMIO behavior?
-11. Does a shadow represent derived state or independent state?
-12. Can shadow and Rigel state diverge?
-13. Does `INT_shadow` affect `INTENA`?
-14. Does `INT_shadow` affect `INTREQ`?
-15. How is `INT_shadow` synchronized?
-16. Can Rigel-originated interrupt changes invalidate shadow state?
-17. Is Rigel IPL still authoritative?
-18. Is Bellatrix reconstructing IPL from shadow state?
-19. Does an optimization accidentally define hardware coverage?
-20. Does an absent optimization entry make hardware inaccessible?
-21. Are MMIO width and ordering preserved?
-22. Are side effects preserved?
-23. Are timing-visible consequences preserved?
-24. Are guest physical addresses separate from CPU MMIO addresses?
-25. Does Rigel remain host-independent?
-26. Can the harness exercise the reference semantics?
-27. Can optimized and reference paths be compared?
-28. Does the optimization improve implementation without changing hardware behavior?
+5. Does the optimized path avoid a fault?
+6. Is avoiding that fault intentional and valuable?
+7. What happens on an optimization miss?
+8. Is there a correct generic fallback?
+9. Is an MMU fault actually required?
+10. Is generic Bus traversal actually required?
+11. Could a direct specialized Rigel path preserve semantics more efficiently?
+12. Could a cache alter observable MMIO behavior?
+13. Does a shadow represent optimization state or hardware authority?
+14. Can shadow and Rigel state diverge?
+15. Does `INT_shadow` cover `INTENA`?
+16. Does `INT_shadow` cover `INTREQ`?
+17. Which operations does `INT_shadow` accelerate?
+18. Which faults does `INT_shadow` avoid?
+19. How is `INT_shadow` synchronized with Rigel?
+20. Can Rigel-originated `INTREQ` changes invalidate shadow assumptions?
+21. Does synchronization accidentally reintroduce the generic fault?
+22. Is Rigel IPL still authoritative?
+23. Is Bellatrix reconstructing IPL from `INT_shadow`?
+24. Is Rigel IPL delivered through Emu68 `INT.IPL`?
+25. Does an optimization accidentally define hardware coverage?
+26. Does an absent optimization entry make hardware inaccessible?
+27. Are MMIO width and ordering preserved?
+28. Are side effects preserved?
+29. Are timing-visible consequences preserved?
+30. Are guest physical addresses separate from CPU MMIO addresses?
+31. Does Rigel remain host-independent?
+32. Can the harness exercise the reference path?
+33. Can optimized and reference paths be compared?
+34. Can performance tests confirm fault avoidance?
+35. Does the optimization improve performance without changing hardware behavior?
 
 ---
 
-# 45. Target Architecture
+# 53. Target Architecture
 
 ~~~text
                         M68K CPU
                            │
                            ▼
-                    Bellatrix / Emu68
+                         Emu68
                            │
           ┌────────────────┼─────────────────┐
           │                │                 │
           ▼                ▼                 ▼
-       caches          fast paths          shadows
+       caches          fast paths        INT_shadow
                                              │
-                                        INT_shadow
+                                  optimized INTENA/INTREQ
+                                      fault avoidance
           │                │                 │
           └────────────────┼─────────────────┘
                            │
-                     handled correctly?
+                    handled correctly?
                            │
                          /   \
                        yes    no
@@ -1597,67 +2193,93 @@ Every relevant patch should answer:
                         │      ▼
                         │ Bellatrix Bus
                         │      │
+                        │      ▼
+                        │ canonical MMIO
+                        │      │
                         └──┬───┘
                            │
                            ▼
-                    Rigel semantics
+                         Rigel
                            │
-           ┌───────────────┼───────────────┐
-           │               │               │
-           ▼               ▼               ▼
-        custom            CIA            other
+              authoritative classic semantics
+                           │
+          ┌────────────────┼─────────────────┐
+          │                │                 │
+          ▼                ▼                 ▼
+        custom            CIA             other
         hardware        hardware        hardware
-           │
-           └───────────────┬───────────────┘
+          │                │                 │
+          └────────────────┼─────────────────┘
                            │
                            ▼
-                 authoritative classic
-                    hardware state
+                    interrupt sources
+                           │
+                   ┌───────┴───────┐
+                   ▼               ▼
+                INTENA           INTREQ
+                   │               │
+                   └───────┬───────┘
+                           ▼
+                  priority resolution
+                           │
+                           ▼
+                       Rigel IPL
+                           │
+                           ▼
+                    Emu68 INT.IPL
+                           │
+                           ▼
+                        M68K CPU
 ~~~
 
-For interrupts specifically:
+The optimized interrupt path is therefore:
 
 ~~~text
-                     M68K access
-                         │
-                         ▼
-                       Emu68
-                         │
-                ┌────────┴────────┐
-                │                 │
-                ▼                 ▼
-          INT_shadow path     generic path
-                │                 │
-                └────────┬────────┘
-                         │
-                         ▼
-                       Rigel
-                         │
-                  ┌──────┴──────┐
-                  ▼             ▼
-               INTENA         INTREQ
-                  │             │
-                  └──────┬──────┘
-                         ▼
-                priority resolution
-                         │
-                         ▼
-                     Rigel IPL
-                         │
-                         ▼
-              Bellatrix arbitration
-                         │
-                         ▼
-                       M68K
+M68K INTENA / INTREQ access
+           │
+           ▼
+      Emu68 INT_shadow
+           │
+           ▼
+       fast handling
+     without generic fault
+           │
+           ▼
+      coherent Rigel
+     semantic transition
+           │
+           ▼
+        Rigel IPL
+           │
+           ▼
+      Emu68 INT.IPL
 ~~~
 
-The exact optimized path may differ.
+while the fallback remains:
 
-The authority relationship may not.
+~~~text
+unoptimized Rigel access
+          │
+          ▼
+       MMU fault
+          │
+          ▼
+    Bellatrix Bus
+          │
+          ▼
+ canonical Rigel MMIO
+          │
+          ▼
+        Rigel
+~~~
+
+The exact optimized integration mechanism is implementation-defined.
+
+The ownership relationship is not.
 
 ---
 
-# 46. Definition of Done for Rigel API Version 1
+# 54. Definition of Done for Rigel API Version 1
 
 API Version 1 should not be frozen until:
 
@@ -1672,20 +2294,25 @@ API Version 1 should not be frozen until:
 * fast paths remain possible;
 * shadows remain possible;
 * specialized Emu68 paths remain possible;
+* `INT_shadow` is preserved when it provides useful fault avoidance and can remain correct;
+* `INT_shadow` hits do not unnecessarily enter the generic fault path;
 * optimization misses correctly fall back;
 * optimized paths preserve observable Rigel semantics;
-* `INT_shadow` has been explicitly reviewed;
 * `INT_shadow` cannot become an independent interrupt authority;
 * `INTENA` semantics remain Rigel-owned;
 * `INTREQ` semantics remain Rigel-owned;
-* Rigel-generated interrupt changes cannot silently diverge from shadow state;
+* Rigel-generated interrupt changes cannot silently diverge from shadow-visible behavior;
+* synchronization semantics are explicit;
+* synchronization does not unnecessarily destroy the performance advantage of the shadow;
 * Rigel IPL remains authoritative for the classic interrupt domain;
+* Rigel IPL is delivered to the CPU through the appropriate Emu68 `INT.IPL` path;
 * Bellatrix does not reconstruct classic IPL from Emu68 shadow state;
 * DMA ownership remains unchanged;
 * timing ownership remains unchanged;
 * Rigel remains host-topology neutral;
 * harness and Bellatrix use compatible production semantics;
-* optimized and reference paths have behavioral equivalence tests.
+* optimized and reference paths have behavioral equivalence tests;
+* performance tests can demonstrate that intended fast paths actually avoid generic fault overhead.
 
 For Version 1:
 
@@ -1693,9 +2320,9 @@ For Version 1:
 
 ---
 
-# 47. Final Recommendation
+# 55. Final Recommendation
 
-The Rigel/Bellatrix/Emu68 relationship should be governed by three independent concepts:
+The Rigel/Bellatrix/Emu68 relationship should be governed by four distinct concepts:
 
 ~~~text
 1. HARDWARE AUTHORITY
@@ -1727,6 +2354,17 @@ The Rigel/Bellatrix/Emu68 relationship should be governed by three independent c
          ├── shadows
          ├── INT_shadow
          └── specialized paths
+
+
+4. CPU INTERRUPT DELIVERY
+
+      Rigel IPL
+         │
+         ▼
+     Emu68 INT.IPL
+         │
+         ▼
+        M68K
 ~~~
 
 These concepts must not be collapsed into one another.
@@ -1737,69 +2375,81 @@ In particular:
 
 > **Bellatrix guarantees that supported hardware remains reachable.**
 
-> **Emu68 remains free to optimize how accesses are executed.**
+> **Emu68 remains free to optimize how CPU accesses are executed.**
 
-For `INTENA` and `INTREQ`:
+> **Rigel publishes the resolved classic interrupt result through IPL rather than requiring Emu68 to reconstruct it from shadow state.**
+
+For `INTENA` and `INTREQ`, the desired model is:
 
 ~~~text
-                  Rigel
-                    │
-               authoritative
-              interrupt semantics
-                    │
-             ┌──────┴──────┐
-             ▼             ▼
-          INTENA         INTREQ
-             │             │
-             └──────┬──────┘
-                    ▼
-                Rigel IPL
+                    CPU
+                     │
+              INTENA / INTREQ
+                     │
+                     ▼
+                   Emu68
+                     │
+                     ▼
+                INT_shadow
+                     │
+             optimized fast path
+             avoiding generic fault
+                     │
+                     ▼
+              coherent Rigel
+             interrupt semantics
+                     │
+             ┌───────┴───────┐
+             ▼               ▼
+          INTENA           INTREQ
+             │               │
+             └───────┬───────┘
+                     ▼
+            priority resolution
+                     │
+                     ▼
+                 Rigel IPL
+                     │
+                     ▼
+               Emu68 INT.IPL
+                     │
+                     ▼
+                    M68K
 ~~~
 
-while:
+with the generic path remaining available for accesses not handled by an optimized mechanism:
 
 ~~~text
-                Emu68
-                  │
-                  ▼
-              INT_shadow
-                  │
-                  ▼
-          optimization / mirror
-```
+M68K access
+     │
+     ▼
+optimization unavailable
+     │
+     ▼
+MMU / fault
+     │
+     ▼
+Bellatrix Bus
+     │
+     ▼
+canonical Rigel MMIO
+     │
+     ▼
+Rigel semantics
+~~~
 
-must remain subordinate to that authority.
-
-Therefore the final compatibility rule is:
+The final compatibility rule is:
 
 > **No software should fail because it accessed a Rigel-supported classic hardware address that was missing from a Bellatrix or Emu68 optimization path.**
 
-And the corresponding performance rule is:
+The final performance rule is:
 
-> **Satisfying complete Rigel hardware visibility must not require disabling valid Emu68 caches, fast paths, shadows, or specialized handlers.**
+> **Satisfying complete Rigel hardware visibility must not require disabling valid Emu68 caches, fast paths, shadows, specialized handlers, or other mechanisms that avoid unnecessary fault overhead.**
 
-The desired architecture is therefore:
+And the specific interrupt rule is:
 
-~~~text
-M68K software
-     │
-     ▼
-Bellatrix / Emu68
-     │
-     ├── cache
-     ├── fast path
-     ├── shadow
-     │     └── INT_shadow
-     ├── specialized handler
-     └── generic MMU/Bus fallback
-              │
-              ▼
-       Rigel-defined semantics
-              │
-              ▼
-       classic Amiga hardware
-~~~
+> **Preserve `INT_shadow` as a fault-avoidance optimization where it remains beneficial, preserve Rigel as the authority for `INTENA`/`INTREQ` semantics, and use Rigel's resolved IPL as the architectural interrupt input to Emu68.**
 
-with one non-negotiable invariant:
+Thus the shortest statement of the target architecture is:
 
-> **Optimization may change the path. It may never change which Rigel-supported hardware the M68K CPU can correctly access.**
+> **Semantic reachability is mandatory. Generic dispatch is the fallback. Fast paths are allowed. Rigel owns the hardware.**
