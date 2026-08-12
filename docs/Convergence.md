@@ -1,8 +1,8 @@
 # Rigel API Convergence Plan
 
-## Aligning the Existing Rigel Implementation with the Bellatrix / Rigel Integration Specification
+## Refining the Existing Rigel Host Boundary for Bellatrix Integration
 
-**Status:** Proposed Refactoring Baseline  
+**Status:** Proposed API Boundary Refinement Baseline  
 **Target:** Rigel API Version 1  
 **Related specification:** `Bellatrix/docs/Rigel_integration.md`
 
@@ -10,7 +10,9 @@
 
 # 1. Purpose
 
-This document defines the recommended evolution of the existing Rigel implementation so that its public integration boundary conforms cleanly to the architecture established by:
+This document defines the recommended refinement of the existing Rigel public API so that the boundary between Rigel and its hosts is explicit, minimal, host-neutral, optimization-friendly, and suitable for long-term use by Bellatrix and the standalone harness.
+
+The authority chain remains:
 
 ~~~text
 Bellatrix.md
@@ -19,89 +21,180 @@ Bellatrix.md
 Rigel_integration.md
         │
         ▼
+Rigel API Convergence Plan
+        │
+        ▼
 Rigel public API
         │
         ▼
 librigel implementation
 ~~~
 
-Rigel already implements most of the architectural concepts required by the Bellatrix/Rigel integration model.
+The current Rigel implementation already contains the major architectural properties required by the Bellatrix/Rigel design.
 
-The objective is therefore **not to rewrite Rigel**.
+The objective is therefore **not to redesign Rigel**.
 
-The objective is to converge the existing implementation toward a smaller, clearer, and explicitly host-independent integration contract.
+The objective is:
 
-The primary work should concentrate on:
+> Preserve the existing Rigel execution and hardware boundary. Refine only those public interfaces where the current API exposes implementation details, mixes host and hardware concerns, requires the host to understand Rigel-owned semantics, or permits CPU-visible Rigel hardware to become inaccessible to M68K software.
+
+A critical requirement is:
+
+> **Every M68K CPU-visible classic hardware access supported by Rigel MUST remain functionally reachable through Bellatrix.**
+
+This requirement defines **semantic visibility**, not a mandatory implementation path.
+
+It does **not** require every access to pass through:
+
+* an MMU fault;
+* the generic Bellatrix Bus dispatcher;
+* a generic Rigel MMIO router;
+* the same lookup mechanism;
+* the same code path.
+
+Bellatrix and Rigel remain free to use:
+
+* caches;
+* fast paths;
+* shadows;
+* direct dispatch;
+* pre-resolved providers;
+* lookup tables;
+* region coalescing;
+* specialized register paths;
+* direct mappings where semantically valid;
+* other transparent optimizations.
+
+The invariant is:
+
+> **Complete address visibility is mandatory. The access path is not.**
+
+Conceptually:
+
+~~~text
+M68K access to X
+        │
+        ▼
+Does Rigel support X?
+        │
+       yes
+        │
+        ▼
+X MUST remain functionally reachable
+        │
+        ▼
+correct Rigel-visible semantics
+~~~
+
+The following must never occur:
+
+~~~text
+M68K accesses X
+        │
+        ▼
+Rigel supports X
+        │
+        ▼
+Bellatrix integration omitted X
+        │
+        ▼
+unmapped / incorrect / invisible
+~~~
+
+The primary areas requiring attention are:
 
 * public API organization;
 * separation of hardware configuration from host services;
-* canonical MMIO dispatch;
-* explicit MMIO width, alignment, ordering, side-effect, and result semantics;
+* opaque host context semantics;
 * explicit guest-physical memory semantics;
-* lifecycle encapsulation;
-* explicit reset semantics;
+* canonical M68K-visible MMIO semantics;
+* authoritative Rigel CPU-visible address coverage;
+* complete functional reachability of every CPU-visible Rigel address;
+* optimization-safe host integration;
+* MMU and Bus policy without imposing mandatory slow paths;
+* MMIO width, alignment, ordering, side-effect, and result semantics;
+* removal of direct host access to Rigel internals;
+* explicit lifecycle and reset semantics;
+* explicit execution/concurrency contract without constraining host topology;
 * preservation of Rigel's authoritative chipset timeline;
+* preservation of Rigel IPL ownership;
+* preservation of DMA and Chip RAM ownership rules;
+* formalization of video output as host-consumable classic chipset output;
 * separation of integration APIs from diagnostic and advanced APIs;
-* preservation of existing observable behavior during refactoring;
-* removal of unnecessary implementation details from the Bellatrix-facing boundary.
-
-The existing chipset implementation, timing model, interrupt model, DMA model, bus model, and harness should be preserved wherever they already satisfy the architectural contract.
+* preservation of existing observable behavior during API refinement.
 
 ---
 
-# 2. Guiding Principle
+# 2. Classification Model
 
-The migration should follow one rule:
-
-> Preserve working Rigel semantics. Refactor the boundary around them.
-
-The desired transformation is therefore:
+Every proposed API change should first be classified into one of four categories:
 
 ~~~text
-Current Rigel
-      │
-      ├── existing chipset implementation
-      ├── existing timing model
-      ├── existing interrupt model
-      ├── existing DMA model
-      ├── existing bus model
-      ├── existing harness
-      └── broad public API
-              │
-              ▼
-        API convergence
-              │
-              ├── minimal host integration API
-              ├── explicit host operations
-              ├── canonical MMIO boundary
-              ├── explicit memory semantics
-              ├── encapsulated lifecycle
-              └── separate advanced/debug APIs
-                      │
-                      ▼
-             candidate public API
-                      │
-              ┌───────┴───────┐
-              │               │
-           Harness         Bellatrix
-              │               │
-              └───────┬───────┘
-                      │
-               integration review
-                      │
-                      ▼
-                  librigel v1
+PRESERVE
+
+    The current implementation and host boundary are already
+    architecturally correct.
+
+FORMALIZE
+
+    The current behavior is already correct, but its public
+    contract is implicit or insufficiently documented.
+
+CHANGE
+
+    The current public API requires host/chipset responsibility
+    leakage, mixes unrelated concerns, exposes an unsuitable
+    host-facing abstraction, or allows CPU-visible Rigel
+    hardware to become functionally unreachable.
+
+INTERNALIZE
+
+    The functionality may remain useful internally, for tests,
+    inspection, or tooling, but should not remain part of the
+    normal host integration contract.
 ~~~
 
-The implementation should not be reorganized merely to resemble the specification structurally.
-
-Changes should be made only where they improve or enforce the architectural boundary.
+The existence of a topic in this document does not imply that the current Rigel implementation is deficient in that area.
 
 ---
 
-# 3. Existing Rigel Architecture
+# 3. Guiding Principles
 
-The current Rigel implementation already contains the major subsystems expected from the classic Amiga compatibility component.
+The convergence work should follow these rules:
+
+> Preserve working Rigel semantics.
+
+> Refine the API boundary rather than rewriting the chipset.
+
+> Do not treat already-correct host/Rigel ownership as a migration task.
+
+> A host-side boundary violation does not automatically justify expanding the Rigel API.
+
+> The Rigel API defines operation semantics and ordering requirements. The host decides where and how those operations execute.
+
+> Rigel must support host freedom without becoming aware of host execution topology.
+
+> Bellatrix must not interpret classic hardware semantics that belong to Rigel.
+
+> Rigel must not acquire Bellatrix, Emu68, Raspberry Pi, AROS, VC4, scheduler, or core-specific knowledge.
+
+> **Every CPU-visible classic hardware address supported by Rigel must remain semantically reachable to M68K software.**
+
+> **Bellatrix must never accidentally expose only a subset of Rigel's CPU-visible hardware.**
+
+> **Visibility is a semantic invariant, not an implementation-shape invariant.**
+
+> No CPU-visible Rigel address may become inaccessible merely because the optimized execution path bypasses the generic dispatcher.
+
+> Caches, fast paths, shadows, direct paths, and other optimizations are valid provided they preserve observable classic hardware behavior.
+
+> Rigel should remain authoritative for what CPU-visible classic hardware it implements.
+
+---
+
+# 4. Existing Rigel Architecture
+
+The current Rigel implementation already contains the major classic hardware domains expected from the compatibility component.
 
 Conceptually:
 
@@ -111,7 +204,6 @@ Rigel
 ├── public API
 │
 ├── chipset composition
-│
 │   ├── Agnus
 │   ├── Denise
 │   ├── Paula
@@ -119,7 +211,6 @@ Rigel
 │   └── related devices
 │
 ├── hardware domains
-│
 │   ├── beam
 │   ├── DMA
 │   ├── Copper
@@ -130,28 +221,23 @@ Rigel
 │   ├── serial
 │   └── input
 │
-├── timing
-│
+├── deterministic timing
 ├── bus observation
-│
+├── classic video generation
 └── harness / tests
 ~~~
 
-This basic organization should remain.
+This organization should remain.
 
-In particular, hardware domains should continue to represent ownership of chipset state and behavior rather than host execution threads.
+Hardware domains represent ownership of chipset state and behavior.
 
-Rigel should remain responsible for classic hardware semantics regardless of where or how the host executes the library.
+They must not be confused with host execution threads, ARM cores, queues, schedulers, MMU implementation details, dispatcher topology, or Bellatrix runtime policy.
 
 ---
 
-# 4. What Should Be Preserved
+# 5. What Should Be Preserved
 
-The convergence work should begin by identifying functionality that already matches the new architecture.
-
-The following concepts should be preserved unless implementation evidence demonstrates a concrete problem.
-
-## 4.1 Host-independent chipset implementation
+## 5.1 Host-independent chipset implementation
 
 Rigel should remain independent from:
 
@@ -162,35 +248,30 @@ Rigel should remain independent from:
 * BCM interrupt controllers;
 * USB;
 * Bluetooth;
-* AROS.
+* AROS;
+* host scheduler topology;
+* host core numbering;
+* host synchronization primitives;
+* host MMU implementation details;
+* host dispatch implementation details.
 
-No Bellatrix-specific dependency should be introduced into the Rigel core during integration work.
-
----
-
-## 4.2 Deterministic execution model
-
-Rigel's deterministic execution model should remain fundamental.
-
-Given identical defined:
-
-* configuration;
-* guest memory;
-* MMIO accesses;
-* input;
-* execution progress;
-
-Rigel should produce identical defined hardware state transitions and outputs.
-
-Host wall-clock timing must remain outside chipset correctness.
+No Bellatrix-specific dependency should enter the Rigel core.
 
 ---
 
-## 4.3 Deadline-based timing
+## 5.2 Deterministic execution model
 
-The existing temporal relationship should be preserved and formalized.
+Given identical defined configuration, guest memory, MMIO accesses, input, and execution progress, Rigel should produce identical defined hardware state transitions and outputs.
 
-Conceptually:
+Host wall-clock timing remains outside chipset correctness.
+
+Host optimization strategy must not change defined observable Rigel behavior.
+
+---
+
+## 5.3 Temporal model
+
+Rigel owns the authoritative classic chipset timeline.
 
 ~~~text
 Rigel
@@ -205,21 +286,16 @@ Host executes CPU
 execution progress
   │
   ▼
-Rigel advances
-  │
-  ▼
-new deadline
+Rigel step/advance
 ~~~
 
-This already corresponds closely to the Bellatrix/Rigel integration architecture.
-
-The timing implementation should therefore be adapted rather than replaced.
+This ownership should remain unchanged.
 
 ---
 
-## 4.4 Rigel interrupt ownership
+## 5.4 Interrupt ownership
 
-Rigel should continue to own:
+Rigel owns:
 
 ~~~text
 INTREQ
@@ -229,136 +305,149 @@ classic priority resolution
 Rigel IPL
 ~~~
 
-Bellatrix should consume the resulting IPL.
-
-The internal interrupt implementation should not be moved into the Bellatrix adapter.
+Bellatrix consumes the resulting IPL.
 
 ---
 
-## 4.5 Host-provided memory
+## 5.5 DMA ownership
 
-Rigel should continue to operate on memory supplied by the host.
+Rigel owns:
 
-Rigel must not become the allocator of Bellatrix guest physical memory.
+* Agnus DMA semantics;
+* Paula DMA semantics;
+* Copper and Blitter memory behavior;
+* chipset-generated address interpretation;
+* classic Chip RAM visibility rules.
 
-The current callback-based approach is compatible with the intended architecture and can remain the initial memory backend.
+Bellatrix provides memory services but must not reproduce classic DMA semantics.
 
 ---
 
-## 4.6 Standalone harness
+## 5.6 Host-provided memory
 
-The existing harness is architecturally important and should remain a first-class consumer of `librigel`.
+Rigel operates on host-provided guest memory.
 
-The harness should use the same production API and implementation used by Bellatrix.
+Rigel does not allocate Bellatrix guest physical memory.
 
-There must not be:
+---
+
+## 5.7 Host-controlled execution topology
+
+Bellatrix may execute Rigel:
 
 ~~~text
-Rigel for Bellatrix
+same core
 
-and separately
+different ARM core
 
-simplified Rigel for tests
+worker thread
+
+queue consumer
+
+serialized remote context
 ~~~
 
-The relationship must remain:
+without changing Rigel semantics.
+
+---
+
+## 5.8 Host-controlled access optimization
+
+Bellatrix may optimize access delivery using:
+
+~~~text
+generic dispatcher
+
+cached provider lookup
+
+fast path
+
+shadow
+
+direct provider call
+
+specialized path
+
+region coalescing
+
+validated direct mapping
+~~~
+
+provided the optimization preserves the same defined observable hardware semantics.
+
+No optimization may make a valid Rigel-supported CPU access disappear.
+
+---
+
+## 5.9 Standalone harness
+
+The standalone harness remains a first-class consumer of the production API.
 
 ~~~text
 Bellatrix ──┐
-            │
             ├──► public Rigel API ──► librigel
-            │
 Harness ────┘
 ~~~
 
 ---
 
-# 5. Behavioral Preservation
+# 6. Behavioral Preservation
 
-Before changing the public boundary, the existing implementation should be characterized sufficiently to distinguish API-refactoring regressions from intentional semantic corrections.
+Before changing the public boundary, establish a behavioral baseline covering:
 
-The purpose is not to freeze every existing behavior forever.
+* CPU-visible address decode;
+* MMIO accesses;
+* MMIO side effects;
+* timing;
+* deadlines;
+* IPL transitions;
+* DMA;
+* reset;
+* video;
+* audio;
+* bus behavior where relevant.
 
-The purpose is to establish an observable baseline.
+The baseline should verify semantic behavior rather than requiring identical internal execution paths.
 
-Conceptually:
-
-~~~text
-Current Rigel
-     │
-     ▼
-Capture behavioral baseline
-     │
-     ├── MMIO traces
-     ├── timing/deadline traces
-     ├── IPL traces
-     ├── DMA effects
-     ├── selected video state
-     └── selected audio state
-     │
-     ▼
-Refactor API
-     │
-     ▼
-Replay equivalent scenarios
-     │
-     ▼
-Compare behavior
-~~~
-
-Differences discovered after refactoring should be classified as either:
+For example:
 
 ~~~text
-intentional semantic correction
+generic dispatcher path
+        │
+        ▼
+observable result X
+
+
+optimized fast path
+        │
+        ▼
+observable result X
 ~~~
 
-or:
+is valid.
 
-~~~text
-regression caused by API refactoring
-~~~
-
-This makes the guiding principle:
-
-> Preserve working Rigel semantics.
-
-objectively testable.
+API refinement or optimization must not silently change classic hardware behavior.
 
 ---
 
-# 6. Primary Refactoring Target: The Public Boundary
+# 7. Public API Boundary
 
-The largest architectural change should occur at the public API boundary rather than inside the chipset implementation.
-
-The current Rigel API exposes considerably more functionality than Bellatrix requires to host Rigel.
-
-This is useful for:
-
-* debugging;
-* testing;
-* introspection;
-* development tools;
-* bus analysis;
-* snapshots;
-* harness operation.
-
-It should not automatically become the Bellatrix integration contract.
-
-The public surface should therefore be conceptually separated into:
+The public API should be conceptually divided into:
 
 ~~~text
 Rigel API
    │
    ├── Host Integration API
-   │
    │      lifecycle
+   │      CPU-visible coverage
    │      MMIO
    │      progress
    │      deadlines
    │      IPL
    │      guest memory
+   │      video
+   │      audio
    │      input
-   │      output
    │
    └── Advanced / Inspection API
           bus inspection
@@ -366,66 +455,27 @@ Rigel API
           snapshots
           diagnostics
           testing controls
-          internal-state observation
 ~~~
 
-Bellatrix should depend only on the Host Integration API unless a future architectural requirement explicitly expands that contract.
+Bellatrix should normally depend only on the Host Integration API.
 
 ---
 
-# 7. Opaque Rigel Instance
+# 8. Opaque Rigel Instance
 
-The primary Rigel object should remain opaque to hosts.
-
-Conceptually:
+The primary Rigel object should remain opaque:
 
 ~~~c
 struct rigel;
 ~~~
 
-Bellatrix should never require direct access to internal chipset structures.
-
-The lifecycle should conceptually remain:
-
-~~~c
-struct rigel *rigel_create(...);
-
-void
-rigel_reset(...);
-
-void
-rigel_destroy(...);
-~~~
-
-Internal structures representing:
-
-* Agnus;
-* Denise;
-* Paula;
-* CIA;
-* Copper;
-* Blitter;
-* beam state;
-* DMA scheduling;
-* interrupt state;
-
-must remain inaccessible through the normal Bellatrix integration boundary.
+Bellatrix must not directly access internal chipset structures.
 
 ---
 
-# 8. Separate Hardware Configuration from Host Services
+# 9. Configuration and Host Services
 
-One of the most useful API cleanups is to distinguish two fundamentally different concepts:
-
-~~~text
-What hardware Rigel should model
-
-versus
-
-What services the host provides
-~~~
-
-These should eventually be represented separately.
+Hardware configuration and host services should remain distinct.
 
 Conceptually:
 
@@ -434,1441 +484,801 @@ struct rigel_config {
     enum rigel_chipset chipset;
     enum rigel_video_standard video_standard;
     uint32_t chip_ram_size;
-    ...
 };
 
 struct rigel_host_ops {
-    uint8_t  (*mem_read8)(void *ctx, uint32_t guest_addr);
-    uint16_t (*mem_read16)(void *ctx, uint32_t guest_addr);
-    uint32_t (*mem_read32)(void *ctx, uint32_t guest_addr);
+    uint8_t  (*mem_read8)(void *ctx, uint32_t addr);
+    uint16_t (*mem_read16)(void *ctx, uint32_t addr);
+    uint32_t (*mem_read32)(void *ctx, uint32_t addr);
 
-    void (*mem_write8)(void *ctx, uint32_t guest_addr, uint8_t value);
-    void (*mem_write16)(void *ctx, uint32_t guest_addr, uint16_t value);
-    void (*mem_write32)(void *ctx, uint32_t guest_addr, uint32_t value);
+    void (*mem_write8)(void *ctx, uint32_t addr, uint8_t value);
+    void (*mem_write16)(void *ctx, uint32_t addr, uint16_t value);
+    void (*mem_write32)(void *ctx, uint32_t addr, uint32_t value);
 
     void (*log)(void *ctx, int level, const char *message);
 };
 ~~~
 
-Creation could then conceptually become:
-
-~~~c
-struct rigel *
-rigel_create(
-    const struct rigel_config *config,
-    const struct rigel_host_ops *host_ops,
-    void *host_context);
-~~~
-
-The exact API may differ.
-
-The important architectural separation is:
-
-~~~text
-rigel_config
-      │
-      └── describes classic hardware
-
-rigel_host_ops
-      │
-      └── describes services supplied by the host
-
-host_context
-      │
-      └── identifies host-specific state
-~~~
-
-This prevents configuration from becoming a generic container for host integration mechanisms.
+Exact signatures are not normative.
 
 ---
 
-# 9. Chip RAM Configuration
+# 10. Host Context
 
-Fields such as:
+The host context is opaque.
 
-~~~c
-uint32_t chip_ram_size;
-~~~
+Rigel receives it from the host and returns it unchanged to host callbacks.
 
-must describe the chipset-visible memory topology.
+Rigel never interprets its contents.
 
-They must not imply that Rigel owns the allocation.
+---
 
-The relationship should remain:
+# 11. Chip RAM Ownership
+
+Chip RAM configuration describes chipset-visible memory topology.
+
+It does not imply allocation ownership.
 
 ~~~text
 Bellatrix
     │
-    ├── allocates guest memory
-    ├── maps guest memory
-    └── provides backing
-            │
-            ▼
-      guest physical memory
+    ├── allocates
+    ├── maps
+    └── backs guest memory
             │
             ▼
           Rigel
             │
-            └── interprets chipset-visible
+            └── applies classic
                 Chip RAM semantics
 ~~~
 
-Rigel owns:
-
-* Agnus-visible address rules;
-* chipset address masking;
-* chipset pointer interpretation;
-* DMA accessibility;
-* classic Chip RAM semantics.
-
-Bellatrix owns:
-
-* allocation;
-* mapping;
-* backing storage;
-* host representation.
+This is separate from CPU-visible Rigel MMIO coverage.
 
 ---
 
-# 10. Clarify Memory Callback Semantics
+# 12. Memory Address Semantics
 
-Memory callback addresses should have an explicit architectural meaning.
+Addresses passed to host memory callbacks are guest physical addresses.
 
-The recommended contract is:
+~~~text
+chipset-generated address
+        │
+        ▼
+Rigel classic address rules
+        │
+        ▼
+guest physical address
+        │
+        ▼
+host memory callback
+~~~
 
-> Addresses passed to host memory callbacks are guest physical addresses.
+These addresses must not be confused with CPU-visible MMIO addresses.
+
+---
+
+# 13. Host Memory as Coherency Boundary
+
+Rigel DMA writes pass through the host memory interface.
+
+The host may perform required coherency actions, including Emu68 JIT invalidation where necessary.
+
+Rigel remains unaware of JIT internals.
+
+---
+
+# 14. CPU-Visible Rigel Hardware
+
+Rigel must define the CPU-visible classic hardware interface that it supports.
+
+Conceptually:
+
+~~~text
+Rigel-supported CPU-visible interface
+                    │
+                    ▼
+          host integration knowledge
+                    │
+                    ▼
+       complete functional reachability
+~~~
+
+The essential invariant is:
+
+> If Rigel supports the defined semantics of a CPU-visible M68K hardware access, Bellatrix must provide a valid execution path for that access.
+
+This does not require a one-address-per-entry representation.
+
+It does not require every address to fault.
+
+It does not require every access to pass through a generic dispatcher.
+
+It requires only that no supported access become invisible.
+
+---
+
+# 15. Semantic Reachability
+
+Define:
+
+~~~text
+R = set of CPU-visible classic hardware accesses
+    whose semantics are supported by Rigel
+
+H = set of CPU-visible accesses that Bellatrix
+    can correctly deliver to Rigel-equivalent semantics
+~~~
+
+The required invariant is:
+
+~~~text
+R ⊆ H
+~~~
+
+This is the fundamental address-visibility requirement.
+
+It deliberately does not define:
+
+~~~text
+R = MMU faults
+
+R = Bellatrix Bus calls
+
+R = generic dispatcher calls
+~~~
+
+because those are implementation mechanisms.
+
+---
+
+# 16. Visibility Versus Access Path
+
+The following distinction is normative.
+
+~~~text
+VISIBILITY
+    mandatory
+
+SEMANTIC REACHABILITY
+    mandatory
+
+OBSERVABLE HARDWARE BEHAVIOR
+    mandatory
+
+
+GENERIC DISPATCH
+    implementation choice
+
+MMU FAULT
+    implementation choice
+
+CACHE
+    implementation choice
+
+FAST PATH
+    implementation choice
+
+SHADOW
+    implementation choice
+
+DIRECT PATH
+    implementation choice
+~~~
 
 Therefore:
 
-~~~c
-mem_read16(ctx, guest_physical_address);
-~~~
-
-must not ambiguously mean:
-
-* Chip RAM array offset;
-* chipset-generated address;
-* M68K MMIO address;
-* host pointer.
-
-The complete translation becomes:
-
-~~~text
-chipset register
-      │
-      ▼
-chipset-generated address
-      │
-      ▼
-Rigel address masking / decoding
-      │
-      ▼
-guest physical address
-      │
-      ▼
-host memory callback
-      │
-      ▼
-Bellatrix memory backend
-~~~
-
-This distinction is particularly important once Bellatrix provides multiple guest-memory regions.
+> **Complete address visibility is mandatory; the access path is not.**
 
 ---
 
-# 11. Define Memory Failure Semantics Before API v1
+# 17. Canonical MMIO Boundary
 
-Before the host memory interface becomes part of API Version 1, the implementation must determine whether memory callbacks are infallible by contract or require explicit failure semantics.
-
-A simple interface such as:
-
-~~~c
-uint16_t
-mem_read16(
-    void *ctx,
-    uint32_t guest_physical_address);
-~~~
-
-implicitly assumes that every address passed to the host memory backend can produce a valid result.
-
-That may be correct if Rigel guarantees that only valid, configured guest physical addresses can reach the callback.
-
-If this guarantee cannot be made, the API may require explicit failure semantics.
-
-Conceptually:
-
-~~~c
-rigel_status_t
-mem_read16(
-    void *ctx,
-    uint32_t guest_physical_address,
-    uint16_t *value);
-~~~
-
-This document does not mandate either form.
-
-The API convergence process must determine and document:
-
-* whether memory callbacks can fail;
-* which component validates addresses;
-* what happens for inaccessible memory;
-* what happens for addresses outside configured Chip RAM;
-* whether invalid DMA accesses produce open-bus behavior, ignored writes, hardware-specific behavior, or integration errors.
-
-Classic hardware behavior must not accidentally become a host API failure.
-
-The distinction between:
-
-~~~text
-valid classic hardware behavior
-~~~
-
-and:
-
-~~~text
-host integration failure
-~~~
-
-must remain explicit.
-
----
-
-# 12. Preserve Callback-Based Memory Initially
-
-The callback memory model is sufficient for the initial Bellatrix integration.
-
-It should not be replaced prematurely with direct mappings.
-
-Initial model:
-
-~~~text
-Rigel
-  │
-  ▼
-host memory callback
-  │
-  ▼
-Bellatrix guest memory
-~~~
-
-This has several advantages during convergence:
-
-* explicit ownership;
-* simple instrumentation;
-* easy harness implementation;
-* controlled JIT invalidation;
-* clear memory semantics;
-* minimal host coupling.
-
-Optimization should occur only after correctness is demonstrated.
-
----
-
-# 13. Direct Memory Windows as a Later Optimization
-
-A future optimization may expose validated direct memory windows.
-
-Conceptually:
-
-~~~c
-struct rigel_memory_window {
-    uint32_t guest_base;
-    size_t size;
-    void *host_ptr;
-};
-~~~
-
-The optimized relationship could become:
-
-~~~text
-Rigel
-  │
-  ├── callback memory
-  │
-  └── validated direct window
-             │
-             ▼
-        guest memory
-~~~
-
-However, direct access must remain an optimization of the same memory contract.
-
-It must not redefine memory ownership.
-
-Rigel must not become aware of:
-
-* Bellatrix allocators;
-* ARM page tables;
-* Emu68 translation metadata;
-* Raspberry Pi memory layout.
-
----
-
-# 14. Canonical MMIO Boundary
-
-The current Rigel API already contains subsystem-specific MMIO operations.
-
-For example, custom-register operations naturally use register offsets.
-
-That internal model should remain useful.
-
-However, Bellatrix should use a canonical M68K-visible MMIO transaction boundary.
+Rigel should expose a canonical host-facing M68K-visible MMIO transaction interface capable of representing the complete CPU-visible classic hardware semantics supported by Rigel.
 
 Conceptually:
 
 ~~~text
-Bellatrix / execution engine
-            │
-            ▼
-M68K-visible MMIO transaction
-            │
-            ├── address
-            ├── width
-            ├── read/write direction
-            └── value where applicable
-            │
-            ▼
-           Rigel
-~~~
-
-For example, Bellatrix should be able to present the logical transaction:
-
-~~~text
-WRITE
-
-M68K address = 0x00DFF096
-width        = 16 bits
-value        = 0x8200
-~~~
-
-without needing to understand that:
-
-~~~text
-0x00DFF096
-      │
-      ▼
-custom register region
-      │
-      ▼
-offset 0x096
-~~~
-
-That interpretation should belong to Rigel.
-
-The exact C representation of the canonical MMIO boundary is intentionally not frozen by this document.
-
-It may eventually use width-specific entry points, a generic transaction interface, or another representation that preserves the required semantics.
-
----
-
-# 15. Canonical MMIO Does Not Make Rigel a Global Dispatcher
-
-The canonical MMIO API does not imply that Rigel receives every M68K address.
-
-Bellatrix/Emu68 remains responsible for determining which registered provider owns an address-space region.
-
-Conceptually:
-
-~~~text
-M68K address
-     │
-     ▼
-Emu68 / Bellatrix address dispatcher
-     │
-     ├── native provider
-     │
-     ├── Rigel provider
-     │
-     └── unmapped
-             │
-             ▼
-       normal behavior
-~~~
-
-Only an access assigned to a Rigel provider reaches the Rigel MMIO interface.
-
-Therefore Bellatrix may know:
-
-~~~text
-0xDFFxxx
-belongs to a Rigel compatibility region
-~~~
-
-without knowing:
-
-~~~text
-0xDFF096
-is DMACON
-~~~
-
-The latter is classic chipset knowledge and belongs to Rigel.
-
-The responsibility boundary is:
-
-~~~text
-Bellatrix / Emu68
+M68K-visible transaction
         │
-        │ determine provider
-        ▼
-      Rigel
-        │
-        │ interpret address inside
-        │ compatibility domain
-        ▼
-chipset component
-~~~
-
-Rigel MUST NOT become a generic fallback handler for the complete M68K address space.
-
----
-
-# 16. Preserve Internal Region-Specific MMIO
-
-Canonical external MMIO does not require removing useful internal APIs.
-
-The implementation may remain conceptually:
-
-~~~text
-canonical MMIO transaction
-          │
-          ▼
-    Rigel MMIO router
-          │
-          ├── custom
-          │      │
-          │      ▼
-          │  custom register handler
-          │
-          ├── CIAA
-          │
-          └── CIAB
-~~~
-
-This is preferable to moving address decoding into Bellatrix.
-
-Bellatrix should determine that an address belongs to a Rigel-registered region.
-
-Rigel should determine what that address means inside the compatibility hardware environment.
-
----
-
-# 17. MMIO Values Must Remain M68K-Logical
-
-The canonical MMIO interface should operate on M68K-visible logical values.
-
-For example, the logical transaction:
-
-~~~text
-WRITE
-
-address = 0x00DFF096
-width   = 16 bits
-value   = 0x8200
-~~~
-
-must mean:
-
-~~~text
-M68K-visible value = 0x8200
-~~~
-
-regardless of ARM host byte order.
-
-Endianness conversion must occur at a clearly defined boundary.
-
-ARM-native representation must not leak into Rigel register semantics.
-
----
-
-# 18. Define MMIO Width and Alignment Semantics
-
-Before the canonical MMIO interface becomes part of API Version 1, the supported transaction widths and alignment behavior must be explicitly defined.
-
-Conceptual transactions may include:
-
-~~~text
-8-bit read
-16-bit read
-32-bit read
-
-8-bit write
-16-bit write
-32-bit write
-~~~
-
-The existence of these conceptual transactions must not imply that all classic hardware regions naturally support all widths.
-
-The API convergence process must determine and document:
-
-* which MMIO widths are supported;
-* whether support differs between compatibility regions;
-* required address alignment for each width;
-* behavior of misaligned accesses;
-* behavior of historically unusual access widths;
-* whether unsupported widths are rejected or represented through defined classic bus behavior;
-* whether a wider access represents one logical transaction or multiple ordered classic bus transactions.
-
-The following concepts must remain distinct:
-
-~~~text
-CPU transaction width
+        ├── address
+        ├── width
+        ├── direction
+        └── value
         │
         ▼
-classic bus semantics
+canonical Rigel MMIO
         │
         ▼
-register implementation width
-~~~
-
-An implementation must not assume without an explicit semantic rule that:
-
-~~~text
-32-bit read at A
-~~~
-
-is necessarily equivalent to:
-
-~~~text
-16-bit read at A
-followed by
-16-bit read at A + 2
-~~~
-
-If a 32-bit operation is represented internally as multiple classic bus accesses, their:
-
-* ordering;
-* side effects;
-* timing visibility;
-* fault behavior;
-
-must be explicitly defined.
-
-The same principle applies to byte accesses on registers whose historical hardware semantics are naturally word-oriented.
-
-MMIO width and alignment behavior must therefore be part of the public transaction contract rather than an accidental consequence of the ARM host implementation.
-
----
-
-# 19. MMIO Transactions Are Observable Hardware Operations
-
-Canonical MMIO operations must be treated as hardware transactions rather than ordinary memory accesses.
-
-A read transaction may have hardware-visible consequences.
-
-Similarly, a write represents an observable transaction whose:
-
-* address;
-* width;
-* value;
-* ordering;
-* number of occurrences;
-
-may be semantically significant.
-
-Therefore Bellatrix, Emu68, or another execution engine must not assume that Rigel MMIO transactions may be freely:
-
-* cached;
-* eliminated;
-* duplicated;
-* combined;
-* split;
-* reordered;
-
-unless the Rigel transaction contract explicitly permits that transformation.
-
-Conceptually:
-
-~~~text
-M68K execution
-      │
-      ▼
-observable MMIO transaction
-      │
-      ├── address
-      ├── width
-      ├── value
-      ├── ordering
-      └── occurrence
-      │
-      ▼
-Rigel
-      │
-      ▼
 classic hardware semantics
 ~~~
 
-For example:
+Example:
 
 ~~~text
-read A
-read A
+address = 0x00DFF096
+width   = 16
+write   = 0x8200
 ~~~
 
-must not automatically become:
+Bellatrix must not need to convert this into:
 
 ~~~text
-read A once
-reuse result
+DMACON
+custom register 0x096
+Agnus-specific operation
 ~~~
 
-because two hardware reads may not be semantically equivalent to one read.
-
-Likewise:
-
-~~~text
-write A
-write B
-~~~
-
-must not be reordered merely because the host architecture or JIT would normally permit such optimization for ordinary memory.
-
-If Rigel internally decomposes a transaction into multiple classic bus operations, that decomposition belongs to Rigel's defined MMIO semantics.
-
-The host must preserve the M68K-visible transaction presented at the public boundary.
-
-This rule is especially important for translated execution engines:
-
-> MMIO optimization must preserve Rigel-defined observable transaction semantics.
-
-The canonical MMIO API is therefore a hardware transaction boundary, not merely a convenience memory-access API.
+before entering the Rigel compatibility domain.
 
 ---
 
-# 20. Define MMIO Transaction Result and Failure Semantics
+# 18. Canonical MMIO Is the Semantic Reference Path
 
-Before the canonical MMIO interface becomes part of API Version 1, the convergence process must determine how transaction completion and exceptional conditions are represented at the host boundary.
+Canonical MMIO defines the normal public semantic boundary.
 
-Possible conditions include:
-
-* unsupported access width;
-* misaligned access;
-* access to an address hole inside a Rigel-owned compatibility region;
-* classic hardware behavior that does not correspond to an ordinary successful memory access;
-* an internal integration failure unrelated to guest-visible hardware behavior.
-
-The first question should be whether every transaction assigned to Rigel can be resolved entirely through classic hardware semantics.
+It does not imply that every optimized host access must physically execute through the generic canonical dispatcher.
 
 Conceptually:
 
 ~~~text
-M68K MMIO transaction
-        │
-        ▼
-      Rigel
-        │
-        ▼
-classic hardware behavior
-        │
-        ▼
-transaction completed
+                    M68K access
+                        │
+                        ▼
+                host access resolution
+                        │
+       ┌────────────────┼────────────────┐
+       │                │                │
+       ▼                ▼                ▼
+ generic MMIO       cached path       fast path
+       │                │                │
+       │                ▼                │
+       │             shadow              │
+       │                │                │
+       └────────────────┼────────────────┘
+                        ▼
+              Rigel-defined semantics
 ~~~
 
-If so, no generic host-visible failure mechanism may be required.
-
-Alternatively, if the public boundary must represent transaction status explicitly, the API may require a conceptual result such as:
-
-~~~text
-MMIO transaction result
-        │
-        ├── completed
-        │
-        ├── defined guest-visible hardware condition
-        │
-        └── host integration failure
-~~~
-
-This document does not mandate a particular C representation.
-
-The MMIO convergence phase must determine and document:
-
-* whether every Rigel-owned MMIO transaction resolves through classic hardware semantics;
-* whether the host needs an explicit transaction-result representation;
-* how unsupported widths are represented;
-* how misaligned accesses are represented;
-* how compatibility-region address holes are represented;
-* whether any guest-visible bus or fault condition must cross the API boundary;
-* how genuine host integration failures are reported.
-
-The distinction between:
-
-~~~text
-guest-visible classic hardware behavior
-~~~
-
-and:
-
-~~~text
-host integration failure
-~~~
-
-must remain explicit.
-
-A valid or historically defined hardware response must not accidentally become an API error merely because it is unusual from the host's perspective.
-
-Likewise, a genuine integration failure must not silently become invented classic hardware behavior.
+All paths must remain semantically equivalent where the contract requires equivalence.
 
 ---
 
-# 21. Keep Address Namespaces Explicit
+# 19. No Hidden CPU-Visible Hardware
 
-The convergence should preserve explicit terminology for different address spaces.
-
-At minimum:
+A CPU-visible Rigel capability must not exist only behind:
 
 ~~~text
-M68K MMIO address
-        │
-        │ CPU-visible hardware address
-        ▼
-Rigel MMIO routing
+internal subsystem API
 
+test API
 
-Chipset-generated address
-        │
-        │ interpreted according to
-        │ classic chipset rules
-        ▼
-Rigel address masking / decoding
-        │
-        ▼
-Guest physical address
-        │
-        │ supplied to host memory backend
-        ▼
-Host representation / pointer
+debug API
+
+private helper
 ~~~
 
-These concepts must not be collapsed merely because a particular implementation can map between them cheaply.
+if doing so makes that hardware inaccessible to M68K software hosted by Bellatrix.
 
-Recommended terminology in the public API should therefore distinguish names such as:
+Internal helpers are valid.
 
-~~~text
-m68k_address
-
-chipset_generated_address
-
-guest_physical_address
-
-host_ptr
-~~~
-
-where appropriate.
-
-In particular, a classic MMIO address such as:
-
-~~~text
-0x00DFF096
-~~~
-
-must not be described as a `guest_physical_address` in the public contract.
+Internal-only CPU-visible reachability is not.
 
 ---
 
-# 22. Preserve the Existing Temporal Model
+# 20. Authoritative Coverage Description
 
-The existing Rigel temporal model already provides the essential concepts required by Bellatrix.
+Rigel should provide enough host-neutral information for Bellatrix to guarantee complete CPU-visible reachability.
 
-The convergence should preserve the conceptual capabilities:
-
-~~~text
-current Rigel time
-
-next Rigel deadline
-
-advance Rigel according to reported execution progress
-~~~
-
-These map naturally onto the integration model:
-
-~~~text
-Emu68
-  │
-  ▼
-execution progress
-  │
-  ▼
-Bellatrix
-  │
-  ▼
-Rigel
-  │
-  ├── advances authoritative chipset timeline
-  └── returns next synchronization deadline
-~~~
-
-The existing timing implementation should therefore be refined and documented rather than replaced.
-
-The exact API representation of advancement remains intentionally undecided at this stage.
-
-In particular:
-
-~~~text
-semantic capability
-        │
-        ▼
-advance Rigel according
-to execution progress
-        │
-        ▼
-API design decision
-       / \
-      /   \
-advance   advance_to
-(delta)   (absolute)
-~~~
-
-The temporal API freeze phase should determine which representation best expresses the existing model without changing its ownership semantics.
-
----
-
-# 23. Rigel Owns the Authoritative Timeline
-
-The public API and implementation should make one point unambiguous:
-
-> Rigel owns the authoritative chipset timeline.
-
-Bellatrix may maintain:
-
-* accumulated CPU progress;
-* synchronization accounting;
-* execution budgets;
-* scheduling information.
-
-Those values are not authoritative chipset time.
-
-Conceptually:
-
-~~~text
-Bellatrix progress accounting
-             │
-             ▼
-     execution progress
-             │
-             ▼
-           Rigel
-             │
-             ▼
- authoritative chipset timeline
-             │
-      ┌──────┼─────────┐
-      │      │         │
-     beam   DMA      Copper
-                    Blitter
-                    Paula
-                    CIA
-~~~
-
-No second beam or chipset clock should exist in Bellatrix.
-
----
-
-# 24. Freeze the Progress Unit Before API v1
-
-Before the temporal API becomes a stable Version 1 API, one canonical progress representation must be selected.
-
-Possible models include:
+A possible representation is:
 
 ~~~c
-rigel_advance_cycles(...);
+struct rigel_mmio_region {
+    uint32_t start;
+    uint32_t end;
+    uint32_t flags;
+};
 ~~~
 
-or:
+The exact representation is not normative.
 
-~~~c
-rigel_advance_ns(...);
-~~~
+The region description may be:
 
-or an equivalent fixed virtual unit.
+* fine-grained;
+* coarse-grained;
+* coalesced;
+* generated;
+* static;
+* optimized.
 
-The choice should optimize for:
+Its purpose is not to prescribe the dispatch implementation.
 
-* deterministic conversion;
-* sufficient precision;
-* efficient Emu68 integration;
-* overflow behavior;
-* testability;
-* portability across hosts.
-
-It must not represent host elapsed time.
-
-The earlier conceptual API descriptions in this document do not commit Version 1 to a delta-based or absolute-time advancement model.
+Its purpose is to prevent Bellatrix from accidentally omitting CPU-visible Rigel hardware.
 
 ---
 
-# 25. Define Deadline Representation Explicitly
+# 21. Coverage Description Is Not a Mandatory Slow Path
 
-The current temporal model should be made explicit about whether deadlines are:
-
-~~~text
-absolute virtual timestamps
-~~~
-
-or:
+The authoritative coverage description tells the host:
 
 ~~~text
-relative deltas
+which CPU-visible address space must remain valid
 ~~~
 
-The Version 1 API must select one representation.
-
-For example, an absolute model might conceptually be:
-
-~~~c
-rigel_time_t now =
-    rigel_get_time(rigel);
-
-rigel_time_t deadline =
-    rigel_get_next_deadline(rigel);
-~~~
-
-where both values belong to the same virtual timeline.
-
-Alternatively, a relative API could explicitly express:
-
-~~~c
-rigel_duration_t delta =
-    rigel_time_until_deadline(rigel);
-~~~
-
-What should be avoided is an API where callers must infer the semantics.
-
----
-
-# 26. Evaluate `advance()` Versus `advance_to()`
-
-Before the temporal API is frozen, the convergence work should explicitly evaluate how the semantic capability:
+It does not tell the host:
 
 ~~~text
-advance Rigel according to execution progress
+how every access must be executed
 ~~~
-
-should be represented at the public API boundary.
-
-A delta-oriented API could conceptually use:
-
-~~~c
-rigel_advance(
-    rigel,
-    elapsed);
-~~~
-
-An absolute-time API could conceptually use:
-
-~~~c
-rigel_advance_to(
-    rigel,
-    reached_time);
-~~~
-
-An absolute model has the potential advantage that:
-
-~~~text
-current time
-deadline
-advance target
-~~~
-
-all inhabit the same explicit virtual timeline.
-
-A delta model may integrate more naturally with execution engines that report accumulated progress.
-
-This document does not select either model.
-
-The decision belongs to the temporal API freeze phase.
-
-Until then, references such as:
-
-~~~text
-advance Rigel
-
-obtain next deadline
-~~~
-
-should be understood as conceptual capabilities rather than final ABI signatures.
-
----
-
-# 27. Preserve Overshoot Support
-
-Rigel should continue to tolerate execution progress crossing a deadline.
-
-Conceptually:
-
-~~~text
-deadline = 100
-
-CPU reaches = 112
-
-Rigel:
-    process event at 100
-    continue through remaining 12
-~~~
-
-This is important because a translated M68K execution engine may not always stop exactly at a chipset boundary.
-
-However:
-
-> Overshoot tolerance is a correctness property, not a scheduling strategy.
-
-Bellatrix should still attempt to respect Rigel deadlines reasonably closely.
-
----
-
-# 28. Preserve Returned Host-Visible Results
-
-Rigel already has a useful model where stepping can return information about externally relevant state changes.
-
-This is preferable to introducing a generic asynchronous callback from Rigel into Bellatrix.
-
-Conceptually:
-
-~~~text
-Bellatrix
-    │
-    │ Rigel advance
-    ▼
-Rigel
-    │
-    ▼
-step result
-    │
-    ├── CPU-visible state changed
-    ├── output became available
-    └── other explicitly host-visible result
-~~~
-
-This direction has important properties:
-
-* deterministic ordering;
-* no arbitrary reentrancy;
-* simple harness reproduction;
-* host remains in control of execution;
-* Rigel does not acquire Bellatrix dependencies.
-
-Internal hardware events should remain internal unless they cross the host boundary for a defined reason.
 
 For example:
 
 ~~~text
-Blitter completes
-       │
-       ├── changes internal state
-       └── may affect INTREQ
-~~~
-
-does not necessarily imply that Bellatrix should receive a dedicated:
-
-~~~text
-BLIT_DONE
-~~~
-
-host event.
-
-The host should observe the externally relevant consequence through the appropriate boundary.
-
----
-
-# 29. Avoid Generic Host Event Callbacks
-
-A generic callback such as:
-
-~~~c
-signal_event(ctx, event);
-~~~
-
-should not be introduced merely for convenience.
-
-It risks becoming:
-
-~~~text
-Rigel
-  │
-  └── arbitrary escape into Bellatrix
-~~~
-
-Instead, prefer:
-
-~~~text
-Rigel call
-   │
-   ▼
-explicit return value
-   │
-   ▼
-Bellatrix reacts
-~~~
-
-or narrow interfaces with well-defined semantics when asynchronous communication is genuinely required.
-
----
-
-# 30. Preserve Rigel IPL as the Interrupt Boundary
-
-The normal Bellatrix integration should require only the compatibility-domain IPL.
-
-Conceptually:
-
-~~~c
-unsigned
-rigel_get_ipl(const struct rigel *rigel);
-~~~
-
-Bellatrix then performs:
-
-~~~text
-native_ipl ─────┐
-                │
-                ▼
-          IPL arbitration
-                │
-                ▼
-              M68K
-                ▲
-                │
-rigel_ipl ──────┘
-~~~
-
-Bellatrix should not need to inspect Rigel's individual interrupt sources to perform normal CPU interrupt delivery.
-
----
-
-# 31. Keep INTREQ and INTENA for Inspection if Useful
-
-Existing APIs exposing:
-
-~~~text
-INTREQ
-INTENA
-~~~
-
-may remain useful for:
-
-* debugging;
-* harness inspection;
-* diagnostics;
-* tests;
-* state visualization.
-
-They should not become required inputs to Bellatrix interrupt arbitration.
-
-The distinction should be:
-
-~~~text
-Host integration:
-    rigel_get_ipl()
-
-Inspection:
-    rigel_get_intreq()
-    rigel_get_intena()
-~~~
-
-Bellatrix should not reconstruct Rigel IPL from `INTREQ` and `INTENA`.
-
-That calculation belongs to Rigel.
-
----
-
-# 32. Preserve Bus Observation as an Advanced Capability
-
-Rigel's bus-observation facilities should not be removed merely because they are not required by the minimal Bellatrix integration.
-
-Capabilities conceptually equivalent to:
-
-~~~text
-get bus state
-
-get next bus change
-
-determine whether CPU can access Chip RAM
-
-determine CPU resume time
-~~~
-
-may become important for tighter CPU/chipset synchronization.
-
-In particular, they may later support:
-
-~~~text
-M68K CPU
-   │
-   ▼
-Chip RAM access
-   │
-   ▼
-Rigel bus ownership
-   │
-   ├── CPU may access
-   │
-   └── CPU must wait
-             │
-             ▼
-        resume time
-~~~
-
-This is distinct from the basic deadline interface.
-
----
-
-# 33. Do Not Make Bus Contention Mandatory in Phase 1
-
-The initial Bellatrix adapter should not require detailed bus observation unless needed for correctness of the first integration.
-
-Recommended progression:
-
-~~~text
-Initial integration
-
-MMIO
-progress
-deadline
-IPL
-DMA
-memory coherence
-
-        │
-        ▼
-
-Advanced integration
-
-fine-grained Chip RAM contention
-bus ownership
-CPU stalls
-bus-change observation
-~~~
-
-The existing Rigel bus infrastructure should be preserved so advanced integration does not require redesigning chipset internals.
-
-This preserves the possibility of a future relationship such as:
-
-~~~text
-Emu68 executes M68K
-        │
-        ├── Fast RAM access
-        │      └── no Rigel involvement
-        │
-        └── Chip RAM access
-               │
-               ▼
-          Rigel bus model
-               │
-             busy?
-             /   \
-           no     yes
-           │       │
-         access   stall until
-                  resume time
-~~~
-
-Rigel remains authoritative for classic bus semantics.
-
-Bellatrix does not reproduce Agnus bus-slot logic.
-
----
-
-# 34. Reconsider `rigel_chipset_wire()`
-
-Any public function that exposes internal chipset wiring should be reviewed carefully.
-
-If an operation such as:
-
-~~~c
-rigel_chipset_wire(...);
-~~~
-
-exists primarily to connect internal Rigel components, it should probably not form part of the normal host integration API.
-
-The desired lifecycle is:
-
-~~~text
-rigel_create()
+Rigel coverage
       │
-      ├── allocate internal state
-      ├── configure hardware
-      ├── wire internal components
-      └── return complete opaque instance
+      ▼
+Bellatrix policy
+      │
+      ├── generic Bus route
+      ├── cached provider
+      ├── fast path
+      ├── shadow path
+      └── other validated optimization
 ~~~
 
-The host should receive a valid Rigel instance rather than constructing internal chipset relationships itself.
-
-If runtime reconfiguration requires rewiring, that requirement should be represented by a specific public operation rather than exposing generic internal wiring.
+All are valid.
 
 ---
 
-# 35. Define Lifecycle and Reset Semantics Before API v1
+# 22. Region Holes and Subdecode
 
-Before the lifecycle API becomes part of Version 1, creation, reset, and destruction semantics must be explicitly defined.
+Rigel may advertise larger regions containing internal holes.
 
-At minimum, the public contract should distinguish conceptually between:
+For example:
 
 ~~~text
-create
-  │
-  ▼
-defined initial instance state
+advertised region:
 
+1 2 3 4 5 6 7 8
+      │
+      ▼
+Rigel subdecode:
 
-cold reset
-  │
-  ▼
-defined classic power-on/reset state
-
-
-warm reset
-  │
-  ▼
-defined classic machine reset semantics
-
-
-destroy
-  │
-  ▼
-instance becomes unusable
+1 register
+2 register
+3 hole
+4 register
+5 open bus
+6 register
+7 ignored write
+8 register
 ~~~
 
-The API convergence process must determine and document:
+Bellatrix does not need to understand those distinctions.
 
-* what state exists immediately after `rigel_create()`;
-* whether `rigel_create()` implicitly performs a cold reset;
-* whether an explicit initial reset is required before MMIO or advancement;
-* what internal state is reset by a cold reset;
-* what internal state is reset or preserved by a warm reset;
-* what externally supplied state survives each reset;
-* whether guest memory is modified by reset;
-* whether host callbacks remain installed across reset;
-* whether configuration remains fixed across reset;
-* whether output queues or pending host-visible results are discarded or preserved;
-* whether the Rigel virtual timeline is restarted, preserved, or otherwise transformed;
-* what operations are valid during each lifecycle state.
+If an access reaches Rigel's canonical path, Rigel determines the classic behavior.
+
+An optimized path may avoid generic subdecode only if it preserves equivalent observable behavior.
+
+---
+
+# 23. Bellatrix Knows Ownership, Not Meaning
+
+Bellatrix may know:
+
+~~~text
+this address belongs to the Rigel compatibility domain
+~~~
+
+Bellatrix should not need to know:
+
+~~~text
+this is DMACON
+
+this is INTENA
+
+this is CIAA PRA
+
+this starts Paula DMA
+~~~
+
+The normal responsibility boundary remains:
+
+~~~text
+Bellatrix
+    │
+    │ resolves ownership / access path
+    ▼
+Rigel
+    │
+    │ defines classic hardware meaning
+    ▼
+chipset implementation
+~~~
+
+---
+
+# 24. MMU Policy
+
+The Emu68 MMU is one mechanism Bellatrix may use to make Rigel regions interceptable.
 
 Conceptually:
 
-~~~c
-rigel_reset(
-    rigel,
-    RIGEL_RESET_COLD);
-
-rigel_reset(
-    rigel,
-    RIGEL_RESET_WARM);
-~~~
-
-The existence of reset enum values must not precede a clear definition of their semantics.
-
-In particular:
-
-> Bellatrix must request a reset class. Rigel must own the classic hardware semantics of that reset class.
-
-Bellatrix must not reproduce rules such as:
-
 ~~~text
-reset Copper this way
-
-preserve CIA state that way
-
-clear this interrupt register
-
-restart this beam state
+Rigel coverage
+      │
+      ▼
+Bellatrix machine policy
+      │
+      ▼
+Emu68 MMU map/unmap facilities
+      │
+      ▼
+fault/interception where required
 ~~~
 
-Those rules belong to Rigel.
+Bellatrix should reuse existing Emu68 MMU mechanisms wherever sufficient.
 
-Likewise, resetting Rigel must not implicitly reset unrelated Bellatrix or Raspberry Pi hardware.
-
-Lifecycle semantics should therefore be frozen together with the Version 1 host contract rather than treated as a trivial implementation detail.
-
----
-
-# 36. Reconsider Cycle-Exact Control as Integration API
-
-Development controls conceptually equivalent to:
-
-~~~c
-rigel_set_cycle_exact(...);
-rigel_get_cycle_exact(...);
-~~~
-
-may remain valuable.
-
-However, Bellatrix should not normally need to know which internal mechanism Rigel uses to satisfy its timing contract.
-
-These controls are better classified as:
-
-~~~text
-advanced configuration
-
-testing
-
-diagnostics
-
-A/B validation
-~~~
-
-rather than mandatory host integration operations.
-
-The distinction should be reflected in API organization.
-
----
-
-# 37. Snapshots Should Remain Outside the Minimal Host Contract
-
-Snapshot functionality is valuable and should not be removed.
+Bellatrix should not create a parallel MMU implementation.
 
 However:
 
-~~~text
-snapshot creation
-snapshot restoration
-state inspection
-~~~
+> MMU faulting is not itself part of the Rigel semantic contract.
 
-are not necessary to define the basic Bellatrix/Rigel integration.
-
-They should remain available through an advanced or tooling API.
-
-The minimal Bellatrix adapter should not depend on snapshot functionality.
+An optimized path may avoid a fault where correctness is preserved.
 
 ---
 
-# 38. Video Output
+# 25. Bellatrix Bus
 
-Rigel should continue to own classic video-generation semantics.
-
-Bellatrix should own presentation.
+The Bellatrix Bus provides the generic routing mechanism for accesses that require generic host dispatch.
 
 Conceptually:
 
 ~~~text
-Denise / chipset
-       │
-       ▼
-     Rigel
-       │
-       ▼
-host-independent video output
-       │
-       ▼
-Bellatrix video adapter
-       │
-       ▼
-VC4 / framebuffer / future output
+M68K access
+    │
+    ▼
+MMU/fault or other generic entry
+    │
+    ▼
+Bellatrix Bus
+    │
+    ▼
+Rigel
 ~~~
 
-No VC4 knowledge should enter Rigel.
+But the Bus is not required to be the physical execution path for every optimized Rigel access.
 
-The precise output representation does not need to be frozen as part of the first API cleanup unless required immediately.
+The requirement is:
 
-Possible future representations include:
-
-* completed frames;
-* scanlines;
-* incremental raster data;
-* another host-independent surface.
+> Any access that falls back to the generic Bellatrix Bus path must remain routable to the correct Rigel provider.
 
 ---
 
-# 39. Audio Output
+# 26. Generic Fallback Must Be Complete
 
-The equivalent boundary should exist for Paula audio.
+Optimizations may exist above the generic dispatcher.
+
+However, the generic fallback should remain capable of resolving the complete Rigel coverage for which it is responsible.
+
+Conceptually:
+
+~~~text
+M68K access
+     │
+     ▼
+optimized path available?
+     │
+    / \
+  yes  no
+  │     │
+  ▼     ▼
+fast   generic
+path   dispatcher
+  │     │
+  └──┬──┘
+     ▼
+correct semantics
+~~~
+
+This ensures that an optimization is not required merely to make an otherwise invisible address work.
+
+---
+
+# 27. Fast Paths
+
+Fast paths are explicitly permitted.
+
+A fast path may:
+
+* avoid repeated provider lookup;
+* avoid generic Bus traversal;
+* use pre-decoded routing metadata;
+* call a specialized Rigel entry point;
+* use validated direct access;
+* exploit stable region ownership.
+
+A fast path is valid if:
+
+~~~text
+observable(fast_path(X))
+        =
+observable(reference_semantics(X))
+~~~
+
+for all behavior required by the contract.
+
+---
+
+# 28. Caches
+
+Caching routing information is explicitly permitted.
+
+Examples include:
+
+~~~text
+address → provider cache
+
+region → provider cache
+
+decoded access metadata cache
+
+JIT block → Rigel access metadata
+
+pre-resolved MMIO target
+~~~
+
+Caching must not incorrectly survive changes that invalidate the cached assumptions.
+
+Cache invalidation belongs to the component owning the optimization.
+
+Rigel must not become aware of Emu68 JIT cache internals.
+
+---
+
+# 29. Shadows
+
+Shadows are explicitly permitted where they preserve required semantics.
+
+A shadow may represent:
+
+* cached host-visible state;
+* mirrored state;
+* optimized read state;
+* precomputed routing state;
+* another validated representation.
+
+But:
+
+> A shadow is an optimization or representation mechanism, not a second independent authority for classic hardware semantics.
+
+Where Rigel owns the authoritative classic hardware state, the shadow must remain coherent with Rigel according to the defined contract.
+
+A shadow must never make the original CPU-visible address inaccessible.
+
+---
+
+# 30. Direct Paths
+
+Direct paths are permitted where the hardware semantics make them safe.
+
+Conceptually:
+
+~~~text
+M68K access
+     │
+     ▼
+validated direct path
+     │
+     ▼
+Rigel-equivalent semantics
+~~~
+
+A direct path must not bypass required:
+
+* side effects;
+* ordering;
+* timing visibility;
+* interrupt changes;
+* DMA interactions;
+* read semantics;
+* write semantics.
+
+---
+
+# 31. Optimization Must Be Transparent
+
+The correctness test for an optimization is behavioral.
+
+Conceptually:
+
+~~~text
+reference path
+     │
+     ▼
+observable behavior
+     │
+     =
+
+optimized path
+     │
+     ▼
+observable behavior
+~~~
+
+Implementation identity is not required.
+
+Semantic equivalence is.
+
+---
+
+# 32. MMIO Width, Alignment, and Ordering
+
+Before API Version 1, the MMIO contract must define:
+
+* supported widths;
+* alignment;
+* misaligned accesses;
+* wider access decomposition;
+* operation ordering;
+* side effects;
+* unsupported-width behavior.
+
+These rules apply equally to generic and optimized paths.
+
+An optimization must not change transaction semantics merely because it avoids generic dispatch.
+
+---
+
+# 33. MMIO Is Observable
+
+The host or execution engine must not freely:
+
+* eliminate;
+* duplicate;
+* cache values;
+* reorder;
+* combine;
+* split;
+
+Rigel MMIO transactions unless the contract explicitly permits that transformation.
+
+Routing metadata may be cached.
+
+Observable hardware transactions may not be incorrectly optimized away.
+
+---
+
+# 34. MMIO Results
+
+The canonical MMIO interface should distinguish concepts equivalent to:
+
+~~~text
+HANDLED
+
+UNHANDLED
+
+INVALID_ACCESS
+
+HOST_FAILURE
+~~~
+
+For an access that Rigel defines as supported CPU-visible behavior, failure solely because Bellatrix did not provide a route is an integration error.
+
+---
+
+# 35. Address Namespace Separation
+
+The public contract must distinguish:
+
+~~~text
+M68K CPU-visible MMIO address
+
+chipset-generated DMA address
+
+guest physical address
+
+host pointer
+~~~
+
+These namespaces must never be conflated.
+
+---
+
+# 36. Temporal Model
+
+Rigel remains authoritative for chipset time.
+
+~~~text
+host CPU progress
+      │
+      ▼
+Rigel step
+      │
+      ▼
+chipset timeline
+~~~
+
+The host must not introduce a second authoritative classic chipset clock.
+
+Optimized MMIO paths must preserve whatever timing interaction the Rigel contract requires.
+
+---
+
+# 37. IPL
+
+Rigel continues to expose resolved classic IPL.
+
+~~~c
+unsigned rigel_get_ipl(const struct rigel *rigel);
+~~~
+
+Bellatrix consumes it as one source in its interrupt arbitration.
+
+---
+
+# 38. INTREQ and INTENA
+
+Detailed interrupt state may remain available for diagnostics and testing.
+
+Bellatrix must not reconstruct Rigel IPL from those registers.
+
+A shadow of interrupt-related state, if used for optimization, must not become an independent interrupt authority.
+
+---
+
+# 39. DMA
+
+DMA remains separate from CPU-visible MMIO.
+
+~~~text
+CPU MMIO
+   │
+   ▼
+host-selected access path
+   │
+   ▼
+Rigel
+
+
+Rigel DMA
+   │
+   ▼
+guest physical memory API
+~~~
+
+DMA is not reverse Bellatrix Bus traffic.
+
+---
+
+# 40. Video
+
+Rigel continues to own classic video generation.
+
+~~~text
+Chip RAM
+   │
+   ▼
+Agnus / Denise
+   │
+   ▼
+classic pixels
+   │
+   ▼
+host-consumable output
+   │
+   ▼
+Bellatrix presentation
+~~~
+
+Rigel remains independent of RTG, P96, VC4, and AROS native graphics.
+
+---
+
+# 41. Audio and Input
+
+Audio:
 
 ~~~text
 Paula
@@ -1878,1681 +1288,500 @@ Rigel
   │
   ▼
 host-independent audio output
-  │
-  ▼
-Bellatrix audio adapter
-  │
-  ▼
-native audio hardware
 ~~~
 
-Rigel must remain unaware of:
-
-* HDMI audio;
-* PWM;
-* USB audio;
-* Raspberry Pi-specific audio transport.
-
-Existing audio generation should be preserved while presentation remains host-owned.
-
----
-
-# 40. Input
-
-Input should follow the reverse direction.
+Input:
 
 ~~~text
-USB / Bluetooth / native input
-              │
-              ▼
-          Bellatrix
-              │
-              ▼
-       input adaptation
-              │
-              ▼
-            Rigel
-              │
-              ▼
-      classic hardware state
-~~~
-
-Rigel should receive classic hardware-facing input information.
-
-It should not receive:
-
-* USB descriptors;
-* HID reports;
-* Bluetooth objects;
-* Raspberry Pi controller state.
-
-Different classic hardware interfaces may have different APIs.
-
-There is no requirement to invent one generic input structure for all devices.
-
----
-
-# 41. Reentrancy
-
-The Version 1 API should explicitly define Rigel instances as non-reentrant unless otherwise documented.
-
-For example:
-
-~~~text
-Rigel advance
-      │
-      ▼
-host mem_read()
-      │
-      ╳
-      └── must not re-enter
-          the same Rigel instance
-~~~
-
-This allows the initial implementation to remain simple and deterministic.
-
-It avoids introducing synchronization machinery into Rigel merely to accommodate hypothetical host behavior.
-
----
-
-# 42. Thread Affinity
-
-A Rigel instance may initially be treated as single-thread-affine.
-
-The host should serialize calls into the instance.
-
-The API must not encode a specific ARM core.
-
-Therefore Rigel must remain unaware of:
-
-~~~text
-Core 0
-Core 1
-Core 2
-Core 3
-
-WFE
-SEV
-
-Bellatrix queues
-
-Bellatrix scheduler
-~~~
-
-This allows Bellatrix to change core topology without changing the Rigel API.
-
----
-
-# 43. API Version Versus Binary ABI Stability
-
-Rigel API Version 1 should define the stable public source-level contract.
-
-Binary ABI stability should not be implied unless explicitly specified.
-
-This distinction is important because structures such as:
-
-~~~c
-struct rigel_config;
-struct rigel_host_ops;
-rigel_time_t;
-enum rigel_*;
-~~~
-
-may otherwise acquire permanent binary-layout compatibility requirements.
-
-For the initial Version 1 contract, the recommended rule is:
-
-> Rigel API Version 1 defines a stable public source-level interface. Binary ABI stability is not guaranteed unless separately documented.
-
-This allows Bellatrix, the harness, and other hosts to rebuild against compatible public headers without requiring indefinite preservation of structure layouts.
-
-If binary ABI stability becomes a future requirement, the interface should explicitly introduce the necessary mechanisms.
-
-These may include concepts such as:
-
-~~~c
-struct rigel_config {
-    uint32_t struct_size;
-    uint32_t api_version;
-    ...
-};
-~~~
-
-Such mechanisms should not be introduced merely in anticipation of a requirement that does not yet exist.
-
----
-
-# 44. Recommended Public API Organization
-
-The final header organization does not need to follow one particular filesystem layout, but the conceptual separation should be clear.
-
-One possible organization is:
-
-~~~text
-include/rigel/
-│
-├── rigel.h
-│
-│   Minimal host integration surface
-│
-├── rigel_types.h
-│
-├── rigel_config.h
-│
-├── rigel_host.h
-│
-├── rigel_mmio.h
-│
-├── rigel_time.h
-│
-├── rigel_irq.h
-│
-├── rigel_video.h
-│
-├── rigel_audio.h
-│
-├── rigel_input.h
-│
-└── advanced/
+native input
     │
-    ├── rigel_bus.h
-    ├── rigel_snapshot.h
-    ├── rigel_debug.h
-    └── rigel_inspect.h
+    ▼
+Bellatrix adaptation
+    │
+    ▼
+Rigel classic input state
 ~~~
-
-This exact layout is not normative.
-
-The important property is that the normal host API does not accidentally expose every internal or diagnostic capability.
 
 ---
 
-# 45. `rigel.h` Should Become Deliberately Small
+# 42. Concurrency Contract
 
-The umbrella header used by Bellatrix should expose only what is required to host a Rigel instance.
+Rigel should define serialization and reentrancy requirements without defining host topology.
 
-Conceptually:
+Correct principle:
 
-~~~c
-/* lifecycle */
+> A Rigel instance is non-concurrent unless otherwise documented. The host is responsible for serialization.
 
-struct rigel *
-rigel_create(...);
+Rigel must remain usable under same-core or cross-core execution without API changes.
 
-void
-rigel_destroy(...);
-
-void
-rigel_reset(...);
-
-
-/* interrupt */
-
-unsigned
-rigel_get_ipl(...);
-~~~
-
-The remaining core capabilities should be represented without prematurely freezing their exact C signatures.
-
-Conceptually:
-
-~~~text
-MMIO
-
-    submit M68K-visible read transaction
-
-    submit M68K-visible write transaction
-
-    obtain read value where applicable
-
-    preserve:
-        address
-        width
-        ordering
-        side effects
-        occurrence
-
-    represent transaction result/failure
-    according to the semantics frozen
-    during MMIO convergence
-
-
-Timing
-
-    obtain current Rigel time
-
-    obtain next synchronization deadline
-
-    advance Rigel according to
-    reported execution progress
-~~~
-
-The exact functions should be derived from the integration specification and convergence phases rather than copied mechanically from this document.
-
-In particular:
-
-* MMIO entry points are not frozen until width, alignment, decomposition, ordering, side-effect, and result semantics are defined;
-* the temporal signatures are not frozen until the progress and deadline model is defined;
-* reset classes are not frozen until lifecycle and reset semantics are defined.
-
-The Version 1 header should be the consequence of the resolved contract.
-
-It should not be the place where unresolved architectural questions are silently answered through convenient C signatures.
+Optimized access paths remain subject to the same ordering and serialization requirements.
 
 ---
 
-# 46. Internal APIs Should Remain Internal
+# 43. Bellatrix Adapter Responsibilities
 
-The refactoring should identify functions that are currently public only because historical implementation convenience made them public.
-
-Candidates should be classified as:
+The Bellatrix adapter should:
 
 ~~~text
-Host API
+create/configure Rigel
 
-Advanced API
+obtain enough information to guarantee
+complete Rigel CPU-visible reachability
 
-Inspection API
+configure Emu68 MMU interception
+where interception is required
 
-Test API
+register generic Bus fallback coverage
 
-Internal API
+forward canonical MMIO
+
+support validated optimized paths
+
+provide guest memory
+
+report execution progress
+
+consume deadlines
+
+obtain Rigel IPL
+
+consume video/audio output
+
+adapt input
 ~~~
 
-Anything classified as internal should move out of the stable public API.
+It must not contain:
 
-This is particularly important before declaring `RIGEL_API_VERSION 1`.
+~~~text
+partial manually maintained Rigel coverage
 
-Once Version 1 is established, unnecessary public symbols become source-compatibility obligations.
+independent Amiga hardware semantics
+
+Copper semantics
+
+Blitter semantics
+
+Paula semantics
+
+CIA semantics
+
+INTREQ/INTENA authority
+
+Agnus DMA rules
+~~~
 
 ---
 
-# 47. Bellatrix Adapter Should Remain Small
+# 44. Bellatrix Access Architecture
 
-The resulting Bellatrix-side code should conceptually look like:
+The intended access architecture is:
 
 ~~~text
-Bellatrix
-   │
-   └── rigel_adapter
+                         M68K access
+                              │
+                              ▼
+                     Bellatrix access policy
+                              │
+          ┌───────────────────┼───────────────────┐
+          │                   │                   │
+          ▼                   ▼                   ▼
+       fast path            cache              shadow
+          │                   │                   │
+          └─────────────┬─────┴─────────────┬─────┘
+                        │                   │
+                        ▼                   ▼
+                 resolved access      generic fallback
+                                            │
+                                            ▼
+                                      MMU / fault
+                                            │
+                                            ▼
+                                      Bellatrix Bus
+                                            │
+                                            ▼
+                                      canonical MMIO
+                        │                   │
+                        └─────────┬─────────┘
+                                  ▼
+                         Rigel semantics
+~~~
+
+Not every access must traverse every layer.
+
+Every supported access must reach the correct semantics.
+
+---
+
+# 45. Required Semantic Invariant
+
+Define:
+
+~~~text
+R = CPU-visible accesses supported by Rigel
+
+H = CPU-visible accesses for which Bellatrix
+    provides a correct execution path
+~~~
+
+Required:
+
+~~~text
+R ⊆ H
+~~~
+
+This is the normative coverage invariant.
+
+No equality between:
+
+~~~text
+Rigel coverage
+
+MMU faults
+
+Bus routes
+
+generic MMIO calls
+~~~
+
+is required.
+
+Those sets may differ because optimizations may bypass generic mechanisms.
+
+---
+
+# 46. Reference Path and Optimized Paths
+
+The architecture should maintain a conceptual reference path:
+
+~~~text
+M68K access
+    │
+    ▼
+generic host resolution
+    │
+    ▼
+canonical Rigel MMIO
+    │
+    ▼
+Rigel semantics
+~~~
+
+Optimized paths may replace portions of that execution:
+
+~~~text
+M68K access
+    │
+    ├──► fast path ───────┐
+    │                     │
+    ├──► cached path ─────┤
+    │                     ├──► equivalent semantics
+    ├──► shadow path ─────┤
+    │                     │
+    └──► generic path ────┘
+~~~
+
+The reference path defines semantic expectations.
+
+It does not define mandatory runtime topology.
+
+---
+
+# 47. Example of the Visibility Requirement
+
+Assume Rigel supports CPU-visible accesses to:
+
+~~~text
+1 2 3 4 5 6 7 8 9 10
+~~~
+
+Bellatrix must ensure that software can correctly access:
+
+~~~text
+1 2 3 4 5 6 7 8 9 10
+~~~
+
+But the implementation may look like:
+
+~~~text
+1 ──► fast path
+
+2 ──► cache ──► Rigel
+
+3 ──► generic Bus ──► Rigel
+
+4 ──► shadow
+
+5 ──► generic Bus ──► Rigel
+
+6 ──► direct Rigel path
+
+7 ──► cache ──► Rigel
+
+8 ──► generic Bus ──► Rigel
+
+9 ──► fast path
+
+10 ─► generic Bus ──► Rigel
+~~~
+
+provided:
+
+~~~text
+observable semantics
+        =
+Rigel-defined semantics
+~~~
+
+for every required access.
+
+The forbidden result is:
+
+~~~text
+1 2 3 4 5   7 8 9 10
+          ^
           │
-          ├── create/configure Rigel
-          ├── register MMIO regions
-          ├── forward Rigel-owned Emu68 MMIO transactions
-          ├── provide guest-memory operations
-          ├── report execution progress
-          ├── observe deadlines
-          ├── obtain rigel_ipl
-          ├── participate in IPL arbitration
-          ├── adapt native input
-          └── present video/audio
+      6 invisible
 ~~~
 
-The MMIO relationship should remain:
+The problem is not that `6` avoided the dispatcher.
 
-~~~text
-Emu68
-  │
-  ▼
-Bellatrix address dispatcher
-  │
-  │ selects Rigel provider
-  ▼
-Bellatrix Rigel adapter
-  │
-  │ forwards M68K-visible transaction
-  ▼
-Rigel
-  │
-  │ interprets compatibility-region address
-  ▼
-classic hardware semantics
-~~~
-
-The adapter must preserve the observable MMIO transaction presented by the execution engine unless Rigel's public contract explicitly permits a transformation.
-
-The adapter must not contain:
-
-~~~text
-Copper logic
-
-Blitter logic
-
-Denise logic
-
-Paula logic
-
-CIA timing
-
-beam calculations
-
-INTREQ semantics
-
-INTENA semantics
-
-Agnus DMA addressing
-~~~
-
-If such code begins accumulating in `rigel_adapter`, the boundary has failed.
+The problem is if `6` has no correct CPU-visible path at all.
 
 ---
 
-# 48. Recommended Migration Strategy
+# 48. Migration Strategy
 
-The migration should be incremental.
-
-A large rewrite would introduce unnecessary risk because the current Rigel implementation already contains working hardware behavior.
-
-Recommended strategy:
+Recommended sequence:
 
 ~~~text
-Existing Rigel
-      │
-      ▼
-capture behavioral baseline
-      │
-      ▼
-classify current public API
-      │
-      ▼
-define minimal host-facing API
-      │
-      ▼
-introduce compatibility wrappers if needed
-      │
-      ▼
-move harness to candidate API
-      │
-      ▼
-move Bellatrix to candidate API
-      │
-      ▼
-integration validation
-      │
-      ▼
-API review
-      │
-      ▼
-classify remaining APIs
-      │
-      ├── advanced
-      ├── debug
-      ├── test
-      └── internal
-      │
-      ▼
-remove obsolete public exposure
-      │
-      ▼
-freeze API Version 1
-~~~
+1. Capture behavioral baseline
 
-At every stage, the chipset behavior should remain testable.
+2. Inventory Rigel CPU-visible behavior
+
+3. Establish authoritative Rigel coverage information
+
+4. Establish canonical MMIO semantics
+
+5. Verify complete functional reachability
+
+6. Establish generic Bellatrix fallback routing
+
+7. Integrate with existing Emu68 MMU mechanisms
+
+8. Validate that no supported Rigel access is omitted
+
+9. Remove manually selected incomplete coverage
+
+10. Formalize cache / fast-path / shadow rules
+
+11. Validate optimized paths against reference behavior
+
+12. Formalize memory, timing, IPL,
+    lifecycle and concurrency
+
+13. Migrate harness
+
+14. Migrate Bellatrix
+
+15. Freeze API Version 1
+
+16. Optimize further only while preserving
+    semantic equivalence
+~~~
 
 ---
 
-# 49. Phase 0 — Behavioral Baseline
+# 49. Conformance Tests
 
-Before changing the public API, establish a behavioral characterization baseline for the existing Rigel implementation.
+## Complete CPU-visible reachability
 
-The baseline should capture representative scenarios for:
+Every CPU-visible hardware access supported by Rigel must have a valid Bellatrix execution path.
 
-* MMIO;
-* MMIO transaction ordering and side effects;
-* timing;
-* deadlines;
-* interrupt transitions;
-* DMA reads;
-* DMA writes;
-* reset behavior;
-* selected video behavior;
-* selected audio behavior;
-* bus behavior where already tested.
+## No invisible supported address
 
-Conceptually:
+A test must fail if:
 
 ~~~text
-Existing Rigel
-      │
-      ▼
-Known deterministic scenarios
-      │
-      ▼
-Capture observable behavior
-      │
-      ├── MMIO transaction traces
-      ├── timing traces
-      ├── memory results
-      ├── IPL transitions
-      ├── deadlines
-      └── output hashes/state
-      │
-      ▼
-Behavioral baseline
-~~~
-
-The baseline does not declare every existing behavior correct.
-
-Known bugs may remain explicitly documented as known deviations.
-
-The purpose is to distinguish intentional corrections from accidental regressions introduced during API convergence.
-
----
-
-# 50. Phase 1 — API Inventory
-
-Before changing exported visibility, classify every currently exported Rigel symbol.
-
-Each symbol should be assigned one category:
-
-~~~text
-CORE HOST
-
-ADVANCED HOST
-
-INSPECTION
-
-TEST
-
-INTERNAL
-
-DEPRECATED
-~~~
-
-For example:
-
-~~~text
-rigel_create
-    → CORE HOST
-
-rigel_destroy
-    → CORE HOST
-
-rigel_get_ipl
-    → CORE HOST
-
-bus inspection
-    → ADVANCED / INSPECTION
-
-snapshot
-    → ADVANCED
-
-chipset wiring
-    → likely INTERNAL
-
-cycle-exact development control
-    → ADVANCED / TEST
-~~~
-
-No symbol should remain public merely because it is currently public.
-
----
-
-# 51. Phase 2 — Separate Configuration and Host Operations
-
-Refactor creation so classic hardware configuration and host services become conceptually independent.
-
-Target:
-
-~~~text
-rigel_config
-      │
-      └── hardware model
-
-rigel_host_ops
-      │
-      └── host services
-
-host_context
-      │
-      └── host instance
-~~~
-
-Update the harness early in this process where practical.
-
-This provides immediate proof that the interface remains independent from Bellatrix.
-
----
-
-# 52. Phase 3 — Formalize Memory Semantics
-
-Define explicitly:
-
-~~~text
-chipset-generated address
-        ↓
-Rigel address masking / decoding
-        ↓
-guest physical address
-        ↓
-host memory API
-~~~
-
-Ensure callbacks operate according to this definition.
-
-Determine whether host memory callbacks are:
-
-~~~text
-infallible by contract
-~~~
-
-or:
-
-~~~text
-capable of explicit failure
-~~~
-
-and document the result before Version 1.
-
-Add tests covering:
-
-* chipset address masking;
-* Chip RAM limits;
-* alignment;
-* host mapping;
-* out-of-range behavior;
-* invalid or inaccessible backing where applicable;
-* distinction between hardware-visible invalid access and host integration failure.
-
----
-
-# 53. Phase 4 — Introduce Canonical MMIO
-
-Introduce a canonical M68K-visible MMIO transaction boundary.
-
-Target relationship:
-
-~~~text
-Bellatrix / Harness
+Rigel supports X
         │
         ▼
-canonical MMIO transaction
-        │
-        ▼
-Rigel MMIO router
-        │
-        ├── custom
-        ├── CIAA
-        └── CIAB
+M68K software cannot correctly access X
 ~~~
 
-Bellatrix/Emu68 remains responsible for selecting Rigel as the provider for a registered compatibility region.
+## Canonical reference behavior
 
-Rigel remains responsible for interpreting the M68K-visible address within that compatibility domain.
+The canonical MMIO path must provide the reference host-facing semantics for Rigel CPU-visible hardware.
 
-Keep existing subsystem MMIO helpers internally where useful.
+## Generic fallback completeness
 
-During this phase, explicitly define:
+Addresses relying on generic dispatch must remain routable through the generic Bellatrix path.
 
-* supported MMIO access widths;
-* width semantics for each compatibility region;
-* alignment requirements;
-* misaligned access behavior;
-* unsupported-width behavior;
-* whether wider operations represent one logical access or multiple ordered classic bus transactions;
-* ordering and side-effect semantics for decomposed accesses;
-* M68K-visible endianness semantics;
-* observability requirements for reads and writes;
-* which, if any, transaction transformations are permitted to the host or execution engine;
-* whether every Rigel-owned transaction resolves entirely through classic hardware semantics;
-* whether an explicit transaction-result representation is required;
-* how address holes inside Rigel-owned regions behave;
-* whether any guest-visible bus or fault condition must cross the API boundary;
-* how genuine host integration failures are represented;
-* how guest-visible hardware behavior remains distinct from host integration failure.
+## Optimization equivalence
 
-The exact C representation of the canonical MMIO interface should be selected only after these semantics are understood.
-
-Possible representations may include:
+Where both reference and optimized paths exist:
 
 ~~~text
-width-specific entry points
-
-or
-
-a generic MMIO transaction interface
-
-or
-
-another explicit representation
+observable(reference)
+        =
+observable(optimized)
 ~~~
 
-No representation should be selected merely because it is convenient for the current ARM implementation.
+for the behavior covered by the contract.
 
-Add equivalence tests proving that the new canonical route produces the same chipset behavior as the existing implementation for equivalent transactions.
+## Cache correctness
 
-Tests should also verify that transaction ordering and repeated accesses remain observable where required.
+Cached routing must not make previously valid accesses stale, invisible, or incorrectly routed.
+
+## Fast-path correctness
+
+Fast paths must preserve required side effects, ordering, timing interaction, and hardware semantics.
+
+## Shadow correctness
+
+Shadows must remain coherent with authoritative Rigel state according to their defined contract.
+
+## MMU independence
+
+A valid optimization must not fail conformance merely because it avoids an MMU fault.
+
+## Bus independence
+
+A valid optimization must not fail conformance merely because it avoids generic Bellatrix Bus traversal.
+
+## No host-side semantic duplication
+
+Bellatrix must not become an independent implementation of classic Amiga hardware merely to optimize dispatch.
 
 ---
 
-# 54. Phase 5 — Freeze Temporal Semantics
+# 50. Review Checklist
 
-Before API v1, decide:
+Every relevant patch should answer:
 
-1. canonical execution-progress unit;
-2. current-time representation;
-3. deadline representation;
-4. absolute versus relative deadline semantics;
-5. delta-based `advance()` versus absolute `advance_to()` semantics;
-6. overflow rules;
-7. overshoot semantics.
-
-Then document and test:
-
-~~~text
-advance
-
-deadline
-
-overshoot
-
-event ordering
-
-IPL visibility
-~~~
-
-This is one of the most important API decisions and should not be left implicit.
-
----
-
-# 55. Phase 6 — Formalize Lifecycle and Reset Semantics
-
-Before the lifecycle API becomes stable, define the exact relationship between:
-
-~~~text
-create
-
-cold reset
-
-warm reset
-
-destroy
-~~~
-
-Determine and document:
-
-* post-create state;
-* whether creation implies reset;
-* valid operations before first reset;
-* cold-reset semantics;
-* warm-reset semantics;
-* timeline behavior across reset;
-* interrupt-state behavior across reset;
-* DMA-state behavior across reset;
-* output-state behavior across reset;
-* preservation of host callbacks and host context;
-* preservation of configuration;
-* interaction with guest memory;
-* shutdown ordering requirements.
-
-The host should select the reset class.
-
-Rigel should define the classic hardware semantics of that class.
-
-Add deterministic reset tests to the standalone harness.
+1. Does Rigel support this CPU-visible access?
+2. Can M68K software still perform it correctly?
+3. Could the address become invisible because Bellatrix omitted it?
+4. Does a generic fallback exist where required?
+5. Is the optimization preserving observable semantics?
+6. Is an MMU fault genuinely required, or merely one implementation mechanism?
+7. Is generic Bus traversal genuinely required, or merely one implementation mechanism?
+8. Can provider lookup safely be cached?
+9. Does the cache have correct invalidation semantics?
+10. Does a fast path preserve side effects?
+11. Does a fast path preserve ordering?
+12. Does a fast path preserve required timing interaction?
+13. Is a shadow coherent with Rigel's authoritative state?
+14. Has a shadow accidentally become a second hardware authority?
+15. Is a CPU-visible address accessible only through a private API?
+16. Is Bellatrix maintaining a manually selected incomplete subset?
+17. Is Bellatrix interpreting classic hardware semantics unnecessarily?
+18. Are region holes still given correct Rigel-defined behavior?
+19. Are M68K MMIO and guest physical memory kept distinct?
+20. Does the optimization preserve IPL behavior?
+21. Does the optimization preserve DMA interaction?
+22. Does the optimization preserve deterministic behavior?
+23. Can the harness exercise the reference semantics?
+24. Can optimized and reference paths be compared?
+25. Does the change preserve host-topology neutrality?
 
 ---
 
-# 56. Phase 7 — Formalize IPL Boundary
-
-Ensure normal host integration requires only:
+# 51. Target Architecture
 
 ~~~text
-rigel_ipl
+                         Rigel
+                           │
+                  CPU-visible hardware
+                     semantics/coverage
+                           │
+                           ▼
+                       Bellatrix
+                           │
+                   host access policy
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+        ▼                  ▼                  ▼
+     fast path           cache              shadow
+        │                  │                  │
+        └───────────┬──────┴───────────┬──────┘
+                    │                  │
+                    │           generic fallback
+                    │                  │
+                    │          ┌───────┴───────┐
+                    │          ▼               ▼
+                    │      Emu68 MMU      Bellatrix Bus
+                    │          │               │
+                    │          └───────┬───────┘
+                    │                  ▼
+                    │          canonical MMIO
+                    │                  │
+                    └──────────┬───────┘
+                               ▼
+                       Rigel-defined behavior
 ~~~
 
-for classic interrupt delivery.
-
-Preserve detailed interrupt state as inspection functionality where useful.
-
-Test:
+The critical property is:
 
 ~~~text
-Rigel interrupt becomes pending
-        │
-        ▼
-rigel_ipl changes
-        │
-        ▼
-Bellatrix observes change
-        │
-        ▼
-M68K IPL arbitration
-~~~
-
-and:
-
-~~~text
-M68K accepts interrupt
-        │
-        ╳
-        └── Rigel source is NOT
-            automatically cleared
-~~~
-
----
-
-# 57. Phase 8 — Candidate API and Harness Migration
-
-Once the fundamental memory, MMIO, timing, lifecycle/reset, and IPL semantics are defined, expose them as a candidate public API.
-
-This stage is intentionally not yet the frozen Version 1 interface.
-
-Conceptually:
-
-~~~text
-Candidate Rigel API
-        │
-        ▼
-Standalone Harness
-        │
-        ▼
-Behavioral validation
-~~~
-
-The harness should validate:
-
-~~~text
-create Rigel
-
-configure Chip RAM
-
-load memory
-
-perform MMIO
-
-verify MMIO ordering/side effects
-
-verify MMIO result semantics
-
-advance time
-
-inspect deadline
-
-observe IPL
-
-inspect DMA effects
-
-cold reset
-
-warm reset
-
-repeat deterministically
-~~~
-
-The behavioral baseline from Phase 0 should be replayed through the candidate API where applicable.
-
----
-
-# 58. Phase 9 — Bellatrix Adapter
-
-Only after the preceding boundaries are sufficiently stable should Bellatrix become a direct consumer of the candidate API.
-
-The adapter should initially implement only:
-
-~~~text
-Lifecycle
-
-MMIO
-
-Progress
-
-Deadline
-
-IPL
-
-DMA memory
-~~~
-
-The MMIO adapter should route or forward transactions assigned to the Rigel provider.
-
-It should not interpret classic register semantics.
-
-It must preserve transaction identity and ordering according to the canonical Rigel MMIO contract.
-
-It must also preserve the distinction between guest-visible MMIO behavior and any host integration failure represented by the API.
-
-Do not add advanced bus integration, cross-core execution, or zero-copy presentation until this path is validated.
-
----
-
-# 59. Phase 10 — Integration Validation
-
-The candidate API should then be exercised simultaneously by both real consumers:
-
-~~~text
-              Candidate Rigel API
-                     │
-             ┌───────┴───────┐
-             │               │
-          Harness         Bellatrix
-             │               │
-             └───────┬───────┘
-                     │
-              integration tests
-                     │
-                     ▼
-                API review
-~~~
-
-This phase should specifically identify whether real Bellatrix integration exposes missing or incorrectly shaped abstractions.
-
-Examples may include:
-
-* callback granularity;
-* memory failure semantics;
-* reset distinctions;
-* lifecycle ordering;
-* deadline semantics;
-* MMIO width behavior;
-* MMIO alignment behavior;
-* MMIO transaction ordering;
-* MMIO side-effect preservation;
-* MMIO transaction-result semantics;
-* MMIO error behavior;
-* distinction between guest-visible MMIO behavior and integration failure;
-* host-visible result representation.
-
-Such discoveries should be resolved before Version 1 is frozen.
-
----
-
-# 60. Phase 11 — API Version 1 Review and Freeze
-
-Only after both the standalone harness and Bellatrix operate successfully through the candidate interface should the API be reviewed for Version 1.
-
-The review should ask:
-
-~~~text
-Does the harness need anything host-specific?
-
-Does Bellatrix need anything Rigel-internal?
-
-Are any callbacks too generic?
-
-Are any API operations unused?
-
-Are address semantics explicit?
-
-Are MMIO width/alignment semantics explicit?
-
-Are MMIO observability and ordering semantics explicit?
-
-Are MMIO result/failure semantics explicit?
-
-Are guest-visible hardware conditions distinct
-from host integration failures?
-
-Are temporal semantics explicit?
-
-Are lifecycle/reset semantics explicit?
-
-Are memory error semantics explicit?
-
-Are ownership rules preserved?
-~~~
-
-Only after this review should:
-
-~~~c
-#define RIGEL_API_VERSION 1
-~~~
-
-represent a stable source-level API commitment.
-
----
-
-# 61. Phase 12 — Advanced Bus Integration
-
-Once the basic Bellatrix/Rigel integration is correct, evaluate whether Bellatrix should consume Rigel's existing bus-observation facilities.
-
-Potential objective:
-
-~~~text
-CPU requests Chip RAM
-        │
-        ▼
-Rigel bus state
-        │
-       / \
-      /   \
-available  busy
-   │        │
-   ▼        ▼
-CPU runs   CPU stalls
-              │
-              ▼
-         Rigel resume time
-~~~
-
-This may enable more accurate CPU/chipset contention without moving bus semantics into Bellatrix.
-
-This phase should build on the existing Rigel bus model rather than duplicating it.
-
----
-
-# 62. Phase 13 — Presentation and Input
-
-After the execution, memory, lifecycle, and interrupt boundary is stable, finalize host-independent:
-
-~~~text
-video output
-
-audio output
-
-input
-~~~
-
-These should remain presentation/adaptation interfaces rather than native-device interfaces.
-
-Rigel must never need to know whether Bellatrix ultimately presents output through:
-
-~~~text
-VC4
-
-HDMI
-
-framebuffer
-
-another GPU
-
-another host entirely
-~~~
-
----
-
-# 63. API Compatibility During Migration
-
-Because Rigel is under the same development control as Bellatrix, this is the appropriate moment to make deliberate API-breaking changes if they materially improve the architecture.
-
-Compatibility with an accidental or immature API should not take precedence over establishing a clean Version 1 boundary.
-
-However, changes should still be controlled.
-
-Where useful:
-
-~~~text
-old API
-   │
-   ▼
-temporary compatibility wrapper
-   │
-   ▼
-candidate canonical API
-~~~
-
-This allows behavior to remain testable while migration proceeds.
-
-Temporary compatibility interfaces should be clearly marked and removed before the Version 1 API is considered frozen.
-
----
-
-# 64. What Should Not Be Rewritten
-
-The convergence effort should explicitly avoid rewriting working implementation merely for architectural aesthetics.
-
-Do not rewrite without a concrete reason:
-
-* Copper implementation;
-* Blitter implementation;
-* Denise implementation;
-* Paula implementation;
-* CIA implementation;
-* interrupt priority logic;
-* DMA scheduling;
-* beam state;
-* existing deterministic event scheduling;
-* bus ownership model;
-* harness infrastructure.
-
-The first question for each change should be:
-
-> Does this implementation violate the new boundary, or is it merely organized differently?
-
-Only actual boundary violations require architectural refactoring.
-
----
-
-# 65. What Should Change
-
-The following areas are the primary expected changes.
-
-## Required before API v1
-
-1. Capture a behavioral baseline.
-2. Audit and classify exported API.
-3. Define the minimal host integration surface.
-4. Separate hardware configuration from host operations.
-5. Make host context explicitly opaque.
-6. Define guest-memory callback address semantics.
-7. Define memory callback failure semantics.
-8. Formalize Chip RAM ownership semantics.
-9. Define a canonical M68K-visible MMIO transaction boundary.
-10. Preserve provider selection outside Rigel.
-11. Define supported MMIO widths.
-12. Define MMIO alignment and misalignment semantics.
-13. Define semantics for wider accesses and any decomposition into ordered classic bus transactions.
-14. Define MMIO observability, ordering, and side-effect semantics.
-15. Define which MMIO transaction transformations, if any, are permitted to the host or execution engine.
-16. Define MMIO transaction result/failure semantics.
-17. Distinguish guest-visible MMIO behavior from host integration failures.
-18. Select the concrete C representation of the canonical MMIO boundary only after its semantics are defined.
-19. Keep MMIO, chipset DMA, guest physical, and host address spaces distinct.
-20. Freeze execution-progress representation.
-21. Freeze deadline representation.
-22. Select delta-based versus absolute advancement semantics.
-23. Preserve Rigel as authoritative chipset timeline.
-24. Define lifecycle and reset-state semantics.
-25. Define post-create state and whether creation implies reset.
-26. Define cold-reset and warm-reset behavior.
-27. Formalize IPL as the normal interrupt boundary.
-28. Document non-reentrancy.
-29. Document initial single-thread affinity.
-30. Remove internal construction/wiring details from the normal host API.
-31. Establish an explicit public API version.
-32. Define whether Version 1 promises source API stability only or binary ABI stability.
-
-## Strongly recommended
-
-33. Separate advanced/debug APIs from the normal host integration API.
-34. Keep `INTREQ`/`INTENA` inspection outside normal Bellatrix operation.
-35. Keep bus observation as an advanced capability.
-36. Keep snapshots outside the minimal integration contract.
-37. Preserve returned deterministic host-visible information rather than adding generic asynchronous callbacks.
-38. Validate the candidate API with both the harness and Bellatrix before freezing Version 1.
-
-## Later optimizations
-
-39. Direct validated memory windows.
-40. Fine-grained CPU/Chip RAM contention.
-41. Zero-copy video.
-42. Zero-copy audio.
-43. Cross-core Rigel execution.
-44. Specialized asynchronous notifications where proven necessary.
-
----
-
-# 66. What Bellatrix Should Not Force Rigel to Become
-
-Bellatrix integration must not cause Rigel to become:
-
-~~~text
-a Raspberry Pi library
-
-an Emu68 extension
-
-a VC4 driver
-
-a BCM interrupt adapter
-
-a Bellatrix subsystem
-
-an AROS component
-~~~
-
-Rigel remains:
-
-> A host-independent implementation of classic Amiga hardware semantics.
-
-Bellatrix is one host of that implementation.
-
-The standalone harness is another.
-
-Future hosts may exist without requiring architectural changes to Rigel.
-
----
-
-# 67. Conformance Tests
-
-The refactoring should be considered successful when the following properties are demonstrated.
-
-## Behavioral preservation
-
-Equivalent deterministic scenarios executed before and after API convergence produce equivalent defined hardware behavior unless a difference is explicitly classified as an intentional semantic correction.
-
-## Independent build
-
-~~~text
-librigel
-~~~
-
-builds without:
-
-~~~text
-Bellatrix headers
-
-Emu68 internal headers
-
-Raspberry Pi headers
-
-AROS headers
-~~~
-
-## Independent execution
-
-The standalone harness creates and operates a Rigel instance without Bellatrix.
-
-## Canonical MMIO
-
-A canonical M68K-visible MMIO transaction reaches the correct Rigel hardware implementation without Bellatrix interpreting the register.
-
-## MMIO interface neutrality
-
-The Version 1 C representation of MMIO is selected only after the transaction semantics are defined.
-
-The architecture does not require width-specific entry points merely because they are convenient to implement.
-
-## MMIO width semantics
-
-Supported access widths are explicitly defined and produce deterministic classic hardware behavior.
-
-## MMIO alignment semantics
-
-Aligned, misaligned, unsupported, and historically unusual accesses have explicitly defined behavior rather than inheriting accidental ARM host semantics.
-
-## Wider-access semantics
-
-Where a wider MMIO access is represented through multiple classic bus operations, ordering and side effects are explicitly defined and tested.
-
-## MMIO transaction observability
-
-Repeated, ordered, and side-effecting MMIO operations remain distinct observable hardware transactions unless the Rigel contract explicitly defines them as transformable.
-
-## MMIO transaction result semantics
-
-The Version 1 contract explicitly defines how transaction completion, unsupported accesses, misaligned accesses, address holes, and any guest-visible exceptional hardware conditions are represented.
-
-## MMIO failure separation
-
-Guest-visible classic hardware behavior remains semantically distinct from genuine host integration failure.
-
-## Execution-engine independence
-
-The canonical MMIO contract does not depend on Emu68-specific optimization behavior.
-
-An execution engine must preserve Rigel-defined transaction semantics regardless of whether execution is interpreted, translated, or otherwise accelerated.
-
-## Provider isolation
-
-Bellatrix/Emu68 determines whether an address belongs to Rigel.
-
-Rigel interprets the address only after the compatibility provider has been selected.
-
-## Address-space separation
-
-M68K MMIO addresses, chipset-generated addresses, guest physical addresses, and host pointers remain semantically distinct.
-
-## Memory ownership
-
-Rigel performs chipset DMA without allocating Bellatrix guest physical memory.
-
-## Address translation
-
-Chipset-generated addresses are interpreted according to Rigel's classic chipset address rules before the host memory backend receives a guest physical address.
-
-## Memory failure semantics
-
-The Version 1 contract explicitly defines whether host memory operations can fail and how invalid hardware-visible accesses differ from host integration failures.
-
-## Timing ownership
-
-Changing Bellatrix execution accounting does not create a second authoritative chipset clock.
-
-## Determinism
-
-Identical harness inputs produce identical defined outputs.
-
-## Lifecycle correctness
-
-Creation produces a documented instance state and only documented operations are permitted before any required initial reset.
-
-## Cold reset correctness
-
-A cold Rigel reset returns classic hardware state to the documented cold-reset condition without resetting unrelated Bellatrix platform hardware.
-
-## Warm reset correctness
-
-A warm Rigel reset follows the documented classic reset semantics and preserves or resets state according to Rigel-defined rules.
-
-## Interrupt ownership
-
-Bellatrix obtains Rigel IPL without reproducing `INTENA`/`INTREQ` logic.
-
-## JIT independence
-
-Rigel DMA can trigger host-required executable-memory handling without Rigel knowing anything about Emu68 translation internals.
-
-## Adapter isolation
-
-Removing the Bellatrix Rigel adapter removes Rigel integration without requiring structural changes to Bellatrix Core.
-
-## Candidate validation
-
-Both the standalone harness and Bellatrix operate through the candidate host integration API before Version 1 is frozen.
-
----
-
-# 68. Review Checklist
-
-Every Rigel API refactoring patch should answer:
-
-1. Is this operation actually required by a host?
-2. Is it required by Bellatrix specifically or by any generic Rigel host?
-3. Is chipset implementation detail leaking through the API?
-4. Does the host need to understand a classic hardware register?
-5. Is Rigel being given host-specific knowledge?
-6. Is hardware configuration being confused with host services?
-7. Is an M68K MMIO address being confused with a guest physical address?
-8. Is a chipset-generated DMA address being confused with a guest physical address?
-9. Is a guest physical address being confused with a host pointer?
-10. Is Rigel taking ownership of guest-memory allocation?
-11. Is Bellatrix reproducing chipset address-generation, masking, or decoding logic?
-12. Is Rigel being turned into a global M68K address dispatcher?
-13. Does Bellatrix select only the provider while Rigel owns compatibility-region semantics?
-14. Are supported MMIO access widths explicit?
-15. Are MMIO alignment and misalignment semantics explicit?
-16. If a wider MMIO access is decomposed, are ordering and side effects explicitly defined?
-17. Can an MMIO read or write have observable hardware side effects?
-18. Could Bellatrix or the execution engine incorrectly cache, eliminate, duplicate, combine, split, or reorder an MMIO transaction?
-19. Are permitted MMIO transaction transformations explicitly defined rather than assumed?
-20. Are MMIO transaction result semantics explicit?
-21. Is guest-visible MMIO behavior being confused with a host integration failure?
-22. Has the concrete MMIO C representation been selected only after transaction semantics were defined?
-23. Are memory callback failure semantics defined?
-24. Is valid classic hardware behavior being incorrectly reported as a host integration error?
-25. Is Bellatrix creating authoritative chipset timing state?
-26. Is a wall clock entering chipset semantics?
-27. Is a deadline's representation explicit?
-28. Is advancement explicitly defined as delta-based or absolute?
-29. Does overshoot remain deterministic?
-30. Are creation and initial-state semantics explicit?
-31. Are cold-reset and warm-reset semantics explicit?
-32. Is Bellatrix encoding chipset-specific reset behavior that belongs to Rigel?
-33. Is Bellatrix reconstructing IPL from internal Rigel state?
-34. Is CPU interrupt acceptance being confused with source acknowledgement?
-35. Is an internal hardware event being exposed to the host without a defined reason?
-36. Is a generic callback being introduced unnecessarily?
-37. Can a callback re-enter the same Rigel instance?
-38. Is an advanced/debug facility accidentally becoming part of the core host API?
-39. Can the standalone harness still exercise the same implementation?
-40. Does this change actually require modifying chipset internals?
-41. Would another non-Bellatrix host still be able to implement this interface cleanly?
-42. Does the change preserve the Phase 0 behavioral baseline, or is any deviation explicitly intentional?
-43. Has the candidate interface been exercised by both the harness and Bellatrix before being considered stable?
-44. Is binary ABI stability being accidentally promised where only source API stability is intended?
-
-If these questions cannot be answered cleanly, the API change should be reconsidered.
-
----
-
-# 69. Target Architecture
-
-The target relationship is:
-
-~~~text
-                        Bellatrix
-                            │
-                   Bellatrix Rigel Adapter
-                            │
-           ┌────────────────┼────────────────┐
-           │                │                │
-          MMIO           Progress           IPL
-           │                │                │
-           └────────────────┼────────────────┘
-                            │
-                     public Rigel API
-                            │
-                            ▼
-                        librigel
-                            │
-          ┌─────────────────┼─────────────────┐
-          │                 │                 │
-        Agnus             Denise            Paula
-          │                                   │
-     Copper/Blitter                        CIAA/CIAB
-          │                                   │
-          └────────────── DMA ────────────────┘
-                            │
-                            ▼
-                  chipset-generated address
-                            │
-                            ▼
-                 address masking / decoding
-                            │
-                            ▼
-                   guest physical address
-                            │
-                            ▼
-                     host memory API
-                            │
-                            ▼
-                   Bellatrix guest RAM
-~~~
-
-Provider selection remains outside Rigel:
-
-~~~text
-M68K address
-     │
-     ▼
-Bellatrix / Emu68
-address dispatcher
-     │
-     ├── native provider
-     │
-     ├── Rigel provider
-     │       │
-     │       ▼
-     │   public Rigel MMIO API
-     │
-     └── unmapped
-~~~
-
-The MMIO transaction itself remains observable:
-
-~~~text
-M68K execution
-      │
-      ▼
-address + width + value + ordering
-      │
-      ▼
-Bellatrix Rigel adapter
-      │
-      │ preserve transaction semantics
-      ▼
-public Rigel MMIO boundary
-      │
-      ▼
-classic hardware behavior
-      │
-      ▼
-defined transaction result
-~~~
-
-The transaction-result boundary must preserve the distinction:
-
-~~~text
-classic guest-visible behavior
-             │
-             │ distinct from
-             ▼
-host integration failure
-~~~
-
-The harness uses the same boundary:
-
-~~~text
-Harness
-   │
-   ▼
-public Rigel API
-   │
-   ▼
-librigel
-   │
-   ▼
-Harness memory backend
-~~~
-
-Advanced facilities remain available without becoming mandatory Bellatrix dependencies:
-
-~~~text
-                     librigel
-                         │
-          ┌──────────────┴──────────────┐
-          │                             │
- Host Integration API          Advanced / Tooling API
-          │                             │
-      Bellatrix                    Harness/debug
-                                    inspection
-                                    snapshots
-                                    bus analysis
-~~~
-
----
-
-# 70. Desired Bellatrix Dependency
-
-The final Bellatrix integration should be understandable from a small amount of code.
-
-Conceptually:
-
-~~~c
-rigel = rigel_create(
-    &config,
-    &host_ops,
-    host_context);
-
-rigel_reset(
-    rigel,
-    RIGEL_RESET_COLD);
-~~~
-
-The exact post-create/reset sequence remains subject to the lifecycle semantics selected for Version 1.
-
-MMIO remains deliberately conceptual until its transaction semantics and C representation are frozen:
-
-~~~text
-Bellatrix
-    │
-    │ M68K-visible MMIO transaction
-    │
-    │ address
-    │ width
-    │ direction
-    │ value
-    ▼
-  Rigel
-    │
-    ▼
-classic hardware semantics
-    │
-    ▼
-defined transaction result
-~~~
-
-The final C interface may use width-specific functions, a generic transaction representation, or another explicit form.
-
-The architectural requirement is the transaction semantics, not a predetermined function shape.
-
-Execution likewise remains deliberately conceptual until the temporal API is frozen:
-
-~~~text
-deadline = obtain next Rigel deadline
-
-execute M68K according to
-Bellatrix / Emu68 policy
-
-report resulting execution progress to Rigel
-~~~
-
-The eventual API may become conceptually:
-
-~~~c
-rigel_advance(
-    rigel,
-    execution_progress);
-~~~
-
-or:
-
-~~~c
-rigel_advance_to(
-    rigel,
-    reached_time);
-~~~
-
-Interrupt:
-
-~~~c
-rigel_ipl = rigel_get_ipl(rigel);
-
-effective_ipl =
-    bellatrix_arbitrate_ipl(
-        native_ipl,
-        rigel_ipl);
-~~~
-
-DMA travels in the opposite direction:
-
-~~~text
-Rigel chipset logic
+Rigel supports X
        │
        ▼
-chipset-generated address
+Bellatrix knows X must remain valid
        │
        ▼
-Rigel address masking / decoding
+host chooses an access mechanism
+       │
+       ├── generic
+       ├── cached
+       ├── fast
+       ├── shadow
+       └── direct
        │
        ▼
-guest physical address
-       │
-       ▼
-host_ops.mem_read/write
-       │
-       ▼
-Bellatrix guest-memory backend
+correct observable semantics
 ~~~
 
-If the basic Bellatrix adapter requires substantially more knowledge about Rigel than this conceptual model implies, the boundary should be reviewed.
+There must be no requirement that every access traverse the same path.
+
+There must be a requirement that every supported access remains valid.
 
 ---
 
-# 71. Recommended Implementation Sequence
+# 52. Definition of Done for Rigel API Version 1
 
-The concrete work should proceed approximately as follows:
+API Version 1 should not be frozen until:
 
-~~~text
-0. Capture behavioral baseline
-        │
-1. Inventory current exported Rigel API
-        │
-2. Classify every exported symbol
-        │
-3. Define minimal host integration API
-        │
-4. Separate config from host operations
-        │
-5. Formalize guest physical memory semantics
-        │
-6. Define memory callback failure semantics
-        │
-7. Formalize Chip RAM topology semantics
-        │
-8. Introduce canonical MMIO transaction boundary
-        │
-9. Preserve provider selection outside Rigel
-        │
-10. Define MMIO width/alignment semantics
-        │
-11. Define MMIO observability/ordering semantics
-        │
-12. Define MMIO transaction result/failure semantics
-        │
-13. Select concrete MMIO C representation
-        │
-14. Preserve existing internal MMIO handlers
-        │
-15. Freeze execution-progress unit
-        │
-16. Freeze deadline representation
-        │
-17. Select advance vs advance_to semantics
-        │
-18. Validate authoritative Rigel timeline
-        │
-19. Define lifecycle/reset semantics
-        │
-20. Formalize IPL host boundary
-        │
-21. Separate advanced/debug API
-        │
-22. Remove internal wiring from host surface
-        │
-23. Move harness to candidate API
-        │
-24. Replay behavioral baseline
-        │
-25. Implement Bellatrix adapter against candidate API
-        │
-26. Validate deterministic DMA/MMIO/timing/reset/IRQ
-        │
-27. Review candidate API using both consumers
-        │
-28. Freeze RIGEL_API_VERSION 1
-        │
-29. Add advanced bus integration if required
-        │
-30. Optimize only after correctness
-~~~
+* Rigel has an authoritative definition or discoverable description sufficient to identify its CPU-visible classic hardware coverage;
+* every CPU-visible access supported by Rigel remains functionally reachable through Bellatrix;
+* canonical MMIO provides a complete semantic reference interface;
+* Bellatrix does not maintain a manually selected incomplete subset of Rigel hardware;
+* the generic fallback can route all accesses assigned to it;
+* Emu68 MMU mechanisms are reused where interception is required;
+* MMU faults are not incorrectly treated as mandatory for every Rigel access;
+* Bellatrix Bus traversal is not incorrectly treated as mandatory for every Rigel access;
+* caches are explicitly permitted;
+* fast paths are explicitly permitted;
+* shadows are explicitly permitted;
+* direct paths are explicitly permitted where semantically valid;
+* optimized paths preserve required observable behavior;
+* shadows do not become independent classic hardware authorities;
+* no CPU-visible Rigel hardware exists only behind an inaccessible private path;
+* Bellatrix does not unnecessarily interpret classic register semantics;
+* guest-memory address semantics remain explicit;
+* Rigel remains authoritative for classic timing and interrupts;
+* DMA ownership remains unchanged;
+* Rigel remains host-topology neutral;
+* harness and Bellatrix use the same production semantic interface;
+* behavioral equivalence has been validated.
 
----
-
-# 72. Definition of Done for Rigel API Version 1
-
-Rigel API Version 1 should not be considered frozen until:
-
-* the existing implementation has a behavioral characterization baseline;
-* `librigel` builds independently;
-* the standalone harness uses the production API;
-* Bellatrix uses only the defined host integration API;
-* both harness and Bellatrix have exercised the candidate API;
-* Rigel hardware state is opaque;
-* hardware configuration and host services have clear ownership;
-* guest-memory callback semantics are explicit;
-* memory callback failure semantics are explicit;
-* Chip RAM configuration does not imply allocation ownership;
-* canonical MMIO transaction semantics are explicit;
-* provider selection remains outside Rigel;
-* supported MMIO widths are explicit;
-* MMIO alignment and misalignment behavior is explicit;
-* wider-access decomposition semantics are explicit where applicable;
-* MMIO transaction observability and ordering semantics are explicit;
-* MMIO side effects cannot be accidentally removed by host or execution-engine optimization;
-* permitted MMIO transaction transformations, if any, are explicitly documented;
-* MMIO transaction result/failure semantics are explicit;
-* guest-visible MMIO behavior remains distinct from host integration failure;
-* the concrete C representation of MMIO is selected only after its semantics are defined;
-* MMIO addresses and guest physical addresses remain distinct;
-* chipset-generated addresses and guest physical addresses remain semantically distinct;
-* MMIO endianness is explicit;
-* execution-progress representation is explicit;
-* deadline representation is explicit;
-* advancement semantics are explicitly delta-based or absolute;
-* Rigel is the sole authoritative chipset timeline;
-* overshoot behavior is deterministic;
-* post-create state is explicitly defined;
-* cold-reset semantics are explicitly defined;
-* warm-reset semantics are explicitly defined;
-* reset does not transfer chipset reset semantics into Bellatrix;
-* Rigel IPL is sufficient for normal Bellatrix interrupt integration;
-* interrupt acceptance does not implicitly clear Rigel sources;
-* DMA/JIT interaction does not expose Emu68 internals to Rigel;
-* callbacks have defined reentrancy rules;
-* threading assumptions are documented;
-* advanced/debug facilities are distinguishable from the core host API;
-* deterministic harness tests pass;
-* the Phase 0 behavioral baseline has been replayed after convergence;
-* any behavioral differences are documented as intentional;
-* Version 1 explicitly states whether it guarantees source API compatibility only or binary ABI compatibility;
-* `CONFIG_RIGEL=n` remains independent from the compatibility layer.
-
-Only then should:
-
-~~~c
-#define RIGEL_API_VERSION 1
-~~~
-
-represent a stable architectural commitment.
-
-For the initial Version 1 release, the recommended compatibility promise is:
+For Version 1:
 
 > Stable public source-level API. Binary ABI stability is not implied unless separately documented.
 
 ---
 
-# 73. Relationship to the Integration Specification
+# 53. Relationship to the Integration Specification
 
 The authority hierarchy remains:
 
@@ -3572,13 +1801,10 @@ cross-boundary behavioral contract
 Rigel API Convergence Plan
       │
       ▼
-migration of the existing implementation
+API refinement
       │
       ▼
-include/rigel/rigel.h
-      │
-      ▼
-concrete public API
+public Rigel headers
       │
       ▼
 librigel
@@ -3586,97 +1812,153 @@ librigel
 
 This document does not redefine `Rigel_integration.md`.
 
-Its purpose is to explain how the existing Rigel implementation should converge toward that contract.
-
-If a conflict exists:
+Its purpose is to identify which parts of the current Rigel boundary should be:
 
 ~~~text
-Rigel API Convergence Plan
-            │
-            ▼
-Rigel_integration.md
-            │
-            ▼
-Bellatrix.md
+preserved
+
+formalized
+
+changed
+
+internalized
 ~~~
 
-the higher-level specification takes precedence.
-
-The concrete C interface must therefore be a consequence of these documents rather than a source of new architectural rules.
+while ensuring complete CPU-visible compatibility without preventing future optimization.
 
 ---
 
-# 74. Final Recommendation
+# 54. Final Recommendation
 
-The current Rigel implementation should be treated as the foundation of `librigel`, not as a prototype to be discarded.
+The existing Rigel implementation should remain the foundation of `librigel`.
 
-Its existing:
+Its working:
 
 * chipset implementation;
-* deterministic model;
+* deterministic execution model;
 * temporal model;
 * interrupt model;
 * DMA behavior;
 * bus infrastructure;
+* Denise renderer;
+* chunky video output;
 * harness;
 
-should be preserved wherever they already conform to the architectural contract.
+should remain intact wherever they already satisfy the required contract.
 
-The primary transformation is:
+The primary refinement is the public host boundary.
 
-> from a broad implementation-oriented public surface to a deliberate host-integration API.
+The central CPU-visible invariant is:
 
-The intended result is:
+> **Every M68K CPU-visible classic hardware access supported by Rigel must remain functionally reachable through Bellatrix.**
+
+The central optimization invariant is:
+
+> **Complete address visibility is mandatory; the access path is not.**
+
+Therefore the architecture explicitly permits:
 
 ~~~text
-                    Rigel internals
-                          │
-                          │ remain owned by Rigel
-                          ▼
-                       librigel
-                          │
-                 candidate public API
-                          │
-             ┌────────────┴────────────┐
-             │                         │
-          Harness                   Bellatrix
-             │                         │
-             └────────────┬────────────┘
-                          │
-                  integration validation
-                          │
-                          ▼
-                    API Version 1
+generic dispatcher
+
+MMU interception
+
+cached provider lookup
+
+fast paths
+
+shadows
+
+direct paths
+
+region coalescing
+
+specialized dispatch
+
+future transparent optimizations
 ~~~
 
-Bellatrix must not become aware of how Rigel implements the Amiga chipset.
+provided that:
 
-Rigel must not become aware of how Bellatrix implements the native platform.
+~~~text
+observable optimized behavior
+            =
+required Rigel-defined behavior
+~~~
 
-The API between them should express only the information that genuinely crosses that architectural boundary.
+The intended relationship is:
 
-The guiding rules for the refactoring are therefore:
+~~~text
+Rigel
+    defines classic hardware semantics
+    and supported CPU-visible behavior
 
-> Do not rewrite the chipset to fit the API.
+Bellatrix
+    guarantees that supported behavior
+    remains reachable
 
-> Refine the API so that the existing chipset can remain independently owned, independently tested, and cleanly hosted.
+Bellatrix / Emu68
+    choose how each access is transported
+    and optimized
 
-> Establish the existing behavioral baseline before changing the boundary.
+Rigel
+    remains authoritative for classic
+    hardware meaning
+~~~
 
-> Treat MMIO as an observable hardware transaction boundary rather than ordinary memory access.
+The architecture must therefore avoid both extremes.
 
-> Define MMIO transaction semantics before selecting convenience entry points as stable API.
+This is too restrictive:
 
-> Keep guest-visible MMIO hardware behavior distinct from host integration failure.
+~~~text
+every Rigel access
+      MUST
+fault through MMU
+      MUST
+enter generic Bus
+      MUST
+enter generic dispatcher
+~~~
 
-> Select the concrete C representation of MMIO only after width, alignment, ordering, side-effect, and result semantics are understood.
+because it unnecessarily prevents optimization.
 
-> Preserve the distinction between chipset-generated addresses and guest physical addresses.
+This is incorrect:
 
-> Preserve the semantic temporal model independently from the eventual choice between `advance()` and `advance_to()`.
+~~~text
+Rigel supports address X
 
-> Define lifecycle and reset semantics before freezing reset operations as stable API.
+but Bellatrix has no path for X
+~~~
 
-> Validate the candidate interface with both the standalone harness and Bellatrix before freezing Version 1.
+because it breaks compatibility.
 
-Once that boundary is established and validated by both real consumers, the resulting interface can be frozen as Rigel API Version 1.
+The desired model is:
+
+~~~text
+                         M68K
+                           │
+                     access to X
+                           │
+                           ▼
+                  Bellatrix / Emu68
+                           │
+                    choose best path
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+        cache           fast path         generic
+          │                │                │
+        shadow          direct path      MMU / Bus
+          │                │                │
+          └────────────────┼────────────────┘
+                           ▼
+                   correct Rigel semantics
+~~~
+
+Thus the final rule for Rigel API Version 1 is:
+
+> **Rigel defines what classic CPU-visible hardware behavior exists. Bellatrix guarantees that none of that behavior becomes inaccessible to M68K software, while remaining free to use caches, fast paths, shadows, direct paths, MMU interception, generic dispatch, or future optimizations to implement that visibility.**
+
+Or, in its shortest form:
+
+> **Semantic reachability is mandatory. Dispatch topology is an optimization choice.**
