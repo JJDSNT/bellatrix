@@ -40,6 +40,63 @@ static void putreg(const char *name, ULONG value)
     emu68_console_puts("\n");
 }
 
+extern UWORD __aros_resident_start[];
+extern UWORD __aros_resident_end[];
+
+/*
+ * Walk the stack the exception came off and print what is on it.
+ *
+ * The PC in the frame names the victim, not the culprit. When a wild pointer
+ * is executed the reported PC is wherever control ended up -- an odd, absurd
+ * address that resolves to nothing -- and every fatal exception this port has
+ * produced looks like that. What identifies the path there are the return
+ * addresses still on the stack, which the same trick in patches/emu68/0004
+ * already uses to attribute open-bus accesses: "the longword at the top of the
+ * stack is the return address of a leaf call -- which is what identifies the
+ * caller passing the bad pointer, where m68kPC only names the victim".
+ *
+ * Printed raw rather than filtered, with a marker on the ones inside the
+ * kernel image. Return addresses into modules loaded from disk live in the
+ * heap and are indistinguishable from data by inspection, so deciding here
+ * which longwords are "real" would throw away the ones that matter -- the
+ * `ret` value seen in the open-bus reports was a heap address.
+ *
+ * Guarded, because a stack pointer taken from a machine that has already lost
+ * control is not to be trusted: reading through a wild one would fault inside
+ * the fault report.
+ */
+static void dump_stack(const char *what, ULONG sp)
+{
+    const ULONG *p = (const ULONG *)sp;
+    int i;
+
+    emu68_console_puts(what);
+    puthex(sp);
+
+    if ((sp & 1) || sp < 0x1000 || sp >= 0x34000000)
+    {
+        emu68_console_puts("  (not walkable)\n");
+        return;
+    }
+
+    emu68_console_puts("\n");
+
+    for (i = 0; i < 24; i++)
+    {
+        ULONG v = p[i];
+
+        emu68_console_puts("    +0x");
+        puthex((ULONG)(i * 4));
+        emu68_console_puts(" 0x");
+        puthex(v);
+
+        if (v >= (ULONG)__aros_resident_start && v < (ULONG)__aros_resident_end)
+            emu68_console_puts("  <- kernel");
+
+        emu68_console_puts("\n");
+    }
+}
+
 /*
  * Called from the stub below with a pointer to everything it saved:
  *
@@ -84,6 +141,17 @@ void emu68_trap_report(ULONG *regs)
     for (i = 0; i < 7; i++)
         putreg(anames[i], regs[9 + i]);
     putreg(" USP 0x", regs[0]);
+
+    /*
+     * The supervisor stack continues immediately above the exception frame --
+     * SR, PC and the format word are 8 bytes -- so that is where a call chain
+     * taken in supervisor mode is. If the exception happened in user mode
+     * (SR bit 13 clear) the chain is on the user stack instead, so print both
+     * rather than choose: one of them is the interesting one and the other
+     * costs a few lines.
+     */
+    dump_stack("  SSP 0x", (ULONG)&regs[16] + 8);
+    dump_stack("  USP 0x", regs[0]);
 
     for (;;)
         ;

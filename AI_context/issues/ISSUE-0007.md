@@ -1819,6 +1819,64 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 — the corruption lands in the Exec jump table, just below SysBase
+
+The trap probe now walks the stack it came off (`boot/trapprobe.c`), because the
+PC of a fatal exception names the victim and never the culprit. First failure
+caught with it, `out/boot-timing/2026-08-13T183333Z`:
+
+```
+CPU exception vector 0x00000010 at PC 0x01001270
+  A6 0x010012f4      USP 0x0104ec54
+  USP walk:
+    +0x00 0x3460a882  <- kernel      Exec_91_Vacate +0xe
+    +0x04 0x3464b588  <- kernel      is_Code_Wrapper +0x0
+    +0x08 0x34662592  <- kernel      IntuiInputHandler +0x0
+    +0x14 0x3466220c  <- kernel      __inline_Exec_ObtainSemaphore +0xe
+```
+
+So the chain is `IntuiInputHandler → is_Code_Wrapper → ObtainSemaphore`, and
+`ObtainSemaphore` begins with `Forbid()`.
+
+The arithmetic names the defect exactly:
+
+```
+A6 - PC = 0x010012f4 - 0x01001270 = 0x84 = 132 = LVO -132
+132 / 6 = 22, and exec_lib.fd entry 22 is Forbid()
+```
+
+`jsr -132(A6)` landed on data. **A6 is not the corrupted thing** -- `0x010012f4`
+is a plausible SysBase in a heap that starts at `0x01000000`, and it is
+consistent across runs (`…12f4`, `…12ff`, `…1314`). What is corrupted is the
+**Exec jump table**, 132 bytes below it, where a 6-byte `jmp` should be.
+
+This is not a wild pointer being *followed*. It is a wild **write** landing
+immediately below SysBase.
+
+It accounts for everything else on record:
+
+- **Why F-line dominates** (29 of 40 exceptions). Whatever overwrites an entry
+  decides the vector by its first word; random data is `0xFxxx` often enough,
+  and other entries give A-line or illegal instruction instead.
+- **Why the fault PCs are absurd and never repeat.** Each run corrupts
+  different entries.
+- **Why no `icons` run has an exception at all** (0 of 83). When the wild write
+  does not happen, the table survives and the boot completes.
+
+Run rate in the same series: **5 of 6 reached icons**, against ~32% historically.
+Not a claim that anything is fixed -- the sixth failed, and one failure is
+enough to know the defect is live. The register-reservation fix
+(`cmake/bellatrix-variant.cmake`) landed in the same window, so the two cannot
+be separated from six runs.
+
+**Next:** the jump table is at a known, fixed address, and the region mechanism
+added today can watch it. Installing a DIRECT read-only region over the page
+containing `SysBase-132` makes a write there fault, which prints the address,
+width and guest PC -- and Emu68 still services the access through the linear
+alias, so the instrument is non-destructive. That converts the culprit from
+deduction into a name.
+
+
 ## 2026-08-13 — the stall is a fatal guest exception, and no successful boot has one
 
 Two things were closed today by reading data already on disk, with no new runs.
