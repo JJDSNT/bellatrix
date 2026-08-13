@@ -33,6 +33,13 @@ static void puthex(ULONG value)
     emu68_console_puts(buffer);
 }
 
+/* A byte as a character, for values that turn out to be text rather than
+ * addresses -- which is how "Work" was recognised. */
+static int printable(int c)
+{
+    return (c >= 0x20 && c < 0x7f) ? c : '.';
+}
+
 static void putreg(const char *name, ULONG value)
 {
     emu68_console_puts(name);
@@ -233,7 +240,24 @@ static void describe_base(const char *what, ULONG base)
 
     if ((base & 1) || base < 0x1000 || base >= 0x34000000)
     {
-        emu68_console_puts("  (not a readable even address)\n");
+        emu68_console_puts("  (not a library base)\n");
+
+        /*
+         * Then say what the value *is* instead.
+         *
+         * A6 has held NULL, unrelated debris, and -- decisively -- the ASCII
+         * bytes "Work", which are the first four of "Workbench". That is not a
+         * pointer damaged by a stray write; it is what a freed structure looks
+         * like once its memory has been handed to something else. Printing the
+         * four bytes as characters is what turned that from a theory into a
+         * reading, so do it always rather than by hand afterwards.
+         */
+        emu68_console_puts("    as bytes: '");
+        emu68_console_putc(printable((base >> 24) & 0xff));
+        emu68_console_putc(printable((base >> 16) & 0xff));
+        emu68_console_putc(printable((base >> 8) & 0xff));
+        emu68_console_putc(printable(base & 0xff));
+        emu68_console_puts("'\n");
         return;
     }
 

@@ -1819,6 +1819,33 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 (last) — A6 is read out of name storage, at two different alignments
+
+The probe now renders A6 as characters, which is what made the previous entry
+readable at all. Four more failures:
+
+| A6 | as text | what |
+|---|---|---|
+| `0x61727900` | `ary.` | the tail of a name ending `...ary` plus its NUL -- i.e. `".library"` |
+| `0x01594f00` | — | a heap address whose target is all zeros (`ln_Type` 0, both sizes 0) |
+| `0x010012ff` | — | odd, just above SysBase |
+| `0x00000000` | — | NULL |
+
+plus `0x576f726b` = `"Work"` from the previous series.
+
+**The two text cases sit at different alignments inside names.** `"Work"` is
+the *start* of "Workbench"; `"ary\0"` is the *end* of something like
+".library". A structure freed and overwritten would give text at arbitrary
+offsets, which this is -- but a pointer read from a **wrong offset within a
+live structure** gives exactly this too, and in AROS a library's name is stored
+near its node, so a bad offset from a node lands in ".library".
+
+Both readings remain open. What is settled is that A6 comes from memory that
+holds names, and that the fatal call is always `jsr -LVO(A6)` with a real LVO.
+
+Verdicts in the same series: 4 icons, 5 workbench, 1 logo.
+
+
 ## 2026-08-13 (later still) — A6 holds freed memory: NULL, a string, debris
 
 The trap probe now prints A6 as a `struct Library` header, to settle whether it
