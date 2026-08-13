@@ -1,12 +1,12 @@
 /*
  * src/machine/bus.h
  *
- * The machine's view of a CPU transaction that the MMU did not satisfy.
+ * The machine's view of a CPU transaction the MMU did not satisfy.
  *
- * Today this only observes: Emu68 reports the access, the machine records who
- * made it, and Emu68 then services it exactly as it always did. Routing a
- * transaction to a subsystem is a later question, and giving it a home here is
- * the point of the boundary.
+ * Emu68 reconstructs the access and reports it here; the region table decides
+ * what it means. Today no region has an owner, so every classic-domain access
+ * is recorded and Emu68 goes on to service it exactly as before -- what
+ * changes is what is known, not what happens.
  */
 
 #ifndef BELLATRIX_MACHINE_BUS_H
@@ -19,12 +19,12 @@ extern "C" {
 #endif
 
 /*
- * Note a guest access to the classic 24-bit domain.
+ * Deliver a faulted guest access to the machine.
  *
- * Addresses at or above 0x01000000 are ignored, so the call is safe to place
- * on the whole fault path. size is in bytes, as Emu68 reports it.
+ * An address in no installed region returns immediately, so this is safe to
+ * place on the whole fault path. size is in bytes, as Emu68 reports it.
  */
-void machine_bus_observe(uint32_t address, int size, int write);
+void machine_bus_access(uint32_t address, int size, int write);
 
 /* Print the accesses seen so far, with their counts. */
 void machine_bus_report(void);
