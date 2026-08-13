@@ -46,12 +46,17 @@ extern UWORD __aros_resident_end[];
 /*
  * Watch the Exec jump table.
  *
- * The fatal exceptions this port dies on are a call through a corrupted
- * library vector, not a wild pointer being followed. Measured, 2026-08-13:
- * A6 held a healthy SysBase (0x010012f4) and the fault PC was A6-132, which is
- * LVO -132, which exec_lib.fd says is Forbid(); ObtainSemaphore -- three frames
- * up the stack -- opens with Forbid(). So a stray write landed in the six bytes
- * below SysBase where a jmp belongs, and the jsr executed data.
+ * Built to confirm that the table was being overwritten, and it refuted that
+ * instead -- which is why it stays. Across eight runs it reports exactly four
+ * changes and they are identical in the boots that reach the icons and the
+ * boots that die: AROS patching its own vectors during startup. The table is
+ * intact, and the fatal calls go through an A6 that is garbage rather than a
+ * vector that is. See AI_context/issues/ISSUE-0007.md.
+ *
+ * It stays because "the table is still intact" is worth knowing on every run
+ * that fails, and because it is the only thing here that measures where
+ * SysBase actually is -- which is what showed the earlier reading of
+ * A6-PC = 132 to be a coincidence.
  *
  * The obvious instrument is the MMU: mark the page read-only and let the write
  * fault, naming its author. It cannot be used here. The jump table sits *below*
@@ -203,6 +208,60 @@ void emu68_lvo_guard_check(void)
  * control is not to be trusted: reading through a wild one would fault inside
  * the fault report.
  */
+/*
+ * Ask whether A6 was ever a library base.
+ *
+ * Every fatal exception on this port is a `jsr -LVO(A6)` -- the offsets are
+ * exact multiples of six -- with an A6 that cannot be a base: 0x83e70000 and
+ * 0xc1d00000 are nowhere in the heap, and 0x010012ff is odd, which a base
+ * never is. That says the base register is wrong, but not whether it is a
+ * pointer to something that *used* to be a library.
+ *
+ * A live base has a struct Library at it: an LN_Type of NT_LIBRARY (9), a
+ * plausible ln_Name, and a lib_NegSize that matches the jump table below it.
+ * Debris from a freed one usually keeps some of that and loses the rest, and
+ * an address that was never a library has none of it. Printing the header
+ * separates the three without needing a theory first.
+ */
+static void describe_base(const char *what, ULONG base)
+{
+    const struct Library *lib = (const struct Library *)base;
+    const char *name;
+
+    emu68_console_puts(what);
+    puthex(base);
+
+    if ((base & 1) || base < 0x1000 || base >= 0x34000000)
+    {
+        emu68_console_puts("  (not a readable even address)\n");
+        return;
+    }
+
+    emu68_console_puts("\n    ln_Type 0x");
+    puthex(lib->lib_Node.ln_Type);
+    emu68_console_puts(" (NT_LIBRARY is 0x9)  lib_NegSize 0x");
+    puthex(lib->lib_NegSize);
+    emu68_console_puts("  lib_PosSize 0x");
+    puthex(lib->lib_PosSize);
+    emu68_console_puts("\n    lib_OpenCnt 0x");
+    puthex(lib->lib_OpenCnt);
+    emu68_console_puts("  lib_Flags 0x");
+    puthex(lib->lib_Flags);
+    emu68_console_puts("  ln_Name 0x");
+    name = lib->lib_Node.ln_Name;
+    puthex((ULONG)name);
+
+    if (name && (ULONG)name >= 0x1000 &&
+        (ULONG)name < 0x34000000)
+    {
+        emu68_console_puts(" '");
+        emu68_console_puts(name);
+        emu68_console_puts("'");
+    }
+
+    emu68_console_puts("\n");
+}
+
 static void dump_stack(const char *what, ULONG sp)
 {
     const ULONG *p = (const ULONG *)sp;
@@ -288,6 +347,8 @@ void emu68_trap_report(ULONG *regs)
      * rather than choose: one of them is the interesting one and the other
      * costs a few lines.
      */
+    describe_base(" A6 as a library base: ", regs[15]);
+
     dump_stack("  SSP 0x", (ULONG)&regs[16] + 8);
     dump_stack("  USP 0x", regs[0]);
 

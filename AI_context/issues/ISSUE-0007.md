@@ -1819,6 +1819,68 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 (later still) — A6 holds freed memory: NULL, a string, debris
+
+The trap probe now prints A6 as a `struct Library` header, to settle whether it
+was ever a base. It was not. Across three failures in one series:
+
+| A6 | what it is |
+|---|---|
+| `0x576f726b` | **ASCII `"Work"`** -- the first four bytes of "Workbench" |
+| `0x00000000` | NULL |
+| `0x010012ff` | odd, forty-odd bytes above SysBase |
+
+and from the previous series, `0x83e70000` and `0xc1d00000`.
+
+The `"Work"` case is unambiguous and worth stating on its own. The fault:
+
+```
+open bus read: guest 0x576f6fe5 ... m68kPC 576f6fe3 ret 0157cc72
+CPU exception vector 0x2c at PC 0x576f6fe3
+  A6 0x576f726b
+```
+
+`0x576f726b - 0x576f6fe3 = 0x288 = 648 = 108 * 6`, an exact LVO -- the *same*
+LVO as the `0xc1d00000` failure. The CPU is fetching instructions from inside
+the text. So a library call was made with a base register holding **string
+data**.
+
+**It is the variety that identifies the defect, not any single value.** A
+pointer corrupted by a stray write would be wrong in some consistent way. NULL,
+ASCII text, and unrelated debris are what you get when a *structure has been
+freed and its memory reused* -- zeroed by one allocation, filled with a name by
+another -- while a stale pointer to it is still called through.
+
+This supersedes three earlier readings, all now closed:
+
+- the Exec jump table is corrupted -- refuted by the LVO guard;
+- the context backend loses A6 -- `switch.S`/`dispatch.S` checked, they agree
+  on the 68-byte frame and A6 is saved and restored correctly;
+- a pointer is corrupted a bit or a byte at a time -- `0x576f726b` was never a
+  pointer.
+
+It fits what was already on record: `strcmp`/`strchr` reaching wild string
+pointers, a `ret` into the heap where disk-loaded module code lives, and
+`Lddemon_0_CloseLibrary` in the first stack walk -- the daemon that unloads
+libraries is exactly what frees these structures.
+
+**Not yet known:** which structure is reused, and whether `ret 0157cc72` is the
+same caller in every failure. Both are answerable now that the target is
+specific.
+
+**Two unrelated defects found while checking the endianness angle**, both real
+and neither on the boot path, so neither explains this: `rom/filesys/fat/ops.c`
+line 599 and `rom/filesys/fat/direntry.c` line 242 build FAT cluster numbers
+from the raw little-endian `first_cluster_hi`/`first_cluster_lo` fields with no
+`AROS_LE2WORD`, unlike the `FIRST_FILE_CLUSTER` macro in `fat_fs.h` which does
+it correctly. Same family as `patches/aros/0008` and `0011`.
+
+Our own `patches/aros/0009` (ELF loads from an unfilled buffer) was re-examined
+on suspicion and holds up: the `ilsSeek(file, offset, OFFSET_BEGINNING)`
+precedes the fill so the request really is at the buffer head, `srb` is
+zero-initialised at its declaration, and the cache is bounded by `srb_Valid`.
+
+
 ## 2026-08-13 (later) — retraction: the jump table is intact, A6 is the corrupt thing
 
 The entry below claiming the Exec jump table was overwritten is **wrong**, and
