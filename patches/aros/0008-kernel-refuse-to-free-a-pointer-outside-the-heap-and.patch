@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 7 Aug 2026 07:00:00 -0300
-Subject: [PATCH 10/10] kernel: refuse to free a pointer outside the heap, and say who
+Subject: [PATCH 08/11] kernel: refuse to free a pointer outside the heap, and
+ say who
 
 MEM_TO_BHDR(ptr) computes a header address from the caller pointer and the
 code reads it; a pointer that is not ours makes that a read of whatever the
@@ -14,9 +15,14 @@ as bad, declining them.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ rom/kernel/tlsf.c | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/rom/kernel/tlsf.c b/rom/kernel/tlsf.c
+index 6bd30b66cb..7812fa3d4a 100644
 --- a/rom/kernel/tlsf.c
 +++ b/rom/kernel/tlsf.c
-@@ -670,6 +670,48 @@
+@@ -817,6 +817,48 @@ void tlsf_freevec(struct MemHeaderExt * mhe, APTR ptr)
      if (unlikely(!ptr))
          return;
  

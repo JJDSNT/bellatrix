@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Thu, 6 Aug 2026 23:50:00 -0300
-Subject: [PATCH 7/8] Raise the m68k default task stack to match the other targets
+Subject: [PATCH 06/11] Raise the m68k default task stack to match the other
+ targets
 
 16 KB made m68k the outlier in this tree by a factor of two and a half:
 i386, ppc, riscv and x86_64 all use 40960, MorphOS 32768, m68k 16384. It is
@@ -23,9 +24,14 @@ It does not change the boot rate; that was measured too, and said so.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ arch/m68k-all/include/aros/cpu.h | 19 ++++++++++++++++++-
+ 1 file changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/arch/m68k-all/include/aros/cpu.h b/arch/m68k-all/include/aros/cpu.h
+index 1e50323859..97c5bf5a88 100644
 --- a/arch/m68k-all/include/aros/cpu.h
 +++ b/arch/m68k-all/include/aros/cpu.h
-@@ -116,7 +116,24 @@
+@@ -116,7 +116,24 @@ extern void aros_not_implemented ();
      Not so much, I think (schulz) ;-))
  */
  

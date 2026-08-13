@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Mon, 3 Aug 2026 18:59:32 -0300
-Subject: [PATCH 6/6] DEBUG: turn on tracing in dos, lddemon and Shell
+Subject: [PATCH 05/11] DEBUG: turn on tracing in dos, lddemon and Shell
 
 Bring-up aid, not part of the port. Enables the existing D() tracing in
 the boot and shell paths, which is where a new architecture spends most
@@ -32,7 +32,7 @@ index adf0a3684a..8076faf602 100644
  #include <exec/alerts.h>
  #include <exec/libraries.h>
 diff --git a/rom/dos/cliinit.c b/rom/dos/cliinit.c
-index 5415afe898..4251ada550 100644
+index 218cb9a579..4efec393b2 100644
 --- a/rom/dos/cliinit.c
 +++ b/rom/dos/cliinit.c
 @@ -4,6 +4,7 @@
@@ -44,7 +44,7 @@ index 5415afe898..4251ada550 100644
  #include <exec/resident.h>
  #include <proto/exec.h>
 diff --git a/rom/dos/newcliproc.c b/rom/dos/newcliproc.c
-index 22e2882e6d..9f793c014c 100644
+index f024bb2cea..8c605126c9 100644
 --- a/rom/dos/newcliproc.c
 +++ b/rom/dos/newcliproc.c
 @@ -4,6 +4,7 @@
@@ -68,7 +68,7 @@ index b39987d288..6f54d924e7 100644
  #include <utility/tagitem.h>
  #include <dos/dostags.h>
 diff --git a/rom/dos/systemtaglist.c b/rom/dos/systemtaglist.c
-index 26d20928da..b878b30dc6 100644
+index 7a5f675e4a..463b08b53c 100644
 --- a/rom/dos/systemtaglist.c
 +++ b/rom/dos/systemtaglist.c
 @@ -4,6 +4,7 @@
@@ -80,7 +80,7 @@ index 26d20928da..b878b30dc6 100644
  #include <utility/tagitem.h>
  #include <dos/dostags.h>
 diff --git a/rom/lddemon/lddemon.c b/rom/lddemon/lddemon.c
-index 765e7bcaea..8f65050a64 100644
+index 58d8e6d2bb..03b276ffcd 100644
 --- a/rom/lddemon/lddemon.c
 +++ b/rom/lddemon/lddemon.c
 @@ -6,6 +6,7 @@
@@ -92,7 +92,7 @@ index 765e7bcaea..8f65050a64 100644
  #include <aros/debug.h>
  #include <aros/symbolsets.h>
 diff --git a/workbench/c/Shell/Shell.c b/workbench/c/Shell/Shell.c
-index 42ee5bdd87..c3bc27e96f 100644
+index bf13ddcd6e..0c27a3a386 100644
 --- a/workbench/c/Shell/Shell.c
 +++ b/workbench/c/Shell/Shell.c
 @@ -8,6 +8,7 @@

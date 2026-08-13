@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Mon, 3 Aug 2026 18:58:09 -0300
-Subject: [PATCH 1/6] Add the m68k-emu68 target to configure
+Subject: [PATCH 01/11] Add the m68k-emu68 target to configure
 
 Registers a m68k target whose architecture is not amiga: an m68k CPU on
 a Raspberry Pi under Emu68, with no Amiga chipset. Everything else in
@@ -12,10 +12,10 @@ this series follows from that distinction being expressible.
  2 files changed, 102 insertions(+), 5 deletions(-)
 
 diff --git a/configure b/configure
-index 76e310aa1c..efad8865a6 100755
+index 13d10bbbf8..667d5864cc 100755
 --- a/configure
 +++ b/configure
-@@ -11321,6 +11321,40 @@ printf "%s\n" "$darwin_sdk_path" >&6; }
+@@ -11336,6 +11336,40 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
          aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Dthumb"
          ;;
  
@@ -56,7 +56,7 @@ index 76e310aa1c..efad8865a6 100755
      amiga*)
          # Extract the first word of "gzip", so it can be a program name with args.
  set dummy gzip; ac_word=$2
-@@ -12457,7 +12491,21 @@ spec_obj_format="-m $aros_object_format"
+@@ -12494,7 +12528,21 @@ spec_obj_format="-m $aros_object_format"
  # as well as floating-point ABI.
  case "$aros_target_cpu" in
      *m68k*)
@@ -79,7 +79,7 @@ index 76e310aa1c..efad8865a6 100755
          aros_isa_targets="M68K_ISA_TARGETS              :=MC68020 MC68040"
          aros_isa_extra="$aros_isa_extra$export_newline$aros_isa_targets$export_newline"
          aros_isa_extra="$aros_isa_extra$m68k_isa_extra$export_newline$m68k_020_isa_extra$export_newline$m68k_030_isa_extra$export_newline$m68k_040_isa_extra$export_newline$m68k_060_isa_extra$export_newline$m68k_ac080_isa_extra$export_newline"
-@@ -21622,7 +21670,6 @@ fi
+@@ -21656,7 +21704,6 @@ fi
  aros_shared_ar="$aros_shared_ld $aros_shared_ldflags -o"
  
  if test -n "$aros_shared_cflags" ; then
@@ -90,10 +90,10 @@ index 76e310aa1c..efad8865a6 100755
  fi
 -
 diff --git a/configure.in b/configure.in
-index bd9ca02218..9a873b7332 100644
+index 3f758b7816..7de040478d 100644
 --- a/configure.in
 +++ b/configure.in
-@@ -2207,6 +2207,42 @@ case "$target_os" in
+@@ -2241,6 +2241,42 @@ case "$target_os" in
          aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Dthumb"
          ;;
  
@@ -136,7 +136,7 @@ index bd9ca02218..9a873b7332 100644
      amiga*)
          AROS_PROG(GZIP,[gzip])
          host_extra_cfg+="$export_newline""GZIP                          := $GZIP"
-@@ -2759,7 +2795,21 @@ spec_obj_format="-m $aros_object_format"
+@@ -2817,7 +2853,21 @@ spec_obj_format="-m $aros_object_format"
  # as well as floating-point ABI.
  case "$aros_target_cpu" in
      *m68k*)

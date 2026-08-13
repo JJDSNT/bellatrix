@@ -3,7 +3,7 @@
 AROS is the m68k operating system this project boots. It lives at
 `external/aros`, a submodule tracking upstream
 [aros-development-team/AROS](https://github.com/aros-development-team/AROS),
-pinned at **`d0370bd`**.
+pinned at **`8570536`**.
 
 The submodule is never edited in place. Our work reaches it two ways, and the
 split is deliberate.
@@ -13,7 +13,7 @@ split is deliberate.
 | | What | Where it lives | How it gets in |
 |---|---|---|---|
 | **The port** | 57 files, ~6900 lines — an entire architecture directory that exists nowhere upstream | `aros/arch/m68k-emu68/` in this repository | symlinked into place by `scripts/setup.sh` |
-| **Upstream changes** | 19 files modified, 2 added, +186/−11 | `patches/aros/` | applied by `scripts/setup.sh` |
+| **Upstream changes** | 11 files modified, 2 added, +341/−21 | `patches/aros/` | applied by `scripts/setup.sh` |
 
 The port is **our source code**, not a modification of anyone else's. Carrying
 6900 lines as a patch would produce a diff nobody can review, with no history
@@ -31,21 +31,75 @@ to code that belongs to someone else.
 
 ## The series
 
+Eleven patches, in three kinds. The distinction is the point of the table: a
+patch that exists because this target exists is not the same thing as a defect
+someone else has, and neither is an instrument.
+
+### Target enablement — exists because `m68k-emu68` exists
+
 | # | Patch | What it does |
 |---|---|---|
-| 0001 | `configure-add-m68k-emu68-target` | Registers an m68k target whose architecture is not `amiga`. Everything else follows from that distinction being expressible. |
-| 0002 | `m68k-all-support-non-amiga-m68k` | The shared m68k layer assumed Amiga hardware in cache maintenance, dispatch, signalling, task switch and wait. Adds `preserveall.S` and `preserveall_install.c`. |
-| 0003 | `sdcard-initialise-softlist` | **Upstream bug.** `NEWLIST` on `sdcu_SoftList` was lost when the driver was derived from `rom/devs/ata`. `AddHead()` on a zeroed list writes through a NULL `lh_Head`, i.e. to address 4 — harmless-looking on the ARM ports that have used this driver, fatal on m68k where address 4 is `AbsExecBase`. |
-| 0004 | `dos-reply-synchronous-system-packet` | **Upstream bug.** A synchronous `System()` had its flags zeroed, so `AROS_CLI()` took the "CliInit already replied for me" branch and nobody ever replied. The caller sits in `WaitPkt()` forever. `__dos_Boot()` hits it on the first `Execute()` that `AROSMonDrvs` makes, which is why no display driver was ever loaded on m68k. |
-| 0005 | `dosboot-planar-image-by-arch` | The planar boot image was selected on `AROS_TARGET_CPU=m68k`, which also catches an m68k with a chunky framebuffer and no blitter. Tests `AROS_TARGET_ARCH=amiga` instead. |
-| 0006 | `debug-enable-dos-shell-tracing` | **Bring-up aid, not part of the port.** `#define DEBUG 1` in the boot and shell paths. Applied last and touching nothing else, so it can be dropped without disturbing the rest. |
+| 0001 | `add-the-m68k-emu68-target-to-configure` | Registers an m68k target whose architecture is not `amiga`. Everything else follows from that distinction being expressible. |
+| 0002 | `m68k-all-support-an-m68k-that-is-not-an-amiga` | The shared m68k layer assumed Amiga hardware in cache maintenance, dispatch, signalling, task switch and wait. Adds `preserveall.S` and `preserveall_install.c`. |
+| 0004 | `dosboot-key-the-planar-boot-image-on-target-arch-not` | The planar boot image was selected on `AROS_TARGET_CPU=m68k`, which also catches an m68k with a chunky framebuffer and no blitter. Tests `AROS_TARGET_ARCH=amiga` instead. |
+| 0011 | `m68k-all-do-not-race-the-emu68-exec-backend` | `arch/m68k-all/exec` and `arch/m68k-emu68/exec` both declared `%build_archspecific` for `switch`, `dispatch` and `preparecontext`, writing the same object path. mmake has no notion of one overriding the other: they raced, and a full rebuild reversed the order for the first time on 2026-08-07, linking 66-byte stubs beside a `kernel_cpu.c` that removes their symbols on purpose. The guest jumped to address zero 570 ms in. |
 
-0003 and 0004 are ordinary upstream bugs that this port happened to expose.
-Neither mentions m68k-emu68 and both stand alone, which makes them the natural
-candidates to send upstream first.
+These four are candidates for upstreaming and none can be dropped before that
+happens.
 
-Applying the series and then the symlink reproduces the reference branch
-exactly: `git diff` between the two, excluding `arch/m68k-emu68`, is empty.
+### Defects upstream still has
+
+| # | Patch | What it does |
+|---|---|---|
+| 0003 | `sdcard-initialise-sdcu-softlist-before-addhead-uses` | `NEWLIST` on `sdcu_SoftList` was lost when the driver was derived from `rom/devs/ata`. `AddHead()` on a zeroed list writes through a NULL `lh_Head`, i.e. to address 4 — harmless-looking on the ARM ports that have used this driver, fatal on m68k where address 4 is `AbsExecBase`. |
+| 0006 | `raise-the-m68k-default-task-stack-to-match-the-other` | m68k's default task stack was left below what the other targets use. |
+| 0007 | `fat-write-cluster-and-size-little-endian` | FAT directory entries are little-endian on disk whatever the host is. The write path stored cluster numbers and sizes native, so a card written here was unreadable elsewhere and, worse, reread wrong. |
+| 0009 | `fat-convert-directory-dates-little-endian` | The same defect in `ConvertFATDate`/`ConvertDOSDate`. Converted inside the two functions rather than at the call sites, so there is one place to be right. |
+
+0007 and 0009 were re-checked against upstream HEAD on 2026-08-13 and the
+defect is still there. **We owe both upstream**, along with two further sites
+found the same day and not yet patched here: `rom/filesys/fat/ops.c` line 599
+and `rom/filesys/fat/direntry.c` line 242 build cluster numbers from the raw
+little-endian fields with no `AROS_LE2WORD`, unlike the `FIRST_FILE_CLUSTER`
+macro that does it correctly. Neither is on the boot path.
+
+### Instruments — not fixes
+
+| # | Patch | What it does |
+|---|---|---|
+| 0005 | `debug-turn-on-tracing-in-dos-lddemon-and-shell` | `#define DEBUG 1` in the boot and shell paths. |
+| 0008 | `kernel-refuse-to-free-a-pointer-outside-the-heap-and` | Refuses the free and names the caller instead of corrupting the allocator quietly. |
+| 0010 | `exec-name-the-caller-that-frees-outside-the-pool` | Reports the caller when a pointer arrives at `FreeVecPooled` that the pool does not own. Has never fired. |
+
+**0005 changes what the machine measures, not only what it says.** It floods
+the serial console, which changes boot timing, and the failure under
+investigation is timing-sensitive and intermittent. A measurement run and a
+diagnostic run should not be the same build; making that true is
+`AI_context/issues/ISSUE-0017.md` step 3, and until it is done a baseline taken
+with these applied is not comparable with one taken without.
+
+### What was dropped, and why it matters
+
+The series was 19 patches at pin `d0370bd`. Eight went at the bump to
+`8570536` because upstream has them:
+
+| Was | Upstream |
+|---|---|
+| `0013`–`0017`, `0019` | imported verbatim from upstream in the first place |
+| `0009` (ELF loads from an unfilled buffer) | `2f514b7472` |
+| `0004` (synchronous `System()` packet) | `bde1ec0f23` |
+
+The last one is worth remembering rather than just deleting. We patched
+`rom/dos/newcliproc.c` so a synchronous `System()` keeps its flags. Upstream
+deletes those lines and fixes `arch/m68k-all/dos/bcpl.S`, where the BCPL flag
+translation was being applied to every `System()` call instead of only to
+genuine BCPL Shell-Segs. Same bug — both descriptions name `AROSMonDrvs` —
+and theirs is at the cause. Ours was a symptom patch, and it was masking the
+real defect for as long as it was applied.
+
+All eleven surviving patches applied to HEAD without a single conflict across
+785 upstream commits, which is the evidence that what remains is genuinely
+ours rather than upstream with a delay.
 
 ## Building
 

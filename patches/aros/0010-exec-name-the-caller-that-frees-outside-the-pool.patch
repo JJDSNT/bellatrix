@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 7 Aug 2026 08:30:00 -0300
-Subject: [PATCH 12/12] exec: name the caller that frees outside the pool
+Subject: [PATCH 10/11] exec: name the caller that frees outside the pool
 
 patches/aros/0010 refuses a free whose pointer is outside the allocator's
 areas, which stops the corruption but says nothing about who is responsible.
@@ -30,6 +30,11 @@ refused.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ rom/exec/freevecpooled.c | 32 ++++++++++++++++++++++++++++++++
+ 1 file changed, 32 insertions(+)
+
+diff --git a/rom/exec/freevecpooled.c b/rom/exec/freevecpooled.c
+index efe029d506..e214f456ee 100644
 --- a/rom/exec/freevecpooled.c
 +++ b/rom/exec/freevecpooled.c
 @@ -2,6 +2,7 @@

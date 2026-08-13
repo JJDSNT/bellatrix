@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 7 Aug 2026 12:00:00 -0300
-Subject: [PATCH 11/11] fat: convert directory dates little-endian
+Subject: [PATCH 09/11] fat: convert directory dates little-endian
 
 The last field family in the FAT directory entry still exchanged in host
 order -- and this is a restoration, not a new fix. The conversion was on main
@@ -45,6 +45,11 @@ ppc-morphos share this code.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ rom/filesys/fat/date.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/rom/filesys/fat/date.c b/rom/filesys/fat/date.c
+index 2cdd21c027..2880344bb6 100644
 --- a/rom/filesys/fat/date.c
 +++ b/rom/filesys/fat/date.c
 @@ -24,6 +24,12 @@ void ConvertFATDate(UWORD date, UWORD time, struct DateStamp *ds,
