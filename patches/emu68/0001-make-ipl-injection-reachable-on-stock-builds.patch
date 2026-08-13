@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Thu, 6 Aug 2026 16:00:00 -0300
-Subject: [PATCH 2/2] Make IPL injection reachable on stock builds
+Subject: [PATCH 1/6] Make IPL injection reachable on stock builds
 
 INTF.IPL is how an external interrupt controller hands the CPU a level --
 the interface PiStorm itself uses. On a stock build, writing it has no
@@ -22,6 +22,9 @@ yet. It is the step that makes writing it mean something.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ src/ExecutionLoop.c | 41 +++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 39 insertions(+), 2 deletions(-)
+
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 index f968d72..5caefed 100644
 --- a/src/ExecutionLoop.c

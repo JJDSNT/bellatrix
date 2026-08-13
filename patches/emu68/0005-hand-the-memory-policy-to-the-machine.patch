@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Thu, 13 Aug 2026 12:00:00 -0300
-Subject: [PATCH 6/6] Hand the memory policy to the machine
+Subject: [PATCH 5/6] Hand the memory policy to the machine
 
 Emu68 maps the advertised system memory flat and then carves out the few
 addresses it emulates. That is right for a machine whose address space is
@@ -42,6 +42,10 @@ See AI_context/issues/ISSUE-0016.md, docs/Bus.md and docs/New_emu68.md.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ CMakeLists.txt      |  8 +++++++-
+ src/aarch64/start.c | 22 ++++++++++++++++++++++
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index 63d0d03..89555da 100644
 --- a/CMakeLists.txt
@@ -74,6 +78,8 @@ index 63d0d03..89555da 100644
 +
  configure_file(include/version.h.in include/version.h @ONLY)
  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/.git/index)
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+index 0f8200e..1ecd4b2 100644
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
 @@ -27,6 +27,9 @@
@@ -86,7 +92,7 @@ index 63d0d03..89555da 100644
  #include "sponsoring.h"
  #include "spinlock.h"
  #include "intc.h"
-@@ -2169,6 +2172,25 @@
+@@ -2157,6 +2160,25 @@ void M68K_StartEmu(void *addr, void *fdt)
      
      __m68k_state = &__m68k;
  

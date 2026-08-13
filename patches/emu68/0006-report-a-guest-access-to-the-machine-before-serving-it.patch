@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Thu, 13 Aug 2026 14:30:00 -0300
-Subject: [PATCH 7/7] Report a guest access to the machine before serving it
+Subject: [PATCH 6/6] Report a guest access to the machine before serving it
 
 The classic 24-bit domain is trapped by machine policy now, so every access
 to it arrives here. Nobody was looking.
@@ -22,6 +22,11 @@ learns no Amiga geography from this patch.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
+ src/aarch64/vectors.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+index 251334d..eba2f69 100644
 --- a/src/aarch64/vectors.c
 +++ b/src/aarch64/vectors.c
 @@ -15,6 +15,9 @@
@@ -34,25 +39,27 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  #include "intc.h"
  
  #define FULL_CONTEXT 0
-@@ -793,6 +796,10 @@
+@@ -790,6 +793,10 @@ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
  {
      D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
      
 +#ifdef BELLATRIX_EMU68
-+    machine_bus_observe((uint32_t)far, size, 1);
++    machine_bus_access((uint32_t)far, size, 1);
 +#endif
 +
      if (far == 0xdeadbeef && size == 1) {
          kprintf("%c", value);
          return 1;
-@@ -864,6 +871,10 @@
+@@ -821,7 +828,11 @@ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
  int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
  {
      D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
+-    
 +
 +#ifdef BELLATRIX_EMU68
-+    machine_bus_observe((uint32_t)far, size, 0);
++    machine_bus_access((uint32_t)far, size, 0);
 +#endif
- 
-     /*
-         On PiStorm these two snoop the values coming back from a real Paula.
++
+     switch(size)
+     {
+         case 1:
