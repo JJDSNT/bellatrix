@@ -1819,6 +1819,70 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 (later) — retraction: the jump table is intact, A6 is the corrupt thing
+
+The entry below claiming the Exec jump table was overwritten is **wrong**, and
+the guard built to confirm it refuted it instead.
+
+`emu68_lvo_guard` snapshots the table at `lib_NegSize` below SysBase and
+re-checks every timer tick. Across eight runs it reports exactly four changes,
+and they are **identical in the runs that reach the icons and the runs that
+die** -- same addresses, same before/after bytes, same order, same ticks. They
+are AROS patching its own vectors during startup (`SetFunction`,
+`m68k_ExecInstallPreserveAll`). The table is not corrupted.
+
+What made the earlier claim look solid was `A6 - PC = 132`, exactly `LVO -132`,
+exactly `Forbid()` -- with `ObtainSemaphore` three frames up the stack, which
+opens with `Forbid()`. It fitted. It was a coincidence in one sample. The guard
+measures SysBase at `0x010012cc`, and that trap had `A6 = 0x010012f4`, which is
+**40 bytes above SysBase**. A6 was never SysBase.
+
+With SysBase known, three failures read:
+
+| A6 | PC | A6-PC | /6 |
+|---|---|---|---|
+| `0x010012ff` | `0x010010bb` | 580 | 96.7 |
+| `0x83e70000` | `0x83e6fd5a` | 678 | **113** |
+| `0xc1d00000` | `0xc1cffd78` | 648 | **108** |
+
+Two of three are exact multiples of six, so these are real library calls --
+`jsr -LVO(A6)` -- and **A6 is garbage**. `0x83e70000` and `0xc1d00000` are not
+library bases at all, and `0x010012ff` is odd, which a base can never be.
+
+Two things were checked and cleared:
+
+- **The context backend.** `exec/switch.S` and `exec/dispatch.S` agree: the
+  save builds 68 bytes below USP -- PC(4), SR(2), format(2), then D0-D7/A0-A6
+  (60) -- and the restore reads those 60 from `%a5@(8)` and sets
+  `USP = A5+68`. A6 is saved and restored correctly.
+- **The instrument.** The trap stub does `movem.l %d0-%d7/%a0-%a6,%sp@-` then
+  pushes USP, giving exactly the `[0]=USP, [1..8]=D0-D7, [9..15]=A0-A6` the C
+  side assumes. The A6 being reported really is A6.
+
+The stack walk names the path:
+
+| stack value | symbol |
+|---|---|
+| `0x346b2b7c` | `kprintf +0x1c` |
+| `0x3468ac4c` | **`Lddemon_0_CloseLibrary +0x26`** |
+| `0x3468b899` | `ldDemonName +0x18` (a string, not code) |
+| `0x3468b82f` | `__func__.11354` (a string) |
+
+So the fatal call happens in the lddemon `CloseLibrary` path -- the daemon that
+loads and unloads libraries.
+
+**Hypothesis, stated as one:** a library is expunged while something still
+holds its base, and the next call through that base jumps into freed memory.
+That fits garbage A6, fits offsets that are proper LVOs, fits intermittency
+(it depends on when the expunge lands), and fits the earlier evidence -- wild
+string pointers reaching `strcmp`, and a `ret` into the heap where disk-loaded
+module code lives.
+
+**Next:** record expunged library bases in a small ring and have the trap probe
+print it, so a garbage A6 can be matched against a base that was freed. Expunge
+is rare, so this cannot flood.
+
+
 ## 2026-08-13 — the corruption lands in the Exec jump table, just below SysBase
 
 The trap probe now walks the stack it came off (`boot/trapprobe.c`), because the

@@ -505,6 +505,14 @@ static void start_aros(struct Emu68BootContext *ctx)
         emu68_set_stage(EMU68_STAGE_EXEC_READY);
         emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
 
+        /*
+         * Snapshot the Exec jump table now, while it is certainly intact.
+         * The fatal exceptions this port dies on are calls through a corrupted
+         * vector below SysBase; see boot/trapprobe.c and
+         * AI_context/issues/ISSUE-0007.md.
+         */
+        emu68_lvo_guard_arm();
+
         emu68_set_stage(EMU68_STAGE_SINGLETASK);
         emu68_console_puts("[AROS/Emu68] InitCode SINGLETASK\n");
         InitCode(RTF_SINGLETASK, 0);

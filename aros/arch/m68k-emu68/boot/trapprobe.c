@@ -44,6 +44,144 @@ extern UWORD __aros_resident_start[];
 extern UWORD __aros_resident_end[];
 
 /*
+ * Watch the Exec jump table.
+ *
+ * The fatal exceptions this port dies on are a call through a corrupted
+ * library vector, not a wild pointer being followed. Measured, 2026-08-13:
+ * A6 held a healthy SysBase (0x010012f4) and the fault PC was A6-132, which is
+ * LVO -132, which exec_lib.fd says is Forbid(); ObtainSemaphore -- three frames
+ * up the stack -- opens with Forbid(). So a stray write landed in the six bytes
+ * below SysBase where a jmp belongs, and the jsr executed data.
+ *
+ * The obvious instrument is the MMU: mark the page read-only and let the write
+ * fault, naming its author. It cannot be used here. The jump table sits *below*
+ * SysBase and SysBase's own mutable fields sit above it, in the same 4 KiB
+ * page, and IDNestCnt is written by every Forbid/Permit pair in the system.
+ * Trapping that page means a data abort on the hottest write in Exec -- the
+ * same shape as the 262144-abort sweep recorded in docs/legacy-emu68-patches.md.
+ *
+ * So compare instead of trap. A copy of the table costs a kilobyte and a
+ * memcmp per tick costs nothing, and it answers a narrower question than the
+ * trap probe does: not "who called through the broken vector" but "when did it
+ * break, and what was running". The boot is allowed to
+ * continue -- the interesting part is often what happens next.
+ */
+#define LVO_GUARD_MAX 1024
+
+static UBYTE lvo_guard_copy[LVO_GUARD_MAX];
+static UBYTE *lvo_guard_base;
+static ULONG lvo_guard_size;
+static ULONG lvo_guard_events;
+
+/* The platform tick, so a report says *when* as well as what. */
+extern volatile ULONG emu68_platform_ticks;
+
+/*
+ * Report several changes, not the first one.
+ *
+ * The first version stopped after one, and spent it on a legitimate write:
+ * AROS patches its own vectors during startup -- m68k_ExecInstallPreserveAll()
+ * is called from boot.c and SetFunction() is used elsewhere -- so the guard
+ * fired identically in every run, including the ones that reach the icons, and
+ * then went quiet before anything interesting happened.
+ *
+ * Arming later would be guesswork about when the legitimate patching ends, and
+ * would miss a corruption that happens before that point -- two of eight runs
+ * died before the screen even opened. So report each change and re-sync, and
+ * let the comparison between a good boot and a bad one do the work: the
+ * legitimate ones appear in both.
+ */
+#define LVO_GUARD_EVENTS 8
+
+void emu68_lvo_guard_arm(void)
+{
+    struct ExecBase *sb = *(struct ExecBase **)4;
+    ULONG size, i;
+
+    if (!sb)
+        return;
+
+    size = sb->LibNode.lib_NegSize;
+    if (size == 0 || size > LVO_GUARD_MAX)
+        size = LVO_GUARD_MAX;
+
+    lvo_guard_base = (UBYTE *)sb - size;
+    lvo_guard_size = size;
+
+    for (i = 0; i < size; i++)
+        lvo_guard_copy[i] = lvo_guard_base[i];
+
+    emu68_console_puts("[AROS/Emu68] LVO guard armed over 0x");
+    puthex((ULONG)lvo_guard_base);
+    emu68_console_puts("-0x");
+    puthex((ULONG)(lvo_guard_base + size - 1));
+    emu68_console_puts("\n");
+}
+
+void emu68_lvo_guard_check(void)
+{
+    struct ExecBase *sb;
+    struct Task *task;
+    ULONG i;
+
+    if (!lvo_guard_base || lvo_guard_events >= LVO_GUARD_EVENTS)
+        return;
+
+    for (i = 0; i < lvo_guard_size; i++)
+        if (lvo_guard_base[i] != lvo_guard_copy[i])
+            break;
+
+    if (i == lvo_guard_size)
+        return;
+
+    lvo_guard_events++;
+    sb = *(struct ExecBase **)4;
+    task = sb ? sb->ThisTask : (struct Task *)0;
+
+    emu68_console_puts("[AROS/Emu68] LVO GUARD #");
+    puthex(lvo_guard_events);
+    emu68_console_puts(" tick 0x");
+    puthex(emu68_platform_ticks);
+    emu68_console_puts(": changed at 0x");
+    puthex((ULONG)&lvo_guard_base[i]);
+    emu68_console_puts(" (LVO -");
+    puthex(lvo_guard_size - i);
+    emu68_console_puts(")\n  was 0x");
+    puthex(lvo_guard_copy[i]);
+    emu68_console_puts("  now 0x");
+    puthex(lvo_guard_base[i]);
+    emu68_console_puts("\n  task 0x");
+    puthex((ULONG)task);
+    if (task && task->tc_Node.ln_Name)
+    {
+        emu68_console_puts(" '");
+        emu68_console_puts(task->tc_Node.ln_Name);
+        emu68_console_puts("'");
+    }
+    emu68_console_puts("\n");
+
+    /*
+     * Print the whole changed run, not just its first byte: what was written
+     * is as much of a fingerprint as where. A string, a node pointer and a
+     * length field each look quite different.
+     */
+    emu68_console_puts("  bytes:");
+    for (; i < lvo_guard_size && i < LVO_GUARD_MAX; i++)
+    {
+        if (lvo_guard_base[i] == lvo_guard_copy[i])
+            continue;
+        emu68_console_puts(" 0x");
+        puthex(lvo_guard_base[i]);
+    }
+    emu68_console_puts("\n");
+
+    /* Re-sync, so the next change is a change from here rather than a repeat
+     * of this one. */
+    for (i = 0; i < lvo_guard_size; i++)
+        lvo_guard_copy[i] = lvo_guard_base[i];
+}
+
+/*
  * Walk the stack the exception came off and print what is on it.
  *
  * The PC in the frame names the victim, not the culprit. When a wild pointer

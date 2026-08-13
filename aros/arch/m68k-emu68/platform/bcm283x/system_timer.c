@@ -132,6 +132,11 @@ static void systimer_heartbeat(void *unused, void *unused2)
         emu68_platform_ticks <= 0x10000)
         platform_trace_val("[systimer] IRQ tick ", emu68_platform_ticks);
 
+    /* Cheap enough at the VBlank rate: a memcmp over a kilobyte. It answers
+     * a narrower question than the trap probe -- when the jump table broke,
+     * and what was running -- and reports only once. */
+    emu68_lvo_guard_check();
+
     if (SysBase && (IDNESTCOUNT_GET < 0))
         core_Cause(INTB_VERTB, 1L << INTB_VERTB);
 }
