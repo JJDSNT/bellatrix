@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 13 Aug 2026 12:00:00 -0300
+Subject: [PATCH 6/6] Hand the memory policy to the machine
+
+Emu68 maps the advertised system memory flat and then carves out the few
+addresses it emulates. That is right for a machine whose address space is
+its host's memory. Bellatrix is not one: its classic 24-bit domain is a
+machine definition, and inheriting the host's DRAM there means $E80000
+answers autoconfig cycles with heap contents and every hole in the map
+reads back as memory. Emu68's own comment beside the $DFF000 hole says as
+much -- "here it is plain RAM".
+
+So this asks the machine. Two hooks, and deliberately nothing else:
+
+  - VARIANT=bellatrix includes cmake/bellatrix-variant.cmake from our tree,
+    which is where the source list lives;
+  - start.c calls machine_init() at the top of M68K_StartEmu, which is the
+    one window where everything the host had to load is loaded and the guest
+    has not run yet.
+
+Placement was learned the hard way. Doing it while the memory map is built
+looks natural and is wrong: the ELF loader reads the initrd out of the low
+addresses, so the machine's policy took that range away from Emu68 itself
+and the loader faulted 192 times on its own image before AROS existed.
+
+Neither hook knows anything about the Amiga. No address decoding, no
+INTENA, no Zorro, no Rigel: Emu68 keeps the mechanism -- page tables,
+translation, the fault path -- and the machine decides how it is used,
+through the same mmu_map() everything else here calls. Searching this
+patch for a chipset concept should turn up nothing.
+
+The split into two cmake files is what stops this patch from growing.
+Adding a Bellatrix source is a line in our own tree; the four lines here
+never move again. The legacy branch established this shape and it is the
+reason the old integration needed only one Emu68 patch for the build.
+
+Both hunks are one unit of revert: the call without the source will not
+link, and the source without the call is dead code.
+
+See AI_context/issues/ISSUE-0016.md, docs/Bus.md and docs/New_emu68.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 63d0d03..89555da 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -59,7 +59,7 @@ set(SUPPORTED_TARGETS "raspi64" "pbpro" "rockpro64" "virt")
+ set(TARGET "raspi64" CACHE STRING "One of target machines: ${SUPPORTED_TARGETS}")
+ set_property(CACHE TARGET PROPERTY STRINGS ${SUPPORTED_TARGETS})
+ 
+-set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm-classic")
++set(SUPPORTED_VARIANTS "none" "pistorm" "pistorm-classic" "bellatrix")
+ set(VARIANT "none" CACHE STRING "Compilation variant: ${SUPPORTED_VARIANTS}")
+ set_property(CACHE VARIANT PROPERTY STRINGS ${SUPPORTED_VARIANTS})
+ 
+@@ -269,6 +269,8 @@ if (${VARIANT} IN_LIST SUPPORTED_VARIANTS)
+         else()
+             message(FATAL_ERROR "PiStorm variants are supported on raspi targets, only.")
+         endif()
++    elseif(${VARIANT} STREQUAL "bellatrix")
++        include(${CMAKE_SOURCE_DIR}/../../cmake/bellatrix-variant.cmake)
+     endif()
+ else()
+     message(FATAL_ERROR "Wrong variant selected: ${VARIANT}")
+@@ -323,5 +325,9 @@ target_compile_definitions(Emu68.elf PRIVATE
+     EMU68_VERSION_MINOR=${CMAKE_PROJECT_VERSION_MINOR}
+ )
+ 
++if(${VARIANT} STREQUAL "bellatrix")
++    include(${CMAKE_SOURCE_DIR}/../../cmake/bellatrix-target.cmake)
++endif()
++
+ configure_file(include/version.h.in include/version.h @ONLY)
+ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/.git/index)
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -27,6 +27,9 @@
+ #include "disasm.h"
+ #include "version.h"
+ #include "cache.h"
++#ifdef BELLATRIX_EMU68
++#include "machine/machine.h"
++#endif
+ #include "sponsoring.h"
+ #include "spinlock.h"
+ #include "intc.h"
+@@ -2169,6 +2172,25 @@
+     
+     __m68k_state = &__m68k;
+ 
++#ifdef BELLATRIX_EMU68
++    /*
++        Hand the memory policy to the machine, once, here.
++
++        Everything the host had to load is loaded by now and the guest has not
++        run yet, which is the only window where both are true. Doing it earlier
++        -- while the memory map is being built -- takes the low addresses away
++        from Emu68 itself: the ELF loader reads the initrd out of that range,
++        and it took 192 faults on its own image before AROS existed.
++
++        What the machine has is a different question from what the host has,
++        and not one Emu68 should answer. Bellatrix decides the map, through
++        this same mmu_map(). Emu68 keeps the mechanism.
++
++        See ../../src/machine/machine.c.
++    */
++    machine_init();
++#endif
++
+     //*(uint32_t*)4 = 0;
+ 
+     for (int fp=0; fp < 8; fp++) {

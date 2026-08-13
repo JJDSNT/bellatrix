@@ -1,176 +1,110 @@
-/* src/machine/machine.c */
+/*
+ * src/machine/machine.c
+ *
+ * The Bellatrix machine's memory policy.
+ *
+ * Bellatrix defines the map; Emu68 implements it. Everything here is expressed
+ * through the mmu_map() Emu68 already provides -- there are no page tables of
+ * our own, and no parallel MMU (docs/Bus.md sections 3 and 10).
+ */
 
 #include "machine.h"
 
 #include <stdint.h>
-#include <stddef.h>
 
+#include "A64.h"
 #include "mmu.h"
 
 /*
- * Classic 24-bit Amiga address domain.
+ * The classic 24-bit Amiga address domain.
  *
- * Bellatrix policy:
+ * Bellatrix policy: this range starts inaccessible to direct CPU loads and
+ * stores. Individual ranges are then mapped back, one at a time, once they
+ * have been confirmed to be normal memory.
  *
- *   0x00000000 - 0x00ffffff
+ * This inverts what the standalone Emu68 build does. Emu68 maps the advertised
+ * system memory 1:1 and punches holes for the few addresses it emulates
+ * (src/aarch64/start.c), which leaves everything else -- $E80000 autoconfig,
+ * the CIA ranges, every hole in the map -- as ordinary DRAM that reads back
+ * whatever happens to be in it. The comment beside the $DFF000 hole says so:
+ * "On PiStorm the whole Amiga address space already faults through to the bus;
+ * here it is plain RAM."
  *
- * starts inaccessible to direct CPU memory accesses.
- *
- * Individual ranges are then explicitly mapped back when they are
- * confirmed to be normal memory.
- *
- * Everything else remains faulting and is therefore observable through
- * the Emu68 data-abort path / Amiga bus hook.
+ * Starting from fault means the machine has to name what it contains, rather
+ * than inheriting the host's memory by default. See docs/New_emu68.md
+ * section 6 and AI_context/issues/ISSUE-0016.md.
  */
-
-#define AMIGA24_BASE       0x00000000UL
-#define AMIGA24_SIZE       0x01000000UL
+#define MACHINE_LOW24_BASE      0x00000000UL
+#define MACHINE_LOW24_SIZE      0x01000000UL
 
 /*
- * Initial known direct-memory region.
+ * Page zero is the one part of that domain this machine does confirm as normal
+ * memory, and it has to be: the 68K exception vector table lives at address 0,
+ * and AROS reaches its own ExecBase through the absolute long at address 4
+ * (the kernel is linked with --defsym AbsExecBase=0x4). Both are read on paths
+ * far too hot to service through a fault.
  *
- * Example: 2 MiB Chip RAM.
+ * arch/m68k-emu68 also leaves a boot-stage marker at 0x400, immediately above
+ * the vector table, so a bare-metal monitor can see boot progress before there
+ * is a console.
  */
-#define CHIPRAM_BASE       0x00000000UL
-#define CHIPRAM_SIZE       0x00200000UL
-
+#define MACHINE_PAGE0_BASE      0x00000000UL
+#define MACHINE_PAGE0_SIZE      0x00001000UL
 
 /*
- * These attributes are placeholders for the actual normal-RAM
- * attributes already used by the pinned Emu68 tree.
+ * DIRECT -- normal memory, translated by the MMU, never seen by the fault path.
+ * TRAPPED -- no translation the guest may use, so the access reaches machine
+ *            semantics.
  *
- * Do not introduce Bellatrix-specific page-table attributes here.
- * Reuse Emu68's existing definitions/constants.
+ * TRAPPED is not "invalid": it is how a machine transaction is delivered
+ * (docs/Bus.md section 4).
+ *
+ * TRAPPED clears MMU_ACCESS and keeps everything else. MMU_ACCESS is 0x400,
+ * the AArch64 Access Flag: with it clear the descriptor stays valid and keeps
+ * its attributes, and every access to the page raises an Access Flag fault.
+ *
+ * Two other spellings were tried and both are wrong, so they are recorded here
+ * rather than rediscovered:
+ *
+ *   - Dropping only MMU_ALLOW_EL0 does not trap at all. A deliberate word read
+ *     of $E80000 from the AROS bootstrap -- emitted, verified in the object as
+ *     `movew e80000,%d0` -- never reached the bus observer. Whatever exception
+ *     level the JIT runs guest code at, the EL0 bit is not the gate.
+ *
+ *   - An attribute-less mapping (0), which is what Emu68's own 4 KiB holes use,
+ *     traps everyone. It removed the range from Emu68 as well, and the loader
+ *     reading the initrd took 192 faults on its own image before the guest even
+ *     started. Right for one page Emu68 never touches; wrong for a range.
  */
-#define MMU_NORMAL_LO      /* existing Emu68 normal-memory attr */
-#define MMU_NORMAL_HI      /* existing Emu68 normal-memory attr */
+#define MACHINE_ATTR_DIRECT     (MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | \
+                                 MMU_ATTR_CACHED)
+#define MACHINE_ATTR_TRAPPED    (MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_CACHED)
 
-
-/*
- * Host/physical backing of Chip RAM.
- *
- * machine_init() should receive this from the existing Bellatrix
- * memory/bootstrap code instead if that fits the current ownership
- * model better.
- */
-static uintptr_t s_chipram_phys;
-
-
-/*
- * Step 1:
- *
- * Make the complete 24-bit domain faulting.
- *
- * In the current Emu68 approach this is done with the same mmu_map()
- * mechanism already used to create no-access holes: zero attributes.
- *
- * This does NOT mean "16 MiB of MMIO".
- *
- * It means:
- *
- *      no low-24 address is directly reachable unless the
- *      machine explicitly grants a mapping for it.
- */
-static void
-machine_protect_low24(void)
+static void machine_setup_memory(void)
 {
-    mmu_map(
-        AMIGA24_BASE,     /* virtual / 68k-visible address */
-        AMIGA24_BASE,     /* irrelevant while inaccessible */
-        AMIGA24_SIZE,
-        0,
-        0
-    );
-}
+    /* Deny direct access to the complete classic 24-bit address domain. */
+    mmu_map(MACHINE_LOW24_BASE, MACHINE_LOW24_BASE, MACHINE_LOW24_SIZE,
+            MACHINE_ATTR_TRAPPED, 0);
 
-
-/*
- * Generic helper for regions that should bypass the fault path.
- *
- * Once a range is mapped here, ordinary CPU accesses become direct
- * MMU-backed loads/stores and DO NOT enter vectors.c or amiga/bus.c.
- */
-static void
-machine_map_direct_ram(
-    uintptr_t guest_addr,
-    uintptr_t physical_addr,
-    size_t size)
-{
-    mmu_map(
-        guest_addr,
-        physical_addr,
-        size,
-        MMU_NORMAL_LO,
-        MMU_NORMAL_HI
-    );
-}
-
-
-/*
- * Step 2:
- *
- * Restore only memory we already know is genuine direct memory.
- */
-static void
-machine_map_known_memory(void)
-{
-    machine_map_direct_ram(
-        CHIPRAM_BASE,
-        s_chipram_phys,
-        CHIPRAM_SIZE
-    );
+    /* Restore only what is known to be normal memory. Order matters: this
+     * has to follow the protection above, which covers it. */
+    mmu_map(MACHINE_PAGE0_BASE, MACHINE_PAGE0_BASE, MACHINE_PAGE0_SIZE,
+            MACHINE_ATTR_DIRECT, 0);
 
     /*
-     * Nothing else is mapped yet.
-     *
-     * Later, if observation proves that Slow RAM is required:
-     *
-     * machine_map_direct_ram(
-     *     0x00c00000,
-     *     slowram_phys,
-     *     0x00080000
-     * );
-     *
-     * And similarly for any other region that is proven to be
-     * ordinary memory.
-     *
-     * Do NOT map:
-     *
-     *   $DFFxxx       Custom registers
-     *   $BFDxxx       CIA-B
-     *   $BFExxx       CIA-A
-     *
-     * Those must remain faulting so the Amiga bus can resolve them.
-     *
-     * Unknown holes also remain faulting.
+     * Nothing else is promoted yet, and nothing should be promoted merely
+     * because software touched it. An access to a trapped range is a question
+     * to answer -- normal RAM, machine MMIO, a mirror, open bus, or a pointer
+     * that went wrong -- and only the first answer justifies a mapping.
      */
 }
 
-
-void
-machine_set_chipram(uintptr_t physical_addr)
+void machine_init(void)
 {
-    s_chipram_phys = physical_addr;
-}
+    machine_setup_memory();
 
-
-void
-machine_init(void)
-{
-    /*
-     * Start from denial:
-     *
-     *     low-24 = fault
-     */
-    machine_protect_low24();
-
-    /*
-     * Then grant direct access only to known RAM.
-     */
-    machine_map_known_memory();
-
-    /*
-     * bus/IRQ/Rigel wiring can be initialized separately here
-     * once those pieces become part of the scaffold.
-     */
+    kprintf("[BELLATRIX] machine: low 24-bit domain protected, "
+            "$%08x-$%08x direct\n",
+            (unsigned int)MACHINE_PAGE0_BASE,
+            (unsigned int)(MACHINE_PAGE0_BASE + MACHINE_PAGE0_SIZE - 1));
 }

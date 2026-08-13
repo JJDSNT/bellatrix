@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 13 Aug 2026 14:30:00 -0300
+Subject: [PATCH 7/7] Report a guest access to the machine before serving it
+
+The classic 24-bit domain is trapped by machine policy now, so every access
+to it arrives here. Nobody was looking.
+
+That is the whole of the discovery phase: a range cannot be classified as
+RAM, chipset MMIO, a mirror or open bus until it is known what reaches it
+and which guest code sent it. Until then, promoting a range to a direct
+mapping because software touched it is guessing.
+
+Two call sites, in the standalone pair only -- PiStorm keeps its own copies
+above the #else and is not touched. The observer returns nothing and
+decides nothing: Emu68 goes on to service the access exactly as it did
+before, so this changes what is known and not what happens.
+
+The filter lives on the machine side (addresses at or above 0x01000000 are
+dropped there) so that neither call site carries an address constant. Emu68
+learns no Amiga geography from this patch.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -15,6 +15,9 @@
+ #include "tlsf.h"
+ #include "M68k.h"
+ #include "cache.h"
++#ifdef BELLATRIX_EMU68
++#include "machine/bus.h"
++#endif
+ #include "intc.h"
+ 
+ #define FULL_CONTEXT 0
+@@ -793,6 +796,10 @@
+ {
+     D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
+     
++#ifdef BELLATRIX_EMU68
++    machine_bus_observe((uint32_t)far, size, 1);
++#endif
++
+     if (far == 0xdeadbeef && size == 1) {
+         kprintf("%c", value);
+         return 1;
+@@ -864,6 +871,10 @@
+ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
+ {
+     D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
++
++#ifdef BELLATRIX_EMU68
++    machine_bus_observe((uint32_t)far, size, 0);
++#endif
+ 
+     /*
+         On PiStorm these two snoop the values coming back from a real Paula.

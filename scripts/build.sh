@@ -20,7 +20,14 @@ FIRMWARE="$ROOT/out/firmware"
 IMAGES="$ROOT/out/images"
 
 TARGET="${BELLATRIX_TARGET:-raspi64}"
-VARIANT="${BELLATRIX_VARIANT:-none}"
+
+# The Bellatrix variant is the machine this repository is about: it compiles
+# src/machine and lets it decide the memory policy instead of inheriting the
+# host's flat memory (patches/emu68/0006, cmake/bellatrix-variant.cmake).
+#
+# BELLATRIX_VARIANT=none still builds stock Emu68, which is what an A/B against
+# the unmodified upstream behaviour needs.
+VARIANT="${BELLATRIX_VARIANT:-bellatrix}"
 
 if [ "${1:-}" = "clean" ]; then
     echo "[build] wiping $BUILD"
