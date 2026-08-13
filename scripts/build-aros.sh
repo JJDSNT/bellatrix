@@ -84,6 +84,30 @@ if [ ! -f "$BUILD/mmake.config" ]; then
     "$SRC/configure" --target="$TARGET"
 else
     echo "[aros] already configured"
+
+    # setup.sh --reset checks the submodule out again, which rewrites every
+    # file's mtime without changing a byte of it -- the content is pinned by
+    # the submodule commit. AROS's Makefile then sees configure newer than
+    # config.status and refuses to build at all:
+    #
+    #   **** The configure script must be executed before running 'make'.
+    #
+    # Touching config.status clears that, but on its own it is expensive:
+    # config/make.cfg is generated from it, every mmakefile.src includes
+    # config/aros.cfg which includes make.cfg, and the whole tree goes out of
+    # date. That is why builds here were rebuilding everything after a reset.
+    #
+    # So bump the generated files past it in the same breath. Sound because the
+    # trigger is an mtime with identical content, which is the only kind of
+    # change a submodule checkout can produce.
+    if [ -f "$BUILD/config.status" ] && \
+       [ "$SRC/configure" -nt "$BUILD/config.status" ]; then
+        echo "[aros] configure is newer only by mtime — keeping the build tree"
+        touch "$BUILD/config.status"
+        for cfg in "$BUILD/config/make.cfg" "$BUILD/compiler/include/geninc.cfg"; do
+            [ -f "$cfg" ] && touch "$cfg"
+        done
+    fi
 fi
 
 # Deliberately serial.
