@@ -1819,6 +1819,57 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 — the preserve-all wrappers are ours alone, and the failures land on them
+
+`m68k_ExecInstallPreserveAll()` replaces four Exec vectors at boot:
+
+| function | entry | LVO |
+|---|---|---|
+| `Permit` | 23 | -138 |
+| `ObtainSemaphore` | 94 | -564 |
+| `ReleaseSemaphore` | 95 | -570 |
+| `ObtainSemaphoreShared` | 113 | **-678** |
+
+One of today's failures had `A6 = 0x83e70000`, `PC = 0x83e6fd5a`, so
+`A6 - PC = 678` -- exactly `ObtainSemaphoreShared`. The first stack walk of a
+failure named `__inline_Exec_ObtainSemaphore`. Two of the four.
+
+**Four things make this the least justified mechanism in the failing path:**
+
+1. **No other AROS target has it.** `preserveall.S` and
+   `preserveall_install.c` are new files added by our `patches/aros/0002`;
+   they do not exist upstream. `arch/m68k-amiga/exec/` contains only
+   `coldreboot`, `disable.S`, `enable.S`, `exec_globals`, `moveexecbase`,
+   `readgayle` and `shutdowna` -- no wrappers and no vector patching.
+2. **The patch message does not justify it.** It says only "Adds
+   preserveall.S and preserveall_install.c, which the exec mmakefile now
+   builds."
+3. **The rationale in the file header points at a case that is not ours.**
+   "Classic m68k callers, however, rely on these Exec vectors preserving
+   D0-D1/A0-A1." The target that actually runs classic Amiga binaries is
+   `m68k-amiga`, and it does not do this. We run AROS-compiled C only.
+4. **`boot.c` describes behaviour the code does not have.** Its comment says
+   "the 68040 variants `m68k_ExecInstallPreserveAll()` selects from these
+   flags", and the installer consults no flags at all -- it installs four
+   wrappers unconditionally. That comment is part of what justifies the
+   `AttnFlags` assignment above it.
+
+The wrapper itself reads correctly: it pushes `d0-d1/a0-a1`, `jsr`s the real
+entry, pops, and returns. The stack balances and A6 passes through untouched,
+being callee-saved in the C ABI.
+
+**So this is not a claim that the wrappers are wrong.** It is that they are a
+port-specific mechanism, unique in this tree, patching Exec vectors at boot,
+sitting exactly where the measurement points, with no recorded reason that
+applies to us. Removing them returns this target to what every other target
+does, which makes it a cheap experiment rather than a risky change.
+
+The correlation is not proof. `ObtainSemaphore` is among the most-called
+functions in the system, so a random failure landing on it is unsurprising;
+what makes it interesting is that there are four specific vectors and the
+failures land on two.
+
+
 ## 2026-08-13 (last) — A6 is read out of name storage, at two different alignments
 
 The probe now renders A6 as characters, which is what made the previous entry

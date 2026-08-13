@@ -48,7 +48,6 @@ extern char __aros_resident_end[];
 extern void Exec_Supervisor_Trap(void);
 extern void emu68_enter_user(void (*entry)(void), void *stack)
     __attribute__((noreturn));
-extern void m68k_ExecInstallPreserveAll(struct ExecBase *SysBase);
 extern void SuperstackSwap(void);
 
 /* arch/m68k-amiga/boot/start.c uses the same 8KB. */
@@ -486,9 +485,9 @@ static void start_aros(struct Emu68BootContext *ctx)
          * AttnFlags.
          *
          * The target is built -march=68040 to match (configure sets
-         * gcc_default_cpu for this arch), so the 68040 variants
-         * m68k_ExecInstallPreserveAll() selects from these flags are built for
-         * the CPU that is actually underneath.
+         * gcc_default_cpu for this arch), so the code these flags select --
+         * the cache and context routines in arch/m68k-all -- is built for the
+         * CPU that is actually underneath.
          *
          * The FPU is claimed too. Emu68 emulates one, the target is built
          * against the toolchain's hard-float multilib, and
@@ -499,7 +498,35 @@ static void start_aros(struct Emu68BootContext *ctx)
                                AFF_68040 | AFF_ADDR32 |
                                AFF_68881 | AFF_68882 | AFF_FPU40;
 
-        m68k_ExecInstallPreserveAll(sys_base);
+        /*
+         * No preserve-all wrappers.
+         *
+         * m68k_ExecInstallPreserveAll() replaced four Exec vectors -- Permit,
+         * ObtainSemaphore, ReleaseSemaphore and ObtainSemaphoreShared -- with
+         * trampolines that save D0-D1/A0-A1 around the C implementation,
+         * because a classic m68k caller expects those vectors not to clobber
+         * them.
+         *
+         * This target has no classic callers. Everything in it is
+         * AROS-compiled C using the AROS convention, and the target that does
+         * run classic Amiga binaries -- m68k-amiga -- installs no such
+         * wrappers: arch/m68k-amiga/exec/ patches no vectors at all. We were
+         * the only AROS target doing this, for a reason that describes
+         * somebody else's port.
+         *
+         * It is also where the measurement points. Every fatal exception on
+         * this port is a jsr -LVO(A6) with an A6 that cannot be a library
+         * base, and one of them landed on LVO -678, which is
+         * ObtainSemaphoreShared; the first stack walk of a failure named
+         * ObtainSemaphore. Two of the four. That is correlation, not proof --
+         * these are among the most-called functions in the system -- but a
+         * boot-time rewrite of Exec vectors with no reason that applies to us
+         * is the wrong thing to keep while chasing memory that is called
+         * through after it has been freed.
+         *
+         * See AI_context/issues/ISSUE-0007.md. The wrappers themselves stay in
+         * arch/m68k-all (patches/aros/0002); nothing calls them now.
+         */
         ctx->exec_base = sys_base;
         ctx->flags |= EMU68_BOOT_EXEC_READY;
         emu68_set_stage(EMU68_STAGE_EXEC_READY);

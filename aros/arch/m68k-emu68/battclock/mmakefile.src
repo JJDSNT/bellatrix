@@ -1,0 +1,27 @@
+
+include $(SRCDIR)/config/aros.cfg
+
+#
+# battclock.resource for arch/m68k-emu68.
+#
+# The Raspberry Pi has no battery-backed clock, so there is nothing to read a
+# time out of. arch/arm-raspi answered that by keeping the value in a file on
+# the boot volume, and this is that answer for the same hardware: the three
+# sources are arch/arm-raspi/battclock's, unchanged.
+#
+# Carried as a copy rather than shared, the same way soc/sdcard and soc/mbox
+# are. The alternative -- making arch/arm-raspi's directory serve two targets
+# -- would couple a bring-up in progress to a working port, for four files.
+#
+# Until now this port had no battclock.resource at all. boot/mmakefile.src
+# recorded it as "the one item of that minimal BSP still missing", and modules
+# that expect the resource to exist had to cope with its absence.
+#
+USER_INCLUDES := -I$(SRCDIR)/$(CURDIR) -I$(SRCDIR)/rom/battclock
+
+%build_archspecific \
+  mainmmake=kernel-battclock maindir=rom/battclock \
+  arch=emu68-m68k modname=battclock \
+  files="readbattclock writebattclock"
+
+%common
