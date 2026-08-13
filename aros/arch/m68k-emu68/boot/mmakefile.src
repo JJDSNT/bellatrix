@@ -3,7 +3,6 @@ include $(SRCDIR)/config/aros.cfg
 TARGETDIR := $(GENDIR)/$(CURDIR)
 BOOTOBJ   := $(TARGETDIR)/entry.o $(TARGETDIR)/usermode.o $(TARGETDIR)/boot.o \
              $(TARGETDIR)/console.o $(TARGETDIR)/selftest.o \
-             $(TARGETDIR)/diag.o $(TARGETDIR)/romboot.o \
              $(TARGETDIR)/superstack_swap.o $(TARGETDIR)/trapprobe.o
 BOOTELF   := $(AROSDIR)/aros-emu68-m68k.elf
 BOOTMAP   := $(GENDIR)/boot/aros-emu68-m68k.elf.map
@@ -58,8 +57,14 @@ CORERESIDENTS := timer_device utility_library oop_library hiddclass_hidd \
 # DeviceList to warn us, and both would program the same registers and both
 # call KrnAddIRQHandler(62).
 #
-# Ours are linked; the board's modules are kept out by EMU68_EXPANSION_ROM in
-# boot/boot.c. Flip both together.
+# Ours are linked, and now unconditionally: this port has no classic Expansion,
+# so there is no Emu68 Zorro board whose modules could claim the same registers.
+# See AI_context/issues/ISSUE-0016.md.
+#
+# expansion_library stays in CORERESIDENTS below. DOS boot needs the library
+# itself -- removing it ends in an "Exec Bootstrap Task" requester that never
+# reaches Wanderer -- and rom/expansion's generic ConfigChain() does nothing,
+# which is right for a machine with no Zorro bus.
 #
 # Note the ELF does not relink on a change to this file alone -- delete it to
 # force the link.

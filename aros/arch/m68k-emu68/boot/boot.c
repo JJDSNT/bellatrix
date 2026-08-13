@@ -74,39 +74,23 @@ void emu68_set_stage(uint32_t stage)
 }
 
 /*
- * Run each configured board's DiagPoint.
+ * There is no classic Expansion on this port.
  *
- * Emu68 offers a Zorro III ROM board carrying its own m68k modules and answers
- * the autoconfig cycles for it at E_EXPANSIONBASE (Emu68
- * src/aarch64/vectors.c). expansion.library walks that bus itself during its
- * own init -- it is RTF_SINGLETASK, so this has already happened -- but
- * enumerating a board is not the same as using it: what registers the modules
- * a board carries is its DiagArea, and nothing in rom/ processes one.
+ * What used to stand here walked expansion.library's BoardList for DiagAreas
+ * and romtags, on the premise that Emu68 answers autoconfig cycles at
+ * E_EXPANSIONBASE. It does -- but only when that address faults, and on this
+ * target it does not: Emu68 maps the advertised system memory 1:1, so
+ * $E80000-$E8FFFF is ordinary DRAM and the bus walk was reading whatever
+ * happened to be there.
  *
- * Timing is not free choice. An expansion ROM registers through KickTags, and
- * InitCode() collects those in InitKickTags() at the very start of the
- * RTF_COLDSTART pass (rom/exec/initcode.c:66), so this has to run before that
- * call rather than from a resident inside it.
+ * expansion.library stays in CORERESIDENTS, because DOS boot needs the library
+ * itself and removing it ends in an "Exec Bootstrap Task" requester. What is
+ * gone is the port-specific backend: rom/expansion's own ConfigChain() and
+ * ReadExpansionByte() stubs do nothing, which is the correct behaviour for a
+ * machine with no Zorro bus.
+ *
+ * See AI_context/issues/ISSUE-0016.md and docs/New_emu68.md section 25.
  */
-/*
- * Off while the SD path is being debugged against our own driver.
- *
- * Turning this on hands the SD controller and the VideoCore mailbox to
- * Emu68's brcm-sdhc.device and mailbox.resource, so soc/sdcard and soc/mbox
- * have to come out of CORERESIDENTS at the same time (see boot/mmakefile.src)
- * -- otherwise two drivers program the same registers.
- *
- * expansion.library still enumerates and maps the board either way; this only
- * governs whether the modules it carries are ever registered.
- */
-#define EMU68_EXPANSION_ROM 0
-
-static void emu68_configure_expansion(void)
-{
-#if EMU68_EXPANSION_ROM
-    emu68_diag_callroms();
-#endif
-}
 
 static void coldstart_user(void)
 {
@@ -130,8 +114,6 @@ static void coldstart_user(void)
         emu68_console_puts("[AROS/Emu68] platform timer enabled\n");
     else
         emu68_console_puts("[AROS/Emu68] platform timer not found\n");
-
-    emu68_configure_expansion();
 
     /*
      * Move off the supervisor stack Emu68 gave us and onto one Exec owns.
@@ -407,13 +389,30 @@ static void start_aros(struct Emu68BootContext *ctx)
         return;
 
     /*
-     * Keep the vector table and the absolute SysBase slot at address 4 out of
-     * the allocator. Emu68 has already removed its FDT and the loaded ELF from
-     * the top of the advertised memory range.
+     * Keep the whole classic 24-bit address domain out of the allocator.
+     *
+     * That domain is not ours to hand out. Emu68 maps the advertised system
+     * memory 1:1 and then punches holes in it -- 0x00dff000 for the custom
+     * chip registers, 0xdeadb000 for its own debug port (src/aarch64/start.c)
+     * -- and every access to a holed page is trapped and emulated as a device.
+     * A heap that starts at 0x1000 contains both of them, so an ordinary
+     * allocation can be handed a page whose every store goes to INTENA/INTREQ
+     * instead of to memory. Nothing reserved them, because the heap was laid
+     * out as if the address space were plain RAM.
+     *
+     * Starting above 0x00ffffff reserves them by construction, and it is the
+     * precondition for the memory policy this port is moving to: the low 24
+     * bits start inaccessible to direct loads and stores, and ranges are
+     * promoted back to a direct mapping only once classified as normal memory.
+     * See AI_context/issues/ISSUE-0016.md and docs/New_emu68.md section 6.
+     *
+     * The vector table and the absolute SysBase slot at address 4 fall out of
+     * the allocator for free. Emu68 has already removed its FDT and the loaded
+     * ELF from the top of the advertised memory range.
      */
     lower = ctx->memory_base;
-    if (lower < 0x1000)
-        lower = 0x1000;
+    if (lower < 0x01000000)
+        lower = 0x01000000;
     lower = (lower + 15) & ~15UL;
 
     if (upper <= lower || upper - lower < 0x10000)
@@ -431,6 +430,29 @@ static void start_aros(struct Emu68BootContext *ctx)
     if (ctx->flags & EMU68_BOOT_BOOTARGS_VALID)
         add_boot_tag(&tag_index, KRN_CmdLine, (uint32_t)ctx->bootargs);
     add_boot_tag(&tag_index, TAG_DONE, 0);
+
+    /*
+     * Assert the machine's trap contract, once.
+     *
+     * The classic 24-bit domain is meant to be inaccessible to direct loads
+     * and stores, so that an access to it reaches machine semantics rather
+     * than reading back whatever DRAM happens to be there. That is an
+     * invariant, not an aspiration: "a hardware range intended to trap MUST
+     * NOT simultaneously have a direct mapping that bypasses the fault path"
+     * (docs/Bus.md section 5).
+     *
+     * Nothing in this port touches the classic domain in normal operation --
+     * interrupts arrive as an IPL level, not through Paula, so even $DFF000 is
+     * never written (see platform/platform.c and exec/dispatch.S). That is
+     * correct, and it also means an instrument watching that domain would
+     * report nothing whether the trap works or not. So read one address that
+     * should trap and let the machine say it saw it.
+     *
+     * $E80000 is chosen because it is where autoconfig would be if this
+     * machine had a Zorro bus; it has no other meaning here. The value is
+     * discarded -- what is being tested is that the read is seen at all.
+     */
+    (void)*(volatile UWORD *)0x00e80000;
 
     BootMsg = emu68_boot_tags;
     memory = (struct MemHeader *)lower;

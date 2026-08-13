@@ -591,7 +591,8 @@ IPL would burden the JIT's hot loop. Second, the consumer is compiled out for
 a standalone build -- neither branch above is reachable without
 `PISTORM`/`PISTORM_CLASSIC` -- so this is not a free switch: it needs a
 non-PiStorm branch of its own, in the same spirit as the interrupt-register
-and autoconfig work already done.
+work already done. (This once also cited the autoconfig work; that has since
+been removed -- see AI_context/issues/ISSUE-0016.md.)
 
 `doc/host-interrupts.md` records the two options that were on the table when
 the EXTER route was chosen. This is a third, and it is the one that stops

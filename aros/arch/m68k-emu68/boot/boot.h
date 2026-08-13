@@ -81,6 +81,5 @@ void emu68_console_init(void *framebuffer, uint32_t pitch,
 int emu68_console_putc(int chr);
 void emu68_console_puts(const char *text);
 void emu68_set_stage(uint32_t stage);
-void emu68_diag_callroms(void);
 
 #endif
