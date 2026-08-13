@@ -1819,6 +1819,60 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 — the stall is a fatal guest exception, and no successful boot has one
+
+Two things were closed today by reading data already on disk, with no new runs.
+
+**The stall is our own trap probe, parked on purpose.** `stall.txt` for a `logo`
+run shows CPU#0 with `PSTATE=60000205` — bit 7 clear, so ARM interrupts are
+*enabled* — and the PC inside the JIT code buffer with `X12` equal to it, i.e.
+executing translated guest code. `X18` is the guest PC (`REG_PC` is 18) and
+resolves to `emu68_trap_report+0xce`, whose tail is `for (;;) ;`. The guest took
+a fatal exception, `boot/trapprobe.c` printed the dump, and parked by design.
+Every symptom the harness reports for a stall -- PC not moving, ARM alive,
+interrupts on -- is that loop.
+
+This closes the interrupt-delivery hypothesis. The ARM IRQ enable really is
+coupled to the guest lowering its own IPL mask (recorded now in `docs/irq.md`),
+and that really is fragile, but it is not what these stalls are.
+
+**No successful boot has a fatal guest exception.** Across the pooled log:
+
+| verdict | runs | with `guest_exception` |
+|---|---|---|
+| `icons` | 83 | **0 (0%)** |
+| `workbench` | 101 | 24 (24%) |
+| `logo` | 67 | 16 (24%) |
+
+Zero out of eighty-three. A fatal exception is sufficient for failure. It is not
+necessary -- three quarters of the failures have none recorded, though absence
+may be a capture limit rather than a fact about the run.
+
+**The vectors say the guest is executing data.** Of the 40 exceptions in
+non-icons runs:
+
+| vector | number | meaning | n |
+|---|---|---|---|
+| `0x2c` | 11 | F-line emulator | 29 |
+| `0x10` | 4 | illegal instruction | 7 |
+| `0x28` | 10 | A-line emulator | 3 |
+| `0x14` | 5 | divide by zero | 1 |
+
+F-line dominating would be an unimplemented FPU opcode if the PCs were sane.
+They are not: `0x010010b7`, `0xc0eda201`, `0x00000019` -- odd, absurd, and
+different every time. F-line, A-line and illegal-instruction together are simply
+what a 68k reports when it is fed data as code, depending on the bytes.
+
+So the chain is one defect, not several: a pointer is corrupted, control
+eventually transfers through it, the CPU executes data, and the trap probe
+parks. It matches the other evidence -- a valid heap pointer with bit 30 set,
+and wild string pointers reaching `strcmp`/`strchr`.
+
+**What this rules out:** a timing race in interrupt delivery. When the
+corruption does not happen, the boot completes; `icons` runs are clean of
+exceptions entirely.
+
+
 - 2026-08-04 — localized redraw stall to OpenDiskFont and proved FAT endian
   corruption from raw directory bytes.
 - 2026-08-04 — proved 66-byte versus 68-byte exception-frame mismatch.

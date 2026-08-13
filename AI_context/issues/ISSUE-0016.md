@@ -257,6 +257,55 @@ includes a `machine.h` and an `mmu.h` that do not exist.
 
 # Execution log
 
+## 2026-08-13 — our sources were not reserving the registers Emu68 reserves
+
+Emu68 breaks the AArch64 C ABI deliberately: `x13`-`x29` hold the m68k
+registers (`M68k.h`, `REG_PC` is 18), `x12` holds the translation-unit entry
+point, and the m68k context pointer lives in a vector lane -- `CTX_POINTER_ASM`
+is `"v20.d[1]"`. The files that participate are compiled with those registers
+pinned, **one set per file**, via `set_source_files_properties`. The
+directory-level options pin `x12` and nothing else.
+
+`src/machine/*.c` went in through `BASE_FILES`, so they inherited the
+directory-level options only -- no `CONTEXT_RESERVE_FLAGS`, which is what pins
+`v19`-`v26`. Under AAPCS64 the vector registers `v16`-`v31` are caller-saved,
+so the compiler was free to treat `v20` as scratch: any function of ours could
+clobber the m68k context pointer and never restore it, and `vectors.c` --
+compiled expecting nobody does that -- would return into a corrupted context.
+
+This is the accident recorded in the legacy ISSUE-0038: a target created before
+Emu68's flags, therefore compiled without them, clobbering pinned state inside
+the JIT context.
+
+Fixed where it belongs, in the build:
+
+```cmake
+set_source_files_properties(${BELLATRIX_SOURCES} PROPERTIES COMPILE_FLAGS
+    "-ffixed-x19 ... -ffixed-x29 ${CONTEXT_RESERVE_FLAGS}")
+```
+
+Verified in the generated code rather than assumed. Uses of `v/d/q19-26`:
+`region.c` 0, `machine.c` 0, `bus.c` exactly one -- `mov x0, v20.d[1]`, the
+deliberate context read, and a read at that.
+
+The manual save/restore that was there instead has been removed, because it
+protected the wrong registers by a mechanism that could not work:
+
+- `v30` is nothing in this pin. It was the legacy modeled-cycle counter from a
+  patch we do not carry; `CONTEXT_RESERVE_FLAGS` here stops at `v26`.
+- `x18` is the guest PC, but `vectors.c` does not pin it either, and the PC is
+  already read the correct way, through the context pointer, as
+  `patches/emu68/0005` does.
+- Worse, it saved *after* two calls had already been made. If the clobber
+  happened it happened first. Saving in C could never have worked: the clobber
+  can occur in any function on the path, before the saving one is entered.
+  Only the compile flag prevents it.
+
+**This taints today's measurements.** `src/machine` did not exist before today,
+so this cannot explain the long-standing intermittency in ISSUE-0007 -- but
+every run taken today after it was introduced ran on a build where our code
+could corrupt the JIT context. Today's runs are not a usable baseline.
+
 ## 2026-08-13 — the instrument is proven, and it named three callers
 
 Two corrections, both taken from the legacy integration after re-reading it:

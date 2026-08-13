@@ -218,6 +218,104 @@ incarnation's attempt hung in Exec idle with the interface working. The
 de-assert protocol has to be designed before code is written — see
 ISSUE-0010.
 
+## Where the level goes, and what re-enables the ARM IRQ
+
+This has now been derived from source twice, from scratch, because it is not
+written anywhere. It is written here.
+
+The full lifecycle of one host interrupt on this port:
+
+```
+ARM IRQ fires
+   → curr_el_spx_irq (vectors.c)
+        SPSR_EL1 |= 0x080          -- PSTATE.I set: IRQ masked after eret
+        INTF.IPL  = 6              -- no INTENA test, no shadow
+        eret
+   → ExecutionLoop
+        level 6 > SR IPL mask?  take the m68k autovector exception
+        SR.IPL = 6
+        INTF.IPL = 0               -- "the level has been consumed, so drop it"
+   → guest level-6 handler services the BCM peripheral
+   → guest writes SR (RTE, MOVE to SR, ANDI/ORI/EORI to SR)
+        the JIT emits, conditionally on the new IPL:
+            IPL < 6  →  msr DAIFClr, #7    -- ARM IRQ re-enabled
+            else     →  msr DAIFSet, #7
+```
+
+**Nothing in the C source ever re-enables the ARM IRQ.** Grepping for `daif`
+across `external/emu68` finds exactly one hit, in `PPC_ExecutionLoop.cpp`, which
+this port does not run. The enable is emitted *as translated code* by
+`M68k_LINE4.c` (RTE, MOVE to SR, STOP — around lines 1176, 1604, 1744) and
+`M68k_LINE0.c` (immediate-to-SR, around line 880), through `msr_imm(3, 7, 7)`.
+That is why a textual search comes up empty and why the reasoning has to be
+redone unless it is recorded.
+
+The consequence is the part worth carrying:
+
+> **ARM interrupts are re-enabled only when the guest executes an instruction
+> that lowers its own IPL mask below 6.**
+
+A guest that never gets there — a fault inside the level-6 handler, a handler
+that never reaches its RTE, a context switch that restores a high SR — leaves
+ARM IRQs masked with nothing to unmask them. The machine then idles forever
+with no further host interrupts, which looks exactly like the `logo` stall.
+
+That is a fragility, not a diagnosis. Measured against the pooled log
+(`out/boot-timing.jsonl`, ~200 runs carrying `pstate_irq_masked`), the
+correlation is weak and not monotonic — mean masked ratio: icons 0.306,
+logo 0.420, workbench 0.499 — and exactly **one** run showed IRQs masked in
+every sample. That run stalled. So this is a real mechanism that has been
+observed to happen once, not the general cause of the intermittency.
+
+### And it is not what the stalls are — checked, 2026-08-13
+
+The obvious follow-up was: in a stalled boot, is `PSTATE.I` masked with
+`INTF.IPL` already clear, i.e. did an interrupt arrive and get lost? **No.**
+
+`out/boot-timing/2026-08-13T172322Z/stall.txt`, a `logo` run, CPU#0:
+
+```
+PC=fffffff000388140  X12=fffffff000388140  X18=0000000034600a4c
+PSTATE=60000205  -ZC- NS EL1h
+```
+
+`PSTATE` bit 7 is clear, so ARM interrupts are **enabled**. The PC is inside
+the JIT code buffer with `X12` equal to it, so the ARM is executing translated
+guest code, not parked in Emu68. Cores 1-3 sit at `0x3c5` with everything
+masked, which is what a parked core looks like.
+
+`X18` is the guest PC (`REG_PC` is 18): `0x34600a4c` resolves to
+`emu68_trap_report+0xce`. That function ends in
+
+```c
+    for (;;)
+        ;
+```
+
+deliberately. The guest took a fatal CPU exception, our trap probe printed the
+register dump, and then parked by design. Everything observed — PC not moving,
+interrupts enabled, ARM inside translated code — is that `for(;;)` being
+executed.
+
+So the stall is not interrupt delivery, and this whole line of enquiry is
+closed. See `AI_context/issues/ISSUE-0007.md` for where it went instead.
+
+## Both `INT_shadow` and `INTF.ARM` are dead code on this port
+
+Also derived twice; also recorded here.
+
+Since `patches/emu68/0003` made host interrupts arrive as `INTF.IPL`, nothing
+writes `INTF.ARM` except the `INTENA`/`INTREQ` interception in
+`patches/emu68/0001` — and the guest never touches those registers. That is not
+inference: `platform/platform.c` says *"there is nothing for this port to arm
+and nothing to acknowledge"*, `exec/dispatch.S` says *"no Paula write here"*,
+and the bus observer added in `patches/emu68/0007` recorded **zero** accesses to
+the whole classic 24-bit domain across a boot to Workbench.
+
+So `patch 0001` is inert in every build this repository produces. Removing it
+changes nothing observable — which makes it safe cleanup, and also means it
+cannot be the fix for anything.
+
 ## What has to be decided later
 
 Not which mechanism is nicer in the abstract, but:
