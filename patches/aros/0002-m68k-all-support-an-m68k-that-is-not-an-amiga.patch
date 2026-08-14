@@ -10,7 +10,7 @@ cache maintenance, dispatch, signalling, task switch and wait.
 Adds preserveall.S and preserveall_install.c, which the exec mmakefile
 now builds.
 ---
- arch/m68k-all/exec/cachecleare.c         | 12 +++++++++-
+ arch/m68k-all/exec/cachecleare.c         | 104 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  arch/m68k-all/exec/cacheclearu.c         |  9 ++++++++
  arch/m68k-all/exec/dispatch.S            |  2 ++
  arch/m68k-all/exec/mmakefile.src         |  3 ++-
@@ -25,32 +25,127 @@ now builds.
  create mode 100644 arch/m68k-all/exec/preserveall_install.c
 
 diff --git a/arch/m68k-all/exec/cachecleare.c b/arch/m68k-all/exec/cachecleare.c
-index 5acf106afe..249c320675 100644
+index 5acf106afe..53bc35483b 100644
 --- a/arch/m68k-all/exec/cachecleare.c
 +++ b/arch/m68k-all/exec/cachecleare.c
-@@ -28,6 +28,17 @@ AROS_LH3(void, CacheClearE,
+@@ -18,6 +18,39 @@
+ 
+ /* See rom/exec/cachecleare.c for documentation */
+ 
++#ifdef __EMU68__
++
++/*
++ * Cache maintenance a page at a time, because under a JIT the unit of cost is
++ * the *instruction*, not the cache line.
++ *
++ * Emu68 ends the translation block after every cache instruction -- "Cache is
++ * context synchronizing. Break up here!" in src/M68k_LINEF.c -- so each CPUSH
++ * the guest executes forces a re-entry into the dispatcher. A line-at-a-time
++ * loop is therefore pathological here in a way it would not be on real
++ * hardware: it costs one translation break per 16 bytes.
++ *
++ * CPUSHP is one instruction, one break, and Emu68 loops dc civac across the
++ * whole 4KB internally using the host's real line size -- which also sidesteps
++ * the guest not being able to read CTR_EL0 to find out what that size is. A
++ * typical USB transfer is one instruction instead of thirty-two.
++ *
++ * Flushing whole pages touches lines the caller did not ask about. That is
++ * harmless: a clean-and-invalidate of an uninvolved line costs a writeback and
++ * a refetch, never correctness.
++ *
++ * Measured: a 16-byte CPUSHL loop cost about eleven seconds of boot time
++ * against this.
++ */
++#define EMU68_DCACHE_PAGE       4096
++
++/*
++ * Above this, one set/way walk beats a page loop.
++ */
++#define EMU68_DCACHE_ALL_BYTES  65536
++
++#endif
++
+ AROS_LH3(void, CacheClearE,
+     AROS_LHA(APTR, address, A0),
+     AROS_LHA(ULONG, length, D0),
+@@ -28,6 +61,77 @@
  
      void (*func)();
  
 +#ifdef __EMU68__
 +    /*
-+     * Emu68 recognizes the 68040 CINVA IC opcode and uses it to invalidate
-+     * translated m68k code. There is no physical m68k data cache to manage,
-+     * so invalidate the complete translated instruction cache even when the
-+     * caller supplied a smaller range.
++     * Emu68 has no m68k caches, but it has the ARM's.
++     *
++     * Guest loads and stores are translated to ordinary AArch64 loads and
++     * stores, so they sit in the host's data cache like anyone else's, and a
++     * bus master that is not the CPU -- the USB OTG core, the VideoCore, any
++     * DMA engine -- does not see that cache. The two halves below are therefore
++     * not symmetric, and only the first is about the JIT:
++     *
++     *   CACRF_ClearI is a *translation* question. Emu68 recognises CINVA IC and
++     *   discards translated m68k code, which is what self-modifying code and
++     *   SetFunction() need. The range is deliberately ignored: what has to be
++     *   thrown away is indexed by m68k PC, not by the address written.
++     *
++     *   CACRF_ClearD and CACRF_InvalidateD are a *coherency* question, and
++     *   there the range is the whole point. Emu68 translates the 68040 CPUSH
++     *   instructions into real maintenance -- dsb sy, a dc civac loop across
++     *   the page for CPUSHP, and the full CLIDR/CSSELR set/way walk for CPUSHA
++     *   (src/M68k_LINEF.c, the CPUSH branch, where opcode bit 0x40 selects the
++     *   data cache).
++     *
++     * Until 2026-08-14 this function did the first and returned, reasoning that
++     * "there is no physical m68k data cache to manage". There is not. There is
++     * an ARM one, and every DMA buffer on this machine went through it
++     * unflushed. See AI_context/issues/ISSUE-0019.md.
++     *
++     * This is the only place that needs fixing, because on 68040 every caller
++     * arrives here: CachePreDMA_40 and CachePostDMA_40 in cachepredma_.S and
++     * cachepostdma_.S both end in `jsr -0x282(%a6)`, which is this vector.
++     *
++     * That is also why both flags clean *and* invalidate rather than one doing
++     * each. Those two callers pass CACRF_ClearD for the post-DMA direction as
++     * well as the pre-DMA one, so a CACRF_ClearD that only wrote back would
++     * leave the CPU reading its own stale copy of what the device just wrote --
++     * silently, and only on real hardware. CINV alone would be marginally
++     * cheaper for CACRF_InvalidateD and would discard a dirty line, losing a
++     * write the guest believes it made. Clean-and-invalidate is correct for
++     * every case any caller actually asks for.
++     *
++     * CPUSH is privileged on a real 68040. Emu68 does not check -- EMIT_lineF()
++     * dispatches on the opcode with no supervisor gate -- which is why this runs
++     * wherever the caller happens to be. Do not copy the idiom to a target with
++     * a real 68040.
 +     */
-+    __asm__ volatile(".word 0xf498" ::: "memory");
++    if (caches & CACRF_ClearI)
++        __asm__ volatile(".word 0xf498" ::: "memory");   /* CINVA IC */
++
++    if (caches & (CACRF_ClearD | CACRF_InvalidateD))
++    {
++        /* $FFFFFFFF is the documented "all addresses". */
++        if (length == 0xFFFFFFFFUL || length > EMU68_DCACHE_ALL_BYTES)
++        {
++            __asm__ volatile("cpusha %%dc" ::: "memory");
++        }
++        else if (length != 0)
++        {
++            IPTR       p   = (IPTR)address & ~(IPTR)(EMU68_DCACHE_PAGE - 1);
++            const IPTR end = (IPTR)address + length;
++
++            do
++            {
++                __asm__ volatile("cpushp %%dc,(%0)" :: "a"(p) : "memory");
++                p += EMU68_DCACHE_PAGE;
++            } while (p < end);
++        }
++    }
++
 +    return;
 +#endif
 +
      if (SysBase->LibNode.lib_OpenCnt == 0)
          return;
  
-@@ -57,4 +68,3 @@ AROS_LH3(void, CacheClearE,
- 
-     AROS_LIBFUNC_EXIT
- } /* CacheClearE */
--
 diff --git a/arch/m68k-all/exec/cacheclearu.c b/arch/m68k-all/exec/cacheclearu.c
 index a00cb81280..d90c5a6d4d 100644
 --- a/arch/m68k-all/exec/cacheclearu.c
