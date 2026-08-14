@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 12:20:00 -0300
+Subject: [PATCH 12/12] m68k-all: define cpumask_t, as every other arch does
+
+arm, aarch64, riscv and riscv64 typedef it to unsigned int; i386 and
+x86_64 to void *. m68k defined it nowhere, so any generic code carrying a
+cpumask_t field failed to compile for this architecture -- found while
+building the BCM2708 USB OTG driver, whose unit structure has one.
+---
+ arch/m68k-all/include/aros/cpu.h | 8 ++++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/arch/m68k-all/include/aros/cpu.h b/arch/m68k-all/include/aros/cpu.h
+index 97c5bf5a88..31be6b6a83 100644
+--- a/arch/m68k-all/include/aros/cpu.h
++++ b/arch/m68k-all/include/aros/cpu.h
+@@ -27,6 +27,16 @@
+ 
+ #define AROS_SLOWSTACKFORMAT 1
+ 
++/*
++    A set of CPUs, as a bitmask.
++
++    Every other maintained architecture defines this -- arm, aarch64, riscv and
++    riscv64 as unsigned int, i386 and x86_64 as void * -- and m68k defined it
++    nowhere, so generic code carrying a cpumask_t field simply did not compile
++    for this architecture.
++*/
++typedef unsigned int    cpumask_t;
++
+ #define AROS_NOFPU 1
+ 
+ /* do we need a function attribute to get parameters on the stack? */
+-- 
+2.43.0
+

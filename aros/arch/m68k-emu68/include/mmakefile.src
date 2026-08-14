@@ -9,9 +9,11 @@ include $(SRCDIR)/config/aros.cfg
 #
 # hardware/ holds the SoC descriptions the SD and mailbox code needs; aros/
 # holds bootstruct.h, which exists purely to unblock the inherited Amiga
-# command set -- see the comment in that file.
+# command set -- see the comment in that file; asm/ holds the CPU primitives
+# arm-native drivers reach for through <asm/cpu.h>, which arch/m68k-all does
+# not provide.
 #
-INCLUDE_FILES := $(call WILDCARD, *.[hi] aros/*.[hi] hardware/*.[hi])
+INCLUDE_FILES := $(call WILDCARD, *.[hi] aros/*.[hi] hardware/*.[hi] asm/*.[hi])
 
 #MM- includes-copy-emu68-m68k : includes-common-m68k
 

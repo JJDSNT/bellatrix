@@ -19,6 +19,7 @@
 #include <exec/io.h>
 #include <exec/errors.h>
 
+#include <hardware/videocore.h>
 #include <devices/timer.h>
 
 /*
@@ -72,10 +73,8 @@ extern IPTR __arm_periiobase;
 
 #define VCMB_PROPCHAN                   8
 
-#define VCPOWER_SDHCI		        0
-#define VCPOWER_STATE_ON	        (1 << 0)
-#define VCPOWER_STATE_WAIT	        (1 << 1)
-#define VCCLOCK_SDHCI                   1
+/* VCPOWER_* and VCCLOCK_* now live in <hardware/videocore.h>: they describe
+ * the VideoCore property interface, and the USB OTG driver wants them too. */
 
 void FNAME_BCMSDCBUS(BCMLEDCtrl)(int lvl);
 

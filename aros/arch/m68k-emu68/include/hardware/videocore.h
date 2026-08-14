@@ -144,4 +144,29 @@
 #define VCALPHA_REVERSE         0x1
 #define VCALPHA_IGNORE          0x2
 
+/*
+ * Device and state ids for VCTAG_GET/SETPOWER.
+ *
+ * These describe the VideoCore property interface, not any one peripheral, so
+ * they belong here rather than in a driver's private header. They lived in
+ * soc/sdcard/sdcard_intern.h until 2026-08-14, which was invisible until a
+ * second caller wanted them: arch/arm-native's USB OTG driver powers the OTG
+ * core up the same way and expects them from <hardware/videocore.h>, which is
+ * where arm-native keeps them too.
+ */
+#define VCPOWER_SDHCI           0
+#define VCPOWER_UART0           1
+#define VCPOWER_UART1           2
+#define VCPOWER_USBHCD          3
+#define VCPOWER_I2C0            4
+#define VCPOWER_I2C1            5
+#define VCPOWER_I2C2            6
+#define VCPOWER_SPI             7
+#define VCPOWER_CCP2TX          8
+
+#define VCPOWER_STATE_ON        (1 << 0)
+#define VCPOWER_STATE_WAIT      (1 << 1)
+
+#define VCCLOCK_SDHCI           1
+
 #endif	/* VCMBOX_H */
