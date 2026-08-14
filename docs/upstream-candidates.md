@@ -1,9 +1,13 @@
-# Four changes we would like to send upstream
+# Five changes we would like to send upstream
 
-Four patches from `patches/aros/` that are not about our target. Each is a
+Five patches from `patches/aros/` that are not about our target. Each is a
 defect in code shared by every AROS port, or a value that makes m68k an
 outlier for no reason we can find. None mentions `m68k-emu68`; none depends on
 another; each applies to upstream HEAD on its own.
+
+**Section 5 is the one to read first if you only read one.** It is a heap
+corruptor in `rom/kernel/tlsf.c`, reachable on m68k and only on m68k, and it
+cost this project ten days.
 
 They are written up here so they can be reviewed before being offered, and so
 the reasoning survives if the answer is no.
@@ -14,8 +18,8 @@ with no Amiga chipset and 840 MB of RAM. That is an unusual environment and it
 exposes things a normal Amiga does not. Where the argument depends on this
 being unusual, it says so.
 
-Verified against upstream HEAD `85705361ca` (2026-08-13): all four defects are
-still present.
+Verified against upstream HEAD `85705361ca`: the first four on 2026-08-13, the
+fifth on 2026-08-14. All are still present.
 
 ---
 
@@ -52,7 +56,7 @@ consequence is port-specific.
 ## 2. m68k's default task stack is a quarter of everyone else's
 
 **File:** `arch/m68k-all/include/aros/cpu.h`
-**Our patch:** `0006-raise-the-m68k-default-task-stack-to-match-the-other.patch`
+**Our patch:** `0005-raise-the-m68k-default-task-stack-to-match-the-other.patch`
 
 `AROS_STACKSIZE` is 16384 on m68k. Every other target in the tree is larger:
 i386, ppc, riscv and x86_64 use 40960; MorphOS uses 32768. That makes m68k the
@@ -89,8 +93,8 @@ but it should not be mistaken for a fix to whatever consumes the stack.
 ## 3 and 4. FAT directory entries are little-endian on disk
 
 **Files:** `rom/filesys/fat/direntry.c`, `ops.c`, `lock.c`, `date.c`
-**Our patches:** `0007-fat-write-cluster-and-size-little-endian.patch`,
-`0009-fat-convert-directory-dates-little-endian.patch`
+**Our patches:** `0006-fat-write-cluster-and-size-little-endian.patch`,
+`0008-fat-convert-directory-dates-little-endian.patch`
 
 A FAT directory entry is little-endian on disk regardless of the host. The read
 path knows this — `FIRST_FILE_CLUSTER` in `fat_fs.h` is
@@ -141,11 +145,105 @@ corrupt, and rereading it produces garbage that looks like data.
 
 ---
 
+## 5. TLSF splits a block into a free node too small to hold its own links
+
+**File:** `rom/kernel/tlsf.c`, `tlsf_malloc()`
+**Our patch:** `0011-kernel-avoid-undersized-tlsf-free-blocks.patch`
+
+A free block in TLSF carries a `free_node_t` — two pointers — in its payload,
+written by `INSERT_FREE_BLOCK` when the block joins a free list. The split test
+in `tlsf_malloc()` only asked whether the remainder had room for the *header*:
+
+```c
+if (likely(GET_SIZE(b) > (size + ROUNDUP(sizeof(hdr_t)))))
+```
+
+That guarantees the remainder is non-empty. It does not guarantee it can hold a
+`free_node_t`. When the remainder comes out smaller than two pointers,
+`INSERT_FREE_BLOCK` writes the second pointer **past the end of the block it
+belongs to, across the following block's header** — overwriting that block's
+`prev` link and its length-and-flags word.
+
+The result is a free list that points into the middle of a live allocation. It
+is silent when it happens and fatal some unbounded time later, in whatever code
+next walks the chain.
+
+**The fix** requires room for both:
+
+```c
+if (likely(GET_SIZE(b) >= (size + ROUNDUP(sizeof(hdr_t)) +
+                           ROUNDUP(sizeof(free_node_t)))))
+```
+
+### Why this has not bitten before: it is reachable on m68k alone
+
+`SIZE_ALIGN` is `AROS_WORSTALIGN`, and m68k is the only maintained target where
+that is not 16:
+
+| Target | `AROS_WORSTALIGN` |
+|---|---|
+| i386, x86_64, ppc, arm, aarch64, riscv, riscv64 | 16 |
+| ppc-morphos | 8 |
+| **m68k** | **4** |
+
+Every payload is a multiple of `SIZE_ALIGN`, so the smallest non-zero remainder
+a split can leave is `SIZE_ALIGN` itself. `sizeof(free_node_t)` is 8 on a 32-bit
+target and 16 on a 64-bit one. So the remainder is large enough by construction
+everywhere `SIZE_ALIGN` is 16, and on ppc-morphos at 8 it is exactly large
+enough. On m68k, a 4-byte remainder is reachable and is half of what
+`INSERT_FREE_BLOCK` writes.
+
+That is why this is an old defect that nobody has hit: the arithmetic only fails
+on the one target with 4-byte alignment.
+
+### How it was caught, since "the heap is corrupt" is not a diagnosis
+
+Validating the whole physical block chain at every allocator entry and exit —
+not just at the point of failure — made it deterministic in two consecutive
+runs, at the same address and the same operation:
+
+```
+[Kernel:TLSF] free-list corruption at MALLOC exit
+bucket=0/1 block=020cd3f4 size=36 flags=0x2 head=020cd3e8 ... 'Boot Mount'
+```
+
+Both runs entered `tlsf_malloc()` with a **valid** heap and failed at its exit,
+which is what identified the allocator as the author rather than an external
+writer. The free-list head at `0x020cd3e8` and the following physical header at
+`0x020cd3f4` are 12 bytes apart: an 8-byte `hdr_t` and a 4-byte payload.
+
+Before this, the corruption was blamed in turn on a task switch, `CopyMem`'s
+MOVEM fast path, `lddemon` expunge, and an overlap with the JIT's own allocator.
+Each was tested and each was wrong. Worth stating because the entry point that
+finally worked — validate the invariant on *entry and exit* of every operation,
+so the first invalid state is attributed to the operation that produced it — is
+more transferable than the fix.
+
+### The same defect in two places we have not patched
+
+Both in `tlsf_realloc()`, both left alone because neither is on our boot path:
+
+- **The shrink path.** `if (new_size <= GET_SIZE(b))` splits unconditionally and
+  gives the remainder `GET_SIZE(b) - new_size - ROUNDUP(sizeof(hdr_t))`. Since
+  `GET_SIZE(b) - new_size` can be smaller than `ROUNDUP(sizeof(hdr_t))`, and
+  `IPTR` is unsigned, that subtraction can also **underflow to a huge size**,
+  which is worse than the malloc case rather than merely equivalent to it.
+- **The grow-into-next path.** `if (rest_size > ROUNDUP(sizeof(hdr_t)))` then
+  `rest_size -= ROUNDUP(sizeof(hdr_t))`, leaving a remainder that can again be
+  a single `SIZE_ALIGN` unit before `INSERT_FREE_BLOCK`.
+
+Whoever takes the patch above should look at these in the same pass. We have not
+patched them because we have not reproduced them, and we would rather offer a
+reading of the code than a fix we cannot demonstrate.
+
+---
+
 ## What we are asking
 
-Review, and an opinion on whether these are wanted as they are. The two FAT
-patches and the sdcard one we believe are straightforwardly correct. The stack
-one is a judgement call and we would rather it were argued than merged quietly.
+Review, and an opinion on whether these are wanted as they are. The TLSF one,
+the two FAT patches and the sdcard one we believe are straightforwardly
+correct. The stack one is a judgement call and we would rather it were argued
+than merged quietly.
 
 If any are wanted in a different shape — split, combined, or fixed elsewhere —
 that is fine; the point is the defects, not our patches. Upstream has twice now

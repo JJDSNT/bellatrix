@@ -13,7 +13,7 @@ split is deliberate.
 | | What | Where it lives | How it gets in |
 |---|---|---|---|
 | **The port** | 57 files, ~6900 lines — an entire architecture directory that exists nowhere upstream | `aros/arch/m68k-emu68/` in this repository | symlinked into place by `scripts/setup.sh` |
-| **Upstream changes** | 11 files modified, 2 added, +341/−21 | `patches/aros/` | applied by `scripts/setup.sh` |
+| **Upstream changes** | 11 patches over 20 files (18 modified, 2 added), +362/−24 | `patches/aros/` | applied by `scripts/setup.sh` |
 
 The port is **our source code**, not a modification of anyone else's. Carrying
 6900 lines as a patch would produce a diff nobody can review, with no history
@@ -31,9 +31,15 @@ to code that belongs to someone else.
 
 ## The series
 
-Eleven patches, in three kinds. The distinction is the point of the table: a
-patch that exists because this target exists is not the same thing as a defect
-someone else has, and neither is an instrument.
+Eleven patches, numbered `0001`-`0011` with no gaps, in three kinds. The
+distinction is the point of the table: a patch that exists because this target
+exists is not the same thing as a defect someone else has, and neither is an
+instrument.
+
+Numbers are contiguous on purpose. `setup.sh` applies `[0-9]*.patch` in numeric
+order and a hole invites the question of what used to be there; the answer is in
+git, not in the numbering. A patch that leaves the series gets renumbered out,
+and one that arrives takes the next free number.
 
 ### Target enablement — exists because `m68k-emu68` exists
 
@@ -42,7 +48,7 @@ someone else has, and neither is an instrument.
 | 0001 | `add-the-m68k-emu68-target-to-configure` | Registers an m68k target whose architecture is not `amiga`. Everything else follows from that distinction being expressible. |
 | 0002 | `m68k-all-support-an-m68k-that-is-not-an-amiga` | The shared m68k layer assumed Amiga hardware in cache maintenance, dispatch, signalling, task switch and wait. Adds `preserveall.S` and `preserveall_install.c`. |
 | 0004 | `dosboot-key-the-planar-boot-image-on-target-arch-not` | The planar boot image was selected on `AROS_TARGET_CPU=m68k`, which also catches an m68k with a chunky framebuffer and no blitter. Tests `AROS_TARGET_ARCH=amiga` instead. |
-| 0011 | `m68k-all-do-not-race-the-emu68-exec-backend` | `arch/m68k-all/exec` and `arch/m68k-emu68/exec` both declared `%build_archspecific` for `switch`, `dispatch` and `preparecontext`, writing the same object path. mmake has no notion of one overriding the other: they raced, and a full rebuild reversed the order for the first time on 2026-08-07, linking 66-byte stubs beside a `kernel_cpu.c` that removes their symbols on purpose. The guest jumped to address zero 570 ms in. |
+| 0010 | `m68k-all-do-not-race-the-emu68-exec-backend` | `arch/m68k-all/exec` and `arch/m68k-emu68/exec` both declared `%build_archspecific` for `switch`, `dispatch` and `preparecontext`, writing the same object path. mmake has no notion of one overriding the other: they raced, and a full rebuild reversed the order for the first time on 2026-08-07, linking 66-byte stubs beside a `kernel_cpu.c` that removes their symbols on purpose. The guest jumped to address zero 570 ms in. |
 
 These four are candidates for upstreaming and none can be dropped before that
 happens.
@@ -52,31 +58,48 @@ happens.
 | # | Patch | What it does |
 |---|---|---|
 | 0003 | `sdcard-initialise-sdcu-softlist-before-addhead-uses` | `NEWLIST` on `sdcu_SoftList` was lost when the driver was derived from `rom/devs/ata`. `AddHead()` on a zeroed list writes through a NULL `lh_Head`, i.e. to address 4 — harmless-looking on the ARM ports that have used this driver, fatal on m68k where address 4 is `AbsExecBase`. |
-| 0006 | `raise-the-m68k-default-task-stack-to-match-the-other` | m68k's default task stack was left below what the other targets use. |
-| 0007 | `fat-write-cluster-and-size-little-endian` | FAT directory entries are little-endian on disk whatever the host is. The write path stored cluster numbers and sizes native, so a card written here was unreadable elsewhere and, worse, reread wrong. |
-| 0009 | `fat-convert-directory-dates-little-endian` | The same defect in `ConvertFATDate`/`ConvertDOSDate`. Converted inside the two functions rather than at the call sites, so there is one place to be right. |
+| 0005 | `raise-the-m68k-default-task-stack-to-match-the-other` | m68k's default task stack was left below what the other targets use. |
+| 0006 | `fat-write-cluster-and-size-little-endian` | FAT directory entries are little-endian on disk whatever the host is. The write path stored cluster numbers and sizes native, so a card written here was unreadable elsewhere and, worse, reread wrong. |
+| 0008 | `fat-convert-directory-dates-little-endian` | The same defect in `ConvertFATDate`/`ConvertDOSDate`. Converted inside the two functions rather than at the call sites, so there is one place to be right. |
+| 0011 | `kernel-avoid-undersized-tlsf-free-blocks` | `tlsf_malloc()` split a block whenever the remainder had room for a `hdr_t`. On a 32-bit target that leaves a four-byte payload, and `INSERT_FREE_BLOCK` then writes its eight-byte `free_node_t` **across the following block's header**. The split now requires room for the header *and* a complete free-list node. |
 
-0007 and 0009 were re-checked against upstream HEAD on 2026-08-13 and the
-defect is still there. **We owe both upstream**, along with two further sites
-found the same day and not yet patched here: `rom/filesys/fat/ops.c` line 599
-and `rom/filesys/fat/direntry.c` line 242 build cluster numbers from the raw
+0006 and 0008 were re-checked against upstream HEAD on 2026-08-13 and the
+defect is still there. **We owe all four upstream**, along with two further
+sites found the same day and not yet patched here: `rom/filesys/fat/ops.c` line
+599 and `rom/filesys/fat/direntry.c` line 242 build cluster numbers from the raw
 little-endian fields with no `AROS_LE2WORD`, unlike the `FIRST_FILE_CLUSTER`
 macro that does it correctly. Neither is on the boot path.
+See [`upstream-candidates.md`](upstream-candidates.md).
+
+**0011 is the one that ended ISSUE-0007.** The heap corruption this port spent
+ten days on was the allocator corrupting itself, and every hypothesis about an
+external writer -- task switch, `CopyMem`, `lddemon` expunge, an overlap with
+Emu68's own pools -- was wrong. Full physical-chain validation caught the
+invalid state twice at the same address and operation, at `tlsf_malloc()`'s
+exit rather than on entry, which is what identified the allocator as the author.
+With it applied and the diagnostics removed, the boot reached Wanderer with
+icons in **10 of 10 runs** on a freshly generated card, 38.8-44.5 s.
 
 ### Instruments — not fixes
 
 | # | Patch | What it does |
 |---|---|---|
-| 0005 | `debug-turn-on-tracing-in-dos-lddemon-and-shell` | `#define DEBUG 1` in the boot and shell paths. |
-| 0008 | `kernel-refuse-to-free-a-pointer-outside-the-heap-and` | Refuses the free and names the caller instead of corrupting the allocator quietly. |
-| 0010 | `exec-name-the-caller-that-frees-outside-the-pool` | Reports the caller when a pointer arrives at `FreeVecPooled` that the pool does not own. Has never fired. |
+| 0007 | `kernel-refuse-to-free-a-pointer-outside-the-heap-and` | Refuses the free and names the caller instead of corrupting the allocator quietly. |
+| 0009 | `exec-name-the-caller-that-frees-outside-the-pool` | Reports the caller when a pointer arrives at `FreeVecPooled` that the pool does not own. Has never fired. |
 
-**0005 changes what the machine measures, not only what it says.** It floods
-the serial console, which changes boot timing, and the failure under
-investigation is timing-sensitive and intermittent. A measurement run and a
-diagnostic run should not be the same build; making that true is
-`AI_context/issues/ISSUE-0017.md` step 3, and until it is done a baseline taken
-with these applied is not comparable with one taken without.
+These two are guards rather than traces: they cost a range check on a path that
+already fails, and they print only when something is already wrong. They are on
+in every build deliberately.
+
+**The one that could not stay on is not in the series.**
+`optional-debug-turn-on-tracing-in-dos-lddemon-and-shell.patch` has no number,
+so `setup.sh` -- which globs `[0-9]*.patch` -- does not apply it. It sets
+`DEBUG 1` in the boot and shell paths, which floods the serial console and
+changes boot timing substantially, and the failure it was written for was
+timing-sensitive and intermittent. Six series were run on 2026-08-13 whose icons
+rate moved 83%, 25%, 25%, 50%, 40%, 8% with **only instrumentation changing**.
+A measurement run and a diagnostic run must not be the same build; apply it by
+hand with `git -C external/aros apply` when you want it.
 
 ### What was dropped, and why it matters
 
@@ -97,9 +120,10 @@ genuine BCPL Shell-Segs. Same bug — both descriptions name `AROSMonDrvs` —
 and theirs is at the cause. Ours was a symptom patch, and it was masking the
 real defect for as long as it was applied.
 
-All eleven surviving patches applied to HEAD without a single conflict across
-785 upstream commits, which is the evidence that what remains is genuinely
-ours rather than upstream with a delay.
+All ten surviving patches applied to HEAD without a single conflict across 785
+upstream commits, which is the evidence that what remains is genuinely ours
+rather than upstream with a delay. The eleventh, `0011`, was written after the
+bump.
 
 ## Building
 
