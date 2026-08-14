@@ -1819,6 +1819,47 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 — the overlap is closed, and the prediction held
+
+`patches/emu68/0007` excludes Emu68's own pool from the /memory node the guest
+receives. First boot with it:
+
+```
+[BOOT] Adjusting memory blocks (Emu68 keeps up to 0x0000000002000000)
+[BOOT]   0x0 - 0x347fffff  Raising past Emu68's own memory to 0x02000000 - 0x347fffff
+                           Trimming to 0x02000000 - 0x345fffff
+```
+
+and **`free-list corruption` did not appear** -- the first run without it since
+the detector arrived with the pin bump, against fifteen runs where it appeared
+in all but one.
+
+That was the falsifiable prediction stated before the run: with the pools
+separated, the guest allocator's free list stops being overwritten. It held.
+
+**The fix is half of a loop that already existed.** The block correcting the
+guest's copy of /memory already trimmed everything above `top_of_ram` -- the
+loaded ELF, the device tree copy. It never trimmed the bottom, where Emu68's
+pool is. Three earlier attempts published the extent as a property on /emu68
+instead and none arrived: `dt_add_property()` edits Emu68's in-memory tree,
+while the guest gets `memcpy(fdt, dt_fdt_base(), ...)`, a byte copy of the
+original blob with no /emu68 node in it. The FDT node dump added to `boot.c`
+is what settled that -- 21 top-level nodes, no `emu68` among them.
+
+The AROS-side `host-mem` reader in `boot.c` is now unnecessary and harmless;
+it stays because an Emu68 that does publish such a property costs nothing to
+honour, and because removing it is a change nobody has measured.
+
+**What this does not claim.** One run, and it reached `workbench`, not `icons`.
+The free-list corruption was a symptom; there may be others. The card still
+carries modules from the old pin because the full build is blocked on
+freetype, so there is still no baseline.
+
+What is different from the five diagnoses withdrawn earlier today is only
+this: a primary verification that could have failed (`0x02000000` in the log)
+and a prediction that could have failed (no corruption). Neither did.
+
+
 ## 2026-08-13 — two allocators, one range of memory
 
 The boot log has said this all day and nobody read it:

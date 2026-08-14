@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Wed, 13 Aug 2026 21:30:00 -0300
+Subject: [PATCH 7/7] Keep Emu68's own memory out of the range given to the guest
+
+Emu68 carves its allocator and JIT buffers out of DRAM and then hands the
+guest a /memory node describing all of it. The guest builds its heap from
+that range and the two allocators proceed to hand out the same addresses.
+
+Measured on a standalone build, 2026-08-13: the SYS pool ran
+0x0088a000-0x01ffffff while the AROS heap began at 0x01000000, so sixteen
+megabytes had two independent owners. It surfaced as free-list corruption
+inside the guest's own allocator -- free_node pointers reading back as
+0x000c2c6f and 0x00104eae, values that are data and not addresses -- in a
+block sitting inside the overlap. It had been attributed to a wild pointer in
+the guest for a long time. There was no wild pointer; the memory had another
+owner the whole time.
+
+The fix is half of a loop that already exists. The block that corrects the
+guest's copy of /memory already trims anything above top_of_ram -- the loaded
+ELF, the device tree copy itself. It never trimmed the bottom, where Emu68's
+own pool is. Now it does, using the same range pointer and the same cell
+writes, so a guest that reads its memory range is simply right and needs no
+change of its own.
+
+Three earlier attempts published the extent as a property on /emu68 instead,
+and none of them arrived. dt_add_property() edits Emu68's in-memory tree,
+while the guest receives `memcpy(fdt, dt_fdt_base(), dt_total_size())` -- a
+byte copy of the original blob, which has no /emu68 node at all. Correcting
+/memory is both the mechanism that already reaches the guest and the one that
+needs no cooperation from it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -1630,7 +1630,12 @@
+             int block_size = (size_cells + address_cells);
+             int block_count = p->op_length / (4 * block_size);
+ 
+-            kprintf("[BOOT] Adjusting memory blocks\n");
++            uintptr_t host_mem_end =
++                ((uintptr_t)boot + (KERNEL_SYS_PAGES << 21)) & ~((1 << 21) - 1)
++                & 0xffffffff;
++
++            kprintf("[BOOT] Adjusting memory blocks (Emu68 keeps up to %p)\n",
++                    host_mem_end);
+             for (int b = 0; b < block_count; b++)
+             {
+                 uintptr_t base = 0;
+@@ -1646,6 +1651,63 @@
+                 }
+ 
+                 kprintf("[BOOT]   %p - %p ", base, base + size - 1);
++
++                /*
++                    Trim the bottom as well as the top.
++                
++                    This loop already excludes what sits above top_of_ram --
++                    the loaded ELF, this device tree copy. What sits *below*
++                    the guest's memory is Emu68's own: the SYS pool runs from
++                    __bootstrap_end to kernel_top_virt, and it was advertised
++                    to the guest as ordinary memory.
++                
++                    Measured on 2026-08-13: the pool ran 0x0088a000-0x01ffffff
++                    and the AROS heap began at 0x01000000, so sixteen megabytes
++                    had two independent allocators handing out the same
++                    addresses. It surfaced as free-list corruption inside the
++                    guest's allocator, whose free_node pointers came back
++                    holding data rather than addresses -- and as a boot failure
++                    long attributed to a wild pointer in the guest. There was
++                    no wild pointer. The memory had another owner.
++                
++                    Excluded here rather than announced elsewhere, because this
++                    is where the guest's own copy of /memory is already being
++                    corrected, and a guest that reads its memory range is then
++                    simply right. Three earlier attempts published the extent as
++                    a property on /emu68 instead; none arrived, because
++                    dt_add_property() edits Emu68's in-memory tree and the guest
++                    receives a byte copy of the original blob.
++                */
++                if (base < host_mem_end)
++                {
++                    if (base + size <= host_mem_end)
++                    {
++                        kprintf("Below Emu68's own memory. Removing\n");
++                        for (int j = 0; j < size_cells + address_cells; j++)
++                            range[b * block_size + j] = 0;
++                        continue;
++                    }
++
++                    uintptr_t w;
++
++                    size -= host_mem_end - base;
++                    base = host_mem_end;
++                    kprintf("Raising past Emu68's own memory to %p - %p ",
++                            base, base + size - 1);
++
++                    w = base;
++                    for (int j = address_cells - 1; j >= 0; j--)
++                    {
++                        range[b * block_size + j] = w;
++                        w >>= 32;
++                    }
++                    w = size;
++                    for (int j = size_cells - 1; j >= 0; j--)
++                    {
++                        range[b * block_size + address_cells + j] = w;
++                        w >>= 32;
++                    }
++                }
+ 
+                 if (base + size < top_of_ram)
+                 {
