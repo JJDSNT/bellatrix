@@ -1,0 +1,31 @@
+From: Bellatrix Development <bellatrix@localhost>
+Subject: [PATCH] usb2otg: only schedule work for due SOF transfers
+
+handle_SOF records whether it promoted an interrupt request, but used to
+Cause PendingInt unconditionally.  That woke the scheduler at the 1 kHz SOF
+rate even when the mouse, hub and every other periodic endpoint were waiting
+for a later frame.
+
+Only request pending work after an actual promotion.  Split-channel delay and
+stall handling remain in the SOF handler itself and therefore keep their
+existing frame-sensitive behaviour.
+
+---
+ arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_intr.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_intr.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_intr.c
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_intr.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_intr.c
+@@ -966,7 +966,8 @@ static void handle_SOF(struct USB2OTGUnit *USBUnit, struct ExecBase *SysBase, ULONG frnm_orig)
+ #endif
+         }
+ 
+-        FNAME_DEV(Cause)(USB2OTGBase, &USBUnit->hu_PendingInt);
++        if (int_scheduled)
++            FNAME_DEV(Cause)(USB2OTGBase, &USBUnit->hu_PendingInt);
+ 
+         /*
+          * Do NOT arm INT channels from here: arming a direct periodic
+-- 
+2.43.0

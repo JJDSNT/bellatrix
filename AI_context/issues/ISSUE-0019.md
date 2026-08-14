@@ -638,6 +638,17 @@ from a 1 kHz SOF ISR. The architectural lesson is directly applicable:
 Bellatrix should not pay one emulated IRQ per USB frame merely to discover that
 a 10 ms mouse or 255 ms hub deadline is not due.
 
+The first low-risk scheduler reduction is patch 0028. `handle_SOF()` already
+tracked whether it promoted an interrupt request, but ignored that result and
+caused `PendingInt` on every 1 kHz SOF. It now wakes pending work only after an
+actual promotion. Frame-sensitive split delay and stall recovery remain in the
+SOF handler unchanged. This removes up to 1,000 needless scheduler/worker
+wakeups per second before attempting the more invasive dynamic SOF masking.
+
+Patch 0027 removes the temporary HCD, bootmouse and generic HID movement logs.
+Those traces proved the full input path, but serial formatting on every report
+would distort both the new BootUI timer and subjective redraw measurements.
+
 The preferred DWC2 adaptation is a deadline-driven periodic scheduler. Mask
 SOF while no near-term frame-sensitive work requires it; use a task-local
 timer/softint to wake at the earliest interrupt-pipe deadline, then arm the
