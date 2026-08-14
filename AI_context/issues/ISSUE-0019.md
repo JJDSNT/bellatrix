@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0019
 title: "Port the BCM2708 USB OTG host controller and Poseidon from arm-native"
-status: ready
+status: doing
 priority: high
 type: feature
 owner: unassigned
@@ -237,3 +237,58 @@ find out by measuring than by noticing.
 `arch/m68k-amiga` also has USB (`usb/denebusb`), which is evidence Poseidon
 builds for m68k at all — a different controller, but the stack above it is the
 same one.
+
+# Execution log
+
+## 2026-08-14 — steps 1 to 4 done; the driver builds for m68k
+
+**Step 1, `CacheClearE`** — done (`90020ee`). One function was enough: on 68040
+`CachePreDMA_40` and `CachePostDMA_40` both end in `jsr -0x282(%a6)`, which is
+this vector, and that also settled the semantics -- both pass `CACRF_ClearD` for
+the *post*-DMA direction, so clean-only would have been wrong there.
+
+The implementation changed once during the work, for a reason worth keeping.
+The first version stepped the range in 16-byte lines with `CPUSHL`. Emu68 ends
+the translation block after every cache instruction -- *"Cache is context
+synchronizing. Break up here!"* -- so **under a JIT the unit of cost is the
+instruction, not the cache line**, and a line loop costs one translation break
+per 16 bytes. `CPUSHP` is one instruction, one break, and Emu68 loops the page
+internally with the host's real line size, which also sidesteps the guest being
+unable to read `CTR_EL0`. A typical USB transfer went from 32 instructions to 1.
+
+**Step 2, the bus-address assumption** — done, and it needed no new code. Two
+independent proofs:
+
+- *Static.* `external/emu68/src/aarch64/start.c:1365` is
+  `mmu_map(mb_Base, mb_Base, size, MMU_ACCESS | MMU_ISHARE | MMU_ATTR_CACHED, 0)`
+  and the signature is `mmu_map(phys, virt, ...)`, so the guest's DRAM is
+  identity-mapped. `MMU_ATTR_CACHED` is also why step 1 matters.
+- *Runtime, on every boot.* `soc/sdcard/sdcard_bcm2708init.c:75` allocates its
+  mailbox buffer with `AllocMem` -- heap, above `0x02000000` -- and hands the
+  pointer to the VideoCore, which DMAs at a physical address. Line 99 checks the
+  address comes back echoed and line 120 reads a result the VideoCore wrote into
+  that buffer. The card only powers on because this works, and we boot from it.
+
+**Steps 3 and 4, the CPU layer and the build** — done (`407e787`). The driver
+compiles to `usb2otg.device`, ELF 32-bit MSB Motorola m68k, 62 KB, in
+`Devs/USBHardware`. No source is copied: `rule_compile_multi` resolves absolute
+basenames against their own directory and adds a `vpath`, so the mmakefile names
+the arm-native files where they live.
+
+Four gaps, all found by building rather than by reading: `<asm/cpu.h>` (added
+for this target), `cpumask_t` (patch 0012 -- m68k was the only architecture not
+defining it), `VCPOWER_*` (moved from soc/sdcard's private header to
+`<hardware/videocore.h>`), and the 27 raw ARM instructions (patch 0013).
+
+Also established: **Emu68 does no VideoCore power management.** Its only mailbox
+tags are `0x00010005`/`0x00010006` (memory), `0x00030002`/`4`/`7` (clock
+queries), `0x00038002`/`0x00038030` (clock set) and `0x00040003` (framebuffer).
+Powering the OTG core up is the guest's job, exactly as it already is for the SD
+card.
+
+## What is next
+
+Step 5, Poseidon. Nothing loads `usb2otg.device` yet -- it is a file on the card
+with no stack above it -- so the next thing that can be *observed* is
+`rom/usb/poseidon` plus a `usbromstartup` equivalent. Building is not the same
+as running, and none of the above has been run.
