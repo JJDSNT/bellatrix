@@ -85,9 +85,4 @@ int emu68_console_putc(int chr);
 void emu68_console_puts(const char *text);
 void emu68_set_stage(uint32_t stage);
 
-/* Exec jump-table watch -- boot/trapprobe.c. Armed once ExecBase exists,
- * checked from the platform timer tick. */
-void emu68_lvo_guard_arm(void);
-void emu68_lvo_guard_check(void);
-
 #endif

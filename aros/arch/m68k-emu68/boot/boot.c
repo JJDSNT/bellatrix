@@ -164,6 +164,19 @@ static uint32_t align4(uint32_t value)
     return (value + 3) & ~3UL;
 }
 
+static void put_hex32(uint32_t value)
+{
+    static const char digits[] = "0123456789abcdef";
+    char buffer[9];
+    int i;
+
+    for (i = 7; i >= 0; i--, value >>= 4)
+        buffer[i] = digits[value & 15];
+    buffer[8] = '\0';
+
+    emu68_console_puts(buffer);
+}
+
 static int bounded_string_equal(const char *value, uint32_t value_size,
                                 const char *expected)
 {
@@ -281,14 +294,6 @@ static void parse_fdt(struct Emu68BootContext *ctx)
             in_emu68 = depth == 2 &&
                        bounded_string_equal(name, 6, "emu68");
 
-            /* Bring-up: name every top-level node, so a property that never
-             * arrives can be told apart from one we fail to match. */
-            if (depth == 2)
-            {
-                emu68_console_puts("[FDT] node '");
-                emu68_console_puts(name);
-                emu68_console_puts("'\n");
-            }
             in_chosen = depth == 2 &&
                         bounded_string_equal(name,
                                              (uint32_t)(cursor - structure + 1),
@@ -343,20 +348,19 @@ static void parse_fdt(struct Emu68BootContext *ctx)
                  * Emu68's own allocator lives in the same DRAM we are told we
                  * own, and this is where it says so. Without it the guest heap
                  * is built over the top of it and the two hand out the same
-                 * addresses -- see AI_context/issues/ISSUE-0007.md.
+                 * addresses -- measured on 2026-08-13 as a sixteen-megabyte
+                 * overlap.
+                 *
+                 * That overlap was real and this closes it, but it was not the
+                 * cause of the heap corruption it was found while chasing; that
+                 * was an undersized TLSF split (patches/aros/0011). Keeping the
+                 * two claims apart matters, because the first was asserted as a
+                 * fix on one run and withdrawn -- see
+                 * AI_context/consolidated/history/ISSUE-0007.md.
                  */
                 const uint32_t *cells = (const uint32_t *)value;
 
                 ctx->host_mem_end = cells[1];
-                emu68_console_puts("[FDT] host-mem end 0x");
-                {
-                    static const char h[] = "0123456789abcdef";
-                    char b[9]; int k; uint32_t v = cells[1];
-                    for (k = 7; k >= 0; k--, v >>= 4) b[k] = h[v & 15];
-                    b[8] = 0;
-                    emu68_console_puts(b);
-                }
-                emu68_console_puts("\n");
             }
             else if (in_memory &&
                      bounded_string_equal(name, 4, "reg") &&
@@ -470,6 +474,22 @@ static void start_aros(struct Emu68BootContext *ctx)
     if (upper <= lower || upper - lower < 0x10000)
         return;
 
+    /*
+     * One line for the heap, and it replaces two.
+     *
+     * The bring-up FDT dump named every top-level node and printed host-mem
+     * raw, because at the time the question was whether the property arrived
+     * at all. It does, and what is worth reading on an ordinary boot is not the
+     * property but its consequence: where this heap actually begins and ends. A
+     * base that is not above Emu68's pools, or an unexpected top, is visible
+     * here without a debug build.
+     */
+    emu68_console_puts("[AROS/Emu68] heap 0x");
+    put_hex32(lower);
+    emu68_console_puts("-0x");
+    put_hex32(upper - 1);
+    emu68_console_puts("\n");
+
     add_boot_tag(&tag_index, KRN_KernelBase,
                  (uint32_t)__aros_resident_start);
     add_boot_tag(&tag_index, KRN_KernelLowest,
@@ -557,14 +577,6 @@ static void start_aros(struct Emu68BootContext *ctx)
         ctx->flags |= EMU68_BOOT_EXEC_READY;
         emu68_set_stage(EMU68_STAGE_EXEC_READY);
         emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
-
-        /*
-         * Snapshot the Exec jump table now, while it is certainly intact.
-         * The fatal exceptions this port dies on are calls through a corrupted
-         * vector below SysBase; see boot/trapprobe.c and
-         * AI_context/issues/ISSUE-0007.md.
-         */
-        emu68_lvo_guard_arm();
 
         emu68_set_stage(EMU68_STAGE_SINGLETASK);
         emu68_console_puts("[AROS/Emu68] InitCode SINGLETASK\n");
