@@ -1,0 +1,12 @@
+include $(SRCDIR)/config/aros.cfg
+
+USER_LDFLAGS := -static
+USER_CFLAGS := -noposixc
+
+#MM- workbench-c-emu68-bootprogress : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-bootprogress \
+    progname=BootProgress files=BootProgress targetdir=$(AROS_C) \
+    coverageinstr=no
+
+%common

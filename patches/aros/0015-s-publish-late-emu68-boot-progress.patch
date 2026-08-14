@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 16:00:00 -0300
+Subject: [PATCH 15/15] s: publish late Emu68 boot progress
+
+BootProgress is present only in distributions for the Emu68 target. Guard
+every call so the generic Startup-Sequence remains unchanged elsewhere.
+---
+ workbench/s/Startup-Sequence | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
+index 4f32a1dede..1111111111 100644
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -3,6 +3,10 @@ SetClock LOAD
+ 
+ FailAt 21
+ 
++If EXISTS "C:BootProgress"
++    C:BootProgress DOS
++EndIf
++
+ If NOT EXISTS "RAM:Clipboards"
+     MakeDir "RAM:Clipboards"
+ EndIf
+@@ -55,6 +59,10 @@ If EXISTS "SYS:Tools/Commodities"
+     Path "SYS:Tools/Commodities" QUIET ADD
+ EndIf
+ 
++If EXISTS "C:BootProgress"
++    C:BootProgress STARTUP
++EndIf
++
+ If EXISTS "SYS:Demos"
+     Path "SYS:Demos" ADD QUIET
+ EndIf
+@@ -161,6 +169,10 @@ If EXISTS "S:User-Startup"
+ EndIf
+ 
+ If EXISTS "WANDERER:Wanderer"
++    If EXISTS "C:BootProgress"
++        C:BootProgress WANDERER
++    EndIf
++
+     WANDERER:Wanderer
+ 
+     If NOT ERROR
+-- 
+2.43.0

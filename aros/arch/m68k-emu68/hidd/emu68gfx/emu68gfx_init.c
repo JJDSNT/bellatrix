@@ -92,6 +92,7 @@ static int Emu68Gfx_Init(LIBBASETYPEPTR LIBBASE)
     }
 
     xsd->basebm = OOP_FindClass(CLID_Hidd_BitMap);
+    emu68_set_stage(EMU68_STAGE_GRAPHICS_READY);
     error = AddDisplayDriver(xsd->gfxclass, NULL,
                              DDRV_BootMode, TRUE, TAG_DONE);
     CloseLibrary(&GfxBase->LibNode);

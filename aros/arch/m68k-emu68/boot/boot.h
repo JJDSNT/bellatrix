@@ -43,6 +43,10 @@
 #define EMU68_STAGE_TIMER_MINUTE2  0x45303137UL /* "E017" */
 #define EMU68_STAGE_TIMER_COMPLETE 0x45303138UL /* "E018" */
 #define EMU68_STAGE_SCHED_RETURN   0x45303139UL /* "E019" */
+#define EMU68_STAGE_GRAPHICS_READY 0x45303230UL /* "E020" */
+#define EMU68_STAGE_DOS_READY      0x45303231UL /* "E021" */
+#define EMU68_STAGE_STARTUP        0x45303232UL /* "E022" */
+#define EMU68_STAGE_DESKTOP        0x45303233UL /* "E023" */
 
 struct Emu68BootContext
 {
@@ -84,5 +88,9 @@ void emu68_console_init(void *framebuffer, uint32_t pitch,
 int emu68_console_putc(int chr);
 void emu68_console_puts(const char *text);
 void emu68_set_stage(uint32_t stage);
+void emu68_bootui_init(void);
+void emu68_bootui_add_resource(void);
+void emu68_bootui_set_stage(uint32_t stage);
+void emu68_bootui_takeover(void);
 
 #endif

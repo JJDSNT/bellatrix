@@ -64,6 +64,7 @@ void emu68_set_stage(uint32_t stage)
     struct Emu68BootContext *ctx = &emu68_boot_context;
 
     ctx->stage = stage;
+    emu68_bootui_set_stage(stage);
 
     /*
      * The first page is kept out of the allocator. Leave a big-endian marker
@@ -575,6 +576,7 @@ static void start_aros(struct Emu68BootContext *ctx)
         m68k_ExecInstallPreserveAll(sys_base);
         ctx->exec_base = sys_base;
         ctx->flags |= EMU68_BOOT_EXEC_READY;
+        emu68_bootui_add_resource();
         emu68_set_stage(EMU68_STAGE_EXEC_READY);
         emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
 
@@ -635,11 +637,11 @@ void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
     emu68_boot_context.bootargs = 0;
     emu68_boot_context.bootargs_size = 0;
     emu68_boot_context.exec_base = 0;
-    emu68_set_stage(EMU68_STAGE_ENTRY);
-
     if (framebuffer && pitch && width && height)
         emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
 
+    emu68_bootui_init();
+    emu68_set_stage(EMU68_STAGE_ENTRY);
     emu68_console_init(framebuffer, pitch, width, height);
     emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");
 

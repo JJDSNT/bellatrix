@@ -27,9 +27,9 @@ include $(SRCDIR)/config/aros.cfg
 #MM- AROS-emu68-m68k-quick : kernel-link-emu68-m68k-quick
 
 #MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k \
+#MM                         workbench-c-emu68-bootprogress \
 #MM                         compiler-posixc compiler-stdcio external-openurl-lib
 #MM- workbench-emu68-m68k : workbench-complete workbench
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k
 #MM- distfiles-emu68-m68k-quick : AROS-emu68-m68k-quick
-

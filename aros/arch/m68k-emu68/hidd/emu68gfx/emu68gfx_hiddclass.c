@@ -194,3 +194,19 @@ OOP_Object *Emu68Display__Hidd_Display__CreateObject(
     }
     return (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
 }
+
+/*
+ * Keep the early boot UI alive after graphics.library and Intuition exist.
+ * The physical display changes ownership only when the generic Display class
+ * is asked to install an actual bitmap.  Stop direct framebuffer writes just
+ * before forwarding that first Show(), so the new screen replaces the loader
+ * without the two producers ever racing each other.
+ */
+OOP_Object *Emu68Display__Hidd_Display__Show(
+    OOP_Class *cl, OOP_Object *o, struct pHidd_Display_Show *msg)
+{
+    if (msg->bitMap)
+        emu68_bootui_takeover();
+
+    return (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
+}
