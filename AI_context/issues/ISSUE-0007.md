@@ -1819,6 +1819,47 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 — correction: the overlap was real, and it is not the cause
+
+The entry below claims the prediction held. It did not, and the claim was made
+on one run.
+
+Nine runs with the pools separated: **1 icons, 8 workbench, free-list
+corruption in 6**. The single clean run that the previous entry was written on
+was noise.
+
+The heap moved as intended and the corruption followed it:
+
+| | before | after |
+|---|---|---|
+| `mhe` | `01000000` | `02000000` |
+| corrupt block | `012f0ab8` | `022f0ab8` |
+| size | 532524 | 532524 |
+
+Same block, same size, same offset within the heap, displaced by exactly the
+16 MB the heap moved. **If the overlap with Emu68's pool were the cause,
+moving out of it would have removed the corruption.** It did not, so the
+origin is inside the guest's own heap.
+
+**What the change is still worth.** Sixteen megabytes with two independent
+allocators was real -- arithmetic off the boot log -- and a latent defect
+whatever else is true. `patches/emu68/0007` stays: it is in the right place,
+half of a loop that already existed, and it costs the guest nothing. It is
+simply not the answer to ISSUE-0007.
+
+**The method failure is the part worth keeping.** A falsifiable prediction was
+stated before running, which was right, and then declared confirmed on a
+single sample -- in a metric this same session had shown swinging 83% to 25%
+with no functional change at all. Six hypotheses have now been asserted and
+withdrawn today; this is the first one where the evidence to refute it was
+already in hand and was not gathered before writing the conclusion down.
+
+**Where this leaves the target.** The corruption is internal to the AROS heap,
+in a reproducible block of 532524 bytes at a fixed offset from the heap base,
+and the overlap is no longer in the picture to confuse it. That is a narrower
+target than anything earlier today.
+
+
 ## 2026-08-13 — the overlap is closed, and the prediction held
 
 `patches/emu68/0007` excludes Emu68's own pool from the /memory node the guest
