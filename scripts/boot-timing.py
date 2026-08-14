@@ -54,7 +54,10 @@
 # first frame that has a title band, the number of pixels in the backdrop that
 # differ from the backdrop's own modal colour is recorded as delta0 -- window
 # border, chrome, pointer, whatever this build happens to draw. Icons are
-# declared when the count has grown by --icon-delta pixels *beyond* delta0.
+# declared when the count has grown by --icon-delta pixels *beyond* delta0 --
+# or immediately, if that first frame is already past the threshold, because
+# the screen and its icons can arrive inside one sampling window and anchoring
+# delta0 on them makes the growth unobservable (ISSUE-0018).
 # Nothing depends on where Wanderer places the icons or on how the desktop is
 # themed, and every sample's raw counts are kept in the record, so the threshold
 # can be re-checked against data instead of argued about. Measured margin on the
@@ -420,9 +423,24 @@ def one_run(args, workdir):
 
             if state == "screen":
                 if delta0 is None:
-                    delta0 = frame["delta"]
                     t_workbench = now
-                elif frame["delta"] >= delta0 + args.icon_delta:
+                    #
+                    # The screen and its icons can arrive inside one sampling
+                    # window, and then anchoring delta0 on that frame hides the
+                    # very growth being looked for: the run can never exceed
+                    # delta0 + icon_delta, and it is reported as "workbench"
+                    # having in fact reached the desktop.
+                    #
+                    # Measured on 2026-08-14 -- a run called "workbench" whose
+                    # final frame was byte-for-byte identical (same md5) to an
+                    # "icons" run's. A bare backdrop reads delta 0 in every
+                    # sample recorded, so a first screen frame already past the
+                    # threshold is icons, not a noisy baseline.
+                    #
+                    delta0 = 0 if frame["delta"] >= args.icon_delta \
+                        else frame["delta"]
+
+                if frame["delta"] >= delta0 + args.icon_delta:
                     verdict = "icons"
                     record["t_total"] = now
                     record["delta"] = frame["delta"]
