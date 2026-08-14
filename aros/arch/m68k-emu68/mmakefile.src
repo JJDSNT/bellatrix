@@ -13,7 +13,7 @@ include $(SRCDIR)/config/aros.cfg
 # AROS.boot. The SD card was therefore always made from a foreign tree, and
 # every module on it -- libraries, Zune classes, the commands in C: -- came
 # from there rather than from this build. A patch touching module code changed
-# nothing that booted, silently. See AI_context/issues/ISSUE-0007.md.
+# nothing that booted, silently. See AI_context/consolidated/history/ISSUE-0007.md.
 #
 # Shaped after arch/m68k-amiga, minus the Amiga-specific packaging and demos.
 #

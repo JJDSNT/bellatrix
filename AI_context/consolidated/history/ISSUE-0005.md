@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0005
 title: "Access-size handling gaps in our interrupt-register intercepts"
-status: ready
+status: done
 priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-03
-updated_at: 2026-08-03
+updated_at: 2026-08-14
 tags:
   - emu68
   - irq
@@ -132,3 +132,28 @@ port is moving to IPL injection (ISSUE-0010), which removes these intercepts
 entirely and would make the question moot rather than answered. Worth resolving
 anyway: if a fall-through inside the fault handler can fault, that is a defect
 independent of which registers are intercepted.
+
+# Closed 2026-08-14 — the patch this describes no longer exists
+
+Both open items are defects *inside* `patches/emu68/0001-emulate-amiga-interrupt-registers.patch`.
+That patch was removed on 2026-08-13 (`11be65d`, "refactor(emu68): drop the
+emulated interrupt registers, renumber the series") once the bus observer
+established that the guest never touches `$DFF000` at all: host interrupts
+arrive as an IPL level (`patches/emu68/0002`), so there is no `INTENA`/`INTREQ`
+shadow left to intercept at any access size.
+
+Closed as obsolete rather than fixed. Nothing was decided about the two
+questions and nothing needs to be — the code they were about is gone. If an
+interrupt-register intercept is ever reintroduced, the rule this issue was
+written to enforce is the part worth carrying forward, and it lives in
+`docs/irq.md`: **claiming an access is a promise to satisfy it completely for
+the size requested.** If an intercept only makes sense at one or two widths,
+that belongs in the condition, not in a comment.
+
+The 2026-08-06 update above speculated that a 32-bit access spanning
+`INTENAR`+`INTREQR` might be re-entering the fault handler and exhausting the
+ARM stack. That was never confirmed, and the boot failure it was speculating
+about turned out to be something else entirely — an undersized TLSF split in
+`rom/kernel/tlsf.c`, see `AI_context/consolidated/history/ISSUE-0007.md`. The
+speculation is left in place above rather than edited out, because a plausible
+mechanism that was wrong is worth being able to recognise again.

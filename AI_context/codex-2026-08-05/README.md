@@ -66,6 +66,6 @@ Not all of this came from the same place. Roughly:
 ## How to use it
 
 Take one thing at a time, on top of a `main` that builds, and measure it.
-`AI_context/issues/ISSUE-0007.md` records the measurement discipline this
+`AI_context/consolidated/history/ISSUE-0007.md` records the measurement discipline this
 problem has already cost twice: serial runs, idle machine, three per
 configuration, `screendump` and dominant colour rather than a glance.

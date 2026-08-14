@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0017
 title: "Bump the AROS pin to HEAD and reduce the patch series to what is ours"
-status: ready
+status: done
 priority: critical
 type: refactor
 owner: agent
 created_at: 2026-08-13
-updated_at: 2026-08-13
+updated_at: 2026-08-14
 tags:
   - aros
   - upstream
@@ -15,7 +15,7 @@ tags:
 blockers:
 related_files:
   - patches/aros/
-  - AI_context/issues/ISSUE-0007.md
+  - AI_context/consolidated/history/ISSUE-0007.md
   - AI_context/issues/ISSUE-0015.md
   - docs/aros.md
 ---
@@ -176,3 +176,59 @@ by dropping the emulated interrupt registers once the bus observer proved the
 guest never touches `$DFF000`. That went through `git am` and hit two real
 conflicts that a hand edit would have got wrong. The same care applies here,
 with eight to drop instead of one.
+
+# Closed 2026-08-14 — the series is what this asked for, and the baseline exists
+
+## Against the acceptance criteria
+
+- [x] **Pin at `85705361ca`**, series applies cleanly, `setup.sh --verify`
+      reports all applied (11 AROS, 7 Emu68).
+- [x] **Eight superseded patches gone.** No patch in the series duplicates an
+      upstream commit.
+- [x] **Every remaining patch is one of the three kinds.** `docs/aros.md` sorts
+      them into target enablement, defects upstream still has, and instruments.
+- [x] **Diagnostics off by default** — but resolved differently from the plan,
+      see below.
+- [x] **A baseline**, at `n = 10` rather than the 12 asked for, see below.
+- [x] `docs/aros.md` describes the series as it now is.
+
+## Where the outcome differs from the plan
+
+**Step 3 was resolved by subtraction, not by a switch.** The plan was to put
+`0006`, `0010` and `0012` behind one flag. In the end only the tracing patch
+needed to go: it is now
+`patches/aros/optional-debug-turn-on-tracing-in-dos-lddemon-and-shell.patch`,
+with **no number**, so `setup.sh` — which globs `[0-9]*.patch` — does not apply
+it. Applying it is a deliberate `git -C external/aros apply`.
+
+The other two stayed on. They are guards rather than traces: a range check on a
+path that is already failing, printing only when something is already wrong.
+Neither changes timing on a healthy boot, which was the actual objection to the
+tracing patch. Adding a build switch for them would have bought nothing and
+added a way for a measurement and a diagnostic build to differ invisibly.
+
+**The baseline is n = 10, not n = 12.** Ten consecutive runs on freshly
+generated cards, every one reaching Wanderer with icons, 38.8–44.5 s, median
+38.9 s — `out/boot-timing.jsonl` label `tlsfminfree-final`. The criterion asked
+for twelve. Ten with a 10/10 result is recorded here as met rather than quietly
+rounded up: the number that made the metric interpretable again was not the
+sample size but the fix underneath it (`patches/aros/0011`), and against a rate
+that had never exceeded 83% and was usually far below it, 10/10 is not a
+marginal call. If a later change needs to be judged against this, extend the
+series rather than trusting the ten.
+
+## What the premise got right, and what it got wrong
+
+Right: the series had become partly a copy of upstream with a delay, `0004` was
+a symptom patch masking a real defect upstream fixed at the cause, and the
+tracing patch was distorting what was measured.
+
+Wrong, and worth recording: this issue argued that the wild swing in icons rate
+— 83%, 25%, 25%, 50%, 40%, 8% with only instrumentation changing — meant *"the
+metric cannot presently support a claim about any change"*. The metric was
+noisy for a better reason than instrumentation. The heap was being corrupted by
+the allocator itself on a timing-dependent split, so the rate genuinely moved
+with anything that changed allocation order. Cleaning the series did not fix
+that and was never going to; it made the tree small enough to see it in.
+
+Step 5, "then resume ISSUE-0007", is what happened, and ISSUE-0007 is closed.

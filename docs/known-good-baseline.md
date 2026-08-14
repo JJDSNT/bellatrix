@@ -36,7 +36,7 @@ this port consumes the board — no `expansion.library`, no autoconfig sweep —
 while it is offered, the 64 KB window at `0xe80000` stops faulting and starts
 answering stray accesses. The reference pair is still the reference for
 everything else; this is the one place `main` is intentionally smaller than it,
-and the reasoning is in `AI_context/issues/ISSUE-0007.md`.
+and the reasoning is in `AI_context/consolidated/history/ISSUE-0007.md`.
 
 ## How to check you are on it
 
@@ -84,7 +84,7 @@ loading `Zune/IconListview.mui`" is one of the stall states, not a phase.
 
 Opening the screen is very nearly deterministic — the spread is nine seconds
 across ten runs, whatever the outcome. What is intermittent is Wanderer
-finishing after that. See `AI_context/issues/ISSUE-0007.md`.
+finishing after that. See `AI_context/consolidated/history/ISSUE-0007.md`.
 
 ## Two ways this baseline has been lost before
 
@@ -175,5 +175,5 @@ closed and the failure became diagnosable rather than silent, which is a
 different achievement and should not be reported as this one.
 
 The failure now surfaces as a wild guest PC inside `InternalLoadSeg_ELF`. See
-`AI_context/issues/ISSUE-0007.md`, and the measurement discipline in `CLAUDE.md`
+`AI_context/consolidated/history/ISSUE-0007.md`, and the measurement discipline in `CLAUDE.md`
 before quoting any rate.

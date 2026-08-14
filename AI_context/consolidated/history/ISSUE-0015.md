@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0015
 title: "Upstream AROS fixes worth incorporating, and what has been taken"
-status: ready
+status: done
 priority: high
 type: bug
 owner: agent
 created_at: 2026-08-07
-updated_at: 2026-08-07
+updated_at: 2026-08-14
 tags:
   - aros
   - upstream
@@ -22,7 +22,7 @@ related_files:
   - external/aros/rom/hidds/gfx/gfx_bitmapclass.c
   - external/aros/rom/exec/memory.c
   - external/aros/rom/kernel/tlsf.c
-  - AI_context/issues/ISSUE-0007.md
+  - AI_context/consolidated/history/ISSUE-0007.md
 ---
 
 # Summary
@@ -280,3 +280,35 @@ Two things, both found here and absent there:
   caller every time, and the next thing to chase.
   The five stay: each is a real defect verified in our tree, and this is a
   negative result about *this* failure, not about them.
+
+# Closed 2026-08-14 — superseded by the pin bump
+
+This issue existed for one reason, stated in "Why this exists rather than a pin
+bump": bumping 359 commits mid-investigation would have destroyed the
+measurement baseline. The bump happened anyway on 2026-08-13 (ISSUE-0017), to
+`85705361ca`, 785 commits on — because the series had stopped describing what
+this port needs and the measurement it was protecting turned out not to be
+interpretable either way.
+
+Everything this ledger tracked as **taken** became a patch to drop at the bump,
+which is exactly what it was for. Of the unticked acceptance criteria:
+
+- *the five measured / bisect the five* — moot. All five are in upstream HEAD
+  and are no longer separable patches.
+- *`7957a02d64` taken*, *tlsf checks without the backtrace calls*,
+  *`c4780bddbd` evaluated* — all arrived with the bump.
+- *this table re-run against a fresh fetch before any pin bump* — done, as
+  ISSUE-0017's inventory.
+- **`FAT byte order offered upstream`** — still owed, and the only item that
+  survives this issue. It has moved to `docs/upstream-candidates.md` sections 3
+  and 4, where it is written up for review alongside three others.
+- **the `442d33b4b9` cache-hit hole reported upstream** — also still owed, and
+  not yet written up. It is the one loose end this closure leaves; it is
+  recorded here and nowhere else.
+
+The negative result in the execution log stands and is worth keeping: the five
+imported fixes did **not** touch the boot failure, and `patches/aros/0012`'s
+`[FreeVecPooled] REFUSED` never fired. The pointer was never arriving as an
+out-of-pool free, because nothing external was writing to the heap — the
+allocator was corrupting itself. See
+`AI_context/consolidated/history/ISSUE-0007.md`.

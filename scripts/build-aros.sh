@@ -39,7 +39,7 @@ METATARGET="kernel-link-$TARGET"
 # classes, the commands in C: -- comes from whatever tree make-sdcard.sh is
 # pointed at. Until 2026-08-07 that was always the reference distribution, so a
 # patch touching module code changed nothing that booted, silently. See
-# AI_context/issues/ISSUE-0007.md.
+# AI_context/consolidated/history/ISSUE-0007.md.
 #
 # It drags in contrib and fetches external sources, so it is not the default.
 for arg in "$@"; do

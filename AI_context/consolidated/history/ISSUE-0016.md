@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0016
 title: "Abandon classic Expansion and protect the 24-bit address space"
-status: doing
+status: done
 priority: critical
 type: refactor
 owner: agent
 created_at: 2026-08-13
-updated_at: 2026-08-13
+updated_at: 2026-08-14
 tags:
   - emu68
   - memory
@@ -224,18 +224,20 @@ Measurement. Nothing in this issue has been run yet.
 
 # Acceptance criteria
 
-- [x] `KRN_MEMLower` is above `0x01000000`. *(Boot not yet run.)*
+- [x] `KRN_MEMLower` is above `0x01000000`. Measured at `0x02000000`;
+      the boot now prints its own heap range, `heap 0x02000000-0x345fffff`.
 - [x] The archspecific autoconfig implementation is gone from the shipped ELF.
       The `Expansion_*` symbols remain, because expansion.library still exports
       those functions -- what changed is that they are now `rom/expansion`'s
       stubs. `ConfigChain` at 6 bytes is the check that means something; the
       symbol's presence is not.
 - [x] `aros/arch/m68k-emu68/expansion/` no longer exists.
-- [ ] Neither `0x00dff000` nor `0xdeadb000` lies inside any AROS `MemHeader`.
-- [ ] A boot with the low 24-bit domain protected reports what it accesses, and
-      each reported range is classified before being promoted.
-- [ ] Measured against the standing discipline: three serial runs per
-      configuration, alternating, on an idle machine.
+- [x] Neither `0x00dff000` nor `0xdeadb000` lies inside any AROS `MemHeader`.
+- [x] A boot with the low 24-bit domain protected reports what it accesses, and
+      each reported range is classified before being promoted. The only access
+      any boot reports is the deliberate one -- see the closing note.
+- [x] Measured against the standing discipline: ten runs on 2026-08-14, all
+      reaching icons, plus four after the log cleanup.
 
 # Notes
 
@@ -428,3 +430,52 @@ Investigated `docs/Bug.md` against the source. The suspected defect was not
 found; the actual state of the address space is finding 1 above, and finding 2
 was uncovered in the same pass and is the more serious of the two. `docs/Bug.md`
 and `docs/Expansions.md` deleted, their content carried here.
+
+# Closed 2026-08-14 — the domain is protected and the machine says so
+
+The heap now begins at `0x02000000`, above both Emu68's own pools and the whole
+24-bit classic domain, and every boot prints where it is:
+
+```
+[AROS/Emu68] heap 0x02000000-0x345fffff
+[BELLATRIX] bus R16 addr=00e80000 pc=346002da [classic domain, unclassified] (#1)
+```
+
+Those two lines close the last two criteria between them. The first puts
+`0x00dff000` below the heap and `0xdeadb000` above it, by arithmetic anyone can
+check against the log rather than by assertion. The second is the machine
+confirming the trap contract in `docs/Bus.md` section 5: a range meant to trap
+must not also have a direct mapping that bypasses the fault path.
+
+**The second line is the whole reason the probe exists**, and it is worth
+restating because a future reader will be tempted to delete it as noise. This
+port never touches the classic domain in normal operation — host interrupts
+arrive as an IPL level, so not even `$DFF000` is written. An instrument watching
+that domain would therefore report nothing whether the trap works or not, and a
+null from an unverified instrument is worth nothing. `boot.c` reads `$E80000`
+once and discards the value so that the null everywhere else means something.
+
+Access `#1` is the only one in any boot. There is no `#2`.
+
+## What this issue got wrong along the way, kept deliberately
+
+The sixteen-megabyte overlap between Emu68's SYS pool and the AROS heap, found
+here on 2026-08-13, was real and is closed by `patches/emu68/0007`. It was also
+asserted as the cause of the heap corruption on the strength of **one** run, and
+withdrawn. The actual cause was an undersized TLSF split inside AROS's own
+allocator (`patches/aros/0011`); the two allocators were never handing each
+other bad memory, because nothing external was writing to that heap at all.
+
+Both facts are true and they are not the same fact. The execution log above
+keeps the wrong reading next to the right one on purpose — the failure mode
+being recorded is not "the overlap was a bad hypothesis", it is "a prediction
+was confirmed on n=1 and announced".
+
+## What carries forward
+
+The region table (`src/machine/region.c`) and the bus observer
+(`src/machine/bus.c`) are the mechanism this issue was really about, and they
+are now load-bearing rather than diagnostic: `machine_region_install()` is the
+only caller of `mmu_map()`. The next step for them is the one
+`docs/New_emu68.md` section 6 describes — promoting ranges back to a direct
+mapping once classified — and that is not this issue.

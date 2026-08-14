@@ -298,7 +298,7 @@ interrupts enabled, ARM inside translated code — is that `for(;;)` being
 executed.
 
 So the stall is not interrupt delivery, and this whole line of enquiry is
-closed. See `AI_context/issues/ISSUE-0007.md` for where it went instead.
+closed. See `AI_context/consolidated/history/ISSUE-0007.md` for where it went instead.
 
 ## Both `INT_shadow` and `INTF.ARM` are dead code on this port
 

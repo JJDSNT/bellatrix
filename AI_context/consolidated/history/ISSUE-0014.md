@@ -17,7 +17,7 @@ related_files:
   - aros/arch/m68k-emu68/kernel/context.c
   - aros/arch/m68k-emu68/exec/switch.S
   - aros/arch/m68k-emu68/exec/dispatch.S
-  - AI_context/issues/ISSUE-0007.md
+  - AI_context/consolidated/history/ISSUE-0007.md
 ---
 
 # Summary

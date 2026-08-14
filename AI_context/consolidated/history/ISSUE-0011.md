@@ -18,7 +18,7 @@ related_files:
   - run.sh
   - scripts/make-sdcard.sh
   - docs/known-good-baseline.md
-  - AI_context/issues/ISSUE-0007.md
+  - AI_context/consolidated/history/ISSUE-0007.md
   - AI_context/issues/ISSUE-0009.md
 ---
 
