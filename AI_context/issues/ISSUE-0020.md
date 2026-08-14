@@ -132,9 +132,11 @@ anybody.
 
 - [x] The failure reproduced at the current pin, and attributed with evidence
       rather than guessed.
-- [ ] `./scripts/build-aros.sh full` completes.
-- [ ] A card built from the resulting distribution boots to icons, so that the
-      kernel and the modules on the card come from the same tree.
+- [x] `./scripts/build-aros.sh full` completes. It then turned up two more
+      stale-artifact failures, both recorded below.
+- [x] A card built from the resulting distribution boots to icons, so that the
+      kernel and the modules on the card come from the same tree. 6/6 on
+      2026-08-14, median 44.0 s.
 - [ ] A durable guard, so a future version bump does not reintroduce it.
 - [ ] Offered upstream, if option 2 holds up.
 
@@ -147,3 +149,41 @@ should fix. The build log's `note: declared here` line, naming a path under
 `AROS/Developer/include` rather than under `Ports/`, is what turned it from a
 guess into a diagnosis. A two-minute look at *which* header the compiler chose
 was worth more than any reasoning about which version was right.
+
+# 2026-08-14 — two more of the same, found by actually running it
+
+The freetype header was not the only stale artifact the pin bump left behind.
+Fixing it only moved the failure.
+
+**`workbench/devs/AHI`**: `No rule to make target
+'Drivers/HDAudio/pci_wrapper.h', needed by 'driver-init.o'`. The file does not
+exist and `driver-init.c` does not include it; every *other* AHI PCI driver has
+one. Upstream `acda3c8d24` ("audio: split HD Audio support into a reusable
+controller class") removed it, and our
+`gen/workbench/devs/AHI/Drivers/HDAudio/Makefile.dep`, dated 7 August, still
+listed it -- along with a leftover `pci_wrapper.o`. Same family as the freetype
+header: a build tree that predates the pin. Cleared by deleting
+`gen/workbench/devs/AHI`.
+
+**`make-sdcard.sh`**: not a stale artifact, but only reachable once the full
+build succeeded, so it belongs to the same session. mtools refuses to write
+`Devs/DOSDrivers/AUX` because AUX is a DOS device name, and fails with **no
+message and a bare exit 1**. Fixed in `0affe50` by staging through a hard-link
+farm and naming what is dropped.
+
+## What the three have in common
+
+Each was silent or misdirecting, and each was diagnosed by looking at what the
+tool actually did rather than at what the error implied:
+
+| Failure | What the message suggested | What it was |
+|---|---|---|
+| freetype arity | a source mismatch upstream should fix | the compiler picking a header from the sysroot, named in `note: declared here` |
+| AHI missing header | a file missing from upstream | a dependency file older than the pin |
+| card build stops | image too small, or tree missing | one filename mtools will not write |
+
+The general lesson for this build tree is narrow and worth keeping: **after a
+pin bump, generated state is suspect until proven otherwise, and the cheapest
+proof is to delete it.** A `--reset` is not the answer -- it rewrites every
+mtime and forces a full rebuild -- but a targeted `rm -rf` of one `gen/`
+subdirectory costs minutes and settles the question.
