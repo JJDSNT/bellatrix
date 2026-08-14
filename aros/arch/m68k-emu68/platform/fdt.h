@@ -34,6 +34,10 @@ typedef struct
  * `fdt` is not a valid FDT blob. */
 of_node_t *dt_parse(const void *fdt);
 
+/* Parsed tree published to residents through KRN_OpenFirmwareTree after
+ * platform discovery. NULL until dt_parse() succeeds. */
+of_node_t *dt_root_node(void);
+
 /* Look up an absolute path ("/soc/timer@7e003000") from the root parsed by
  * dt_parse(). Returns NULL if any path component is missing. The unit
  * address (the part after '@') is ignored when matching a component that

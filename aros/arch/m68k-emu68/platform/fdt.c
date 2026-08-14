@@ -170,6 +170,11 @@ of_node_t *dt_parse(const void *fdt)
     return dt_root;
 }
 
+of_node_t *dt_root_node(void)
+{
+    return dt_root;
+}
+
 of_node_t *dt_find_node(const char *path)
 {
     of_node_t *node = dt_root;

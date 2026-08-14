@@ -96,6 +96,7 @@ void emu68_set_stage(uint32_t stage)
 static void coldstart_user(void)
 {
     struct Emu68BootContext *ctx = &emu68_boot_context;
+    struct TagItem *tag;
     ULONG timer_interval_us;
     APTR ss_stack;
 
@@ -115,6 +116,23 @@ static void coldstart_user(void)
         emu68_console_puts("[AROS/Emu68] platform timer enabled\n");
     else
         emu68_console_puts("[AROS/Emu68] platform timer not found\n");
+
+    /*
+     * Emu68 hands us a flattened FDT, which is what the early bootstrap and
+     * platform discovery need. openfirmware.resource follows the native AROS
+     * contract instead: KRN_OpenFirmwareTree names the parsed of_node_t tree.
+     * Publish the tree platform_timer_start() just built before COLDSTART
+     * residents initialise, so disk drivers see the same rewritten hardware
+     * description that established KATTR_PeripheralBase and the IRQ wiring.
+     */
+    for (tag = BootMsg; tag && tag->ti_Tag != TAG_DONE; tag++)
+    {
+        if (tag->ti_Tag == KRN_OpenFirmwareTree)
+        {
+            tag->ti_Data = (IPTR)platform_openfirmware_tree();
+            break;
+        }
+    }
 
     /*
      * Move off the supervisor stack Emu68 gave us and onto one Exec owns.

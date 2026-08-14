@@ -128,4 +128,8 @@ static inline void platform_trace_val(const char *label, ULONG value)
  * `interval_us`. Returns FALSE if either device is missing/unrecognised. */
 BOOL platform_timer_start(const void *fdt, ULONG interval_us);
 
+/* Return the parsed OpenFirmware-style node tree created during platform
+ * discovery, for publication to normal AROS resources and drivers. */
+APTR platform_openfirmware_tree(void);
+
 #endif /* PLATFORM_H */

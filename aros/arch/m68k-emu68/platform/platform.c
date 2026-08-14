@@ -346,6 +346,11 @@ BOOL platform_timer_start(const void *fdt, ULONG interval_us)
     return TRUE;
 }
 
+APTR platform_openfirmware_tree(void)
+{
+    return dt_root_node();
+}
+
 /*
  * kernel_arch.h wires these to the generic KrnAddIRQHandler()/
  * KrnRemIRQHandler() path (see rom/kernel/addirqhandler.c), same as
