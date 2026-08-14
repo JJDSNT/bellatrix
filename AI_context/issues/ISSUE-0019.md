@@ -169,14 +169,22 @@ Each step ends somewhere that builds and boots.
 
 # Risks, in the order they are likely to bite
 
-**The full build is on the path and was last seen broken.** `usb2otg` lands in
-`Devs/USBHardware` on the SD card, not in the kernel ELF, so this needs
-`build-aros.sh full`. That last failed on 2026-08-13 at the old pin, in
-freetype: `too few arguments to function 'ft_glyphslot_alloc_bitmap'`, an
-AROS-against-freetype-2.14.3 mismatch. `FT2VERS` is still 2.14.3, but the AROS
-side has moved 785 commits since that attempt and **it has not been retried**.
-Retry it early, because everything after step 3 is blocked on it and the answer
-is cheap to get.
+**The full build is on the path, and it was broken — now ISSUE-0020.** `usb2otg`
+lands in `Devs/USBHardware` on the SD card, not in the kernel ELF, so this needs
+`build-aros.sh full`, and that failed in freetype. Reproduced at the current pin
+on 2026-08-14 and diagnosed: freetype 2.14.3's sources were being compiled
+against **2.14.1's headers**, still installed in the sysroot from the August 3
+build, because the 2.14.3 tarball's headers carry March mtimes and `%copy_includes`
+is a plain make prerequisite. Older-but-newer-version loses to newer-but-older-file.
+
+The guess recorded here first — "an AROS-against-freetype-2.14.3 mismatch",
+i.e. somebody else's source bug — was wrong, and cheaply so: the compiler's
+`note: declared here` named a path under `AROS/Developer/include` rather than
+under `Ports/`, which settled it. Worth remembering as a habit rather than as a
+fact about freetype.
+
+Unblocked by deleting the stale installed headers. See ISSUE-0020 for the
+durable fix, which is not yet done.
 
 **QEMU will not exercise most of the driver.** QEMU attaches USB devices
 directly to the dwc2 root port. A real Pi 3B has a LAN9514 hub soldered between
