@@ -217,6 +217,22 @@ that had never exceeded 83% and was usually far below it, 10/10 is not a
 marginal call. If a later change needs to be judged against this, extend the
 series rather than trusting the ten.
 
+**Addendum, same day: the criterion is met after all, at n = 12.** The instrument
+cleanup that followed (`2887961`) and the classifier fix (`f74b9a5`) were each
+validated with runs of their own, and together they come to twelve consecutive
+boots reaching Wanderer with icons on the cleaned-up build -- four labelled
+`logcleanup` and eight `classifier-fix`. One of the four was reported
+`workbench` by the detector as it then stood, and is counted as icons here on
+the strength of a byte-for-byte identical final frame; that is what led to
+ISSUE-0018.
+
+Two things are worth separating inside that number. The `logcleanup` runs varied
+38.9-44.2 s. The six `classifier-fix` runs, on a machine deliberately left
+quiet, came in at 44.0-44.3 s with `t_workbench` 38.6-38.7 -- a spread of 0.3 s
+across six runs, for a boot that spent ten days being called unpredictable.
+Neither figure is the true one, and the difference between them is the host
+rather than the guest.
+
 ## What the premise got right, and what it got wrong
 
 Right: the series had become partly a copy of upstream with a delay, `0004` was
