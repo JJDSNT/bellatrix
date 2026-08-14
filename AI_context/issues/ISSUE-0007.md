@@ -1,18 +1,20 @@
 ---
 id: ISSUE-0007
 title: "Intermittent Emu68 boot loses task context before Wanderer icons"
-status: doing
+status: done
 priority: critical
 type: bug
 owner: agent
 created_at: 2026-08-04
-updated_at: 2026-08-07
+updated_at: 2026-08-14
 tags:
   - aros
   - emu68
   - scheduler
   - fat
   - wanderer
+  - heap
+  - tlsf
 blockers:
 related_files:
   - aros/arch/m68k-emu68/platform/bcm283x/interrupt_controller.c
@@ -23,6 +25,7 @@ related_files:
   - external/aros/arch/m68k-emu68/platform/bcm283x/system_timer.c
   - external/aros/arch/m68k-emu68/doc/host-interrupts.md
   - external/aros/rom/kernel/addirqhandler.c
+  - external/aros/rom/kernel/tlsf.c
   - external/aros/rom/filesys/fat/date.c
   - external/aros/rom/filesys/fat/direntry.c
   - external/aros/rom/filesys/fat/ops.c
@@ -33,6 +36,81 @@ related_files:
 QEMU sometimes reaches Wanderer but does not draw volume icons; other runs
 fail at different points of `startup-sequence`, with corrupt PC/A6 or an
 Emu68 exception.
+
+**Status 2026-08-14 — fixed and validated in 10/10 boots.** Full
+physical-chain validation at every TLSF operation boundary
+caught the first invalid state twice, at the exact same address and operation:
+
+```
+[Kernel:TLSF] free-list corruption at MALLOC exit ...
+bucket=0/1 block=020cd3f4 size=36 flags=0x2 head=020cd3e8 ... 'Boot Mount'
+```
+
+Both runs entered `tlsf_malloc()` with a valid heap and failed at its exit, so
+the corruption is created by the allocator rather than by an external writer,
+a task switch, or overlap with Emu68's allocator. The free-list head at
+`0x020cd3e8` and following physical header at `0x020cd3f4` are only 12 bytes
+apart: an 8-byte `hdr_t` followed by a **4-byte free payload**. On this 32-bit
+target `free_node_t` contains two pointers and needs 8 bytes. Inserting that
+undersized split writes the second list pointer across the following block
+header.
+
+`patches/aros/0019-fix-kernel-avoid-undersized-TLSF-free-blocks.patch`
+changes the malloc split threshold to require room for both the rounded header
+and a complete rounded `free_node_t`. The two diagnostic reproductions are in
+`out/boot-timing/2026-08-14T103404Z/serial.log` and
+`out/boot-timing/2026-08-14T103536Z/serial.log`.
+
+After applying 0019, the same physical validator passed the former deterministic
+failure point without reporting corruption. The temporary patches 0011–0018
+were then removed and the normal image (`aros_sha=290c9277b684`) completed
+**10 of 10 boots with Wanderer icons**, with a freshly generated card and a
+different SD hash for every run. Time to icons was 38.8–44.5 seconds, median
+38.9 seconds. The records are `out/boot-timing.jsonl` lines 366–375 and the kept
+serial directories run from `2026-08-14T104639Z` through
+`2026-08-14T105237Z`; none contains `Software Failure`, a TLSF corruption,
+`TLSF-BAD`, `EMU68-FAULT`, or `terminating`. `scripts/setup.sh --verify`
+reports all 11 AROS patches and all 7 Emu68 patches applied.
+
+A separate retained-frame boot also reached icons in 39.5 seconds. Its visual
+artifact is `out/boot-timing/2026-08-14T105608Z/frame.ppm`; inspection confirms
+that the detected changes are the `RAM Disk` and `AROS` volume icons on the
+Wanderer desktop, not a classifier false positive.
+
+The Emu68 image stayed unchanged throughout the causal and final series
+(`emu68_sha=ba00abc1eb9f`). Restoring the documented m68k preserve-all Exec
+wrappers did not remove the corruption in the A/B runs, so the wrappers were
+not its cause; they remain restored for ABI correctness. The m68k Amiga target
+does preserve the same four vectors, installing each directly with
+`PRESERVE_ALL()` in its board bootstrap; Emu68 uses the shared
+`m68k_ExecInstallPreserveAll()` helper instead. The Emu68 and AROS TLSF arenas
+were also shown to be disjoint: Emu68's system arena ended below `0x02000000`,
+where the AROS guest heap begins.
+
+### Iterating on an AROS patch without rebuilding most of AROS
+
+Do not run `scripts/setup.sh --reset` for every probe edit. Resetting and
+reapplying the whole series refreshes timestamps throughout `external/aros`, so
+the generated dependency graph considers a large part of the kernel image
+stale. It was the reason small diagnostic edits repeatedly caused broad builds.
+
+For an already-applied patch under active iteration, keep the upstream change
+represented by the numbered patch but update the prepared tree in place through
+Git's patch mechanism:
+
+1. `git -C external/aros apply --reverse ../../patches/aros/NNNN-....patch`
+2. edit only `patches/aros/NNNN-....patch` (never edit the submodule source
+   directly)
+3. `git -C external/aros apply ../../patches/aros/NNNN-....patch`
+4. `scripts/build-aros.sh`
+
+When patch 0018 was corrected this way, the next functional change (0019)
+compiled only `rom/kernel/tlsf.c`, relinked `kernel_resource.o`, a small set of
+generated descriptors, and relinked `aros-emu68-m68k.elf`; it did not rebuild
+Emu68 or most of AROS. Finish an iteration with `scripts/setup.sh --verify` to
+prove that the prepared submodules still match the complete patch series. Use a
+full reset only when that verification fails or the patch ordering itself has
+changed incompatibly.
 
 **Status 2026-08-05, end of day.** The desktop is reachable again, with icons,
 from a build made by this repository — see `docs/known-good-baseline.md`. Two
@@ -1819,6 +1897,34 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-14 — four direct A/Bs refuted; corruption is not tied to one block
+
+The initially reproducible block at `heap_base + 0x2f0ab8` did not remain the
+victim once a page trap changed timing.  Subsequent failures named different
+blocks, buckets and tasks, including a null block selected from a non-empty
+bitmap and a 32-byte block in Wanderer.  The invalid link and size words look
+like ordinary loaded data, not damaged pointers with a stable transformation.
+
+Four mechanisms were tested and each reproduced `free-list corruption` on its
+second or earlier boot:
+
+- protecting the Exec memory list with `__AROSEXEC_BROKENMEMLOCK__`;
+- keeping disk-loaded libraries resident instead of closing/expunging them;
+- replacing the m68k-all MOVEM CopyMem with a scalar byte loop;
+- extending the scheduler quantum to 1000 ticks while retaining voluntary
+  dispatches.
+
+The failed configurations were removed and the official ten-patch AROS series
+and seven-patch Emu68 series reapplied with `setup.sh --reset`.  Do not repeat
+these A/Bs: allocator task concurrency, lddemon expunge, CopyMem's MOVEM fast
+path and periodic-quantum preemption are individually insufficient causes.
+
+The page trap did capture `ReadFileChunk -> CopyMem` writing through one watched
+address, but that run's block had not first been observed entering a free list;
+the write was therefore a normal file-buffer write, not attribution of the
+corruption.  A future write watch must be armed dynamically by the allocator,
+not by a fixed heap address.
+
 ## 2026-08-13 — correction: the overlap was real, and it is not the cause
 
 The entry below claims the prediction held. It did not, and the claim was made
@@ -2466,3 +2572,11 @@ exceptions entirely.
   It was scaffolding for a working tree the repository could not represent, not
   an archive of a code line; `legacy` is the latter and keeps its tag. The
   audit above is what survives it.
+- 2026-08-14 — physical TLSF-chain validation made the first corruption
+  deterministic in 2/2 runs at `MALLOC exit`: malloc split a block leaving a
+  four-byte free payload, then `INSERT_FREE_BLOCK` wrote its eight-byte
+  `free_node_t` across the following header. Patch 0019 requires enough room
+  for both `hdr_t` and `free_node_t`. With diagnostics removed, the fixed image
+  reached Wanderer icons in 10/10 fresh-card boots (38.8–44.5 s, median 38.9 s),
+  with no fatal or heap-corruption marker in any serial log. Patch-series
+  verification passed for AROS and Emu68.
