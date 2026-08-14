@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 10:40:00 -0300
+Subject: [PATCH] fix(kernel): avoid undersized TLSF free blocks
+
+A split block must have enough payload for the two pointers in free_node_t.
+Checking only for room beyond hdr_t can leave a four-byte payload on 32-bit
+targets. INSERT_FREE_BLOCK then writes its eight-byte free-list node across
+the following physical block header.
+
+Require both the block header and a complete free-list node before splitting.
+---
+ rom/kernel/tlsf.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/rom/kernel/tlsf.c b/rom/kernel/tlsf.c
+--- a/rom/kernel/tlsf.c
++++ b/rom/kernel/tlsf.c
+@@ -704,7 +704,8 @@ void * tlsf_malloc(struct MemHeaderExt *mhe, IPTR size, ULONG *flags)
+     REMOVE_HEADER(mhe, tlsf, b, fl, sl);
+ 
+     /* Is this block larger then requested? Try to split it then */
+-    if (likely(GET_SIZE(b) > (size + ROUNDUP(sizeof(hdr_t)))))
++    if (likely(GET_SIZE(b) >= (size + ROUNDUP(sizeof(hdr_t)) +
++                               ROUNDUP(sizeof(free_node_t)))))
+     {
+         /* New split block */
+         bhdr_t *sb = GET_NEXT_BHDR(b, size);
+-- 
+2.43.0
