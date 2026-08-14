@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 15:15:00 -0300
+Subject: [PATCH 21/21] usb2otg: quiesce the AHB master before core reset
+
+Device Init enables internal DMA before Poseidon opens unit zero.  OpenUnit
+then waits for AHBIDLE as the prerequisite for its core soft reset, but leaves
+that DMA master enabled.  QEMU exposes the resulting sequencing bug as an
+indefinite wait; the reset register reports AHBIDLE normally before DMA is
+enabled.
+
+Mask the global interrupt and disable DMA immediately before waiting for idle.
+The post-reset step already restores both bits.
+---
+ arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+index 3333333333..4444444444 100644
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+@@ -66,6 +66,13 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+             ULONG saved_gusbcfg = rd32le(USB2OTG_USB);
+ 
+             /* Step 1: Core soft reset (wait AHB IDLE -> CSFTRST -> wait clear). */
++            otg_RegVal = rd32le(USB2OTG_AHB);
++            otg_RegVal &= ~(USB2OTG_AHB_DMAENABLE | USB2OTG_AHB_INTENABLE);
++            wr32le(USB2OTG_AHB, otg_RegVal);
++            wr32le(USB2OTG_INTRMASK, 0);
++
++            D(bug("[USB2OTG] Init: AHB master quiesced\n"));
++
+             bug("[USB2OTG] Init: Core soft reset\n");
+             usb2otg_wait_ahb_idle(100000, "before core soft reset");
+             wr32le(USB2OTG_RESET, USB2OTG_RESET_CORESOFT);
+-- 
+2.43.0

@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 16:45:00 -0300
+Subject: [PATCH 23/23] usb2otg: use a task-local timer for open delays
+
+The device-wide timer request is created by the device Init task.  OpenUnit is
+later called by Poseidon's AddUSBHardware task, so waiting synchronously on the
+Init task's reply port never wakes the caller.
+
+Use a short-lived reply port and timer request owned by the calling task for
+the two hardware settle delays.  Propagate allocation and timer errors instead
+of hanging or continuing before the PHY is ready.
+---
+ .../broadcom/2708/usb/usb2otg/usb2otg_core.c | 41 ++++++++++++++++++--
+ 1 file changed, 37 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+index 5555555555..6666666666 100644
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+@@ -28,14 +28,47 @@ static const UWORD __suported_cmds[] =
+     0
+ };
+ 
+-static void usb2otg_delay(LIBBASETYPEPTR USB2OTGBase, ULONG microseconds)
++static BOOL usb2otg_delay(ULONG microseconds)
+ {
+-    struct timerequest *req = USB2OTGBase->hd_TimerReq;
++    struct MsgPort *port;
++    struct timerequest *req;
++    BOOL result = FALSE;
++
++    port = CreateMsgPort();
++    if (port == NULL)
++    {
++        bug("[USB2OTG] Failed to create delay timer port\n");
++        return FALSE;
++    }
++
++    req = (struct timerequest *)CreateIORequest(port,
++        sizeof(struct timerequest));
++    if (req == NULL)
++    {
++        bug("[USB2OTG] Failed to create delay timer request\n");
++        DeleteMsgPort(port);
++        return FALSE;
++    }
++
++    if (OpenDevice("timer.device", UNIT_MICROHZ,
++            (struct IORequest *)req, 0) != 0)
++    {
++        bug("[USB2OTG] Failed to open delay timer\n");
++        DeleteIORequest((struct IORequest *)req);
++        DeleteMsgPort(port);
++        return FALSE;
++    }
+ 
+     req->tr_node.io_Command = TR_ADDREQUEST;
+     req->tr_time.tv_secs = microseconds / 1000000;
+     req->tr_time.tv_micro = microseconds % 1000000;
+     DoIO((struct IORequest *)req);
++    result = req->tr_node.io_Error == 0;
++
++    CloseDevice((struct IORequest *)req);
++    DeleteIORequest((struct IORequest *)req);
++    DeleteMsgPort(port);
++    return result;
+ }
+ 
+ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+@@ -86,7 +119,8 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+                 goto reset_failed;
+             bug("[USB2OTG] Init: Core reset complete, GRSTCTL=%08x\n",
+                 rd32le(USB2OTG_RESET));
+-            usb2otg_delay(USB2OTGBase, 1000);
++            if (!usb2otg_delay(1000))
++                goto reset_failed;
+ 
+             /*
+              * Step 2: Re-enable DMA + global IRQs (cleared by core reset).
+@@ -105,7 +139,8 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+             saved_gusbcfg |= USB2OTG_USB_FORCE_HOST_MODE;
+             wr32le(USB2OTG_USB, saved_gusbcfg);
+             /* Let the PHY complete the force-host mode switch. */
+-            usb2otg_delay(USB2OTGBase, 25000);
++            if (!usb2otg_delay(25000))
++                goto reset_failed;
+ 
+             /* Step 4: Configure HOSTCFG (FSLSPCLKSEL) after core reset. */
+             otg_RegVal = rd32le(USB2OTG_HARDWARE2);
+-- 
+2.43.0

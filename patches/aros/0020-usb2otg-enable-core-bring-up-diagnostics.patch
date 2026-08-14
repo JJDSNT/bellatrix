@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 15:05:00 -0300
+Subject: [PATCH 20/20] usb2otg: enable core bring-up diagnostics
+
+Temporarily enable the existing core-open diagnostics to distinguish reset
+polling from the elapsed-time settle waits during Bellatrix bring-up.
+---
+ arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+index 2222222222..3333333333 100644
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+@@ -2,7 +2,7 @@
+     Copyright (C) 2013-2026, The AROS Development Team. All rights reserved.
+ */
+ 
+-#define DEBUG 0
++#define DEBUG 1
+ #include <aros/debug.h>
+ 
+ #include <proto/exec.h>
+-- 
+2.43.0

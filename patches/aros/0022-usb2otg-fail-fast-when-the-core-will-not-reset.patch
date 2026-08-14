@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 16:10:00 -0300
+Subject: [PATCH 22/22] usb2otg: fail fast when the core will not reset
+
+The reset polling helpers return a status, but OpenUnit ignored it.  On a
+slow MMIO path this makes a failed reset look like a hung device open and can
+then continue initialisation with an unusable core.
+
+Log GRSTCTL at the reset boundary, use bounded polling, and reject the unit
+when either the AHB never becomes idle or CSFTRST does not clear.
+---
+ .../broadcom/2708/usb/usb2otg/usb2otg_core.c | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+index 4444444444..5555555555 100644
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+@@ -74,11 +74,18 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+ 
+             D(bug("[USB2OTG] Init: AHB master quiesced\n"));
+ 
+-            bug("[USB2OTG] Init: Core soft reset\n");
+-            usb2otg_wait_ahb_idle(100000, "before core soft reset");
++            bug("[USB2OTG] Init: Core soft reset, GRSTCTL=%08x\n",
++                rd32le(USB2OTG_RESET));
++            if (!usb2otg_wait_ahb_idle(1000, "before core soft reset"))
++                goto reset_failed;
+             wr32le(USB2OTG_RESET, USB2OTG_RESET_CORESOFT);
+-            usb2otg_wait_reset_bit_clear(USB2OTG_RESET_CORESOFT, 1000000,
+-                "Init: Core soft reset");
++            bug("[USB2OTG] Init: CSFTRST written, GRSTCTL=%08x\n",
++                rd32le(USB2OTG_RESET));
++            if (!usb2otg_wait_reset_bit_clear(USB2OTG_RESET_CORESOFT, 10000,
++                    "Init: Core soft reset"))
++                goto reset_failed;
++            bug("[USB2OTG] Init: Core reset complete, GRSTCTL=%08x\n",
++                rd32le(USB2OTG_RESET));
+             usb2otg_delay(USB2OTGBase, 1000);
+ 
+             /*
+@@ -311,5 +318,7 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+         return (&otg_Unit->hu_Unit);
+     }
+ 
++reset_failed:
++    otg_Unit->hu_UnitAllocated = FALSE;
+     return (NULL);
+ }
+ 
+-- 
+2.43.0

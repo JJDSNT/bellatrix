@@ -26,6 +26,34 @@ specification, and consolidated investigation records.
 Pass `clean` to either build script for a clean build. See `README.md` for host
 dependencies and additional run options.
 
+## Incremental Patch and Build Workflow
+
+Do not use `./scripts/setup.sh --reset` for ordinary development. It resets
+both submodules, can discard local work, rewrites mtimes, and causes unrelated
+AROS targets to regenerate. Reserve it for an explicitly requested recovery
+after inspecting and reporting exactly what would be lost.
+
+Do not revise a patch that is already applied to a submodule during an
+iteration. Add a numbered follow-up patch, validate it with `git apply
+--check`, and apply only that patch to the relevant submodule. The numbered
+patch remains the authoritative source; never make an unrecorded submodule
+edit. Use `./scripts/setup.sh --verify` afterwards. Inspect the submodule
+itself before applying anything, because the parent repository may hide dirty
+submodule state.
+
+Build the smallest affected target and keep AROS builds serial. For example,
+use `make kernel-usb-usb2otg-emu68` for that disk driver and
+`make kernel-link-emu68-m68k` for ELF/resident changes. Do not run the full
+`AROS-emu68-m68k` distribution target unless disk-distribution contents
+genuinely require it. Reuse the existing distribution tree and regenerate the
+SD image only after updating the disk files that actually changed; relinking
+the ELF alone does not require rebuilding the distribution.
+
+Record whether an interrupted build completed before using its artifacts. If
+an explicitly authorized reset was unavoidable, use the timestamp repair in
+`scripts/build-aros.sh` rather than treating the resulting global regeneration
+as a reason to perform a full build.
+
 ## Coding Style & Naming Conventions
 
 Write code, comments, documentation, and commits in English. Follow nearby AROS

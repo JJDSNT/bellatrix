@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 14:55:00 -0300
+Subject: [PATCH 19/19] usb2otg: use the timer for core settle delays
+
+The core-open path models one and twenty-five millisecond hardware delays with
+fixed CPU loops.  Their duration depends on the compiler and CPU, and the 30
+million iteration loop is especially expensive when m68k runs through Emu68
+under QEMU.
+
+The device already owns an idle UNIT_MICROHZ request at this point.  Use it for
+real elapsed-time waits, as the same function already does later for port power
+and reset delays.
+---
+ arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c | 25 +++++++++++----------
+ 1 file changed, 13 insertions(+), 12 deletions(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+index 1111111111..2222222222 100644
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
+@@ -24,6 +24,16 @@ static const UWORD __suported_cmds[] =
+     0
+ };
+ 
++static void usb2otg_delay(LIBBASETYPEPTR USB2OTGBase, ULONG microseconds)
++{
++    struct timerequest *req = USB2OTGBase->hd_TimerReq;
++
++    req->tr_node.io_Command = TR_ADDREQUEST;
++    req->tr_time.tv_secs = microseconds / 1000000;
++    req->tr_time.tv_micro = microseconds % 1000000;
++    DoIO((struct IORequest *)req);
++}
++
+ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+                         LONG unitnr,
+                         LIBBASETYPEPTR USB2OTGBase)
+@@ -60,12 +69,7 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+             wr32le(USB2OTG_RESET, USB2OTG_RESET_CORESOFT);
+             usb2otg_wait_reset_bit_clear(USB2OTG_RESET_CORESOFT, 1000000,
+                 "Init: Core soft reset");
+-            /* Wait for internal logic to settle after core reset */
+-            {
+-                volatile int i;
+-                for (i = 0; i < 100000; i++)
+-                    USB2OTG_RELAX();
+-            }
++            usb2otg_delay(USB2OTGBase, 1000);
+ 
+             /*
+              * Step 2: Re-enable DMA + global IRQs (cleared by core reset).
+@@ -84,12 +88,8 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
+             saved_gusbcfg &= ~USB2OTG_USB_FORCE_DEV_MODE;
+             saved_gusbcfg |= USB2OTG_USB_FORCE_HOST_MODE;
+             wr32le(USB2OTG_USB, saved_gusbcfg);
+-            /* 25 ms for mode switch — ~30M NOPs on 1.2 GHz Cortex-A53. */
+-            {
+-                volatile int i;
+-                for (i = 0; i < 30000000; i++)
+-                    USB2OTG_RELAX();
+-            }
++            /* Let the PHY complete the force-host mode switch. */
++            usb2otg_delay(USB2OTGBase, 25000);
+ 
+             /* Step 4: Configure HOSTCFG (FSLSPCLKSEL) after core reset. */
+             otg_RegVal = rd32le(USB2OTG_HARDWARE2);
+-- 
+2.43.0

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 14:45:00 -0300
+Subject: [PATCH 18/18] s: pass the modular USB controller path to Poseidon
+
+The ARM package can register usb2otg.device by basename because the device is
+already resident.  Bellatrix deliberately keeps the controller replaceable on
+disk under DEVS:USBHardware, so OpenDevice cannot find it by that basename.
+
+Pass the path that exists on disk.  Poseidon's device task first tries the full
+name and retains its existing fallback through path components.
+---
+ workbench/s/Startup-Sequence | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
+index 1111111111..2222222222 100644
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -118,7 +118,7 @@ EndIf
+ ; that is actually present, if one is.
+ If EXISTS "DEVS:USBHardware/usb2otg.device"
+     Echo "starting AddUSBHardware" >"SDCARD0P0:usb-hardware.log"
+-    AddUSBHardware usb2otg.device >>"SDCARD0P0:usb-hardware.log"
++    AddUSBHardware DEVS:USBHardware/usb2otg.device >>"SDCARD0P0:usb-hardware.log"
+     Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
+ EndIf
+ Run <NIL: >NIL: QUIET ConClip
+-- 
+2.43.0

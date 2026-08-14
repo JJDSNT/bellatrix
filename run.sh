@@ -9,6 +9,7 @@
 #   ./run.sh --sd PATH      a different card
 #   ./run.sh --headless     serial only, no window
 #   ./run.sh --gui          force a window even with no display detected
+#                           GUI boots include a USB tablet
 #   ./run.sh --serial FILE  send the serial console to a file instead of stdio
 #   ./run.sh --debug FLAGS  adds sysdebug=FLAGS to the kernel arguments
 #   ./run.sh --build        build Emu68 first (not done by default)
@@ -103,6 +104,14 @@ QEMU=(
     -no-reboot
     -monitor "unix:$MONITOR,server,nowait"
 )
+
+# The raspi3b machine provides the DWC2 USB host controller, but QEMU does not
+# populate it with a pointing device automatically.  Use an absolute USB HID
+# tablet for graphical runs: it does not depend on frontend pointer capture,
+# and QEMU's SDL relative usb-mouse path reverses both motion axes here.
+if [ "$DISPLAY_ARG" != "none" ]; then
+    QEMU+=(-device usb-tablet)
+fi
 
 if [ "$AROS" = 1 ]; then
     # nocomposition is currently required to see anything on the framebuffer.

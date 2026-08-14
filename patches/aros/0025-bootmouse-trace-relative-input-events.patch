@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 17:45:00 -0300
+Subject: [PATCH 25/25] bootmouse: trace relative input events
+
+The DWC2 completion trace proves that relative X/Y bytes reach Poseidon, but
+the pointer remains stationary.  Trace the signed coordinates bootmouse puts
+in InputEvent and the result returned by input.device, only for movement
+reports, to locate the loss above the HCD without restoring broad USB logs.
+---
+ rom/usb/classes/bootmouse/bootmouse.class.c | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/rom/usb/classes/bootmouse/bootmouse.class.c b/rom/usb/classes/bootmouse/bootmouse.class.c
+index 1111111111..2222222222 100644
+--- a/rom/usb/classes/bootmouse/bootmouse.class.c
++++ b/rom/usb/classes/bootmouse/bootmouse.class.c
+@@ -476,6 +476,7 @@ AROS_UFH0(void, nHidTask)
+     UBYTE *buf;
+     UBYTE *bufreal;
+     LONG ioerr;
++    LONG inputerr;
+     BOOL firstpkt = TRUE;
+ 
+     if((nch = nAllocHid()))
+@@ -574,7 +575,19 @@ AROS_UFH0(void, nHidTask)
+                         nch->nch_InpIOReq->io_Data = &nch->nch_FakeEvent;
+                         nch->nch_InpIOReq->io_Length = sizeof(struct InputEvent);
+                         nch->nch_InpIOReq->io_Command = IND_WRITEEVENT;
+-                        DoIO((struct IORequest *) nch->nch_InpIOReq);
++                        if(nch->nch_FakeEvent.ie_X != 0 ||
++                           nch->nch_FakeEvent.ie_Y != 0)
++                            bug("[BOOTMOUSE] submit x=%ld y=%ld code=%04lx qual=%04lx raw=%02lx %02lx %02lx %02lx\n",
++                                (LONG)nch->nch_FakeEvent.ie_X,
++                                (LONG)nch->nch_FakeEvent.ie_Y,
++                                (ULONG)nch->nch_FakeEvent.ie_Code,
++                                (ULONG)nch->nch_FakeEvent.ie_Qualifier,
++                                (ULONG)bufreal[0], (ULONG)bufreal[1],
++                                (ULONG)bufreal[2], (ULONG)bufreal[3]);
++                        inputerr = DoIO((struct IORequest *) nch->nch_InpIOReq);
++                        if((nch->nch_FakeEvent.ie_X != 0 ||
++                            nch->nch_FakeEvent.ie_Y != 0) && inputerr != 0)
++                            bug("[BOOTMOUSE] IND_WRITEEVENT failed: %ld\n", inputerr);
+                         if(newmouse)
+                         {
+                             while(wheeldist--)
+-- 
+2.43.0

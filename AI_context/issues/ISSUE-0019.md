@@ -23,6 +23,8 @@ related_files:
   - aros/arch/m68k-emu68/soc/
   - aros/arch/m68k-emu68/kernel/getsystemattr.c
   - aros/arch/m68k-emu68/platform/bcm283x/interrupt_controller.c
+  - aros/arch/m68k-emu68/boot/mmakefile.src
+  - run.sh
 ---
 
 # Summary
@@ -286,9 +288,439 @@ queries), `0x00038002`/`0x00038030` (clock set) and `0x00040003` (framebuffer).
 Powering the OTG core up is the guest's job, exactly as it already is for the SD
 card.
 
-## What is next
+## Runtime investigation — 2026-08-14
 
-Step 5, Poseidon. Nothing loads `usb2otg.device` yet -- it is a file on the card
-with no stack above it -- so the next thing that can be *observed* is
-`rom/usb/poseidon` plus a `usbromstartup` equivalent. Building is not the same
-as running, and none of the above has been run.
+The earlier statement that nothing loads `usb2otg.device` is obsolete. Patch
+0014 starts `PsdStackLoader` and calls `AddUSBHardware usb2otg.device` from
+`Startup-Sequence`; the full distribution and SD image contain all of:
+
+- `Devs/USBHardware/usb2otg.device`;
+- `Libs/poseidon.library`;
+- `Classes/USB/hid.class` and `bootmouse.class`;
+- `C:PsdStackLoader`, `C:AddUSBHardware`, and `C:AddUSBClasses`.
+
+QEMU's `raspi3b` machine already owns a DWC2 controller. Attaching
+`-device usb-mouse` succeeds at the QEMU level but does not make the AROS
+cursor move. A diagnostic `Startup-Sequence` captured the actual guest result:
+
+```text
+starting AddUSBHardware
+Adding hardware usb2otg.device, unit 0...failed!
+finished AddUSBHardware
+```
+
+No `[USB2OTG] HS OTG Core Release` or driver-initialised message reached the
+serial log. The failure is therefore below Poseidon's hardware registration:
+`psdAddHardware()` cannot open/initialise the device. The module itself is a
+valid ELF32 big-endian m68k relocatable, contains its ROMTag and Init entry, and
+has no undefined symbols.
+
+## ARM-native versus Emu68 wiring
+
+The low-level Bellatrix wiring already follows the native ARM path:
+
+- Emu68 maps the Raspberry Pi `/soc` peripheral ranges below 4 GiB and rewrites
+  the FDT `ranges` values before passing the copied tree to the m68k ELF in A6.
+- The m68k bootstrap publishes that FDT as `KRN_OpenFirmwareTree`.
+- `platform.c` derives `platform_periiobase` from the rewritten `/soc/ranges`;
+  `KrnGetSystemAttr(KATTR_PeripheralBase)` exposes it to disk modules. The SD
+  and mailbox drivers already operate successfully through this path.
+- The m68k BCM283x interrupt-controller driver uses the native logical IRQ
+  numbering and makes `KrnAddIRQHandler(IRQ_VC_USB, ...)` unmask GPU IRQ 9.
+- Emu68 has no competing USB stack or DWC2 owner. Powering the block remains
+  the guest driver's responsibility through `mbox.resource`.
+
+The important architectural difference is startup. ARM-native packages the
+DWC2 driver and runs a Raspberry Pi `usbromstartup` resident during
+`COLDSTART`; that resident opens Poseidon, registers the controller and begins
+enumeration while the required kernel resources are resident. Bellatrix keeps
+the driver on disk and attempts registration much later from
+`Startup-Sequence`.
+
+### Emu68 itself is not a USB-driver reference
+
+A source-tree search on 2026-08-14 found no DWC2, OTG, xHCI, LAN9514 or generic
+USB controller implementation in Emu68's runtime sources, headers, examples or
+board code. The only relevant textual occurrence is the CM4 preparation guide,
+which describes Raspberry Pi firmware `usbboot` exposing eMMC to the host; it
+is not USB support supplied to the m68k guest. Matches under bundled Capstone
+are instruction names such as `PADDUSB`, not USB code.
+
+Consequently Emu68 is the platform-enablement reference for address mappings,
+the rewritten FDT and translated cache-maintenance instructions, but not for
+DWC2 sequencing or a guest USB ABI. For those, the correct implementation
+reference remains AROS `arm-native`/BCM2708, adapted only at the CPU/platform
+boundary and registered through the normal modular Poseidon path.
+
+### The Emu68 xHCI driver is a valuable integration reference
+
+The separate [`rondoval/emu68-xhci-driver`](https://github.com/rondoval/emu68-xhci-driver)
+project is not part of the Emu68 core tree and targets the BCM2711/VL805 xHCI
+controllers on Pi 4/CM4, not the BCM2837 DWC2 on Pi 3. It therefore cannot
+supply our controller reset/register sequence. It is nevertheless strong
+evidence for the surrounding architecture because it is a real classic
+Poseidon HCD designed specifically for Emu68.
+
+Transferable patterns found in its source on 2026-08-14:
+
+- It is a normal loadable `xhci.device`, installed under
+  `DEVS:USBHardware`, rather than a USB stack embedded in Emu68. This supports
+  Bellatrix's modular `usb2otg.device`/installation-owned Poseidon boundary.
+- Its onboard unit discovers MMIO and IRQ from `devicetree.resource`, checks
+  `status`, and obtains a guest-visible virtual base instead of hard-coding the
+  Pi model. The API differs from AROS's `openfirmware.resource`, but the role is
+  exactly the one intended for our resident OpenFirmware service.
+- It wraps transfer buffers with `CachePreDMA()`/`CachePostDMA()`, maintains a
+  pool limited to Emu68/Pi DRAM, tests DMA reachability, and uses aligned bounce
+  buffers for unreachable or unsafe inbound buffers. This independently
+  validates treating correct cache/DMA semantics as a platform prerequisite,
+  not as a DWC2-specific workaround.
+- It permits direct inbound DMA only for whole cache-line-aligned ranges,
+  because invalidating partial boundary lines could discard neighbouring CPU
+  data. Bellatrix must audit the inherited DWC2 bounce/direct-buffer decisions
+  against the same rule after enumeration works.
+- Its interrupt server acknowledges and gates hardware, signals a dedicated
+  unit task, and lets that task process event rings and timeouts. It also uses
+  `timer.device` for watchdog/delay work. This supports bounded, scheduled
+  waits and minimal ISR work rather than long MMIO spin loops.
+- Controller attach is staged with error unwinding. A failed register mapping,
+  controller registration, task start or interrupt setup returns an error and
+  releases acquired state. This directly supports patch 0022's change to stop
+  ignoring DWC2 reset-wait failures.
+
+Non-transferable details:
+
+- xHCI controller state, rings, doorbells, halt/reset protocol and PCIe/MSI
+  wiring do not apply to DWC2.
+- Its DMA addresses are direct Emu68 RAM addresses. BCM2837 DWC2 uses the
+  VideoCore bus alias (`0xc0000000 | physical`), so its address-programming
+  convention must not be copied.
+- Pi 4's onboard xHCI and VL805 topology does not validate Pi 3's LAN9514 hub
+  or DWC2 split transactions.
+
+The practical use is therefore as a checklist and design precedent for the
+Emu68/Exec/Poseidon boundary, while AROS arm-native remains the authority for
+BCM2708 DWC2 register sequencing.
+
+## Role of `openfirmware.resource` in the Emu68 port
+
+Emu68 already does the hard part needed by `openfirmware.resource`: it copies
+the firmware FDT, rewrites the parent addresses in `/soc/ranges` to describe
+the guest-accessible peripheral mappings, and passes the resulting tree to the
+m68k ELF in A6. The bootstrap preserves that pointer in the boot tags as
+`KRN_OpenFirmwareTree`.
+
+What is missing is the public AROS interface over that tree.
+`openfirmware.resource` is not currently listed in the Emu68 ELF's
+`CORERESIDENTS`, so later drivers cannot assume that
+`OpenResource("openfirmware.resource")` succeeds. `usb2otg.device` explicitly
+allows for this: when the resource is absent it performs a blind probe instead
+of validating `brcm,bcm2708-usb`.
+
+### Advantages
+
+- **One public hardware-description API.** Drivers can use the same
+  `OF_FindNodeByCompatible()` and property accessors as ARM-native instead of
+  adding private FDT parsers or Pi-model conditionals to each module.
+- **Safe probing.** A driver can distinguish an enabled DWC2 on BCM283x from a
+  disabled or unsuitable OTG block on BCM2711, and from hardware that has no
+  such controller at all, before touching MMIO.
+- **Model independence.** Compatible strings, `status`, `reg`, interrupts,
+  clocks, DMA ranges and board-specific properties come from the tree rather
+  than being inferred from CPU architecture or fixed addresses.
+- **Correct use of Emu68's rewritten view.** Drivers see the addresses Emu68
+  made accessible to the m68k guest, not the original physical addresses from
+  the firmware tree.
+- **Parity with native ports.** Shared SoC drivers can retain their existing
+  OpenFirmware-based hardware checks, reducing Bellatrix-only patches and
+  making upstreaming more realistic.
+- **A scalable boundary.** Future GPIO, network, PCIe, audio or other platform
+  modules can discover hardware without growing `platform.c` into a registry
+  of every peripheral in the machine.
+
+### Intended responsibility
+
+`openfirmware.resource` should be the public, read-only hardware-description
+service available to normal residents and loadable drivers. It should expose
+the FDT that Emu68 has already adjusted for the guest; it should not remap
+hardware, own devices, or duplicate driver policy.
+
+It does **not** replace the small parser in `platform.c`. That parser runs at
+the earliest bootstrap stage, before ordinary residents are available, and is
+needed to establish the interrupt controller, system timer and
+`platform_periiobase`. Once Exec and resources exist, consumers should prefer
+`openfirmware.resource` rather than adding more late-driver queries to the
+bootstrap parser.
+
+### Integration requirements
+
+1. Add `openfirmware_resource` to the Emu68 ELF residents and its corresponding
+   mmake dependencies.
+2. Place it after the kernel/Exec foundation it requires and before normal
+   disk modules can be opened.
+3. Verify that it consumes the `KRN_OpenFirmwareTree` boot tag and publishes
+   the same rewritten FDT that `platform.c` used.
+4. Keep the DWC2 `DTEnabled()` validation active; do not replace it with an
+   `__mc68000__` exception.
+5. Treat absence of the resource as a platform bring-up error rather than
+   silently relying on a blind MMIO probe.
+6. Add a boot diagnostic that confirms the resource exists and resolves
+   `brcm,bcm2708-usb` with an enabled status before Poseidon registers the
+   controller.
+
+## Decision
+
+Use ARM-native as the reference for BCM283x wiring, but preserve the modular
+AROS m68k installation model:
+
+1. Keep fundamental platform services in the Emu68 ELF: kernel/Exec,
+   `openfirmware.resource`, interrupt controller, timer, mailbox, DMA/cache
+   primitives and the SD boot path.
+2. Keep `usb2otg.device` as a replaceable disk module under
+   `Devs/USBHardware`, analogous to an Amiga USB host-controller driver.
+3. Keep `poseidon.library`, `PsdStackLoader`, USB classes and preferences owned
+   by the AROS m68k installation. Do not embed a second Poseidon stack in the
+   Bellatrix ELF.
+4. Register the Bellatrix controller through the normal Poseidon startup path.
+   Make registration idempotent so an installation with saved hardware
+   preferences does not add a duplicate controller.
+5. Keep HID, keyboard, mouse and mass-storage classes on disk and load/scan
+   them through the standard installation mechanisms.
+6. Do not make boot depend on USB. Bellatrix already boots from SD, so there is
+   no need to copy ARM-native's early USB-mass-storage `COLDSTART` policy.
+7. Keep the real Device Tree validation. The experimental
+   `#ifdef __mc68000__` bypass is diagnostic only and must not be the final
+   implementation.
+8. Keep `-device usb-mouse` in graphical QEMU runs; it supplies the emulated
+   device but does not replace guest-side controller/stack initialization.
+
+This boundary is preferred both for elegance and compatibility. Whether a
+module was loaded from disk or linked into the ELF has negligible steady-state
+USB performance once its code is resident; DMA cache maintenance, IRQ latency,
+worker scheduling and DWC2 transaction handling dominate. Keeping the generic
+stack on disk avoids coupling an installation to the ELF's Poseidon version
+without sacrificing meaningful runtime performance.
+
+## Next validation
+
+- Add and validate `openfirmware.resource` as an Emu68 resident.
+- Make the modular driver reach its DWC2 core-release log when opened from
+  Poseidon.
+- Confirm that `psdAddHardware()` succeeds and QEMU's USB mouse enumerates.
+- Confirm that `bootmouse.class` produces input events and moves the cursor.
+- Repeat with `usb-kbd`, then smoke-test on a real Pi 3B because QEMU bypasses
+  the board's LAN9514 hub and cannot validate split transactions.
+
+## Current bring-up state — 2026-08-14
+
+- `openfirmware.resource` is now linked into the Emu68 ELF and the bootstrap
+  replaces the raw FDT boot-tag value with the parsed OpenFirmware root before
+  `COLDSTART`. The ELF builds, links and boots with the resource resident.
+- The first modular-startup defect was the device name: Poseidon was given only
+  `usb2otg.device`, although the module lives in `DEVS:USBHardware`. Supplying
+  `DEVS:USBHardware/usb2otg.device` reaches device Init and OpenUnit.
+- QEMU reports DWC2 core release `OT2.94a`, architecture 2 (internal DMA), and
+  the driver reaches its first core soft reset.
+- The current stop is inside that reset sequence after DMA/global interrupts
+  are disabled. A paused QEMU monitor read of physical `GRSTCTL` before guest
+  initialisation returned `0x80000000` (`AHBIDLE` set). Patch 0022 records
+  `GRSTCTL` immediately around `CSFTRST` and rejects a reset timeout instead of
+  ignoring it.
+- Builds remain incremental: apply only the new numbered patch, build
+  `kernel-usb-usb2otg-emu68`, recreate the SD image, and boot it. Do not run
+  `setup.sh --reset`, `build-aros.sh clean`, or an unqualified full build for
+  this investigation.
+
+### Reset and timer result
+
+A local graphical run supplied the decisive patch-0022 trace:
+
+```text
+[USB2OTG] Init: Core soft reset, GRSTCTL=80000000
+[USB2OTG] Init: CSFTRST written, GRSTCTL=80000000
+[USB2OTG] Init: Core reset complete, GRSTCTL=80000000
+```
+
+This excludes a DWC2 MMIO-endianness problem at this boundary. Core identity
+(`OT2.94a`), hardware configuration, `AHBIDLE`, and the self-clearing
+`CSFTRST` bit all have the expected values. The next operation was the first
+`usb2otg_delay(1000)`, where execution stopped.
+
+Patch 0019 had reused `USB2OTGBase->hd_TimerReq`. That request and its reply
+port are created during device Init, so the port's `mp_SigTask` belongs to the
+Init task. `OpenUnit` is later called from Poseidon's `AddUSBHardware` task;
+its synchronous `DoIO()` therefore waits on a reply signal owned by a different
+task. This is a cross-task timer-request ownership bug, not a slow DWC2 reset.
+
+Patch 0023 changes only the two OpenUnit settle delays. Each call creates a
+task-local message port and timer request, opens `UNIT_MICROHZ`, performs the
+delay, and releases them. Allocation, open, and I/O failures abort unit attach
+through the existing patch-0022 failure path. This follows the task-local timer
+pattern already used elsewhere in the driver and by the Emu68 xHCI reference.
+
+The targeted build has completed and the relinked module is present in the SD
+image. Note that this generated target currently needs two incremental `make
+kernel-usb-usb2otg-emu68` passes after a source edit: the first rebuilt
+`usb2otg_core.o`, while the second noticed that newer object and relinked
+`usb2otg.device`. Always verify the module timestamp or diagnostic strings
+before recreating `sd.img`.
+
+Runtime validation of patch 0023 succeeded in the user-provided `usblog.txt`.
+After `Core reset complete`, OpenUnit configured the host clock, flushed both
+FIFO classes, halted all eight channels, reset the connected port and returned
+successfully. Poseidon then completed control transfers without a logged error
+or timeout, assigned addresses 2 and 3, read the device/configuration/string
+descriptors, selected configuration 1 and interface alternate setting 1, and
+read a 52-byte HID report descriptor from device 3. It finally queued:
+
+```text
+[USB2OTG] INT-Q: dev=2 ep=1 len=2 interval=255 next=386
+[USB2OTG] INT-Q: dev=3 ep=1 len=4 interval=10 next=257
+[AROS/Emu68] BootUI: STARTING WANDERER...
+```
+
+Device 3's HID report-descriptor request and four-byte, 10 ms interrupt IN
+endpoint are consistent with QEMU's USB mouse. This establishes controller
+attach, enumeration, control DMA and HID interrupt scheduling. It does not yet
+establish delivery of completed interrupt reports into `bootmouse.class` or
+visible cursor movement; that remains the next GUI acceptance check.
+
+### HID partial result and performance diagnostic
+
+GUI testing shows that mouse button presses reach AROS but relative motion does
+not move the cursor. Poseidon repeatedly resubmits the four-byte interrupt pipe,
+so the endpoint is alive. Button success proves at least byte zero traverses the
+controller, bounce copy-back, Poseidon and `bootmouse.class`; it does not prove
+that displacement bytes one and two contain the expected values.
+
+`bootmouse.class` treats a boot-mouse report as `[buttons, signed X, signed Y,
+wheel]` and writes bytes 1/2 directly to `InputEvent.ie_X/ie_Y`. Patch 0024
+therefore adds one focused completion diagnostic:
+
+```text
+[USB2OTG:HID] dev=3 ep=1 actual=4 data=BB XX YY WW
+```
+
+It prints only non-zero successful interrupt reports. Movement producing
+non-zero `XX`/`YY` means DWC2 DMA is correct and moves the investigation above
+the HCD into `bootmouse.class`/`input.device`; zero displacement there means
+the loss remains in the controller/bounce path or QEMU device selection.
+
+The same patch restores `DEBUG=0` in `usb2otg_device.c` and
+`usb2otg_core.c`. Those temporary bring-up switches logged every BeginIO and
+interrupt resubmission and materially perturbed performance, so performance
+must be reassessed with the focused build before attributing the slowdown to
+USB IRQ or scheduling overhead. The relinked module was verified to contain
+`USB2OTG:HID` and no `BeginIO: IOReq`/`INT-Q` strings, then copied into the new
+SD image.
+
+### Performance lesson from the m68k-amiga Deneb driver
+
+The Amiga target does provide a strong performance clue, although its
+controller is an ISP1760/EHCI rather than DWC2. `denebusb` deliberately leaves
+the controller's SOF interrupt disabled:
+
+```c
+unit->hu_IntMask = IINTF_ATL_DONE | IINTF_INT_DONE | IINTF_ISO_DONE;
+                    /* | IINTF_SOF intentionally omitted */
+```
+
+It enables only transfer-done, port-change and frame-counter-rollover events,
+sets the EHCI interrupt threshold to eight microframes, and programs periodic
+PTD descriptors with their own microframe/SOF-active masks. Thus hardware
+enforces interrupt endpoint intervals and the CPU is interrupted for useful
+completion/state events, not every one-millisecond USB frame.
+
+This cannot be copied register-for-register: ISP1760 has a descriptor/PTD
+scheduler, while BCM2837 DWC2 host channels expose only limited frame-parity
+scheduling and the inherited driver currently promotes queued interrupt work
+from a 1 kHz SOF ISR. The architectural lesson is directly applicable:
+Bellatrix should not pay one emulated IRQ per USB frame merely to discover that
+a 10 ms mouse or 255 ms hub deadline is not due.
+
+The preferred DWC2 adaptation is a deadline-driven periodic scheduler. Mask
+SOF while no near-term frame-sensitive work requires it; use a task-local
+timer/softint to wake at the earliest interrupt-pipe deadline, then arm the
+channel outside the SOF boundary as required by the existing Pi 3 erratum
+comments. Retain SOF only for short windows where split completion or exact
+microframe sequencing actually needs it. This follows Deneb's event-driven
+policy without pretending DWC2 has Deneb's PTD hardware.
+
+### Future I/O-core direction
+
+Longer term, Bellatrix should be able to place USB and other I/O workers on a
+dedicated core. The current driver already creates a `USB2OTG Worker` task and
+assigns it an explicit CPU0 affinity, so the ownership boundary exists and a
+future port-wide I/O scheduler can move it deliberately.
+
+Do not make that migration part of the present USB bring-up or SOF-performance
+fix. IRQ routing, MMIO serialization, Exec list ownership, cache/DMA ordering
+and completion delivery must first be correct on CPU0. The immediate scheduler
+change should keep all state and worker execution on CPU0 while separating
+deadline wakeups from DWC2 SOF interrupts. Later, affinity can become platform
+policy rather than being hard-coded in the device.
+
+### Bootmouse-to-input instrumentation
+
+Patch 0025 instruments the next boundary above Poseidon. For movement-only
+reports, `bootmouse.class` now records the signed coordinates, event code,
+relative-mouse qualifier and original four report bytes immediately before
+calling `IND_WRITEEVENT`:
+
+```text
+[BOOTMOUSE] submit x=-1 y=0 code=00ff qual=8000 raw=00 ff 00 00
+```
+
+It also logs a non-zero result from the synchronous `DoIO()` as
+`IND_WRITEEVENT failed`. Button-only and idle reports remain silent. This will
+distinguish report parsing/sign-extension from rejection inside `input.device`
+without restoring the high-volume HCD diagnostics.
+
+The class target required the same two incremental make passes as the HCD:
+the first rebuilt its object and the second relinked the installed
+`Classes/USB/bootmouse.class`. The relinked artifact was verified to contain
+both diagnostic strings and copied into `sd.img`.
+
+The absence of that trace in the next GUI run was itself diagnostic:
+`bootmouse.class` was not the active binding. `Startup-Sequence` runs
+`AddUSBClasses`, which adds every class under `SYS:Classes/USB`, and Poseidon's
+AfterDOS logic explicitly documents `hid.class` overruling bootmouse and
+bootkeyboard. Its ROM late-startup follows the same policy: add `hid.class`
+first and add the boot classes only if that fails. The report-descriptor traffic
+already observed was another indication that the generic parser owned the
+interface.
+
+Patch 0026 therefore instruments the equivalent active boundary in
+`hid.class::nFlushEvents()`. Whenever the generic HID parser has accumulated a
+relative delta it now logs the signed X/Y, code, qualifier and input command
+before `DoIO()`, plus any non-zero input.device result:
+
+```text
+[HID:MOUSE] submit x=-1 y=0 code=00ff qual=8000 cmd=10
+```
+
+The relinked `hid.class` was verified by its diagnostic strings and copied into
+`sd.img`.
+
+### QEMU pointing-device result
+
+Patch 0026 confirmed the complete guest path. A relative report such as
+`data=00 ff 00 00` became `x=-1 y=0`, `IECLASS_RAWMOUSE`,
+`IEQUALIFIER_RELATIVEMOUSE`, and command 24 (`IND_WRITEEVENT`), with no error
+from `input.device`. The pointer moved under the SDL frontend, proving the
+end-to-end DWC2, Poseidon, HID, input.device and Intuition path.
+
+The graphical frontend and emulated device do matter for QEMU validation:
+
+- GTK with `usb-mouse` did not deliver sustained relative movement without
+  pointer capture, although buttons and wheel reports continued;
+- SDL with `usb-mouse` delivered movement, but both axes were reversed between
+  physical motion and the guest pointer;
+- `usb-tablet` delivered correctly oriented movement through the same guest
+  stack and does not require relative pointer capture.
+
+The raw HCD bytes and the `InputEvent` values were identical, so no inversion
+belongs in `usb2otg.device` or `hid.class`; doing that would break standards-
+compliant physical USB mice. Graphical `run.sh` boots therefore use
+`-device usb-tablet` as the stable QEMU test device. Relative `usb-mouse`
+remains useful as an explicit diagnostic override, not the default.

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 14:05:00 -0300
+Subject: [PATCH 16/16] usb2otg: report a device-tree rejection
+
+The disabled-node diagnostic is hidden behind DEBUG even though rejecting the
+probe makes OpenDevice fail without any other explanation.  Report it
+unconditionally so a missing or disabled OTG node can be distinguished from a
+controller initialization failure.
+---
+ arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_device.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_device.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_device.c
+index 5effcfa28f..1111111111 100644
+--- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_device.c
++++ b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_device.c
+@@ -88,7 +88,7 @@ static int FNAME_DEV(Init)(LIBBASETYPEPTR USB2OTGBase)
+ 
+     if (!FNAME_DEV(DTEnabled)())
+     {
+-        D(bug("[USB2OTG] %s: disabled in the device tree\n", __PRETTY_FUNCTION__));
++        bug("[USB2OTG] %s: disabled in the device tree\n", __PRETTY_FUNCTION__);
+         return FALSE;
+     }
+ 
+-- 
+2.43.0
