@@ -91,6 +91,8 @@ void emu68_set_stage(uint32_t stage);
 void emu68_bootui_init(void);
 void emu68_bootui_add_resource(void);
 void emu68_bootui_set_stage(uint32_t stage);
+void emu68_bootui_clock_start(uint32_t now_us);
+void emu68_bootui_clock_tick(uint32_t now_us);
 void emu68_bootui_takeover(void);
 
 #endif

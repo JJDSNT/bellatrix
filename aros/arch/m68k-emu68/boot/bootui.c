@@ -24,6 +24,9 @@ struct BootUIState
     uint32_t width;
     uint32_t height;
     uint32_t progress;
+    uint32_t clock_start_us;
+    uint32_t elapsed_seconds;
+    int clock_started;
     int active;
 };
 
@@ -43,6 +46,17 @@ static const struct Glyph glyphs[] =
 {
     { ' ', { 0, 0, 0, 0, 0, 0, 0 } },
     { '.', { 0, 0, 0, 0, 0, 6, 6 } },
+    { ':', { 0, 6, 6, 0, 6, 6, 0 } },
+    { '0', { 14, 17, 19, 21, 25, 17, 14 } },
+    { '1', { 4, 12, 4, 4, 4, 4, 14 } },
+    { '2', { 14, 17, 1, 2, 4, 8, 31 } },
+    { '3', { 30, 1, 1, 14, 1, 1, 30 } },
+    { '4', { 2, 6, 10, 18, 31, 2, 2 } },
+    { '5', { 31, 16, 16, 30, 1, 1, 30 } },
+    { '6', { 14, 16, 16, 30, 17, 17, 14 } },
+    { '7', { 31, 1, 2, 4, 8, 8, 8 } },
+    { '8', { 14, 17, 17, 14, 17, 17, 14 } },
+    { '9', { 14, 17, 17, 15, 1, 1, 14 } },
     { 'A', { 14, 17, 17, 31, 17, 17, 17 } },
     { 'B', { 30, 17, 17, 30, 17, 17, 30 } },
     { 'C', { 14, 17, 16, 16, 16, 17, 14 } },
@@ -210,6 +224,27 @@ static void draw_progress(uint32_t progress, const char *status)
     fill_rect(bar_x, bar_y, bar_width * progress / 100, bar_height, accent);
 }
 
+static void draw_clock(void)
+{
+    char text[6];
+    uint32_t seconds = bootui.elapsed_seconds;
+    uint32_t minutes;
+
+    if (seconds > 99 * 60 + 59)
+        seconds = 99 * 60 + 59;
+    minutes = seconds / 60;
+    seconds %= 60;
+    text[0] = '0' + minutes / 10;
+    text[1] = '0' + minutes % 10;
+    text[2] = ':';
+    text[3] = '0' + seconds / 10;
+    text[4] = '0' + seconds % 10;
+    text[5] = 0;
+
+    fill_rect(0, bootui.height - 16, bootui.width, 10, RGB565(0, 0, 0));
+    draw_text(text, bootui.height - 15, 1, RGB565(116, 83, 234));
+}
+
 void emu68_bootui_init(void)
 {
     struct Emu68BootContext *ctx = &emu68_boot_context;
@@ -227,6 +262,9 @@ void emu68_bootui_init(void)
     bootui.width = ctx->framebuffer_width;
     bootui.height = ctx->framebuffer_height;
     bootui.progress = 0;
+    bootui.clock_start_us = 0;
+    bootui.elapsed_seconds = 0;
+    bootui.clock_started = 0;
     bootui.active = 1;
 
     if (!draw_boot_image())
@@ -248,6 +286,27 @@ void emu68_bootui_set_stage(uint32_t stage)
     emu68_console_puts(status);
     emu68_console_puts("\n");
     draw_progress(progress, status);
+    draw_clock();
+}
+
+void emu68_bootui_clock_start(uint32_t now_us)
+{
+    bootui.clock_start_us = now_us;
+    bootui.elapsed_seconds = 0;
+    bootui.clock_started = 1;
+}
+
+void emu68_bootui_clock_tick(uint32_t now_us)
+{
+    uint32_t elapsed;
+
+    if (!bootui.active || !bootui.clock_started)
+        return;
+    elapsed = (now_us - bootui.clock_start_us) / 1000000UL;
+    if (elapsed == bootui.elapsed_seconds)
+        return;
+    bootui.elapsed_seconds = elapsed;
+    draw_clock();
 }
 
 void emu68_bootui_add_resource(void)
