@@ -60,6 +60,9 @@ struct Emu68BootContext
 
     uint32_t memory_base;
     uint32_t memory_size;
+    /* End of Emu68's own memory pools, from /emu68 host-mem. Zero if the
+     * running Emu68 does not publish it. */
+    uint32_t host_mem_end;
 
     const char *bootargs;
     uint32_t bootargs_size;

@@ -1819,6 +1819,73 @@ The goal is the Workbench screen with its icons, reached repeatedly.
 
 # Execution log
 
+## 2026-08-13 — two allocators, one range of memory
+
+The boot log has said this all day and nobody read it:
+
+```
+[BOOT] System memory: 0x0000000000000000-0x00000000347fffff (840 MiB)
+[BOOT]    SYS:        0xffffff800088a000 - 0xffffff8001ffffff (size: 24024 KiB)
+```
+
+Emu68's own TLSF pool is physical `0x0088a000`-`0x01ffffff`, i.e. 8.9 MB to
+32 MB. The AROS heap starts at `0x01000000`, 16 MB. **They overlap from 16 MB
+to 32 MB**, and the two allocators know nothing about each other.
+
+The block the guest allocator reported corrupt sat at `0x012f0ab8` -- 19.8 MB,
+squarely inside the overlap.
+
+This is arithmetic off the boot log, not inference, and it accounts for
+everything the day was spent on:
+
+| symptom | cause |
+|---|---|
+| `free_node` holding data instead of pointers | Emu68 allocated and wrote where AROS had a free block |
+| A6 holding `"Work"`, `"ary\0"`, NULL, debris | AROS structures underneath Emu68 allocations |
+| intermittency | depends which allocator gets there first |
+| a reproducible block address | both layouts are deterministic |
+| no writer ever found for the "use-after-free" | **there was no use-after-free. The memory had another owner.** |
+
+It also explains why moving the heap from `0x1000` to `0x01000000` earlier
+today improved the icons rate: it cut the overlap from ~23 MB to 16 MB. The
+number was a guess that happened to help, and the improvement was recorded
+without understanding it.
+
+Emu68 is not at fault either. It carves its pools out of DRAM and then
+advertises the whole of memory to the guest, which is fine as long as somebody
+says where its own memory ends. Nobody did.
+
+### The fix, and its state
+
+`patches/emu68/0007` publishes the pool extent as `host-mem`, a `[start, end)`
+pair on `/emu68`, beside `vc4-mem`. `arch/m68k-emu68/boot/boot.c` reads it and
+raises `KRN_MEMLower` above it, falling back to the old behaviour when the
+property is absent.
+
+**Not yet working.** Two attempts, both without effect: the property does not
+reach the guest, and `mhe=` in the corruption report still reads `01000000`
+where it must read `02000000`. The first attempt published beside the pool
+sizes printed late in boot, after the tree the guest receives is settled. The
+second moved it beside `vc4-mem` and still did not arrive.
+
+So the hypothesis **remains untested**, not refuted. `boot.c` now prints every
+top-level FDT node it walks and the `host-mem` value when it matches, which
+separates the two remaining possibilities in one line of log: either the
+property is not in the tree we receive, or our matching is wrong.
+
+### What this supersedes
+
+Five diagnoses were asserted and withdrawn during this session -- the Exec jump
+table, `Forbid` at LVO -132, the context backend, the preserve-all wrappers,
+and `battclock`. Each fitted the evidence at the time. This one did not come
+from a pattern that fitted; it came from two addresses printed at every boot.
+
+The instruments built while chasing the others were not waste -- they are what
+ruled the others out, and what produced the signature (`"Work"`, `"ary\0"`,
+free-list pointers holding data) that made the overlap recognisable. But the
+question "what does the boot log already say" should have come far earlier.
+
+
 ## 2026-08-13 — the preserve-all wrappers are ours alone, and the failures land on them
 
 `m68k_ExecInstallPreserveAll()` replaces four Exec vectors at boot:

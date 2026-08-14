@@ -240,6 +240,7 @@ static void parse_fdt(struct Emu68BootContext *ctx)
     uint32_t size_cells = 1;
     uint32_t depth = 0;
     int in_memory = 0;
+    int in_emu68 = 0;
     int in_chosen = 0;
 
     if (!header || header->magic != FDT_MAGIC ||
@@ -276,6 +277,17 @@ static void parse_fdt(struct Emu68BootContext *ctx)
 
             depth++;
             in_memory = depth == 2 && node_is_memory(name, structure_end);
+            in_emu68 = depth == 2 &&
+                       bounded_string_equal(name, 6, "emu68");
+
+            /* Bring-up: name every top-level node, so a property that never
+             * arrives can be told apart from one we fail to match. */
+            if (depth == 2)
+            {
+                emu68_console_puts("[FDT] node '");
+                emu68_console_puts(name);
+                emu68_console_puts("'\n");
+            }
             in_chosen = depth == 2 &&
                         bounded_string_equal(name,
                                              (uint32_t)(cursor - structure + 1),
@@ -289,6 +301,7 @@ static void parse_fdt(struct Emu68BootContext *ctx)
             if (depth == 2)
             {
                 in_memory = 0;
+            in_emu68 = 0;
                 in_chosen = 0;
             }
             depth--;
@@ -320,6 +333,29 @@ static void parse_fdt(struct Emu68BootContext *ctx)
                     address_cells = *(const uint32_t *)value;
                 else if (bounded_string_equal(name, 12, "#size-cells"))
                     size_cells = *(const uint32_t *)value;
+            }
+            else if (in_emu68 &&
+                     bounded_string_equal(name, 9, "host-mem") &&
+                     length >= 2 * sizeof(uint32_t))
+            {
+                /*
+                 * Emu68's own allocator lives in the same DRAM we are told we
+                 * own, and this is where it says so. Without it the guest heap
+                 * is built over the top of it and the two hand out the same
+                 * addresses -- see AI_context/issues/ISSUE-0007.md.
+                 */
+                const uint32_t *cells = (const uint32_t *)value;
+
+                ctx->host_mem_end = cells[1];
+                emu68_console_puts("[FDT] host-mem end 0x");
+                {
+                    static const char h[] = "0123456789abcdef";
+                    char b[9]; int k; uint32_t v = cells[1];
+                    for (k = 7; k >= 0; k--, v >>= 4) b[k] = h[v & 15];
+                    b[8] = 0;
+                    emu68_console_puts(b);
+                }
+                emu68_console_puts("\n");
             }
             else if (in_memory &&
                      bounded_string_equal(name, 4, "reg") &&
@@ -412,6 +448,22 @@ static void start_aros(struct Emu68BootContext *ctx)
     lower = ctx->memory_base;
     if (lower < 0x01000000)
         lower = 0x01000000;
+
+    /*
+     * And above Emu68's own pools.
+     *
+     * This is the one that mattered. Emu68 carves its allocator and its JIT
+     * buffers out of the same DRAM it then advertises to us, and said nothing
+     * about it; measured on 2026-08-13, its SYS pool ran 0x0088a000-0x01ffffff
+     * while this heap started at 0x01000000, so sixteen megabytes had two
+     * independent allocators handing out the same addresses. The guest
+     * allocator's own free-list pointers came back as somebody else's data.
+     *
+     * host_mem_end is what Emu68 now publishes on /emu68. Zero means an Emu68
+     * that does not publish it, and then this is no worse than before.
+     */
+    if (ctx->host_mem_end > lower)
+        lower = ctx->host_mem_end;
     lower = (lower + 15) & ~15UL;
 
     if (upper <= lower || upper - lower < 0x10000)
