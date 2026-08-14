@@ -87,10 +87,37 @@ SECTORS=$(( ($(stat -c%s "$OUT") / 512) - 2048 ))
 mformat -i "$OUT@@1M" -F -v AROS -T "$SECTORS" ::
 
 echo "[sd] copying distribution"
+
+# mtools enforces DOS device-name rules that FAT itself does not: it refuses to
+# create a file called AUX, CON, PRN, NUL, COM1-9 or LPT1-9, anywhere in the
+# tree. AROS's FAT handler has no such rule, and the full distribution ships
+# Devs/DOSDrivers/AUX -- the AUX: mountlist. Copying the tree straight in then
+# fails on that one file with no message at all and a bare exit 1, which reads
+# like the card being too small or the tree being missing.
+#
+# Stage through a hard-link farm, which copies no data, and drop those names
+# there: the build tree is never modified, and what was left out is named
+# rather than silently missing.
+STAGE="$(dirname "$OUT")/.sdstage"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
 for d in "${DIRS[@]}"; do
-    mcopy -i "$OUT@@1M" -s -Q "$DIST/$d" ::
+    cp -al "$DIST/$d" "$STAGE/$d"
 done
-mcopy -i "$OUT@@1M" -Q "$DIST/AROS.boot" ::
+cp -al "$DIST/AROS.boot" "$STAGE/AROS.boot"
+
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    echo "[sd] skipping $f -- mtools will not write a DOS device name"
+    rm -f "$STAGE/$f"
+done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' |
+         grep -iE '(^|/)(AUX|CON|PRN|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$' || true)
+
+for d in "${DIRS[@]}"; do
+    mcopy -i "$OUT@@1M" -s -Q "$STAGE/$d" ::
+done
+mcopy -i "$OUT@@1M" -Q "$STAGE/AROS.boot" ::
+rm -rf "$STAGE"
 
 echo "[sd] $(basename "$OUT")  ($(stat -c%s "$OUT") bytes)"
 mdir -i "$OUT@@1M" :: | tail -n +2
