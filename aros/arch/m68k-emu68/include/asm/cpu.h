@@ -49,4 +49,19 @@ static inline void dmb(void) { __asm__ __volatile__("" ::: "memory"); }
 static inline void sev(void) { __asm__ __volatile__("" ::: "memory"); }
 static inline void wfe(void) { __asm__ __volatile__("" ::: "memory"); }
 
+/*
+ * Stop the machine, for rom/kernel/kernel_panic.c's `for (;;) HALT;`.
+ *
+ * This target reached that line through arch/m68k-amiga/include/asm/cpu.h until
+ * this file existed, which is how it was found: adding <asm/cpu.h> here shadowed
+ * m68k-amiga's and took HALT away with it. The rest of that header is Amiga
+ * interrupt-vector addresses and handler installers, and nothing outside
+ * m68k-amiga uses them, so they are deliberately not carried over.
+ *
+ * `stop #0x2700` is the same instruction m68k-amiga uses: supervisor, interrupts
+ * masked, halted. Emu68 implements STOP, so this stops rather than falling
+ * through into a spin.
+ */
+#define HALT    __asm__ volatile("stop #0x2700")
+
 #endif /* ASM_M68K_EMU68_CPU_H */
