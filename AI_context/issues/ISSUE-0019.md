@@ -155,12 +155,20 @@ Each step ends somewhere that builds and boots.
    complication here: it has kernel static arrays at `0xf8xxxxxx` virtual that
    the alias cannot reach, and this port has no VA/PA split for the guest.
 
-3. **Build `usb2otg.device` for the target.** A new `soc/usb/usb2otg/` under
-   `aros/arch/m68k-emu68/`, mirroring the arm-native mmakefile
-   (`modtype=device`, `moduledir=Devs/USBHardware`). Expect this step to be
-   mostly mmakefile work, since the source should need little or nothing.
+3. **Give m68k the CPU abstraction the driver needs.** Checked on 2026-08-14
+   and it is the one real portability gap -- see "How ARM-specific the driver
+   actually is" below. `arch/m68k-all` has no `include/asm/` at all, and the
+   driver's MMIO accessors call `dmb()` on every register access.
 
-4. **Bring in Poseidon and the romstartup.** `rom/usb/poseidon` plus the
+4. **Build `usb2otg.device` for the target.** A new `soc/usb/usb2otg/` under
+   `aros/arch/m68k-emu68/`, mirroring the arm-native mmakefile
+   (`modtype=device`, `moduledir=Devs/USBHardware`). The 9200 lines of driver
+   source are **not** copied: `config/make.cfg.in:346` sets `VPATH` to the
+   source directory and `rule_compile_multi` adds `vpath %.c` of its own, so the
+   mmakefile can name the arm-native directory and compile in place. One copy of
+   the source, no divergence from upstream.
+
+5. **Bring in Poseidon and the romstartup.** `rom/usb/poseidon` plus the
    classes actually wanted (hid, massstorage) and a `usbromstartup` equivalent
    to `arch/arm-native/soc/broadcom/2708/usb/poseidon/`.
 
