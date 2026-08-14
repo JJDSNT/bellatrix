@@ -302,9 +302,19 @@ which is exactly what it was for. Of the unticked acceptance criteria:
 - **`FAT byte order offered upstream`** — still owed, and the only item that
   survives this issue. It has moved to `docs/upstream-candidates.md` sections 3
   and 4, where it is written up for review alongside three others.
-- **the `442d33b4b9` cache-hit hole reported upstream** — also still owed, and
-  not yet written up. It is the one loose end this closure leaves; it is
-  recorded here and nowhere else.
+- **the `442d33b4b9` cache-hit hole** — **not owed after all.** Checked on
+  2026-08-14, prompted by being asked what it was. Upstream came back to it in
+  `2f514b7472`, "dos: keep track of how much of the LoadSeg small-read cache is
+  valid", and closed it the same way we did: the cache-hit test at
+  `internalloadseg_elf.c:76` now bounds by `srb_Len` -- the bytes that actually
+  arrived -- instead of by the buffer size, `srb_Len` is zeroed before the read,
+  and a short read returns failure rather than serving the remainder from
+  uninitialised memory.
+
+  That is the commit ISSUE-0017 credited when dropping our `patches/aros/0009`,
+  so the drop was correct and nothing was reopened by the pin bump. This entry
+  first said the debt survived; it does not, and the difference matters because
+  the alternative was a defect we had silently reintroduced.
 
 The negative result in the execution log stands and is worth keeping: the five
 imported fixes did **not** touch the boot failure, and `patches/aros/0012`'s
