@@ -7,7 +7,8 @@
 #   ./scripts/make-sdcard.sh --pack               ... and pack it as .tar.xz to hand out
 #   ./scripts/make-sdcard.sh --dist DIR           from another distribution tree
 #   ./scripts/make-sdcard.sh --size 512M          bigger card
-#   ./scripts/make-sdcard.sh --out path/to.img    elsewhere
+#   ./scripts/make-sdcard.sh --out path/to.img    elsewhere (names the archive
+#                                                 too, under --pack)
 #
 # Without --pi the image carries AROS alone, which is all QEMU needs: run.sh
 # passes the kernel, the device tree and the m68k ELF on the command line. A
@@ -38,6 +39,7 @@ DIST="$ROOT/out/build/aros/bin/emu68-m68k/AROS"
 # card carries that tree's modules: every library, Zune class and C: command.
 # A patch touching module code then changes nothing that boots, silently.
 OUT=""
+OUT_GIVEN=""
 SIZE="256M"
 PI=0
 PACK=0
@@ -47,7 +49,7 @@ while [ $# -gt 0 ]; do
         --pi)   PI=1; shift ;;
         --pack) PI=1; PACK=1; shift ;;
         --dist) DIST="$2"; shift 2 ;;
-        --out)  OUT="$2";  shift 2 ;;
+        --out)  OUT="$2"; OUT_GIVEN=1; shift 2 ;;
         --size) SIZE="$2"; shift 2 ;;
         -h|--help) sed -n '2,28p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -213,6 +215,33 @@ EOF
     printf 'nocomposition' > "$STAGE/cmdline.txt"
 fi
 
+# What this card is, written for the same reason config.txt is: a card outlives
+# the download it came from, and a card that cannot say what it is turns every
+# later question into guesswork.
+#
+# The three digests are what decides whether an in-place update is enough. They
+# are recorded, never enforced: a newer kernel or ELF over an older volume is a
+# supported state -- see docs/Compat.md -- and this file is how somebody tells
+# which combination they are looking at.
+#
+# BELLATRIX_VERSION is set by scripts/release.sh. Outside a release there is no
+# tag to claim, and saying so is better than inventing one.
+digest() { sha256sum | cut -c1-12; }
+
+{
+    echo "bellatrix   ${BELLATRIX_VERSION:-untagged}"
+    echo "built       $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "commit      $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "emu68       $(git -C "$ROOT/external/emu68" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "aros        $(git -C "$ROOT/external/aros" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    echo "d-emu68     $({ git -C "$ROOT" rev-parse HEAD:patches/emu68
+                          git -C "$ROOT/external/emu68" rev-parse HEAD; } 2>/dev/null | digest)"
+    echo "d-elf       $({ git -C "$ROOT" rev-parse HEAD:aros HEAD:patches/aros
+                          git -C "$ROOT/external/aros" rev-parse HEAD; } 2>/dev/null | digest)"
+    echo "d-system    $({ git -C "$ROOT" rev-parse HEAD:patches/aros
+                          git -C "$ROOT/external/aros" rev-parse HEAD; } 2>/dev/null | digest)"
+} > "$STAGE/version.txt"
+
 # --pack hands out the card's contents instead of a card: the recipient formats
 # their own FAT32 partition, at whatever size their card happens to be, and
 # unpacks this into it. No image is written -- the size of the medium is theirs
@@ -221,7 +250,14 @@ fi
 # tar carries the DOS device names that the staging step keeps aside for mtools,
 # since nothing in this path goes through mtools.
 if [ "$PACK" = 1 ]; then
-    ARCHIVE="$(dirname "$OUT")/bellatrix-pi3.tar.xz"
+    # --out names the archive when it is given, so a release can name its own
+    # asset; otherwise the default sits beside the image it replaces.
+    if [ -n "$OUT_GIVEN" ]; then
+        ARCHIVE="$OUT"
+    else
+        ARCHIVE="$(dirname "$OUT")/bellatrix-pi3.tar.xz"
+    fi
+    mkdir -p "$(dirname "$ARCHIVE")"
     echo "[sd] packing $(basename "$ARCHIVE")"
     tar -C "$STAGE" -cf - . | xz -T0 -9 > "$ARCHIVE"
     rm -rf "$STAGE"

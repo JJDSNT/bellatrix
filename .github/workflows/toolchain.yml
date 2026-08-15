@@ -1,0 +1,109 @@
+name: Cross toolchain
+
+# The m68k-aros toolchain, built once and reused by every release.
+#
+# It is hours of gcc and binutils, and it changes almost never: its identity
+# comes from config/gcc_def, config/binutils_def and tools/crosstools inside the
+# AROS pin, and nothing else. So it is built by hand, on demand, and published
+# as a release asset that outlives any cache.
+#
+# The asset is the durable floor under the release workflow. GitHub's own cache
+# cannot be that floor on its own: entries unused for seven days are evicted,
+# the repository budget is 10 GB shared with everything else, and caches made
+# off the default branch are not visible elsewhere. A monthly release would find
+# nothing there and pay for gcc again.
+#
+# ubuntu-24.04 is not incidental. The toolchain links against glibc 2.38, which
+# 22.04 (2.35) does not have, and a binary that will not start is a confusing
+# way to find that out.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the toolchain to a release named after its digest"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu cmake flex bison gperf \
+            python3 mtools ccache
+
+      - name: Apply the patch series
+        run: ./scripts/setup.sh
+
+      - name: Work out the key
+        id: key
+        run: |
+          digest=$({ git -C external/aros rev-parse HEAD:config/gcc_def \
+                                                    HEAD:config/binutils_def \
+                                                    HEAD:tools/crosstools
+                     grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
+                       patches/aros/[0-9]*.patch 2>/dev/null | sort |
+                       xargs -r sha256sum || true; } | sha256sum | cut -c1-16)
+          glibc=$(ldd --version | head -1 | grep -o '[0-9]\+\.[0-9]\+$')
+          echo "digest=$digest"                              >> "$GITHUB_OUTPUT"
+          echo "key=$digest-linux-x86_64-glibc$glibc"        >> "$GITHUB_OUTPUT"
+
+      - name: Build the toolchain
+        # build-aros.sh refuses a surprise toolchain build when there is no
+        # terminal to ask. Here it is the point of the job, so it is accepted
+        # explicitly -- which is the distinction the flag exists to make.
+        run: ./scripts/build-aros.sh --yes
+
+      - name: Pack it
+        run: |
+          tools=$(dirname "$(find out/build/aros/bin -maxdepth 3 -type d -name crosstools | head -1)")
+          tar -C "$tools" -cf - crosstools | xz -T0 -3 > "${{ steps.key.outputs.key }}.tar.xz"
+          sha256sum "${{ steps.key.outputs.key }}.tar.xz" > "${{ steps.key.outputs.key }}.tar.xz.sha256"
+          ls -lh "${{ steps.key.outputs.key }}.tar.xz"
+
+      - name: Publish
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="toolchain-${{ steps.key.outputs.digest }}"
+          # gcc and binutils are GPL, so the release says where the sources are.
+          # They are not ours to keep: the AROS build fetches them, at versions
+          # its own pin names.
+          notes=$(cat <<EOF
+          m68k-aros cross toolchain, built by this repository's CI.
+
+          Contents: binutils $(cat external/aros/config/binutils_def), gcc $(cat external/aros/config/gcc_def),
+          plus gmp, isl, mpc and mpfr, configured for \`m68k-aros\`.
+
+          Sources are fetched by the AROS build at pin \`$(git -C external/aros rev-parse --short HEAD)\`
+          from the upstream GNU archives; nothing here is modified. Both are GPL,
+          and the corresponding sources are those upstream releases.
+
+          Runs on glibc 2.38 or newer. Restore into
+          \`out/build/aros/bin/<host>/tools/\`.
+          EOF
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" ./*.tar.xz ./*.sha256 --clobber
+          else
+            gh release create "$tag" ./*.tar.xz ./*.sha256 \
+              --title "$tag" --notes "$notes" --prerelease --latest=false
+          fi
+
+      - name: Seed the cache
+        uses: actions/cache/save@v4
+        with:
+          path: out/build/aros/bin/*/tools
+          key: toolchain-${{ steps.key.outputs.key }}
