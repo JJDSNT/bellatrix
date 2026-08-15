@@ -105,9 +105,9 @@ fi
 # bootcode.bin is the stage the Pi 3 loads out of the card by itself; start.elf
 # and fixup.dat are the GPU firmware it then runs; the DTB is picked by the
 # firmware from the board model, so every Pi 3 variant's tree is written and the
-# board chooses. Emu68 goes in gzipped exactly as the build installs it -- the
-# firmware decompresses a kernel image by its content, and config.txt below
-# names it by that same name.
+# board chooses. Emu68 goes in gzipped exactly as the build produced it, renamed
+# to Bellatrix.img.gz on the card -- the firmware decompresses a kernel image by
+# its content, so the name is config.txt's to choose.
 #
 # The AROS ELF is taken from the distribution tree rather than out/aros so the
 # kernel and the modules on the card always come from one build.
@@ -181,8 +181,17 @@ for d in "${DIRS[@]}"; do
 done
 
 if [ "$PI" = 1 ]; then
+    # Emu68's own build installs it as Emu68.img.gz, and on the card it is ours:
+    # the kernel a Bellatrix card boots. The firmware picks a kernel by the name
+    # config.txt gives and decompresses it by content, so the name is free, and
+    # a card whose files say what they are beats one that borrows a name from
+    # upstream. Nothing else renames -- Emu68 the project keeps its name
+    # everywhere it belongs to Emu68.
     for f in "${BOOT_FILES[@]}"; do
-        cp -al "$f" "$STAGE/$(basename "$f")"
+        case "$(basename "$f")" in
+            Emu68.img.gz) cp -al "$f" "$STAGE/Bellatrix.img.gz" ;;
+            *)            cp -al "$f" "$STAGE/$(basename "$f")" ;;
+        esac
     done
 
     # config.txt and cmdline.txt are written here rather than kept as files in
@@ -191,7 +200,7 @@ if [ "$PI" = 1 ]; then
     cat > "$STAGE/config.txt" <<'EOF'
 # Bellatrix on a Raspberry Pi 3. Written by scripts/make-sdcard.sh --pi.
 
-kernel=Emu68.img.gz
+kernel=Bellatrix.img.gz
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 

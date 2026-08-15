@@ -11,7 +11,7 @@
 # Three assets come out of it, in out/release:
 #
 #   bellatrix-<tag>-pi3.tar.xz   the whole card, for a first installation
-#   Emu68.img.gz                 the aarch64 kernel, to update in place
+#   Bellatrix.img.gz             the aarch64 kernel, to update in place
 #   aros-emu68-m68k.elf          the m68k system, to update in place
 #
 # The two loose files keep the exact names config.txt declares, because updating
@@ -82,10 +82,12 @@ verify_archive() {
         die "$archive contains absolute or parent-relative paths"
     fi
 
+    # The kernel and the m68k system are deliberately absent from this list:
+    # they are checked below against the names config.txt gives them, which is
+    # the only authority on what the card actually boots.
     local required=(
         ./config.txt ./cmdline.txt ./version.txt
         ./bootcode.bin ./start.elf ./fixup.dat
-        ./Emu68.img.gz ./aros-emu68-m68k.elf
         ./AROS.boot ./Devs/DOSDrivers/AUX ./S/Startup-Sequence
     )
     local entry
@@ -209,8 +211,18 @@ BELLATRIX_VERSION="$TAG" "$ROOT/scripts/make-sdcard.sh" --pack --out "$ARCHIVE"
 # The two increments are copied from the same trees the archive was built from,
 # not extracted back out of it: if they ever disagree, verify_assets says so
 # rather than the difference travelling to a card.
-cp "$FIRMWARE/Emu68.img.gz" "$RELEASE/Emu68.img.gz"
-cp "$DIST/aros-emu68-m68k.elf" "$RELEASE/aros-emu68-m68k.elf"
+#
+# Their published names come from the config.txt that make-sdcard.sh just wrote,
+# so renaming a file on the card is a one-line change there and nothing here has
+# to learn about it.
+CFG="$(tar -xJOf "$ARCHIVE" ./config.txt)"
+KERNEL_NAME="$(sed -n 's/^kernel=\(.*\)$/\1/p' <<<"$CFG" | tr -d '\r')"
+ELF_NAME="$(sed -n 's/^initramfs \([^ ]*\).*$/\1/p' <<<"$CFG" | tr -d '\r')"
+[ -n "$KERNEL_NAME" ] && [ -n "$ELF_NAME" ] \
+    || die "config.txt in the archive names no kernel or no initramfs"
+
+cp "$FIRMWARE/Emu68.img.gz"    "$RELEASE/$KERNEL_NAME"
+cp "$DIST/aros-emu68-m68k.elf" "$RELEASE/$ELF_NAME"
 
 ( cd "$RELEASE" && for f in *; do sha256sum "$f" > "$f.sha256"; done )
 
@@ -301,13 +313,13 @@ case "$TAG" in *-rc*|*-beta*|*-test*) FLAGS+=(--prerelease --latest=false) ;; es
 
 if gh release view "$TAG" >/dev/null 2>&1; then
     say "release $TAG exists, replacing its assets"
-    gh release upload "$TAG" "$RELEASE"/bellatrix-*.tar.xz "$RELEASE"/Emu68.img.gz \
-        "$RELEASE"/aros-emu68-m68k.elf "$RELEASE"/*.sha256 --clobber
+    gh release upload "$TAG" "$RELEASE"/bellatrix-*.tar.xz "$RELEASE/$KERNEL_NAME" \
+        "$RELEASE/$ELF_NAME" "$RELEASE"/*.sha256 --clobber
 else
     say "creating release $TAG"
     gh release create "$TAG" \
-        "$RELEASE"/bellatrix-*.tar.xz "$RELEASE"/Emu68.img.gz \
-        "$RELEASE"/aros-emu68-m68k.elf "$RELEASE"/*.sha256 \
+        "$RELEASE"/bellatrix-*.tar.xz "$RELEASE/$KERNEL_NAME" \
+        "$RELEASE/$ELF_NAME" "$RELEASE"/*.sha256 \
         --title "$TAG" --notes-file "$NOTES_FILE" "${FLAGS[@]}"
 fi
 

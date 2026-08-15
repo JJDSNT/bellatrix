@@ -140,12 +140,17 @@ digest decides whether it has to be rebuilt at all:
 # the kernel ELF: the same, plus this project's own sources
 { git rev-parse HEAD:aros
   git rev-parse HEAD:patches/aros
-  git -C external/aros rev-parse HEAD; } | sha256sum   # 2ea9677bf5a2
+  git -C external/aros rev-parse HEAD; } | sha256sum
 
 # Emu68
 { git rev-parse HEAD:patches/emu68
-  git -C external/emu68 rev-parse HEAD; } | sha256sum  # 21cbfe2f9945
+  git -C external/emu68 rev-parse HEAD; } | sha256sum
 ```
+
+No value is quoted here on purpose: the ELF digest moves with every commit that
+touches `aros/` or the patch series, so a number written into a document is
+stale by the next day. The current ones are on the card, in `version.txt`, and
+in the notes of whichever release produced it.
 
 The digests are published as information, not as a gate: a newer ELF meeting an
 older volume is a supported state, because that is what `docs/Compat.md` asks

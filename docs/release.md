@@ -8,7 +8,7 @@ designs those constraints leave standing.
 ## The artifact
 
 `scripts/make-sdcard.sh --pack` produces `out/aros/bellatrix-pi3.tar.xz`: the Pi
-firmware, `Emu68.img.gz`, the AROS m68k ELF, the generated `config.txt` and
+firmware, the Emu68 kernel, the AROS m68k ELF, the generated `config.txt` and
 `cmdline.txt`, and the AROS distribution tree. Paths are written as `./…` with
 no top-level directory, so
 
@@ -189,8 +189,13 @@ measured rather than assumed:
   explicitly, and the cache key has to carry the host tag:
 
 ```
-a88db85e62ed-linux-x86_64-glibc2.38
+<digest>-linux-x86_64-glibc2.38
 ```
+
+No digest is quoted anywhere in this document. They move — the ELF's with every
+commit that touches the port or the patch series — and a number copied into
+prose is wrong by the following day. A card carries its own in `version.txt`,
+and the commands above compute them.
 
 Packing costs 39 s and produces 184 MB; restoring costs 14 s. Against hours,
 both are noise.
@@ -231,19 +236,34 @@ Three assets, and only the first is a package:
 | asset | what it is | size | when it is wanted |
 |---|---|---|---|
 | `bellatrix-<tag>-pi3.tar.xz` | the whole card | 19 MB | first installation |
-| `Emu68.img.gz` | the aarch64 kernel | 748 KB | update in place |
+| `Bellatrix.img.gz` | the aarch64 kernel | 748 KB | update in place |
 | `aros-emu68-m68k.elf` | the m68k system | 1.19 MB | update in place |
 
 The two increments are not an arbitrary cut of the card. They are **exactly the
 two files `config.txt` names** — the boundary the boot already declares:
 
 ```ini
-kernel=Emu68.img.gz
+kernel=Bellatrix.img.gz
 initramfs aros-emu68-m68k.elf
 ```
 
-So they ship as loose files rather than archives, under the exact names the card
-expects, because updating has to be a copy and never a rename. GitHub scopes
+The kernel is `Bellatrix.img.gz` on the card, not the `Emu68.img.gz` the Emu68
+build installs: the firmware picks a kernel by the name `config.txt` gives and
+decompresses it by content, so the name is free, and a card whose files say what
+they are beats one borrowing a name from upstream. Nothing else is renamed —
+Emu68 keeps its name everywhere the thing is Emu68's.
+
+They ship as loose files rather than archives, under the exact names the card
+expects, because updating has to be a copy and never a rename. Only
+`make-sdcard.sh` knows those names; `release.sh` reads them back out of the
+`config.txt` it just produced, so a rename is one line in one place.
+
+**Renaming the kernel breaks in-place updates across that release.** A card
+built before the change has a `config.txt` that still names the old file, so
+dropping the new one beside it changes nothing and the card goes on booting what
+it had. This is the hazard the cross-check below catches within a release and
+cannot catch between two: when the name changes, the notes have to say
+"reinstall". GitHub scopes
 assets per release, so the same name across releases does not collide; the
 version is the page it came from. Compressing the ELF would take it from 1.19 MB
 to 415 KB and cost the person a tool to unpack it — not a trade worth making for
@@ -257,7 +277,7 @@ makes an update cheap. Every cost below assumes the toolchain above exists:
 
 | input | identity derives from | built by | cost |
 |---|---|---|---|
-| firmware, DTBs, `Emu68.img.gz` | `patches/emu68`, Emu68 pin | `build.sh` | minutes |
+| firmware, DTBs, `Bellatrix.img.gz` | `patches/emu68`, Emu68 pin | `build.sh` | minutes |
 | `aros-emu68-m68k.elf` | AROS pin, `patches/aros`, `aros/` | `build-aros.sh`, lean | minutes |
 | the AROS tree the card boots from | AROS pin, `patches/aros` | `build-aros.sh full` | hours |
 

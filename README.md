@@ -66,7 +66,7 @@ starts is handed to it as the `initramfs` — the slot where an Emu68 user names
 a Kickstart ROM:
 
 ```ini
-kernel=Emu68.img.gz
+kernel=Bellatrix.img.gz
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 ```
