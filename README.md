@@ -1,14 +1,32 @@
 # Bellatrix
 
-AROS/m68k running on a Raspberry Pi 3 under Emu68, with no Amiga hardware
-anywhere — an m68k CPU with real RAM, and Pi peripherals reached directly
-rather than through Paula, Agnus and Denise.
+> An AI-generated project. The goal is AROS running at a usable speed on a
+> Raspberry Pi 3 — which is where it is built and tested, not a limit of the
+> idea. Nothing in the approach is specific to this board, and a stronger one,
+> a Radxa Orion O6 say, would have more room than the Pi ever will.
 
-Emu68 owns the bare-metal machine and translates M68K to AArch64. AROS starts
-after Emu68 has initialised the hardware and loaded its ELF. Both are upstream
-projects, vendored as submodules and never edited in place.
+AROS/m68k on a Raspberry Pi 3, with no Amiga anywhere in it.
+
+Nothing here emulates a machine. There is no chipset, no Paula, Agnus or
+Denise, no simulated device and no timing model. M68K is treated as one more
+instruction set the board can run: Emu68 translates it to AArch64 as it
+executes, and the code works against real RAM and the Pi's own peripherals —
+closer to what Rosetta does for x86 on Apple silicon than to what UAE does for
+an Amiga.
+
+Emu68 owns the bare metal and hands control to AROS once the hardware is up.
+Both are upstream projects, vendored as submodules and never edited in place.
 
 ## Quick start
+
+On Debian or Ubuntu, install what the build needs:
+
+```bash
+sudo apt-get install -y gcc-aarch64-linux-gnu cmake flex bison gperf \
+    python3 mtools qemu-system-arm
+```
+
+Then:
 
 ```bash
 git clone --recurse-submodules git@github.com:JJDSNT/bellatrix.git
@@ -21,14 +39,64 @@ cd bellatrix
 ./run.sh                    # boot the lot under QEMU
 ```
 
-The first `build-aros.sh` also builds an m68k cross toolchain from source and
-takes considerably longer than everything else combined.
+Set aside a few hours for the first `./scripts/build-aros.sh`: it builds an
+m68k cross toolchain from source before it can build AROS itself, and that
+takes longer than everything else combined. Later runs reuse it.
 
 `run.sh` boots whatever is built: AROS if its ELF is there, otherwise Emu68 on
 its own. `--no-aros` forces the latter, `--headless` drops the window.
 
-Prerequisites: `gcc-aarch64-linux-gnu`, `cmake`, `flex`, `bison`, `gperf`,
-`python3`, `mtools`, `qemu-system-arm`.
+## Running on a Raspberry Pi 3
+
+You need a Pi 3 (Model B or B+), a microSD card of 2 GB or more, an HDMI
+monitor and a wired USB mouse. Everything else is built here.
+
+### 1. Build
+
+```bash
+./scripts/build.sh              # Emu68
+./scripts/build-aros.sh full    # AROS, complete — the plain build is not enough
+```
+
+### 2. Build the card image
+
+```bash
+./scripts/make-sdcard.sh --pi     # → out/aros/bellatrix-pi3.img
+```
+
+That image is complete: firmware, Emu68, AROS and the settings the Pi reads at
+power-on. Write it to the card with `/dev/sdX` replaced by the card's device —
+check it twice, this erases whatever it points at:
+
+```bash
+sudo dd if=out/aros/bellatrix-pi3.img of=/dev/sdX bs=4M conv=fsync status=progress
+```
+
+### 3. Boot it
+
+Insert the card, connect the monitor and the mouse, and power up. The loading
+screen appears first, then the Workbench desktop.
+
+### If it does not come up
+
+**The boot stops on the loading screen.** Some USB devices stop it there.
+Power off, unplug everything from USB, and boot again; add the mouse back once
+you know the machine comes up. A plain wired mouse is the safe choice.
+
+**Nothing at all on the monitor.** The green LED next to the card slot says how
+far the Pi itself got. If it never blinks, the card was not read at all — try
+another card or another reader. Four or seven blinks mean the card was written
+incompletely: build the image again and write it again.
+
+**A black screen with the LED behaving normally.** Turn the monitor on before
+powering the Pi. If it stays black, add the line `hdmi_force_hotplug=1` to
+`config.txt` on the card — that makes the Pi drive the output even when it
+cannot detect the monitor at power-on.
+
+### What works today
+
+The Pi boots to the Workbench desktop. USB input is still being brought up, so
+some devices are not usable yet.
 
 ## Layout
 
@@ -88,15 +156,39 @@ never replies its startup packet, leaving the caller in `WaitPkt()` forever.
 
 ## Status
 
-Verified here: Emu68 boots under QEMU; the AROS m68k ELF builds and is loaded;
-the SD card mounts as `SDCARD0P0:`; `S:Startup-Sequence` runs and the Shell
-executes. The desktop has been reached in earlier runs of this port but is not
-part of what this repository has verified yet.
+Working, on a Raspberry Pi 3 Model B and under QEMU alike:
 
-Five open issues are filed under `AI_context/issues/` — four defects in
-upstream Emu68 found while building this, and one in our own patch series.
+- the machine boots to the Workbench desktop;
+- the SD card is the system volume — AROS runs from the same card it booted
+  from;
+- the display comes up on HDMI, and a wired USB mouse drives the desktop.
+
+Still being brought up:
+
+- **USB input.** Some devices stop the boot before the desktop appears; the
+  machine has to be started without them, and a plain wired mouse is the safe
+  choice. Which devices, and why, is what is being worked on now.
+- **Storage.** The card is read correctly, but the driver stumbles once during
+  start-up on real hardware and recovers by resetting the controller.
+- **The display path.** `nocomposition` is currently required; with the
+  compositor enabled the boot finishes but the screen never changes.
+
+Eight issues are filed under [`AI_context/issues/`](AI_context/issues/).
 
 ## Language
 
 All content in this repository — documentation, issues, specs, code comments
 and commit messages — is written in English.
+
+## Credits
+
+Bellatrix is the integration of two projects it does not own, and it would not
+exist without either:
+
+- [Emu68](https://github.com/michalsc/Emu68) by Michal Schulz — the M68K→AArch64
+  translator that makes m68k code run on the board at all;
+- [AROS](https://github.com/aros-development-team/AROS) — the operating system,
+  and the m68k port this one descends from.
+
+Both are vendored as submodules and used unmodified except for the patch series
+under `patches/`, all of which is written to be upstreamable.
