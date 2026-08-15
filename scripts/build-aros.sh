@@ -90,13 +90,18 @@ host_tools_dir() {
 # reaches them. It deliberately does not move when the port sources or the rest
 # of the patch series change -- the most expensive thing to build is the thing
 # that changes least, and a digest that moved every day would be worthless.
+# Both halves end in `|| true` deliberately: no patch of ours reaching the
+# toolchain is the normal case, and grep answers "no match" with status 1. Under
+# `set -e` and `pipefail` that status propagates out of the group, out of the
+# pipeline, and kills the caller -- which is how the first version of this
+# managed to abort the build immediately after writing the stamp.
 toolchain_digest() {
     {
         git -C "$SRC" rev-parse HEAD:config/gcc_def HEAD:config/binutils_def \
-                                HEAD:tools/crosstools 2>/dev/null
+                                HEAD:tools/crosstools 2>/dev/null || true
         grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
             "$ROOT"/patches/aros/[0-9]*.patch 2>/dev/null | sort |
-            xargs -r sha256sum
+            xargs -r sha256sum || true
     } | sha256sum | cut -c1-16
 }
 
