@@ -290,9 +290,9 @@ cat > "$QEMU_STAGE/run.sh" <<'LAUNCHER'
 here=$(cd "$(dirname "$0")" && pwd)
 exec qemu-system-aarch64 \
     -M raspi3b -accel tcg,tb-size=64 \
-    -kernel "$here/Emu68.img" \
+    -kernel "$here/@KERNEL@" \
     -dtb "$here/bcm2710-rpi-3-b.dtb" \
-    -initrd "$here/aros-emu68-m68k.elf" \
+    -initrd "$here/@ELF@" \
     -drive "file=$here/sd.img,if=sd,format=raw" \
     -append nocomposition \
     -serial mon:stdio -display gtk -device usb-tablet -no-reboot "$@"
