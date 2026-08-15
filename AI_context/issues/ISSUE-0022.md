@@ -50,14 +50,78 @@ unpack onto a FAT32 partition without knowing anything about how it was built.
 Nothing implemented. The survey is written up in `docs/release.md`, including
 the decision to start from the workstation script rather than from CI.
 
+# The ground, as surveyed 2026-08-15
+
+Three findings that constrain the script before a line of it is written.
+
+**The verification gate has work to do on day one.** `./scripts/setup.sh
+--verify` currently exits 1:
+
+```
+=== aros ===
+    ERROR: 0027-usb-remove-mouse-hot-path-diagnostics.patch does not apply to the pinned commit
+```
+
+That is not a release problem, it is the release telling the truth: in this
+state the tree is not reproducible from a commit. Either the AROS series drift
+is resolved before the first release, or the gate cannot be strict.
+
+**There is no version to derive.** `git describe --tags` returns nothing on
+`main` — the existing tags are not reachable after the reset. The version has to
+be an argument, not an inference.
+
+**`--pack` hardcodes its output name.** `make-sdcard.sh` computes
+`ARCHIVE="$(dirname "$OUT")/bellatrix-pi3.tar.xz"`; `--out` only applies to the
+image path. Naming an asset per release needs `--out` honoured on the pack path
+too.
+
+# The script
+
+```bash
+./scripts/release.sh v0.1.0 [--dry-run] [--skip-build] [--draft] [--notes FILE]
+```
+
+**1. Preflight.** Clean working tree; `setup.sh --verify` passing; `gh auth
+status` healthy; the tag either absent or being re-uploaded to. Nothing is built
+before this — failing after a two-hour build because of an uncommitted file is
+the worst available outcome.
+
+**2. Build**, unless `--skip-build`: `build.sh`, then `build-aros.sh full`.
+
+**3. Stamp the version — in `make-sdcard.sh`, not here.** That script already
+generates `config.txt` and `cmdline.txt` into the staging directory, for the
+reason its own comment gives: they name what the script has just copied, and the
+two drifting apart is a card that stops with no message worth reading. A
+`version.txt` carrying tag, commit, date and submodule pins is the same
+argument. Writing it there makes every card self-identifying, the QEMU one
+included, and keeps `release.sh` out of another script's staging directory — it
+only passes the tag in through the environment.
+
+**4. Name and checksum.** `out/release/bellatrix-<tag>-pi3-system.tar.xz` and
+its `.sha256`.
+
+**5. Verify the archive before publishing.** The part that makes a release
+trustworthy, and the principle the legacy workflow already applied. Concretely:
+paths start with `./`, none absolute and none containing `..`; `bootcode.bin`,
+`start.elf`, `Emu68.img.gz`, the AROS ELF, at least one `bcm2710-*.dtb`,
+`AROS.boot`, `C/`, `S/Startup-Sequence`, `Libs/` and `Devs/` are present; and
+`Devs/DOSDrivers/AUX` survives — the mtools filter strips it from the image and
+it has already gone missing from the archive once. Finally the names on the
+`kernel=` and `initramfs` lines of `config.txt` must exist inside the archive,
+which is exactly the failure that produces seven blinks and no console. This
+function is reusable as-is when the build moves to CI.
+
+**6. Publish.** `gh release view` decides between `create` and
+`upload --clobber`; pre-release by tag suffix; notes from
+`.github/release-notes/<tag>.md` when present, `--generate-notes` otherwise.
+`--dry-run` stops here and prints what it would have done.
+
 # What is left
 
-- `scripts/release.sh`: refuse unless `setup.sh --verify` reports `applied`, run
-  `--pack`, stamp the version, name and checksum the asset, publish with
-  `gh release create/upload --clobber`.
-- Stamp `version.txt` inside the archive — tag, commit, submodule pins.
-- Adopt `bellatrix-<tag>-pi3-system.tar.xz`, leaving `-boot` free for the split
-  design.
+- Write `scripts/release.sh` along the six steps above.
+- Teach `make-sdcard.sh` to honour `--out` on the pack path and to write
+  `version.txt` into the staging directory.
+- Resolve the AROS series drift, or decide the gate is a warning.
 - Measure one cold `build-aros.sh full` — that number decides between hosted CI
   and a self-hosted runner.
 
@@ -69,6 +133,20 @@ the decision to start from the workstation script rather than from CI.
   convention buys nothing else.
 - Keep the archive's `./…` paths with no top-level directory. Identity goes in
   the filename and in a stamped file, never in a wrapping directory.
+- Identity is a property of the card, not of the release: `version.txt` is
+  written by `make-sdcard.sh` for every card it stages.
+- No `--allow-dirty` escape hatch. A valve like that becomes the normal path the
+  first time someone is in a hurry.
+
+# Open questions
+
+- **Does the script create the tag?** Preference: create the annotated tag at
+  HEAD when it is missing, but push it only after confirmation — pushing a tag
+  is an outward-facing action and should not happen as the side effect of a
+  build script.
+- **Is the `-system` suffix earned?** It only pays for itself if the boot/system
+  split (design D) happens. Otherwise `bellatrix-<tag>-pi3.tar.xz` is more
+  honest.
 
 # Acceptance criteria
 
@@ -86,3 +164,6 @@ design A needs no new credentials.
 
 - 2026-08-15 — survey written to `docs/release.md`; issue opened to track the
   implementation. No code written.
+- 2026-08-15 — script designed against the actual state of the tree: the six
+  steps, the archive checks, and the three findings above (`--verify` failing,
+  no reachable tag, `--pack` ignoring `--out`). Still no code written.
