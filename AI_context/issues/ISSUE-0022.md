@@ -54,17 +54,14 @@ the decision to start from the workstation script rather than from CI.
 
 Three findings that constrain the script before a line of it is written.
 
-**The verification gate has work to do on day one.** `./scripts/setup.sh
---verify` currently exits 1:
-
-```
-=== aros ===
-    ERROR: 0027-usb-remove-mouse-hot-path-diagnostics.patch does not apply to the pinned commit
-```
-
-That is not a release problem, it is the release telling the truth: in this
-state the tree is not reproducible from a commit. Either the AROS series drift
-is resolved before the first release, or the gate cannot be strict.
+**The verification gate had work to do on day one, and it did it.** When this
+was written `./scripts/setup.sh --verify` exited 1 on
+`0027-usb-remove-mouse-hot-path-diagnostics.patch`, which meant the tree could
+not be reproduced from a commit and a strict gate would have blocked the first
+release. Resolved on 2026-08-15: 0027 was written to remove the traces 0026 had
+added but kept `DoIO(...)` as context, where 0026 had turned that same line into
+`ioerr = DoIO(...)`. The series now applies and reproduces the working tree
+exactly. The gate can be strict.
 
 **There is no version to derive.** `git describe --tags` returns nothing on
 `main` — the existing tags are not reachable after the reset. The version has to
@@ -167,7 +164,6 @@ filename gives deduplication and traceability at the same time.
   time; ideally `EMU68_BOOT_ABI` actually read by the side it is declared to.
 - Decide where a cached copy of the toolchain lives — CI cache, or a tarball in
   object storage keyed by its digest. (`clean` no longer deletes it: c59cabc.)
-- Resolve the AROS series drift, or decide the gate is a warning.
 - Measure one cold `build-aros.sh full` — that number decides between hosted CI
   and a self-hosted runner. Measure it with and without the toolchain present;
   they are different questions.
@@ -222,6 +218,9 @@ design A needs no new credentials.
 - 2026-08-15 — script designed against the actual state of the tree: the six
   steps, the archive checks, and the three findings above (`--verify` failing,
   no reachable tag, `--pack` ignoring `--out`). Still no code written.
+- 2026-08-15 — AROS series drift resolved (0027's context did not account for
+  0026 having changed the same line); `setup.sh --verify` passes again, so the
+  release gate can be strict.
 - 2026-08-15 — `build-aros.sh` taught not to throw the toolchain away, to refuse
   a surprise toolchain build when there is no terminal to ask, and to answer
   `--status` without building. ccache passed to configure on fresh trees only.

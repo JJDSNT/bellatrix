@@ -9,8 +9,8 @@ instrumentation was meant to support.
 ---
  arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c | 18 ------------------
  rom/usb/classes/bootmouse/bootmouse.class.c                   | 15 +--------------
- rom/usb/classes/hid/hid.class.c                               |  7 -------
- 3 files changed, 1 insertion(+), 40 deletions(-)
+ rom/usb/classes/hid/hid.class.c                               |  9 +--------
+ 3 files changed, 2 insertions(+), 41 deletions(-)
 
 diff --git a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c b/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
 --- a/arch/arm-native/soc/broadcom/2708/usb/usb2otg/usb2otg_core.c
@@ -75,7 +75,7 @@ diff --git a/rom/usb/classes/bootmouse/bootmouse.class.c b/rom/usb/classes/bootm
 diff --git a/rom/usb/classes/hid/hid.class.c b/rom/usb/classes/hid/hid.class.c
 --- a/rom/usb/classes/hid/hid.class.c
 +++ b/rom/usb/classes/hid/hid.class.c
-@@ -6425,13 +6425,6 @@ void nFlushEvents(struct NepClassHid *nch)
+@@ -6425,14 +6425,7 @@ void nFlushEvents(struct NepClassHid *nch)
          nch->nch_InpIOReq->io_Data = &nch->nch_FakeEvent;
          nch->nch_InpIOReq->io_Length = sizeof(struct InputEvent);
          nch->nch_InpIOReq->io_Command = nch->nch_OS4Hack ? IND_ADDEVENT : IND_WRITEEVENT;
@@ -84,9 +84,10 @@ diff --git a/rom/usb/classes/hid/hid.class.c b/rom/usb/classes/hid/hid.class.c
 -            (ULONG)nch->nch_FakeEvent.ie_Code,
 -            (ULONG)nch->nch_FakeEvent.ie_Qualifier,
 -            (ULONG)nch->nch_InpIOReq->io_Command);
-         DoIO((struct IORequest *) nch->nch_InpIOReq);
+-        ioerr = DoIO((struct IORequest *) nch->nch_InpIOReq);
 -        if(ioerr != 0)
 -            bug("[HID:MOUSE] input.device failed: %ld\n", ioerr);
++        DoIO((struct IORequest *) nch->nch_InpIOReq);
          nch->nch_NewMouseRel = FALSE;
          nch->nch_MouseDeltaX = 0;
          nch->nch_MouseDeltaY = 0;
