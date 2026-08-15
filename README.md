@@ -60,6 +60,12 @@ its own. `--no-aros` forces the latter, `--headless` drops the window.
 You need a Pi 3 (Model B or B+), a microSD card of 2 GB or more, an HDMI
 monitor and a wired USB mouse. Everything else is built here.
 
+Bellatrix boots the way any Emu68 setup does. Emu68 is the Pi's kernel — the
+firmware loads it from the `kernel=` line of `config.txt` — and the m68k side
+is handed to it as the `initramfs`, in the same place an Emu68 user would name
+a Kickstart ROM. Here that file is AROS. So there is no system image to write:
+the card holds ordinary files, and `config.txt` says which of them boot.
+
 ### 1. Build
 
 ```bash
