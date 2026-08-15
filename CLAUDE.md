@@ -20,7 +20,8 @@ vendored as pinned submodules and never edited in place.
 ./scripts/setup.sh --reset   # discard submodule working-tree changes and re-apply
 
 ./scripts/build.sh [clean]       # Emu68     → out/images/Emu68.img, out/firmware/
-./scripts/build-aros.sh [clean]  # AROS m68k → out/aros/aros-emu68-m68k.elf
+./scripts/build-aros.sh          # AROS m68k → out/aros/aros-emu68-m68k.elf
+./scripts/build-aros.sh --status # what would a build cost? builds nothing
 ./scripts/make-sdcard.sh         # boot media → out/aros/sd.img
 
 ./run.sh                     # boot under QEMU: AROS if its ELF exists, else Emu68 alone
@@ -35,9 +36,23 @@ Everything generated lands under `out/`, which is git-ignored.
   crosstools stage against generation of the target headers; under `make -j` gcc
   configures against a half-built sysroot and dies ~15 minutes in with
   `error verifying int64_t uses long long`. Do not "fix" this with `-j`.
-- The first `build-aros.sh` also builds an m68k-aros cross toolchain from source
-  and takes longer than everything else combined. `clean` keeps the downloaded
-  tarballs.
+- **The m68k cross toolchain is the expensive thing, and it is not the build.**
+  The first `build-aros.sh` compiles binutils and gcc from source — hours, and
+  ~650 MB under `out/build/aros/bin/<host>/tools/crosstools`. Everything else
+  here is minutes by comparison, so:
+  - **`build-aros.sh clean` keeps the toolchain**; `distclean` is the verb that
+    drops it. Reach for `distclean` only when the toolchain itself is suspect.
+  - A build that would have to compile the toolchain **refuses** when there is
+    no terminal to ask, which is the case for any agent driving the shell. Pass
+    `--yes` (or `BELLATRIX_BUILD_YES=1`) to accept the cost deliberately.
+  - **`build-aros.sh --status` answers "what would this rebuild?"** — toolchain
+    state, whether the tree is configured, whether the submodules verify,
+    whether the distribution tree exists. Ask it before reaching for `clean`.
+  - The toolchain is stamped with a digest of what it was built from
+    (`config/gcc_def`, `config/binutils_def`, `tools/crosstools`), so a `clean`
+    can tell whether keeping it is sound. That digest deliberately ignores our
+    own sources and the rest of the patch series: they change daily and the
+    toolchain does not depend on them.
 - `build-aros.sh` builds `kernel-link-<target>` by default: the ELF and the
   modules linked into it. **`build-aros.sh full` builds `AROS-<target>`**, the
   whole distribution — slower, drags in contrib and fetches external sources,

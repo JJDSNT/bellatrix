@@ -4,14 +4,23 @@
 # submodules are not prepared, so a fresh clone needs nothing else.
 #
 #   ./scripts/build-aros.sh            incremental, ELF only
-#   ./scripts/build-aros.sh clean      wipe the build directory first
 #   ./scripts/build-aros.sh full       the whole distribution, not just the ELF
+#   ./scripts/build-aros.sh clean      wipe the build, keep the cross toolchain
+#   ./scripts/build-aros.sh distclean  wipe everything, toolchain included
+#   ./scripts/build-aros.sh --status   report what a build would cost, build nothing
 #
 # Output: out/aros/aros-emu68-m68k.elf, and with `full` a complete
 #         distribution tree under out/build/aros/bin/<target>/AROS/
 #
 # The first build also builds an m68k-aros cross toolchain (binutils and gcc)
-# from source, which takes considerably longer than the AROS build itself.
+# from source, which takes considerably longer than the AROS build itself --
+# hours against minutes, and ~650 MB. Everything here that looks like
+# bookkeeping exists to avoid paying that twice:
+#
+#   - `clean` keeps the toolchain; `distclean` is the one that drops it;
+#   - a build that would have to make the toolchain says so and asks first,
+#     and refuses outright when there is no terminal to ask;
+#   - `--status` answers "what would this rebuild?" without building.
 
 set -euo pipefail
 
@@ -32,6 +41,10 @@ ELF="bin/$TARGET/AROS/aros-$TARGET.elf"
 # contrib, boost, the lot. kernel-link-<target> is the ELF and its objects.
 METATARGET="kernel-link-$TARGET"
 
+WIPE=""
+MODE="build"
+ASSUME_YES="${BELLATRIX_BUILD_YES:-0}"
+
 # `full` builds the distribution, which is what the SD card is made from.
 #
 # This matters more than it looks. The lean target produces the kernel ELF and
@@ -43,34 +56,177 @@ METATARGET="kernel-link-$TARGET"
 #
 # It drags in contrib and fetches external sources, so it is not the default.
 for arg in "$@"; do
-    if [ "$arg" = "full" ]; then
-        METATARGET="AROS-$TARGET"
-    fi
+    case "$arg" in
+        full)      METATARGET="AROS-$TARGET" ;;
+        clean)     WIPE="clean" ;;
+        distclean) WIPE="distclean" ;;
+        --status)  MODE="status" ;;
+        --yes)     ASSUME_YES=1 ;;
+        -h|--help) sed -n '3,23p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        *) echo "usage: $0 [clean|distclean] [full] [--status] [--yes]" >&2; exit 2 ;;
+    esac
 done
 
-if [ "${1:-}" = "clean" ]; then
-    # Keep the downloaded toolchain tarballs — they are ~110 MB and re-fetching
-    # them is the slowest part of starting over.
-    if [ -d "$BUILD/bin/Sources" ]; then
-        echo "[aros] wiping build, keeping downloaded sources"
-        tmp="$(mktemp -d)"
-        mv "$BUILD/bin/Sources" "$tmp/"
-        rm -rf "$BUILD"
-        mkdir -p "$BUILD/bin"
-        mv "$tmp/Sources" "$BUILD/bin/"
-        rmdir "$tmp"
+# --- the cross toolchain -----------------------------------------------------
+#
+# AROS builds binutils and gcc for m68k into bin/<host>/tools/crosstools and
+# gates each stage on a flag file *inside that directory* --
+# .installflag-gcc-<version>-<cpu>, see tools/crosstools/gnu/mmakefile.src. So
+# the directory surviving a wipe is exactly what makes the rebuild be skipped.
+#
+# The whole of bin/<host>/tools is kept rather than crosstools alone: the ld
+# wrapper next to it is patched by the same rule that touches the gcc flag, and
+# keeping one without the other invites a half-state for the sake of 3 MB.
+host_tools_dir() {
+    local d
+    for d in "$BUILD"/bin/*/tools; do
+        [ -d "$d/crosstools" ] && { echo "$d"; return; }
+    done
+    return 1
+}
+
+# What the toolchain is made of, and nothing else: the two version files and
+# the crosstools sources, all inside the AROS pin, plus any patch of ours that
+# reaches them. It deliberately does not move when the port sources or the rest
+# of the patch series change -- the most expensive thing to build is the thing
+# that changes least, and a digest that moved every day would be worthless.
+toolchain_digest() {
+    {
+        git -C "$SRC" rev-parse HEAD:config/gcc_def HEAD:config/binutils_def \
+                                HEAD:tools/crosstools 2>/dev/null
+        grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
+            "$ROOT"/patches/aros/[0-9]*.patch 2>/dev/null | sort |
+            xargs -r sha256sum
+    } | sha256sum | cut -c1-16
+}
+
+toolchain_stamp() {
+    local tools
+    tools="$(host_tools_dir)" || return 1
+    echo "$tools/crosstools/.bellatrix-digest"
+}
+
+# absent | unstamped | stale | ready
+#
+# Only `absent` costs hours. `stale` means the toolchain was demonstrably built
+# from different sources; `unstamped` means it predates this bookkeeping and
+# nothing can be proved either way -- which is not the same as being wrong, so
+# it is kept and the next successful build records the stamp.
+toolchain_state() {
+    local stamp
+    stamp="$(toolchain_stamp)" || { echo absent; return; }
+    # The compilers sit directly in crosstools/, not in a bin/ below it, and
+    # are named after the target's cpu -- emu68-m68k builds m68k-aros-gcc.
+    [ -x "$(dirname "$stamp")/${TARGET##*-}-aros-gcc" ] || { echo absent; return; }
+    [ -f "$stamp" ] || { echo unstamped; return; }
+    if [ "$(cat "$stamp")" = "$(toolchain_digest)" ]; then
+        echo ready
     else
-        echo "[aros] wiping $BUILD"
-        rm -rf "$BUILD"
+        echo stale
     fi
-elif [ -n "${1:-}" ] && [ "${1:-}" != "full" ]; then
-    echo "usage: $0 [clean] [full]" >&2
-    exit 2
+}
+
+# --- status ------------------------------------------------------------------
+
+if [ "$MODE" = status ]; then
+    state="$(toolchain_state)"
+    echo "target:      $TARGET"
+    echo "build dir:   $BUILD"
+    echo "configured:  $([ -f "$BUILD/mmake.config" ] && echo yes || echo "no — the next build reconfigures")"
+    echo "ccache:      $(if grep -q 'ccache' "$BUILD/config/make.cfg" 2>/dev/null; then echo "in use"
+                         elif command -v ccache >/dev/null; then echo "available, not configured into this tree"
+                         else echo "not installed"; fi)"
+    echo "toolchain:   $state ($(toolchain_digest))"
+    [ "$state" = ready ] && echo "             $(host_tools_dir)/crosstools"
+    echo "kernel ELF:  $([ -f "$BUILD/$ELF" ] && stat -c '%y' "$BUILD/$ELF" | cut -d. -f1 || echo "not built")"
+    echo "dist tree:   $([ -d "$BUILD/bin/$TARGET/AROS/C" ] && echo "present ($(du -sh "$BUILD/bin/$TARGET/AROS" 2>/dev/null | cut -f1))" || echo "absent — make-sdcard.sh needs 'full'")"
+    echo -n "submodules:  "
+    if "$ROOT/scripts/setup.sh" --verify >/dev/null 2>&1; then
+        echo "verified"
+    else
+        echo "NOT VERIFIED — a build would stop here; run ./scripts/setup.sh --verify"
+    fi
+    echo
+    case "$state" in
+        ready)
+            echo "a plain build would compile AROS only: minutes." ;;
+        unstamped)
+            echo "a plain build would compile AROS only: minutes."
+            echo "the toolchain predates the digest stamp, so it cannot be proved to match"
+            echo "these sources; the next successful build records it." ;;
+        stale)
+            echo "a plain build would compile AROS only: minutes, but the toolchain was"
+            echo "built from different sources — 'clean' will drop it and rebuild." ;;
+        absent)
+            echo "a plain build would compile binutils and gcc first: hours, ~650 MB." ;;
+    esac
+    exit 0
+fi
+
+# --- wiping ------------------------------------------------------------------
+#
+# `clean` means "build it again", not "pay for the toolchain again". The
+# distinction is worth a separate verb because the two differ by hours: the
+# previous version of this script kept the ~110 MB of downloaded tarballs and
+# deleted the 650 MB of compiled toolchain, which is the wrong half of the cost.
+if [ "$WIPE" = distclean ]; then
+    echo "[aros] wiping $BUILD, toolchain included"
+    rm -rf "$BUILD"
+elif [ "$WIPE" = clean ] && [ -d "$BUILD" ]; then
+    # The host directory whose tools/ survives, empty when nothing is worth
+    # keeping. Everything else under out/build/aros goes.
+    keep_host=""
+    case "$(toolchain_state)" in
+        ready|unstamped) keep_host="$(basename "$(dirname "$(host_tools_dir)")")" ;;
+        stale) echo "[aros] the toolchain was built from different sources — not preserving it" ;;
+    esac
+
+    # Delete by exception rather than move-and-restore: no temporary copy of
+    # 650 MB, and nothing left stranded if the wipe is interrupted.
+    find "$BUILD" -mindepth 1 -maxdepth 1 ! -name bin -exec rm -rf {} +
+
+    if [ -d "$BUILD/bin" ]; then
+        if [ -n "$keep_host" ]; then
+            find "$BUILD/bin" -mindepth 1 -maxdepth 1 \
+                ! -name Sources ! -name "$keep_host" -exec rm -rf {} +
+            find "$BUILD/bin/$keep_host" -mindepth 1 -maxdepth 1 \
+                ! -name tools -exec rm -rf {} +
+            echo "[aros] wiped the build, kept the toolchain and the downloaded sources"
+        else
+            find "$BUILD/bin" -mindepth 1 -maxdepth 1 ! -name Sources -exec rm -rf {} +
+            echo "[aros] wiped the build, kept the downloaded sources"
+        fi
+    fi
 fi
 
 for tool in gcc g++ make flex bison python3 gperf; do
     command -v "$tool" >/dev/null || { echo "ERROR: $tool not found" >&2; exit 1; }
 done
+
+# The expensive path says its price before charging it.
+#
+# `make` looks identical whether it compiles a handful of objects or builds gcc
+# from source first, and the two differ by hours. An interactive caller is
+# asked; a caller with no terminal -- CI, or an agent driving the shell -- is
+# refused, because the failure mode there is discovering the cost afterwards.
+if [ "$(toolchain_state)" = absent ] && [ "$ASSUME_YES" != 1 ]; then
+    echo
+    echo "[aros] there is no m68k cross toolchain in this build tree."
+    echo "       This run would build binutils 2.32 and gcc 6.5.0 from source"
+    echo "       before compiling any AROS: hours, and ~650 MB under out/build."
+    echo
+    if [ -t 0 ]; then
+        read -r -p "       Build it now? [y/N] " reply
+        case "$reply" in
+            [yY]|[yY][eE][sS]) ;;
+            *) echo "[aros] nothing built."; exit 1 ;;
+        esac
+    else
+        echo "       Re-run with --yes (or BELLATRIX_BUILD_YES=1) to accept the cost."
+        echo "       ./scripts/build-aros.sh --status reports this without building."
+        exit 1
+    fi
+fi
 
 "$ROOT/scripts/setup.sh" --verify >/dev/null 2>&1 || "$ROOT/scripts/setup.sh"
 
@@ -80,8 +236,20 @@ cd "$BUILD"
 # configure is only re-run when there is nothing to build with. It regenerates
 # the whole bin/<target>/gen tree, so running it needlessly is not free.
 if [ ! -f "$BUILD/mmake.config" ]; then
-    echo "[aros] configuring for $TARGET"
-    "$SRC/configure" --target="$TARGET"
+    # --enable-ccache when ccache is installed. It is offered here and never
+    # forced on an existing tree: turning it on means reconfiguring, and a
+    # reconfigure regenerates gen/ and rebuilds everything -- paying a large
+    # cost now for a smaller one later is a choice, not a side effect of
+    # running the usual build. An existing tree adopts it at its next
+    # `clean`/`distclean`, or never.
+    CONFIGURE_ARGS=(--target="$TARGET")
+    if command -v ccache >/dev/null; then
+        CONFIGURE_ARGS+=(--enable-ccache)
+        echo "[aros] configuring for $TARGET (with ccache)"
+    else
+        echo "[aros] configuring for $TARGET"
+    fi
+    "$SRC/configure" "${CONFIGURE_ARGS[@]}"
 else
     echo "[aros] already configured"
 
@@ -124,6 +292,13 @@ fi
 # explicit dependency, not with -j.
 echo "[aros] building $METATARGET (serial — see comment in this script)"
 make "$METATARGET"
+
+# Record what the toolchain was built from, so a later `clean` can tell whether
+# preserving it is sound. Written after the build because that is when it is
+# true.
+if stamp="$(toolchain_stamp)"; then
+    toolchain_digest > "$stamp"
+fi
 
 # A good kickstart ELF has no unresolved symbols at all — measured, not assumed.
 #
