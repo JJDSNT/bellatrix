@@ -1,9 +1,12 @@
 # Bellatrix
 
-> An AI-generated project. The goal is AROS running at a usable speed on a
-> Raspberry Pi 3 — which is where it is built and tested, not a limit of the
-> idea. Nothing in the approach is specific to this board, and a stronger one,
-> a Radxa Orion O6 say, would have more room than the Pi ever will.
+> An AI-generated project, born out of Bloodline's
+> [Omega](https://github.com/h5n1xp/Omega).
+>
+> The goal is AROS running at a usable speed on a Raspberry Pi 3 — which is
+> where it is built and tested, not a limit of the idea. Nothing in the
+> approach is specific to this board, and a stronger one, a Radxa Orion O6 say,
+> would have more room than the Pi ever will.
 
 AROS/m68k on a Raspberry Pi 3, with no Amiga anywhere in it.
 
