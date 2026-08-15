@@ -17,6 +17,13 @@ executes, and the code works against real RAM and the Pi's own peripherals —
 closer to what Rosetta does for x86 on Apple silicon than to what UAE does for
 an Amiga.
 
+Classic chipset compatibility is wanted later, through
+[Rigel](https://github.com/JJDSNT/Rigel), for the software that needs Paula and
+friends to exist. It would sit beside this path rather than under it: native Pi
+hardware reached through m68k drivers, classic hardware semantics through
+Rigel, kept as separate domains. See [`docs/Compat.md`](docs/Compat.md) for the
+whole objective.
+
 Emu68 owns the bare metal and hands control to AROS once the hardware is up.
 Both are upstream projects, vendored as submodules and never edited in place.
 
@@ -61,21 +68,29 @@ monitor and a wired USB mouse. Everything else is built here.
 ./scripts/build-aros.sh full    # AROS, complete — the plain build is not enough
 ```
 
-### 2. Build the card image
+### 2. Prepare the card
+
+The card uses the Emu68 layout: MBR, and the first partition formatted FAT32.
+Nothing else is required of it, and its size is yours to choose — use the whole
+card if you want to.
+
+### 3. Pack and unpack
 
 ```bash
-./scripts/make-sdcard.sh --pi     # → out/aros/bellatrix-pi3.img
+./scripts/make-sdcard.sh --pack     # → out/aros/bellatrix-pi3.tar.xz
 ```
 
-That image is complete: firmware, Emu68, AROS and the settings the Pi reads at
-power-on. Write it to the card with `/dev/sdX` replaced by the card's device —
-check it twice, this erases whatever it points at:
+Unpack it at the root of that partition, with `/media/you/BOOT` replaced by
+wherever the card is mounted:
 
 ```bash
-sudo dd if=out/aros/bellatrix-pi3.img of=/dev/sdX bs=4M conv=fsync status=progress
+tar -xJf out/aros/bellatrix-pi3.tar.xz -C /media/you/BOOT
 ```
 
-### 3. Boot it
+That is everything the Pi reads at power-on — firmware, Emu68, AROS and the
+settings — alongside the AROS system files.
+
+### 4. Boot it
 
 Insert the card, connect the monitor and the mouse, and power up. The loading
 screen appears first, then the Workbench desktop.
@@ -87,9 +102,10 @@ Power off, unplug everything from USB, and boot again; add the mouse back once
 you know the machine comes up. A plain wired mouse is the safe choice.
 
 **Nothing at all on the monitor.** The green LED next to the card slot says how
-far the Pi itself got. If it never blinks, the card was not read at all — try
-another card or another reader. Four or seven blinks mean the card was written
-incompletely: build the image again and write it again.
+far the Pi itself got. If it never blinks, the card was not read at all — check
+that the first partition is FAT32, and try another card or another reader. Four
+or seven blinks mean files are missing from it: unpack the archive again, at
+the root of that partition.
 
 **A black screen with the LED behaving normally.** Turn the monitor on before
 powering the Pi. If it stays black, add the line `hdmi_force_hotplug=1` to
@@ -182,6 +198,11 @@ Eight issues are filed under [`AI_context/issues/`](AI_context/issues/).
 
 All content in this repository — documentation, issues, specs, code comments
 and commit messages — is written in English.
+
+## Acknowledgement
+
+Special thanks to Claude for the guidance and support throughout the
+development of Bellatrix.
 
 ## Credits
 
