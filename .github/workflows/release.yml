@@ -69,7 +69,7 @@ jobs:
         id: cache
         uses: actions/cache/restore@v4
         with:
-          path: out/build/aros/bin/*/tools
+          path: out/build/aros/bin/*/tools/crosstools
           key: toolchain-${{ steps.key.outputs.key }}
 
       # Tier two: the asset the toolchain workflow published. Durable, and the
@@ -95,7 +95,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: out/build/aros/bin/*/tools
+          path: out/build/aros/bin/*/tools/crosstools
           key: toolchain-${{ steps.key.outputs.key }}
 
       - name: State of the build

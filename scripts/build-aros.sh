@@ -8,7 +8,8 @@
 #   ./scripts/build-aros.sh clean      wipe the build, keep the cross toolchain
 #   ./scripts/build-aros.sh distclean  wipe everything, toolchain included
 #   ./scripts/build-aros.sh --status   report what a build would cost, build nothing
-#   ./scripts/build-aros.sh --toolchain-key   print the cache key, for CI
+#   ./scripts/build-aros.sh --toolchain-key    print the cache key, for CI
+#   ./scripts/build-aros.sh --toolchain-only   build the cross compiler alone
 #
 # Output: out/aros/aros-emu68-m68k.elf, and with `full` a complete
 #         distribution tree under out/build/aros/bin/<target>/AROS/
@@ -63,9 +64,13 @@ for arg in "$@"; do
         distclean) WIPE="distclean" ;;
         --status)  MODE="status" ;;
         --toolchain-key) MODE="key" ;;
+        # Just the compiler, nothing of AROS. The toolchain workflow wants this
+        # and nothing else: building the lean target afterwards would add tens
+        # of minutes of CI to an artefact that does not contain any of it.
+        --toolchain-only) METATARGET="tools-crosstools"; ASSUME_YES=1 ;;
         --yes)     ASSUME_YES=1 ;;
         -h|--help) sed -n '3,23p' "$0" | sed 's/^# \?//'; exit 0 ;;
-        *) echo "usage: $0 [clean|distclean] [full] [--status|--toolchain-key] [--yes]" >&2; exit 2 ;;
+        *) echo "usage: $0 [clean|distclean] [full|--toolchain-only] [--status|--toolchain-key] [--yes]" >&2; exit 2 ;;
     esac
 done
 
@@ -491,6 +496,11 @@ fi
 # named it.
 #
 # Fail here, where it is cheap, rather than 45 minutes into a boot harness.
+if [ "$METATARGET" = "tools-crosstools" ]; then
+    echo "[aros] the cross toolchain is built; nothing of AROS was."
+    exit 0
+fi
+
 NM="$BUILD/bin/linux-x86_64/tools/crosstools/m68k-aros-nm"
 if [ -x "$NM" ]; then
     undef="$("$NM" -u "$BUILD/$ELF" 2>/dev/null || true)"

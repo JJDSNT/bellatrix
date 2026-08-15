@@ -56,10 +56,11 @@ jobs:
           echo "digest=$(./scripts/build-aros.sh --toolchain-key | cut -d- -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Build the toolchain
-        # build-aros.sh refuses a surprise toolchain build when there is no
-        # terminal to ask. Here it is the point of the job, so it is accepted
-        # explicitly -- which is the distinction the flag exists to make.
-        run: ./scripts/build-aros.sh --yes
+        # --toolchain-only builds the cross compiler and stops: none of AROS is
+        # in the artefact, so building it here would be tens of minutes of CI
+        # spent on something thrown away. It also accepts the cost without
+        # asking, which is the whole point of this job.
+        run: ./scripts/build-aros.sh --toolchain-only
 
       - name: Pack it
         run: |
@@ -101,5 +102,5 @@ jobs:
       - name: Seed the cache
         uses: actions/cache/save@v4
         with:
-          path: out/build/aros/bin/*/tools
+          path: out/build/aros/bin/*/tools/crosstools
           key: toolchain-${{ steps.key.outputs.key }}
