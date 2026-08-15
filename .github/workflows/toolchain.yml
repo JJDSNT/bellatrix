@@ -44,7 +44,7 @@ jobs:
           # run without pngtopnm and ppmtoilbm, which it uses to convert boot
           # images at build time.
           sudo apt-get install -y gcc-aarch64-linux-gnu cmake flex bison gperf \
-            gawk netpbm libpng-dev python3 mtools ccache
+            gawk netpbm libpng-dev liblzma-dev python3 python3-mako mtools ccache
 
       - name: Apply the patch series
         run: ./scripts/setup.sh

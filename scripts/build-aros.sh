@@ -392,6 +392,14 @@ for tool in gcc g++ make flex bison python3 gperf gawk patch pngtopnm ppmtoilbm;
     }
 done
 
+# configure also wants a python module, and says so only after several minutes
+# of probing. The message it gives -- "failed to detect mako templates" -- does
+# not name a package either.
+python3 -c 'import mako' 2>/dev/null || {
+    echo "ERROR: the python mako module is missing (package python3-mako)" >&2
+    exit 1
+}
+
 # The expensive path says its price before charging it.
 #
 # `make` looks identical whether it compiles a handful of objects or builds gcc
