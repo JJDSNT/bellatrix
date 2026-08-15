@@ -220,6 +220,13 @@ So they are tiers, not alternatives, and the durable one is the floor:
 local cache → actions/cache (CI only) → release asset → build from source
 ```
 
+Only `crosstools/` travels. Beside it in `bin/<host>/tools/` sit wrappers the
+build generates — `<cpu>-<arch>-elf-gcc`, the `aros-ld` that drives
+`collect-aros` — and they hardcode the absolute path of the tree they were
+configured for. They belong to the build rather than to the toolchain, and
+`configure` writes them from `config/elf-gcc.in` and friends, so packing them
+would make the cache portable in name only.
+
 The toolchain is built **by CI**, in a workflow dispatched by hand when the
 digest changes, which publishes the asset and seeds the cache. That is not
 ceremony: it means nobody has to trust a binary that came off a laptop, and it

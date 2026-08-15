@@ -63,7 +63,7 @@ jobs:
                      grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
                        patches/aros/[0-9]*.patch 2>/dev/null | sort |
                        xargs -r sha256sum || true; } | sha256sum | cut -c1-16)
-          glibc=$(ldd --version | head -1 | grep -o '[0-9]\+\.[0-9]\+$')
+          glibc=$(ldd --version | awk 'NR == 1 { print $NF }')
           echo "digest=$digest"                       >> "$GITHUB_OUTPUT"
           echo "key=$digest-linux-x86_64-glibc$glibc" >> "$GITHUB_OUTPUT"
 

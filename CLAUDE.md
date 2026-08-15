@@ -48,6 +48,13 @@ Everything generated lands under `out/`, which is git-ignored.
   - **`build-aros.sh --status` answers "what would this rebuild?"** — toolchain
     state, whether the tree is configured, whether the submodules verify,
     whether the distribution tree exists. Ask it before reaching for `clean`.
+  - **A cached copy is looked for before anything is compiled**: first
+    `~/.cache/bellatrix/toolchain/`, then the `toolchain-<digest>` release
+    published by CI. A build only reaches the prompt when neither has one that
+    runs here. `BELLATRIX_TOOLCHAIN_FETCH=0` keeps it off the network.
+  - Only `crosstools/` is cached, never the whole of `bin/<host>/tools/`: the
+    wrappers beside it embed the absolute path of the tree that configured them,
+    so they belong to the build and `configure` writes them again.
   - The toolchain is stamped with a digest of what it was built from
     (`config/gcc_def`, `config/binutils_def`, `tools/crosstools`), so a `clean`
     can tell whether keeping it is sound. That digest deliberately ignores our

@@ -131,6 +131,141 @@ toolchain_state() {
     fi
 }
 
+# --- the toolchain cache -----------------------------------------------------
+#
+# Three hours of gcc, or fourteen seconds of tar. The toolchain is portable in
+# both directions -- built here it runs on a runner, built on a runner it runs
+# here -- and two measured facts are why:
+#
+#   - it relocates, because gcc resolves its own prefix relative to the binary,
+#     so the absolute path it was built under does not matter;
+#   - the only host coupling is the C library.
+#
+# So the key is the digest plus where it can run, and a cached copy is looked
+# up before anything is compiled. The glibc in the key is the one it was built
+# against; an entry is usable on any host with that version or newer, which is
+# why the lookup picks the newest compatible entry rather than demanding an
+# exact match.
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/bellatrix/toolchain"
+FETCH="${BELLATRIX_TOOLCHAIN_FETCH:-1}"
+
+# awk rather than `head -1 | grep`: head closes the pipe, ldd takes SIGPIPE, and
+# under pipefail the whole pipeline fails -- which made this answer "0" now and
+# then, and a host with glibc 0 matches no cached toolchain at all.
+host_glibc() { ldd --version 2>/dev/null | awk 'NR == 1 { print $NF }'; }
+host_arch()  { echo "$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"; }
+toolchain_key() { echo "$(toolchain_digest)-$(host_arch)-glibc$(host_glibc)"; }
+
+# Reads candidate file names on stdin, writes back the newest one this host can
+# actually run. Silence means nothing on offer fits.
+pick_compatible() {
+    local prefix ours name version
+    prefix="$(toolchain_digest)-$(host_arch)-glibc"
+    ours="$(host_glibc)"
+    while read -r name; do
+        case "$name" in "$prefix"*.tar.xz) ;; *) continue ;; esac
+        version="${name#"$prefix"}"; version="${version%.tar.xz}"
+        # usable when it was built against a glibc no newer than ours
+        [ "$(printf '%s\n%s\n' "$version" "$ours" | sort -V | head -1)" = "$version" ] \
+            && echo "$version $name"
+    done | sort -V | tail -1 | cut -d' ' -f2-
+}
+
+# Only crosstools/ travels, never the whole of tools/.
+#
+# Beside crosstools sit wrappers the build generates -- <cpu>-<arch>-elf-gcc and
+# the aros-ld that drives collect-aros -- and they hardcode the absolute path of
+# the tree they were configured for:
+#
+#   exec /home/you/bellatrix/out/build/aros/bin/linux-x86_64/tools/crosstools/m68k-aros-gcc …
+#
+# They belong to the build, not to the toolchain: configure writes them from
+# config/elf-gcc.in and friends. Packing them would make the cache portable in
+# name only, so they are left out, and a tree that has lost them is sent back
+# through configure to get them again.
+extract_toolchain() {  # $1 = tarball
+    local tools
+    tools="$BUILD/bin/$(host_arch)/tools"
+    mkdir -p "$tools"
+    tar -C "$tools" -xJf "$1"
+    [ -x "$tools/crosstools/${TARGET##*-}-aros-gcc" ] \
+        || { echo "[aros] the restored toolchain has no compiler in it" >&2; return 1; }
+
+    # A configured tree with no wrappers only happens when somebody has been
+    # deleting things by hand: every path that removes tools/ removes
+    # mmake.config with it. Say so and reconfigure, rather than let the build
+    # fail forty seconds later with "m68k-emu68-elf-gcc: not found".
+    if [ -f "$BUILD/mmake.config" ] && ! ls "$tools"/*-elf-gcc >/dev/null 2>&1; then
+        echo "[aros] the tree is configured but its compiler wrappers are gone —"
+        echo "       reconfiguring so they are written again"
+        rm -f "$BUILD/mmake.config"
+    fi
+}
+
+save_toolchain() {
+    local tools key
+    tools="$(host_tools_dir)" || return 0
+    key="$(toolchain_key)"
+    [ -f "$CACHE_DIR/$key.tar.xz" ] && return 0
+
+    mkdir -p "$CACHE_DIR"
+    echo "[aros] caching the toolchain as $key.tar.xz"
+    tar -C "$tools" -cf - crosstools | xz -T0 -3 > "$CACHE_DIR/$key.tar.xz.part"
+    mv "$CACHE_DIR/$key.tar.xz.part" "$CACHE_DIR/$key.tar.xz"
+    ( cd "$CACHE_DIR" && sha256sum "$key.tar.xz" > "$key.tar.xz.sha256" )
+}
+
+# The published tarball, when the local cache has nothing. Named after the
+# digest, so the tag is the same one the toolchain workflow creates.
+fetch_toolchain() {
+    local slug tag name url tmp
+    [ "$FETCH" = 1 ] || return 1
+    command -v curl >/dev/null || return 1
+
+    slug="$(git -C "$ROOT" remote get-url origin 2>/dev/null |
+            sed -E 's#(git@github\.com:|https://github\.com/)##; s#\.git$##')" || return 1
+    [ -n "$slug" ] || return 1
+    tag="toolchain-$(toolchain_digest)"
+
+    if command -v gh >/dev/null && gh release view "$tag" >/dev/null 2>&1; then
+        name="$(gh release view "$tag" --json assets -q '.assets[].name' 2>/dev/null |
+                pick_compatible)"
+    else
+        # Without gh there is nothing to list, so ask for the exact key and let
+        # the download fail if it is not there.
+        name="$(toolchain_key).tar.xz"
+    fi
+    [ -n "$name" ] || return 1
+
+    url="https://github.com/$slug/releases/download/$tag/$name"
+    tmp="$(mktemp -d)"
+    echo "[aros] fetching a prebuilt toolchain: $name"
+    if ! curl -fsSL "$url" -o "$tmp/$name" ||
+       ! curl -fsSL "$url.sha256" -o "$tmp/$name.sha256"; then
+        rm -rf "$tmp"; return 1
+    fi
+    if ! ( cd "$tmp" && sha256sum -c --quiet "$name.sha256" ); then
+        echo "[aros] the downloaded toolchain does not match its checksum" >&2
+        rm -rf "$tmp"; return 1
+    fi
+
+    extract_toolchain "$tmp/$name" || { rm -rf "$tmp"; return 1; }
+    mkdir -p "$CACHE_DIR"
+    mv "$tmp/$name" "$tmp/$name.sha256" "$CACHE_DIR/"
+    rm -rf "$tmp"
+}
+
+restore_toolchain() {
+    local name
+    name="$(ls "$CACHE_DIR" 2>/dev/null | pick_compatible)"
+    if [ -n "$name" ] && [ -f "$CACHE_DIR/$name" ]; then
+        echo "[aros] restoring the toolchain from $CACHE_DIR/$name"
+        extract_toolchain "$CACHE_DIR/$name" && return 0
+        echo "[aros] that cached copy is unusable; ignoring it" >&2
+    fi
+    fetch_toolchain
+}
+
 # --- status ------------------------------------------------------------------
 
 if [ "$MODE" = status ]; then
@@ -141,10 +276,14 @@ if [ "$MODE" = status ]; then
     echo "ccache:      $(if grep -q 'ccache' "$BUILD/config/make.cfg" 2>/dev/null; then echo "in use"
                          elif command -v ccache >/dev/null; then echo "available, not configured into this tree"
                          else echo "not installed"; fi)"
-    echo "toolchain:   $state ($(toolchain_digest))"
+    echo "toolchain:   $state (key $(toolchain_key))"
     [ "$state" = ready ] && echo "             $(host_tools_dir)/crosstools"
     echo "kernel ELF:  $([ -f "$BUILD/$ELF" ] && stat -c '%y' "$BUILD/$ELF" | cut -d. -f1 || echo "not built")"
     echo "dist tree:   $([ -d "$BUILD/bin/$TARGET/AROS/C" ] && echo "present ($(du -sh "$BUILD/bin/$TARGET/AROS" 2>/dev/null | cut -f1))" || echo "absent — make-sdcard.sh needs 'full'")"
+    cached="$(ls "$CACHE_DIR" 2>/dev/null | grep -c '\.tar\.xz$' || true)"
+    echo "cache:       ${cached:-0} in $CACHE_DIR$([ "${cached:-0}" -gt 0 ] && echo " ($(du -sh "$CACHE_DIR" 2>/dev/null | cut -f1))")"
+    [ -n "$(ls "$CACHE_DIR" 2>/dev/null | pick_compatible)" ] \
+        && echo "             usable here: $(ls "$CACHE_DIR" | pick_compatible)"
     echo -n "submodules:  "
     if "$ROOT/scripts/setup.sh" --verify >/dev/null 2>&1; then
         echo "verified"
@@ -163,7 +302,13 @@ if [ "$MODE" = status ]; then
             echo "a plain build would compile AROS only: minutes, but the toolchain was"
             echo "built from different sources — 'clean' will drop it and rebuild." ;;
         absent)
-            echo "a plain build would compile binutils and gcc first: hours, ~650 MB." ;;
+            if [ -n "$(ls "$CACHE_DIR" 2>/dev/null | pick_compatible)" ]; then
+                echo "a plain build would restore the toolchain from the cache (seconds), then"
+                echo "compile AROS: minutes."
+            else
+                echo "a plain build would look for a prebuilt toolchain and, finding none,"
+                echo "compile binutils and gcc first: hours, ~650 MB."
+            fi ;;
     esac
     exit 0
 fi
@@ -175,8 +320,12 @@ fi
 # previous version of this script kept the ~110 MB of downloaded tarballs and
 # deleted the 650 MB of compiled toolchain, which is the wrong half of the cost.
 if [ "$WIPE" = distclean ]; then
+    # distclean is the verb for "start over". Leaving a cached copy of the very
+    # thing being discarded, ready to be restored on the next build, would make
+    # it mean nothing.
     echo "[aros] wiping $BUILD, toolchain included"
     rm -rf "$BUILD"
+    rm -f "$CACHE_DIR/$(toolchain_digest)"-*.tar.xz "$CACHE_DIR/$(toolchain_digest)"-*.sha256
 elif [ "$WIPE" = clean ] && [ -d "$BUILD" ]; then
     # The host directory whose tools/ survives, empty when nothing is worth
     # keeping. Everything else under out/build/aros goes.
@@ -214,6 +363,10 @@ done
 # from source first, and the two differ by hours. An interactive caller is
 # asked; a caller with no terminal -- CI, or an agent driving the shell -- is
 # refused, because the failure mode there is discovering the cost afterwards.
+if [ "$(toolchain_state)" = absent ]; then
+    restore_toolchain || true
+fi
+
 if [ "$(toolchain_state)" = absent ] && [ "$ASSUME_YES" != 1 ]; then
     echo
     echo "[aros] there is no m68k cross toolchain in this build tree."
@@ -303,6 +456,7 @@ make "$METATARGET"
 # true.
 if stamp="$(toolchain_stamp)"; then
     toolchain_digest > "$stamp"
+    save_toolchain
 fi
 
 # A good kickstart ELF has no unresolved symbols at all — measured, not assumed.
