@@ -21,8 +21,7 @@ Classic chipset compatibility is wanted later, through
 [Rigel](https://github.com/JJDSNT/Rigel), for the software that needs Paula and
 friends to exist. It would sit beside this path rather than under it: native Pi
 hardware reached through m68k drivers, classic hardware semantics through
-Rigel, kept as separate domains. See [`docs/Compat.md`](docs/Compat.md) for the
-whole objective.
+Rigel, kept as separate domains.
 
 Emu68 owns the bare metal and hands control to AROS once the hardware is up.
 Both are upstream projects, vendored as submodules and never edited in place.
@@ -160,6 +159,7 @@ reports `pristine`, `applied`, `dirty` or `broken`.
 
 | | |
 |---|---|
+| [`docs/Compat.md`](docs/Compat.md) | the compatibility objective: AROS as the resident system, with AROS and both families of AmigaOS userland booting on it, no Kickstart ROM required |
 | [`docs/emu68.md`](docs/emu68.md) | what the Emu68 patches change, where, and which patch each change comes from |
 | [`docs/aros.md`](docs/aros.md) | the same for AROS, plus building and running |
 | [`docs/irq.md`](docs/irq.md) | how a host interrupt becomes an m68k interrupt, and the three mechanisms available for it |
