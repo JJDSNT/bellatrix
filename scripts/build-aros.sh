@@ -8,6 +8,7 @@
 #   ./scripts/build-aros.sh clean      wipe the build, keep the cross toolchain
 #   ./scripts/build-aros.sh distclean  wipe everything, toolchain included
 #   ./scripts/build-aros.sh --status   report what a build would cost, build nothing
+#   ./scripts/build-aros.sh --toolchain-key   print the cache key, for CI
 #
 # Output: out/aros/aros-emu68-m68k.elf, and with `full` a complete
 #         distribution tree under out/build/aros/bin/<target>/AROS/
@@ -61,9 +62,10 @@ for arg in "$@"; do
         clean)     WIPE="clean" ;;
         distclean) WIPE="distclean" ;;
         --status)  MODE="status" ;;
+        --toolchain-key) MODE="key" ;;
         --yes)     ASSUME_YES=1 ;;
         -h|--help) sed -n '3,23p' "$0" | sed 's/^# \?//'; exit 0 ;;
-        *) echo "usage: $0 [clean|distclean] [full] [--status] [--yes]" >&2; exit 2 ;;
+        *) echo "usage: $0 [clean|distclean] [full] [--status|--toolchain-key] [--yes]" >&2; exit 2 ;;
     esac
 done
 
@@ -87,7 +89,8 @@ host_tools_dir() {
 
 # What the toolchain is made of, and nothing else: the two version files and
 # the crosstools sources, all inside the AROS pin, plus any patch of ours that
-# reaches them. It deliberately does not move when the port sources or the rest
+# reaches them. This describes the gcc toolchain, which is what m68k uses; a
+# target built with LLVM instead would have to bring config/llvm_def in here. It deliberately does not move when the port sources or the rest
 # of the patch series change -- the most expensive thing to build is the thing
 # that changes least, and a digest that moved every day would be worthless.
 # Both halves end in `|| true` deliberately: no patch of ours reaching the
@@ -154,13 +157,21 @@ FETCH="${BELLATRIX_TOOLCHAIN_FETCH:-1}"
 # then, and a host with glibc 0 matches no cached toolchain at all.
 host_glibc() { ldd --version 2>/dev/null | awk 'NR == 1 { print $NF }'; }
 host_arch()  { echo "$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"; }
-toolchain_key() { echo "$(toolchain_digest)-$(host_arch)-glibc$(host_glibc)"; }
+
+# The target cpu is in the key because crosstools/ is scoped by host, not by
+# target: AROS gates its stages per cpu inside one directory
+# (.installflag-gcc-<version>-m68k), so a second AROS target would build a
+# different toolchain into the same place. Without the cpu here the two would
+# share a cache entry and quietly overwrite each other.
+toolchain_key() {
+    echo "$(toolchain_digest)-${TARGET##*-}-$(host_arch)-glibc$(host_glibc)"
+}
 
 # Reads candidate file names on stdin, writes back the newest one this host can
 # actually run. Silence means nothing on offer fits.
 pick_compatible() {
     local prefix ours name version
-    prefix="$(toolchain_digest)-$(host_arch)-glibc"
+    prefix="$(toolchain_digest)-${TARGET##*-}-$(host_arch)-glibc"
     ours="$(host_glibc)"
     while read -r name; do
         case "$name" in "$prefix"*.tar.xz) ;; *) continue ;; esac
@@ -268,6 +279,14 @@ restore_toolchain() {
 
 # --- status ------------------------------------------------------------------
 
+# One implementation of the key, asked for by name. The workflows used to
+# recompute it in YAML, which is how the same SIGPIPE bug came to exist in three
+# places at once.
+if [ "$MODE" = key ]; then
+    toolchain_key
+    exit 0
+fi
+
 if [ "$MODE" = status ]; then
     state="$(toolchain_state)"
     echo "target:      $TARGET"
@@ -325,7 +344,8 @@ if [ "$WIPE" = distclean ]; then
     # it mean nothing.
     echo "[aros] wiping $BUILD, toolchain included"
     rm -rf "$BUILD"
-    rm -f "$CACHE_DIR/$(toolchain_digest)"-*.tar.xz "$CACHE_DIR/$(toolchain_digest)"-*.sha256
+    rm -f "$CACHE_DIR/$(toolchain_digest)-${TARGET##*-}"-*.tar.xz \
+          "$CACHE_DIR/$(toolchain_digest)-${TARGET##*-}"-*.sha256
 elif [ "$WIPE" = clean ] && [ -d "$BUILD" ]; then
     # The host directory whose tools/ survives, empty when nothing is worth
     # keeping. Everything else under out/build/aros goes.

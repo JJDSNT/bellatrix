@@ -56,16 +56,12 @@ jobs:
 
       - name: Work out the toolchain key
         id: key
+        # Asked of the script rather than recomputed here. It used to be
+        # duplicated in YAML, which is how one pipefail bug came to live in
+        # three files at once.
         run: |
-          digest=$({ git -C external/aros rev-parse HEAD:config/gcc_def \
-                                                    HEAD:config/binutils_def \
-                                                    HEAD:tools/crosstools
-                     grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
-                       patches/aros/[0-9]*.patch 2>/dev/null | sort |
-                       xargs -r sha256sum || true; } | sha256sum | cut -c1-16)
-          glibc=$(ldd --version | awk 'NR == 1 { print $NF }')
-          echo "digest=$digest"                       >> "$GITHUB_OUTPUT"
-          echo "key=$digest-linux-x86_64-glibc$glibc" >> "$GITHUB_OUTPUT"
+          echo "key=$(./scripts/build-aros.sh --toolchain-key)" >> "$GITHUB_OUTPUT"
+          echo "digest=$(./scripts/build-aros.sh --toolchain-key | cut -d- -f1)" >> "$GITHUB_OUTPUT"
 
       # Tier one: the native cache. Fastest when it is there, gone after seven
       # idle days, which is why it is not the only tier.
