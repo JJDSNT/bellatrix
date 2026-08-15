@@ -409,9 +409,10 @@ case "$TAG" in *-rc*|*-beta*|*-test*) FLAGS+=(--prerelease --latest=false) ;; es
 
 if gh release view "$TAG" >/dev/null 2>&1; then
     say "release $TAG exists, replacing its assets"
+    # bellatrix-*.tar.xz is both archives, the card and the QEMU bundle. Naming
+    # the bundle again here would hand gh the same file twice.
     gh release upload "$TAG" "$RELEASE"/bellatrix-*.tar.xz "$RELEASE/$KERNEL_NAME" \
-        "$RELEASE/$ELF_NAME" "$RELEASE"/bellatrix-*-qemu.tar.xz \
-        "$RELEASE"/*.sha256 --clobber
+        "$RELEASE/$ELF_NAME" "$RELEASE"/*.sha256 --clobber
 else
     say "creating release $TAG"
     gh release create "$TAG" \
