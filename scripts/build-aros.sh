@@ -378,8 +378,18 @@ elif [ "$WIPE" = clean ] && [ -d "$BUILD" ]; then
     fi
 fi
 
-for tool in gcc g++ make flex bison python3 gperf; do
-    command -v "$tool" >/dev/null || { echo "ERROR: $tool not found" >&2; exit 1; }
+# What AROS's own configure insists on, checked here because it says so in one
+# second and configure says so several minutes in, after the toolchain search
+# and half the environment probing. pngtopnm and ppmtoilbm are the ones nobody
+# expects: AROS converts its boot images at build time.
+for tool in gcc g++ make flex bison python3 gperf gawk patch pngtopnm ppmtoilbm; do
+    command -v "$tool" >/dev/null || {
+        echo "ERROR: $tool not found" >&2
+        case "$tool" in
+            pngtopnm|ppmtoilbm) echo "       it comes from the netpbm package" >&2 ;;
+        esac
+        exit 1
+    }
 done
 
 # The expensive path says its price before charging it.

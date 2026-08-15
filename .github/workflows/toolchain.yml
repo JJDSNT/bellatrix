@@ -40,8 +40,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          # netpbm is not optional and not obvious: AROS's configure refuses to
+          # run without pngtopnm and ppmtoilbm, which it uses to convert boot
+          # images at build time.
           sudo apt-get install -y gcc-aarch64-linux-gnu cmake flex bison gperf \
-            python3 mtools ccache
+            gawk netpbm libpng-dev python3 mtools ccache
 
       - name: Apply the patch series
         run: ./scripts/setup.sh

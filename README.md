@@ -32,7 +32,7 @@ On Debian or Ubuntu, install what the build needs:
 
 ```bash
 sudo apt-get install -y gcc-aarch64-linux-gnu cmake flex bison gperf \
-    python3 mtools qemu-system-arm
+    gawk netpbm libpng-dev python3 mtools qemu-system-arm
 ```
 
 Then:
