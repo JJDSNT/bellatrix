@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 7 Aug 2026 10:00:00 -0300
-Subject: [PATCH 11/11] m68k-all: do not race the emu68 Exec backend
+Subject: [PATCH 10/22] m68k-all: do not race the emu68 Exec backend
 
 arch/m68k-all/exec and arch/m68k-emu68/exec both declare %build_archspecific
 for switch, dispatch and preparecontext, and both write to the same object

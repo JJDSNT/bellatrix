@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 14 Aug 2026 16:10:00 -0300
-Subject: [PATCH 22/22] usb2otg: fail fast when the core will not reset
+Subject: [PATCH 20/22] usb2otg: fail fast when the core will not reset
 
 The reset polling helpers return a status, but OpenUnit ignored it.  On a
 slow MMIO path this makes a failed reset look like a hung device open and can

@@ -1,5 +1,5 @@
 From: Bellatrix Development <bellatrix@localhost>
-Subject: [PATCH] usb2otg: only schedule work for due SOF transfers
+Subject: [PATCH 22/22] usb2otg: only schedule work for due SOF transfers
 
 handle_SOF records whether it promoted an interrupt request, but used to
 Cause PendingInt unconditionally.  That woke the scheduler at the 1 kHz SOF

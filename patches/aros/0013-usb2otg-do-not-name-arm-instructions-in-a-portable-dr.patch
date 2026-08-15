@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 14 Aug 2026 12:45:00 -0300
-Subject: [PATCH 13/13] usb2otg: do not name ARM instructions in a portable driver
+Subject: [PATCH 13/22] usb2otg: do not name ARM instructions in a portable driver
 
 The BCM2708 USB OTG driver is portable C everywhere else: its register
 accessors go through dmb() from <asm/cpu.h>, and its MMIO is

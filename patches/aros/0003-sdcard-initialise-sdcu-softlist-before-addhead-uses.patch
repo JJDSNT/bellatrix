@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Mon, 3 Aug 2026 18:59:05 -0300
-Subject: [PATCH 03/11] sdcard: initialise sdcu_SoftList before AddHead() uses
+Subject: [PATCH 03/22] sdcard: initialise sdcu_SoftList before AddHead() uses
  it
 
 cmd_AddChangeInt() does AddHead(&unit->sdcu_SoftList), so the list has

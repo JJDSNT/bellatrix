@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 14 Aug 2026 13:10:00 -0300
-Subject: [PATCH 14/14] s: tell Poseidon about a host controller that is present
+Subject: [PATCH 14/22] s: tell Poseidon about a host controller that is present
 
 PsdStackLoader starts the stack and restores saved preferences. A machine
 that has never had Poseidon configured has no hardware in those, so the

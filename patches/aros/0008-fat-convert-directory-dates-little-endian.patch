@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 7 Aug 2026 12:00:00 -0300
-Subject: [PATCH 09/11] fat: convert directory dates little-endian
+Subject: [PATCH 08/22] fat: convert directory dates little-endian
 
 The last field family in the FAT directory entry still exchanged in host
 order -- and this is a restoration, not a new fix. The conversion was on main

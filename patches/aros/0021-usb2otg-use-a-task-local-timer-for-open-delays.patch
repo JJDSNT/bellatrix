@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 14 Aug 2026 16:45:00 -0300
-Subject: [PATCH 23/23] usb2otg: use a task-local timer for open delays
+Subject: [PATCH 21/22] usb2otg: use a task-local timer for open delays
 
 The device-wide timer request is created by the device Init task.  OpenUnit is
 later called by Poseidon's AddUSBHardware task, so waiting synchronously on the

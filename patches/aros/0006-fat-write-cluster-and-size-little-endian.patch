@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 7 Aug 2026 03:00:00 -0300
-Subject: [PATCH 07/11] fat: write cluster and size little-endian
+Subject: [PATCH 06/22] fat: write cluster and size little-endian
 
 rom/filesys/fat converts these on read -- FIRST_FILE_CLUSTER() in fat_fs.h,
 AROS_LE2LONG on file_size in lock.c -- and not on write. On a little-endian

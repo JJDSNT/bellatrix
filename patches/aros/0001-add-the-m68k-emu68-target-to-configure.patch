@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Mon, 3 Aug 2026 18:58:09 -0300
-Subject: [PATCH 01/11] Add the m68k-emu68 target to configure
+Subject: [PATCH 01/22] Add the m68k-emu68 target to configure
 
 Registers a m68k target whose architecture is not amiga: an m68k CPU on
 a Raspberry Pi under Emu68, with no Amiga chipset. Everything else in

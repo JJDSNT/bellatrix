@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 14 Aug 2026 14:45:00 -0300
-Subject: [PATCH 18/18] s: pass the modular USB controller path to Poseidon
+Subject: [PATCH 17/22] s: pass the modular USB controller path to Poseidon
 
 The ARM package can register usb2otg.device by basename because the device is
 already resident.  Bellatrix deliberately keeps the controller replaceable on

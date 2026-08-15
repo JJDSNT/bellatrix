@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Fri, 14 Aug 2026 16:00:00 -0300
-Subject: [PATCH 15/15] s: publish late Emu68 boot progress
+Subject: [PATCH 15/22] s: publish late Emu68 boot progress
 
 BootProgress is present only in distributions for the Emu68 target. Guard
 every call so the generic Startup-Sequence remains unchanged elsewhere.

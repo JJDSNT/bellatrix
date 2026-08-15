@@ -141,11 +141,11 @@ some devices are not usable yet.
 
 ```
 external/emu68      submodule → michalsc/Emu68            (pinned 9b4379a)
-external/aros       submodule → aros-development-team/AROS (pinned d0370bd)
+external/aros       submodule → aros-development-team/AROS (pinned 8570536)
 
 aros/arch/m68k-emu68  the AROS port — our source, symlinked into the AROS tree
-patches/emu68/        3 patches on Emu68
-patches/aros/         6 patches on AROS
+patches/emu68/        7 patches on Emu68
+patches/aros/        22 patches on AROS
 
 scripts/            setup, build, build-aros, make-sdcard
 run.sh              boot under QEMU (Emu68, or Emu68 + AROS + SD card)
@@ -160,13 +160,15 @@ AI_context/         issues and consolidated knowledge
 Two mechanisms, chosen by what the change *is*:
 
 **Patches**, for changing code that belongs to someone else. Both series are
-small and cut by purpose — 3 patches on Emu68 (+206/−14 across 4 files), 6 on
-AROS (+220/−9 across 21 files). `scripts/setup.sh` applies them, and checks the
-result by a tree hash derived from the patches themselves.
+cut by purpose — 7 patches on Emu68 (+304/−25 across 4 files), 22 on AROS
+(+608/−66 across 26 files). `scripts/setup.sh` applies them, and checks the
+result by a tree hash derived from the patches themselves, which is also what
+keeps the series honest: a patch that only undoes an earlier one shows up as
+changing nothing.
 
 **Symlinks**, for shipping our own. The port under `aros/arch/m68k-emu68` is
-57 files and ~6900 lines; as a patch it would be an unreviewable diff with no
-history of its own. It lives here as ordinary source and is linked into
+45 source files and ~5400 lines; as a patch it would be an unreviewable diff
+with no history of its own. It lives here as ordinary source and is linked into
 `external/aros/arch/m68k-emu68`, so there is exactly one copy and editing it
 from either path is the same file.
 
@@ -188,7 +190,7 @@ reports `pristine`, `applied`, `dirty` or `broken`.
 | [`AI_context/`](AI_context/) | open issues and consolidated knowledge |
 
 Nothing in either patch series is specific to this project — all of it is a
-candidate for upstreaming. Two of the nine are ordinary upstream bugs that this
+candidate for upstreaming. Two of them are ordinary upstream bugs that this
 work happened to expose, and neither mentions this port:
 `sdcard` missing a `NEWLIST` before `AddHead()` writes through a NULL `lh_Head`
 (address 4, which on m68k is `AbsExecBase`), and a synchronous `System()` that
