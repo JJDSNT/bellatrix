@@ -13,6 +13,7 @@
 #   bellatrix-<tag>-pi3.tar.xz   the whole card, for a first installation
 #   Bellatrix.img.gz             the aarch64 kernel, to update in place
 #   aros-emu68-m68k.elf          the m68k system, to update in place
+#   bellatrix-<tag>-qemu.tar.xz  the same system, runnable without a Pi
 #
 # The two loose files keep the exact names config.txt declares, because updating
 # a card has to be a copy and never a rename. Mixing versions is supported, not
@@ -144,6 +145,23 @@ verify_assets() {
             || die "$f differs from the copy inside the archive"
     done
 
+    # The QEMU bundle stands or falls on the four files its launcher names.
+    local qemu
+    qemu="$(ls "$dir"/bellatrix-*-qemu.tar.xz 2>/dev/null | head -1 || true)"
+    if [ -n "$qemu" ]; then
+        local qlisting qmissing=()
+        qlisting="$(tar -tJf "$qemu")" || die "$qemu is not readable as tar.xz"
+        for f in ./sd.img ./Emu68.img ./bcm2710-rpi-3-b.dtb ./aros-emu68-m68k.elf \
+                 ./run.sh ./README.txt; do
+            grep -qxF "$f" <<<"$qlisting" || qmissing+=("${f#./}")
+        done
+        [ "${#qmissing[@]}" -eq 0 ] || die "$(basename "$qemu") is missing: ${qmissing[*]}"
+        # -kernel wants a raw image: the gzip the card carries would not boot.
+        tar -xJOf "$qemu" ./Emu68.img | head -c2 | grep -q $'\x1f\x8b' \
+            && die "Emu68.img in the QEMU bundle is gzipped; QEMU will not unpack it"
+        say "verified: $(basename "$qemu")"
+    fi
+
     ( cd "$dir" && sha256sum -c --quiet ./*.sha256 ) \
         || die "a checksum in $dir does not match"
 
@@ -224,6 +242,71 @@ ELF_NAME="$(sed -n 's/^initramfs \([^ ]*\).*$/\1/p' <<<"$CFG" | tr -d '\r')"
 cp "$FIRMWARE/Emu68.img.gz"    "$RELEASE/$KERNEL_NAME"
 cp "$DIST/aros-emu68-m68k.elf" "$RELEASE/$ELF_NAME"
 
+# The QEMU bundle.
+#
+# QEMU's raspi3b does not run the Pi's boot ROM, so it never reads config.txt:
+# the kernel, the device tree and the m68k ELF are passed on the command line
+# instead. That is why this cannot be the card archive with a different name --
+# it needs the files loose *and* a disk image, where the card needs files only.
+say "packing the QEMU bundle"
+QEMU_STAGE="$RELEASE/.qemu"
+rm -rf "$QEMU_STAGE"; mkdir -p "$QEMU_STAGE"
+
+"$ROOT/scripts/make-sdcard.sh" --out "$QEMU_STAGE/sd.img" >/dev/null
+cp "$ROOT/out/images/Emu68.img"     "$QEMU_STAGE/Emu68.img"
+cp "$FIRMWARE/bcm2710-rpi-3-b.dtb"  "$QEMU_STAGE/"
+cp "$DIST/aros-emu68-m68k.elf"      "$QEMU_STAGE/"
+
+# Uncompressed here, unlike on a card: the Pi firmware unpacks a gzipped kernel
+# by content, and QEMU does not.
+cat > "$QEMU_STAGE/run.sh" <<'LAUNCHER'
+#!/bin/sh
+# Boot Bellatrix under QEMU. Needs qemu-system-aarch64 (Debian/Ubuntu:
+# qemu-system-arm). Ctrl-A X quits. Anything passed here reaches qemu.
+#
+# nocomposition is not optional yet: with the compositor enabled the boot
+# finishes and the screen never changes.
+here=$(cd "$(dirname "$0")" && pwd)
+exec qemu-system-aarch64 \
+    -M raspi3b -accel tcg,tb-size=64 \
+    -kernel "$here/Emu68.img" \
+    -dtb "$here/bcm2710-rpi-3-b.dtb" \
+    -initrd "$here/aros-emu68-m68k.elf" \
+    -drive "file=$here/sd.img,if=sd,format=raw" \
+    -append nocomposition \
+    -serial mon:stdio -display gtk -device usb-tablet -no-reboot "$@"
+LAUNCHER
+chmod +x "$QEMU_STAGE/run.sh"
+
+cat > "$QEMU_STAGE/README.txt" <<'QREADME'
+Bellatrix under QEMU
+====================
+
+    ./run.sh
+
+That is all, if qemu-system-aarch64 is installed. Without a window:
+
+    ./run.sh -display none
+
+The files, and why each is passed:
+
+    Emu68.img              the aarch64 kernel, given to -kernel
+    bcm2710-rpi-3-b.dtb    the device tree, given to -dtb
+    aros-emu68-m68k.elf    the m68k system, given to -initrd
+    sd.img                 the system volume, attached as the SD card
+
+QEMU's raspi3b does not run the Pi's boot ROM, so it never reads a
+config.txt from the card: the first three are named on the command line
+instead. On real hardware the same files are on the card and config.txt
+names them.
+
+A wired USB tablet is attached for the pointer. QEMU's relative usb-mouse
+path reverses both axes here.
+QREADME
+
+tar -C "$QEMU_STAGE" -cf - . | xz -T0 -9 > "$RELEASE/bellatrix-$TAG-qemu.tar.xz"
+rm -rf "$QEMU_STAGE"
+
 ( cd "$RELEASE" && for f in *; do sha256sum "$f" > "$f.sha256"; done )
 
 verify_assets "$RELEASE"
@@ -275,6 +358,19 @@ fi
     echo "Both files go at the root of the card, under the names they have here —"
     echo '`config.txt` names them, so renaming one is the same as not copying it.'
     echo
+    echo "## Running it without a Pi"
+    echo
+    echo "\`bellatrix-'"$TAG"'-qemu.tar.xz\` is the same system, packaged to run under"
+    echo "QEMU. Unpack it anywhere and:"
+    echo
+    echo '```'
+    echo "./run.sh"
+    echo '```'
+    echo
+    echo "It needs \`qemu-system-aarch64\` (Debian and Ubuntu call the package"
+    echo "\`qemu-system-arm\`). Ctrl-A X quits, and \`./run.sh -display none\` runs it"
+    echo "on the serial line alone."
+    echo
     echo "## What this is"
     echo
     echo '```'
@@ -314,7 +410,8 @@ case "$TAG" in *-rc*|*-beta*|*-test*) FLAGS+=(--prerelease --latest=false) ;; es
 if gh release view "$TAG" >/dev/null 2>&1; then
     say "release $TAG exists, replacing its assets"
     gh release upload "$TAG" "$RELEASE"/bellatrix-*.tar.xz "$RELEASE/$KERNEL_NAME" \
-        "$RELEASE/$ELF_NAME" "$RELEASE"/*.sha256 --clobber
+        "$RELEASE/$ELF_NAME" "$RELEASE"/bellatrix-*-qemu.tar.xz \
+        "$RELEASE"/*.sha256 --clobber
 else
     say "creating release $TAG"
     gh release create "$TAG" \
