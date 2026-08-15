@@ -170,32 +170,96 @@ That digest does not move when this project's sources change, nor when the patch
 series changes, nor on most bumps of the AROS pin itself. The most expensive
 thing to build is the thing that changes least.
 
-Two consequences:
+`build-aros.sh clean` used to destroy it, preserving instead the ~110 MB of
+downloaded tarballs on the grounds that re-fetching them was the slowest part of
+starting over. That was backwards — the download is minutes, gcc is hours — and
+is fixed: `clean` keeps the toolchain, `distclean` is the verb that drops it.
 
-- **`build-aros.sh clean` destroys it.** The script preserves `bin/Sources` on
-  the stated grounds that the ~110 MB of downloaded tarballs are the slowest
-  part of starting over. That is backwards: re-fetching 110 MB is minutes,
-  recompiling gcc is not. `clean` keeps the cheap half and deletes the expensive
-  one.
-- **It is host-specific** (`bin/linux-x86_64`), so it is never a user-facing
-  release asset. It is, however, exactly what a pipeline has to cache: keyed on
-  the digest above, either as a CI cache (what AROS does on Azure) or as a
-  tarball in object storage, so that a cold clone skips the hours as well.
+### It can be moved
+
+Two properties decide whether a cache is possible at all, and both were
+measured rather than assumed:
+
+- **It relocates.** gcc resolves its own prefix relative to the binary, so a
+  toolchain built under one absolute path compiles from another. Verified by
+  copying `crosstools` elsewhere and compiling an object with it.
+- **It is bound to the host's C library**, needing **glibc ≥ 2.38** and nothing
+  else. That runs on Ubuntu 24.04 (2.39) and later, and not on 22.04 or Debian
+  12 — so a workflow using a cached toolchain has to say `runs-on: ubuntu-24.04`
+  explicitly, and the cache key has to carry the host tag:
+
+```
+a88db85e62ed-linux-x86_64-glibc2.38
+```
+
+Packing costs 39 s and produces 184 MB; restoring costs 14 s. Against hours,
+both are noise.
+
+### Where a cached copy lives
+
+CI is the consumer that matters — a release built by hand on one workstation
+does not need any of this. That ordering rules out using GitHub's own cache
+alone: `actions/cache` restores fastest and costs nothing, but entries unused
+for **7 days are evicted**, the repository budget is **10 GB** shared with
+everything else, and caches are branch-scoped except those made on the default
+branch. With a monthly release cadence the cache is gone by the time it is
+needed, and every release pays for gcc.
+
+A release asset has none of those properties: permanent, not branch-scoped,
+fetched with the `GITHUB_TOKEN` the runner already has, 184 MB against a 2 GB
+limit. It is slow next to the native cache and irrelevant next to compiling.
+
+So they are tiers, not alternatives, and the durable one is the floor:
+
+```
+local cache → actions/cache (CI only) → release asset → build from source
+```
+
+The toolchain is built **by CI**, in a workflow dispatched by hand when the
+digest changes, which publishes the asset and seeds the cache. That is not
+ceremony: it means nobody has to trust a binary that came off a laptop, and it
+gives the GPL obligation a public log naming the sources — gcc 6.5.0 and
+binutils 2.32, fetched by the AROS build at the pinned commit.
 
 This is a build input, not a card component — a different kind of artifact from
 the three below, and the one that governs the cost of all of them.
 
-## The three artifacts
+## What a release publishes
 
-The card is not one thing built one way. It is three, with different inputs,
-different build costs and different rates of change. Every build cost below
-assumes the toolchain above already exists:
+Three assets, and only the first is a package:
 
-| artifact | contents | identity derives from | built by | size |
-|---|---|---|---|---|
-| **boot** | Broadcom firmware, DTBs, `Emu68.img.gz`, `config.txt`, `cmdline.txt` | `patches/emu68`, Emu68 pin | `build.sh`, minutes | 2.2 MB packed |
-| **kernel** | `aros-emu68-m68k.elf` | AROS pin, `patches/aros`, `aros/` | `build-aros.sh`, lean | 1.2 MB raw |
-| **system** | the AROS tree the card boots from | AROS pin, `patches/aros` | `build-aros.sh full`, hours | ~17 MB packed |
+| asset | what it is | size | when it is wanted |
+|---|---|---|---|
+| `bellatrix-<tag>-pi3.tar.xz` | the whole card | 19 MB | first installation |
+| `Emu68.img.gz` | the aarch64 kernel | 748 KB | update in place |
+| `aros-emu68-m68k.elf` | the m68k system | 1.19 MB | update in place |
+
+The two increments are not an arbitrary cut of the card. They are **exactly the
+two files `config.txt` names** — the boundary the boot already declares:
+
+```ini
+kernel=Emu68.img.gz
+initramfs aros-emu68-m68k.elf
+```
+
+So they ship as loose files rather than archives, under the exact names the card
+expects, because updating has to be a copy and never a rename. GitHub scopes
+assets per release, so the same name across releases does not collide; the
+version is the page it came from. Compressing the ELF would take it from 1.19 MB
+to 415 KB and cost the person a tool to unpack it — not a trade worth making for
+800 KB.
+
+## What a release rebuilds
+
+Publishing three things does not mean building three things. The card is made of
+inputs with different costs and different rates of change, and that is what
+makes an update cheap. Every cost below assumes the toolchain above exists:
+
+| input | identity derives from | built by | cost |
+|---|---|---|---|
+| firmware, DTBs, `Emu68.img.gz` | `patches/emu68`, Emu68 pin | `build.sh` | minutes |
+| `aros-emu68-m68k.elf` | AROS pin, `patches/aros`, `aros/` | `build-aros.sh`, lean | minutes |
+| the AROS tree the card boots from | AROS pin, `patches/aros` | `build-aros.sh full` | hours |
 
 The third row is the point. **The system tree does not derive from this
 project's own sources.** The port's modules link into the kernel ELF rather than
@@ -205,34 +269,43 @@ shipping as files: a name search across the distribution tree finds nothing of
 `softpipe`, and the port's `sdcard` appears solely as headers under
 `Developer/`, which the card does not carry.
 
-So everyday work on the port moves the kernel identity and leaves the system
-identity untouched. The expensive build is triggered by a change of AROS pin or
-of its patch series, not by the work that actually happens most days, and the
-artifact that changes is 1.2 MB produced by the lean build.
+So everyday work on the port moves the ELF's identity and leaves the system's
+untouched. The hours are spent when the AROS pin or its patch series moves, not
+on the work that actually happens most days — and a digest of those inputs turns
+"do not rebuild AROS" from a judgement call into a check.
 
-It also gives updates a shape they do not have today: a card already assembled
-is brought up to date by replacing one file. Only a first installation needs the
-19 MB. The single archive stays as the install path; the three artifacts are the
-increment.
+## Mixing versions is allowed
 
-Three consequences follow directly:
+A card assembled from one release and updated from another is a supported state,
+not a hazard to be gated. It follows from what the project is for:
+[`Compat.md`](Compat.md) asks the resident system to boot userlands it was never
+built alongside, AmigaOS included. A release that refused to let a newer ELF meet
+an older volume would be contradicting that on its own card.
 
-- **The artifacts overlap.** The distribution tree contains the kernel ELF at its
-  root — `make-sdcard.sh` copies it from there. If the ELF is its own artifact,
-  the system package must exclude it, or the order of unpacking silently decides
-  which build ends up on the card.
-- **`config.txt` belongs to boot but names the others.** `kernel=Emu68.img.gz`
-  points inside its own package; `initramfs aros-emu68-m68k.elf` points at the
-  kernel package. Those two names become a contract between artifacts, and
-  release verification becomes cross-artifact.
-- **There are two compatibility boundaries, and both are mute.** Between boot and
-  kernel there is `EMU68_BOOT_ABI` (`aros/arch/m68k-emu68/boot/boot.h:7`,
-  published at `boot.c:645`) — but nothing reads it: no reference exists in
-  `patches/emu68` or in `external/emu68/src`. It is a self-declaration, not a
-  handshake. Between kernel and system lies the ordinary AROS boundary between a
-  resident system and the modules on the card. Three separately versioned
-  artifacts give a user eight combinations to assemble, and none of them
-  announces itself as wrong.
+What a release owes the reader is therefore information, never a refusal:
+
+- the three identity digests, in the notes and in a `version.txt` inside the
+  full archive, so a card can say what it is;
+- a plain statement of when an in-place update is enough. The system digest
+  answers it: unchanged since the release someone installed, and the two loose
+  files drop straight in; changed, and the full archive is the honest route,
+  because libraries, Zune classes and the commands in `C:` are files on the card
+  and no new ELF brings them along. That trap is old — `CLAUDE.md` records the
+  months when patches to module code silently never reached what booted.
+
+Two further consequences of the shape:
+
+- **`config.txt` ships only in the full archive**, and it names both increments.
+  Those two names are a contract: a release that renames either file, or adds a
+  boot argument, breaks in-place updates silently. Checking that the names in
+  `config.txt` match the assets being published is cheap and belongs in the
+  release script.
+- **The boot-to-kernel boundary is mute.** `EMU68_BOOT_ABI`
+  (`aros/arch/m68k-emu68/boot/boot.h:7`, published at `boot.c:645`) is declared
+  by AROS and read by nobody: no reference exists in `patches/emu68` or in
+  `external/emu68/src`. Unlike the volume boundary, this one is a genuine
+  handshake that should exist — Emu68 reading the number it is handed is the
+  real protection, and a patch away.
 
 ## Decision in force
 
@@ -242,14 +315,18 @@ of a cold `build-aros.sh full` decides between B and C on evidence.
 
 Two properties belong in it from the start:
 
-- **A version stamped inside the archive** — tag, commit and submodule pins, so
-  a card identifies itself long after the download is forgotten.
-- **A name with room in it**, since the three artifacts above will each need one.
+- **A version stamped inside the archive** — tag, commit, submodule pins and the
+  three digests, so a card identifies itself long after the download is
+  forgotten.
+- **The exact filenames `config.txt` declares** for the two increments, checked
+  against it at publication.
 
 A release is correct when the archive extracts at the root of a FAT32 partition
 and boots a Pi 3, it carries its `.sha256`, it names the commit it was built
 from, and the build refused to run from a `dirty` submodule state.
 
-The decomposition is settled; how it is published is not. Naming, which artifact
-carries `config.txt`, and how a mismatched pair is detected are open — see
-ISSUE-0022.
+What is published, and what makes an update cheap, is settled. Open: whether the
+script creates and pushes the tag, and two measurements that decide whether a
+hosted runner can build a release at all — how long `build-aros.sh full` takes
+with the toolchain present, and how much disk it wants against the runner's ~14
+GB. See ISSUE-0022.

@@ -94,8 +94,9 @@ argument. Writing it there makes every card self-identifying, the QEMU one
 included, and keeps `release.sh` out of another script's staging directory — it
 only passes the tag in through the environment.
 
-**4. Name and checksum.** `out/release/bellatrix-<tag>-pi3-system.tar.xz` and
-its `.sha256`.
+**4. Name and checksum.** `out/release/bellatrix-<tag>-pi3.tar.xz` for the card,
+plus the two increments under the names `config.txt` declares, and a `.sha256`
+beside each.
 
 **5. Verify the archive before publishing.** The part that makes a release
 trustworthy, and the principle the legacy workflow already applied. Concretely:
@@ -115,58 +116,78 @@ function is reusable as-is when the build moves to CI.
 
 # Isolating the expensive build
 
-The reason to split the release is not asset size, it is that one of the three
-things on a card costs hours to build and the other two do not. The
-decomposition, the verification behind it and its consequences are in
-[`docs/release.md`](../../docs/release.md#the-three-artifacts); what matters here
-is the mechanism that makes the isolation real.
+The reason to split a release is not asset size, it is that one of the things on
+a card costs hours to build and the others do not. What is published, what gets
+rebuilt and why mixing versions is allowed are in
+[`docs/release.md`](../../docs/release.md#what-a-release-publishes); what matters
+here is the mechanism.
 
-**The toolchain gates everything.** `m68k-aros-gcc` is built from source when
-absent, so no build cost quoted anywhere is real on a machine that has not paid
-for it once: 653 MB installed, 184 MB packed, and its own digest from
-`config/gcc_def`, `config/binutils_def` and `tools/crosstools` inside the AROS
-pin. It is a build input rather than a card component, and it is host-specific,
-so it is never published to users — but it is the first thing a pipeline has to
-cache. See [`docs/release.md`](../../docs/release.md#the-cross-toolchain).
+**Three assets, one of them a package.** `bellatrix-<tag>-pi3.tar.xz` is the
+whole card, for a first installation. `Emu68.img.gz` (748 KB) and
+`aros-emu68-m68k.elf` (1.19 MB) ship as loose files under the exact names the
+card expects, because they are precisely the two files `config.txt` names and an
+update has to be a copy, never a rename.
 
-**Identity by content.** Each artifact is a pure function of tracked inputs, so
-each can carry a digest of them and be rebuilt only when that digest moves:
+**Identity by content.** Each input is a pure function of tracked paths, so a
+digest decides whether it has to be rebuilt at all:
 
 ```bash
-# system: AROS pin + its patch series -- deliberately NOT aros/, since the
-# port's modules link into the kernel ELF instead of shipping as files
+# the AROS tree the card boots from: pin + patch series, deliberately NOT
+# aros/, since the port's modules link into the ELF instead of shipping as files
 { git rev-parse HEAD:patches/aros
   git -C external/aros rev-parse HEAD; } | sha256sum
 
-# kernel: the same, plus this project's own sources
+# the kernel ELF: the same, plus this project's own sources
 { git rev-parse HEAD:aros
   git rev-parse HEAD:patches/aros
   git -C external/aros rev-parse HEAD; } | sha256sum   # 2ea9677bf5a2
 
-# boot
+# Emu68
 { git rev-parse HEAD:patches/emu68
   git -C external/emu68 rev-parse HEAD; } | sha256sum  # 21cbfe2f9945
 ```
 
-With that, "do not rebuild AROS" stops being a judgement call and becomes a
-check: if the digest has not moved, the release points at the asset already
-published instead of rebuilding and re-uploading it. Putting the digest in the
-filename gives deduplication and traceability at the same time.
+The digests are published as information, not as a gate: a newer ELF meeting an
+older volume is a supported state, because that is what `docs/Compat.md` asks
+for. What the notes owe the reader is whether the system digest moved, since
+that is what decides if dropping in the two files is enough.
+
+**The toolchain cache.** Two facts were measured rather than assumed: the
+toolchain relocates (gcc resolves its prefix relative to the binary, verified by
+compiling from a copy at another absolute path), and it needs glibc >= 2.38 and
+nothing else. So the cache key is `<digest>-<arch>-glibc<version>`, any workflow
+using it has to say `runs-on: ubuntu-24.04`, and packing/restoring cost 39 s and
+14 s for 184 MB.
+
+CI is the consumer that decides the shape. `actions/cache` alone cannot serve
+it: 7-day eviction, a 10 GB repository budget, and branch scoping outside the
+default branch mean a monthly release finds no cache and pays for gcc every
+time. A release asset has none of those limits. They are tiers, with the durable
+one as the floor:
+
+```
+local cache -> actions/cache (CI only) -> release asset -> build from source
+```
+
+The toolchain is built by CI, in a workflow dispatched by hand when the digest
+moves, which publishes the asset and seeds the cache. Nobody has to trust a
+binary from a laptop, and the GPL obligation gets a public log naming gcc 6.5.0
+and binutils 2.32 at the pinned AROS commit.
 
 # What is left
 
+- Measure `build-aros.sh full` twice: incremental (what running it episodically
+  costs here) and cold with the toolchain present (what a runner would pay).
+  With the disk figure, those decide whether a hosted runner can build a release
+  at all, or whether it has to be self-hosted.
 - Write `scripts/release.sh` along the six steps above.
 - Teach `make-sdcard.sh` to honour `--out` on the pack path and to write
   `version.txt` into the staging directory.
-- Decide the three artifacts' names, and which one carries `config.txt`.
-- Make the system package exclude the kernel ELF it currently contains.
-- Give the two compatibility boundaries a voice — at minimum a check at pack
-  time; ideally `EMU68_BOOT_ABI` actually read by the side it is declared to.
-- Decide where a cached copy of the toolchain lives — CI cache, or a tarball in
-  object storage keyed by its digest. (`clean` no longer deletes it: c59cabc.)
-- Measure one cold `build-aros.sh full` — that number decides between hosted CI
-  and a self-hosted runner. Measure it with and without the toolchain present;
-  they are different questions.
+- Toolchain cache: local tier first, then the CI tiers, sharing one key.
+- Check at publication that the names in `config.txt` match the two increments
+  being published.
+- Give the boot-to-kernel boundary a voice: `EMU68_BOOT_ABI` read by Emu68
+  rather than only declared by AROS. The volume boundary stays ungated.
 
 # Decisions taken
 
@@ -180,24 +201,21 @@ filename gives deduplication and traceability at the same time.
   written by `make-sdcard.sh` for every card it stages.
 - No `--allow-dirty` escape hatch. A valve like that becomes the normal path the
   first time someone is in a hurry.
+- Three assets: the full card as an archive, and the two files `config.txt`
+  names as loose files under their exact names. No `-boot`/`-system` split of
+  the card -- the increments are the update path, the archive is the install.
+- Mixing versions is supported, not gated. `docs/Compat.md` asks the resident
+  system to boot volumes it was never built with; a release that refused the
+  same thing on its own card would contradict the project.
+- The toolchain cache has a durable floor (a release asset) with
+  `actions/cache` as a fast tier above it, never as the only tier.
 
 # Open questions
 
-Being refined; the decomposition into three artifacts is settled, the way they
-are published is not.
-
-- **Does the script create the tag?** Preference: create the annotated tag at
-  HEAD when it is missing, but push it only after confirmation — pushing a tag
-  is an outward-facing action and should not happen as the side effect of a
-  build script.
-- **How are the three artifacts named and versioned?** One repository tag across
-  all three, or each carrying its own content digest, or both. A single tag is
-  simpler to talk about; digests are what make the reuse check work.
-- **Which artifact carries `config.txt`?** It belongs to boot by content, but it
-  names the kernel ELF, so the boot package cannot be validated on its own.
-- **How is a mismatched set detected?** Three artifacts give eight combinations
-  and no current mechanism notices a wrong one. Cheap answer: `version.txt` plus
-  a check at pack time. Real answer: the ABI number gets read.
+- **Does the script create the tag?** Minor, and deferred. Preference: create the
+  annotated tag at HEAD when missing, push only after confirmation, since
+  pushing a tag is an outward-facing act and not a side effect of a build.
+- **Is a hosted runner viable?** Waiting on the two `full` measurements above.
 
 # Acceptance criteria
 
