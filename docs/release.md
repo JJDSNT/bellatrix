@@ -245,6 +245,7 @@ Three assets, and only the first is a package:
 | `bellatrix-<tag>-pi3.tar.xz` | the whole card | 19 MB | first installation |
 | `Bellatrix.img.gz` | the aarch64 kernel | 748 KB | update in place |
 | `aros-emu68-m68k.elf` | the m68k system | 1.19 MB | update in place |
+| `bellatrix-<tag>-qemu.tar.xz` | the same system, runnable | 18 MB | trying it without a Pi |
 
 The two increments are not an arbitrary cut of the card. They are **exactly the
 two files `config.txt` names** — the boundary the boot already declares:
@@ -275,6 +276,29 @@ assets per release, so the same name across releases does not collide; the
 version is the page it came from. Compressing the ELF would take it from 1.19 MB
 to 415 KB and cost the person a tool to unpack it — not a trade worth making for
 800 KB.
+
+### The QEMU bundle
+
+It cannot be the card archive under another name. QEMU's `raspi3b` does not run
+the Pi's boot ROM, so it never reads `config.txt`: the kernel, the device tree
+and the m68k ELF go on the command line instead. The card needs files; QEMU
+needs loose files *and* a disk image. So the bundle carries `sd.img`, the kernel
+uncompressed — the Pi firmware unpacks a gzipped kernel by content and QEMU does
+not — the device tree, the ELF, a `README.txt`, and two launchers: `run.sh` for
+Linux and macOS, `run.bat` for Windows.
+
+The Windows one differs in two ways that are easy to get wrong. It passes no
+`-display`, because a Windows QEMU build may have no gtk frontend and naming a
+frontend it lacks is a hard error, while omitting it lets QEMU open its own
+window; and `%~dp0` already ends in a backslash, so the paths concatenate
+without one.
+
+Nothing in the bundle has a filename written into it twice. The kernel's name
+comes from the card's `config.txt` minus the gzip, the launchers and README get
+it substituted, and verification reads it back out of `run.sh` — which is the
+bundle's authority on what it boots, the way `config.txt` is the card's. The
+first run of that check earned its place by refusing a bundle whose launcher
+still named the old kernel.
 
 ## What a release rebuilds
 
