@@ -56,6 +56,21 @@ takes longer than everything else combined. Later runs reuse it.
 `run.sh` boots whatever is built: AROS if its ELF is there, otherwise Emu68 on
 its own. `--no-aros` forces the latter, `--headless` drops the window.
 
+## Trying it without a Pi
+
+Every release carries `bellatrix-<version>-qemu.tar.xz`, which is the same
+system packaged to run under QEMU. Download it from
+[Releases](https://github.com/JJDSNT/bellatrix/releases), unpack it anywhere,
+and:
+
+```bash
+./run.sh
+```
+
+That is all, given `qemu-system-aarch64` — Debian and Ubuntu ship it as
+`qemu-system-arm`. `Ctrl-A X` quits, and `./run.sh -display none` runs it on the
+serial line alone.
+
 ## Running on a Raspberry Pi 3
 
 You need a Pi 3 (Model B or B+), a microSD card of 2 GB or more, an HDMI
