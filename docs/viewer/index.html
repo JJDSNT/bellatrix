@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI_context viewer — Bellatrix</title>
+<style>
+  :root {
+    color-scheme: light dark;
+
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-alt: rgba(255, 255, 255, 0.9);
+    --border: #e2e8f0;
+    --border-hover: #93c5fd;
+    --text: #0f172a;
+    --text-soft: #334155;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --chip-bg: #f1f5f9;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --danger-bg: #fef2f2;
+    --danger-border: #fecaca;
+    --danger-strong: #f87171;
+    --danger-text: #991b1b;
+    --danger-soft: #7f1d1d;
+    --info-bg: #eff6ff;
+    --info-border: #bfdbfe;
+    --info-text: #1d4ed8;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220;
+      --surface: #111a2e;
+      --surface-alt: rgba(17, 26, 46, 0.9);
+      --border: #1f2b45;
+      --border-hover: #3b82f6;
+      --text: #e2e8f0;
+      --text-soft: #cbd5e1;
+      --muted: #94a3b8;
+      --faint: #64748b;
+      --chip-bg: #1a2438;
+      --accent: #3b82f6;
+      --accent-text: #0b1220;
+      --danger-bg: #2a1414;
+      --danger-border: #7f1d1d;
+      --danger-strong: #b91c1c;
+      --danger-text: #fca5a5;
+      --danger-soft: #fca5a5;
+      --info-bg: #10203c;
+      --info-border: #1e3a8a;
+      --info-text: #93c5fd;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    display: grid;
+    gap: 12px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 900;
+  }
+  .sub {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .sub a { color: var(--accent); }
+  .input-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  input[type="text"], input[type="password"] {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    min-width: 220px;
+  }
+  button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:disabled {
+    background: var(--faint);
+    cursor: not-allowed;
+  }
+  .hint {
+    font-size: 11px;
+    color: var(--faint);
+  }
+  main {
+    padding: 20px;
+    display: grid;
+    gap: 24px;
+  }
+  .status-banner {
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .status-banner.error {
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    color: var(--danger-text);
+  }
+  .status-banner.empty {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .status-banner.loading {
+    background: var(--info-bg);
+    border: 1px solid var(--info-border);
+    color: var(--info-text);
+  }
+  section h2 {
+    font-size: 14px;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-soft);
+    margin: 0 0 10px;
+  }
+  .board {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(180px, 1fr);
+    gap: 12px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .column {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+    align-content: start;
+    min-height: 80px;
+  }
+  .column.unsanctioned {
+    border-color: var(--danger-border);
+  }
+  .column-title {
+    font-size: 12px;
+    font-weight: 800;
+    color: var(--text-soft);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .column.unsanctioned .column-title {
+    color: var(--danger-text);
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    cursor: pointer;
+    display: grid;
+    gap: 4px;
+  }
+  .card:hover {
+    border-color: var(--border-hover);
+  }
+  .card .id {
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--muted);
+  }
+  .card .title {
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .tags {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .tag {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--chip-bg);
+    border: 1px solid var(--border);
+    color: var(--text-soft);
+  }
+  .tag.priority-high, .tag.priority-critical {
+    background: var(--danger-bg);
+    border-color: var(--danger-border);
+    color: var(--danger-text);
+  }
+  .tag.clickable {
+    cursor: pointer;
+    user-select: none;
+  }
+  .tag.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+  }
+  .facet-bar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .list {
+    display: grid;
+    gap: 8px;
+  }
+  .list-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+  }
+  .list-item:hover {
+    border-color: var(--border-hover);
+  }
+  .list-item .sub-line {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .blockers-section {
+    border: 1px solid var(--danger-border);
+    background: var(--danger-bg);
+    border-radius: 14px;
+    padding: 14px 16px;
+  }
+  .blockers-section h2 {
+    color: var(--danger-text);
+  }
+  .blocker-item {
+    background: var(--surface);
+    border: 1px solid var(--danger-border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    display: grid;
+    gap: 4px;
+  }
+  .blocker-item:hover {
+    border-color: var(--danger-strong);
+  }
+  .blocker-item .id-line {
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .blocker-item .reason {
+    font-size: 12px;
+    color: var(--danger-soft);
+  }
+  dialog {
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    padding: 0;
+    width: min(720px, 92vw);
+    max-height: 84vh;
+  }
+  dialog::backdrop {
+    background: rgba(15, 23, 42, 0.45);
+  }
+  dialog .dialog-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 12px;
+  }
+  dialog .dialog-body {
+    padding: 14px 18px;
+    overflow: auto;
+    max-height: 64vh;
+  }
+  dialog pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 13px;
+    line-height: 1.6;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  dialog .close-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .dialog-title {
+    font-weight: 800;
+    font-size: 15px;
+  }
+  .dialog-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  footer {
+    padding: 16px 20px 30px;
+    font-size: 11px;
+    color: var(--faint);
+  }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI_context viewer — Bellatrix</h1>
+  <p class="sub">
+    Issues, specs and consolidated knowledge of any GitHub repository that follows
+    the <code>AI_context/</code> convention, read live in the browser with nothing
+    cloned and nothing built. Based on the viewer from
+    <a href="https://github.com/JJDSNT/ai_sdlc" target="_blank" rel="noopener">JJDSNT/ai_sdlc</a>.
+  </p>
+
+  <div class="input-row">
+    <input id="repo-input" type="text" placeholder="owner/repo or GitHub URL" />
+    <input id="token-input" type="password" placeholder="Token (optional, private repos)" />
+    <button id="load-btn">Load</button>
+  </div>
+  <span class="hint">
+    The token is never stored — it stays in memory while the page is open. Public
+    repositories need no token: one GitHub API request per load, file contents
+    come from the raw CDN.
+  </span>
+</header>
+
+<main id="app">
+  <div class="status-banner empty">Enter a repository above to start.</div>
+</main>
+
+<footer>
+  Publication mechanism (live reads from the GitHub API, no build, server or database)
+  adapted from <a href="https://github.com/JJDSNT/ai_sdlc/blob/main/docs/viewer/index.html" target="_blank" rel="noopener">JJDSNT/ai_sdlc/docs/viewer/index.html</a>.
+</footer>
+
+<dialog id="detail-dialog">
+  <div class="dialog-header">
+    <div>
+      <div id="detail-title" class="dialog-title"></div>
+      <div id="detail-meta" class="dialog-meta"></div>
+    </div>
+    <button class="close-btn" id="detail-close">✕</button>
+  </div>
+  <div class="dialog-body">
+    <pre id="detail-body"></pre>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+
+// ---------- Frontmatter parser ----------
+// Based on the hand-rolled parser from JJDSNT/ai_sdlc
+// (apps/agent/src/ai-context/frontmatter.ts / docs/viewer/index.html),
+// extended to also accept single-line YAML flow lists (`tags: [a, b, c]`);
+// the original only recognised the block style (`tags:\n  - a\n  - b`).
+function parseInlineList(value) {
+  const inner = value.slice(1, -1).trim();
+  if (inner.length === 0) return [];
+  return inner.split(",").map((item) => item.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+}
+
+function parseFrontmatter(raw) {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+
+  if (!match) {
+    return { frontmatter: {}, body: raw };
+  }
+
+  const block = match[1];
+  const body = match[2] || "";
+  const frontmatter = {};
+
+  let currentKey = null;
+  let currentList = null;
+
+  function flushList() {
+    if (currentKey && currentList) {
+      frontmatter[currentKey] = currentList;
+    }
+    currentKey = null;
+    currentList = null;
+  }
+
+  for (const line of block.split(/\r?\n/)) {
+    const listItem = line.match(/^\s*-\s*(.+)$/);
+
+    if (listItem && currentKey) {
+      currentList = currentList || [];
+      currentList.push(listItem[1].trim().replace(/^["']|["']$/g, ""));
+      continue;
+    }
+
+    const keyLine = line.match(/^([\w-]+):\s*(.*)$/);
+
+    if (keyLine) {
+      flushList();
+      const key = keyLine[1];
+      const trimmedValue = keyLine[2].trim();
+
+      if (trimmedValue.startsWith("[") && trimmedValue.endsWith("]")) {
+        frontmatter[key] = parseInlineList(trimmedValue);
+        currentKey = null;
+      } else if (trimmedValue.length > 0) {
+        frontmatter[key] = trimmedValue.replace(/^["']|["']$/g, "");
+        currentKey = null;
+      } else {
+        currentKey = key;
+        currentList = null;
+      }
+    }
+  }
+
+  flushList();
+
+  return { frontmatter, body };
+}
+
+// ---------- GitHub client ----------
+//
+// One API call per load, not one per file. The git trees API returns every
+// path in the repository in a single response, and the contents themselves
+// come from raw.githubusercontent.com, which does not spend the API budget.
+// The previous shape -- list three directories, then fetch each file through
+// the API -- cost about 25 requests per load against an unauthenticated limit
+// of 60 per hour, so two reloads and a refresh were enough to get throttled.
+//
+// A token is only needed for private repositories; there the raw CDN is not
+// reachable and the contents API serves the file instead.
+
+const AI_CONTEXT_ROOT = "AI_context/";
+
+function parseRepoInput(value) {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  const urlMatch = trimmed.match(/github\.com\/([^/]+)\/([^/]+)/i);
+
+  if (urlMatch) {
+    return { owner: urlMatch[1], repo: urlMatch[2].replace(/\.git$/, "") };
+  }
+
+  const shortMatch = trimmed.match(/^([^/\s]+)\/([^/\s]+)$/);
+
+  if (shortMatch) {
+    return { owner: shortMatch[1], repo: shortMatch[2] };
+  }
+
+  return null;
+}
+
+// When served from GitHub Pages the repository is in the URL itself
+// (owner.github.io/repo/...), so the viewer defaults to the repository that
+// published it instead of to a hardcoded name.
+function repoFromLocation() {
+  const host = window.location.hostname.match(/^([^.]+)\.github\.io$/i);
+  if (!host) return null;
+
+  const owner = host[1];
+  const segments = window.location.pathname.split("/").filter(Boolean);
+
+  // owner.github.io/<repo>/viewer/ -> <repo>; a user site (owner.github.io/)
+  // publishes from the repository named after the owner.
+  if (segments.length === 0) return { owner: owner, repo: owner + ".github.io" };
+  return { owner: owner, repo: segments[0] };
+}
+
+function apiHeaders(token) {
+  const headers = { Accept: "application/vnd.github+json" };
+  if (token) headers.Authorization = "token " + token;
+  return headers;
+}
+
+async function fetchTree(owner, repo, token) {
+  const res = await fetch(
+    "https://api.github.com/repos/" + owner + "/" + repo + "/git/trees/HEAD?recursive=1",
+    { headers: apiHeaders(token) }
+  );
+
+  if (res.status === 404) {
+    throw new Error("Repository not found: " + owner + "/" + repo);
+  }
+
+  if (res.status === 403) {
+    const body = await res.json().catch(() => null);
+    const message = body && body.message ? body.message : "denied by the GitHub API.";
+    throw new Error("Rate limited or access denied: " + message);
+  }
+
+  if (!res.ok) {
+    throw new Error("Could not read the repository tree (HTTP " + res.status + ")");
+  }
+
+  const data = await res.json();
+  const paths = (data.tree || [])
+    .filter((entry) => entry.type === "blob")
+    .map((entry) => entry.path)
+    .filter((path) => path.startsWith(AI_CONTEXT_ROOT) && path.endsWith(".md"))
+    .filter((path) => !path.endsWith("/README.md"));
+
+  // A repository large enough to truncate the tree would need paged listing;
+  // say so rather than silently showing a partial board.
+  return { paths: paths, truncated: Boolean(data.truncated) };
+}
+
+async function fetchFile(owner, repo, path, token) {
+  const url = token
+    ? "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + path
+    : "https://raw.githubusercontent.com/" + owner + "/" + repo + "/HEAD/" + path;
+
+  const headers = token ? { Accept: "application/vnd.github.raw" , Authorization: "token " + token } : {};
+  const res = await fetch(url, { headers: headers });
+
+  if (!res.ok) {
+    throw new Error("Could not read " + path + " (HTTP " + res.status + ")");
+  }
+
+  return res.text();
+}
+
+async function loadDocs(owner, repo, paths, token) {
+  const docs = await Promise.all(
+    paths.map(async (path) => {
+      const raw = await fetchFile(owner, repo, path, token);
+      return Object.assign({ name: path.split("/").pop(), path: path, raw: raw }, parseFrontmatter(raw));
+    })
+  );
+
+  return docs.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ---------- Render ----------
+
+// The sanctioned values, from AI_context/README.md. Anything else gets its own
+// column, marked, instead of being dropped: the legacy viewer carried an extra
+// entry for an unsanctioned status precisely because issues using it vanished
+// from the board with no indication. Surfacing the drift is the job of the
+// board, not of a constant that has to be edited whenever someone invents a
+// status.
+const ISSUE_STATUSES = ["backlog", "ready", "doing", "review", "done", "consolidated", "blocked"];
+const SPEC_STATUSES = ["draft", "validated", "active", "deprecated"];
+
+let activeTagFilter = null;
+let lastIssues = [];
+let lastSpecs = [];
+let lastConsolidated = [];
+
+function el(tag, attrs, children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const key in attrs) {
+      if (key === "text") node.textContent = attrs[key];
+      else node.setAttribute(key, attrs[key]);
+    }
+  }
+  (children || []).forEach((child) => node.appendChild(child));
+  return node;
+}
+
+function renderTags(frontmatter) {
+  const wrap = el("div", { class: "tags" });
+  if (frontmatter.priority) {
+    wrap.appendChild(el("span", { class: "tag priority-" + frontmatter.priority, text: frontmatter.priority }));
+  }
+  (frontmatter.tags || []).slice(0, 3).forEach((tag) => {
+    wrap.appendChild(el("span", { class: "tag", text: tag }));
+  });
+  return wrap;
+}
+
+function openDetail(title, meta, body) {
+  document.getElementById("detail-title").textContent = title;
+  document.getElementById("detail-meta").textContent = meta;
+  document.getElementById("detail-body").textContent = body.trim();
+  document.getElementById("detail-dialog").showModal();
+}
+
+function issueLabel(issue) {
+  return (issue.frontmatter.id || issue.name) + " — " + (issue.frontmatter.title || "");
+}
+
+// Blockers: every issue with a non-empty `blockers`, whatever its status.
+// `status: blocked` alone does not capture the common case in this project --
+// an issue in `doing` with one specific item held up, typically validation on
+// real hardware. See AI_context/README.md ("Blockers").
+function renderBlockers(issues) {
+  const blocked = issues.filter(
+    (issue) => Array.isArray(issue.frontmatter.blockers) && issue.frontmatter.blockers.length > 0
+  );
+
+  const section = el("section", { class: "blockers-section" }, [
+    el("h2", { text: "⚠ Blockers (" + blocked.length + ")" }),
+  ]);
+  const list = el("div", { class: "list" });
+
+  blocked.forEach((issue) => {
+    issue.frontmatter.blockers.forEach((reason) => {
+      const item = el("div", { class: "blocker-item" }, [
+        el("div", { class: "id-line" }, [
+          el("span", { text: issueLabel(issue) }),
+          el("span", { text: "status: " + (issue.frontmatter.status || "-") }),
+        ]),
+        el("div", { class: "reason", text: reason }),
+      ]);
+      item.addEventListener("click", () => {
+        openDetail(
+          issueLabel(issue),
+          "status: " + (issue.frontmatter.status || "-") + " · priority: " + (issue.frontmatter.priority || "-"),
+          issue.body
+        );
+      });
+      list.appendChild(item);
+    });
+  });
+
+  if (blocked.length === 0) {
+    list.appendChild(el("div", { class: "status-banner empty", text: "No blockers recorded." }));
+  }
+
+  section.appendChild(list);
+  return section;
+}
+
+function renderTagFacets(issues) {
+  const counts = new Map();
+  issues.forEach((issue) => {
+    (issue.frontmatter.tags || []).forEach((tag) => {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    });
+  });
+
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const section = el("section", null, [el("h2", { text: "Filter by tag" })]);
+  const bar = el("div", { class: "facet-bar" });
+
+  const allChip = el("span", {
+    class: "tag clickable" + (activeTagFilter === null ? " active" : ""),
+    text: "all (" + issues.length + ")",
+  });
+  allChip.addEventListener("click", () => {
+    activeTagFilter = null;
+    renderAll();
+  });
+  bar.appendChild(allChip);
+
+  sorted.forEach(([tag, count]) => {
+    const chip = el("span", {
+      class: "tag clickable" + (activeTagFilter === tag ? " active" : ""),
+      text: tag + " (" + count + ")",
+    });
+    chip.addEventListener("click", () => {
+      activeTagFilter = activeTagFilter === tag ? null : tag;
+      renderAll();
+    });
+    bar.appendChild(chip);
+  });
+
+  section.appendChild(bar);
+  return section;
+}
+
+function renderIssueBoard(issues) {
+  const filtered = activeTagFilter
+    ? issues.filter((issue) => (issue.frontmatter.tags || []).includes(activeTagFilter))
+    : issues;
+
+  const section = el("section", null, [
+    el("h2", { text: "Issues (" + filtered.length + (activeTagFilter ? " of " + issues.length : "") + ")" }),
+  ]);
+  const board = el("div", { class: "board" });
+
+  const unsanctioned = [...new Set(
+    issues
+      .map((issue) => issue.frontmatter.status)
+      .filter((status) => status && !ISSUE_STATUSES.includes(status))
+  )].sort();
+
+  ISSUE_STATUSES.concat(unsanctioned).forEach((status) => {
+    const isUnsanctioned = unsanctioned.includes(status);
+    const cards = filtered.filter((issue) => issue.frontmatter.status === status);
+    const column = el("div", { class: "column" + (isUnsanctioned ? " unsanctioned" : "") }, [
+      el("div", { class: "column-title" }, [
+        el("span", {
+          text: isUnsanctioned ? status + " ⚠" : status,
+          title: isUnsanctioned ? "Not one of the statuses allowed by AI_context/README.md" : "",
+        }),
+        el("span", { text: String(cards.length) }),
+      ]),
+    ]);
+
+    cards.forEach((issue) => {
+      const hasBlockers = Array.isArray(issue.frontmatter.blockers) && issue.frontmatter.blockers.length > 0;
+      const card = el("div", { class: "card" }, [
+        el("div", { class: "id", text: (issue.frontmatter.id || issue.name) + (hasBlockers ? " ⚠" : "") }),
+        el("div", { class: "title", text: issue.frontmatter.title || "(untitled)" }),
+        renderTags(issue.frontmatter),
+      ]);
+      card.addEventListener("click", () => {
+        openDetail(
+          issueLabel(issue),
+          "status: " + status + " · priority: " + (issue.frontmatter.priority || "-") + " · type: " + (issue.frontmatter.type || "-"),
+          issue.body
+        );
+      });
+      column.appendChild(card);
+    });
+
+    board.appendChild(column);
+  });
+
+  section.appendChild(board);
+  return section;
+}
+
+function renderSpecList(specs) {
+  const section = el("section", null, [el("h2", { text: "Specs (" + specs.length + ")" })]);
+  const list = el("div", { class: "list" });
+
+  SPEC_STATUSES.forEach((status) => {
+    specs
+      .filter((spec) => spec.frontmatter.status === status)
+      .forEach((spec) => {
+        const item = el("div", { class: "list-item" }, [
+          el("div", null, [
+            el("div", { style: "font-weight:700;font-size:13px;", text: spec.frontmatter.title || spec.name }),
+            el("div", { class: "sub-line", text: spec.frontmatter.id || spec.name }),
+          ]),
+          el("span", { class: "tag", text: status }),
+        ]);
+        item.addEventListener("click", () => {
+          openDetail(
+            (spec.frontmatter.id || spec.name) + " — " + (spec.frontmatter.title || ""),
+            "status: " + status,
+            spec.body
+          );
+        });
+        list.appendChild(item);
+      });
+  });
+
+  if (specs.length === 0) {
+    list.appendChild(el("div", { class: "status-banner empty", text: "No specs found." }));
+  }
+
+  section.appendChild(list);
+  return section;
+}
+
+// Closed issues move to AI_context/consolidated/history/, so this section reads
+// the whole subtree, not just the top directory. Consolidated documents do not
+// always carry frontmatter; when they do not, the title is the first heading.
+function renderConsolidatedList(items) {
+  const section = el("section", null, [el("h2", { text: "Consolidated (" + items.length + ")" })]);
+  const list = el("div", { class: "list" });
+
+  const sorted = [...items].sort((a, b) => b.name.localeCompare(a.name));
+
+  sorted.forEach((item) => {
+    const title = item.frontmatter.title || (item.raw.match(/^#\s+(.+)$/m) || [, item.name])[1];
+    const where = item.path.slice(AI_CONTEXT_ROOT.length).replace(/\/[^/]+$/, "");
+
+    const node = el("div", { class: "list-item" }, [
+      el("div", null, [
+        el("div", { style: "font-weight:700;font-size:13px;", text: title }),
+        el("div", { class: "sub-line", text: where }),
+      ]),
+      el("span", { class: "tag", text: item.name.replace(".md", "") }),
+    ]);
+    node.addEventListener("click", () => {
+      openDetail(title, item.path, item.raw);
+    });
+    list.appendChild(node);
+  });
+
+  if (items.length === 0) {
+    list.appendChild(el("div", { class: "status-banner empty", text: "Nothing consolidated yet." }));
+  }
+
+  section.appendChild(list);
+  return section;
+}
+
+// ---------- Orchestration ----------
+
+const app = document.getElementById("app");
+const loadBtn = document.getElementById("load-btn");
+const repoInput = document.getElementById("repo-input");
+const tokenInput = document.getElementById("token-input");
+
+document.getElementById("detail-close").addEventListener("click", () => {
+  document.getElementById("detail-dialog").close();
+});
+
+function setStatus(kind, message) {
+  app.innerHTML = "";
+  app.appendChild(el("div", { class: "status-banner " + kind, text: message }));
+}
+
+function renderAll() {
+  app.innerHTML = "";
+  app.appendChild(renderBlockers(lastIssues));
+  app.appendChild(renderTagFacets(lastIssues));
+  app.appendChild(renderIssueBoard(lastIssues));
+  app.appendChild(renderSpecList(lastSpecs));
+  app.appendChild(renderConsolidatedList(lastConsolidated));
+}
+
+async function load() {
+  const parsed = parseRepoInput(repoInput.value);
+
+  if (!parsed) {
+    setStatus("error", "Invalid repository. Use owner/repo or a GitHub URL.");
+    return;
+  }
+
+  const token = tokenInput.value.trim();
+  loadBtn.disabled = true;
+  activeTagFilter = null;
+  setStatus("loading", "Loading AI_context from " + parsed.owner + "/" + parsed.repo + "…");
+
+  try {
+    const tree = await fetchTree(parsed.owner, parsed.repo, token);
+
+    if (tree.paths.length === 0) {
+      setStatus("empty", "No AI_context/ in " + parsed.owner + "/" + parsed.repo + " (or it is empty).");
+      return;
+    }
+
+    const issuePaths = tree.paths.filter((path) => path.startsWith(AI_CONTEXT_ROOT + "issues/"));
+    const specPaths = tree.paths.filter((path) => path.startsWith(AI_CONTEXT_ROOT + "specs/"));
+    const consolidatedPaths = tree.paths.filter((path) => path.startsWith(AI_CONTEXT_ROOT + "consolidated/"));
+
+    const [issues, specs, consolidated] = await Promise.all([
+      loadDocs(parsed.owner, parsed.repo, issuePaths, token),
+      loadDocs(parsed.owner, parsed.repo, specPaths, token),
+      loadDocs(parsed.owner, parsed.repo, consolidatedPaths, token),
+    ]);
+
+    lastIssues = issues;
+    lastSpecs = specs;
+    lastConsolidated = consolidated;
+    renderAll();
+
+    if (tree.truncated) {
+      app.prepend(el("div", {
+        class: "status-banner error",
+        text: "The repository tree came back truncated — some documents may be missing from this view.",
+      }));
+    }
+  } catch (error) {
+    setStatus("error", error && error.message ? error.message : "Unexpected error while loading.");
+  } finally {
+    loadBtn.disabled = false;
+  }
+}
+
+loadBtn.addEventListener("click", load);
+repoInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") load();
+});
+
+// Precedence: ?repo=owner/repo in the query string, so a link can point at one
+// specific repository; then the repository that published this page; then
+// Bellatrix, for the case of opening the file straight from disk.
+const presetRepo = new URLSearchParams(window.location.search).get("repo");
+const detected = repoFromLocation();
+
+repoInput.value = presetRepo
+  || (detected ? detected.owner + "/" + detected.repo : "JJDSNT/bellatrix");
+
+load();
+</script>
+
+</body>
+</html>

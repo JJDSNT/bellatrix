@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0021
 title: "Keep BootUI visible until Wanderer has produced useful output"
-status: in_progress
+status: doing
 priority: medium
 type: research
 owner: agent

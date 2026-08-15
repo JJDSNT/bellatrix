@@ -5,6 +5,18 @@
 Reference documentation for the project: what the system **is** today —
 architecture, contracts between components, decisions in force.
 
+This folder is published with GitHub Pages at
+<https://jjdsnt.github.io/bellatrix/>.
+
+## Viewer
+
+[`viewer/`](viewer/) is a single page that reads `AI_context/` live from the
+GitHub API: the issue board, blockers, specs and the consolidated history, with
+nothing to clone, build or install. Published alongside these documents at
+<https://jjdsnt.github.io/bellatrix/viewer/>, and it works just as well opened
+from disk. `?repo=owner/repo` points it at any other repository following the
+same convention.
+
 ## Relationship to AI_context/
 
 | | `docs/` | `AI_context/` |
