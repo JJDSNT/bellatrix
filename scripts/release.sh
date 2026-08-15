@@ -152,7 +152,7 @@ verify_assets() {
         local qlisting qmissing=()
         qlisting="$(tar -tJf "$qemu")" || die "$qemu is not readable as tar.xz"
         for f in ./sd.img ./Emu68.img ./bcm2710-rpi-3-b.dtb ./aros-emu68-m68k.elf \
-                 ./run.sh ./README.txt; do
+                 ./run.sh ./run.bat ./README.txt; do
             grep -qxF "$f" <<<"$qlisting" || qmissing+=("${f#./}")
         done
         [ "${#qmissing[@]}" -eq 0 ] || die "$(basename "$qemu") is missing: ${qmissing[*]}"
@@ -278,11 +278,45 @@ exec qemu-system-aarch64 \
 LAUNCHER
 chmod +x "$QEMU_STAGE/run.sh"
 
+# The same command for Windows. Two differences, both learned the hard way by
+# everyone who ships qemu: -display is left out, because a Windows qemu build
+# may have no gtk frontend and naming one it does not have is a hard error,
+# while omitting it lets qemu open its own window; and %~dp0 already ends in a
+# backslash, so the paths concatenate without one.
+cat > "$QEMU_STAGE/run.bat" <<'WINLAUNCHER'
+@echo off
+rem Boot Bellatrix under QEMU on Windows. Needs qemu-system-aarch64 on PATH
+rem (the QEMU for Windows installer puts it there). Anything passed to this
+rem script reaches qemu.
+setlocal
+set HERE=%~dp0
+
+where qemu-system-aarch64 >nul 2>&1
+if errorlevel 1 (
+    echo qemu-system-aarch64 was not found on PATH.
+    echo Install QEMU for Windows from https://qemu.weilnetz.de/w64/ and
+    echo make sure its folder is on PATH, then run this again.
+    exit /b 1
+)
+
+rem nocomposition is not optional yet: with the compositor enabled the boot
+rem finishes and the screen never changes.
+qemu-system-aarch64 ^
+    -M raspi3b -accel tcg,tb-size=64 ^
+    -kernel "%HERE%Emu68.img" ^
+    -dtb "%HERE%bcm2710-rpi-3-b.dtb" ^
+    -initrd "%HERE%aros-emu68-m68k.elf" ^
+    -drive "file=%HERE%sd.img,if=sd,format=raw" ^
+    -append nocomposition ^
+    -serial mon:stdio -device usb-tablet -no-reboot %*
+WINLAUNCHER
+
 cat > "$QEMU_STAGE/README.txt" <<'QREADME'
 Bellatrix under QEMU
 ====================
 
-    ./run.sh
+    ./run.sh          on Linux and macOS
+    run.bat           on Windows
 
 That is all, if qemu-system-aarch64 is installed. Without a window:
 
@@ -367,9 +401,10 @@ fi
     echo "./run.sh"
     echo '```'
     echo
-    echo "It needs \`qemu-system-aarch64\` (Debian and Ubuntu call the package"
-    echo "\`qemu-system-arm\`). Ctrl-A X quits, and \`./run.sh -display none\` runs it"
-    echo "on the serial line alone."
+    echo "or \`run.bat\` on Windows. It needs \`qemu-system-aarch64\` — Debian and Ubuntu"
+    echo "call the package \`qemu-system-arm\`, Windows users want the installer from"
+    echo "qemu.weilnetz.de. Ctrl-A X quits, and \`./run.sh -display none\` runs it on the"
+    echo "serial line alone."
     echo
     echo "## What this is"
     echo

@@ -64,12 +64,13 @@ system packaged to run under QEMU. Download it from
 and:
 
 ```bash
-./run.sh
+./run.sh          # run.bat on Windows
 ```
 
 That is all, given `qemu-system-aarch64` — Debian and Ubuntu ship it as
-`qemu-system-arm`. `Ctrl-A X` quits, and `./run.sh -display none` runs it on the
-serial line alone.
+`qemu-system-arm`, and Windows users want the installer from
+[qemu.weilnetz.de](https://qemu.weilnetz.de/w64/). `Ctrl-A X` quits, and
+`./run.sh -display none` runs it on the serial line alone.
 
 ## Running on a Raspberry Pi 3
 
