@@ -146,10 +146,50 @@ at the price of depending on one machine being up.
 packages exists here too, and cuts in three rather than two. Composes with A, B
 or C rather than competing with them; see below.
 
+## The cross toolchain
+
+Before the three artifacts, the thing that gates all of them. Building anything
+m68k needs `m68k-aros-gcc`, and if it is not there the build makes it from
+source — so "the lean build takes minutes" is only true on a machine that has
+already paid for the toolchain once.
+
+`out/build/aros/bin/linux-x86_64/tools/crosstools` is **653 MB** installed:
+binutils 2.32 and gcc 6.5.0 for `m68k-aros`, plus gmp, isl, mpc and mpfr. As a
+`tar.xz -3` it is **184 MB**.
+
+Its identity is narrower than everything else's, and lives entirely inside the
+AROS pin:
+
+```bash
+{ git -C external/aros rev-parse HEAD:config/gcc_def        # 6.5.0
+  git -C external/aros rev-parse HEAD:config/binutils_def   # 2.32
+  git -C external/aros rev-parse HEAD:tools/crosstools; } | sha256sum
+```
+
+That digest does not move when this project's sources change, nor when the patch
+series changes, nor on most bumps of the AROS pin itself. The most expensive
+thing to build is the thing that changes least.
+
+Two consequences:
+
+- **`build-aros.sh clean` destroys it.** The script preserves `bin/Sources` on
+  the stated grounds that the ~110 MB of downloaded tarballs are the slowest
+  part of starting over. That is backwards: re-fetching 110 MB is minutes,
+  recompiling gcc is not. `clean` keeps the cheap half and deletes the expensive
+  one.
+- **It is host-specific** (`bin/linux-x86_64`), so it is never a user-facing
+  release asset. It is, however, exactly what a pipeline has to cache: keyed on
+  the digest above, either as a CI cache (what AROS does on Azure) or as a
+  tarball in object storage, so that a cold clone skips the hours as well.
+
+This is a build input, not a card component — a different kind of artifact from
+the three below, and the one that governs the cost of all of them.
+
 ## The three artifacts
 
 The card is not one thing built one way. It is three, with different inputs,
-different build costs and different rates of change:
+different build costs and different rates of change. Every build cost below
+assumes the toolchain above already exists:
 
 | artifact | contents | identity derives from | built by | size |
 |---|---|---|---|---|

@@ -124,6 +124,14 @@ decomposition, the verification behind it and its consequences are in
 [`docs/release.md`](../../docs/release.md#the-three-artifacts); what matters here
 is the mechanism that makes the isolation real.
 
+**The toolchain gates everything.** `m68k-aros-gcc` is built from source when
+absent, so no build cost quoted anywhere is real on a machine that has not paid
+for it once: 653 MB installed, 184 MB packed, and its own digest from
+`config/gcc_def`, `config/binutils_def` and `tools/crosstools` inside the AROS
+pin. It is a build input rather than a card component, and it is host-specific,
+so it is never published to users — but it is the first thing a pipeline has to
+cache. See [`docs/release.md`](../../docs/release.md#the-cross-toolchain).
+
 **Identity by content.** Each artifact is a pure function of tracked inputs, so
 each can carry a digest of them and be rebuilt only when that digest moves:
 
@@ -157,9 +165,13 @@ filename gives deduplication and traceability at the same time.
 - Make the system package exclude the kernel ELF it currently contains.
 - Give the two compatibility boundaries a voice — at minimum a check at pack
   time; ideally `EMU68_BOOT_ABI` actually read by the side it is declared to.
+- Stop `build-aros.sh clean` from deleting the cross toolchain, and decide where
+  a cached copy lives — CI cache, or a tarball in object storage keyed by its
+  digest.
 - Resolve the AROS series drift, or decide the gate is a warning.
 - Measure one cold `build-aros.sh full` — that number decides between hosted CI
-  and a self-hosted runner.
+  and a self-hosted runner. Measure it with and without the toolchain present;
+  they are different questions.
 
 # Decisions taken
 
@@ -211,6 +223,9 @@ design A needs no new credentials.
 - 2026-08-15 — script designed against the actual state of the tree: the six
   steps, the archive checks, and the three findings above (`--verify` failing,
   no reachable tag, `--pack` ignoring `--out`). Still no code written.
+- 2026-08-15 — the cross toolchain identified as a fourth expensive thing, of a
+  different kind: a build input, host-specific, 653 MB installed, with the
+  narrowest identity of all and destroyed by `build-aros.sh clean`.
 - 2026-08-15 — the split resolved into three artifacts, not two, once it was
   verified that the port's modules link into the kernel ELF and never reach the
   card as files: the expensive system tree does not depend on this project's
