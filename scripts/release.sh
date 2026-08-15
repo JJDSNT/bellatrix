@@ -149,16 +149,29 @@ verify_assets() {
     local qemu
     qemu="$(ls "$dir"/bellatrix-*-qemu.tar.xz 2>/dev/null | head -1 || true)"
     if [ -n "$qemu" ]; then
-        local qlisting qmissing=()
+        local qlisting qmissing=() qlauncher qkernel qinitrd
         qlisting="$(tar -tJf "$qemu")" || die "$qemu is not readable as tar.xz"
-        for f in ./sd.img ./Emu68.img ./bcm2710-rpi-3-b.dtb ./aros-emu68-m68k.elf \
-                 ./run.sh ./run.bat ./README.txt; do
+        for f in ./sd.img ./bcm2710-rpi-3-b.dtb ./run.sh ./run.bat ./README.txt; do
             grep -qxF "$f" <<<"$qlisting" || qmissing+=("${f#./}")
         done
         [ "${#qmissing[@]}" -eq 0 ] || die "$(basename "$qemu") is missing: ${qmissing[*]}"
+
+        # run.sh is the bundle's authority on what it boots, the way config.txt
+        # is the card's. Reading the names back means neither this check nor the
+        # bundle has to know them in advance.
+        qlauncher="$(tar -xJOf "$qemu" ./run.sh)"
+        qkernel="$(sed -n 's|.*-kernel "$here/\([^"]*\)".*|\1|p' <<<"$qlauncher")"
+        qinitrd="$(sed -n 's|.*-initrd "$here/\([^"]*\)".*|\1|p' <<<"$qlauncher")"
+        [ -n "$qkernel" ] && [ -n "$qinitrd" ] \
+            || die "run.sh in the QEMU bundle names no kernel or no initrd"
+        grep -qxF "./$qkernel" <<<"$qlisting" \
+            || die "run.sh names -kernel $qkernel, which is not in the bundle"
+        grep -qxF "./$qinitrd" <<<"$qlisting" \
+            || die "run.sh names -initrd $qinitrd, which is not in the bundle"
+
         # -kernel wants a raw image: the gzip the card carries would not boot.
-        tar -xJOf "$qemu" ./Emu68.img | head -c2 | grep -q $'\x1f\x8b' \
-            && die "Emu68.img in the QEMU bundle is gzipped; QEMU will not unpack it"
+        tar -xJOf "$qemu" "./$qkernel" | head -c2 | grep -q $'\x1f\x8b' \
+            && die "$qkernel in the QEMU bundle is gzipped; QEMU will not unpack it"
         say "verified: $(basename "$qemu")"
     fi
 
@@ -253,9 +266,17 @@ QEMU_STAGE="$RELEASE/.qemu"
 rm -rf "$QEMU_STAGE"; mkdir -p "$QEMU_STAGE"
 
 "$ROOT/scripts/make-sdcard.sh" --out "$QEMU_STAGE/sd.img" >/dev/null
-cp "$ROOT/out/images/Emu68.img"     "$QEMU_STAGE/Emu68.img"
+
+# The bundle's kernel is the card's kernel without the gzip: uncompressed here
+# because the Pi firmware unpacks a gzipped kernel by content and QEMU does not.
+# Taking the name from KERNEL_NAME rather than writing it out means a rename in
+# make-sdcard.sh reaches this bundle too -- the card and the bundle cannot end
+# up calling the same file different things.
+QEMU_KERNEL="${KERNEL_NAME%.gz}"
+
+cp "$ROOT/out/images/Emu68.img"     "$QEMU_STAGE/$QEMU_KERNEL"
 cp "$FIRMWARE/bcm2710-rpi-3-b.dtb"  "$QEMU_STAGE/"
-cp "$DIST/aros-emu68-m68k.elf"      "$QEMU_STAGE/"
+cp "$DIST/$ELF_NAME"                "$QEMU_STAGE/"
 
 # Uncompressed here, unlike on a card: the Pi firmware unpacks a gzipped kernel
 # by content, and QEMU does not.
@@ -303,9 +324,9 @@ rem nocomposition is not optional yet: with the compositor enabled the boot
 rem finishes and the screen never changes.
 qemu-system-aarch64 ^
     -M raspi3b -accel tcg,tb-size=64 ^
-    -kernel "%HERE%Emu68.img" ^
+    -kernel "%HERE%@KERNEL@" ^
     -dtb "%HERE%bcm2710-rpi-3-b.dtb" ^
-    -initrd "%HERE%aros-emu68-m68k.elf" ^
+    -initrd "%HERE%@ELF@" ^
     -drive "file=%HERE%sd.img,if=sd,format=raw" ^
     -append nocomposition ^
     -serial mon:stdio -device usb-tablet -no-reboot %*
@@ -324,9 +345,9 @@ That is all, if qemu-system-aarch64 is installed. Without a window:
 
 The files, and why each is passed:
 
-    Emu68.img              the aarch64 kernel, given to -kernel
+    @KERNEL@               the aarch64 kernel, given to -kernel
     bcm2710-rpi-3-b.dtb    the device tree, given to -dtb
-    aros-emu68-m68k.elf    the m68k system, given to -initrd
+    @ELF@                  the m68k system, given to -initrd
     sd.img                 the system volume, attached as the SD card
 
 QEMU's raspi3b does not run the Pi's boot ROM, so it never reads a
@@ -337,6 +358,9 @@ names them.
 A wired USB tablet is attached for the pointer. QEMU's relative usb-mouse
 path reverses both axes here.
 QREADME
+
+sed -i "s|@KERNEL@|$QEMU_KERNEL|g; s|@ELF@|$ELF_NAME|g" \
+    "$QEMU_STAGE/run.sh" "$QEMU_STAGE/run.bat" "$QEMU_STAGE/README.txt"
 
 tar -C "$QEMU_STAGE" -cf - . | xz -T0 -9 > "$RELEASE/bellatrix-$TAG-qemu.tar.xz"
 rm -rf "$QEMU_STAGE"
