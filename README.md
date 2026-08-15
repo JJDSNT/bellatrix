@@ -1,6 +1,6 @@
 # Bellatrix
 
-> An AI-generated project, born out of Bloodline's
+> An AI-generated project, inspired by Bloodline's
 > [Omega](https://github.com/h5n1xp/Omega).
 >
 > The goal is AROS running at a usable speed on a Raspberry Pi 3 — which is
