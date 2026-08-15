@@ -116,11 +116,47 @@ function is reusable as-is when the build moves to CI.
 `.github/release-notes/<tag>.md` when present, `--generate-notes` otherwise.
 `--dry-run` stops here and prints what it would have done.
 
+# Isolating the expensive build
+
+The reason to split the release is not asset size, it is that one of the three
+things on a card costs hours to build and the other two do not. The
+decomposition, the verification behind it and its consequences are in
+[`docs/release.md`](../../docs/release.md#the-three-artifacts); what matters here
+is the mechanism that makes the isolation real.
+
+**Identity by content.** Each artifact is a pure function of tracked inputs, so
+each can carry a digest of them and be rebuilt only when that digest moves:
+
+```bash
+# system: AROS pin + its patch series -- deliberately NOT aros/, since the
+# port's modules link into the kernel ELF instead of shipping as files
+{ git rev-parse HEAD:patches/aros
+  git -C external/aros rev-parse HEAD; } | sha256sum
+
+# kernel: the same, plus this project's own sources
+{ git rev-parse HEAD:aros
+  git rev-parse HEAD:patches/aros
+  git -C external/aros rev-parse HEAD; } | sha256sum   # 2ea9677bf5a2
+
+# boot
+{ git rev-parse HEAD:patches/emu68
+  git -C external/emu68 rev-parse HEAD; } | sha256sum  # 21cbfe2f9945
+```
+
+With that, "do not rebuild AROS" stops being a judgement call and becomes a
+check: if the digest has not moved, the release points at the asset already
+published instead of rebuilding and re-uploading it. Putting the digest in the
+filename gives deduplication and traceability at the same time.
+
 # What is left
 
 - Write `scripts/release.sh` along the six steps above.
 - Teach `make-sdcard.sh` to honour `--out` on the pack path and to write
   `version.txt` into the staging directory.
+- Decide the three artifacts' names, and which one carries `config.txt`.
+- Make the system package exclude the kernel ELF it currently contains.
+- Give the two compatibility boundaries a voice — at minimum a check at pack
+  time; ideally `EMU68_BOOT_ABI` actually read by the side it is declared to.
 - Resolve the AROS series drift, or decide the gate is a warning.
 - Measure one cold `build-aros.sh full` — that number decides between hosted CI
   and a self-hosted runner.
@@ -140,13 +176,21 @@ function is reusable as-is when the build moves to CI.
 
 # Open questions
 
+Being refined; the decomposition into three artifacts is settled, the way they
+are published is not.
+
 - **Does the script create the tag?** Preference: create the annotated tag at
   HEAD when it is missing, but push it only after confirmation — pushing a tag
   is an outward-facing action and should not happen as the side effect of a
   build script.
-- **Is the `-system` suffix earned?** It only pays for itself if the boot/system
-  split (design D) happens. Otherwise `bellatrix-<tag>-pi3.tar.xz` is more
-  honest.
+- **How are the three artifacts named and versioned?** One repository tag across
+  all three, or each carrying its own content digest, or both. A single tag is
+  simpler to talk about; digests are what make the reuse check work.
+- **Which artifact carries `config.txt`?** It belongs to boot by content, but it
+  names the kernel ELF, so the boot package cannot be validated on its own.
+- **How is a mismatched set detected?** Three artifacts give eight combinations
+  and no current mechanism notices a wrong one. Cheap answer: `version.txt` plus
+  a check at pack time. Real answer: the ABI number gets read.
 
 # Acceptance criteria
 
@@ -167,3 +211,8 @@ design A needs no new credentials.
 - 2026-08-15 — script designed against the actual state of the tree: the six
   steps, the archive checks, and the three findings above (`--verify` failing,
   no reachable tag, `--pack` ignoring `--out`). Still no code written.
+- 2026-08-15 — the split resolved into three artifacts, not two, once it was
+  verified that the port's modules link into the kernel ELF and never reach the
+  card as files: the expensive system tree does not depend on this project's
+  sources at all. Identity-by-content added as the mechanism. Naming, ownership
+  of `config.txt` and mismatch detection left open.

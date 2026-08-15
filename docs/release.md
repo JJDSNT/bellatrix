@@ -142,11 +142,57 @@ during the build.
 already exist. Keeps "push a tag, get a link" without rebuilding the toolchain,
 at the price of depending on one machine being up.
 
-**D — split the asset.** The same seam AROS maintains: the aarch64 side
-(firmware, Emu68, `config.txt`, `cmdline.txt`) builds in minutes and is
-CI-friendly; the m68k side is the expensive one. Two assets, `-boot` and
-`-system`, let the cheap half be automated without waiting on the other.
-Composes with A, B or C rather than competing with them.
+**D — split the asset.** The seam AROS maintains between its boot and system
+packages exists here too, and cuts in three rather than two. Composes with A, B
+or C rather than competing with them; see below.
+
+## The three artifacts
+
+The card is not one thing built one way. It is three, with different inputs,
+different build costs and different rates of change:
+
+| artifact | contents | identity derives from | built by | size |
+|---|---|---|---|---|
+| **boot** | Broadcom firmware, DTBs, `Emu68.img.gz`, `config.txt`, `cmdline.txt` | `patches/emu68`, Emu68 pin | `build.sh`, minutes | 2.2 MB packed |
+| **kernel** | `aros-emu68-m68k.elf` | AROS pin, `patches/aros`, `aros/` | `build-aros.sh`, lean | 1.2 MB raw |
+| **system** | the AROS tree the card boots from | AROS pin, `patches/aros` | `build-aros.sh full`, hours | ~17 MB packed |
+
+The third row is the point. **The system tree does not derive from this
+project's own sources.** The port's modules link into the kernel ELF rather than
+shipping as files: a name search across the distribution tree finds nothing of
+`emu68` or `sdcard` under `C/`, `Libs/`, `Devs/` or `Classes/` —
+`Devs/Drivers/` carries only the generic `gallium`, `hdaudio`, `i2c` and
+`softpipe`, and the port's `sdcard` appears solely as headers under
+`Developer/`, which the card does not carry.
+
+So everyday work on the port moves the kernel identity and leaves the system
+identity untouched. The expensive build is triggered by a change of AROS pin or
+of its patch series, not by the work that actually happens most days, and the
+artifact that changes is 1.2 MB produced by the lean build.
+
+It also gives updates a shape they do not have today: a card already assembled
+is brought up to date by replacing one file. Only a first installation needs the
+19 MB. The single archive stays as the install path; the three artifacts are the
+increment.
+
+Three consequences follow directly:
+
+- **The artifacts overlap.** The distribution tree contains the kernel ELF at its
+  root — `make-sdcard.sh` copies it from there. If the ELF is its own artifact,
+  the system package must exclude it, or the order of unpacking silently decides
+  which build ends up on the card.
+- **`config.txt` belongs to boot but names the others.** `kernel=Emu68.img.gz`
+  points inside its own package; `initramfs aros-emu68-m68k.elf` points at the
+  kernel package. Those two names become a contract between artifacts, and
+  release verification becomes cross-artifact.
+- **There are two compatibility boundaries, and both are mute.** Between boot and
+  kernel there is `EMU68_BOOT_ABI` (`aros/arch/m68k-emu68/boot/boot.h:7`,
+  published at `boot.c:645`) — but nothing reads it: no reference exists in
+  `patches/emu68` or in `external/emu68/src`. It is a self-declaration, not a
+  handshake. Between kernel and system lies the ordinary AROS boundary between a
+  resident system and the modules on the card. Three separately versioned
+  artifacts give a user eight combinations to assemble, and none of them
+  announces itself as wrong.
 
 ## Decision in force
 
@@ -158,9 +204,12 @@ Two properties belong in it from the start:
 
 - **A version stamped inside the archive** — tag, commit and submodule pins, so
   a card identifies itself long after the download is forgotten.
-- **A name with room in it** — `bellatrix-<tag>-pi3-system.tar.xz`, following the
-  AROS convention and leaving `-boot` free for design D.
+- **A name with room in it**, since the three artifacts above will each need one.
 
 A release is correct when the archive extracts at the root of a FAT32 partition
 and boots a Pi 3, it carries its `.sha256`, it names the commit it was built
 from, and the build refused to run from a `dirty` submodule state.
+
+The decomposition is settled; how it is published is not. Naming, which artifact
+carries `config.txt`, and how a mismatched pair is detected are open — see
+ISSUE-0022.
