@@ -165,9 +165,8 @@ filename gives deduplication and traceability at the same time.
 - Make the system package exclude the kernel ELF it currently contains.
 - Give the two compatibility boundaries a voice — at minimum a check at pack
   time; ideally `EMU68_BOOT_ABI` actually read by the side it is declared to.
-- Stop `build-aros.sh clean` from deleting the cross toolchain, and decide where
-  a cached copy lives — CI cache, or a tarball in object storage keyed by its
-  digest.
+- Decide where a cached copy of the toolchain lives — CI cache, or a tarball in
+  object storage keyed by its digest. (`clean` no longer deletes it: c59cabc.)
 - Resolve the AROS series drift, or decide the gate is a warning.
 - Measure one cold `build-aros.sh full` — that number decides between hosted CI
   and a self-hosted runner. Measure it with and without the toolchain present;
@@ -223,6 +222,9 @@ design A needs no new credentials.
 - 2026-08-15 — script designed against the actual state of the tree: the six
   steps, the archive checks, and the three findings above (`--verify` failing,
   no reachable tag, `--pack` ignoring `--out`). Still no code written.
+- 2026-08-15 — `build-aros.sh` taught not to throw the toolchain away, to refuse
+  a surprise toolchain build when there is no terminal to ask, and to answer
+  `--status` without building. ccache passed to configure on fresh trees only.
 - 2026-08-15 — the cross toolchain identified as a fourth expensive thing, of a
   different kind: a build input, host-specific, 653 MB installed, with the
   narrowest identity of all and destroyed by `build-aros.sh clean`.
