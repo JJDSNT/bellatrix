@@ -155,7 +155,8 @@ throughout.
 4. **Give discovery a device list.** `platform_timer_start()` takes an FDT and
    walks `/soc`. Have the bootstrap produce the list of `PlatformNode`s and pass
    that, so the driver ops tables — which are already abstract — can be reached
-   without a tree.
+   without a tree. This does **not** finish with `platform/fdt.c`: it removes the
+   discovery uses, but `dt_parse()` still runs for the OF tree below.
 5. **Make the console a function pointer**, supplied by the bootstrap.
    `0xdeadbeef` becomes one implementation.
 6. **Decide what to do about the OF tree.** `KRN_OpenFirmwareTree` is part of
@@ -165,6 +166,13 @@ throughout.
    documented requirement of any machine wanting those drivers, or the drivers
    move to the platform seam. This is the only item with a real design choice in
    it, and it comes last, with the rest already separated.
+
+   It also decides where `platform/fdt.c` lives. After step 4 its only remaining
+   job is turning the flattened tree into the `of_node_t` tree that
+   `boot/boot.c:132` publishes as `KRN_OpenFirmwareTree`. If producing that tree
+   is the bootstrap's job — it is the half that has an FDT — the file goes back
+   to `m68k-emu68`. If instead native offers a generic FDT-to-OF converter for
+   any machine that has one, it stays. Not decided here.
 
 Deliberately not in scope: writing a second bootstrap. It is listed under
 **Open questions**.
@@ -394,9 +402,20 @@ lands.
     default, installed by the machine.
 
   Also settled while reading: `platform/fdt.c` is *not* the bootstrap's FDT
-  parser and does not stay with the machine. `boot/boot.c` has its own
-  (`fdt_string()` and friends); `platform/fdt.c` is a generic reader used only
-  by `platform.c`, so it is native and step 4 deletes it rather than moving it.
+  parser. `boot/boot.c` has its own (`fdt_string()` and friends), so the two are
+  unrelated and `platform/fdt.c` moves with `platform/`.
+
+  **Correction, same day.** It was recorded here that step 4 would then delete
+  it. That is wrong, and the file has a second consumer that step 4 does not
+  touch: `platform_openfirmware_tree()` returns `dt_root_node()`, and
+  `boot/boot.c:132` publishes it as `KRN_OpenFirmwareTree` — the hardware
+  description `openfirmware.resource` exposes and the disk drivers read. Step 4
+  removes the *discovery* uses (`soc_translate`, `node_reg`, `find_driver`,
+  `soc_scan`); `dt_parse()` still has to run. Where the file ends up is step 6's
+  question, and deleting it is not among the likely answers: if what survives is
+  producing the OF tree, that is the job of whoever *has* an FDT — the bootstrap
+  — and the file goes back to `m68k-emu68`. The alternative is native keeping a
+  generic FDT-to-OF converter for any machine that has one.
 
   Comments in `cli.c`, `sti.c` and `cause.c` were corrected before the move
   rather than after: each asserted that it was a placeholder awaiting Emu68
