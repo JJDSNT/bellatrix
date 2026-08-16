@@ -10,7 +10,8 @@ include $(SRCDIR)/config/aros.cfg
 
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR) \
                  -I$(SRCDIR)/rom/devs/sdcard \
-                 -I$(SRCDIR)/arch/m68k-emu68/include
+                 -I$(SRCDIR)/arch/m68k-native/include \
+                 -I$(SRCDIR)/arch/m68k-native/soc/include
 
 # -fno-common: Emu68's ELF loader rejects the whole guest image on the first
 # COMMON symbol (src/ElfLoader.c bails on SHN_COMMON), and this backend has

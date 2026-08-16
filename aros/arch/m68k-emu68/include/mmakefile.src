@@ -1,19 +1,18 @@
 include $(SRCDIR)/config/aros.cfg
 
 #
-# Publish this target's headers into $(GENINCDIR), so they are reachable as
-# <hardware/videocore.h> and friends without every mmakefile having to add an
-# -I of its own. compiler/include/mmakefile.src:88 pulls
-# includes-copy-$(ARCH)-$(CPU) into includes-copy, which is how the hook is
-# named for us.
+# Publish this machine's headers into $(GENINCDIR), so they are reachable as
+# <aros/bootui.h> without every mmakefile having to add an -I of its own.
+# compiler/include/mmakefile.src:88 pulls includes-copy-$(ARCH)-$(CPU) into
+# includes-copy, which is how the hook is named for us.
 #
-# hardware/ holds the SoC descriptions the SD and mailbox code needs; aros/
-# holds bootstruct.h, which exists purely to unblock the inherited Amiga
-# command set -- see the comment in that file; asm/ holds the CPU primitives
-# arm-native drivers reach for through <asm/cpu.h>, which arch/m68k-all does
-# not provide.
+# What is left here is what belongs to this bootstrap and not to the port:
+# bootui.h is the splash screen's resource contract, which BootProgress in C:
+# uses to report boot stages. Everything else moved -- the port's boot contract
+# and the CPU primitives to ../../m68k-native/include, the SoC descriptions to
+# ../../m68k-native/soc/include, where the drivers that read them now live.
 #
-INCLUDE_FILES := $(call WILDCARD, *.[hi] aros/*.[hi] hardware/*.[hi] asm/*.[hi])
+INCLUDE_FILES := $(call WILDCARD, *.[hi] aros/*.[hi])
 
 #MM- includes-copy-emu68-m68k : includes-common-m68k
 

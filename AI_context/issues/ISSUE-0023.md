@@ -23,7 +23,7 @@ related_files:
   - aros/arch/m68k-emu68/boot/entry.S
   - aros/arch/m68k-emu68/boot/console.c
   - aros/arch/m68k-emu68/boot/bootui.c
-  - aros/arch/m68k-emu68/include/aros/bootcontract.h
+  - aros/arch/m68k-native/include/aros/bootcontract.h
   - aros/arch/m68k-native/platform/platform.c
   - aros/arch/m68k-native/platform/platform.h
   - aros/arch/m68k-native/platform/fdt.c
@@ -88,7 +88,7 @@ Adding a second machine means writing a bootstrap, not editing the kernel.
 
 - Surveyed the port against the AROS `arch/` convention and wrote
   `docs/aros_port_contract.md`.
-- **Step 1 done.** `aros/arch/m68k-emu68/include/aros/bootcontract.h` states the
+- **Step 1 done.** `aros/arch/m68k-native/include/aros/bootcontract.h` states the
   m68k-specific half: entry conditions, the character sink, what a bootstrap
   must not attempt, and the fact that the minimum CPU is unstated. `boot/boot.h`
   includes it, so it is on the path of everything in `boot/` and cannot rot
@@ -104,10 +104,11 @@ Adding a second machine means writing a bootstrap, not editing the kernel.
   `<aros/bootcontract.h>` and defined with a discarding default in
   `kernel/kernel_debug.c`. `0xdeadbeef` now appears in exactly one executable
   place, `boot/console.c`, which installs itself.
-- **Step 2 mostly done.** `exec/`, `kernel/` and `platform/` (with `bcm283x/`
-  and `fdt.c`) are in `arch/m68k-native/`. No mmakefile needed editing in any of
-  the three moves. What is left of the step is `soc/` and part of `include/`;
-  see *The per-directory split* for what stays behind and why.
+- **Step 2 done.** `exec/`, `kernel/`, `platform/` (with `bcm283x/` and
+  `fdt.c`), `soc/` and the portable part of `include/` are in
+  `arch/m68k-native/`. `arch/m68k-emu68/` is down to `boot/`, `hidd/emu68gfx/`,
+  `battclock/`, `c/`, `doc/` and one header. See *The per-directory split* for
+  why each of those stays.
 
 # How `<cpu>-native` is selected: it is not
 
@@ -223,11 +224,35 @@ its decision was made.** Applying it:
 | `platform/` | native | discovery and the level-6 autovector wiring; the ops tables are already abstract |
 | `platform/bcm283x/` | native | BCM2708 peripherals, same class as `arm-native/soc/broadcom/2708` |
 | `soc/{mbox,sdcard,usb,bluetooth}` | native | ditto, and upstream files these by SoC part |
-| `include/` | native, partly | `hardware/` and `asm/` are the SoC and the CPU; needs its own `includes-copy` hook first |
+| `include/` | native, split three ways | see below |
 | `battclock/` | **machine** | the decision is "this machine has no RTC, keep the clock in `DEVS:battclock`" — a machine with one supplies a different resource. Matches `arm-raspi/battclock` and `aarch64-raspi/battclock`, which our copy is derived from |
 | `boot/` | **machine** | entry shim, FDT parsing, `console.c`, the Emu68 register convention. Matches `arm-raspi/boot` |
 | `hidd/emu68gfx/` | **machine** | the framebuffer Emu68's loader hands over, not a SoC display block |
 | `c/`, `doc/` | **machine** | `BootProgress` and the host-interrupt write-up are about this bootstrap |
+
+## Where the headers went
+
+`include/` did not move as a unit, and upstream again says how to split it.
+`arm-native/soc/broadcom/2708/include/hardware/` holds `videocore.h` and
+`arasan.h` — our two files, under our two names — *inside* the soc directory,
+while the CPU primitives sit in `arm-all/include/asm/cpu.h`. So:
+
+| Header | Went to | Because |
+|---|---|---|
+| `aros/bootcontract.h` | `m68k-native/include/` | the port's requirements on its bootstrap |
+| `aros/bootstruct.h` | `m68k-native/include/` | a shim for the inherited Amiga command set; nothing reads it, and nothing about it is Emu68 |
+| `asm/cpu.h` | `m68k-native/include/` | m68k CPU primitives. Upstream would put this in `m68k-all/include/`, but that directory is the submodule's and also serves `m68k-amiga` |
+| `hardware/videocore.h`, `hardware/arasan.h` | `m68k-native/soc/include/hardware/` | with the drivers that read them, as upstream files them |
+| `aros/bootui.h` | **stays in `m68k-emu68/include/`** | the splash screen's resource contract, which `C:BootProgress` uses |
+
+**Three directories now publish under one hook**, `includes-copy-emu68-m68k`.
+That is not a compromise: it is the only key available, because `$(FAMILY)` is
+empty for every non-hosted target and there is no `native` key at all (above).
+It works for the same reason three directories already share
+`kernel-kernel-emu68-m68k` — mmake runs a target in every directory that
+declares it. The published names are unchanged, so no consumer moved:
+everything reaches these as `<hardware/videocore.h>` and friends out of the
+sysroot, never through an `-I` at the source.
 
 The `battclock/` case is the one worth keeping in mind, because on content alone
 it looks portable — nothing in it is Emu68 or even Pi, it is just "no RTC, use a
@@ -263,9 +288,9 @@ correct m68k behaviour and stays in the native architecture.
       and character sink
 - [x] `arch/m68k-native/` exists and holds the kernel, `exec` and platform
       discovery
-- [ ] `arch/m68k-emu68/` holds only bootstrap: entry shim, FDT parser, console
-      — `soc/`, `hidd/emu68gfx/`, `battclock/`, `c/` and `include/` still there;
-      of those only `soc/` and part of `include/` are due to move
+- [x] `arch/m68k-emu68/` holds only bootstrap: entry shim, FDT parser, console
+      — plus `hidd/emu68gfx/`, `battclock/`, `c/`, `doc/` and `aros/bootui.h`,
+      all of which are this machine's by the rule in *The per-directory split*
 - [ ] `boot.c`'s generic half contains no FDT parsing
 - [x] The memory gate tests whether the range is known, not who supplied it
 - [ ] `platform_timer_start()` takes a device list, not a flattened tree
@@ -447,3 +472,20 @@ lands.
   is our `soc/` under native; `arm-raspi/timer/` turned out to be `rom/timer`
   arch code, not a SoC driver, so it was never the counter-example it read as.
   Table under *The per-directory split*.
+- 2026-08-16 — Step 2 finished: `soc/` and the portable part of `include/` moved.
+  The headers split three ways rather than moving as a unit, following
+  `arm-native`'s own filing — SoC descriptions inside `soc/include/hardware`,
+  CPU primitives in the architecture's `include/asm` — and `aros/bootui.h`
+  stayed with the machine. Table under *Where the headers went*.
+
+  Nothing had to be renamed. Every consumer reaches these headers as
+  `<hardware/videocore.h>` and friends out of the sysroot, so moving the source
+  changed only the four `-I` lines in `soc/` and the mmakefile that publishes
+  each set. Three directories now hook `includes-copy-emu68-m68k`, which is the
+  only key available to a non-hosted target and works the same way three
+  directories already share `kernel-kernel-emu68-m68k`.
+
+  Verified by boot rather than by link: `[SDBus00] MMC0: [256MB Capacity]` and
+  the `[USB2OTG]` init sequence both appear, so the Arasan backend, the mailbox
+  resource and the USB driver all run from their new locations, and the boot
+  reaches BootUI display takeover.
