@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0023
 title: "Split the port into an m68k-native architecture and an m68k-emu68 bootstrap"
-status: backlog
+status: doing
 priority: medium
 type: refactor
 owner: agent
@@ -22,9 +22,14 @@ related_files:
   - aros/arch/m68k-emu68/boot/boot.h
   - aros/arch/m68k-emu68/boot/entry.S
   - aros/arch/m68k-emu68/boot/console.c
-  - aros/arch/m68k-emu68/platform/platform.c
-  - aros/arch/m68k-emu68/platform/platform.h
-  - aros/arch/m68k-emu68/kernel/kernel_debug.c
+  - aros/arch/m68k-emu68/boot/bootui.c
+  - aros/arch/m68k-emu68/include/aros/bootcontract.h
+  - aros/arch/m68k-native/platform/platform.c
+  - aros/arch/m68k-native/platform/platform.h
+  - aros/arch/m68k-native/platform/fdt.c
+  - aros/arch/m68k-native/platform/bcm283x/system_timer.c
+  - aros/arch/m68k-native/kernel/kernel_debug.c
+  - aros/arch/m68k-native/kernel/kernel_arch.h
   - aros/arch/m68k-emu68/mmakefile.src
 ---
 
@@ -91,6 +96,18 @@ Adding a second machine means writing a bootstrap, not editing the kernel.
   moves in step 2, and says so in its own text.
 - **Established how `<cpu>-native` is actually selected**, which changes step 2.
   See below.
+- **Step 3 done.** `boot/boot.c` gates on whether the memory range is usable —
+  non-zero size, no wraparound — instead of on the `EMU68_BOOT_MEMORY_VALID`
+  flag. The flag stays as a record of provenance, because
+  `hidd/emu68gfx/emu68gfx_init.c:63` prints the flags word.
+- **Step 5 done.** The character sink is `m68k_boot_putc`, declared in
+  `<aros/bootcontract.h>` and defined with a discarding default in
+  `kernel/kernel_debug.c`. `0xdeadbeef` now appears in exactly one executable
+  place, `boot/console.c`, which installs itself.
+- **Step 2 mostly done.** `exec/`, `kernel/` and `platform/` (with `bcm283x/`
+  and `fdt.c`) are in `arch/m68k-native/`. No mmakefile needed editing in any of
+  the three moves. What is left of the step is `soc/` and part of `include/`;
+  see *The per-directory split* for what stays behind and why.
 
 # How `<cpu>-native` is selected: it is not
 
@@ -250,13 +267,17 @@ correct m68k behaviour and stays in the native architecture.
       — `soc/`, `hidd/emu68gfx/`, `battclock/`, `c/` and `include/` still there;
       of those only `soc/` and part of `include/` are due to move
 - [ ] `boot.c`'s generic half contains no FDT parsing
-- [ ] The memory gate tests whether the range is known, not who supplied it
+- [x] The memory gate tests whether the range is known, not who supplied it
 - [ ] `platform_timer_start()` takes a device list, not a flattened tree
-- [ ] The console is reached through a function pointer
+- [x] The console is reached through a function pointer
 - [ ] `0xdeadbeef`, `/memory`, `/soc` and the entry register assignment appear
-      only in `m68k-emu68`
-- [ ] The reference target still boots to the desktop
-- [ ] `docs/aros_port_contract.md` is updated to describe the result
+      only in `m68k-emu68` — `0xdeadbeef` yes, since step 5; `/soc` is still
+      walked by `platform/fdt.c` from native, which step 4 addresses
+- [x] The reference target still boots to the desktop — 2026-08-16, to BootUI
+      display takeover under QEMU after each of the three moves
+- [ ] `docs/aros_port_contract.md` is updated to describe the result — carries a
+      correction header naming what moved; the survey body still describes the
+      pre-split layout on purpose, because it is the map of steps 4 and 6
 
 # Notes
 

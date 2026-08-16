@@ -1,5 +1,21 @@
 # AROS m68k boot contract
 
+> **Correction, 2026-08-16.** This is the survey taken *before* the split, and
+> it describes a port that lives entirely in `arch/m68k-emu68/`. That is no
+> longer where it lives. `arch/m68k-native/` now exists and holds `exec/`,
+> `kernel/` and `platform/` (with `bcm283x/` and `fdt.c`); `arch/m68k-emu68/`
+> keeps `boot/`, `soc/`, `hidd/emu68gfx/`, `battclock/`, `c/` and `include/`.
+> Steps 1, 3 and 5 of the plan are done: the contract has a header
+> (`include/aros/bootcontract.h`), the memory gate asks about the range rather
+> than about its source, and the character sink is the `m68k_boot_putc` pointer.
+>
+> The document is kept rather than rewritten because its value is the
+> place-by-place inventory of where the two halves are fused, and that inventory
+> is still the map of the remaining work — steps 4 and 6, the device list and the
+> OpenFirmware tree. Read the paths below as "wherever this file is now"; the
+> current state of each is in
+> [`ISSUE-0023`](../AI_context/issues/ISSUE-0023.md).
+
 The port is intended to run on more than one machine. **Emu68 on a Raspberry Pi
 remains the primary target and does not regress**; what changes is that it stops
 being the only machine the port is able to describe.
@@ -299,8 +315,21 @@ the right ones and are already conventional: `BootMsg` with its `KRN_*` tags is
 what every other native architecture uses, and `struct PlatformDriver` with its
 ops tables is copied from `aarch64-native` by its own admission.
 
-What is missing is that the port occupies one directory in the
-`<cpu>-<machine>` slot and does both jobs there, so the bootstrap half cannot be
-replaced without editing the kernel half. Moving the kernel half into a
+What was missing is that the port occupied one directory in the
+`<cpu>-<machine>` slot and did both jobs there, so the bootstrap half could not
+be replaced without editing the kernel half. Moving the kernel half into a
 `m68k-native` architecture, and leaving `m68k-emu68` as a bootstrap, is tracked
-in [`ISSUE-0023`](../AI_context/issues/ISSUE-0023.md).
+in [`ISSUE-0023`](../AI_context/issues/ISSUE-0023.md) and is largely done — see
+the correction at the top.
+
+Two things the moves taught that this survey could not have predicted, both
+recorded in that issue:
+
+- **A relative include crosses the boundary invisibly.** The BCM283x timer
+  driver called the Emu68 splash screen from its IRQ handler through
+  `#include "../../boot/boot.h"`. No grep for the directory name finds that. It
+  is now a `struct PlatformClockObserver` with a do-nothing default.
+- **The build's object directory does not follow the source directory.**
+  `%build_archspecific` derives it from the `maindir`, so a moved file leaves a
+  dependency file naming a path that no longer exists, and the error reads as
+  though the build system had not noticed the move.
