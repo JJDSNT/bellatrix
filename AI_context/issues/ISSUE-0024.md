@@ -190,7 +190,16 @@ And chipset-shaped access in BASE *source*:
 - `rom/dosboot/menu.c:62-66` — `INITHIDDS_KLUDGE`, gated on `__ppc__`
 - `rom/graphics/bestmodeida.c:352` — `#ifdef __mc68000` retrying the mode search
   with `MONITOR_ID_MASK` so PAL/NTSC IDs resolve. Chipset *policy*, no hardware
-  access; changing it is an Amiga compatibility question, not a portability one.
+  access. **This one is live in our binary**, unlike the two above: it has no
+  runtime probe, so the Amiga PAL/NTSC retry is simply active on a machine with
+  no chipset. It is a fallback, reached only when the exact search already
+  failed, and we have not seen it return anything harmful — but nothing in the
+  source says it was meant to run here.
+
+  Recorded earlier as "an Amiga compatibility question, not a portability one,
+  so we left it alone". Half right: changing the *behaviour* is a compatibility
+  question, but the behaviour is reaching a machine it was never written for,
+  and that half is ours.
 
 Nothing was found in the other twenty-odd BASE modules.
 
@@ -220,6 +229,38 @@ Nothing was found in the other twenty-odd BASE modules.
 6. **`dosboot.resource` on PowerPC.** The kludge calls itself "extremely
    obsolete" in its own comment. Not ours to fix blind; recorded so the note
    stops pointing at `dos.library`.
+7. **The three surviving `#ifdef` sites — two fixes, not one.** Jaime's call,
+   2026-08-16: they belong in architecture-specific code, behind hooks that
+   expand to nothing off Amiga. That is the second of two things, and the first
+   is smaller and independent:
+
+   **7a. Give `amiga*` a machine macro.** `mc68000` selects a CPU; all three
+   sites mean *Amiga*. There is no macro for that today — checked, and the
+   result is worth writing down because it is not what it looks like:
+
+   ```
+   configure.in, amiga* block:
+     aros_target_mkdep="...-D_AMIGA -DAMIGA"       ← dependency generation only
+     aros_config_cppflags="...-DNOLIBINLINE"       ← what reaches the compiler
+   ```
+
+   `-D_AMIGA -DAMIGA` never reach the preprocessor, and neither name is read
+   anywhere in the live tree (`arch/.unmaintained/morphos` and a bundled grub
+   diff are the only hits). The fix is one line, and the pattern is two blocks
+   up in the same file: our own `emu68*` target sets `-D__EMU68__` in **both**
+   variables. Upstream picks the name.
+
+   **7b. Move the code behind do-nothing hooks.** An `#ifdef` around machine
+   code is still machine code in the portable module, which is the rule's actual
+   complaint, and 7a does not touch it. The seam is `rom/kernel/kernel_arch.h`'s
+   — a portable default header the architecture replaces through
+   `%set_archincludes`. `arch/m68k-amiga/dosboot/` would be created;
+   `arch/m68k-all/dosboot` already exists, so header search order between them
+   is the one detail needing a decision rather than typing.
+
+   Both are in the RFC. Neither is written: the name is upstream's to choose,
+   and we cannot boot m68k-amiga, so code that only runs there would be compiled
+   and not tested.
 
 # Decisions taken
 
@@ -323,3 +364,15 @@ comment, unrelated to this issue, noted here so it is not lost.
   INTENA/INTREQ to Rigel through the bus hook, at which point the stores reach a
   real owner. Stale IRQ descriptions corrected in `CLAUDE.md`, `docs/irq.md`
   (correction header) and `aros/arch/m68k-emu68/boot/selftest.c`.
+- 2026-08-16 — Direction set for the three surviving `#ifdef` sites: they go into
+  architecture-specific code behind hooks that expand to nothing off Amiga.
+  Splitting that into 7a and 7b came out of asking whether the key could simply
+  change from `mc68000` to `amiga` — it cannot, because no such macro reaches the
+  preprocessor. `-D_AMIGA -DAMIGA` are set in `aros_target_mkdep` only, and are
+  read nowhere in the live tree. That makes the one-line `configure.in` addition
+  a separate, smaller ask that fixes a live defect without needing agreement on
+  packages, and it is now item 2 of the RFC's four.
+
+  Also corrected in the inventory: `bestmodeida.c:352` was written down as
+  something we had left alone on compatibility grounds. It is the one site with
+  no runtime probe, so it is active in our own binary today.

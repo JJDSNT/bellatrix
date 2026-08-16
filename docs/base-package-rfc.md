@@ -64,8 +64,30 @@ And in BASE *source*, rather than in an injection:
 - `rom/dosboot/menu.c:62-66` — `INITHIDDS_KLUDGE`, gated on `__ppc__`.
 - `rom/graphics/bestmodeida.c:352` — `#ifdef __mc68000` retrying the mode
   search with `MONITOR_ID_MASK` so PAL and NTSC IDs resolve. Chipset policy,
-  no hardware access. Changing it is an Amiga compatibility question, not a
-  portability one, so we have left it alone.
+  no hardware access.
+
+**The CPU macro is not a machine test, and on m68k that now matters.** All three
+of those sites are selected by `mc68000` / `__mc68000`, which gcc defines for
+every m68k target regardless of what the machine is:
+
+```
+$ m68k-aros-gcc -march=68040 -dM -E - </dev/null | grep mc68000
+#define __mc68000 1
+#define __mc68000__ 1
+#define mc68000 1
+```
+
+So on an m68k machine with no Amiga chipset they are all compiled in. Two of
+them survive that because a runtime probe stops them —
+`OpenResource("ciaa.resource")` in both `menu.c` sites. `bestmodeida.c:352` has
+no such probe: the PAL/NTSC retry is simply active. It is a fallback, reached
+only when the exact search already failed, and we have not seen it return
+anything harmful — but it is chipset policy deciding mode IDs on a machine with
+no chipset, and nothing in the source says it was meant to be.
+
+That is the argument for treating all three the same way, rather than only the
+one that stores to hardware: the guard that makes two of them safe is a runtime
+accident of what resources happen to be open, not a statement about the machine.
 
 Nothing was found in the other twenty-odd BASE modules.
 
@@ -109,6 +131,76 @@ The patch rewrites the note to name the functions rather than the module,
 which is what makes the remaining work countable, and records the
 CPU-gate-versus-machine-gate observation, since that is the thing that keeps
 reintroducing these.
+
+## The remaining `#ifdef` sites: two separate fixes, and the first is one line
+
+They answer different halves of the complaint, and the smaller one needs no
+agreement about the larger.
+
+### First: the condition is testing the wrong thing, and there is nothing to test
+
+`mc68000` selects a CPU. What all three sites mean is *Amiga*. There is no macro
+for that today — we looked:
+
+```
+configure.in, amiga* block:
+  aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -D_AMIGA -DAMIGA"
+  aros_config_cppflags="$aros_config_cppflags -DNOLIBINLINE"
+```
+
+`-D_AMIGA -DAMIGA` go to `aros_target_mkdep`, which is dependency generation, not
+the compile. And neither name is read anywhere in the live tree — the only users
+are `arch/.unmaintained/morphos` and a bundled grub diff. So m68k-amiga has no
+machine macro reaching the preprocessor at all.
+
+Creating one is a single line, and the pattern is already in the same file two
+blocks up: the `emu68*` target sets `-D__EMU68__` in **both** `aros_target_mkdep`
+and `aros_config_cppflags`. The `amiga*` block would do the same for whatever
+name you prefer. The three sites then say what they mean, and the live defect
+above — `bestmodeida.c` running chipset mode policy on a chipset-free m68k —
+goes away without anyone deciding anything about packages.
+
+We would rather you pick the name than have us invent one.
+
+### Second: an `#ifdef` around machine code is still machine code in the portable module
+
+Which is the rule's actual complaint, and the first fix does not touch it. For
+that the machine knowledge moves into architecture-specific code, reached
+through a hook whose **portable default expands to nothing**.
+
+AROS already has this mechanism; we are not proposing new machinery.
+`rom/kernel/kernel_arch.h` is a header in a portable module whose own comment
+says *"This file needs to be replaced for every machine … just a sample
+providing necessary minimum"*, and every native architecture replaces it by
+putting its own directory on the include path with `%set_archincludes`.
+(`kernel.resource` is not itself in BASE — `BASE_RSRCS` is `bootloader dosboot
+FileSystem lddemon` — so this is a precedent for the mechanism, not for the
+package.)
+
+| Site | Hook | Portable default | `m68k-amiga` supplies |
+|---|---|---|---|
+| `menu.c:553` `toggleMode()` | `DOSBOOT_ARCH_TOGGLE_MODE(GfxBase)` | nothing | the `$DFF1DC` BEAMCON0 write |
+| `menu.c:889` `buttonsPressed()` | `DOSBOOT_ARCH_MOUSE_HELD()` | `FALSE` | the `$BFE001` / `$DFF016` read |
+| `bestmodeida.c:352` | `GFX_ARCH_RETRY_MONITOR_ID` | `0` | `MONITOR_ID_MASK` |
+
+`arch/m68k-amiga/dosboot/` does not exist yet and would be created;
+`arch/m68k-all/dosboot` already does, so the header search order between the two
+is the one detail here that needs a decision rather than just typing.
+
+The `__ppc__` case (`menu.c:62-66`, `INITHIDDS_KLUDGE`) is the same shape with a
+different owner: `arch/ppc-chrp/dosboot` and `arch/ppc-sam440/dosboot` already
+exist — they are two of the three injection violations in the table above — so
+the kludge has somewhere to go that is already built for those targets.
+
+What we like about this over a runtime probe: the binary for a machine that
+supplies no override is the same binary you would get if the code had never been
+written, which is what "architecture-independent" ought to mean. A probe leaves
+the code in and asks at boot.
+
+We have not written either. The name is yours to choose and the ordering
+question wants an answer; and we cannot boot m68k-amiga, so a change to code
+that only runs there would be compiled and not tested. Say which you want and we
+will write it.
 
 ## The question
 
@@ -169,7 +261,14 @@ start building them for every m68k target.
 ## What we are asking
 
 1. Take the two patches, or say what would make them takeable.
-2. Tell us which shape you want for the six chipset functions, and we will
+2. Name a machine macro for `amiga*`, so the three `#ifdef mc68000` /
+   `#ifdef __mc68000` sites can test the machine instead of the CPU. One line in
+   `configure.in`, and it fixes a live defect on chipset-free m68k regardless of
+   what you decide about anything else here.
+3. Say whether you want those three sites moved behind do-nothing arch hooks
+   afterwards, which is what the rule actually asks for and what the macro alone
+   does not give you.
+4. Tell us which shape you want for the six chipset functions, and we will
    write it — or say that the note should record them as a permanent
    exception, which is also an answer, and a better one than a note that has
    said "does not conform" for fifteen years.
