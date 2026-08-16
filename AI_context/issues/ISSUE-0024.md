@@ -444,3 +444,37 @@ comment, unrelated to this issue, noted here so it is not lost.
   The design survives and gets smaller. `chipset.h` being alive makes it a
   working precedent rather than a broken one, and opting another module in is
   two lines of mmakefile instead of a `configure` change.
+- 2026-08-16 — Tried to build an m68k-amiga kickstart, to boot it under the
+  legacy Rigel harness and check the `CUSTOM_*` hooks at runtime. Got the
+  evidence that mattered by another route and stopped short of the ROM. What was
+  learned, for whoever picks this up:
+
+  - **The toolchain is reusable.** `configure --target=amiga-m68k` plus
+    extracting `~/.cache/bellatrix/toolchain/<digest>.tar.xz` into
+    `bin/<host>/tools/` skips the hours of crosstools. The wrappers are written
+    by `configure`, so only `crosstools/` needs to come from the cache — the
+    same property `build-aros.sh` relies on.
+  - **Do not build under the agent scratchpad path.** Linking `stdc.library`
+    dies with `/bin/sh: Argument list too long`: the ~100-character prefix
+    multiplies across hundreds of object paths and overflows `ARG_MAX`. `/tmp/a68k`
+    works. Nothing to do with the Amiga target.
+  - **AROS needs two passes.** The first `make` fails with
+    `proto/kernel.h: No such file` in `arch/m68k-all/exec` and
+    `arch/m68k-amiga/expansion`; re-running gets past it.
+  - **The ROM is two files**, `aros-amiga-m68k-rom.bin` (`.rom` at `0x0F80000`)
+    and `aros-amiga-m68k-ext.bin` (`.ext` at `0xE00000`), both `objcopy`'d from
+    one `aros-amiga-m68k.elf` and checked by `tools/romcheck`. They are built by
+    **`kernel-link-amiga-m68k`**, not by `kernel-amiga-m68k`, which only builds
+    the modules.
+  - **Where it stops**, at the current pin with default options:
+    `aros-amiga-m68k-ram.elf` fails with ``section `.bss' will not fit in region
+    `invalid'``. That is a deliberate trap, not a size problem —
+    `aros-ram.ld:1-4` declares `invalid (rwx) : org = 0xdead0000, l = 0x0`, so
+    any `.bss` the ROM layout does not place explicitly fails the link. The
+    mmakefile has a comment anticipating exactly this and offering
+    `kernel-link-amiga-m68k-test` to analyse it. Note this blocks
+    `aros.elf`, the RAM/debug variant, which `kernel-link-amiga-m68k` also
+    depends on — the two ROM `.bin` targets themselves were never reached.
+
+  Stopped because the ROM was never load-bearing: the design claim was settled by
+  disassembling one object file, and a boot under Rigel would only re-confirm it.
