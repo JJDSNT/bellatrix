@@ -46,7 +46,7 @@ CORERESIDENTS := timer_device utility_library oop_library hiddclass_hidd \
                  layers_library keymap_library inputclass_hidd keyboard_hidd \
                  mouse_hidd keyboard_device gameport_device input_device \
                  console_device intuition_library expansion_library \
-                 partition_library mbox_resource sdcard_device \
+                 partition_library mbox_resource btuart_resource sdcard_device \
                  FileSystem_resource fat_handler lddemon_resource \
                  ram_handler con_handler shell_resource \
                  shellcommands_resource dos_library dosboot_resource
