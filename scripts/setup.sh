@@ -189,6 +189,21 @@ mapfile -t SERIES < <(find "$PATCHES" -mindepth 1 -maxdepth 1 -type d -printf '%
 
 failed=0
 
+# aros-bluzing is injected into the AROS contrib tree, but unlike the two
+# upstream source trees it has no patch series of its own.  Initialise it
+# explicitly so the injected symlink is never left dangling on a fresh clone.
+if [ ! -e "$ROOT/external/aros-bluzing/.git" ]; then
+    if [ "$MODE" = verify ]; then
+        echo "=== aros-bluzing ==="
+        echo "    NOT INITIALISED"
+        failed=1
+    else
+        echo "=== aros-bluzing ==="
+        echo "    initialising submodule"
+        git -C "$ROOT" submodule update --init external/aros-bluzing
+    fi
+fi
+
 for name in "${SERIES[@]}"; do
     dir="$PATCHES/$name"
     repo="$ROOT/external/$name"

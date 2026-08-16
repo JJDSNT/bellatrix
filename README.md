@@ -159,8 +159,10 @@ some devices are not usable yet.
 ```
 external/emu68      submodule → michalsc/Emu68            (pinned 9b4379a)
 external/aros       submodule → aros-development-team/AROS (pinned 8570536)
+external/aros-bluzing submodule → JJDSNT/aros-bluzing
 
 aros/arch/m68k-emu68  the AROS port — our source, symlinked into the AROS tree
+aros/contrib/aros-bluzing Bluetooth stack injection → external/aros-bluzing
 patches/emu68/        7 patches on Emu68
 patches/aros/        22 patches on AROS
 
