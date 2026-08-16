@@ -63,6 +63,12 @@
 /* The password field is write-only and reads back as zero; mask it out of a
  * read-modify-write so the stored value cannot carry stale bits into it. */
 #define CLOCK_PASSWORD_MASK 0xff000000UL
+/* The only fields worth carrying across a stop: clock source and MASH order.
+ * Everything else in CM_GP2CTL is status (BUSY), a one-shot (KILL, FLIP) or
+ * undefined, and writing back whatever a read returned is how this hung under
+ * emulation, where the register is not modelled and reads are not meaningful. */
+#define CLOCK_CTL_SRC_MASK  0x0000000fUL
+#define CLOCK_CTL_MASH_MASK 0x00000600UL
 #define CLOCK_CTL_ENABLE (1UL << 4)
 #define CLOCK_CTL_BUSY (1UL << 7)
 #define CLOCK_CTL_MASH1 (1UL << 9)
@@ -133,9 +139,9 @@ static LONG setup_lpo_clock(struct BTUARTBase *base)
      * BUSY reads 0 immediately. On a real Pi the firmware has already started
      * it for the Bluetooth LPO, so the bad write lands on a running generator.
      */
-    ctl = mmio_read(base->peripheral_base, CLOCK_GP2CTL_OFFSET);
-    mmio_write(base->peripheral_base, CLOCK_GP2CTL_OFFSET,
-               CLOCK_PASSWORD | (ctl & ~(CLOCK_PASSWORD_MASK | CLOCK_CTL_ENABLE)));
+    ctl = mmio_read(base->peripheral_base, CLOCK_GP2CTL_OFFSET) &
+          (CLOCK_CTL_SRC_MASK | CLOCK_CTL_MASH_MASK);
+    mmio_write(base->peripheral_base, CLOCK_GP2CTL_OFFSET, CLOCK_PASSWORD | ctl);
     while ((mmio_read(base->peripheral_base, CLOCK_GP2CTL_OFFSET) &
             CLOCK_CTL_BUSY) && --wait != 0)
         ;
