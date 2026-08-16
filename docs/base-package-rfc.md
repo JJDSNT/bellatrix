@@ -93,6 +93,13 @@ Nothing was found in the other twenty-odd BASE modules.
 
 ## Patch 1 — `graphics: keep the Amiga chipset out of QBlit() and QBSBlit()`
 
+> **Superseded — see "reuse that header" above.** This patch invents an
+> `arch_CauseBlitterInterrupt()` and two files to hold it. Once `chipset.h`'s
+> gate works, the same job is `CUSTOM_CAUSE(INTF_BLIT); CUSTOM_ENABLE(INTB_BLIT);`
+> with no new API and no new files. We are leaving the patch here because the
+> problem statement below is unchanged and because the two are worth comparing;
+> take the shorter one.
+
 `QBlit()` and `QBSBlit()` cause a blitter interrupt by writing INTREQ and
 INTENA at `$DFF000`, under
 
@@ -137,70 +144,151 @@ reintroducing these.
 They answer different halves of the complaint, and the smaller one needs no
 agreement about the larger.
 
-### First: the condition is testing the wrong thing, and there is nothing to test
+### First: `rom/exec/chipset.h` is already the answer, and it has never worked
 
-`mc68000` selects a CPU. What all three sites mean is *Amiga*. There is no macro
-for that today — we looked:
+The design we would propose is in the tree, written in 2011, and dead. This
+changes what we are asking for, so it is worth the space.
 
+`rom/exec/chipset.h` is a header in a portable module that gates Amiga chipset
+access on the machine and defines every hook away to nothing elsewhere:
+
+```c
+#ifdef AROS_ARCH_amiga
+static inline void CUSTOM_CAUSE(UWORD intBit)
+{
+    volatile struct Custom *custom = (struct Custom*)0xdff000;
+    custom->intreq = INTF_SETCLR | intBit;
+}
+/* CUSTOM_ENABLE, CUSTOM_DISABLE, CUSTOM_ACK likewise */
+#else
+#define CUSTOM_ENABLE(intNumber)
+#define CUSTOM_DISABLE(intNumber, list)
+#define CUSTOM_ACK(intBit)
+#define CUSTOM_CAUSE(intBit)
+#endif
 ```
-configure.in, amiga* block:
-  aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -D_AMIGA -DAMIGA"
-  aros_config_cppflags="$aros_config_cppflags -DNOLIBINLINE"
+
+Call sites carry no `#ifdef` at all — `rom/exec/cause.c:104,137,189`,
+`addintserver.c:73`, `remintserver.c:61`, `reschedule.c:73`. That is exactly the
+shape the rule wants, and it is the shape we would have proposed.
+
+**`AROS_ARCH_amiga` is defined nowhere.** It appears once in the entire tree, at
+`chipset.h:7`, testing itself. We checked every plausible source:
+
+| Candidate | Reality |
+|---|---|
+| `AROS_ARCH_amiga` | used at `chipset.h:7`; **defined nowhere in the tree** |
+| `__AROS_ARCH_<arch>__` | emitted by `config/specs.in:26`; **used nowhere**, and absent from a crosstools compile |
+| `AMIGA`, `_AMIGA` | `builtin_define` in **`gcc/config/aros.h:43-44`** — every AROS target on every CPU. They mean "AROS", not "Amiga hardware" |
+| `mc68000`, `__mc68000` | every m68k target. What the three sites use today |
+
+Two spellings of the same intent that never met. So the Amiga branch of
+`chipset.h` has been dead since it was written, on m68k-amiga as much as
+anywhere: nothing overrides `cause.c`, `addintserver.c`, `remintserver.c` or
+`reschedule.c` for that target — `arch/m68k-amiga/exec/` supplies only
+`coldreboot`, `disable.S`, `enable.S`, `exec_globals`, `moveexecbase`,
+`readgayle` and `shutdowna`.
+
+**Please check what that costs m68k-amiga, because we cannot.** `Cause()` says in
+its own comment:
+
+> Quick soft int request. For optimal performance m68k-amiga `Enable()` does not
+> do any extra `SFF_SoftInt` checks
+
+and `arch/m68k-amiga/exec/enable.S` indeed only writes `#0xc000` to `$DFF09A`,
+with no `SFF_SoftInt` test. If `CUSTOM_CAUSE(INTF_SOFTINT)` compiles to nothing,
+the INTREQ bit that would make Paula raise the queued interrupt is never set. We
+do not have an Amiga to test on and will not assert a bug we cannot reproduce —
+but either something else covers this, or software interrupts on m68k-amiga
+depend on a macro that expands to nothing.
+
+**The fix is one define.** Our preference, because it costs one parameterised
+line rather than an Amiga special case:
+
+```diff
+  # configure.in, after aros_target_arch is known
++ aros_config_cppflags="$aros_config_cppflags -D__AROS_ARCH_$aros_target_arch""__"
 ```
 
-`-D_AMIGA -DAMIGA` go to `aros_target_mkdep`, which is dependency generation, not
-the compile. And neither name is read anywhere in the live tree — the only users
-are `arch/.unmaintained/morphos` and a bundled grub diff. So m68k-amiga has no
-machine macro reaching the preprocessor at all.
+```diff
+  # rom/exec/chipset.h
+- #ifdef AROS_ARCH_amiga
++ #ifdef __AROS_ARCH_amiga__
+```
 
-Creating one is a single line, and the pattern is already in the same file two
-blocks up: the `emu68*` target sets `-D__EMU68__` in **both** `aros_target_mkdep`
-and `aros_config_cppflags`. The `amiga*` block would do the same for whatever
-name you prefer. The three sites then say what they mean, and the live defect
-above — `bestmodeida.c` running chipset mode policy on a chipset-free m68k —
-goes away without anyone deciding anything about packages.
+`__AROS_ARCH_<arch>__` is the spelling `config/specs.in` already chose; this
+makes it reach every target through the variable that demonstrably ends up on
+the compile line — the same `aros_config_cppflags` the `amiga*` m68k block
+already uses for `-DNOLIBINLINE`. Every architecture gets its own, so the next
+machine needs no further work. If you would rather keep the bare spelling and
+define that instead, the shape is identical and we do not mind which.
 
-We would rather you pick the name than have us invent one.
+### Second: reuse that header for the remaining sites — do not build a second mechanism
 
-### Second: an `#ifdef` around machine code is still machine code in the portable module
+With the gate working, the three surviving `#ifdef` sites become uses of a
+pattern that already exists, already has consumers, and already passed review.
 
-Which is the rule's actual complaint, and the first fix does not touch it. For
-that the machine knowledge moves into architecture-specific code, reached
-through a hook whose **portable default expands to nothing**.
+**`qblit.c` / `qbsblit.c` need no new API at all.** The two stores they open-code
+are precisely `CUSTOM_CAUSE` and `CUSTOM_ENABLE`:
 
-AROS already has this mechanism; we are not proposing new machinery.
-`rom/kernel/kernel_arch.h` is a header in a portable module whose own comment
-says *"This file needs to be replaced for every machine … just a sample
-providing necessary minimum"*, and every native architecture replaces it by
-putting its own directory on the include path with `%set_archincludes`.
-(`kernel.resource` is not itself in BASE — `BASE_RSRCS` is `bootloader dosboot
-FileSystem lddemon` — so this is a precedent for the mechanism, not for the
-package.)
+```c
+CUSTOM_CAUSE(INTF_BLIT);
+CUSTOM_ENABLE(INTB_BLIT);
+```
 
-| Site | Hook | Portable default | `m68k-amiga` supplies |
+This supersedes our own Patch 1 below, which invented an
+`arch_CauseBlitterInterrupt()` and two new files to hold it. Reusing the existing
+macros is smaller, adds no API, and deletes rather than adds. **Take that version
+instead**; Patch 1 is left in this document only so the two can be compared.
+
+**`menu.c` needs two hooks, in the same file, in the same shape:**
+
+| Site | Hook | Non-Amiga | Amiga |
 |---|---|---|---|
-| `menu.c:553` `toggleMode()` | `DOSBOOT_ARCH_TOGGLE_MODE(GfxBase)` | nothing | the `$DFF1DC` BEAMCON0 write |
-| `menu.c:889` `buttonsPressed()` | `DOSBOOT_ARCH_MOUSE_HELD()` | `FALSE` | the `$BFE001` / `$DFF016` read |
-| `bestmodeida.c:352` | `GFX_ARCH_RETRY_MONITOR_ID` | `0` | `MONITOR_ID_MASK` |
+| `menu.c:553` `toggleMode()` | `CUSTOM_SET_PAL(BOOL pal)` | nothing | the `$DFF1DC` BEAMCON0 write |
+| `menu.c:889` `buttonsPressed()` | `CUSTOM_MOUSE_HELD()` | `FALSE` | the `$BFE001` / `$DFF016` read |
 
-`arch/m68k-amiga/dosboot/` does not exist yet and would be created;
-`arch/m68k-all/dosboot` already does, so the header search order between the two
-is the one detail here that needs a decision rather than just typing.
+The runtime `OpenResource("ciaa.resource")` probes at both sites then become
+redundant and can go, which is the point: the machine question moves from boot
+time to compile time, and the portable source stops naming a CPU.
 
-The `__ppc__` case (`menu.c:62-66`, `INITHIDDS_KLUDGE`) is the same shape with a
-different owner: `arch/ppc-chrp/dosboot` and `arch/ppc-sam440/dosboot` already
-exist — they are two of the three injection violations in the table above — so
-the kludge has somewhere to go that is already built for those targets.
+**`bestmodeida.c:352` gets the gate and nothing else.** It is not hardware
+access — it is a policy decision about whether PAL and NTSC monitor IDs exist —
+so wrapping it in a hardware hook would be dressing. Changing `#ifdef __mc68000`
+to the machine macro is the whole fix, and it is the one that stops chipset mode
+policy running on a chipset-free m68k. Building a seam for a case that does not
+need one is how a rule like this becomes expensive to keep.
 
-What we like about this over a runtime probe: the binary for a machine that
-supplies no override is the same binary you would get if the code had never been
-written, which is what "architecture-independent" ought to mean. A probe leaves
-the code in and asks at boot.
+**`menu.c:62-66` (`INITHIDDS_KLUDGE`, `__ppc__`)** is the same substitution with
+a different owner and no hardware in it: it selects a display-driver setup
+kludge. Same treatment — a machine gate rather than a CPU gate — once you decide
+whether it should still exist, which its own comment ("extremely obsolete")
+suggests is the real question.
 
-We have not written either. The name is yours to choose and the ordering
-question wants an answer; and we cannot boot m68k-amiga, so a change to code
-that only runs there would be compiled and not tested. Say which you want and we
-will write it.
+### Why this and not per-module arch headers
+
+The obvious alternative is a `<module>_arch.h` per module with an
+`arch/m68k-amiga/<module>/` override on the include path, the way
+`rom/kernel/kernel_arch.h` works. We drafted that and then rejected it: it means
+two new headers, a new `arch/m68k-amiga/dosboot/` directory, `%set_archincludes`
+in two more mmakefiles, and an include-search-order question against the existing
+`arch/m68k-all/dosboot`. All of that to express what one already-present header
+expresses.
+
+It would also put `0xdff000` in three files instead of one. The property worth
+defending is that the address appears exactly once in portable source; that is
+what makes the rule checkable by grep rather than by review.
+
+**The one thing this design costs** is that `chipset.h` stops being private to
+`rom/exec`. Two modules would need it on their include path
+(`-I$(SRCDIR)/rom/exec` in `rom/graphics` and `rom/dosboot`), or the header moves
+somewhere all three see. We would take the `-I`, because a move is a bigger diff
+for a reviewer than two lines, and because the file is already conceptually the
+tree's machine-hook header rather than exec's. If you prefer it moved, say where.
+
+We have not written any of this. The gate is one line and we would send it
+immediately if you name the spelling; the rest is code that only runs on
+m68k-amiga, which we cannot boot, so it would be compiled and not tested.
 
 ## The question
 
@@ -260,15 +348,21 @@ start building them for every m68k target.
 
 ## What we are asking
 
-1. Take the two patches, or say what would make them takeable.
-2. Name a machine macro for `amiga*`, so the three `#ifdef mc68000` /
-   `#ifdef __mc68000` sites can test the machine instead of the CPU. One line in
-   `configure.in`, and it fixes a live defect on chipset-free m68k regardless of
-   what you decide about anything else here.
-3. Say whether you want those three sites moved behind do-nothing arch hooks
-   afterwards, which is what the rule actually asks for and what the macro alone
-   does not give you.
-4. Tell us which shape you want for the six chipset functions, and we will
+1. **Check `chipset.h` first.** `AROS_ARCH_amiga` is defined nowhere, so the
+   Amiga branch has been dead since 2011 and `CUSTOM_CAUSE(INTF_SOFTINT)` in
+   `Cause()` expands to nothing on m68k-amiga too. That may be a live defect in
+   software-interrupt delivery on real hardware. It is the only item here we
+   would call urgent, and it is the only one we cannot test.
+2. **Name the spelling for the machine macro** — `__AROS_ARCH_<arch>__` reaching
+   the compile through `aros_config_cppflags`, or the bare `AROS_ARCH_<arch>`
+   that `chipset.h` already expects. One parameterised line either way, and it
+   is the prerequisite for everything else in this document.
+3. Take Patch 2. **Replace Patch 1** with the `CUSTOM_CAUSE`/`CUSTOM_ENABLE`
+   version above, which needs no new API and no new files.
+4. Say whether you want `menu.c`'s two sites moved behind `CUSTOM_*` hooks in the
+   same header, and whether `bestmodeida.c` and the `__ppc__` kludge should get
+   the gate alone.
+5. Tell us which shape you want for the six chipset functions, and we will
    write it — or say that the note should record them as a permanent
    exception, which is also an answer, and a better one than a note that has
    said "does not conform" for fifteen years.
