@@ -236,9 +236,11 @@ correct m68k behaviour and stays in the native architecture.
 
 - [x] A header states the m68k-specific half of the contract: entry conditions
       and character sink
-- [ ] `arch/m68k-native/` exists and holds the kernel, `exec` and platform
+- [x] `arch/m68k-native/` exists and holds the kernel, `exec` and platform
       discovery
 - [ ] `arch/m68k-emu68/` holds only bootstrap: entry shim, FDT parser, console
+      — `soc/`, `hidd/emu68gfx/`, `battclock/`, `c/` and `include/` still there;
+      of those only `soc/` and part of `include/` are due to move
 - [ ] `boot.c`'s generic half contains no FDT parsing
 - [ ] The memory gate tests whether the range is known, not who supplied it
 - [ ] `platform_timer_start()` takes a device list, not a flattened tree
@@ -374,7 +376,32 @@ lands.
   relink was blocked by unrelated uncommitted work in
   `arch/m68k-emu68/soc/bluetooth/` (`btuart_init.c` redeclares `MBoxBase` and
   `KernelBase` that its own `proto/` includes already declare), so the
-  verification is at the kobj rather than the ELF.
+  verification is at the kobj rather than the ELF. *(Later that day: the
+  bluetooth work landed, the ELF relinked, and it carries
+  `emu68_DispatchFrame`/`emu68_SwitchTail` with zero undefined symbols. The
+  kobj-level check held.)*
+- 2026-08-16 — `kernel/` and `platform/` (with `bcm283x/` and `fdt.c`) moved to
+  `arch/m68k-native`. Again no mmakefile edits. Two real dependencies had to be
+  cut instead of moved, and the second is the one worth remembering:
+
+  - `kernel_debug.c` called `boot/console.c`'s `emu68_console_puts()` by name.
+    Replaced by a local walk over `m68k_boot_putc`, and the tag changed to
+    `[AROS/m68k]`, so the boot log now shows which half emitted each line.
+  - `platform/bcm283x/system_timer.c` reached the Emu68 splash screen through
+    `#include "../../boot/boot.h"` and called `emu68_bootui_clock_tick()` from
+    its IRQ handler. **A grep for `m68k-emu68` does not find this** — the path
+    was relative. Now a `struct PlatformClockObserver` with a do-nothing
+    default, installed by the machine.
+
+  Also settled while reading: `platform/fdt.c` is *not* the bootstrap's FDT
+  parser and does not stay with the machine. `boot/boot.c` has its own
+  (`fdt_string()` and friends); `platform/fdt.c` is a generic reader used only
+  by `platform.c`, so it is native and step 4 deletes it rather than moving it.
+
+  Comments in `cli.c`, `sti.c` and `cause.c` were corrected before the move
+  rather than after: each asserted that it was a placeholder awaiting Emu68
+  work that had already happened, and carrying a wrong claim into the portable
+  half is worse than leaving it where it was.
 - 2026-08-16 — Settled the `soc/` / `battclock/` question against upstream's own
   layout rather than by reasoning about our content. `arm-native/soc/broadcom/2708`
   is our `soc/` under native; `arm-raspi/timer/` turned out to be `rom/timer`
