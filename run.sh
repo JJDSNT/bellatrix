@@ -52,9 +52,9 @@ fi
 WANT_AROS="auto"
 USE_SD=1
 DEBUG=""
-# Where the PL011 goes. stdio for a human; a file for anything unattended, which
-# is what scripts/boot-timing.py uses so it can read the log while the run is
-# still going.
+# Where the AUX mini-UART console goes. stdio for a human; a file for anything
+# unattended, which is what scripts/boot-timing.py uses so it can read the log
+# while the run is still going. PL011 remains disconnected here for Bluetooth.
 SERIAL="stdio"
 EXTRA=()
 
@@ -97,8 +97,9 @@ QEMU=(
     -accel tcg,tb-size=64
     -kernel "$KERNEL"
     -dtb "$DTB"
-    # On raspi3b the first -serial is the PL011 that Emu68 logs to. Getting the
-    # order wrong is silence, not an error.
+    # QEMU raspi3b exposes PL011 first and AUX mini-UART second. Bellatrix logs
+    # only through the latter; PL011 is deliberately reserved for Bluetooth.
+    -serial null
     -serial "$SERIAL"
     -display "$DISPLAY_ARG"
     -no-reboot

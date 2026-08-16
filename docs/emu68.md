@@ -7,6 +7,13 @@ Emu68 is the M68K→AArch64 JIT this project builds on. It lives at
 The submodule is never edited in place. Every change below comes from a patch
 in `patches/emu68/`, applied by `scripts/setup.sh`.
 
+Bellatrix patch `0008` also makes UART ownership permanent at the earliest
+hardware setup point: Emu68 logs through AUX mini-UART on GPIO 14/15 (ALT5),
+while PL011 is disabled and reserved for the AROS onboard-Bluetooth transport.
+There is no runtime handoff. The mini-UART divisor assumes the 400 MHz core
+clock pinned by both the installed Emu68 configuration and the Bellatrix card
+builder.
+
 ## Why anything is modified
 
 Emu68 was built to run on a PiStorm, with a real Amiga on the other side of the

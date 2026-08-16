@@ -1,0 +1,126 @@
+diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
+index 4626055..6e1a754 100644
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -102,11 +102,21 @@ void serial_writer()
+ 
+ #else
+ 
++#ifdef BELLATRIX_EMU68
++#define CONSOLE_UART_DR (ARM_PERIIOBASE + 0x215040)
++#define CONSOLE_UART_FR (ARM_PERIIOBASE + 0x215054)
++#define CONSOLE_UART_TXFF (1 << 5)
++#else
++#define CONSOLE_UART_DR (PL011_0_BASE + PL011_DR)
++#define CONSOLE_UART_FR (PL011_0_BASE + PL011_FR)
++#define CONSOLE_UART_TXFF PL011_FR_TXFF
++#endif
++
+ static inline void waitSerOUT(void *io_base)
+ {
+     while(1)
+     {
+-       if ((rd32le(PL011_0_BASE + PL011_FR) & PL011_FR_TXFF) == 0) break;
++       if ((rd32le(CONSOLE_UART_FR) & CONSOLE_UART_TXFF) == 0) break;
+     }
+ }
+ 
+@@ -118,10 +128,10 @@ static inline void putByte(void *io_base, char chr)
+ 
+         if (chr == '\n')
+         {
+-            wr32le(PL011_0_BASE + PL011_DR, '\r');
++            wr32le(CONSOLE_UART_DR, '\r');
+             waitSerOUT(io_base);
+         }
+-        wr32le(PL011_0_BASE + PL011_DR, (uint8_t)chr);
++        wr32le(CONSOLE_UART_DR, (uint8_t)chr);
+         waitSerOUT(io_base);
+     }
+ }
+@@ -452,6 +462,18 @@ void init_display(struct Size dimensions, void **framebuffer, uint32_t *pitch)
+ #define GPPUD                                           (GPIO_BASE + 0x94)
+ #define GPPUDCLK0                                       (GPIO_BASE + 0x98)
+ 
++#define AUX_ENABLES                                     (ARM_PERIIOBASE + 0x215004)
++#define AUX_MU_IER                                      (ARM_PERIIOBASE + 0x215044)
++#define AUX_MU_IIR                                      (ARM_PERIIOBASE + 0x215048)
++#define AUX_MU_LCR                                      (ARM_PERIIOBASE + 0x21504c)
++#define AUX_MU_MCR                                      (ARM_PERIIOBASE + 0x215050)
++#define AUX_MU_CNTL                                     (ARM_PERIIOBASE + 0x215060)
++#define AUX_MU_BAUD                                     (ARM_PERIIOBASE + 0x215068)
++
++#define BELLATRIX_CONSOLE_BAUD                          115200
++#define BELLATRIX_CORE_CLOCK                            400000000
++#define AUX_MU_BAUD_DIV(clock, baud)                    ((clock / (8 * baud)) - 1)
++
+ #ifdef PISTORM_ANY_MODEL
+ 
+ void setup_serial()
+@@ -489,6 +511,45 @@ void setup_serial()
+ 
+ #else
+ 
++#ifdef BELLATRIX_EMU68
++void setup_serial()
++{
++    unsigned int uartvar;
++
++    /* PL011 is a board device, not a fallback console. Leave it quiet for
++     * the AROS Bluetooth resource even when that resource is not loaded. */
++    wr32le(PL011_0_BASE + PL011_CR, 0);
++    wr32le(PL011_0_BASE + 0x38, 0); /* IMSC: mask every interrupt */
++    wr32le(PL011_0_BASE + PL011_ICR, PL011_ICR_FLAGS);
++
++    wr32le(AUX_ENABLES, rd32le(AUX_ENABLES) | 1);
++    wr32le(AUX_MU_CNTL, 0);
++    wr32le(AUX_MU_IER, 0);
++    wr32le(AUX_MU_LCR, 3);
++    wr32le(AUX_MU_MCR, 0);
++    wr32le(AUX_MU_IIR, 0xc6);
++    wr32le(AUX_MU_BAUD,
++           AUX_MU_BAUD_DIV(BELLATRIX_CORE_CLOCK, BELLATRIX_CONSOLE_BAUD));
++
++    uartvar = rd32le(GPFSEL1);
++    uartvar &= ~(7 << 12);                     /* GPIO14: mini-UART TX */
++    uartvar |= 2 << 12;                        /* ALT5 */
++    uartvar &= ~(7 << 15);                     /* GPIO15: mini-UART RX */
++    uartvar |= 2 << 15;                        /* ALT5 */
++    wr32le(GPFSEL1, uartvar);
++
++    wr32le(GPPUD, 0);
++    for (uartvar = 0; uartvar < 150; uartvar++)
++        __asm__ volatile ("nop");
++    wr32le(GPPUDCLK0, (1 << 14) | (1 << 15));
++    for (uartvar = 0; uartvar < 150; uartvar++)
++        __asm__ volatile ("nop");
++    wr32le(GPPUDCLK0, 0);
++
++    wr32le(AUX_MU_CNTL, 3);
++    serial_up = 1;
++}
++#else
+ void setup_serial()
+ {
+     unsigned int        uartvar;
+@@ -533,3 +594,4 @@ void setup_serial()
+ }
+ 
+ #endif
++#endif
+diff --git a/scripts/config.txt b/scripts/config.txt
+index f0fed63..0c5e1c5 100644
+--- a/scripts/config.txt
++++ b/scripts/config.txt
+@@ -13,6 +13,11 @@ gpu_mem=32
+ hdmi_group=2
+ hdmi_mode=82
+ 
++# Bellatrix logs through AUX mini-UART. Its divisor follows the core clock;
++# pinning the clock keeps the console stable and leaves PL011 to Bluetooth.
++core_freq=400
++core_freq_min=400
++
+ 
+ # Select some m68k code to run...
+ #initramfs dhrystone

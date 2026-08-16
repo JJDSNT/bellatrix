@@ -1,0 +1,8 @@
+include $(SRCDIR)/config/aros.cfg
+
+USER_INCLUDES := -I$(SRCDIR)/arch/m68k-emu68/include
+USER_CFLAGS := -fno-common
+
+%build_module mmake=kernel-btuart-emu68 \
+  modname=btuart modtype=resource \
+  files="btuart_init"

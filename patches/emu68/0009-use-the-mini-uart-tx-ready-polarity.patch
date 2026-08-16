@@ -1,0 +1,26 @@
+diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
+index 6e1a754..1644c37 100644
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -105,18 +105,18 @@ void serial_writer()
+ #ifdef BELLATRIX_EMU68
+ #define CONSOLE_UART_DR (ARM_PERIIOBASE + 0x215040)
+ #define CONSOLE_UART_FR (ARM_PERIIOBASE + 0x215054)
+-#define CONSOLE_UART_TXFF (1 << 5)
++#define CONSOLE_UART_CAN_WRITE(status) (((status) & (1 << 5)) != 0)
+ #else
+ #define CONSOLE_UART_DR (PL011_0_BASE + PL011_DR)
+ #define CONSOLE_UART_FR (PL011_0_BASE + PL011_FR)
+-#define CONSOLE_UART_TXFF PL011_FR_TXFF
++#define CONSOLE_UART_CAN_WRITE(status) (((status) & PL011_FR_TXFF) == 0)
+ #endif
+ 
+ static inline void waitSerOUT(void *io_base)
+ {
+     while(1)
+     {
+-       if ((rd32le(CONSOLE_UART_FR) & CONSOLE_UART_TXFF) == 0) break;
++       if (CONSOLE_UART_CAN_WRITE(rd32le(CONSOLE_UART_FR))) break;
+     }
+ }
+ 
