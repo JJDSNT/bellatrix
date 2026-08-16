@@ -82,7 +82,9 @@ done
 # SDK that nothing in the boot path reads, and a card carrying it stalls the
 # boot between AROSMonDrvs and "preparing console" — an open problem of its own,
 # not worth walking into while bringing something else up.
-DIRS=(C S Libs Devs L Classes Fonts System Prefs Storage Utilities Tools Locale)
+# Extras carries contrib packages which are part of the full distribution.
+# In particular, aros-bluzing installs its hardware self-test there.
+DIRS=(C S Libs Devs L Classes Fonts System Prefs Storage Utilities Tools Locale Extras)
 
 # Locale is not optional: S:Startup-Sequence does Assign "LOCALE:" "SYS:Locale",
 # and without it the boot console opens with "Can't find SYS:Locale" and every
@@ -268,7 +270,9 @@ if [ "$PACK" = 1 ]; then
     fi
     mkdir -p "$(dirname "$ARCHIVE")"
     echo "[sd] packing $(basename "$ARCHIVE")"
-    tar -C "$STAGE" -cf - . | xz -T0 -9 > "$ARCHIVE"
+    # One thread keeps xz -9 within the memory available on ordinary build
+    # hosts.  -T0 may allocate several GiB and leave a truncated archive.
+    tar -C "$STAGE" -cf - . | xz -T1 -9 > "$ARCHIVE"
     rm -rf "$STAGE"
     echo "[sd] $(basename "$ARCHIVE")  ($(stat -c%s "$ARCHIVE") bytes)"
     exit 0
