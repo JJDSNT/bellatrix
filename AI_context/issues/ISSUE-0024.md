@@ -129,7 +129,7 @@ The stores land on Emu68's emulated custom-register page, reach
 touches `ctx->INTF.ARM` when `INT_shadow.ARMPending` is set, and nothing sets it
 any more. `patches/emu68/0002-deliver-host-interrupts-as-an-ipl-not-through-a-shadow.patch`
 replaced that whole path with a direct `INTF.IPL` store in `curr_el_spx_irq`,
-which is what `aros/arch/m68k-emu68/platform/platform.c:20-44` describes: *"There
+which is what `aros/arch/m68k-native/platform/platform.c:20-44` describes: *"There
 is nothing for this port to arm and nothing to acknowledge."* The shadow code is
 still in Emu68 and is the right answer once a machine really owns those
 registers — it is simply not wired to anything here.

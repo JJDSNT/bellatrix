@@ -9,6 +9,8 @@
 #include "boot.h"
 
 #include <aros/bootui.h>
+
+#include "platform.h"
 #include <exec/nodes.h>
 #include <proto/exec.h>
 
@@ -289,24 +291,44 @@ void emu68_bootui_set_stage(uint32_t stage)
     draw_clock();
 }
 
-void emu68_bootui_clock_start(uint32_t now_us)
+/*
+ * The elapsed-time display, as an observer of the platform clock.
+ *
+ * The BCM283x timer driver used to call these two by name, through an include
+ * reaching from the platform layer into this directory. It now calls whatever
+ * observer is installed, and this is the one this machine installs -- see
+ * struct PlatformClockObserver in platform.h. Nothing else calls them, so they
+ * are static.
+ */
+static void bootui_clock_started(ULONG now_us)
 {
-    bootui.clock_start_us = now_us;
+    bootui.clock_start_us = (uint32_t)now_us;
     bootui.elapsed_seconds = 0;
     bootui.clock_started = 1;
 }
 
-void emu68_bootui_clock_tick(uint32_t now_us)
+static void bootui_clock_tick(ULONG now_us)
 {
     uint32_t elapsed;
 
     if (!bootui.active || !bootui.clock_started)
         return;
-    elapsed = (now_us - bootui.clock_start_us) / 1000000UL;
+    elapsed = ((uint32_t)now_us - bootui.clock_start_us) / 1000000UL;
     if (elapsed == bootui.elapsed_seconds)
         return;
     bootui.elapsed_seconds = elapsed;
     draw_clock();
+}
+
+static const struct PlatformClockObserver bootui_clock =
+{
+    .Started = bootui_clock_started,
+    .Tick    = bootui_clock_tick,
+};
+
+void emu68_bootui_observe_clock(void)
+{
+    m68k_platform_clock = &bootui_clock;
 }
 
 void emu68_bootui_add_resource(void)

@@ -683,6 +683,7 @@ void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
         emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
 
     emu68_bootui_init();
+    emu68_bootui_observe_clock();
     emu68_set_stage(EMU68_STAGE_ENTRY);
     emu68_console_init(framebuffer, pitch, width, height);
     emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");

@@ -1,5 +1,5 @@
 /*
- * Port-common platform discovery and dispatch for arch/m68k-emu68.
+ * Port-common platform discovery and dispatch for the m68k port.
  * See platform.h.
  */
 #include "platform.h"
@@ -59,6 +59,27 @@ static uint32_t root_address_cells;
 
 static const struct PlatformIntcOps *g_intc_ops;
 static const struct PlatformTimerOps *g_timer_ops;
+
+/*
+ * The clock observer's default: present, and does nothing.
+ *
+ * Defined rather than left NULL so the timer's IRQ handler can call through it
+ * unconditionally -- a test on every tick would cost more than the calls do,
+ * and a NULL that must be checked is a way to crash in interrupt context.
+ * Initialised rather than left in .bss for the same reason m68k_boot_putc is.
+ */
+static void clock_ignore(ULONG now_us)
+{
+    (void)now_us;
+}
+
+static const struct PlatformClockObserver clock_default =
+{
+    .Started = clock_ignore,
+    .Tick    = clock_ignore,
+};
+
+const struct PlatformClockObserver *m68k_platform_clock = &clock_default;
 
 /*
  * Base of the peripheral window as the guest sees it, i.e. the parent address

@@ -187,7 +187,7 @@ acknowledge.
 whichever interrupt controller driver was discovered; that driver decodes
 `ARMIRQ_PEND`/`GPUIRQ_PEND0`/`GPUIRQ_PEND1` (same registers, same offsets as
 `hardware/bcm2708.h`) to find which real source fired and calls
-`krnRunIRQHandlers()`. `arch/m68k-emu68/kernel/kernel_arch.h` wires
+`krnRunIRQHandlers()`. `arch/m68k-native/kernel/kernel_arch.h` wires
 `ictl_enable_irq()`/`ictl_disable_irq()` to that same driver, so
 `KrnAddIRQHandler()` unmasks real hardware exactly as it does on
 `aarch64-native`/`arm-native`.
@@ -671,7 +671,7 @@ which forwards the byte to its own host-side `kprintf()`
 independent of framebuffer state, instead of the single-value bootstrap marker
 below.
 
-`krnPutC()` (`arch/m68k-emu68/kernel/kernel_debug.c`) and the framebuffer
+`krnPutC()` (`arch/m68k-native/kernel/kernel_debug.c`) and the framebuffer
 console's `emu68_console_putc()` (`arch/m68k-emu68/boot/console.c`) both write
 through this channel now, so existing boot-progress messages show up on serial
 as-is.

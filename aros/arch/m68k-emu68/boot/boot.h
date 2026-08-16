@@ -98,8 +98,14 @@ void emu68_set_stage(uint32_t stage);
 void emu68_bootui_init(void);
 void emu68_bootui_add_resource(void);
 void emu68_bootui_set_stage(uint32_t stage);
-void emu68_bootui_clock_start(uint32_t now_us);
-void emu68_bootui_clock_tick(uint32_t now_us);
 void emu68_bootui_takeover(void);
+
+/*
+ * The boot UI's elapsed-time display, offered to the platform layer as a
+ * struct PlatformClockObserver. emu68_bootui_init() installs it; the two
+ * functions behind it are static in bootui.c, because the platform timer is
+ * the only caller and reaches them through the pointer.
+ */
+void emu68_bootui_observe_clock(void);
 
 #endif

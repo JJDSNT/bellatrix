@@ -84,7 +84,7 @@ two are adjacent enough that this issue should be re-read when that ground is
 covered again.
 
 Raised to `high` on 2026-08-05: this is no longer only adjacent. The port's own
-idle path executes `STOP` — `arch/m68k-emu68/kernel/context.c` does
+idle path executes `STOP` — `arch/m68k-native/kernel/context.c` does
 `asm volatile ("stop #0x2000")` whenever `core_Dispatch()` returns no runnable
 task — and ISSUE-0007 is stalled on a boot that stops making progress while
 timer interrupts keep arriving. A `STOP` that sleeps without consulting `INT64`

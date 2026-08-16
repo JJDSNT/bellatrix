@@ -1,5 +1,5 @@
 /*
- * Port-common platform abstraction for arch/m68k-emu68.
+ * Port-common platform abstraction for the m68k port.
  *
  * Emu68 hands AROS the real board FDT (System Timer, legacy BCM interrupt
  * controller, etc. all present with their real "compatible" strings and
@@ -127,6 +127,31 @@ static inline void platform_trace_val(const char *label, ULONG value)
 }
 
 #endif /* PLATFORM_TRACE_BRINGUP */
+
+/*
+ * An optional observer of the platform clock.
+ *
+ * The timer driver reports when its counter was first read and, from the IRQ
+ * handler, what it currently reads. Nothing in the kernel needs either; the
+ * consumer is a bootstrap that wants to show elapsed time on a splash screen.
+ *
+ * This exists because the BCM283x timer driver used to call the Emu68 boot UI
+ * directly, through a relative include reaching out of the platform layer into
+ * the machine's boot directory. That made a SoC driver depend on a particular
+ * bootstrap's splash screen -- backwards, and the one thing here that did not
+ * survive moving this directory to m68k-native.
+ *
+ * Same shape as m68k_boot_putc in <aros/bootcontract.h>, and for the same
+ * reason: the default does nothing, so a machine that installs nothing boots
+ * unchanged. Tick runs in interrupt context and must not allocate or block.
+ */
+struct PlatformClockObserver
+{
+    void (*Started)(ULONG now_us);
+    void (*Tick)(ULONG now_us);
+};
+
+extern const struct PlatformClockObserver *m68k_platform_clock;
 
 /* Discover the real platform timer and interrupt controller under /soc in
  * `fdt`, wire the level-6 autovector, and start the timer ticking at

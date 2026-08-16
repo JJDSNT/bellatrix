@@ -78,7 +78,7 @@ CORELIBS  := -L$(AROS_LIB) -larossupport -lautoinit -llibinit -lamiga \
 USER_CPPFLAGS := -D__EMU68__ -DADATE="\"$(shell date "+%d.%m.%Y")\""
 USER_CFLAGS   := $(CFLAGS_NO_BUILTIN) -fno-common
 USER_INCLUDES := -I$(SRCDIR)/rom/kernel -I$(SRCDIR)/rom/exec \
-    -I$(SRCDIR)/arch/m68k-emu68/platform \
+    -I$(SRCDIR)/arch/m68k-native/platform \
     -I$(SRCDIR)/arch/m68k-all/kernel
 
 #MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
