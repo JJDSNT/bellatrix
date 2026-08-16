@@ -153,6 +153,79 @@ under `out/build/aros/bin/linux-x86_64/tools/crosstools/` is the marker that it
 finished — the `m68k-aros-gcc` binary appears well before the toolchain is
 actually complete, since libgcc for the target is built in a second phase.
 
+## The toolchain is built once, in CI, and reused
+
+Nobody should be compiling gcc. `build-aros.sh` looks for a prebuilt copy before
+it compiles anything, in this order:
+
+1. `~/.cache/bellatrix/toolchain/` — a local tarball, written by any build here
+   that ended up with a good toolchain.
+2. The GitHub release named `toolchain-<digest>`, fetched by `fetch_toolchain()`
+   and then cached locally so the download happens once per machine.
+3. Only if both miss does it offer to compile, and in a non-interactive shell it
+   refuses rather than silently spending hours (`--yes` accepts the cost).
+
+`BELLATRIX_TOOLCHAIN_FETCH=0` keeps step 2 off the network.
+
+The release is produced by `.github/workflows/toolchain.yml`, which runs
+`build-aros.sh --toolchain-only` and uploads the tarball plus its `.sha256` to a
+release tagged after the digest. It is a *release asset* rather than an Actions
+cache on purpose: caches are scoped to a branch and expire, and this is meant to
+outlive both.
+
+### What the name means, and why it is portable
+
+```
+a88db85e62ede04f - m68k - linux-x86_64 - glibc2.39 .tar.xz
+      digest       cpu       host          libc
+```
+
+- **digest** — `sha256` of the AROS pin's `config/gcc_def`, `config/binutils_def`
+  and `tools/crosstools`, plus any patch of ours that touches them. It
+  deliberately ignores our port sources and the rest of the patch series: the
+  most expensive thing to build is the thing that changes least, and a digest
+  that moved daily would be worthless.
+- **cpu** — `${TARGET##*-}`, so `emu68-m68k` contributes `m68k`. See below.
+- **host + libc** — the only host coupling is the C library, so an entry is
+  usable on any host with that glibc *or newer*; the lookup takes the newest
+  compatible one rather than demanding an exact match. gcc resolves its own
+  prefix relative to its binary, so the absolute path it was built under does not
+  matter and the tarball relocates freely.
+
+Only `crosstools/` travels. Beside it sit wrappers (`<cpu>-<arch>-elf-gcc`,
+`aros-ld`) that `configure` generates with the absolute path of the tree they
+belong to baked in. They are part of the build, not of the toolchain; packing
+them would make the cache portable in name only.
+
+### The same toolchain serves any m68k AROS target
+
+The key is scoped by **CPU**, not by AROS architecture. `emu68-m68k` and
+`amiga-m68k` both reduce to `m68k`, so the published
+`a88db85e62ede04f-m68k-linux-x86_64-glibc2.39.tar.xz` is the toolchain for both.
+This is not a coincidence: AROS gates its crosstools stages per CPU inside one
+directory (`.installflag-gcc-<version>-m68k`), so two AROS targets on the same
+CPU would build the same compiler into the same place anyway.
+
+`build-aros.sh` cannot yet *point* at another tree, though — its `BUILD` and
+`TARGET` are this port's. Provisioning a second AROS target by hand is two
+commands:
+
+```bash
+cd /somewhere/short && /path/to/external/aros/configure --target=amiga-m68k
+tar xJf ~/.cache/bellatrix/toolchain/$(cd /path/to/bellatrix && \
+    ./scripts/build-aros.sh --toolchain-key).tar.xz \
+    -C /somewhere/short/bin/linux-x86_64/tools/
+```
+
+`configure` writes the wrappers, the tarball supplies `crosstools/` beside them,
+and `make` skips the toolchain stage entirely. Closing that gap properly is
+[`ISSUE-0026`](../AI_context/issues/ISSUE-0026.md).
+
+**Use a short build path.** Not an Amiga issue and not an AROS one: linking
+`stdc.library` passes every object on one command line, and a long build-tree
+prefix multiplied by hundreds of paths overflows `ARG_MAX` —
+`/bin/sh: Argument list too long`. A path like `/tmp/a68k` is fine.
+
 ## Running
 
 ```bash
