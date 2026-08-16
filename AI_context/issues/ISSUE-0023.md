@@ -134,6 +134,19 @@ throughout.
    `aarch64-native/kernel/platform_bcm2708.c`, the BCM283x drivers and `soc/`
    go here rather than staying with the machine. `m68k-emu68` keeps `entry.S`,
    `parse_fdt()` and `console.c`.
+
+   `exec/` is moved, as the pilot — see the execution log. Two properties were
+   the point of doing it first and both held: `setup.sh` creates the new
+   injection with nothing declared, and the Emu68 Exec backend is still the one
+   that reaches the object, because what protects it (patch 0010) keys on
+   `ARCH`, not on a path. `soc/` and `battclock/` are the two directories where
+   this issue's own enumeration does not survive contact with the content, and
+   they are settled per-directory before the rest moves.
+
+   `include/` moves with them and is its own small piece of work: it is
+   published into the sysroot by an `includes-copy-emu68-m68k` hook keyed on the
+   machine, so `m68k-native` needs an include directory and a hook of its own
+   before `bootcontract.h` can follow.
 3. **Gate on the information, not on its source.** Replace the
    `EMU68_BOOT_MEMORY_VALID` check (`boot/boot.c:443`) with one that asks
    whether the memory range is known, whoever established it.
@@ -216,6 +229,60 @@ That axis is checkable by grep where the directory axis is not, and clearing it
 is [`ISSUE-0024`](ISSUE-0024.md). Our overlay is already clean on it: every
 `%build_archspecific` in `arch/m68k-emu68/` targets a BSP module.
 
+**Moving a directory leaves a stale build artifact, and the error blames the
+wrong thing.** After `git mv aros/arch/m68k-emu68/exec aros/arch/m68k-native/exec`
+the build failed with
+
+```
+No rule to make target '.../arch/m68k-emu68/exec/preparecontext.c',
+needed by '.../gen/rom/exec/exec/arch/preparecontext.o'
+```
+
+which reads like mmake still believing the old layout. It does not: it found the
+mmakefile at the new path (`CURDIR=arch/m68k-native/exec`) and the `arch=` key
+never mentioned a directory. The old path survives in the **generated dependency
+file**, because `%build_archspecific` derives the object directory from the
+*maindir*, not from the source directory (`config/make.tmpl:3287-3293`):
+
+```make
+BD_OBJROOT := $(GENDIR)/%(maindir)/%(modname)      # rom/exec + exec
+BD_OBJDIR  := $(BD_OBJROOT)/arch
+```
+
+So the objects do not move when the source does, and `preparecontext.d` — written
+when that object was compiled from `m68k-emu68/exec` — keeps naming a file that
+no longer exists. (The doubled `exec/exec` is that formula, not a mistake: it
+only shows when the module name repeats the last component of the maindir.)
+
+The fix is to delete the moved files' objects and dep files in the maindir's
+`arch/` directory. **Not `mmake.cache`**, which was the first guess and is wrong
+twice over: it is binary, so it cannot be pruned selectively, and
+`grep -c m68k-emu68/exec` on it returns 0 — the old path is not in there. Deleting
+it would cost a full rescan and fix nothing.
+
+**A clean link does not prove this move — and what protects it is a patch, not
+the arch ordering.** `arch/m68k-all/exec` ships its own `preparecontext.c`,
+`switch.S` and `dispatch.S`, and `%build_archspecific` sends both trees' objects
+to the same path. That was a genuine race until
+`patches/aros/0010-m68k-all-do-not-race-the-emu68-exec-backend.patch`, which
+stopped `m68k-all` from offering the three files at all under `ARCH=emu68`:
+
+```make
+ifeq ($(ARCH),emu68)
+FILES  := $(filter-out preparecontext,$(FILES))
+AFILES := $(filter-out switch dispatch,$(AFILES))
+endif
+```
+
+So the move is safe because that filter keys on `ARCH`, which the directory name
+does not touch — not because `arch=emu68-m68k` sorts first. Worth checking
+anyway, since the failure mode patch 0010 was written for is a link that
+succeeds with the wrong `Dispatch` and a boot that jumps to address zero. The
+distinguishing symbol is the frame helper: ours calls
+`emu68_DispatchFrame`/`emu68_SwitchTail`, `m68k-all` calls
+`m68k_DispatchFrame`/`m68k_SwitchTail`. `build-aros.sh` also fails an ELF with
+any unresolved symbol, which is the guard patch 0010 added.
+
 **A second machine is what proves the contract.** Until one exists, the
 separation is asserted rather than tested, and nothing stops the next change
 from quietly reintroducing a dependency. This is a reason to expect a second
@@ -252,3 +319,18 @@ lands.
   directories build under the machine's `arch=`. Recorded here and in
   `docs/aros_port_contract.md`; step 2 is unchanged in shape, the Goal's
   "not editing the kernel" is now qualified.
+- 2026-08-16 — Steps 3 and 5 done: `boot/boot.c` gates on the memory range
+  itself, and the character sink is `m68k_boot_putc` with a discarding default in
+  `kernel/kernel_debug.c`, leaving `0xdeadbeef` in `boot/console.c` alone.
+- 2026-08-16 — Step 2 pilot: `exec/` moved to `arch/m68k-native/`. Zero source
+  edits — the mmakefile's includes are all `$(SRCDIR)/rom/...` and its key was
+  already `arch=emu68-m68k`. `setup.sh` created the injection unprompted
+  (`linked arch/m68k-native`). `gen/kobjs/exec_library.o` references
+  `emu68_DispatchFrame`/`emu68_SwitchTail`, so the Emu68 backend is still the
+  one in the module — patch 0010's filter keys on `ARCH`, which a directory move
+  does not touch. The stale-dependency trap this exposed is under
+  **Notes**. The full ELF
+  relink was blocked by unrelated uncommitted work in
+  `arch/m68k-emu68/soc/bluetooth/` (`btuart_init.c` redeclares `MBoxBase` and
+  `KernelBase` that its own `proto/` includes already declare), so the
+  verification is at the kobj rather than the ELF.
