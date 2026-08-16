@@ -141,7 +141,9 @@ throughout.
    that reaches the object, because what protects it (patch 0010) keys on
    `ARCH`, not on a path. `soc/` and `battclock/` are the two directories where
    this issue's own enumeration does not survive contact with the content, and
-   they are settled per-directory before the rest moves.
+   they are settled per-directory before the rest moves — see *The
+   per-directory split*: `soc/` and `platform/bcm283x/` go to native,
+   `battclock/` stays with the machine.
 
    `include/` moves with them and is its own small piece of work: it is
    published into the sysroot by an `includes-copy-emu68-m68k` hook keyed on the
@@ -166,6 +168,46 @@ throughout.
 
 Deliberately not in scope: writing a second bootstrap. It is listed under
 **Open questions**.
+
+# The per-directory split
+
+Upstream answers this directly, and the apparent contradiction — that
+`arm-raspi` keeps a `timer/` while SoC drivers live under native — dissolves on
+reading what each directory contains.
+
+```
+arch/arm-native/           bus/ ceboot/ entropy/ exec/ kernel/ processor/ soc/
+arch/arm-native/soc/       broadcom/{2708,2711}/  ← mbox sdcard usb gpio dma hidd
+arch/arm-raspi/            battclock/ boot/ timer/
+arch/aarch64-native/       exec/ kernel/
+```
+
+`arm-native/soc/broadcom/2708/` is almost exactly our `soc/`, and it is under
+**native**, keyed by SoC part rather than by machine. `arm-raspi/timer/` is not a
+SoC timer driver at all: it is `rom/timer` arch-specific code, and it sits with
+the machine because the decision in it is a machine decision — GPU timer channel
+#1, "since #3 is used for VBlank and #0 and #2 are used by the GPU itself".
+
+So the rule is not "drivers go native, timers stay". It is **the code goes where
+its decision was made.** Applying it:
+
+| Directory | Goes to | Because |
+|---|---|---|
+| `exec/` | native | done — the task frame knows nothing about the machine |
+| `kernel/` | native | `cause`, `cli`/`sti`, `schedule`, `context` are m68k Exec plumbing |
+| `platform/` | native | discovery and the level-6 autovector wiring; the ops tables are already abstract |
+| `platform/bcm283x/` | native | BCM2708 peripherals, same class as `arm-native/soc/broadcom/2708` |
+| `soc/{mbox,sdcard,usb,bluetooth}` | native | ditto, and upstream files these by SoC part |
+| `include/` | native, partly | `hardware/` and `asm/` are the SoC and the CPU; needs its own `includes-copy` hook first |
+| `battclock/` | **machine** | the decision is "this machine has no RTC, keep the clock in `DEVS:battclock`" — a machine with one supplies a different resource. Matches `arm-raspi/battclock` and `aarch64-raspi/battclock`, which our copy is derived from |
+| `boot/` | **machine** | entry shim, FDT parsing, `console.c`, the Emu68 register convention. Matches `arm-raspi/boot` |
+| `hidd/emu68gfx/` | **machine** | the framebuffer Emu68's loader hands over, not a SoC display block |
+| `c/`, `doc/` | **machine** | `BootProgress` and the host-interrupt write-up are about this bootstrap |
+
+The `battclock/` case is the one worth keeping in mind, because on content alone
+it looks portable — nothing in it is Emu68 or even Pi, it is just "no RTC, use a
+file". That is exactly why it stays: what makes it machine code is the claim
+about the machine, not an MMIO address.
 
 # Decisions taken
 
@@ -296,10 +338,9 @@ lands.
   only once the separation is done, and worth remembering that its first
   milestone would be a serial log out of Exec, not a desktop — with no hardware
   description there is no storage, so no dosboot.
-- **How much of `soc/` and `platform/bcm283x/` belongs in native.** The
-  precedent points at native, but `arm-raspi` and `aarch64-raspi` do keep a
-  `timer/` and a `battclock/` of their own, so per-driver judgement is expected
-  rather than a rule.
+- ~~**How much of `soc/` and `platform/bcm283x/` belongs in native.**~~ Settled;
+  see *The per-directory split* below. `arm-raspi/timer/` is not the
+  counter-example it looked like.
 - **The minimum CPU.** `exec/` is assembled with `ISA_MC68060_FLAGS`, the same
   flag `m68k-amiga` uses for files that dispatch on the CPU at runtime, and
   nothing records what the port actually requires. A bootstrap author cannot
@@ -334,3 +375,8 @@ lands.
   `arch/m68k-emu68/soc/bluetooth/` (`btuart_init.c` redeclares `MBoxBase` and
   `KernelBase` that its own `proto/` includes already declare), so the
   verification is at the kobj rather than the ELF.
+- 2026-08-16 — Settled the `soc/` / `battclock/` question against upstream's own
+  layout rather than by reasoning about our content. `arm-native/soc/broadcom/2708`
+  is our `soc/` under native; `arm-raspi/timer/` turned out to be `rom/timer`
+  arch code, not a SoC driver, so it was never the counter-example it read as.
+  Table under *The per-directory split*.
