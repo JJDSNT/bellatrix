@@ -201,18 +201,38 @@ bin/amiga-m68k/gen/config/target.cfg:
 `AROS_ARCH_amiga` occurs in no generated file in that tree. The Amiga branch of
 `chipset.h` does not compile on the Amiga.
 
-**Please check what that costs m68k-amiga, because we cannot.** `Cause()` says in
-its own comment:
+**What it costs m68k-amiga is latency, not delivery.** We chased this before
+writing it up, because the first reading looked alarming and was wrong.
+
+`Cause()` says in its own comment:
 
 > Quick soft int request. For optimal performance m68k-amiga `Enable()` does not
 > do any extra `SFF_SoftInt` checks
 
 and `arch/m68k-amiga/exec/enable.S` indeed only writes `#0xc000` to `$DFF09A`,
-with no `SFF_SoftInt` test. If `CUSTOM_CAUSE(INTF_SOFTINT)` compiles to nothing,
-the INTREQ bit that would make Paula raise the queued interrupt is never set. We
-do not have an Amiga to test on and will not assert a bug we cannot reproduce —
-but either something else covers this, or software interrupts on m68k-amiga
-depend on a macro that expands to nothing.
+with no `SFF_SoftInt` test. So with `CUSTOM_CAUSE(INTF_SOFTINT)` compiling to
+nothing, the INTREQ bit that would make Paula raise the queued interrupt is
+never set, and `Enable()` does not compensate.
+
+It is caught one level down. `arch/m68k-all/kernel/kernel_intr.c:24` builds for
+every m68k target under `arch=m68k`, and its `core_ExitIntr()` opens with:
+
+```c
+/* Soft interrupt requested? It's high time to do it */
+if (SysBase->SysFlags & SFF_SoftInt)
+    core_Cause(INTB_SOFTINT, 1L << INTB_SOFTINT);
+```
+
+So a soft interrupt raised from user context is not lost — it waits for the next
+hardware interrupt exit rather than being raised immediately. On an Amiga that
+bound is a VBlank or a CIA timer, so it is short. Which is exactly why fifteen
+years passed without anyone noticing.
+
+The accurate statement is therefore narrower and, we think, still worth your
+time: **a performance path added in 2011 has never been in effect**, and the
+comment in `Cause()` describes behaviour the build does not produce. Everything
+else in this document depends on the same gate, which is the reason we are
+leading with it.
 
 **The fix is one define.** Our preference, because it costs one parameterised
 line rather than an Amiga special case:
@@ -360,11 +380,11 @@ start building them for every m68k target.
 
 ## What we are asking
 
-1. **Check `chipset.h` first.** `AROS_ARCH_amiga` is defined nowhere, so the
-   Amiga branch has been dead since 2011 and `CUSTOM_CAUSE(INTF_SOFTINT)` in
-   `Cause()` expands to nothing on m68k-amiga too. That may be a live defect in
-   software-interrupt delivery on real hardware. It is the only item here we
-   would call urgent, and it is the only one we cannot test.
+1. **Confirm `chipset.h`'s gate is dead**, which we believe we have shown against
+   a real `amiga-m68k` configure. Nothing is lost by it — `core_ExitIntr()`
+   catches the soft interrupt at the next hardware interrupt — but the "quick
+   soft int request" path `Cause()` documents has never run, and every other
+   proposal here depends on the same gate working.
 2. **Name the spelling for the machine macro** — `__AROS_ARCH_<arch>__` reaching
    the compile through `aros_config_cppflags`, or the bare `AROS_ARCH_<arch>`
    that `chipset.h` already expects. One parameterised line either way, and it

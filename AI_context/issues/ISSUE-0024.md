@@ -251,12 +251,25 @@ Nothing was found in the other twenty-odd BASE modules.
    `addintserver.c`, `remintserver.c`, `reschedule.c`, none of which any
    architecture overrides.
 
-   Possibly a live defect on real Amiga hardware, and we deliberately do not
-   assert it: `Cause()`'s own comment says *"For optimal performance m68k-amiga
-   Enable() does not do any extra SFF_SoftInt checks"*, and
-   `arch/m68k-amiga/exec/enable.S` only writes `#0xc000` to `$DFF09A` with no
-   `SFF_SoftInt` test. If `CUSTOM_CAUSE(INTF_SOFTINT)` is nothing, the INTREQ bit
-   that makes Paula raise the queued interrupt is never set. We have no Amiga.
+   **Proven, not inferred**: `configure --target=amiga-m68k` on a clean tree at
+   the current pin produces
+   `CONFIG_CPPFLAGS = -DAROS_BUILD_TYPE=... -DNOLIBINLINE` and nothing else;
+   `AROS_ARCH_amiga` occurs in no generated file.
+
+   **The consequence is latency, not loss — chased before writing it up, because
+   the first reading looked alarming and was wrong.** `Cause()`'s comment says
+   *"For optimal performance m68k-amiga Enable() does not do any extra
+   SFF_SoftInt checks"*, and `arch/m68k-amiga/exec/enable.S` indeed only writes
+   `#0xc000` to `$DFF09A`. But `arch/m68k-all/kernel/kernel_intr.c:24` builds for
+   every m68k target (`arch=m68k`) and its `core_ExitIntr()` opens with
+   `if (SysBase->SysFlags & SFF_SoftInt) core_Cause(...)`. So the soft interrupt
+   waits for the next hardware interrupt exit instead of being raised
+   immediately by Paula — on an Amiga, a VBlank or CIA timer away.
+
+   The accurate finding is narrower and still worth reporting: **a performance
+   path added in 2011 has never been in effect**, and `Cause()`'s comment
+   describes behaviour the build does not produce. Do not send upstream a claim
+   that softints are broken; they are not.
 
    **The design that follows from this is smaller than the one it replaces:**
 
@@ -424,3 +437,20 @@ comment, unrelated to this issue, noted here so it is not lost.
   preprocessor. They do — but from `gcc/config/aros.h`, for every AROS target on
   every CPU, which makes them useless as a machine test for a different and more
   interesting reason.
+- 2026-08-16 — Two measurements, and the second walked back the first.
+
+  `configure --target=amiga-m68k` on a clean tree: `AROS_ARCH_amiga` appears in
+  no generated file, so the dead gate is confirmed for the real Amiga target
+  rather than reasoned from ours.
+
+  Then, before sending an RFC saying software interrupts might be broken on
+  Amiga hardware, went looking for who else reads `SFF_SoftInt`.
+  `arch/m68k-all/kernel/kernel_intr.c:24` does, in `core_ExitIntr()`, and builds
+  for every m68k target. So the flag is picked up at the next interrupt exit and
+  nothing is lost — the cost is latency bounded by the next VBlank or CIA tick.
+  The claim was rewritten from "may be a live defect" to "a 2011 performance
+  path has never been in effect", which is accurate and still worth reporting.
+
+  Worth keeping as method: the alarming reading was three greps away from being
+  disproved, and sending it would have cost more credibility than the finding
+  was worth.
