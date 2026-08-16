@@ -736,3 +736,74 @@ belongs in `usb2otg.device` or `hid.class`; doing that would break standards-
 compliant physical USB mice. Graphical `run.sh` boots therefore use
 `-device usb-tablet` as the stable QEMU test device. Relative `usb-mouse`
 remains useful as an explicit diagnostic override, not the default.
+
+# 2026-08-16 — Bluetooth UART transport: three defects, confirmed on hardware
+
+The `aros-bluzing` UART self-test hung at `claiming resource` on a Pi 3. Three
+independent defects, all now confirmed fixed on real hardware:
+
+1. **`btuart_init()` never ran.** It was `static` with no `ADD2INITLIB`, so the
+   compiler dropped it as dead code together with everything only it called.
+   genmodule, having no init to fail, called `AddResource()` anyway, and
+   `OpenResource()` handed out a base with every field zero — worse than a
+   missing resource, because it looks like a working one. `BTUARTGetAPIVersion()`
+   answers from a constant and passes on a dead base; `BTUARTClaim()` is the
+   first function that dereferences it. It **hung** rather than crashing because
+   `ObtainSemaphore()` on an all-zero `SignalSemaphore` waits forever:
+   `InitSemaphore()` sets `ss_QueueCount` to -1, so zero reads as "already owned
+   by someone else".
+
+   The decisive evidence was `nm` on `btuart_init.o`: the eight LVO functions
+   present, `btuart_init`/`query_uart_clock`/`setup_lpo_clock` absent.
+
+2. **A race passing the manager task to its process.** `tc_UserData` was
+   assigned after `CreateNewProcTags()` returned, under a `Forbid()` that
+   `CreateNewProc()`'s own allocations can break. Now `NP_UserData`, which
+   `rom/dos/createnewproc.c:402` writes before the `AddTask()` at line 499.
+
+3. **The GPCLK2 stop sequence.** `setup_lpo_clock()` stopped the generator by
+   writing the password alone, which clears ENAB but in the same store drives
+   SRC and MASH to 0 — and the BCM283x datasheet forbids changing source or
+   divisor while the generator runs. On a Pi the firmware has already started it
+   for the Bluetooth LPO, so BUSY never fell and `configure` returned
+   `BTUART_ERR_TIMEOUT`.
+
+   **The first fix for this was wrong and worth remembering.** Reading the
+   register and writing back everything except password and ENAB is right on
+   hardware and wrong where the register is not modelled: under emulation the
+   read is meaningless, the garbage goes back, and BUSY then reads set forever —
+   so the fix moved the timeout from the Pi to QEMU. Masking the read down to
+   SRC and MASH works on both.
+
+Hardware confirms the whole chain, including the baud divisor on a real 48 MHz
+UART clock where QEMU reports 3 MHz:
+
+```
+[BTUART] configure: baud=115200 clock=48000000 divisor=26/3 flags=0x1
+[BTUART] power: GPIO 128 -> 1, result 0
+[aros-bluzing:uart] H4 UART open at 115200 RTS/CTS
+[aros-bluzing:selftest] manager start returned 0
+```
+
+## Two build defects found on the way
+
+- **`contrib` was not built by `full`.** Nothing depended on it: upstream expects
+  the AROS contrib repository under `contrib/` reached by an
+  `AROS-complete-<target>` rule this port has no equivalent of. So the package
+  had no `S/Package-Startup` and no `Prefs/Env-Archive/SYS/Packages` entry —
+  present on the card, never installing its assigns. `software-emu68-m68k` now
+  depends on `contrib`.
+- **Both self-tests compiled `main.c` into the same object.** `%build_prog`
+  defaults `objdir` to `$(GENDIR)/$(CURDIR)`, one directory per mmakefile, so
+  building both in one run linked one program against the other's `main.o` —
+  reported as `U bt_virtual_transport_init`. Hidden while they were built
+  separately by hand. Each now has its own `objdir`.
+
+## Method note
+
+Most of the wall-clock cost of this session was self-inflicted: four `make`
+processes ended up running concurrently in one build tree, which corrupted
+dependency files (`bluetooth_start.d`, NUL bytes, `missing separator`) and sent
+the investigation after failures that were artefacts. `ps | grep make` did not
+show them because the shell hook rewrites command lines; `pgrep -x make` did.
+**Check `pgrep -x make` before starting a build.**
