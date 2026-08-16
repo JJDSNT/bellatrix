@@ -26,9 +26,20 @@ include $(SRCDIR)/config/aros.cfg
 #MM- AROS-emu68-m68k : kernel-link-emu68-m68k software-emu68-m68k
 #MM- AROS-emu68-m68k-quick : kernel-link-emu68-m68k-quick
 
+#
+# `contrib` is on the list because nothing else puts it there. Upstream expects
+# the AROS contrib repository to be checked out into contrib/ and reached by an
+# AROS-complete-<target> rule that this port does not have; ours is a symlink to
+# aros/contrib in this repository, and its mmakefiles declare `#MM- contrib :`
+# hooks that were being collected and never built. The symptom was a full build
+# that produced a distribution with an Extras/ package missing its
+# S/Package-Startup and its Prefs/Env-Archive/SYS/Packages registration, so the
+# package existed on the card and never installed its assigns.
+#
 #MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k \
 #MM                         workbench-c-emu68-bootprogress \
-#MM                         compiler-posixc compiler-stdcio external-openurl-lib
+#MM                         compiler-posixc compiler-stdcio external-openurl-lib \
+#MM                         contrib
 #MM- workbench-emu68-m68k : workbench-complete workbench
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k

@@ -60,6 +60,9 @@
 #define CLOCK_GP2CTL_OFFSET 0x00101080UL
 #define CLOCK_GP2DIV_OFFSET 0x00101084UL
 #define CLOCK_PASSWORD 0x5a000000UL
+/* The password field is write-only and reads back as zero; mask it out of a
+ * read-modify-write so the stored value cannot carry stale bits into it. */
+#define CLOCK_PASSWORD_MASK 0xff000000UL
 #define CLOCK_CTL_ENABLE (1UL << 4)
 #define CLOCK_CTL_BUSY (1UL << 7)
 #define CLOCK_CTL_MASH1 (1UL << 9)
@@ -110,12 +113,29 @@ static LONG setup_lpo_clock(struct BTUARTBase *base)
 {
     ULONG fsel4 = mmio_read(base->gpio_base, GPIO_GPFSEL4);
     ULONG wait = PL011_WAIT_LIMIT;
+    ULONG ctl;
 
     fsel4 = gpio_function(fsel4, 43, GPIO_ALT0);
     mmio_write(base->gpio_base, GPIO_GPFSEL4, fsel4);
 
+    /*
+     * Stop the generator by clearing ENAB *and nothing else*.
+     *
+     * This used to write the password alone, which clears ENAB but in the same
+     * store also drives SRC to 0 (GND) and MASH to 0. The BCM283x peripherals
+     * datasheet is explicit that the source and divisor must not be changed
+     * while the generator is running: clear ENAB, wait for BUSY to fall, and
+     * only then reprogram. Changing SRC in the stop write leaves BUSY set, and
+     * the wait below -- a million iterations, so not a short timeout -- never
+     * completes.
+     *
+     * It passes under emulation because nothing is driving GPCLK2 there and
+     * BUSY reads 0 immediately. On a real Pi the firmware has already started
+     * it for the Bluetooth LPO, so the bad write lands on a running generator.
+     */
+    ctl = mmio_read(base->peripheral_base, CLOCK_GP2CTL_OFFSET);
     mmio_write(base->peripheral_base, CLOCK_GP2CTL_OFFSET,
-               CLOCK_PASSWORD);
+               CLOCK_PASSWORD | (ctl & ~(CLOCK_PASSWORD_MASK | CLOCK_CTL_ENABLE)));
     while ((mmio_read(base->peripheral_base, CLOCK_GP2CTL_OFFSET) &
             CLOCK_CTL_BUSY) && --wait != 0)
         ;
