@@ -116,10 +116,11 @@ AROS already has both correct patterns, in the same tree:
   `CUSTOM_CAUSE` defined away to nothing on every other machine. `CUSTOM_CAUSE`
   is *literally* the `intreq = INTF_SETCLR | bit` that `qblit.c` open-codes.
 
-  **Correction, 2026-08-16: this pattern is correct and also dead.**
-  `AROS_ARCH_amiga` is defined nowhere, so the macros expand to nothing on every
-  target including Amiga. See item 7 under *What is left* — it turned out to be
-  the centre of the design rather than a citation.
+  **This pattern is correct and it works.** The gate comes from the module's own
+  mmakefile, `rom/exec/mmakefile.src:58` — `USER_CPPFLAGS := -DAROS_ARCH_$(ARCH)`
+  — not from `configure`. Verified by disassembling `cause.o` built for
+  `amiga-m68k` (`movew #0x8004,dff09c` and friends present) and for our target
+  (absent). See item 7 under *What is left*: it is the centre of the design.
 - **runtime probe**: `rom/dosboot/menu.c:555,889` gate on `mc68000` too, but
   then ask `OpenResource("ciaa.resource")` before touching anything, so the
   code is inert on a machine that has no chipset.
@@ -234,76 +235,48 @@ Nothing was found in the other twenty-odd BASE modules.
 6. **`dosboot.resource` on PowerPC.** The kludge calls itself "extremely
    obsolete" in its own comment. Not ours to fix blind; recorded so the note
    stops pointing at `dos.library`.
-7. **`rom/exec/chipset.h`'s gate is dead, and fixing it is the whole design.**
-   The mechanism this issue was going to propose already exists and has never
-   worked. `AROS_ARCH_amiga` appears exactly once in the tree — at `chipset.h:7`,
-   testing itself — and is defined nowhere. Verified against every candidate:
+7. **Reuse `rom/exec/chipset.h`. It is the pattern, and it works.** Jaime's
+   direction, 2026-08-16: the three surviving `#ifdef` sites belong in
+   architecture-specific code behind hooks that expand to nothing off Amiga.
+   AROS already has exactly that, in a portable module, with call sites carrying
+   no `#ifdef` at all.
 
-   | Candidate | Reality |
-   |---|---|
-   | `AROS_ARCH_amiga` | used at `chipset.h:7`, **defined nowhere** |
-   | `__AROS_ARCH_<arch>__` | emitted by `config/specs.in:26`, **used nowhere**, absent from a crosstools compile |
-   | `AMIGA`, `_AMIGA` | `builtin_define` in `gcc/config/aros.h:43-44` — **every AROS target**, so they mean "AROS", not "Amiga hardware" |
-   | `mc68000`, `__mc68000` | every m68k target; what the three sites use today |
+   The gate comes from the module's own mmakefile, not from `configure`:
 
-   So `CUSTOM_ENABLE`/`CUSTOM_DISABLE`/`CUSTOM_ACK`/`CUSTOM_CAUSE` expand to
-   nothing on m68k-amiga as well, at six call sites in `rom/exec` — `cause.c`,
-   `addintserver.c`, `remintserver.c`, `reschedule.c`, none of which any
-   architecture overrides.
+   ```make
+   rom/exec/mmakefile.src:58:  USER_CPPFLAGS := -DAROS_ARCH_$(ARCH)
+   ```
 
-   **Proven, not inferred**: `configure --target=amiga-m68k` on a clean tree at
-   the current pin produces
-   `CONFIG_CPPFLAGS = -DAROS_BUILD_TYPE=... -DNOLIBINLINE` and nothing else;
-   `AROS_ARCH_amiga` occurs in no generated file.
+   Verified by compiling `rom/exec/cause.c` for both targets and disassembling.
+   `amiga-m68k` emits `movew #0x8004,dff09c` (`CUSTOM_CAUSE`), `movew #4,dff09a`
+   and `movew #4,dff09c` (`CUSTOM_ACK`), `movew #0x8004,dff09a`
+   (`CUSTOM_ENABLE`); our target emits none of them.
 
-   **The consequence is latency, not loss — chased before writing it up, because
-   the first reading looked alarming and was wrong.** `Cause()`'s comment says
-   *"For optimal performance m68k-amiga Enable() does not do any extra
-   SFF_SoftInt checks"*, and `arch/m68k-amiga/exec/enable.S` indeed only writes
-   `#0xc000` to `$DFF09A`. But `arch/m68k-all/kernel/kernel_intr.c:24` builds for
-   every m68k target (`arch=m68k`) and its `core_ExitIntr()` opens with
-   `if (SysBase->SysFlags & SFF_SoftInt) core_Cause(...)`. So the soft interrupt
-   waits for the next hardware interrupt exit instead of being raised
-   immediately by Paula — on an Amiga, a VBlank or CIA timer away.
+   **So the fix is two lines per module**, in `rom/graphics` and `rom/dosboot`:
+   `USER_CPPFLAGS := -DAROS_ARCH_$(ARCH)` and `-I$(SRCDIR)/rom/exec`. No new
+   macro, no `configure` change, no new files, no new directories.
 
-   The accurate finding is narrower and still worth reporting: **a performance
-   path added in 2011 has never been in effect**, and `Cause()`'s comment
-   describes behaviour the build does not produce. Do not send upstream a claim
-   that softints are broken; they are not.
-
-   **The design that follows from this is smaller than the one it replaces:**
-
-   - **7a. One parameterised define.** `-D__AROS_ARCH_$aros_target_arch""__` in
-     `aros_config_cppflags`, and `chipset.h:7` spelled to match. Not an Amiga
-     special case — every architecture gets its own, so the next machine costs
-     nothing.
-   - **7b. Reuse `chipset.h`, do not build a second mechanism.**
-     `qblit.c`/`qbsblit.c` become `CUSTOM_CAUSE(INTF_BLIT)` +
+   - `qblit.c`/`qbsblit.c` become `CUSTOM_CAUSE(INTF_BLIT)` +
      `CUSTOM_ENABLE(INTB_BLIT)` — **superseding our own patch 0023**, which
      invented `arch_CauseBlitterInterrupt()` and two files when the macros were
-     already there. `menu.c`'s two sites become two new `CUSTOM_*` hooks in the
-     same header, and their runtime `ciaa.resource` probes become redundant.
-   - **7c. `bestmodeida.c` and the `__ppc__` kludge get the gate and nothing
-     else.** Neither touches hardware; wrapping policy in a hardware hook would
-     be dressing. Building a seam for a case that does not need one is how this
-     rule becomes expensive to keep.
+     already there.
+   - `menu.c`'s two sites become two new `CUSTOM_*` hooks in the same header, and
+     their runtime `ciaa.resource` probes become redundant.
+   - `bestmodeida.c:352` and the `__ppc__` kludge get `AROS_ARCH_<machine>` in
+     place of their CPU gate and nothing else. Neither touches hardware;
+     wrapping policy in a hardware hook would be dressing, and building a seam
+     for a case that does not need one is how this rule becomes expensive.
 
    Rejected on purpose: a `<module>_arch.h` per module with an
-   `arch/m68k-amiga/<module>/` override, the `kernel_arch.h` way. It needs two
-   new headers, a new `arch/m68k-amiga/dosboot/`, `%set_archincludes` in two more
+   `arch/m68k-amiga/<module>/` override, the `kernel_arch.h` way. Two new
+   headers, a new `arch/m68k-amiga/dosboot/`, `%set_archincludes` in two more
    mmakefiles, and an include-order decision against the existing
-   `arch/m68k-all/dosboot` — all to express what one present header expresses,
-   and it would put `0xdff000` in three files instead of one. The property worth
-   defending is that the address appears exactly once in portable source, because
-   that is what makes the rule checkable by grep instead of by review.
+   `arch/m68k-all/dosboot` — all to express what one working header expresses in
+   two lines of mmakefile, and it would put `0xdff000` in three files instead of
+   one.
 
-   The one cost of the chosen design: `chipset.h` stops being private to
-   `rom/exec`, so `rom/graphics` and `rom/dosboot` need it on their include path
-   (neither has `-I$(SRCDIR)/rom/exec` today) or the header moves. Two `-I` lines
-   is a smaller diff than a move; upstream may prefer otherwise.
-
-   Nothing written. The gate is one line and goes as soon as upstream names the
-   spelling; the rest only runs on m68k-amiga, which we cannot boot.
+   The one cost: `chipset.h` stops being private to `rom/exec`. Upstream may
+   prefer to move it rather than have two modules reach it with an `-I`.
 
 # Decisions taken
 
@@ -454,3 +427,20 @@ comment, unrelated to this issue, noted here so it is not lost.
   Worth keeping as method: the alarming reading was three greps away from being
   disproved, and sending it would have cost more credibility than the finding
   was worth.
+- 2026-08-16 — **Retraction.** The two entries above are wrong and the RFC was
+  rewritten. `AROS_ARCH_amiga` *is* defined: `rom/exec/mmakefile.src:58` carries
+  `USER_CPPFLAGS := -DAROS_ARCH_$(ARCH)`. `chipset.h` works, has always worked,
+  and the whole "dead gate / never-in-effect performance path / softint latency"
+  story is void.
+
+  **The method error is the part worth keeping.** The claim was checked by
+  grepping a tree that had been `configure`d and not built — so no compile line
+  existed yet, and the define lives on one, put there by a module's mmakefile
+  rather than by `configure`. Two greps of a configured-only tree looked like
+  proof and were not. The disproof took one `objdump` of `cause.o` built for
+  `amiga-m68k`, which is what should have been done first: **for "is this code
+  compiled?", read the object, not the build system.**
+
+  The design survives and gets smaller. `chipset.h` being alive makes it a
+  working precedent rather than a broken one, and opting another module in is
+  two lines of mmakefile instead of a `configure` change.
