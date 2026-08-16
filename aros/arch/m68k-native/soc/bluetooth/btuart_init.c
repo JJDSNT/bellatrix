@@ -14,6 +14,7 @@
 #include <aros/kernel.h>
 #include <aros/libcall.h>
 #include <aros/macros.h>
+#include <aros/symbolsets.h>
 #include <proto/btuart.h>
 #include <proto/exec.h>
 #include <proto/kernel.h>
@@ -443,3 +444,19 @@ AROS_LH0(unsigned long, BTUARTGetCapabilities,
 
     AROS_LIBFUNC_EXIT
 }
+
+/*
+ * Register the init with genmodule's INITLIB set.
+ *
+ * Without this line btuart_init() is a static function nobody references, so
+ * the compiler drops it along with everything only it calls -- and genmodule,
+ * having no init to run, adds the resource anyway. OpenResource() then hands
+ * out a base whose fields are all zero, which is worse than a missing resource
+ * because it looks like a working one: BTUARTGetAPIVersion() answers from a
+ * constant, and the first call that touches the base hangs. ObtainSemaphore()
+ * on a zeroed SignalSemaphore blocks forever, because InitSemaphore() sets
+ * ss_QueueCount to -1 and zero reads as "already owned by someone else".
+ *
+ * arch/m68k-native/soc/mbox/mbox_init.c:241 does the same for the same reason.
+ */
+ADD2INITLIB(btuart_init, 0)
