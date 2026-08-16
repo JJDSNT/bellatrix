@@ -173,6 +173,14 @@ machinery is already in the tree.** `tools/elf2hunk/elf2hunk.c` accepts only
 `SHT_RELA`. None of them places the image at an absolute base and reports that
 base as the entry, which is the remaining piece and the smaller one.
 
+**AROS draws the same boundary a second way, by kickstart package.**
+`boot/modular_kickstart.txt` splits the kickstart into BASE (portable),
+FS, Poseidon and BSP (the only machine-specific one), and names the ports that
+break it — `m68k-amiga` among them, for chipset code in `graphics.library`.
+That axis is checkable by grep where the directory axis is not, and clearing it
+is [`ISSUE-0024`](ISSUE-0024.md). Our overlay is already clean on it: every
+`%build_archspecific` in `arch/m68k-emu68/` targets a BSP module.
+
 **A second machine is what proves the contract.** Until one exists, the
 separation is asserted rather than tested, and nothing stops the next change
 from quietly reintroducing a dependency. This is a reason to expect a second
