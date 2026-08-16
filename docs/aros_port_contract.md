@@ -36,6 +36,22 @@ a `timer/` and a `battclock/` while `aarch64-native` keeps the BCM platform
 files — so each driver is a judgement call. The split that is *not* a judgement
 call is bootstrap versus kernel.
 
+### `<cpu>-native` is a source convention, not a build-system one
+
+Worth knowing before planning any move: there is no `native` key in the arch
+selection chain. `%gen_archspecificrules` (`config/make.tmpl:3232-3241`) offers
+`$(CPU)`, `$(FAMILY)`, `$(ARCH)`, `$(ARCH)-$(VARIANT)` and `$(ARCH)-$(CPU)`, and
+`FAMILY` is empty for every non-hosted target (`config/target.cfg.in:11`, from
+`aros_target_family`, which `configure.in` sets only for hosted).
+
+So `arch/aarch64-native/` and `arch/arm-native/` build under the *machine's*
+key: every `%build_archspecific` in them says `arch=raspi-aarch64`,
+`arch=raspi-arm` or `arch=raspi-armeb`, seventeen in total and not one saying
+`native`. The directory expresses intent; the mmakefile enumerates the machines
+that opt in. A second machine therefore costs one `arch=` line per native
+mmakefile — the kernel *source* stays untouched, which is the property worth
+having, but the enumeration is explicit and lives in the build system.
+
 ### The contract between them is `BootMsg`
 
 The bootstrap hands the kernel a `struct TagItem *` of `KRN_*` tags. This is not

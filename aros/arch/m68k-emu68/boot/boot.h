@@ -3,6 +3,13 @@
 
 #include <stdint.h>
 
+/*
+ * What this port requires of whatever starts it: entry conditions, the
+ * character sink, and what a bootstrap must not attempt. Everything in this
+ * file is the Emu68 answer to that contract.
+ */
+#include <aros/bootcontract.h>
+
 #define EMU68_BOOT_MAGIC   0x45363842UL /* "E68B" */
 #define EMU68_BOOT_ABI     7
 

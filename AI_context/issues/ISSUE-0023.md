@@ -83,16 +83,51 @@ Adding a second machine means writing a bootstrap, not editing the kernel.
 
 - Surveyed the port against the AROS `arch/` convention and wrote
   `docs/aros_port_contract.md`.
+- **Step 1 done.** `aros/arch/m68k-emu68/include/aros/bootcontract.h` states the
+  m68k-specific half: entry conditions, the character sink, what a bootstrap
+  must not attempt, and the fact that the minimum CPU is unstated. `boot/boot.h`
+  includes it, so it is on the path of everything in `boot/` and cannot rot
+  unnoticed. It lives in the machine directory only because there is one; it
+  moves in step 2, and says so in its own text.
+- **Established how `<cpu>-native` is actually selected**, which changes step 2.
+  See below.
+
+# How `<cpu>-native` is selected: it is not
+
+`<cpu>-native` is a source-layout convention, not a build-system concept. There
+is no `native` key anywhere in the arch selection chain.
+
+`%gen_archspecificrules` (`config/make.tmpl:3232-3241`) chains
+`<mmake>` → `-$(CPU)` → `-$(FAMILY)` → `-$(ARCH)` → `-$(ARCH)-$(VARIANT)` →
+`-$(ARCH)-$(CPU)`. For this target `ARCH=emu68`, `CPU=m68k`, and `FAMILY` is
+**empty** — `config/target.cfg.in:11` takes it from `aros_target_family`, which
+`configure.in` only ever sets for hosted targets. So the only keys that reach us
+are `m68k`, `emu68` and `emu68-m68k`.
+
+`arch/aarch64-native/` and `arch/arm-native/` therefore do not build under a
+"native" key. Every `%build_archspecific` in them names the *machine*:
+
+```
+$ grep -o 'arch=[a-z0-9-]*' arch/{aarch64,arm}-native/*/mmakefile.src | sort | uniq -c
+      6 arch=raspi-arm
+      6 arch=raspi-armeb
+      5 arch=raspi-aarch64
+```
+
+The consequence for this issue is not that the split is wrong — upstream does it
+exactly this way — but that one sentence in the **Goal** needs qualifying.
+Adding a second machine means writing a bootstrap *and* adding one `arch=` line
+per native mmakefile. In the arm case that is six lines. The kernel *code* stays
+untouched, which is the property worth having; the enumeration is explicit and
+lives in the build system rather than in the source.
 
 # What is left
 
 Ordered so each step is independently verifiable, with the Emu68 path working
 throughout.
 
-1. **Write down the m68k-specific half of the contract.** `BootMsg` and its
-   `KRN_*` tags are already the convention and need no restating. What does need
-   stating is what is specific to this port: the entry conditions, and the
-   character sink. Two paragraphs in a header, no code movement.
+1. ~~**Write down the m68k-specific half of the contract.**~~ Done —
+   `include/aros/bootcontract.h`.
 2. **Create `arch/m68k-native/` and move the kernel half into it.** Everything
    downstream of `BootMsg = emu68_boot_tags` (`boot/boot.c:548`), plus `exec/`,
    `kernel/`, `platform/` and its drivers. By the precedent of
@@ -144,7 +179,7 @@ correct m68k behaviour and stays in the native architecture.
 
 # Acceptance criteria
 
-- [ ] A header states the m68k-specific half of the contract: entry conditions
+- [x] A header states the m68k-specific half of the contract: entry conditions
       and character sink
 - [ ] `arch/m68k-native/` exists and holds the kernel, `exec` and platform
       discovery
@@ -210,3 +245,10 @@ lands.
   `<cpu>-native` / `<cpu>-<machine>` and the `BootMsg` contract already describe
   the intended split. The directory move moved from *Open questions* into the
   plan; the bespoke "contract and bindings" framing was dropped.
+
+- 2026-08-16 — Step 1 done: `include/aros/bootcontract.h`, included by
+  `boot/boot.h`. Verified by `make kernel-link-emu68-m68k-quick`.
+- 2026-08-16 — Found that `<cpu>-native` has no build-system key: the native
+  directories build under the machine's `arch=`. Recorded here and in
+  `docs/aros_port_contract.md`; step 2 is unchanged in shape, the Goal's
+  "not editing the kernel" is now qualified.
