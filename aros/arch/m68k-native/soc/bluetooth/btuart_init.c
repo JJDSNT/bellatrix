@@ -137,10 +137,16 @@ static LONG firmware_gpio_set(ULONG gpio, ULONG enabled)
     LONG result = BTUART_ERR_UNAVAILABLE;
 
     if (MBoxBase == NULL)
+    {
+        bug("[BTUART] power: mbox.resource unavailable\n");
         return result;
+    }
     raw = AllocMem(12 * sizeof(ULONG) + 15, MEMF_PUBLIC | MEMF_CLEAR);
     if (raw == NULL)
+    {
+        bug("[BTUART] power: mailbox allocation failed\n");
         return result;
+    }
     msg = (ULONG *)(((IPTR)raw + 15) & ~(IPTR)15);
 
     msg[0] = AROS_LONG2LE(12 * 4);
@@ -177,6 +183,8 @@ static LONG firmware_gpio_set(ULONG gpio, ULONG enabled)
     }
 
     FreeMem(raw, 12 * sizeof(ULONG) + 15);
+    bug("[BTUART] power: GPIO %lu -> %lu, result %d\n",
+        gpio, enabled != 0, (int)result);
     return result;
 }
 
@@ -228,15 +236,16 @@ static int btuart_init(struct BTUARTBase *BTUARTBase)
     BTUARTBase->capabilities = BTUART_CAP_PRESENT |
         BTUART_CAP_BAUD_CHANGE | BTUART_CAP_POWER_CONTROL;
 
-    D(bug("[BTUART] PL011 at 0x%lx, clock %lu Hz\n",
-          (ULONG)BTUARTBase->uart_base, BTUARTBase->uart_clock_hz));
+    bug("[BTUART] ready: PL011=0x%lx clock=%lu mbox=%s\n",
+        (ULONG)BTUARTBase->uart_base, BTUARTBase->uart_clock_hz,
+        MBoxBase != NULL ? "yes" : "no");
 
     return TRUE;
 }
 
 AROS_LH1(long, BTUARTClaim,
     AROS_LHA(void *, owner, A0),
-    struct BTUARTBase *, BTUARTBase, 3, BTUART)
+    struct BTUARTBase *, BTUARTBase, 3, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -257,7 +266,7 @@ AROS_LH1(long, BTUARTClaim,
 
 AROS_LH1(void, BTUARTRelease,
     AROS_LHA(void *, owner, A0),
-    struct BTUARTBase *, BTUARTBase, 4, BTUART)
+    struct BTUARTBase *, BTUARTBase, 4, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -279,7 +288,7 @@ AROS_LH3(long, BTUARTConfigure,
     AROS_LHA(void *, owner, A0),
     AROS_LHA(unsigned long, baud, D0),
     AROS_LHA(unsigned long, flags, D1),
-    struct BTUARTBase *, BTUARTBase, 5, BTUART)
+    struct BTUARTBase *, BTUARTBase, 5, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -300,6 +309,7 @@ AROS_LH3(long, BTUARTConfigure,
 
     if (setup_lpo_clock(BTUARTBase) != BTUART_OK)
     {
+        bug("[BTUART] configure: LPO clock timeout\n");
         ReleaseSemaphore(&BTUARTBase->lock);
         return BTUART_ERR_TIMEOUT;
     }
@@ -310,6 +320,7 @@ AROS_LH3(long, BTUARTConfigure,
         ;
     if (wait == 0)
     {
+        bug("[BTUART] configure: PL011 busy timeout\n");
         ReleaseSemaphore(&BTUARTBase->lock);
         return BTUART_ERR_TIMEOUT;
     }
@@ -337,6 +348,8 @@ AROS_LH3(long, BTUARTConfigure,
     mmio_write(BTUARTBase->uart_base, PL011_CR, control);
     BTUARTBase->baud = baud;
     BTUARTBase->config_flags = flags;
+    bug("[BTUART] configure: baud=%lu clock=%lu divisor=%lu/%lu flags=0x%lx\n",
+        baud, BTUARTBase->uart_clock_hz, integer, fraction, flags);
     ReleaseSemaphore(&BTUARTBase->lock);
     return BTUART_OK;
 
@@ -346,7 +359,7 @@ AROS_LH3(long, BTUARTConfigure,
 AROS_LH2(long, BTUARTSetPower,
     AROS_LHA(void *, owner, A0),
     AROS_LHA(unsigned long, enabled, D0),
-    struct BTUARTBase *, BTUARTBase, 6, BTUART)
+    struct BTUARTBase *, BTUARTBase, 6, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -363,7 +376,7 @@ AROS_LH3(long, BTUARTWrite,
     AROS_LHA(void *, owner, A0),
     AROS_LHA(const void *, data, A1),
     AROS_LHA(unsigned long, length, D0),
-    struct BTUARTBase *, BTUARTBase, 7, BTUART)
+    struct BTUARTBase *, BTUARTBase, 7, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -389,7 +402,7 @@ AROS_LH3(long, BTUARTRead,
     AROS_LHA(void *, owner, A0),
     AROS_LHA(void *, data, A1),
     AROS_LHA(unsigned long, capacity, D0),
-    struct BTUARTBase *, BTUARTBase, 8, BTUART)
+    struct BTUARTBase *, BTUARTBase, 8, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -412,7 +425,7 @@ AROS_LH3(long, BTUARTRead,
 }
 
 AROS_LH0(unsigned int, BTUARTGetAPIVersion,
-    struct BTUARTBase *, BTUARTBase, 1, BTUART)
+    struct BTUARTBase *, BTUARTBase, 1, Btuart)
 {
     AROS_LIBFUNC_INIT
 
@@ -422,7 +435,7 @@ AROS_LH0(unsigned int, BTUARTGetAPIVersion,
 }
 
 AROS_LH0(unsigned long, BTUARTGetCapabilities,
-    struct BTUARTBase *, BTUARTBase, 2, BTUART)
+    struct BTUARTBase *, BTUARTBase, 2, Btuart)
 {
     AROS_LIBFUNC_INIT
 
