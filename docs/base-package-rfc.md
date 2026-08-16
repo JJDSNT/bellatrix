@@ -189,6 +189,18 @@ anywhere: nothing overrides `cause.c`, `addintserver.c`, `remintserver.c` or
 `coldreboot`, `disable.S`, `enable.S`, `exec_globals`, `moveexecbase`,
 `readgayle` and `shutdowna`.
 
+**Confirmed against a real `amiga-m68k` configure, not inferred from ours.** We
+ran `configure --target=amiga-m68k` on a clean tree at the current pin. Every
+preprocessor define it produces for that target:
+
+```
+bin/amiga-m68k/gen/config/target.cfg:
+  CONFIG_CPPFLAGS = $(strip -DAROS_BUILD_TYPE=AROS_BUILD_TYPE_PERSONAL -DNOLIBINLINE)
+```
+
+`AROS_ARCH_amiga` occurs in no generated file in that tree. The Amiga branch of
+`chipset.h` does not compile on the Amiga.
+
 **Please check what that costs m68k-amiga, because we cannot.** `Cause()` says in
 its own comment:
 
