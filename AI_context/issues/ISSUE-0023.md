@@ -146,37 +146,30 @@ throughout.
 
 1. ~~**Write down the m68k-specific half of the contract.**~~ Done —
    `include/aros/bootcontract.h`.
-2. **Create `arch/m68k-native/` and move the kernel half into it.** Everything
-   downstream of `BootMsg = emu68_boot_tags` (`boot/boot.c:548`), plus `exec/`,
-   `kernel/`, `platform/` and its drivers. By the precedent of
-   `aarch64-native/kernel/platform_bcm2708.c`, the BCM283x drivers and `soc/`
-   go here rather than staying with the machine. `m68k-emu68` keeps `entry.S`,
-   `parse_fdt()` and `console.c`.
+2. ~~**Create `arch/m68k-native/` and move the kernel half into it.**~~ Done, in
+   three moves: `exec/` as the pilot, then `kernel/` and `platform/`, then
+   `soc/` and the portable part of `include/`. What each directory's placement
+   turned on is in *The per-directory split* and *Where the headers went*; the
+   two dependencies that had to be cut rather than moved are in the execution
+   log.
 
-   `exec/` is moved, as the pilot — see the execution log. Two properties were
-   the point of doing it first and both held: `setup.sh` creates the new
-   injection with nothing declared, and the Emu68 Exec backend is still the one
-   that reaches the object, because what protects it (patch 0010) keys on
-   `ARCH`, not on a path. `soc/` and `battclock/` are the two directories where
-   this issue's own enumeration does not survive contact with the content, and
-   they are settled per-directory before the rest moves — see *The
-   per-directory split*: `soc/` and `platform/bcm283x/` go to native,
-   `battclock/` stays with the machine.
-
-   `include/` moves with them and is its own small piece of work: it is
-   published into the sysroot by an `includes-copy-emu68-m68k` hook keyed on the
-   machine, so `m68k-native` needs an include directory and a hook of its own
-   before `bootcontract.h` can follow.
-3. **Gate on the information, not on its source.** Replace the
-   `EMU68_BOOT_MEMORY_VALID` check (`boot/boot.c:443`) with one that asks
-   whether the memory range is known, whoever established it.
+   Two properties held throughout and were the reason for piloting: `setup.sh`
+   creates the new injection with nothing declared, and no mmakefile needed
+   editing, because their includes are `$(CURDIR)`-relative and their
+   `%build_archspecific` keys name the machine rather than a path.
+3. ~~**Gate on the information, not on its source.**~~ Done. The
+   `EMU68_BOOT_MEMORY_VALID` check is now a test that the range is non-zero and
+   does not wrap; the flag stays only as a record of provenance.
 4. **Give discovery a device list.** `platform_timer_start()` takes an FDT and
    walks `/soc`. Have the bootstrap produce the list of `PlatformNode`s and pass
    that, so the driver ops tables — which are already abstract — can be reached
    without a tree. This does **not** finish with `platform/fdt.c`: it removes the
    discovery uses, but `dt_parse()` still runs for the OF tree below.
-5. **Make the console a function pointer**, supplied by the bootstrap.
-   `0xdeadbeef` becomes one implementation.
+5. ~~**Make the console a function pointer**, supplied by the bootstrap.~~ Done.
+   `m68k_boot_putc`, with a discarding default, and `0xdeadbeef` confined to
+   `boot/console.c`. The same shape was then needed a second time, unplanned, for
+   the boot UI's clock (`struct PlatformClockObserver`) — which is some evidence
+   it is the right one.
 6. **Decide what to do about the OF tree.** `KRN_OpenFirmwareTree` is part of
    the conventional contract and `aarch64-native` reads it too, so this is not a
    deviation to undo. What is specific here is that it is the only hardware

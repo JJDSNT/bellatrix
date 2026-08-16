@@ -6,13 +6,12 @@
  *
  * What this m68k port requires of whatever starts it.
  *
- * This is the port's contract, not Emu68's. It still lives in a machine
- * directory, and arch/m68k-native existing no longer excuses that. What keeps
- * it here is the publication hook: ../mmakefile.src copies this directory into
- * the sysroot under includes-copy-emu68-m68k, which compiler/include pulls in
- * by that name, so moving the header means giving m68k-native an include
- * directory and a hook of its own. Same step of ISSUE-0023.md, not done yet.
- * See also docs/aros_port_contract.md for the survey this is condensed from.
+ * This is the port's contract, not Emu68's, which is why it is here and not in
+ * arch/m68k-emu68. It is published into the sysroot by ../mmakefile.src under
+ * the includes-copy-emu68-m68k hook -- named after the machine because that is
+ * the only key a non-hosted target gets, not because the header belongs to one.
+ * See AI_context/issues/ISSUE-0023.md, and docs/aros_port_contract.md for the
+ * survey this is condensed from.
  *
  *
  * THE GENERIC HALF IS BootMsg, AND IS NOT RESTATED HERE
