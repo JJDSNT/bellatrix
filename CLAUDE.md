@@ -115,16 +115,35 @@ QEMU `raspi3b` → `-kernel Emu68.img` + `-dtb` → `-initrd aros-*.elf` →
 Physical BCM283x interrupts do not take the Amiga Paula path. The chain is:
 
 ```
-ARM peripheral → Emu68 ARMPending → m68k level-6/EXTER → Platform_Autovector()
-→ ARM interrupt-controller Dispatch() → krnRunIRQHandlers() → driver handler
+ARM peripheral → Emu68 stores level 6 into INTF.IPL → m68k level 6
+→ Platform_Autovector() → ARM interrupt-controller Dispatch()
+→ krnRunIRQHandlers() → driver handler
 ```
 
-Emu68 raises level 6 only when the guest `INTENA` shadow has both `INTEN` and
-`EXTER`; `Platform_Init()` arms that gate once, and pending state clears only
-when the guest acknowledges EXTER through `INTREQ`. `KrnCli()`/`KrnSti()` are
-*not* the physical IRQ gate on this port. `docs/irq.md` documents the three
-possible delivery mechanisms (shadow registers, MOVEC, PiStorm's IRQ line) and
-which one is still an open design question.
+The level is handed straight to the CPU as an IPL — the same field an external
+interrupt controller drives on PiStorm — and the arbitration honours it against
+the SR mask like a real 68k. **There is nothing for this port to arm and
+nothing to acknowledge on the bridge**: Emu68 drops the level as it takes the
+exception, and the SR mask keeps it from re-entering until our RTE. Only the
+peripheral that fired has to be acknowledged, which `Dispatch()` does.
+`KrnCli()`/`KrnSti()` are *not* the physical IRQ gate on this port.
+
+This replaced an emulated Paula, where Emu68 raised level 6 only when the guest
+`INTENA` shadow held both `INTEN` and `EXTER` and pending state cleared through
+`INTREQ` — one page fault per arm and per acknowledge. That path still exists in
+Emu68 and is the right answer once something really owns those registers; it is
+simply not what a machine with no chipset needs. See
+`patches/emu68/0002-deliver-host-interrupts-as-an-ipl-not-through-a-shadow.patch`
+and the comment at `aros/arch/m68k-emu68/platform/platform.c:20-44`.
+`docs/irq.md` compares the three possible delivery mechanisms (shadow
+registers, MOVEC, PiStorm's IRQ line); its "The path" section still describes
+the shadow and carries a correction header saying so.
+
+Neither state is the destination. `docs/New_emu68.md` §3 and §14 split this into
+two interrupt domains — platform interrupts keep the `INTF.ARM` → level 6 path,
+chipset interrupts belong to Rigel — and delete `INT_shadow` outright, routing
+`$DFF09A` to Rigel through a generic bus hook. Anything reasoning about who owns
+INTENA/INTREQ should be written against that, not against the current dormancy.
 
 The `nocomposition` boot argument is currently required to see anything on the
 framebuffer.

@@ -266,15 +266,18 @@ static BOOL timer_device_soak_probe(void)
  *
  * Where this stops localises a bring-up failure precisely:
  *
- *  - No tick at all: level 6 never reached AROS. Either the EXTER channel
- *    was never armed (Emu68 raises level 6 only when its INTENA shadow has
- *    both INTEN and EXTER -- see platform/platform.c), the interrupt
- *    controller never unmasked the source, or the System Timer's compare
- *    never matched.
+ *  - No tick at all: level 6 never reached AROS. There is nothing to arm on
+ *    the Emu68 side -- a host interrupt is handed to the CPU as an IPL and
+ *    the arbitration honours it against the SR mask, see
+ *    platform/platform.c -- so the candidates are all below or above that:
+ *    the ARM interrupt never reached Emu68's vector, the interrupt
+ *    controller never unmasked the source, the System Timer's compare never
+ *    matched, or the SR mask never dropped far enough to take a level 6.
  *
- *  - Tick 1 and then a stall: delivery works but is not being released.
- *    The level-6 handler has to acknowledge Emu68's ARM -> m68k bridge by
- *    clearing EXTER in INTREQ, not just the peripheral that fired.
+ *  - Tick 1 and then a stall: delivery works but the source is not being
+ *    released. Emu68 dropped the level as it took the exception and our RTE
+ *    lowers the SR mask, so nothing on the bridge needs acknowledging; what
+ *    does is the peripheral itself, through the controller's Dispatch().
  */
 static void platform_timer_probe(void)
 {

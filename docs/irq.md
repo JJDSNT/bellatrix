@@ -8,6 +8,34 @@ all that exists. It is the place for the rest of the interrupt story as it
 arrives — CIA and chipset sources, Paula's consolidation, and delivery under
 the multicore runtime.
 
+> **Correction, 2026-08-16 — "The path" below is no longer what runs.**
+> `patches/emu68/0002-deliver-host-interrupts-as-an-ipl-not-through-a-shadow.patch`
+> replaced steps 3 to 5 with a single store of level 6 into `INTF.IPL`: no
+> `INTENA` test, no `ARMPending`, nothing for the guest to arm and nothing to
+> acknowledge on the bridge. That is mechanism 2 below, *IPL injection*: the
+> comparison further down still stands as written, but its Status column is out
+> of date — the choice it leaves open went to IPL, on the grounds that a machine
+> with no Paula has nobody to own INTENA/INTREQ. Note that this is the mechanism
+> the document records as having been tried before and not settling delivery;
+> what changed is the surrounding delivery path, not the verdict on the
+> interface.
+> `INT_shadow` still exists in Emu68 and the write handlers still update it
+> (`vectors.c:441-466`), but `ARMPending` is now never set, so those updates
+> reach nothing. The rest of the document stands: the comparison of the three
+> mechanisms is what the decision was made from, and the shadow path is the
+> right answer again the moment a real chipset owns those registers.
+> Current behaviour is described at
+> `aros/arch/m68k-emu68/platform/platform.c:20-44`.
+>
+> **This is a way station, not the destination.**
+> [`New_emu68.md`](New_emu68.md) §3 and §14 describe where it goes: two
+> independent interrupt domains — platform interrupts keeping the
+> `INTF.ARM` → level 6 path, chipset interrupts belonging to Rigel — and
+> `INT_shadow` deleted rather than left dormant, with `$DFF09A` reaching Rigel
+> through the generic bus hook because *"there must not be two independent
+> owners of the same chipset state."* So the registers stop being emulated by
+> Emu68 in both directions: today nobody owns them, afterwards Rigel does.
+
 ## The path
 
 A physical ARM IRQ on core 0 lands in `curr_el_spx_irq`
