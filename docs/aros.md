@@ -207,8 +207,9 @@ directory (`.installflag-gcc-<version>-m68k`), so two AROS targets on the same
 CPU would build the same compiler into the same place anyway.
 
 `build-aros.sh` cannot yet *point* at another tree, though — its `BUILD` and
-`TARGET` are this port's. Provisioning a second AROS target by hand is two
-commands:
+`TARGET` are this port's. Giving a second AROS target the same toolchain by hand
+is two commands — `configure` writes the tree, the tarball fills in the compiler
+it left out:
 
 ```bash
 cd /somewhere/short && /path/to/external/aros/configure --target=amiga-m68k

@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0026
-title: "build-aros.sh can only provision its own tree, so a second AROS target rebuilds the toolchain"
+title: "The prebuilt toolchain can only be installed into this port's own build tree"
 status: backlog
 priority: medium
 type: feature
@@ -54,8 +54,8 @@ So the gap is only the plumbing.
 
 # Goal
 
-Provisioning any AROS build tree with the prebuilt toolchain is one command, and
-uses the same lookup order — local cache, then release, then ask.
+Installing the prebuilt toolchain into any already-configured AROS build tree is
+one command, and uses the same lookup order — local cache, then release.
 
 # What is left
 
@@ -64,11 +64,20 @@ uses the same lookup order — local cache, then release, then ask.
    `restore_toolchain()` can serve another tree unchanged. Everything below it —
    `pick_compatible()`, the glibc-compatibility rule, the checksum check — is
    already target-agnostic.
-2. **A `--provision <dir>` mode**, or equivalent, that assumes the tree is
-   already `configure`d and only unpacks `crosstools/` into
-   `<dir>/bin/<host>/tools/`. It must not try to configure: the wrappers beside
-   `crosstools/` are `configure`'s output and hardcode the tree's absolute path,
-   which is exactly why only `crosstools/` is ever packed.
+2. **A `--install-toolchain <dir>` mode.** It does exactly three things: work
+   out the file name from `toolchain_key()`, find it (local cache, else download
+   the release asset and check its `.sha256`), and extract `crosstools/` into
+   `<dir>/bin/<host>/tools/`.
+
+   It deliberately does **not** run `configure`: the wrappers that sit beside
+   `crosstools/` — `<cpu>-<arch>-elf-gcc`, `aros-ld` — are `configure`'s output
+   and hardcode that tree's absolute path, which is the same reason only
+   `crosstools/` is ever packed. So the order of use is `configure` first, this
+   second, filling the hole `configure` leaves.
+
+   It also does **not** fall back to compiling. If nothing compatible is on
+   offer it says so and stops, rather than starting three hours of gcc in a tree
+   that is not ours.
 3. **Say the ARG_MAX thing where someone will read it.** Linking
    `stdc.library` passes every object on one command line; a long build-tree
    prefix times hundreds of paths overflows it and the error —
@@ -118,8 +127,9 @@ blocked; that blocker is recorded there, not here.
 
 # Execution log
 
-- 2026-08-16 — Opened, after provisioning an `amiga-m68k` tree by hand while
-  chasing `ISSUE-0024`. Confirmed the published release
+- 2026-08-16 — Opened, after installing the toolchain into an `amiga-m68k` tree
+  by hand while chasing `ISSUE-0024` — which worked, but skipped the release
+  lookup and verified no checksum, which is most of what the mode is for. Confirmed the published release
   `toolchain-a88db85e62ede04f` carries
   `a88db85e62ede04f-m68k-linux-x86_64-glibc2.39.tar.xz`, that
   `./scripts/build-aros.sh --toolchain-key` prints exactly that name, and that
