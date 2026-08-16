@@ -2,6 +2,7 @@
  * Low-level debug output for native Emu68.
  */
 
+#include <aros/bootcontract.h>
 #include <aros/kernel.h>
 #include <aros/symbolsets.h>
 
@@ -11,16 +12,34 @@
 extern void emu68_console_puts(const char *text);
 
 /*
- * Emu68 leaves 0x00000000deadbeef deliberately unmapped so a one-byte write
- * from the guest faults into its own host-side kprintf(), which reaches the
- * real UART (visible through QEMU's -serial). This gives kprintf()/bug()
- * scrollback console output independent of the m68k framebuffer console.
+ * The character sink, and its default.
+ *
+ * <aros/bootcontract.h> asks a machine for an address that absorbs a byte
+ * store, so that kprintf()/bug() have somewhere to go before -- and
+ * independently of -- any console. Which address that is belongs to the
+ * machine: Emu68 leaves 0xdeadbeef unmapped and turns the resulting fault into
+ * its own host-side kprintf(), which reaches the real UART and is what QEMU's
+ * -serial shows. boot/console.c installs that one.
+ *
+ * The default discards. A machine that supplies nothing therefore boots and
+ * loses the log, which is what the contract says happens, rather than storing
+ * to an address chosen by whoever wrote this file.
+ *
+ * Initialised rather than left in .bss on purpose: this is called before
+ * anything has had a chance to clear .bss, and a wild pointer here would
+ * fault in the one path that exists to report faults.
  */
+static int krnDiscardC(int chr)
+{
+    return chr;
+}
+
+int (*m68k_boot_putc)(int chr) = krnDiscardC;
+
 int krnPutC(int chr, struct KernelBase *KernelBase)
 {
     (void)KernelBase;
-    *(volatile UBYTE *)0xdeadbeef = (UBYTE)chr;
-    return chr;
+    return m68k_boot_putc(chr);
 }
 
 /*

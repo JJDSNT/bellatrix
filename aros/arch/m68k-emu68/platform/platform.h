@@ -18,6 +18,8 @@
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
+#include <aros/bootcontract.h>
+
 #include <exec/types.h>
 #include <inttypes.h>
 
@@ -73,10 +75,13 @@ struct PlatformDriver
 /*
  * Bring-up tracing.
  *
- * Writes a byte at a time to Emu68's 0xdeadbeef host debug channel, the
- * same one arch/m68k-emu68/boot/console.c uses. Kept self-contained here so
- * the platform layer can trace during early boot without depending on
- * anything from boot/ having been linked or initialised yet.
+ * Writes a byte at a time to whatever character sink the bootstrap installed
+ * as m68k_boot_putc -- see <aros/bootcontract.h>. This used to name Emu68's
+ * 0xdeadbeef directly, which made the platform layer a fourth place a second
+ * machine would have had to edit. Going through the pointer costs an indirect
+ * call on a path that is compiled out by default and is a trace when it is
+ * not, and it still needs nothing from boot/ to have been initialised: the
+ * pointer has a discarding default.
  *
  * Off: these existed to bring interrupt delivery up, and that job is now
  * done by boot/selftest.c, which measures the same path from above (level-6
@@ -91,7 +96,7 @@ struct PlatformDriver
 static inline void platform_trace(const char *text)
 {
     while (*text)
-        *(volatile UBYTE *)0xdeadbeef = (UBYTE)*text++;
+        m68k_boot_putc(*text++);
 }
 
 static inline void platform_trace_hex(ULONG value)
@@ -101,7 +106,7 @@ static inline void platform_trace_hex(ULONG value)
 
     platform_trace("0x");
     for (shift = 28; shift >= 0; shift -= 4)
-        *(volatile UBYTE *)0xdeadbeef = (UBYTE)digits[(value >> shift) & 0xf];
+        m68k_boot_putc(digits[(value >> shift) & 0xf]);
 }
 
 static inline void platform_trace_val(const char *label, ULONG value)
