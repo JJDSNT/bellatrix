@@ -193,8 +193,9 @@ i.e. somebody else's source bug — was wrong, and cheaply so: the compiler's
 under `Ports/`, which settled it. Worth remembering as a habit rather than as a
 fact about freetype.
 
-Unblocked by deleting the stale installed headers. See ISSUE-0020 for the
-durable fix, which is not yet done.
+Unblocked by deleting the stale installed headers. ISSUE-0020 diagnosed that and
+is closed (`consolidated/history/`); the durable fix, which is not yet done, is
+ISSUE-0025.
 
 **QEMU will not exercise most of the driver.** QEMU attaches USB devices
 directly to the dwc2 root port. A real Pi 3B has a LAN9514 hub soldered between

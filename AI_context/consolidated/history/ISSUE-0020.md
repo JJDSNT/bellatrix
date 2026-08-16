@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0020
 title: "The full build compiles freetype 2.14.3 against 2.14.1's installed headers"
-status: doing
+status: done
 priority: high
 type: bug
 owner: agent
 created_at: 2026-08-14
-updated_at: 2026-08-14
+updated_at: 2026-08-16
 tags:
   - build
   - ports
@@ -137,8 +137,39 @@ anybody.
 - [x] A card built from the resulting distribution boots to icons, so that the
       kernel and the modules on the card come from the same tree. 6/6 on
       2026-08-14, median 44.0 s.
-- [ ] A durable guard, so a future version bump does not reintroduce it.
-- [ ] Offered upstream, if option 2 holds up.
+- [x] A durable guard, so a future version bump does not reintroduce it. —
+      **not done here**; carried to [`ISSUE-0025`](ISSUE-0025.md) rather than
+      holding this one open. See below.
+- [x] Offered upstream, if option 2 holds up. — same, `ISSUE-0025`.
+
+# Closed 2026-08-16
+
+The defect is gone from this tree, and the sysroot now agrees with the port:
+
+```
+FT2VERS := 2.14.3                              (workbench/libs/freetype2/mmakefile.src:11)
+AROS/Developer/include/freetype/internal/ftobjs.h:719
+    ft_glyphslot_alloc_bitmap( FT_GlyphSlot slot );          ← 2.14.3, installed 14 Aug
+Ports/freetype2/freetype-2.14.1/.../ftobjs.h:728
+    ft_glyphslot_alloc_bitmap( FT_GlyphSlot slot, FT_ULong size );
+```
+
+Note which way round that is now. The two-argument signature — the one the
+compiler used to pick and fail on — survives only in the **leftover extracted
+`freetype-2.14.1` tree**, which nothing builds; the installed header is 2.14.3
+and matches what compiles against it. The stale artifact that caused this is
+both deleted and superseded.
+
+That leftover directory is worth leaving in the record, because it is the
+cheapest available signal that this build tree has crossed a version bump: two
+extracted trees under one `Ports/<name>/`. `ISSUE-0025` starts there.
+
+Closed against the bug, not against the family. What remains open is a build-
+system guard and an upstream offer, which are their own work with their own
+risk — a guard that deletes installed headers can break a good tree — and do not
+belong in a bug report whose subject is fixed. Keeping this one `doing` for them
+was making the issue list less informative, not more: nothing here is actionable
+and the failure it describes cannot currently be reproduced.
 
 # Notes
 
