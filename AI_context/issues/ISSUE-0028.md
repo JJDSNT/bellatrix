@@ -207,6 +207,46 @@ to 1220 bytes. Our H4 reassembly buffer is 4100 bytes and copes, but the
 receive ring is 2048 — one such event fits and two do not. **Size the ring
 against 1220, not against a tick period.**
 
+# Dual-mode devices appear twice, and that is expected
+
+On hardware a keyboard and a mouse produce **four** HID entries: two from LE with
+an appearance, two from Classic with a class of device. That is not a merge
+failure to be fixed. Legacy wrote the reason down before it could happen, in the
+same comment that disabled LE scanning:
+
+> **TODO(LE):** when re-enabling LE scan, note that HID peripherals (keyboard,
+> mouse) typically advertise on a *different* BDA than their BR/EDR address, so
+> they will appear as separate entries (CL + LE) rather than merging into DM.
+
+Legacy *has* a unifier — `find_or_add()` matches by address and ORs the
+transport bits, so a dual-mode device with one public address becomes a single
+`DM` entry. It never had two entries to merge, because with LE scanning off each
+device was only ever seen once, through inquiry. That is how it worked with
+these same devices.
+
+**So merging by address cannot work here**, and the addresses confirm it: the LE
+sightings arrive on random static addresses (`ce:…`, `c1:…` — top two bits set),
+which is what an unbonded peripheral advertises with. A device that is bonded
+uses its identity address, which is why legacy's comment expects public
+addresses at all.
+
+What could merge them, in increasing order of honesty:
+
+1. **Nothing, and say so.** Show both, marked by transport. A user who knows
+   they own one keyboard can see that `<keyboard>` appears on CL and on LE.
+2. **By type and proximity.** One `<keyboard>` on LE and one on Classic, both
+   strong, are probably one keyboard. A guess, and wrong in a room with two.
+3. **By identity resolution.** The correct answer, and it needs an IRK from
+   bonding — which means it cannot happen before the first pairing, and after
+   pairing it is no longer needed for the device already paired.
+
+**Connect on Classic for now.** That is what legacy did — `hid_host_connect()`
+with `HID_PROTOCOL_MODE_BOOT` — and HID-over-GATT is not wired in
+`aros-bluzing` any more than it was in btstack there. Legacy's note calls LE HID
+preferable long term, for latency and WiFi coexistence, and lists the profile
+support as the blocker. Until that exists, the LE sighting is information and
+the Classic one is the connectable half.
+
 # Two firmware quirks that cost sprints
 
 **`HCI_Read_Local_Name` returns 251 of 252 bytes.** The BCM43430A1 firmware
