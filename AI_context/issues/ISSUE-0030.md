@@ -19,6 +19,19 @@ related_files:
   - AI_context/issues/ISSUE-0028.md
 ---
 
+# The principle this issue exists to hold
+
+**An old failure is a measurement, not a verdict.** Every finding below was made
+by a different port, on a different stack, in a state this one is not in. What
+such a finding is good for is naming the thing to measure first; what it is not
+good for is deciding in advance that something cannot work.
+
+That is easy to say and easy to violate. It was violated twice while writing
+this file: first by reading "Remote Name Request crashes the firmware" as a
+property of the chip, then by assuming the opposite -- that the legacy port ran
+without firmware -- when its build downloads `BCM43430A1.hcd` and compiles it
+in. Both readings were about avoiding the measurement.
+
 # Summary
 
 Two things the legacy port set out to do and did not finish. They are recorded
@@ -42,6 +55,26 @@ name when the device advertises one, a synthesized `<keyboard>` label otherwise.
 that is enough; with two it is not, and "pair the second `<keyboard>`" is not
 something a user can act on. Classic devices that answer inquiry without an
 Extended Inquiry Result have no name at all through any other route.
+
+**The legacy port ran this chip with its firmware loaded, and we do not.**
+`scripts/build.sh` there downloads `BCM43430A1.hcd` and generates a C source
+from it, which CMake compiles in as `BELLATRIX_BTSTACK_PATCHRAM_SOURCE`;
+`bt_firmware_stub.c` with its empty array is only the fallback, and the build
+warns when it is used. `issue_bluetooth.md` records "PatchRAM visível e correto
+no boot".
+
+So its two findings about name commands were made on a **patched** controller:
+
+- `50f5fa9` — *"Remote Name Request crasha o firmware BCM"*
+- `rxq=251/252` — `HCI_Read_Local_Name` returns one byte short and hangs
+
+That makes them harder to dismiss, not easier. But it also exposes a difference
+between the two ports that has not been accounted for anywhere: **this port has
+no patchram at all**, so our controller is running the ROM image while legacy's
+was running the patch. Everything measured here — that HCI works, that LE
+scanning works, that inquiry works — was measured in a state legacy was never
+in. Whether the name commands behave the same in both is unknown and is the
+first thing to establish, in either direction.
 
 **Why it is worth retrying rather than accepting.** There is a specific,
 testable hypothesis for why it failed, and it is not "remote names are hard".
@@ -116,6 +149,9 @@ fixed by other means. What it abandoned is not thereby proved impossible.
       delivered event length recorded either way
 - [ ] Either Classic devices without an EIR name get a real name, or the reason
       they cannot is written down with the measurement behind it
+- [ ] The name commands have been tried on **this** port, whose controller is
+      unpatched, so the result is attributed rather than inherited from a port
+      that ran the patch
 
 # Notes
 
