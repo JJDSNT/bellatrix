@@ -80,10 +80,12 @@ So the protocol work is largely done. The gap is integration and lifecycle.
 
 Ordered so each step is demonstrable on its own.
 
-1. **Connect and disconnect.** `bt_controller_start_le_scan()` and
-   `bt_controller_start_classic_inquiry()` exist; there is no equivalent for
-   establishing a link. This is the first thing without which nothing else can
-   be tried.
+1. **Connect and disconnect, shaped to fit the reconnect state machine.**
+   `bt_controller_start_le_scan()` and `bt_controller_start_classic_inquiry()`
+   exist; there is no equivalent for establishing a link, and no notion of
+   accepting one. Both directions are needed, and *accepting* is the one that
+   carries daily use — see below. Designing the outgoing call without the
+   inbound path would produce an API that has to be reopened immediately.
 2. **Bonding that survives a reboot.** `core/security` exists; nothing persists
    its output. Legacy's `bt_link_key_db_sd.c` is the shape to imitate — link keys
    in a file on the boot volume — and the code is ours to lift if it fits.
@@ -99,6 +101,48 @@ Ordered so each step is demonstrable on its own.
    manager polls at 1 ms (`ISSUE-0019`); ACL traffic from a connected device will
    not tolerate that. This is a prerequisite for 3 in practice even though it is
    not one on paper.
+
+# The reconnect state machine, which is the piece most worth taking
+
+`bt_host.c` carries a connection manager with five states, and its default is the
+one that matters: **the device initiates**.
+
+```
+PASSIVE ──deadline──> CONNECTING ──timeout──> DISCOVERING ──expiry──> BACKOFF
+   ^                       |                       |                     |
+   └───────────────────────┴───────────────────────┴──── 60 s ───────────┘
+```
+
+- **PASSIVE** is where it sits. The host stays connectable
+  (`gap_connectable_control(1)`) and accepts inbound HID links
+  (`hid_host_accept_connection`), so a keyboard or mouse that is switched on
+  reconnects **by itself**, with the host doing nothing. Outgoing reconnection is
+  armed only against a deadline, and only when there is something bonded to
+  reconnect to (`bt_pairs_count() != 0`).
+- **CONNECTING** has a deadline of its own; on expiry it disconnects the pending
+  CID and falls through rather than hanging.
+- **DISCOVERING** is the recovery path, not the normal one: scan for 30 s, and
+  take the first result that is a HID device *and* already bonded
+  (`bt_pairs_is_known`). Finding it returns to PASSIVE — it re-arms the passive
+  path rather than connecting immediately.
+- **BACKOFF** waits 60 s before trying the cycle again, so a device that is
+  simply out of the room costs one scan a minute instead of a permanent one.
+
+Two details in there are worth more than the structure:
+
+**Reconnection can be suspended.** `bt_session_suspend_reconnect()` exists so
+automatic outgoing reconnects do not fight the user while they are pairing
+something new. Any UI that offers "connect" needs this, and it is the kind of
+thing that is obvious only after it has bitten someone.
+
+**Giving up is explicit and says so.** `"recovery discovery expired; passive
+reconnect remains armed"` — the host stops *trying* without stopping *listening*.
+That distinction is the whole design: the expensive half is bounded, the cheap
+half runs forever.
+
+`aros-bluzing` has none of this. It has no connect call at all yet (step 1
+below), so the state machine is what step 1 should be built to fit rather than
+something bolted on afterwards.
 
 # Design notes carried from legacy
 
@@ -123,6 +167,8 @@ printing, and it survives the case where the console is the thing that is broken
 
 - [ ] A device can be connected and disconnected from software
 - [ ] A bonded device is still bonded after a reboot
+- [ ] A bonded device switched on reconnects on its own, with no software action
+- [ ] Automatic reconnection can be suspended while the user pairs something
 - [ ] A Bluetooth keyboard produces characters in a Shell
 - [ ] A Zune application lists scan results and drives connect/disconnect
 - [ ] No btstack source is present in `aros-bluzing`

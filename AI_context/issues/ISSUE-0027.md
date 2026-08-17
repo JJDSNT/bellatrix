@@ -56,6 +56,28 @@ Checked function by function. `tlsf_malloc`, `tlsf_malloc_aligned`, `tlsf_free`,
 `tlsf_add_memory_and_merge` and the integrity reporting Emu68 has no equivalent
 of.
 
+# What AROS has that Emu68 could use
+
+The comparison is one-directional, so it is worth writing down in that
+direction. Counted occurrences in each file:
+
+| | Emu68 | AROS |
+|---|---|---|
+| the split fix (`free_node_t` room, not just `hdr_t`) | absent | `tlsf.c:563` |
+| free-list validation (`tlsf_valid_bucket`) | 0 | 4 |
+| block-in-area validation (`tlsf_block_in_area`) | 0 | 9 |
+| corruption reporting, reported once (`TLSFF_CORRUPTREPORTED`) | 0 | 3 |
+| `tlsf_add_memory_and_merge` | absent | `tlsf.c:1271` |
+
+The validation is the part worth offering. Emu68's allocator runs on the host
+side under a JIT, where a corrupted free list produces a fault with no
+attribution at all; the AROS version answers *which* bucket, *which* block and
+*which* task, which is the difference between a bug report and a mystery. It
+costs a bounds check on a path that is already failing, and it prints once.
+
+`tlsf_add_memory_and_merge` matters only if Emu68 ever grows a heap in pieces
+that are contiguous, which it currently does not. Listed for completeness.
+
 # The flow runs the other way, and that is the actionable part
 
 `patches/aros/0011` fixed a real corruption in AROS: `tlsf_malloc()` split a
@@ -94,7 +116,12 @@ The corruption stops, and whichever project is behind gets the other's fix.
    has already been shown to be wrong.
 3. **Offer patch 0011 to Emu68.** One line, and it is our own diagnosis of a
    defect their copy still carries.
-4. **Consider whether anything should flow the other way at all.** On this
+4. **Offer the validation too, separately.** `tlsf_valid_bucket`,
+   `tlsf_block_in_area` and the report-once flag are independent of the split
+   fix and useful on their own -- more so on the Emu68 side, where a corrupted
+   free list currently faults without naming anything. Send it as its own change
+   so the one-line fix is not held up by a larger one.
+5. **Consider whether anything should flow the other way at all.** On this
    reading, no. Worth re-checking if Emu68's allocator diverges later.
 
 # Decisions taken
@@ -109,6 +136,7 @@ need, and it lacks the fix we already carry. Any work here is on AROS's copy.
 - [ ] The cause is named -- a caller, not "the allocator"
 - [ ] Emu68 has been offered the split fix, or the difference is recorded as
       deliberate
+- [ ] Emu68 has been offered the free-list validation, separately from the fix
 
 # Notes
 
