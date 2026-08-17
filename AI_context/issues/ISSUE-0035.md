@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0035
 title: "Icons on the Wanderer desktop cannot be moved"
-status: backlog
+status: doing
 priority: medium
 type: bug
 owner: unassigned
@@ -26,6 +26,29 @@ related_files:
 
 Icons on the desktop do not move. Pressing one and dragging leaves it where it
 was.
+
+# Confirmed: it was one of the two parked branches
+
+**2026-08-17, on hardware: the icons move again.** `arch/m68k-emu68/` is back
+to what `v0.1.0-rc1` shipped, so the defect is in the `m68k-native-split`
+branch or the `kickstart-base-package` branch and nowhere else. The four
+candidates below are no longer four independent possibilities -- they are ways
+that a *known* change could have produced the symptom.
+
+That turns the remaining work into two merges, cheapest first:
+
+1. **Merge `kickstart-base-package` and try again.** Two patches and a document.
+   The only thing in it that runs on this target is
+   `arch_CauseBlitterInterrupt()` becoming empty where `qblit.c`/`qbsblit.c`
+   used to store to `$DFF000` under a `defined(mc68000)` gate. On a machine with
+   no chipset both should be no-ops, which makes this the one to eliminate
+   first, not the one to suspect.
+2. **If the icons still move, it is `m68k-native-split`**, and the search
+   narrows to its three move commits plus the three behavioural changes that
+   travelled with them: the memory-range gate in `boot.c`, the
+   `m68k_boot_putc` sink, and the `PlatformClockObserver` indirection.
+
+Do them one at a time. Merging both and testing once answers nothing.
 
 # What this claims, and what it does not
 
@@ -120,6 +143,9 @@ being read as one.
 
 # Execution log
 
+- 2026-08-17 -- **Confirmed on the Pi: the icons move.** The revert below was
+  done for a different reason and this was not what it was for, so treat it as
+  what it is -- a bisect step that landed, narrowing the cause to two branches.
 - 2026-08-17 -- `arch/m68k-emu68/` put back to what `v0.1.0-rc1` shipped, which
   is the last state in which the drag is known to have worked; the m68k-native
   split that followed it is on the `m68k-native-split` branch and the BASE
