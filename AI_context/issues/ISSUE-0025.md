@@ -83,8 +83,10 @@ fails loudly, without anyone having to know this trap exists.
    recorded in `bin/Sources`; the copy step simply does not consult it. This
    removes the mtime proxy instead of guarding against it.
 
-3. **Offer it.** Same route as `ISSUE-0024`: a patch plus a short statement of
-   the failure, written so it does not require knowing anything about this port.
+3. **Offer it.** A patch plus a short statement of the failure, written so it
+   does not require knowing anything about this port. `ISSUE-0024` took that
+   route and is the worked example; it lives on the `kickstart-base-package`
+   branch rather than here.
 
 # Decisions taken
 

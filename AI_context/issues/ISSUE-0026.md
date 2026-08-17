@@ -17,7 +17,6 @@ related_files:
   - scripts/build-aros.sh
   - .github/workflows/toolchain.yml
   - docs/aros.md
-  - AI_context/issues/ISSUE-0024.md
 ---
 
 # Summary
@@ -118,8 +117,10 @@ tar xJf ~/.cache/bellatrix/toolchain/$(cd /path/to/bellatrix && \
 `--toolchain-key` exists for CI and prints exactly the file name to look for,
 which is what makes this two lines instead of guessing.
 
-**Why a second target is worth building at all.** `ISSUE-0024` proposes changes
-to code that only runs on `m68k-amiga`. Compiling them there is the difference
+**Why a second target is worth building at all.** `ISSUE-0024` proposed changes
+to code that only runs on `m68k-amiga`. That issue no longer lives on `main` --
+it is on the `kickstart-base-package` branch, together with the two patches it
+carried -- but the argument survives it. Compiling them there is the difference
 between "this builds" and "we cannot test this", and one object file compiled
 for that target was already enough to overturn a wrong conclusion once — see the
 retraction in that issue's log. The full ROM is a further step and currently

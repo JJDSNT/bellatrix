@@ -126,6 +126,26 @@ patch — capture it before running `--reset`, which will destroy it silently.
 To find *what* drifted: check out the pinned commit in a scratch worktree, apply
 the series into it, and diff against `external/<name>/` file by file.
 
+### Deleting a patch needs one step first
+
+`setup.sh` learns everything from the patches that are *there*. Delete one and
+it stops knowing about the files that patch touched — so it never clears their
+`skip-worktree` bit, `git reset --hard` silently skips them, and the deleted
+patch stays applied forever. `--reset` then reports `dirty` and cannot fix it,
+because fixing it is the thing it no longer knows how to do.
+
+So **un-apply the patch before deleting it**, or afterwards clean up by hand:
+
+```bash
+git -C external/<name> ls-files -v | grep '^S'      # what is still marked
+git -C external/<name> update-index --no-skip-worktree <files>
+./scripts/setup.sh --reset
+```
+
+Files the patch *created* need the same treatment: they are untracked and named
+in `.git/modules/external/<name>/info/exclude`, so nothing sees them. Delete
+them and their exclude lines.
+
 ## Boot chain and the IRQ bridge
 
 QEMU `raspi3b` → `-kernel Emu68.img` + `-dtb` → `-initrd aros-*.elf` →
