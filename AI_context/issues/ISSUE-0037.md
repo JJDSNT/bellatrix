@@ -1,8 +1,8 @@
 ---
 id: ISSUE-0037
 title: "A CLI task dies on a corrupt block header once the preferences actually load"
-status: doing
-priority: high
+status: backlog
+priority: medium
 type: bug
 owner: unassigned
 created_at: 2026-08-17
@@ -114,6 +114,32 @@ intermittent memory defect is the shape of a race or of an
 allocation-size-dependent overrun, not of a deterministic off-by-one on a fixed
 path.
 
+# Parked until it recurs, deliberately (2026-08-17)
+
+**The user's call, and the right one.** It has been seen once. Chasing an
+intermittent heap corruption that will not reproduce burns runs and concludes
+nothing, and this project has been burned by exactly that before.
+
+What the parking does **not** mean:
+
+- **It is not gone.** Heap corruption goes quiet when the allocation pattern
+  stops lining up, not when it is fixed. And the pattern is precisely what
+  changed today: `ENV:` now populates, so IPrefs, `C:Decoration` and the Zune
+  preference readers allocate for real where they used to do nothing. Silence
+  from a handful of boots after that is weak evidence.
+- **It is not a reason to skip step 2 below.** The most useful line of the
+  report came back empty:
+
+  ```
+  [Kernel:TLSF] Backtrace (0 frames):
+  ```
+
+  Fixing that is not chasing this bug — it does not need a reproduction, and it
+  decides whether the *next* occurrence (of this or of any other memory defect)
+  is a lookup or another dead end. The trap is set and the camera has no film.
+
+So: do not spend runs trying to provoke it. Do make sure it is worth catching.
+
 # What to do, cheapest first
 
 1. **Name the command.** The failing task is a CLI, which almost certainly means
@@ -141,6 +167,10 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-17 — Moved to `backlog` at the user's request: no further occurrence
+  on their own runs after the four measured here. Recorded rather than closed —
+  one sighting of heap corruption is not a fixed defect, and the reasoning for
+  waiting is above so that whoever meets it next does not re-derive it.
 - 2026-08-17 — Opened. Seen on the first boot after `patches/aros/0023` landed
   and on none of the next three. Call site narrowed to `MERGE_PREV()` by
   elimination — the NULL block can only come from `block->header.prev` at
