@@ -130,9 +130,22 @@ static int draw_boot_image(void)
     for (run = 0; run < sizeof(boot_image_runs) / sizeof(boot_image_runs[0]); run++)
     {
         uint32_t count = boot_image_runs[run].count;
+        /*
+         * No byte swap here, deliberately.
+         *
+         * make-boot-image.py stores the true RGB565 value, and the version of
+         * this loop that wrote 16-bit words had to swap it because a native
+         * store on the 68k puts the high byte first. put_pixel() does not: it
+         * writes the two bytes low-first, which is the framebuffer's order
+         * already, so swapping as well would reverse them.
+         *
+         * That is reasoning about this code, not a diagnosis of the neon
+         * splash seen on a Pi: a test that XORed the green channel here
+         * changed nothing on a QEMU screen, so something other than this
+         * function is putting the image up in that configuration and this
+         * has never been shown to be what the eye was complaining about.
+         */
         uint16_t colour = boot_image_runs[run].colour;
-
-        colour = (colour << 8) | (colour >> 8);
 
         while (count > 0)
         {

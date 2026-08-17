@@ -28,6 +28,10 @@ display icons through `Dtpic` and Workbench renders its icons. So the far more
 likely explanation is something about **how this call was made**, or something
 this port's setup leaves out, and not the subsystem.
 
+Nor is "this port" established. The same call has never been tried on another
+AROS target, so whether this is specific to emu68-m68k, to how this image is
+assembled, or to the call itself is exactly the open question -- not a premise.
+
 Read the numbers below as a starting point for finding that, not as a verdict
 on datatypes.
 
@@ -94,6 +98,27 @@ object fails, so an application sees a blank space and no message; icon.library
 falls back just as quietly. Nothing in a normal boot says this is broken, which
 is why it has gone unnoticed until an application asked for a picture.
 
+# The goal: PNG pictures and PNG icons, both working
+
+Two things should work here and neither does yet.
+
+**PNG pictures**, so an application can put artwork on screen through `Dtpic`
+without shipping its own decoder. BTScan already asks for one and gets nothing.
+
+**PNG icons**, which is the part worth stating as an aim rather than a
+symptom. AROS supports them -- `workbench/libs/icon/diskobjPNGio.c` reads a
+`.info` that is a PNG carrying an `icOn` chunk, which is how OS4-style icons
+work -- and that would let this project use its real artwork, in colour, at
+whatever size, instead of quantising it to four pens.
+
+**What is shipping meanwhile is a deliberate stopgap.** `images/mkicon.py`
+writes BTScan's icon in the classic `e310` planar format, four colours, because
+that path depends only on icon.library and is what every icon in this
+distribution already uses. It works today. It is not where this should end up,
+and the generator is a dozen lines from emitting the PNG form again once the
+decoder does its job -- the earlier version of that script did exactly that and
+is in this repository's history.
+
 # What is left
 
 0. **Assume the caller is wrong first.** Compare against a program in the tree
@@ -111,8 +136,12 @@ is why it has gone unnoticed until an application asked for a picture.
    `bmp.datatype`. If an ILBM loads and a PNG does not, the fault is in the png
    class or its libraries; if nothing loads, it is in datatypes or the
    descriptor database.
-3. **Check the icons at the same time**, per above.
-4. Only then decide whether this is ours or upstream's.
+3. **Check the icons at the same time**, per above. One consequence is already
+   confirmed: a PNG icon written for BTScan could not be opened from Workbench,
+   and the same art in the classic `e310` format works. Every icon this
+   distribution ships is classic, so nothing else had exercised the PNG path.
+4. **Try it on another AROS target** before saying "this port" again.
+5. Only then decide whether this is ours or upstream's.
 
 # Notes
 
@@ -128,8 +157,19 @@ the shell's `PROGDIR:`. Workbench sets it properly, which is why this only
 shows up in scripted launches. BTScan carries a fallback to its install path
 because of it. Worth its own issue if anything else trips on it.
 
+# Acceptance criteria
+
+- [ ] A PNG loads through `NewDTObject` here, or the reason it cannot is
+      written down with the measurement behind it
+- [ ] A PNG icon can be opened from Workbench
+- [ ] BTScan's icon is its real artwork rather than a four-pen reduction
+- [ ] Whether this was ever port-specific has been answered, not assumed
+
 # Execution log
 
+- 2026-08-17 -- A PNG icon written for BTScan could not be opened from
+  Workbench; replaced with a classic planar icon, which works. Recorded the
+  PNG form as the goal rather than the failure.
 - 2026-08-17 -- Opened. Reproduced under QEMU with the distribution's own
   `AROS.logo` as a control, after three wrong hypotheses (long filenames,
   alpha, `PROGDIR:`) were each disproved by measurement. An earlier attempt at
