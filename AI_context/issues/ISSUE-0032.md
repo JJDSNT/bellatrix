@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0032
 title: "BootUI is drawn for a 640x480 screen: no image on a real Pi, and a loader three times too small"
-status: in-review
+status: review
 priority: medium
 type: bug
 owner: unassigned

@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0001
 title: "JITCTRL2 bit 29 always reads 0 for fast-path interrupts"
-status: backlog
+status: review
 priority: low
 type: bug
 owner: unassigned
 created_at: 2026-08-03
-updated_at: 2026-08-03
+updated_at: 2026-08-17
 tags:
   - emu68
   - irq
@@ -64,26 +64,39 @@ delivered the interrupt.
 
 # What is left
 
-Everything. Nothing has been changed.
+**One thing: the observation.** The fix is in and the consumers were audited,
+but nobody has read the register back.
 
-The obvious fix is to store `1` instead of `6` in the two fast-path handlers:
-the value is only ever tested for truthiness, never used as a level (the level
-is a constant 6 by contract, decided in `ExecutionLoop.c`'s arbitration). That
-should be confirmed by reading every consumer of `INTF.ARM` before changing it.
+That gap is easy to mistake for closed, so it is worth being explicit: the
+acknowledge in `Platform_Autovector()` reads JITCTRL2, ORs bit 29 and writes
+it back, and it sets the bit **unconditionally**. It would behave identically
+if the read returned 0. So the acknowledge working is not evidence that the
+read reflects pending state, which is exactly what this issue is about.
+
+One boot that reads the register inside the level-6 handler and reports the
+bit closes it.
 
 # Decisions taken
 
-None yet. Open question: fix locally as a patch in `patches/emu68/`, or report
-upstream and wait. It is a small, self-contained fix with no dependency on
-anything else here, which makes it a good candidate to send upstream first.
+**2026-08-17 — fixed locally, as part of `patches/emu68/0010`.** Not as a
+courtesy: moving platform interrupts onto `INTF.ARM` (ISSUE-0039) makes the
+guest acknowledge through JITCTRL2 bit 29, so a byte that reads back as
+"nothing pending" is not a cosmetic defect there — it is the difference
+between the channel working and not. The two fast paths now store `1`, which
+is what `M68kReportInterrupt()` already stored (`ExecutionLoop.c:595`).
+
+Upstream vs local: local, because it had to ship with the change that needs
+it. It remains a small self-contained fix and a good candidate to send
+upstream separately.
 
 # Acceptance criteria
 
-- [ ] Every consumer of `INTF.ARM` audited; confirmed the byte is never read as
+- [x] Every consumer of `INTF.ARM` audited; confirmed the byte is never read as
       a level
-- [ ] Fast path and `M68kReportInterrupt()` agree on the stored value
+- [x] Fast path and `M68kReportInterrupt()` agree on the stored value — both
+      store `1` as of `patches/emu68/0010`
 - [ ] A guest reading `JITCTRL2` after a fast-path interrupt sees bit 29 set
-- [ ] Decision recorded on upstream vs local patch
+- [x] Decision recorded on upstream vs local patch
 
 # Notes
 
@@ -93,3 +106,6 @@ See `docs/irq.md`, "Known defects in the surrounding Emu68 code".
 # Execution log
 
 - 2026-08-03 — verified against pin `9b4379a`; issue opened, no work started.
+- 2026-08-17 — Fixed by `patches/emu68/0010` as a precondition of ISSUE-0039,
+  not on its own merits. Status `review`: three of the four acceptance
+  criteria are met and the fourth is an observation nobody has made yet.
