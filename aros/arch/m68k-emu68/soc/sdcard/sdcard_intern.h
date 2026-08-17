@@ -25,7 +25,7 @@
 
 /*
  * Peripheral window base, filled in from KrnGetSystemAttr(KATTR_PeripheralBase)
- * during init -- see arch/m68k-native/kernel/getsystemattr.c, which reports
+ * during init -- see arch/m68k-emu68/kernel/getsystemattr.c, which reports
  * what platform.c discovered from /soc's "ranges". Emu68 maps the Pi
  * peripherals where it likes, so this is never a compile-time constant.
  */

@@ -1,5 +1,5 @@
 /*
- * Port-common platform abstraction for the m68k port.
+ * Port-common platform abstraction for arch/m68k-emu68.
  *
  * Emu68 hands AROS the real board FDT (System Timer, legacy BCM interrupt
  * controller, etc. all present with their real "compatible" strings and
@@ -17,8 +17,6 @@
  */
 #ifndef PLATFORM_H
 #define PLATFORM_H
-
-#include <aros/bootcontract.h>
 
 #include <exec/types.h>
 #include <inttypes.h>
@@ -75,13 +73,10 @@ struct PlatformDriver
 /*
  * Bring-up tracing.
  *
- * Writes a byte at a time to whatever character sink the bootstrap installed
- * as m68k_boot_putc -- see <aros/bootcontract.h>. This used to name Emu68's
- * 0xdeadbeef directly, which made the platform layer a fourth place a second
- * machine would have had to edit. Going through the pointer costs an indirect
- * call on a path that is compiled out by default and is a trace when it is
- * not, and it still needs nothing from boot/ to have been initialised: the
- * pointer has a discarding default.
+ * Writes a byte at a time to Emu68's 0xdeadbeef host debug channel, the
+ * same one arch/m68k-emu68/boot/console.c uses. Kept self-contained here so
+ * the platform layer can trace during early boot without depending on
+ * anything from boot/ having been linked or initialised yet.
  *
  * Off: these existed to bring interrupt delivery up, and that job is now
  * done by boot/selftest.c, which measures the same path from above (level-6
@@ -96,7 +91,7 @@ struct PlatformDriver
 static inline void platform_trace(const char *text)
 {
     while (*text)
-        m68k_boot_putc(*text++);
+        *(volatile UBYTE *)0xdeadbeef = (UBYTE)*text++;
 }
 
 static inline void platform_trace_hex(ULONG value)
@@ -106,7 +101,7 @@ static inline void platform_trace_hex(ULONG value)
 
     platform_trace("0x");
     for (shift = 28; shift >= 0; shift -= 4)
-        m68k_boot_putc(digits[(value >> shift) & 0xf]);
+        *(volatile UBYTE *)0xdeadbeef = (UBYTE)digits[(value >> shift) & 0xf];
 }
 
 static inline void platform_trace_val(const char *label, ULONG value)
@@ -127,31 +122,6 @@ static inline void platform_trace_val(const char *label, ULONG value)
 }
 
 #endif /* PLATFORM_TRACE_BRINGUP */
-
-/*
- * An optional observer of the platform clock.
- *
- * The timer driver reports when its counter was first read and, from the IRQ
- * handler, what it currently reads. Nothing in the kernel needs either; the
- * consumer is a bootstrap that wants to show elapsed time on a splash screen.
- *
- * This exists because the BCM283x timer driver used to call the Emu68 boot UI
- * directly, through a relative include reaching out of the platform layer into
- * the machine's boot directory. That made a SoC driver depend on a particular
- * bootstrap's splash screen -- backwards, and the one thing here that did not
- * survive moving this directory to m68k-native.
- *
- * Same shape as m68k_boot_putc in <aros/bootcontract.h>, and for the same
- * reason: the default does nothing, so a machine that installs nothing boots
- * unchanged. Tick runs in interrupt context and must not allocate or block.
- */
-struct PlatformClockObserver
-{
-    void (*Started)(ULONG now_us);
-    void (*Tick)(ULONG now_us);
-};
-
-extern const struct PlatformClockObserver *m68k_platform_clock;
 
 /* Discover the real platform timer and interrupt controller under /soc in
  * `fdt`, wire the level-6 autovector, and start the timer ticking at

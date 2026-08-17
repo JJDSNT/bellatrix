@@ -559,6 +559,6 @@ AROS_LH0(unsigned long, BTUARTGetCapabilities,
  * on a zeroed SignalSemaphore blocks forever, because InitSemaphore() sets
  * ss_QueueCount to -1 and zero reads as "already owned by someone else".
  *
- * arch/m68k-native/soc/mbox/mbox_init.c:241 does the same for the same reason.
+ * arch/m68k-emu68/soc/mbox/mbox_init.c:241 does the same for the same reason.
  */
 ADD2INITLIB(btuart_init, 0)

@@ -1,4 +1,4 @@
-/* Exec scheduler entry for the m68k port. */
+/* Exec scheduler entry for the native Emu68 target. */
 
 #include <aros/kernel.h>
 

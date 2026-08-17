@@ -13,7 +13,7 @@ include $(SRCDIR)/config/aros.cfg
 # What is *not* upstream's is the CPU layer underneath it. rd32le()/wr32le() call
 # dmb() on every register access, and that comes from
 # arch/arm-all/include/asm/cpu.h, which arch/m68k-all has no counterpart for.
-# This port supplies one, in ../../../include/asm/cpu.h. See
+# This target supplies one, in include/asm/cpu.h. See
 # AI_context/issues/ISSUE-0019.md.
 #
 USB2OTGDIR := $(SRCDIR)/arch/arm-native/soc/broadcom/2708/usb/usb2otg
@@ -21,13 +21,10 @@ USB2OTGDIR := $(SRCDIR)/arch/arm-native/soc/broadcom/2708/usb/usb2otg
 #
 # -I$(USB2OTGDIR) is what makes the driver's own `#include "usb2otg_intern.h"`
 # resolve, since the compile happens with CURDIR set to this directory rather
-# than to the source's. The other two bring in <asm/cpu.h> from the port's own
-# include/ and <hardware/videocore.h> from soc/include/, both of which the
-# driver reaches for.
+# than to the source's. -I this target's include/ brings in <asm/cpu.h> and
+# <hardware/videocore.h>, both of which the driver reaches for.
 #
-USER_INCLUDES := -I$(USB2OTGDIR) \
-    -I$(SRCDIR)/arch/m68k-native/include \
-    -I$(SRCDIR)/arch/m68k-native/soc/include
+USER_INCLUDES := -I$(USB2OTGDIR) -I$(SRCDIR)/arch/m68k-emu68/include
 
 FILES := $(addprefix $(USB2OTGDIR)/, \
     usb2otg_device \

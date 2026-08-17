@@ -440,36 +440,12 @@ static void start_aros(struct Emu68BootContext *ctx)
     uint32_t upper;
     uint32_t tag_index = 0;
 
-    /*
-     * Gate on the information, not on who supplied it.
-     *
-     * What this port requires is that the system RAM range be known; it is
-     * stated that way in <aros/bootcontract.h> and it says nothing about
-     * device trees. Testing EMU68_BOOT_MEMORY_VALID asked instead whether
-     * parse_fdt() had found a /memory node, which is the only thing that ever
-     * sets it -- so a machine that established the same two fields any other
-     * way would have been refused with the range sitting right there.
-     *
-     * The flag stays, because it is still a true record of provenance and the
-     * flags word is reported (hidd/emu68gfx/emu68gfx_init.c:63). It is simply
-     * not what this decision is about.
-     *
-     * And say so. Every return below this point used to be silent, which
-     * presents as a boot that loads, runs and produces nothing -- the failure
-     * mode ISSUE-0023 opens with. The character sink is up by now.
-     */
-    if (ctx->memory_size == 0)
-    {
-        emu68_console_puts("[AROS/Emu68] no system memory range -- cannot boot\n");
+    if (!(ctx->flags & EMU68_BOOT_MEMORY_VALID))
         return;
-    }
 
     upper = ctx->memory_base + ctx->memory_size;
     if (upper < ctx->memory_base)
-    {
-        emu68_console_puts("[AROS/Emu68] system memory range wraps -- cannot boot\n");
         return;
-    }
 
     /*
      * Keep the whole classic 24-bit address domain out of the allocator.
@@ -683,7 +659,6 @@ void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
         emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
 
     emu68_bootui_init();
-    emu68_bootui_observe_clock();
     emu68_set_stage(EMU68_STAGE_ENTRY);
     emu68_console_init(framebuffer, pitch, width, height);
     emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");

@@ -14,7 +14,7 @@ tags:
   - amiga
 blockers:
 related_files:
-  - AI_context/issues/ISSUE-0023.md
+  - AI_context/issues/ISSUE-0032.md
 ---
 
 # Summary

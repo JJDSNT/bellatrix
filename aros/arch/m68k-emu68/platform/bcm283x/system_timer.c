@@ -9,6 +9,7 @@
  * firmware use on real Raspberry Pi boards.
  */
 #include "../platform.h"
+#include "../../boot/boot.h"
 
 #include <aros/kernel.h>
 #include <aros/macros.h>
@@ -120,7 +121,7 @@ static void systimer_heartbeat(void *unused, void *unused2)
     systimer_write(SYSTIMER_CS, 1UL << SYSTIMER_CHANNEL);
     now = systimer_read(SYSTIMER_CLO);
     emu68_platform_ticks++;
-    m68k_platform_clock->Tick(now);
+    emu68_bootui_clock_tick(now);
 
     /*
      * Advance from the compare that just fired rather than from CLO, so a
@@ -145,7 +146,7 @@ static BOOL systimer_init(const struct PlatformNode *node)
     systimer_base = node->base;
     if (KrnAddIRQHandler(SYSTIMER_IRQ, systimer_heartbeat, NULL, NULL) == NULL)
         return FALSE;
-    m68k_platform_clock->Started(systimer_read(SYSTIMER_CLO));
+    emu68_bootui_clock_start(systimer_read(SYSTIMER_CLO));
     return TRUE;
 }
 

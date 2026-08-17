@@ -1,5 +1,5 @@
 /*
- * See cli.c: empty by design, not awaiting an implementation.
+ * See cli.c.  Emu68 interrupt delivery will replace this bootstrap no-op.
  */
 
 #include <aros/kernel.h>

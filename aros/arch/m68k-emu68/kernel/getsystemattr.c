@@ -1,7 +1,7 @@
 /*
     Copyright (C) 1995-2015, The AROS Development Team. All rights reserved.
 
-    Desc: KrnGetSystemAttr() for the m68k port.
+    Desc: KrnGetSystemAttr() for the native Emu68 m68k target.
 */
 
 #include <aros/kernel.h>

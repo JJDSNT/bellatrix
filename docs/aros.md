@@ -22,8 +22,8 @@ repository as ordinary source, and `arch/m68k-emu68` inside the AROS tree is a
 symlink to it.
 
 That means there is exactly one copy. Editing
-`external/aros/arch/m68k-native/kernel/…` and editing
-`aros/arch/m68k-native/kernel/…` are the same operation on the same file — no
+`external/aros/arch/m68k-emu68/kernel/…` and editing
+`aros/arch/m68k-emu68/kernel/…` are the same operation on the same file — no
 copy step, nothing to forget to copy back.
 
 The patch series is reserved for what it is good at: small, reviewable changes

@@ -173,7 +173,7 @@ This replaced an emulated Paula, where Emu68 raised level 6 only when the guest
 Emu68 and is the right answer once something really owns those registers; it is
 simply not what a machine with no chipset needs. See
 `patches/emu68/0002-deliver-host-interrupts-as-an-ipl-not-through-a-shadow.patch`
-and the comment at `aros/arch/m68k-native/platform/platform.c:20-44`.
+and the comment at `aros/arch/m68k-emu68/platform/platform.c:20-44`.
 `docs/irq.md` compares the three possible delivery mechanisms (shadow
 registers, MOVEC, PiStorm's IRQ line); its "The path" section still describes
 the shadow and carries a correction header saying so.

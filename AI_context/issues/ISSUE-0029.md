@@ -15,8 +15,8 @@ tags:
 blockers:
 related_files:
   - external/aros/rom/devs/sdcard/sdcard_bus.c
-  - aros/arch/m68k-native/soc/sdcard/sdcard_bcm2708bus.c
-  - aros/arch/m68k-native/soc/sdcard/sdcard_bcm2708init.c
+  - aros/arch/m68k-emu68/soc/sdcard/sdcard_bcm2708bus.c
+  - aros/arch/m68k-emu68/soc/sdcard/sdcard_bcm2708init.c
 ---
 
 # Summary

@@ -18,8 +18,8 @@ related_files:
   - external/aros/arch/arm-native/soc/broadcom/2708/dma/dma.conf
   - external/aros/arch/arm-native/soc/broadcom/2708/sdcard/sdcard_sdhost_bus.c
   - external/aros/arch/arm-native/soc/broadcom/2708/include/hardware/bcm2708_dma.h
-  - aros/arch/m68k-native/soc/sdcard/sdcard_bcm2708bus.c
-  - aros/arch/m68k-native/soc/sdcard/mmakefile.src
+  - aros/arch/m68k-emu68/soc/sdcard/sdcard_bcm2708bus.c
+  - aros/arch/m68k-emu68/soc/sdcard/mmakefile.src
 ---
 
 # Summary

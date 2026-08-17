@@ -20,9 +20,9 @@ related_files:
   - external/aros/rom/usb/poseidon/
   - external/aros/arch/m68k-all/exec/cachecleare.c
   - patches/aros/0002-m68k-all-support-an-m68k-that-is-not-an-amiga.patch
-  - aros/arch/m68k-native/soc/
-  - aros/arch/m68k-native/kernel/getsystemattr.c
-  - aros/arch/m68k-native/platform/bcm283x/interrupt_controller.c
+  - aros/arch/m68k-emu68/soc/
+  - aros/arch/m68k-emu68/kernel/getsystemattr.c
+  - aros/arch/m68k-emu68/platform/bcm283x/interrupt_controller.c
   - aros/arch/m68k-emu68/boot/mmakefile.src
   - run.sh
 ---

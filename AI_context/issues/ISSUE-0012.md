@@ -17,7 +17,7 @@ blockers:
   - "the HVS variant presupposes owning the display, which has not started"
 related_files:
   - aros/arch/m68k-emu68/hidd/emu68gfx/emu68gfx_hiddclass.c
-  - aros/arch/m68k-native/soc/mbox/mbox_init.c
+  - aros/arch/m68k-emu68/soc/mbox/mbox_init.c
   - external/aros/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hiddclass.c
   - external/aros/arch/arm-native/soc/broadcom/2708/include/hardware/videocore.h
   - external/aros/rom/hidds/gfx/gfx_cursorfbclass.c
@@ -96,7 +96,7 @@ several surprises:
 - `SETCURSORSTATE` takes a flag selecting framebuffer coordinates.
 
 Everything it needs already exists on our side: `MBoxCall()` is in
-`aros/arch/m68k-native/soc/mbox/`, and the little-endian conversion idiom the
+`aros/arch/m68k-emu68/soc/mbox/`, and the little-endian conversion idiom the
 whole port uses is the same one that file uses.
 
 Its limits are the firmware's: 64×64 maximum, one sprite, and a mailbox round
