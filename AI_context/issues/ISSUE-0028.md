@@ -16,7 +16,7 @@ tags:
 blockers:
 related_files:
   - external/aros-bluzing/
-  - aros/arch/m68k-emu68/soc/bluetooth/btuart_init.c
+  - aros/arch/m68k-native/soc/bluetooth/btuart_init.c
   - AI_context/issues/ISSUE-0019.md
 ---
 

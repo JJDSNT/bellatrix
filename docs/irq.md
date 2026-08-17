@@ -25,7 +25,7 @@ the multicore runtime.
 > mechanisms is what the decision was made from, and the shadow path is the
 > right answer again the moment a real chipset owns those registers.
 > Current behaviour is described at
-> `aros/arch/m68k-emu68/platform/platform.c:20-44`.
+> `aros/arch/m68k-native/platform/platform.c:20-44`.
 >
 > **This is a way station, not the destination.**
 > [`New_emu68.md`](New_emu68.md) §3 and §14 describe where it goes: two
