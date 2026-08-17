@@ -47,7 +47,7 @@ physically, so soc/sdcard/../../.. leaves the AROS tree entirely.
 Upstream would take this. The two macros disagreeing about what an absolute
 basename means is the accident, and nothing that builds today changes.
 
-See AI_context/issues/ISSUE-0013.md.
+See AI_context/consolidated/history/ISSUE-0013.md.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---

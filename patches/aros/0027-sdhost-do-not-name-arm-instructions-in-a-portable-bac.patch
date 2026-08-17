@@ -36,7 +36,7 @@ instruction to issue and what reaches the bus is AArch64 the JIT emitted.
 Upstream would take this. Naming the instruction was the accident, and every
 ARM target keeps exactly the semantics it has today.
 
-See AI_context/issues/ISSUE-0013.md.
+See AI_context/consolidated/history/ISSUE-0013.md.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---

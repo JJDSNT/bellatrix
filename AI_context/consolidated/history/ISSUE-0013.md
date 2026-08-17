@@ -1,10 +1,10 @@
 ---
 id: ISSUE-0013
 title: "Port dma.resource, and with it the option of a DMA SD card path"
-status: backlog
+status: done
 priority: medium
 type: feature
-owner: unassigned
+owner: agent
 created_at: 2026-08-06
 updated_at: 2026-08-17
 tags:
@@ -21,6 +21,29 @@ related_files:
   - aros/arch/m68k-emu68/soc/sdcard/sdcard_bcm2708bus.c
   - aros/arch/m68k-emu68/soc/sdcard/mmakefile.src
 ---
+
+# Resolved (2026-08-17)
+
+`dma.resource` is ported, linked into the ELF and proven to allocate
+(`[DMA:probe] allocated channel 8`), and the card now runs on the SDHOST
+controller with DMA. Commits `f9ebcb0` and `1f2e463`.
+
+**The question this issue asked was answered differently than it expected.** It
+set out to decide whether a DMA SD path was *worth* having, and made a
+measurement the precondition. The answer came from a constraint instead: the
+Arasan has to be free for SDIO or WiFi is impossible on this board, so the card
+moves regardless of what a benchmark would have said. The measurement stopped
+being the gate and became the follow-up.
+
+Two acceptance criteria are therefore unmet on purpose, and both are
+`ISSUE-0040`:
+
+- a DMA transfer verified to move correct bytes against the same read in PIO;
+- boot time measured before and after.
+
+Reaching a themed desktop reads a great many correct bytes, but that is not the
+measurement either criterion asks for, and this issue should not be read as
+claiming it.
 
 # Summary
 

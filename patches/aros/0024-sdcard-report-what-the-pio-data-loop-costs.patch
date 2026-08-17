@@ -30,7 +30,7 @@ bring-up trace.
 Upstream carries no accounting here, and would not want this as written -- the
 enable is target-specific.
 
-See AI_context/issues/ISSUE-0013.md.
+See AI_context/consolidated/history/ISSUE-0013.md.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---

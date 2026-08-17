@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0039
 title: "Platform interrupts move to INTF.ARM with a guest-owned acknowledge, leaving INTF.IPL to the Amiga domain"
-status: review
+status: done
 priority: high
 type: refactor
 owner: agent
@@ -24,6 +24,26 @@ related_files:
   - docs/Rigel_integration.md
   - AI_context/issues/ISSUE-0001.md
 ---
+
+# Resolved (2026-08-17)
+
+Platform interrupts are delivered on `INTF.ARM` and acknowledged by the guest
+through `MOVEC` on JITCTRL2 bit 29. Commit `4c800fa`. Verified by the user on
+two independent runs, both reaching the icons, plus four here.
+
+The three items under "What is left" are not this issue's work and each has a
+home:
+
+- **Confirm bit 29 reads back set** is `ISSUE-0001`'s last acceptance
+  criterion, and that issue is open in `review` for exactly it.
+- **Push versus pull for Rigel** is a decision to take when Rigel exists. The
+  material for it -- that `docs/New_emu68.md` section 15 and
+  `docs/Rigel_integration.md` sections 25-26 disagree, and that section 28
+  already forbids the auto-clear -- is recorded below and in the message of
+  `patches/emu68/0010`.
+- **Watch this under a second consumer** happened faster than expected:
+  `dma.resource` arrived the same day and registers a per-channel handler.
+  What that costs the system is `ISSUE-0042`.
 
 # Summary
 

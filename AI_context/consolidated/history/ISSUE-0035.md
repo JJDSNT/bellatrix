@@ -1,10 +1,10 @@
 ---
 id: ISSUE-0035
 title: "Icons on the Wanderer desktop cannot be moved"
-status: doing
+status: done
 priority: medium
 type: bug
-owner: unassigned
+owner: agent
 created_at: 2026-08-17
 updated_at: 2026-08-17
 tags:
@@ -21,6 +21,28 @@ related_files:
   - external/aros/workbench/libs/muimaster/dragndrop.c
   - aros/arch/m68k-emu68/hidd/emu68gfx/emu68gfx_hiddclass.c
 ---
+
+# Resolved on main (2026-08-17), with the cause unidentified
+
+Icons move. Confirmed on the Pi by the user, and confirmed harder than intended
+-- the test accidentally dropped the `C` drawer into another drawer, so
+`MUIM_DragQuery`, `MUIM_DragDrop` and Workbench actually moving a directory all
+work, not merely the icon sliding.
+
+**What fixed it is known; why it broke is not.** `arch/m68k-emu68/` was put
+back to what `v0.1.0-rc1` shipped, for an unrelated reason -- that the modular
+kickstart work is not the path being taken -- and the symptom went with it. The
+cause is therefore in the `kickstart-base-package` branch or the
+`m68k-native-split` branch and nowhere else.
+
+Closed rather than pursued because finding out which requires merging those
+branches back one at a time, and the standing freeze says they stay parked. The
+two-merge plan below is kept intact: if either branch is ever revived, it is
+the first thing to run, and it has to watch for a *drop landing* rather than an
+icon sliding.
+
+The four candidate mechanisms below were never tested and are kept for the same
+reason -- if this returns, they are still the list.
 
 # Summary
 
