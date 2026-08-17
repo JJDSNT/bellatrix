@@ -76,33 +76,45 @@ done
 
 [ -d "$DIST" ] || { echo "ERROR: distribution tree not found: $DIST" >&2; exit 1; }
 
-# What goes on the card.
+# What does NOT go on the card. Everything else does.
 #
-# Deliberately a list rather than the whole tree. Developer alone is ~291 MB of
-# SDK that nothing in the boot path reads, and a card carrying it stalls the
-# boot between AROSMonDrvs and "preparing console" — an open problem of its own,
-# not worth walking into while bringing something else up.
-# Extras carries contrib packages which are part of the full distribution.
-# In particular, aros-bluzing installs its hardware self-test there.
-# Developer/ is deliberately left out: it is headers, link libraries and SDK
-# material that nothing on the card reads, and it is large.
+# This is how AROS itself builds a medium, and it is worth stating because the
+# obvious alternative is worse. arch/m68k-amiga/boot/iso/mmakefile.src and
+# arch/i386-pc/boot/iso/mmakefile.src both point mkisofs at $(AROSDIR) -- the
+# whole distribution tree -- and then subtract: the boot ISO is the development
+# ISO minus Sources and minus the kernel ELF. Nobody upstream maintains a list
+# of drawers that belong on a medium, because the distribution already is that
+# list.
 #
-# boot/ is left out too, but for a different reason -- the card's boot files
-# come from the Emu68 side, not from the AROS distribution, and copying this
-# one over them would be a fight nobody wins.
+# This script used to keep one anyway, and it cost exactly what a list like
+# that costs: Rexxc and WBStartup were absent for months, not by decision but
+# because they were built after the list was written and nothing connects the
+# two. A drawer the distribution grows now arrives by itself.
 #
-# Everything else the distribution builds belongs here. WBStartup in
-# particular: it is part of the initial startup, Workbench launches what is in
-# it once the desktop exists, and leaving it off is invisible until something
-# expects to be started that way.
-DIRS=(C S Libs Devs L Classes Fonts System Prefs Storage Utilities Tools Locale
-      Rexxc WBStartup Extras)
+# Developer/ is the one deliberate subtraction, and unlike upstream's it is not
+# only about size: ~292 MB of headers, link libraries and SDK material that
+# nothing on the card reads, and a card carrying it stalls the boot between
+# AROSMonDrvs and "preparing console" -- an open problem of its own.
+EXCLUDE=(Developer)
 
-# Locale is not optional: S:Startup-Sequence does Assign "LOCALE:" "SYS:Locale",
-# and without it the boot console opens with "Can't find SYS:Locale" and every
-# later LOCALE:-relative assign is built on sand.
+# The kernel ELF is at the distribution root too, and it is not part of the
+# volume: --pi writes it beside the firmware, where the Pi's bootloader can
+# find it, and QEMU is handed it on the command line. Upstream removes its own
+# equivalent from the boot ISO for the same reason.
+ELF="aros-emu68-m68k.elf"
+EXCLUDE+=("$ELF")
+
+# What the card cannot boot without, checked so that running the lean build by
+# mistake fails here rather than three minutes into a boot.
+#
+# Locale is on the list because S:Startup-Sequence does
+# Assign "LOCALE:" "SYS:Locale": without it the boot console opens with
+# "Can't find SYS:Locale" and every later LOCALE:-relative assign is built on
+# sand. The rest are the drawers a boot reads before it reaches a desktop.
+REQUIRED=(C S Libs Devs L Classes Fonts System Prefs Locale)
+
 missing=()
-for d in "${DIRS[@]}"; do
+for d in "${REQUIRED[@]}"; do
     [ -d "$DIST/$d" ] || missing+=("$d")
 done
 [ -f "$DIST/AROS.boot" ] || missing+=("AROS.boot")
@@ -113,6 +125,29 @@ if [ "${#missing[@]}" -ne 0 ]; then
     echo "       A bootable card needs the full distribution tree." >&2
     exit 1
 fi
+
+# Resolved once, so the copy and the .info pass agree on what is going.
+excluded() {
+    local e
+    for e in "${EXCLUDE[@]}"; do [ "$1" = "$e" ] && return 0; done
+    return 1
+}
+
+ENTRIES=()
+while IFS= read -r entry; do
+    excluded "$entry" && continue
+    # An .info without its drawer is an icon that opens onto nothing. The
+    # distribution ships Demos.info and Developer.info whether or not the
+    # drawers were built, so this is not hypothetical.
+    case "$entry" in
+        *.info)
+            base="${entry%.info}"
+            [ -d "$DIST/$base" ] || continue
+            excluded "$base" && continue
+            ;;
+    esac
+    ENTRIES+=("$entry")
+done < <(cd "$DIST" && ls -A)
 
 # The boot payload, for --pi only.
 #
@@ -127,7 +162,7 @@ fi
 # kernel and the modules on the card always come from one build.
 if [ "$PI" = 1 ]; then
     BOOT_FILES=("$FIRMWARE/bootcode.bin" "$FIRMWARE/start.elf" "$FIRMWARE/fixup.dat"
-                "$FIRMWARE/Emu68.img.gz" "$DIST/aros-emu68-m68k.elf")
+                "$FIRMWARE/Emu68.img.gz" "$DIST/$ELF")
     for f in "$FIRMWARE"/bcm2710-*.dtb; do
         [ -e "$f" ] && BOOT_FILES+=("$f")
     done
@@ -178,20 +213,14 @@ echo "[sd] collecting the card contents"
 STAGE="$(dirname "$OUT")/.sdstage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-for d in "${DIRS[@]}"; do
-    cp -al "$DIST/$d" "$STAGE/$d"
-done
-cp -al "$DIST/AROS.boot" "$STAGE/AROS.boot"
-
-# Wanderer draws a drawer from its .info file, and that file sits *beside* the
-# drawer rather than inside it. Copying only the directories therefore produces
-# a boot volume whose window is empty: every drawer is present and none of them
-# is visible. Only the ones whose drawer is actually on the card are taken --
-# an .info without its drawer is an icon that opens onto nothing.
-for d in "${DIRS[@]}"; do
-    if [ -f "$DIST/$d.info" ]; then
-        cp -al "$DIST/$d.info" "$STAGE/$d.info"
-    fi
+#
+# The .info files come along by being part of the tree, which matters more than
+# it looks: Wanderer draws a drawer from its .info, and that file sits *beside*
+# the drawer rather than inside it. A copy that took directories only would
+# produce a boot volume whose window is empty -- every drawer present, none of
+# them visible.
+for entry in "${ENTRIES[@]}"; do
+    cp -al "$DIST/$entry" "$STAGE/$entry"
 done
 
 if [ "$PI" = 1 ]; then
@@ -297,14 +326,16 @@ while IFS= read -r f; do
 done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' |
          grep -iE '(^|/)(AUX|CON|PRN|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$' || true)
 
-for d in "${DIRS[@]}"; do
-    mcopy -i "$OUT@@1M" -s -Q "$STAGE/$d" ::
-done
-for f in "$STAGE"/*; do
-    if [ -f "$f" ]; then
-        mcopy -i "$OUT@@1M" -Q "$f" ::
+# The staging tree is the authority now, not the list that built it: --pi has
+# added the boot payload to it and version.txt is written into it, so anything
+# that reads DIST again here would write a different card than --pack packs.
+while IFS= read -r -d '' entry; do
+    if [ -d "$entry" ]; then
+        mcopy -i "$OUT@@1M" -s -Q "$entry" ::
+    else
+        mcopy -i "$OUT@@1M" -Q "$entry" ::
     fi
-done
+done < <(find "$STAGE" -mindepth 1 -maxdepth 1 -print0)
 
 rm -rf "$STAGE"
 
