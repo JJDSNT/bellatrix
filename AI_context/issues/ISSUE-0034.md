@@ -47,33 +47,49 @@ desktop off-screen while the splash stays up, and the desktop then appears
 already complete -- no grey phase at all, and no two producers writing the same
 pixels. That is a better outcome than merely covering the gap.
 
-# The hard part, which is why this is an issue and not a commit
+# The release signal already exists
 
-**The release must be guaranteed.** A held `Show()` that is never released is a
-machine that boots to a splash and never shows a desktop, which is far worse
-than the gap being fixed. Three candidate signals, none yet chosen:
+There is no need to invent one. `C:BootProgress` (`arch/m68k-emu68/c/BootProgress.c`)
+opens `bootui.resource` and calls `set_stage`, and patch 0015 has
+`S:Startup-Sequence` calling it at three points. It already maps `WANDERER` to
+`BOOTUI_STAGE_DESKTOP`.
 
-1. **A helper in `SYS:WBStartup/`.** Workbench launches these after it has
-   opened its window, which is the closest thing to "the desktop exists" that
-   needs no upstream change. Costs a tiny program on the card.
-2. **A call from Wanderer**, added by the patch series, after its first icon
-   layout. The most accurate signal and the most invasive.
-3. **A watchdog** that releases after a bounded wait regardless. Not a signal at
-   all, but the safety net the other two need anyway.
+**The signal that releases the hold is the same one that says the icons are
+there.** That is one signal, not a choice between several -- and the only thing
+wrong with the one we have is where it is sent from:
 
-Whatever fires it, the deferred `Show()` has to be completed from a sane task
-context, and it is worth checking what else framebuffer-mode `Show()` does
-besides the copy -- if it also re-points subsequent rendering at the
-framebuffer, deferring it from a foreign task is not obviously safe and that
-has to be understood before writing the code.
+```
+If EXISTS "C:BootProgress"
+    C:BootProgress WANDERER      <- fires here
+EndIf
+
+WANDERER:Wanderer                <- icons start being drawn only now
+```
+
+It is published *before* Wanderer is launched, so today `BOOTUI_STAGE_DESKTOP`
+means "about to start the desktop", not "the desktop is drawn". Held on that,
+the release would arrive before the screen it is meant to wait for.
+
+**`SYS:WBStartup/` is where it should be sent from.** Workbench launches those
+items after it has opened its window and laid the icons out, which is the
+meaning wanted, and it needs no upstream change -- only a small program on the
+card, because a Workbench-launched tool gets a startup message rather than the
+command line `BootProgress` parses.
+
+**Keep a watchdog underneath it regardless.** Not as an alternative signal but
+as the floor: if the card is missing that item, or it fails, the desktop must
+still appear. A hold that is never released is a machine that boots to a splash
+forever, and that is the whole risk of this change.
 
 # What to do
 
 1. Read AROS's framebuffer-mode Display class and establish exactly what
-   `Show()` does beyond copying, and from which contexts it may be called.
-2. Implement hold-and-release with the watchdog first, so the failure mode is a
-   late desktop rather than no desktop.
-3. Add the real signal on top, and keep the watchdog.
+   `Show()` does beyond copying, and from which contexts it may be called. This
+   is the one open technical question and it decides whether the deferred Show
+   can be completed from another task at all.
+2. Implement hold-and-release with the watchdog alone first, so the worst
+   failure while developing is a late desktop rather than none.
+3. Add the WBStartup item that publishes the stage, and keep the watchdog.
 4. Confirm under QEMU by screendump: the splash should persist, and the desktop
    should appear with its icons already drawn.
 
