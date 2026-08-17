@@ -1,0 +1,216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 16 Aug 2026 12:00:00 -0300
+Subject: [PATCH] graphics: keep the Amiga chipset out of QBlit() and QBSBlit()
+
+QBlit() and QBSBlit() cause a blitter interrupt by writing INTREQ and
+INTENA at $DFF000, under
+
+    #if (AROS_FLAVOUR & AROS_FLAVOUR_BINCOMPAT) && defined(mc68000)
+
+Two things are wrong with that. The gate names the CPU, so it covers
+every m68k target rather than every Amiga. And the code is in
+rom/graphics, part of the kickstart base package, which
+boot/modular_kickstart.txt defines as machine-independent:
+
+    These modules are not allowed to have machine-specific code because
+    it violates portability convention.
+
+So an m68k machine that is not an Amiga gets graphics.library with
+stores to $DFF000 compiled into it, and whether that is harmless depends
+entirely on what the machine happens to leave at that address.
+
+Put the hardware behind a hook instead. rom/graphics/graphics_arch.c
+carries an empty arch_CauseBlitterInterrupt(), which is what a machine
+with no blitter -- or no way to force its interrupt -- wants; the Amiga
+implementation in arch/m68k-amiga/graphics/graphics_arch.c does what the
+inline code did, unchanged, still under the AROS_FLAVOUR_BINCOMPAT test.
+This is the shape rom/hidds/gfx/rgbconv_arch.c already uses for the
+architecture-specific colour conversion functions.
+
+No functional change on any target: m68k-amiga issues the same two
+stores, and every other target ran nothing before and runs nothing now.
+
+hardware/intbits.h was included only for INTF_SETCLR and INTF_BLIT, so
+it goes from both callers.
+---
+ arch/m68k-amiga/graphics/graphics_arch.c | 22 +++++++++++++++++++
+ arch/m68k-amiga/graphics/mmakefile.src   |  2 +-
+ rom/graphics/graphics_arch.c             | 36 ++++++++++++++++++++++++++++++++
+ rom/graphics/graphics_intern.h           |  7 +++++++
+ rom/graphics/mmakefile.src               |  1 +
+ rom/graphics/qblit.c                     | 10 +--------
+ rom/graphics/qbsblit.c                   | 10 +--------
+ 7 files changed, 69 insertions(+), 19 deletions(-)
+diff --git a/arch/m68k-amiga/graphics/graphics_arch.c b/arch/m68k-amiga/graphics/graphics_arch.c
+new file mode 100644
+index 0000000000..4c938dd9e0
+--- /dev/null
++++ b/arch/m68k-amiga/graphics/graphics_arch.c
+@@ -0,0 +1,22 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    Desc: Machine-specific hooks for graphics.library, Amiga chipset
++*/
++
++#include <hardware/custom.h>
++#include <hardware/intbits.h>
++
++#include "graphics_intern.h"
++
++/* See rom/graphics/graphics_arch.c for documentation. */
++
++void arch_CauseBlitterInterrupt(struct GfxBase *GfxBase)
++{
++#if (AROS_FLAVOUR & AROS_FLAVOUR_BINCOMPAT)
++    volatile struct Custom *custom = (struct Custom *)(void **)0xdff000;
++
++    custom->intreq = INTF_SETCLR | INTF_BLIT;
++    custom->intena = INTF_SETCLR | INTF_BLIT;
++#endif
++}
+diff --git a/arch/m68k-amiga/graphics/mmakefile.src b/arch/m68k-amiga/graphics/mmakefile.src
+index 0e08993a5e..b544c51188 100644
+--- a/arch/m68k-amiga/graphics/mmakefile.src
++++ b/arch/m68k-amiga/graphics/mmakefile.src
+@@ -1,7 +1,7 @@
+ 
+ include $(SRCDIR)/config/aros.cfg
+ 
+-CFILES  := bltclear changeextspritea movesprite setchiprev vbeampos
++CFILES  := bltclear changeextspritea graphics_arch movesprite setchiprev vbeampos
+ AFILES  := attemptlocklayerrom locklayerrom unlocklayerrom waitblit
+ 
+ #MM kernel-graphics-amiga-m68k : kernel-hidd-includes kernel-graphics-includes includes-asm_h kernel-hidd-graphics-includes
+diff --git a/rom/graphics/graphics_arch.c b/rom/graphics/graphics_arch.c
+new file mode 100644
+index 0000000000..58664c21e4
+--- /dev/null
++++ b/rom/graphics/graphics_arch.c
+@@ -0,0 +1,36 @@
++/*
++    Copyright (C) 2026, The AROS Development Team. All rights reserved.
++
++    Desc: Machine-specific hooks for graphics.library
++*/
++
++#include "graphics_intern.h"
++
++/*****************************************************************************
++
++    NAME
++        arch_CauseBlitterInterrupt()
++
++    FUNCTION
++        Raise the blitter interrupt in software.
++
++        QBlit() and QBSBlit() queue a blit and rely on the end-of-blit
++        interrupt to start the next entry on the queue. A blit queued while
++        nothing owns the blitter would otherwise wait for an interrupt that
++        may never arrive, so a machine able to raise that interrupt itself
++        raises it here.
++
++        The generic implementation does nothing, which is correct for a
++        machine with no blitter and for one whose blitter interrupt cannot be
++        forced: the queue is then driven only by blits that really complete.
++
++    NOTES
++        graphics.library is part of the portable kickstart base package (see
++        boot/modular_kickstart.txt), so the hardware belongs behind this hook
++        rather than in the callers.
++
++*****************************************************************************/
++
++void arch_CauseBlitterInterrupt(struct GfxBase *GfxBase)
++{
++}
+diff --git a/rom/graphics/graphics_intern.h b/rom/graphics/graphics_intern.h
+index 416e6990ae..8aa819952a 100644
+--- a/rom/graphics/graphics_intern.h
++++ b/rom/graphics/graphics_intern.h
+@@ -309,6 +309,13 @@ struct ViewPort;
+ /* Hash index calculation */
+ extern ULONG CalcHashIndex(IPTR n, UWORD size);
+ 
++/*
++ * Machine-specific hooks. The generic implementations are in graphics_arch.c
++ * and a machine that needs another one replaces that file; see
++ * arch/m68k-amiga/graphics/graphics_arch.c.
++ */
++void arch_CauseBlitterInterrupt(struct GfxBase *GfxBase);
++
+ struct gfx_driverdata *AllocDriverData(struct RastPort *rp, BOOL alloc, struct GfxBase *GfxBase);
+ 
+ /* a function needed by ClipBlit */
+diff --git a/rom/graphics/mmakefile.src b/rom/graphics/mmakefile.src
+index 09166fed54..59bdc1bb76 100644
+--- a/rom/graphics/mmakefile.src
++++ b/rom/graphics/mmakefile.src
+@@ -20,6 +20,7 @@ FILES	  := \
+ 	graphics_compositor \
+ 	graphics_display \
+ 	graphics_driver \
++	graphics_arch \
+ 	dispinfo \
+ 	gfxfuncsupport \
+ 	cgx_support
+diff --git a/rom/graphics/qblit.c b/rom/graphics/qblit.c
+index b9164e2544..b99edf485e 100644
+--- a/rom/graphics/qblit.c
++++ b/rom/graphics/qblit.c
+@@ -5,7 +5,6 @@
+ */
+ 
+ #include <proto/exec.h>
+-#include <hardware/intbits.h>
+ #include <hardware/blit.h>
+ #include <graphics/gfxbase.h>
+ 
+@@ -91,14 +90,7 @@
+         /*
+           !!! missing code here!! See explanation above!
+         */
+-#if (AROS_FLAVOUR & AROS_FLAVOUR_BINCOMPAT) && defined(mc68000)
+-        {
+-            /* Trigger blitter interrupt */
+-            volatile struct Custom *custom = (struct Custom *)(void **)0xdff000;
+-            custom->intreq = INTF_SETCLR | INTF_BLIT;
+-            custom->intena = INTF_SETCLR | INTF_BLIT;
+-        }
+-#endif
++        arch_CauseBlitterInterrupt(GfxBase);
+     } else {
+         /* queue it at the end */
+         GfxBase->blttl->n = bn;
+diff --git a/rom/graphics/qbsblit.c b/rom/graphics/qbsblit.c
+index 3da5dcafd2..08cf39804b 100644
+--- a/rom/graphics/qbsblit.c
++++ b/rom/graphics/qbsblit.c
+@@ -5,7 +5,6 @@
+ */
+ 
+ #include <proto/exec.h>
+-#include <hardware/intbits.h>
+ #include <hardware/blit.h>
+ #include <graphics/gfxbase.h>
+ 
+@@ -88,14 +87,7 @@
+         /*
+           !!! missing code here!! See explanation above!
+         */
+-#if (AROS_FLAVOUR & AROS_FLAVOUR_BINCOMPAT) && defined(mc68000)
+-        {
+-            /* Trigger blitter interrupt */
+-            volatile struct Custom *custom = (struct Custom *)(void **)0xdff000;
+-            custom->intreq = INTF_SETCLR | INTF_BLIT;
+-            custom->intena = INTF_SETCLR | INTF_BLIT;
+-        }
+-#endif
++        arch_CauseBlitterInterrupt(GfxBase);
+     } else {
+         /* queue it at the end */
+         GfxBase->bsblttl->n = bn;
+-- 
+2.43.0
+
