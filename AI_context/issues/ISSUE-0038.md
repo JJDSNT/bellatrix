@@ -3,7 +3,7 @@ id: ISSUE-0038
 title: "FAT's on-disk fields are typed as if they were native, so every endian mistake compiles clean"
 status: backlog
 priority: medium
-type: hardening
+type: refactor
 owner: unassigned
 created_at: 2026-08-17
 updated_at: 2026-08-17
@@ -17,7 +17,7 @@ related_files:
   - external/aros/rom/filesys/fat/fat_struct.h
   - external/aros/rom/filesys/fat/fat_fs.h
   - patches/aros/0023-fat-read-the-first-cluster-fields-little-endian.patch
-  - AI_context/issues/ISSUE-0036.md
+  - AI_context/consolidated/history/ISSUE-0036.md
 ---
 
 # Summary

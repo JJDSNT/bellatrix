@@ -1,10 +1,10 @@
 ---
 id: ISSUE-0036
 title: "No preference loads: ParentDir() fails below two levels on FAT, so ENV: is never populated"
-status: doing
+status: done
 priority: high
 type: bug
-owner: unassigned
+owner: agent
 created_at: 2026-08-17
 updated_at: 2026-08-17
 tags:
@@ -23,6 +23,25 @@ related_files:
   - patches/aros/0023-fat-read-the-first-cluster-fields-little-endian.patch
   - AI_context/consolidated/history/ISSUE-0007.md
 ---
+
+# Resolved (2026-08-17)
+
+Fixed by `patches/aros/0023-fat-read-the-first-cluster-fields-little-endian.patch`,
+commit `0c3a4ff`. `ENV:` populates — 22 files, 8 directories,
+`ENV:SYS/theme.var` naming `THEMES:Ice` — and the desktop renders the Ice theme,
+which had never happened on this port. Four headless runs reached it, and the
+user confirmed it on their own boot.
+
+Two things left this issue rather than died with it:
+
+- **ISSUE-0037** — a TLSF free-list corruption in a CLI task, seen on one of the
+  four runs. Code this fix makes reachable, not code it breaks. Parked until it
+  recurs.
+- **ISSUE-0038** — the handler is endian-correct now and still not endian-safe,
+  because the on-disk fields are declared as native integers. Backlog.
+
+The rest of this document is the diagnosis as it stood, kept because the
+measurement is the part worth having.
 
 # Summary
 

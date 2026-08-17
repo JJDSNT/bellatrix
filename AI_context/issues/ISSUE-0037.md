@@ -15,7 +15,7 @@ tags:
 blockers:
 related_files:
   - external/aros/rom/kernel/tlsf.c
-  - AI_context/issues/ISSUE-0036.md
+  - AI_context/consolidated/history/ISSUE-0036.md
   - patches/aros/0011-kernel-avoid-undersized-tlsf-free-blocks.patch
   - patches/aros/0007-kernel-refuse-to-free-a-pointer-outside-the-heap-and.patch
 ---

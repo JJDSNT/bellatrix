@@ -53,7 +53,7 @@ does not interpret the value.
 Upstream defect on every big-endian AROS target; m68k-amiga, ppc-native and
 ppc-morphos share this code, and origin/master still carries it.
 
-See AI_context/issues/ISSUE-0036.md.
+See AI_context/consolidated/history/ISSUE-0036.md.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
