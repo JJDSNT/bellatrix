@@ -315,3 +315,28 @@ currently load-bearing.
   reading of 18.1 s was host-contaminated; see above). Recorded that the
   address and cache-coherency prerequisites were already answered by the USB
   work, and that the controller switch in step 4 was not.
+- 2026-08-17 — **The card boots on SDHOST.** `SDCARD_BACKEND := sdhost` in
+  `soc/sdcard/mmakefile.src`, the two arm-native sources compiled in place, and
+  a themed Wanderer desktop under QEMU. Three independent signs that it is
+  really the new backend: zero `PIO:` lines in the whole boot (the Arasan word
+  loop is not merely idle, it is not built), `[DMA:probe] allocated channel 9`
+  where it had always been 8 because SDHOST took 8 first through
+  `DMAAllocChannel(0)`, and the card being readable at all with GPIO 48-53
+  muxed to ALT0.
+
+  Acceptance criterion 4 -- "a DMA transfer moves correct bytes, verified
+  against the same read done in PIO" -- is *not* met by this. Booting to a
+  desktop reads a lot of correct bytes, but the criterion asks for a
+  measurement, and what the new path costs is not known at all: see
+  ISSUE-0040, which also records that every block is currently copied twice
+  because of a diagnostic left switched on upstream.
+
+  Five defects were fixed on the way there and none of them was SDHOST:
+  `%build_archspecific` cannot compile a source outside its own directory
+  (patch 0026) and does not make `mainmmake` depend on the arch target
+  (`#MM-` lines in our mmakefile); `MBOX_MSG_ALIGN` was missing from this
+  port's `mbox.resource` interface; the GPIO registers were missing from
+  `include/hardware/bcm2708.h`; and `sdhost_dsb()` spelled a barrier as inline
+  AArch64 (patch 0027), which on m68k gas parses as the MRI define-storage
+  directive and reports as `.space specifies non-absolute value` on unrelated
+  lines.
