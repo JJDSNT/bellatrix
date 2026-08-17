@@ -12,6 +12,25 @@ bare metal and JITs M68K to AArch64; AROS starts after Emu68 has initialised the
 hardware and loaded its m68k ELF from `-initrd`. Both are upstream projects,
 vendored as pinned submodules and never edited in place.
 
+## Where the project is right now: nothing new gets added
+
+**Standing decision, 2026-08-17: no new functionality until the system is fast
+and stable.** Not applications, not drivers, not features on top of what boots
+today. The machine reaches a desktop, and that is the point at which adding
+more stops paying: every addition lands on a base whose speed and stability are
+not settled, and then has to be re-verified when they are.
+
+What is still in scope:
+
+- making what already exists faster,
+- making what already exists stable and reproducible,
+- **diagnosing** defects in what already exists — measurement is not addition.
+
+Issues describing future functionality stay open and stay `backlog`. They are
+the record of what was decided and why; they are not a queue to be worked
+down. An issue in this repository is not permission to build the thing it
+describes.
+
 ## Commands
 
 ```bash

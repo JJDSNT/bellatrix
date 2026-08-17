@@ -167,6 +167,9 @@ because of it. Worth its own issue if anything else trips on it.
 
 # Execution log
 
+- 2026-08-17 -- Frozen. `NewDTObject` returning NULL is a defect and diagnosing
+  it stays in scope; making PNG icons work is an addition and does not, until
+  the system is fast and stable (see `CLAUDE.md`).
 - 2026-08-17 -- A PNG icon written for BTScan could not be opened from
   Workbench; replaced with a classic planar icon, which works. Recorded the
   PNG form as the goal rather than the failure.

@@ -112,6 +112,10 @@ measures the gap being closed rather than anyone judging a screenshot.
 **Do not build this without the release path settled.** The whole risk is
 concentrated in one place and it is a black screen.
 
+**Frozen as of 2026-08-17.** This is an addition, and nothing new is added
+until the system is fast and stable (see `CLAUDE.md`). The design above is
+finished and stays here as the record; it is not a task waiting to be picked up.
+
 # Execution log
 
 - 2026-08-17 -- Opened after the splash-scaling work. Identified the takeover
