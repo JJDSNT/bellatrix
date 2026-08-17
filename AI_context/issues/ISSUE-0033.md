@@ -14,7 +14,6 @@ tags:
   - amiga
 blockers:
 related_files:
-  - scripts/install-dpaint.sh
   - AI_context/issues/ISSUE-0023.md
 ---
 
@@ -34,9 +33,14 @@ SYS:Tools/DPaint >SYS:dpaint.out
 The file is created and is **zero bytes**. Startup then continued and Wanderer
 came up, so the program was loaded, ran and exited of its own accord.
 
-`scripts/install-dpaint.sh` puts it there, from a DPaint IV floppy the user
-supplies. Only the application, its icon and its font are taken; nothing from
-the floppy's 1988 C:, L:, libs: or devs:.
+It was installed by a script that has since been removed at the user's request,
+along with the files it had injected into the distribution tree. What it did is
+worth keeping here because it is the part that would have to be rebuilt: read
+`dpaint`, `DPaint.info` and `fonts/dpaint*` out of the ADF with amitools'
+`xdftool`, put the program and its icon in `Tools/` -- make-sdcard copies a
+fixed list of drawers and silently leaves a new top-level one off the card --
+and the font in `Fonts/`, because diskfont finds a font by name in FONTS: and
+nowhere else. Nothing from the floppy's 1988 C:, L:, libs: or devs: was taken.
 
 # The likely reason, and why it is interesting rather than disappointing
 
@@ -67,9 +71,9 @@ does not offer.
 
 # Notes
 
-**The value is the method, not the result.** There is now a repeatable way to
-put a real Amiga application on the card and see what happens, which did not
-exist before and which the boot-compatibility work will want again.
+**The value is the observation, not the tooling.** The installer is gone and
+the card no longer carries DPaint; what survives is the measurement and the
+recipe above, for whenever someone wants to try a real Amiga application again.
 
 **Do not read this as "DPaint does not work".** It has been tried once, in an
 emulator, with no way for it to report anything. What is established is that it
