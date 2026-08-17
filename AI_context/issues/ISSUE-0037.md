@@ -159,6 +159,25 @@ evidence available: the QEMU boot on SDHOST did *not* corrupt, and the QEMU
 boots that did corrupt were on Arasan. That leaves hardware and USB, and USB is
 both the newer variable and the one with an allocation-heavy path.
 
+## Why QEMU almost never shows it and hardware does
+
+The user's observation: the card `run.sh` boots does not corrupt under QEMU,
+and a card from the same tree does on the Pi. The difference is not the card.
+
+**A Pi 3B always has a USB device, because the hub is soldered to it.** The
+LAN9514 carries the hub and the Ethernet, so the stack always enumerates
+something on real hardware whether or not anything is plugged in -- which is
+what `Device connected, resetting port` is. Under QEMU's `raspi3b` with no
+`-device`, nothing enumerates and the stack goes idle after init.
+
+So "no USB device attached" is a state that **only exists in the emulator**.
+Every clean measurement this project has was taken in a regime the real machine
+never enters, which is the same finding ISSUE-0042 records from the other
+direction.
+
+That does not make USB the cause. It does explain the rates: 1 in 4 under QEMU
+with the stack idle, and apparently reliable on hardware with it enumerating.
+
 ## What to do now, cheapest first
 
 1. **Same Pi, same card, no USB device.** One boot. If it is clean, USB is
@@ -166,7 +185,40 @@ both the newer variable and the one with an allocation-heavy path.
 2. **Same Pi, USB device, USB stack disabled** -- remove the two
    Startup-Sequence blocks (`AddUSBClasses`, `AddUSBHardware`; see ISSUE-0042).
    That separates "a device is plugged in" from "the stack enumerates it".
-3. Only then the backtrace, and step 2 of the original list below.
+3. Only then the backtrace -- and it needs a decision first, see below.
+
+## Why the backtrace is empty, and why fixing it is not free
+
+`[Kernel:TLSF] Backtrace (0 frames)` is not a defect in the walker. From
+`rom/kernel/backtracefromframe.c`'s own autodoc:
+
+> *"This function relies on standard frame-link conventions and **requires code
+> to be compiled with frame pointers enabled** (for GCC or Clang, use
+> `-fno-omit-frame-pointer`)."*
+
+and under BUGS: *"may produce incomplete results if compiler optimizations omit
+frame pointers"*.
+
+This port compiles with **`-fomit-frame-pointer`** -- visible in any failing
+compile line, e.g.
+
+```
+-march=68040 -Os -fno-strict-aliasing -ffreestanding -fomit-frame-pointer ...
+```
+
+With no frame chain there is nothing to walk: the walker looks at the first
+link, finds nothing valid, and stops. Zero frames, no error. AROS already has
+both halves available (`config/features.in:310-311` defines
+`aros_cflags_omitfp` and `aros_cflags_noomitfp`), so building some targets
+without omitting is anticipated.
+
+**The scope of the fix is a cost decision, not an obvious correction.** A
+backtrace is only useful to this issue if the frame that *called the free* is
+in it, and that caller is almost certainly outside `rom/kernel/`. So building
+only the kernel with frame pointers would produce a backtrace that stops
+exactly before the interesting frame. Building everything with them costs a
+register and some speed in JITted m68k code -- in the middle of a performance
+push. Measure that cost before choosing the scope.
 
 Note step 2 is the same card modification ISSUE-0042 wants for its first
 measurement, so one card serves both.
