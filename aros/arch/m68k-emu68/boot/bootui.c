@@ -26,6 +26,16 @@ struct BootUIState
     uint32_t width;
     uint32_t height;
     uint32_t progress;
+    /*
+     * One integer magnification for everything drawn here.
+     *
+     * Every measurement below used to be an absolute pixel count chosen for a
+     * 640x480 screen, which is why a real Pi at 1920x1080 showed a hairline
+     * loader under unreadable text. The factor comes from both axes, not just
+     * the width: 1920/640 is 3 but 1080/480 is 2, and taking the width alone
+     * would scale the splash to 1440 lines on a 1080-line display.
+     */
+    uint32_t scale;
     uint32_t clock_start_us;
     uint32_t elapsed_seconds;
     int clock_started;
@@ -36,6 +46,8 @@ static struct BootUIState bootui;
 static struct BootUIResource bootui_resource;
 
 static void put_pixel(uint32_t x, uint32_t y, uint16_t color);
+static void fill_rect(uint32_t x, uint32_t y, uint32_t width,
+                      uint32_t height, uint16_t color);
 
 /* Complete 5x7 uppercase alphabet used by boot status strings. */
 struct Glyph
@@ -87,25 +99,56 @@ static const struct Glyph glyphs[] =
     { 'Z', { 31, 1, 2, 4, 8, 16, 31 } }
 };
 
+/*
+ * Paint the splash scaled and centred, whatever the mode.
+ *
+ * The old version required the framebuffer to be exactly 640x480 with a pitch
+ * to match, and returned 0 in silence otherwise -- which is why nothing
+ * appeared on a Pi. The requirement was not arbitrary: the run-length data is
+ * one flat sequence of pixels for the whole image, and the loop walked it
+ * straight into the framebuffer with no per-row addressing, so it was only
+ * correct while a source row and a destination row were the same length.
+ *
+ * So the runs are now cut at source row boundaries and each piece is drawn as
+ * a rectangle, which handles both the pitch and the magnification for free.
+ */
 static int draw_boot_image(void)
 {
+    uint32_t scale = bootui.scale;
+    uint32_t dst_w = BOOT_IMAGE_WIDTH * scale;
+    uint32_t dst_h = BOOT_IMAGE_HEIGHT * scale;
+    uint32_t origin_x;
+    uint32_t origin_y;
+    uint32_t pos = 0;
     uint32_t run;
-    uint16_t *pixel;
 
-    if (bootui.width != BOOT_IMAGE_WIDTH || bootui.height != BOOT_IMAGE_HEIGHT)
+    if (bootui.width < dst_w || bootui.height < dst_h)
         return 0;
-    if (bootui.pitch != BOOT_IMAGE_WIDTH * 2)
-        return 0;
-    pixel = (uint16_t *)bootui.framebuffer;
+    origin_x = (bootui.width - dst_w) / 2;
+    origin_y = (bootui.height - dst_h) / 2;
+
     for (run = 0; run < sizeof(boot_image_runs) / sizeof(boot_image_runs[0]); run++)
     {
-        uint32_t count;
+        uint32_t count = boot_image_runs[run].count;
         uint16_t colour = boot_image_runs[run].colour;
 
         colour = (colour << 8) | (colour >> 8);
 
-        for (count = 0; count < boot_image_runs[run].count; count++)
-            *pixel++ = colour;
+        while (count > 0)
+        {
+            uint32_t src_x = pos % BOOT_IMAGE_WIDTH;
+            uint32_t src_y = pos / BOOT_IMAGE_WIDTH;
+            uint32_t span = BOOT_IMAGE_WIDTH - src_x;
+
+            if (span > count)
+                span = count;
+
+            fill_rect(origin_x + src_x * scale, origin_y + src_y * scale,
+                      span * scale, scale, colour);
+
+            pos += span;
+            count -= span;
+        }
     }
     return 1;
 }
@@ -212,16 +255,26 @@ static const char *stage_status(uint32_t stage, uint32_t *progress)
 
 static void draw_progress(uint32_t progress, const char *status)
 {
+    uint32_t scale = bootui.scale;
+    /*
+     * Half the screen wide, and that was already right -- the bar was never
+     * too wide. What it was is too thin and too close to the bottom edge, so
+     * the height and the margin below it are the two numbers that changed,
+     * and they changed at every resolution rather than only on large ones.
+     */
     uint32_t bar_width = bootui.width / 2;
-    uint32_t bar_height = 6;
+    uint32_t bar_height = 10 * scale;
     uint32_t bar_x = (bootui.width - bar_width) / 2;
-    uint32_t bar_y = bootui.height - 26;
+    uint32_t bar_y = bootui.height - 52 * scale;
+    uint32_t text_y = bar_y - 28 * scale;
+    uint32_t band_y = text_y - 8 * scale;
+    uint32_t band_height = bar_y + bar_height + 8 * scale - band_y;
     uint16_t background = RGB565(0, 0, 0);
     uint16_t track = RGB565(29, 31, 38);
     uint16_t accent = RGB565(116, 83, 234);
 
-    fill_rect(0, bootui.height - 90, bootui.width, 90, background);
-    draw_text(status, bar_y - 28, 1, RGB565(190, 193, 203));
+    fill_rect(0, band_y, bootui.width, band_height, background);
+    draw_text(status, text_y, scale, RGB565(190, 193, 203));
     fill_rect(bar_x, bar_y, bar_width, bar_height, track);
     fill_rect(bar_x, bar_y, bar_width * progress / 100, bar_height, accent);
 }
@@ -229,6 +282,7 @@ static void draw_progress(uint32_t progress, const char *status)
 static void draw_clock(void)
 {
     char text[6];
+    uint32_t scale = bootui.scale;
     uint32_t seconds = bootui.elapsed_seconds;
     uint32_t minutes;
 
@@ -243,8 +297,9 @@ static void draw_clock(void)
     text[4] = '0' + seconds % 10;
     text[5] = 0;
 
-    fill_rect(0, bootui.height - 16, bootui.width, 10, RGB565(0, 0, 0));
-    draw_text(text, bootui.height - 15, 1, RGB565(116, 83, 234));
+    fill_rect(0, bootui.height - 16 * scale, bootui.width, 12 * scale,
+              RGB565(0, 0, 0));
+    draw_text(text, bootui.height - 15 * scale, scale, RGB565(116, 83, 234));
 }
 
 void emu68_bootui_init(void)
@@ -263,14 +318,33 @@ void emu68_bootui_init(void)
     bootui.pitch = ctx->framebuffer_pitch;
     bootui.width = ctx->framebuffer_width;
     bootui.height = ctx->framebuffer_height;
+
+    {
+        uint32_t by_width = bootui.width / BOOT_IMAGE_WIDTH;
+        uint32_t by_height = bootui.height / BOOT_IMAGE_HEIGHT;
+
+        bootui.scale = by_width < by_height ? by_width : by_height;
+        if (bootui.scale < 1)
+            bootui.scale = 1;
+        if (bootui.scale > 3)
+            bootui.scale = 3;
+    }
+
     bootui.progress = 0;
     bootui.clock_start_us = 0;
     bootui.elapsed_seconds = 0;
     bootui.clock_started = 0;
     bootui.active = 1;
 
+    /*
+     * Ground first, then the splash on top of it. Centred art does not cover
+     * the screen, and what it does not cover is whatever the firmware left
+     * there.
+     */
+    fill_rect(0, 0, bootui.width, bootui.height, background);
     if (!draw_boot_image())
-        fill_rect(0, 0, bootui.width, bootui.height, background);
+        emu68_console_puts("[AROS/Emu68] BootUI: framebuffer too small for "
+                           "the boot image\n");
 }
 
 void emu68_bootui_set_stage(uint32_t stage)

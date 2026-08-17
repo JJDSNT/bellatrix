@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0032
 title: "BootUI is drawn for a 640x480 screen: no image on a real Pi, and a loader three times too small"
-status: backlog
+status: in-review
 priority: medium
 type: bug
 owner: unassigned
@@ -96,7 +96,24 @@ margin; on a 1080-line one it is against the edge. It should be lifted -- a
 proportion of the height rather than a constant, so it sits above the bottom
 rather than on it.
 
-# What to do
+# Done, and what is left to confirm
+
+All four changes are in `bootui.c`. Verified under QEMU at 1920x1080: the
+splash appears, centred and doubled, with a thicker loader lifted clear of the
+bottom edge and readable status text. **Not yet confirmed on a real Pi**, which
+is where the symptom was reported.
+
+One correction to the plan below: the factor cannot come from the width alone.
+1920/640 is 3, but 1080/480 is 2, and scaling the splash by 3 would ask for
+1440 lines on a 1080-line display. It is the smaller of the two, clamped to
+1..3, which is why a Pi gets 2.
+
+The bar's width was already right and is unchanged -- `width / 2`. What changed
+is its height (`10 * scale`, was a flat 6) and the margin under it
+(`52 * scale`, was a flat 26), at every resolution rather than only on large
+ones, because the bar was thin and low on a 640x480 screen too.
+
+# The original plan
 
 1. **Derive one scale factor from the framebuffer width**, as legacy did:
    `width / 640`, clamped to 1..3. Every constant below then multiplies by it.
@@ -122,6 +139,8 @@ nobody has looked at the splash rather than at the serial log.
 
 # Execution log
 
+- 2026-08-17 -- Fixed and verified under QEMU at 1920x1080. Awaiting a look on
+  real hardware.
 - 2026-08-17 -- Opened from an observation on a real Pi 3: no image, and a
   loader too small to read. Traced to the 640x480 constants and matched against
   the scaling legacy already had.
