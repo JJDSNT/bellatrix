@@ -93,6 +93,20 @@ forever, and that is the whole risk of this change.
 4. Confirm under QEMU by screendump: the splash should persist, and the desktop
    should appear with its icons already drawn.
 
+# The verification already exists too, and it is not the signal
+
+`scripts/boot-timing.py` already decides when the icons are there: it samples
+the framebuffer and declares them when the changed-pixel count grows past
+`--icon-delta` beyond the delta the bare screen produces, corroborated by the
+screen title changing from "Workbench Screen" to "Wanderer <n>M graphics mem".
+
+**That is a host-side observation, so it cannot release the hold** -- it reads
+the screen from outside the machine, and the thing being held is inside it.
+What it is good for is the other half: it is the oracle that proves this change
+did what it claims. Its `t1` is defined as the icons rather than the screen,
+which is exactly the interval this issue is about, so a before/after run of it
+measures the gap being closed rather than anyone judging a screenshot.
+
 # Notes
 
 **Do not build this without the release path settled.** The whole risk is
