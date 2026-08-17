@@ -6,8 +6,16 @@
 #include <exec/nodes.h>
 #include <exec/semaphores.h>
 
-/* Power of two: the index arithmetic below masks rather than divides. */
-#define BTUART_RX_RING 2048
+/*
+ * Power of two, so the index arithmetic masks rather than divides.
+ *
+ * Sized against the traffic, not against a tick period. The BCM43430A1 does not
+ * send one advertising report per event: during an LE scan it batches every
+ * advert it heard into a single HCI event of up to 1220 bytes. Two of those
+ * back to back overflow a 2 KB ring, and an overflow costs the H4 framer its
+ * synchronisation just as an overrun does. 8 KB holds six.
+ */
+#define BTUART_RX_RING 8192
 #include <exec/types.h>
 
 struct BTUARTBase
