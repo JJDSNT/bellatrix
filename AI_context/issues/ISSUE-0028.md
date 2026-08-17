@@ -32,7 +32,15 @@ keyboard": bonding that survives a reboot, HID reports reaching `input.device`,
 a connect/disconnect flow, and a way to drive it that is not a boot-time
 self-test.
 
-The legacy tree had most of that. It is worth mining for **design and hard-won
+**The legacy tree got all the way there.** Its own record says so
+(`AI_context/consolidated/issue_bluetooth.md`, note of 2026-07-16): *"Bluetooth
+HID está funcional — scan, pairing e reconexão automática, e input de
+teclado/mouse/joystick chegando ao Amiga, todos comprovados."* The work that
+closed it is `AI_context/issues/ISSUE-0059.md`. An earlier section of the same
+file says the opposite and is explicitly marked historical — read the note, not
+the body.
+
+So this is not exploratory work. It is worth mining for **design and hard-won
 operational detail**, not for code: it was built on btstack, and `aros-bluzing`
 is a from-scratch stack we own.
 
@@ -92,15 +100,18 @@ Ordered so each step is demonstrable on its own.
 3. **HID to `input.device`.** `core/hid` parses reports; nothing feeds AROS. This
    is where "Bluetooth works" becomes "my keyboard types". Legacy's `bt_hid.c`
    did keyboard, mouse and joystick, and its report handling is reusable.
-4. **A Zune application: scan, connect, disconnect.** The deliverable the user
+4. **Classify and name what the scan finds.** Ten unnamed addresses is not a
+   device list. HID classification from class-of-device and LE UUID 0x1812,
+   remote-name-request as its own phase, and dual-mode merge by public address
+   — all four are in legacy's `BTScanResult` and none in ours.
+5. **A Zune application: scan, connect, disconnect.** The deliverable the user
    asked for. It needs 1-3 underneath, but its *interface* can be specified now
    and is the thing that makes the rest testable by a person rather than by a
    serial log.
-5. **Receive interrupt in `btuart.resource`.** `BTUART_CAP_RX_INTERRUPT` is
-   declared in the ABI and never set. Scanning currently works only because the
-   manager polls at 1 ms (`ISSUE-0019`); ACL traffic from a connected device will
-   not tolerate that. This is a prerequisite for 3 in practice even though it is
-   not one on paper.
+6. ~~**Receive interrupt in `btuart.resource`.**~~ Done 2026-08-16: the PL011
+   interrupt drains into a ring and RSSI values came back correct on hardware.
+   What legacy had and this does not is the observability around it — the
+   watermark, the per-tick budget, and telling silence from a drain failure.
 
 # The reconnect state machine, which is the piece most worth taking
 
@@ -144,6 +155,75 @@ half runs forever.
 below), so the state machine is what step 1 should be built to fit rather than
 something bolted on afterwards.
 
+# Why our scan finds ten devices and the user has two
+
+A passive LE scan reports every advertiser in range, which in a home is a
+dozen phones, televisions and watches. It is not wrong; it answers the wrong
+question. The devices that matter are a keyboard and a mouse, both **dual-mode**,
+and a bonded Classic HID device does not advertise on LE at all — it is found by
+inquiry.
+
+Legacy's `BTScanResult` (`bt_scan.h`) is the shape that answers the right
+question, and every field in it is missing from our `bt_discovered_device`:
+
+```c
+uint8_t  transport;   /* bitmask; dual-mode with a public address merges to one entry */
+uint32_t cod;         /* Classic class of device */
+char     name[25];
+uint8_t  name_state;  /* 0 = none, 1 = synthesized label, 2 = real name */
+bool     hid;         /* HID: CoD peripheral, or LE UUID 0x1812 */
+uint16_t appearance;  /* LE appearance AD */
+```
+
+And the header states the hardware constraint that dictates the whole design:
+
+> Phases alternate (inquiry ≈5s → remote-name requests → LE scan 5s → …)
+> **because the CYW43438 shares one radio between BR/EDR and LE.**
+
+That is not an optimisation. One radio means a scan that only does LE is
+structurally unable to see a Classic keyboard, and doing both means alternating
+rather than running them together. Remote-name-request is a third phase because
+inquiry gives an address and a class, never a name.
+
+# Operational detail from ISSUE-0059, worth more than the code
+
+Ordered by how much trouble it saves.
+
+**Silence is distinguished from a drain failure.** A non-empty PL011 FIFO when
+nothing is arriving indicts the IRQ or host path, and suppresses the
+power-cycle that would otherwise mask it. We now have the interrupt that makes
+this checkable and no such check.
+
+**The IRQ top half preserves FE/PE/BE/OE from every read**, and the ring
+watermark is published. We do the first half (see `BTUARTRead`) and not the
+second.
+
+**Receive has a per-tick budget** — bytes and H4 callbacks both — so a burst
+cannot starve the reactor, with counters logged.
+
+**Recovery advances in four ticks** (`request off`, `force initializing`,
+`force off`, `physical reset/PatchRAM`) rather than one monolithic power cycle,
+because a reentrant HCI transition inside the reactor was the failure being
+avoided. Anything received inside a stack callback only *publishes* intent; the
+transport is mutated later, from the reactor.
+
+**Link keys are kept on ordinary failure.** Only `AUTHENTICATION_FAILURE` and
+`PIN_OR_KEY_MISSING` prove a key was rejected; anything else means the device is
+merely absent. Deleting a good key because a device was out of the room is the
+mistake this prevents.
+
+**Outbound connects one pair at a time, mouse first**, because the embedded SDP
+client has a single context. Inbound is always accepted and the host stays
+connectable.
+
+**HID details that cost debugging time:** the HIDP `0xA1` DATA/Input prefix is
+stripped before the decoder; descriptor, `SET_PROTOCOL` and `GET_PROTOCOL`
+events update session state instead of falling through as unknown; error reports
+`0x01..0x03` are ignored on both USB and Bluetooth; a Classic mouse with Report
+ID 1 and signed 16-bit little-endian deltas is decoded without treating other
+report IDs as movement; and after connecting, `EXIT_SUSPEND` and `GET_PROTOCOL`
+go out in *separate* reactor steps.
+
 # Design notes carried from legacy
 
 **Scanning needs a liveness story, not just a start call.** `bt_scan.c` carried
@@ -169,6 +249,8 @@ printing, and it survives the case where the console is the thing that is broken
 - [ ] A bonded device is still bonded after a reboot
 - [ ] A bonded device switched on reconnects on its own, with no software action
 - [ ] Automatic reconnection can be suspended while the user pairs something
+- [ ] The scan lists HID devices by name, not every advertiser by address
+- [ ] A dual-mode keyboard is found by inquiry, not only when it advertises
 - [ ] A Bluetooth keyboard produces characters in a Shell
 - [ ] A Zune application lists scan results and drives connect/disconnect
 - [ ] No btstack source is present in `aros-bluzing`
