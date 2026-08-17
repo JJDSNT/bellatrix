@@ -4,7 +4,6 @@
 #define BTUART_PRIVATE_H
 
 #include <exec/nodes.h>
-#include <exec/interrupts.h>
 #include <exec/semaphores.h>
 
 /* Power of two: the index arithmetic below masks rather than divides. */
@@ -38,7 +37,6 @@ struct BTUARTBase
     volatile ULONG rx_head;   /* written by the handler */
     volatile ULONG rx_tail;   /* written by BTUARTRead */
     volatile ULONG rx_dropped;
-    struct Interrupt rx_irq;
     BOOL rx_irq_armed;
     UBYTE rx_ring[BTUART_RX_RING];
 };

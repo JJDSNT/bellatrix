@@ -257,16 +257,24 @@ static int btuart_init(struct BTUARTBase *BTUARTBase)
 /*
  * Drain the FIFO into the ring. Runs in interrupt context.
  *
+ * Plain void(void *, void *), which is what KrnAddIRQHandler() calls -- see
+ * platform/bcm283x/system_timer.c:113. Writing it as AROS_INTH1 produces the
+ * struct Interrupt server convention instead, and being called as a plain
+ * pointer through that mismatch corrupted registers: the first attempt died
+ * three boots out of three, with the serial output turning to garbage.
+ *
  * Everything here is a store to MMIO or to the ring: no allocation, no lock,
  * no call back into AROS. The reader synchronises on rx_head alone, which this
  * is the only writer of, so no interlock is needed for a single producer and a
  * single consumer.
  */
-AROS_INTH1(btuart_rx_handler, struct BTUARTBase *, BTUARTBase)
+static void btuart_rx_handler(void *data, void *unused)
 {
-    AROS_INTFUNC_INIT
+    struct BTUARTBase *BTUARTBase = data;
+    ULONG head;
 
-    ULONG head = BTUARTBase->rx_head;
+    (void)unused;
+    head = BTUARTBase->rx_head;
 
     while (!(mmio_read(BTUARTBase->uart_base, PL011_FR) & PL011_FR_RXFE))
     {
@@ -295,9 +303,6 @@ AROS_INTH1(btuart_rx_handler, struct BTUARTBase *, BTUARTBase)
      * a single lost byte does not latch the condition forever. */
     mmio_write(BTUARTBase->uart_base, PL011_ICR,
                PL011_INT_RX | PL011_INT_RT | PL011_INT_OE);
-    return FALSE;
-
-    AROS_INTFUNC_EXIT
 }
 
 AROS_LH1(long, BTUARTClaim,
@@ -415,10 +420,6 @@ AROS_LH3(long, BTUARTConfigure,
     mmio_write(BTUARTBase->uart_base, PL011_IFLS, PL011_IFLS_RX18);
     if (!BTUARTBase->rx_irq_armed)
     {
-        BTUARTBase->rx_irq.is_Node.ln_Name = "btuart";
-        BTUARTBase->rx_irq.is_Node.ln_Pri = 0;
-        BTUARTBase->rx_irq.is_Code = (APTR)btuart_rx_handler;
-        BTUARTBase->rx_irq.is_Data = BTUARTBase;
         if (KrnAddIRQHandler(IRQ_VC_UART, btuart_rx_handler, BTUARTBase, NULL))
         {
             BTUARTBase->rx_irq_armed = TRUE;
