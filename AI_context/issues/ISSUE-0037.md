@@ -133,7 +133,40 @@ Same defect -- `block=00000000`, `bucket=19/0`, so still `MERGE_PREV()` handed
 a NULL `block->header.prev`. Different task and different addresses, as
 expected on different hardware with a different memory map.
 
-## The lead, and it is the first one this issue has had
+## Correction (2026-08-17): USB is the weak hypothesis, not the strong one
+
+The section below was written on the strength of `Device connected, resetting
+port` appearing above the corruption on hardware. **That over-weighted a
+visible new line against evidence already in this issue**, and the user was
+right to push back.
+
+The contradicting fact was already recorded here: **the corruption occurred
+under QEMU, once in four runs, with `No device connected`.** If it happens with
+no USB device at all, a USB device is not necessary to produce it. USB was also
+present and initialised on every boot before this defect ever appeared.
+
+The stronger correlation is the one this issue opened with and then lost sight
+of: **the corruption appeared on the same day `ENV:` started populating.**
+Until ISSUE-0036 was fixed, `Copy "ENVARC:" "ENV:"` copied nothing, so no
+preference loaded -- no IPrefs, no `C:Decoration`, no PNG through datatypes, no
+Zune preference readers. All of that became reachable that day, and the defect
+appeared that day.
+
+A second sign points the same way: **the dying task is a CLI**, the boot shell
+running the Startup-Sequence, not a Poseidon or USB task.
+
+So the discriminating boot is not about USB. It is: **boot with the `ENV:`
+population disabled** -- comment out the `Copy "ENVARC:" "ENV:" ALL ...` line
+in the Startup-Sequence -- and see whether the corruption goes with it. That is
+one card edit and one boot, and it tests the hypothesis this issue was opened
+on rather than the one the last log line suggested.
+
+What remains true from the section below is narrower and still worth keeping:
+the real machine always enumerates its soldered hub, so the emulator's idle-USB
+state does not exist on hardware, and any rate comparison between the two is
+between different regimes.
+
+## The USB correlation, kept for the record
 
 `[USB2OTG] Init: Device connected, resetting port`.
 
