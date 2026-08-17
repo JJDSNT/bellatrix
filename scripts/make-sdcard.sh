@@ -84,7 +84,19 @@ done
 # not worth walking into while bringing something else up.
 # Extras carries contrib packages which are part of the full distribution.
 # In particular, aros-bluzing installs its hardware self-test there.
-DIRS=(C S Libs Devs L Classes Fonts System Prefs Storage Utilities Tools Locale Extras)
+# Developer/ is deliberately left out: it is headers, link libraries and SDK
+# material that nothing on the card reads, and it is large.
+#
+# boot/ is left out too, but for a different reason -- the card's boot files
+# come from the Emu68 side, not from the AROS distribution, and copying this
+# one over them would be a fight nobody wins.
+#
+# Everything else the distribution builds belongs here. WBStartup in
+# particular: it is part of the initial startup, Workbench launches what is in
+# it once the desktop exists, and leaving it off is invisible until something
+# expects to be started that way.
+DIRS=(C S Libs Devs L Classes Fonts System Prefs Storage Utilities Tools Locale
+      Rexxc WBStartup Extras)
 
 # Locale is not optional: S:Startup-Sequence does Assign "LOCALE:" "SYS:Locale",
 # and without it the boot console opens with "Can't find SYS:Locale" and every
