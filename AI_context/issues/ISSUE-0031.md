@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0031
-title: "No picture loads through datatypes on emu68-m68k: NewDTObject returns NULL for every PNG"
+title: "NewDTObject returns NULL for the PNGs BTScan tried, including one of the distribution's own"
 status: backlog
 priority: medium
 type: bug
@@ -19,10 +19,22 @@ related_files:
   - external/aros-bluzing/ports/aros/btscan/main.c
 ---
 
+# What this issue claims, and what it does not
+
+It claims one measurement: two `NewDTObject()` calls returned NULL. It does
+**not** claim that datatypes is broken on this port, and an earlier draft of
+this file did -- wrongly. AROS's own picture datatypes work; prefs editors
+display icons through `Dtpic` and Workbench renders its icons. So the far more
+likely explanation is something about **how this call was made**, or something
+this port's setup leaves out, and not the subsystem.
+
+Read the numbers below as a starting point for finding that, not as a verdict
+on datatypes.
+
 # Summary
 
-`NewDTObject()` returns `NULL` for every PNG tried on this port, with `IoErr()`
-left at 0 -- no DOS error, just no object.
+`NewDTObject()` returned `NULL` for both PNGs tried, with `IoErr()` left at 0
+-- no DOS error, just no object.
 
 Measured on a Pi 3 boot under QEMU on 2026-08-17, from inside BTScan, with
 `pr_WindowPtr` set to -1 so a requester could not interfere:
@@ -71,7 +83,7 @@ So this is not a packaging omission at the level of "the file was not copied".
 
 # Why it is worth more than one missing decoration
 
-**It very likely takes the icons with it.** `workbench/libs/icon/diskobjPNGio.c`
+**If it turns out to be real, it takes the icons with it.** `workbench/libs/icon/diskobjPNGio.c`
 reads PNG icons through `proto/pngdt.h` -- the same png datatype. Every `.info`
 in this distribution that is a PNG icon goes through the code that is failing
 here, so "no picture loads" and "icons do not appear" are plausibly one bug and
@@ -84,7 +96,13 @@ is why it has gone unnoticed until an application asked for a picture.
 
 # What is left
 
-1. **Find where it gives up.** `NewDTObject` -> `ObtainDataTypeA` identifies the
+0. **Assume the caller is wrong first.** Compare against a program in the tree
+   that displays a picture and works -- `workbench/prefs/serial/sereditor.c:130`
+   and `workbench/classes/zune/aboutbox/Aboutbox.c:590` both use `Dtpic`, and
+   `developer/debug/test/Zune/dtpic.c` exists to do exactly this. If one of
+   those runs here and shows its picture, everything below is moot and the
+   answer is in the difference between it and this call.
+1. **Then find where it gives up.** `NewDTObject` -> `ObtainDataTypeA` identifies the
    file from the descriptors in `DEVS:DataTypes`, then opens the class from
    `CLASSES:DataTypes`. Two steps, and the return of NULL with `IoErr() == 0`
    says which is more likely: identification returning nothing rather than a
