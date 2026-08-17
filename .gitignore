@@ -3,3 +3,7 @@
 
 # Local caches
 /.cache/
+
+# Claude Code: the skills are shared, the local settings and scratch notes are not
+.claude/settings.local.json
+.claude/RESUME.md
