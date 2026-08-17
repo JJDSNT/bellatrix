@@ -44,6 +44,58 @@ So this is not exploratory work. It is worth mining for **design and hard-won
 operational detail**, not for code: it was built on btstack, and `aros-bluzing`
 is a from-scratch stack we own.
 
+# The USB transport, checked rather than assumed
+
+The stack has two transports. The UART one is what the Pi 3 uses and what
+everything above has been measured on. The USB one is compiled into the link
+library and **nothing instantiates it** -- `bt_aros_usb_transport_init` has no
+caller anywhere in the tree, so it has never run.
+
+Read against AROS's own driver, it is nevertheless correct:
+
+| what | ours | AROS |
+|---|---|---|
+| device | `usbbluetooth.device` | `rom/usb/classes/bluetooth/dev.c` |
+| write HCI command | `CMD_NONSTD+1` | `BTCMD_WRITEHCI` |
+| read / write ACL | `CMD_NONSTD+3` / `+4` | `BTCMD_READACL` / `BTCMD_WRITEACL` |
+| add / remove msgport | `CMD_NONSTD+8` / `+9` | `BTCMD_ADDMSGPORT` / `BTCMD_REMMSGPORT` |
+| request struct | `struct bt_aros_hci_request` | `struct IOBTHCIReq` |
+| event message | `struct Message` + 257 bytes | `struct BTHCIEventMsg`, `BTHCIEvent` = 1+1+255 |
+
+The request struct is redefined rather than included because
+`devices/bluetoothhci.h` pulls in AROS's `bluetooth/hci.h`, which collides with
+this stack's public header of the same name -- and the redefinition is
+field-for-field, `user_data` included. **That last field is load-bearing**:
+`devOpen` rejects any request whose `mn_Length` is nonzero and smaller than
+`sizeof(struct IOBTHCIReq)`, and `CreateIORequest` sets `mn_Length` from the
+size we ask for. Dropping the field to "the part we use" would fail every open
+with `IOERR_BADLENGTH`.
+
+Event lengths line up too: the class accumulates `mn_Length` up to
+`bhe_PayloadLength + 2`, and that is exactly what the transport passes up as
+the event length.
+
+What is absent is SCO (`BTCMD_SETUPSCO`, `READSCO`, `WRITESCO`), so no audio,
+and `BTCMD_QUERYDEVICE`, so no device identification. Neither matters for HID.
+
+**So the answer to "does the stack talk to the USB structure properly" is: on
+paper yes, in practice unknown.** It is ABI-correct against the driver in this
+tree and has never exchanged a byte. Believing it works because it compiles is
+exactly the mistake this project keeps having to undo.
+
+# BTScan
+
+`ports/aros/btscan/` is a Zune front end over the manager: scan, inquiry, a
+device list with name / address / radio / HID / signal, and a status line. It
+builds (`contrib-aros-bluzing-btscan`) and installs to
+`Extras/aros-bluzing/C/` with its banner and a real AROS PNG icon.
+
+Connect and Disconnect exist and are disabled, because the stack discovers
+devices and does not connect to them yet. That is the next piece of work here,
+and the buttons are the placeholder for it.
+
+**It has not been run.** Building is not evidence.
+
 # The rule for this issue
 
 **No btstack code is copied.** `external/btstack` in the legacy tree is
