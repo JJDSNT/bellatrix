@@ -146,6 +146,12 @@ being read as one.
 - 2026-08-17 -- **Confirmed on the Pi: the icons move.** The revert below was
   done for a different reason and this was not what it was for, so treat it as
   what it is -- a bisect step that landed, narrowing the cause to two branches.
+  Confirmed harder than intended: the test accidentally dropped `C` into
+  another drawer, which means the whole path works, not just repositioning --
+  `MUIM_DragQuery`, `MUIM_DragDrop` and Workbench actually moving the
+  directory. So the two merges below have to watch for a drop landing, not
+  merely an icon sliding. (The card was regenerated afterwards; a drawer that
+  moved is a real move.)
 - 2026-08-17 -- `arch/m68k-emu68/` put back to what `v0.1.0-rc1` shipped, which
   is the last state in which the drag is known to have worked; the m68k-native
   split that followed it is on the `m68k-native-split` branch and the BASE
