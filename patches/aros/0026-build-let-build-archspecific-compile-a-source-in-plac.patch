@@ -1,0 +1,104 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 17 Aug 2026 23:30:00 -0300
+Subject: [PATCH 26/26] build: let %build_archspecific compile a source in place
+
+%build_module can name a source by absolute path and compile it where it
+lives: rule_compile_multi resolves each directory with
+
+    $(if $(filter /%,$(dir)),$(dir),$(..._SRCDIR)/$(CURDIR)/$(dir))
+
+so a basename that is already absolute is taken as it stands. That is what
+lets arch/m68k-emu68 build the BCM2708 USB OTG driver and dma.resource from
+arch/arm-native's sources without copying 9000 lines into a second place.
+
+%build_archspecific could not, for two reasons that had to be fixed together:
+
+  * its vpath prefixed $(CURDIR) onto every source directory
+    unconditionally, so an absolute path turned into nonsense;
+  * and its pattern rules did not consult vpath at all. They named the
+    source literally --
+
+        $(BD_OBJDIR$(BDID))/%.o : $(SRCDIR)/$(CURDIR)/%.c
+
+    -- so no vpath entry could ever be reached. This is why fixing only the
+    first half changed nothing.
+
+The compile does not fail with a message about the path. It simply never
+happens: `$(BD_OBJS$(BDID)) : | $(BD_GENDIR$(BDID))` gives every object a
+rule with no recipe, so make considers them handled, exits 0, and the module
+then links whatever object files were already lying in the objdir. That is a
+worse failure than an error, and it is why this was worth chasing rather than
+working around.
+
+Both halves now match rule_compile_multi, which pairs `vpath %.c
+$(..._MC_DIRS)` with a bare `%.c` prerequisite. Relative paths behave exactly
+as before -- the vpath still carries $(SRCDIR)/$(CURDIR)/ for them -- and the
+recipes already handled an absolute $<, which they test for when printing the
+"Compiling" line.
+
+Wanted because the SD card backend is attached through this seam, and the
+BCM2835 SDHOST controller this port is moving to lives in arch/arm-native
+beside the Arasan one. A relative path is not an alternative here: this
+repository injects its own code into the AROS tree by symlinking
+arch/m68k-emu68 to a directory outside it, and the kernel resolves ".."
+physically, so soc/sdcard/../../.. leaves the AROS tree entirely.
+
+Upstream would take this. The two macros disagreeing about what an absolute
+basename means is the accident, and nothing that builds today changes.
+
+See AI_context/issues/ISSUE-0013.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ config/make.tmpl | 21 +++++++++++++--------
+ 1 file changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/config/make.tmpl b/config/make.tmpl
+--- a/config/make.tmpl
++++ b/config/make.tmpl
+@@ -3315,10 +3315,15 @@
+ 
+ ifeq ($(TARGET),$(BD_TARGET))
+ TMP_SRCDIR := $(shell $(ECHO) $(SRCDIR) | sed 's/^\(.\):\//\/\1\//')
+-vpath %.c $(addprefix $(TMP_SRCDIR)/$(CURDIR)/,$(dir %(files)))
+-vpath %.c $(addprefix $(TMP_SRCDIR)/$(CURDIR)/,$(dir %(linklibfiles)))
+-vpath %.s $(addprefix $(TMP_SRCDIR)/$(CURDIR)/,$(dir %(asmfiles)))
+-vpath %.S $(addprefix $(TMP_SRCDIR)/$(CURDIR)/,$(dir %(asmfiles)))
++# An absolute basename names a file outside this directory and must be taken
++# as it stands; only a relative one is resolved against CURDIR. This is the
++# same rule rule_compile_multi applies, so %build_archspecific can compile a
++# source in place the way %build_module already can.
++BD_VPATHDIR = $(foreach d,$(1),$(if $(filter /%,$(d)),$(d),$(TMP_SRCDIR)/$(CURDIR)/$(d)))
++vpath %.c $(call BD_VPATHDIR,$(dir %(files)))
++vpath %.c $(call BD_VPATHDIR,$(dir %(linklibfiles)))
++vpath %.s $(call BD_VPATHDIR,$(dir %(asmfiles)))
++vpath %.S $(call BD_VPATHDIR,$(dir %(asmfiles)))
+ endif
+ 
+ ifneq ($(BD_LINKLIBARCHOBJS$(BDID))$(BD_LINKLIBOBJS$(BDID)),)
+@@ -3387,9 +3392,9 @@
+ endif
+ 
+ ifeq ($(TARGET),$(BD_TARGET))
+-$(BD_LIBOBJDIR$(BDID))/%.o : $(SRCDIR)/$(CURDIR)/%.c
++$(BD_LIBOBJDIR$(BDID))/%.o : %.c
+ 	%compile_q cmd="$(TMP_CMD)" opt="$(strip $(TMP_CFLAGS) $(TMP_CPPFLAGS))" iquote="$(TMP_IQUOTE)" iquote_end="$(TMP_IQUOTE_END)" incextra="$(BD_INCEXTRA$(BDID))"
+-$(BD_OBJDIR$(BDID))/%.o : $(SRCDIR)/$(CURDIR)/%.c
++$(BD_OBJDIR$(BDID))/%.o : %.c
+ 	%compile_q cmd="$(TMP_CMD)" opt="$(strip $(TMP_CFLAGS) $(TMP_CPPFLAGS))" iquote="$(TMP_IQUOTE)" iquote_end="$(TMP_IQUOTE_END)" incextra="$(BD_INCEXTRA$(BDID))"
+ endif
+ 
+@@ -3413,10 +3418,10 @@
+ $(BD_DEPS$(BDID)) : TMP_DFLAGS:=%(dflags)
+ endif
+ ifeq ($(TARGET),$(BD_TARGET))
+-$(BD_LIBOBJDIR$(BDID))/%.d : $(SRCDIR)/$(CURDIR)/%.c
++$(BD_LIBOBJDIR$(BDID))/%.d : %.c
+ 	%mkdepend_q cc="$(TMP_CMD)" flags="$(strip $(TMP_DFLAGS) $(TMP_CPPFLAGS))"
+ 
+-$(BD_OBJDIR$(BDID))/%.d : $(SRCDIR)/$(CURDIR)/%.c
++$(BD_OBJDIR$(BDID))/%.d : %.c
+ 	%mkdepend_q cc="$(TMP_CMD)" flags="$(strip $(TMP_DFLAGS) $(TMP_CPPFLAGS))"
+ endif
+ 

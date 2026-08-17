@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 18 Aug 2026 00:30:00 -0300
+Subject: [PATCH 27/27] sdhost: do not name ARM instructions in a portable
+ backend
+
+Third of its kind, after 0013 (usb2otg) and 0025 (dma.resource), and the same
+one-line shape: a barrier written as inline AArch64 in a driver that is
+otherwise portable.
+
+    static inline void sdhost_dsb(void) { asm volatile("dsb sy" ::: "memory"); }
+
+Everything else in this file already is portable -- MMIO goes through
+AROS_LE2LONG/AROS_LONG2LE, the peripheral base comes from
+KrnGetSystemAttr(KATTR_PeripheralBase), and the NEON bounce copy directly
+above guards itself on __arm__ and falls back to a word loop.
+
+What makes this one worth a message rather than a diff is how it fails
+elsewhere. On m68k, gas parses "dsb" as the MRI-style define-storage-bytes
+directive, so `dsb sy` assembles as a .space of an undefined symbol:
+
+    Error: .space specifies non-absolute value
+
+reported at whatever line the deferred expression is finally resolved on --
+an ordinary instruction, nowhere near the asm, in a file containing no .space
+at all. sdhost_dsb() is inlined at seven sites, so the error count tracks the
+inline sites and moves with -O level, which reads like an optimiser bug and is
+not one.
+
+<asm/cpu.h> is where every ARM target already gets dsb(), and this port
+supplies its own (added for the USB driver in 0013). Using it changes nothing
+on ARM -- arch/arm-all's dsb() is that instruction -- and gives m68k the
+honest answer: a compiler barrier, because the guest has no barrier
+instruction to issue and what reaches the bus is AArch64 the JIT emitted.
+
+Upstream would take this. Naming the instruction was the accident, and every
+ARM target keeps exactly the semantics it has today.
+
+See AI_context/issues/ISSUE-0013.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ .../soc/broadcom/2708/sdcard/sdcard_sdhost_bus.c   | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/sdcard/sdcard_sdhost_bus.c b/arch/arm-native/soc/broadcom/2708/sdcard/sdcard_sdhost_bus.c
+--- a/arch/arm-native/soc/broadcom/2708/sdcard/sdcard_sdhost_bus.c
++++ b/arch/arm-native/soc/broadcom/2708/sdcard/sdcard_sdhost_bus.c
+@@ -36,6 +36,8 @@
+ #include <proto/exec.h>
+ #include <proto/kernel.h>
+ #include <proto/dma.h>
++
++#include <asm/cpu.h>
+ #include <proto/utility.h>
+ 
+ #include <hardware/mmc.h>
+@@ -57,7 +59,24 @@
+     return 0;
+ }
+ 
+-static inline void sdhost_dsb(void) { asm volatile("dsb sy" ::: "memory"); }
++/*
++ * The barrier every register write below is ordered against.
++ *
++ * Spelled through <asm/cpu.h> rather than as inline AArch64, because naming
++ * the instruction here makes this file ARM-only for no reason -- the rest of
++ * it is portable, and the NEON copy above already guards itself on __arm__.
++ *
++ * On m68k the misspelling is not even a build failure that points at itself:
++ * gas parses "dsb" as the MRI-style define-storage-bytes directive, so
++ * `dsb sy` becomes a .space of an undefined symbol and the diagnostic reads
++ *
++ *     Error: .space specifies non-absolute value
++ *
++ * at whatever line the deferred expression is finally resolved on. This is an
++ * inline function used seven times, so the error count tracks the inline sites
++ * rather than the mistake.
++ */
++static inline void sdhost_dsb(void) { dsb(); }
+ 
+ /* Translate a virtual address to its bus-addressable form for the DMA
+  * engine.  On Pi 3 the kernel identity-maps low memory and adds an
