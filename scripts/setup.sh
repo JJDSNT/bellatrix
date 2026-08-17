@@ -189,20 +189,33 @@ mapfile -t SERIES < <(find "$PATCHES" -mindepth 1 -maxdepth 1 -type d -printf '%
 
 failed=0
 
-# aros-bluzing is injected into the AROS contrib tree, but unlike the two
-# upstream source trees it has no patch series of its own.  Initialise it
-# explicitly so the injected symlink is never left dangling on a fresh clone.
-if [ ! -e "$ROOT/external/aros-bluzing/.git" ]; then
+# Submodules we take unmodified: no patch series, so the loop below never sees
+# them, and nothing else would check them out.  Initialise them explicitly so a
+# fresh clone does not end up with an empty directory that only fails later —
+# aros-bluzing as a dangling injected symlink, xsysinfo as a missing build tree.
+PLAIN=(aros-bluzing xsysinfo)
+
+for name in "${PLAIN[@]}"; do
+    repo="$ROOT/external/$name"
+    [ -e "$repo/.git" ] && continue
+    echo "=== $name ==="
     if [ "$MODE" = verify ]; then
-        echo "=== aros-bluzing ==="
         echo "    NOT INITIALISED"
         failed=1
-    else
-        echo "=== aros-bluzing ==="
-        echo "    initialising submodule"
-        git -C "$ROOT" submodule update --init external/aros-bluzing
+        continue
     fi
-fi
+    echo "    initialising submodule"
+    git -C "$ROOT" submodule update --init "external/$name"
+done
+
+# Their own submodules, in turn: xsysinfo builds flexcat and identify from
+# 3rdparty/, and an empty one there fails deep inside its Makefile.
+for name in "${PLAIN[@]}"; do
+    repo="$ROOT/external/$name"
+    [ -f "$repo/.gitmodules" ] || continue
+    [ "$MODE" = verify ] && continue
+    git -C "$repo" submodule update --init --recursive >/dev/null
+done
 
 for name in "${SERIES[@]}"; do
     dir="$PATCHES/$name"
