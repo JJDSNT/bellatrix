@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 17 Aug 2026 21:00:00 -0300
+Subject: [PATCH 24/24] sdcard: report what the PIO data loop costs
+
+ISSUE-0013 proposes porting dma.resource and a DMA SD path, and its own first
+acceptance criterion is the one nobody has met: what fraction of a boot is the
+card. Without that number the best case is unknown, and the issue says so --
+"if the answer is 5%, the best possible outcome here is 2.5 s".
+
+This measures it, and measures the right thing. The brackets go around the PIO
+word loop and nothing else -- not the command setup, not the inter-block
+polling -- because that loop is exactly what a DMA path would replace. What
+comes out is therefore the *ceiling* on what ISSUE-0013 could ever be worth,
+which is the number that decides whether to spend the work.
+
+That loop is where PIO is paid for: a 512-byte block is 128 MMIO reads, each
+one executed as JITted m68k code.
+
+Reporting is per megabyte rather than per transfer, so the instrument does not
+change what it measures; serial output at block rate would dominate the
+result. SYSTIMER_CLO is 1 MHz, so the accumulator is microseconds and wraps
+after about 71 minutes, far beyond any boot being measured.
+
+Enabled on __EMU68__ rather than on request. On this port the card is the boot
+medium and PIO is a deliberate choice recorded in soc/sdcard/mmakefile.src, so
+what that choice costs belongs in every boot log next to the rest of the
+bring-up trace.
+
+Upstream carries no accounting here, and would not want this as written -- the
+enable is target-specific.
+
+See AI_context/issues/ISSUE-0013.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ rom/devs/sdcard/sdcard_bus.c | 52 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/rom/devs/sdcard/sdcard_bus.c b/rom/devs/sdcard/sdcard_bus.c
+--- a/rom/devs/sdcard/sdcard_bus.c
++++ b/rom/devs/sdcard/sdcard_bus.c
+@@ -40,6 +40,39 @@
+ 
+ /* Generic "Bus Unit" Functions */
+ 
++/*
++ * On this port the card is the boot medium and PIO is a deliberate choice, so
++ * what it costs is worth knowing on every boot rather than on request.
++ */
++#if defined(__EMU68__)
++#define SDCARD_PIO_ACCOUNTING
++#endif
++
++#if defined(SDCARD_PIO_ACCOUNTING)
++/*
++ * How much of a boot is spent moving card bytes a longword at a time?
++ *
++ * This brackets the PIO word loop below and nothing else -- not the command
++ * setup, not the inter-block polling -- because that loop is precisely what a
++ * DMA path would replace. The number it produces is therefore the *ceiling* on
++ * what ISSUE-0013 could ever be worth, which is the question that gates it.
++ *
++ * A 512-byte block is 128 MMIO reads, each executed as JITted m68k code, so
++ * this is the one place where the choice of PIO is paid for per longword.
++ *
++ * SYSTIMER_CLO is 1 MHz, so the accumulator is in microseconds and wraps after
++ * about 71 minutes -- far longer than any boot being measured. Reporting is
++ * per megabyte rather than per transfer so the instrument does not perturb
++ * what it measures; serial output at block rate would dominate the result.
++ */
++#define SDCARD_PIO_REPORT_BYTES (1UL << 20)
++
++static ULONG sdcard_pio_us = 0;
++static ULONG sdcard_pio_bytes = 0;
++static ULONG sdcard_pio_blocks = 0;
++static ULONG sdcard_pio_next = SDCARD_PIO_REPORT_BYTES;
++#endif
++
+ /* How long a single block may keep the PIO transfer waiting */
+ #define SDHCI_DATA_TIMEOUT_US   1000000
+ 
+@@ -1056,6 +1089,9 @@
+     ULONG               waitStart = 0;
+     BOOL                waiting = FALSE;
+     ULONG               retVal = 0;
++#if defined(SDCARD_PIO_ACCOUNTING)
++    ULONG               pioStart;
++#endif
+ 
+     DFUNCS(bug("[SDBus%02u] %s()\n", bus->sdcb_BusNum, __PRETTY_FUNCTION__));
+ 
+@@ -1126,6 +1162,9 @@
+                 volatile ULONG *dataPtr = (volatile ULONG *)sdData;
+ 
+                 DTRANS(bug("[SDBus%02u] %s: Attempting to %s %dbytes\n", bus->sdcb_BusNum, __PRETTY_FUNCTION__, ((sdDataMode == MMC_DATA_READ) ? "read" : "write"), tranlen));
++#if defined(SDCARD_PIO_ACCOUNTING)
++                pioStart = sdcard_CurrentTime();
++#endif
+                 if (sdDataMode == MMC_DATA_READ)
+                 {
+                     for (currword = 0; currword < tranwords; currword++)
+@@ -1140,6 +1179,19 @@
+                         bus->sdcb_IOWriteLong(SDHCI_BUFFER, dataPtr[currword], bus);
+                     }
+                 }
++#if defined(SDCARD_PIO_ACCOUNTING)
++                sdcard_pio_us += sdcard_CurrentTime() - pioStart;
++                sdcard_pio_bytes += tranlen;
++                sdcard_pio_blocks++;
++                if (sdcard_pio_bytes >= sdcard_pio_next)
++                {
++                    bug("[SDBus%02u] PIO: %lu KiB in %lu ms, %lu blocks\n",
++                        bus->sdcb_BusNum, (unsigned long)(sdcard_pio_bytes >> 10),
++                        (unsigned long)(sdcard_pio_us / 1000),
++                        (unsigned long)sdcard_pio_blocks);
++                    sdcard_pio_next += SDCARD_PIO_REPORT_BYTES;
++                }
++#endif
+                 sdData += tranlen;
+                 sdDataLen -= tranlen;
+                 waiting = FALSE;
