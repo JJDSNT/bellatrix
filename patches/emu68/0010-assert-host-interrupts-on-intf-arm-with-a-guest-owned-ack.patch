@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 17 Aug 2026 20:00:00 -0300
+Subject: [PATCH 10/10] Assert host interrupts on INTF.ARM, with a guest-owned
+ acknowledge
+
+Moves platform interrupts off INTF.IPL and onto the channel that was always
+meant to carry them. 0002 put them on INTF.IPL because upstream's INTF.ARM
+lifecycle is coupled to Paula at both ends -- armed only when the guest has
+INTEN+EXTER in the INTENA shadow, cleared only by a guest write to INTREQ --
+and neither end exists on a machine with no chipset. That reasoning was about
+the lifecycle, never about the channel.
+
+The channel itself needs nothing. ExecutionLoop.c maps INTF.ARM to level 6
+unconditionally, ahead of any chipset consideration:
+
+    if (ctx->INTF.ARM)      level = 6;
+    else if (ctx->INTF.PPC) level = 2;
+
+What was missing is an acknowledge that does not go through INTREQ, and Emu68
+already ships one: MOVEC on the JITCTRL2 control register (0x1e0) exposes
+INTF.ARM as bit 29 -- readable as pending state, write-1-to-clear
+(M68k_LINE4.c:2104 for the write, :2365 for the read). Register to register,
+no MMIO, no fault, nothing to emulate. That is docs/New_emu68.md section 18's
+M68kClearHostInterrupt(), present in stock Emu68 and never used because
+nothing wrote the byte.
+
+So this patch is only the assert half: store into INTF.ARM instead of
+INTF.IPL, still with no INTENA test and no shadow. The deassert lives in the
+guest, at aros/arch/m68k-emu68/platform/platform.c, and the two have to land
+together -- INTF.ARM is a latch, so an unacknowledged one re-enters level 6
+the moment the guest's RTE drops the SR mask.
+
+The value stored is 1, not 6. The byte is only ever tested for truthiness by
+the arbitration (the level is a constant 6 by contract), but JITCTRL2 exposes
+bit 0 of it, so storing 6 makes the register read back "nothing pending" --
+6 & 1 == 0. That is AI_context/issues/ISSUE-0001, an upstream defect this
+change has to fix in order to work at all.
+
+What this leaves behind: INTF.IPL goes back to meaning what it means
+everywhere else -- a level decided by something that resolves an Amiga IPL,
+which here will be Rigel. Two domains, neither depending on the other, as
+docs/New_emu68.md sections 3 and 4 lay out.
+
+patches/emu68/0001 stays. It is what makes INTF.IPL mean anything on a
+standalone build, and INTF.IPL is now exclusively the Amiga domain's -- which
+is the separation docs/New_emu68.md sections 3 and 4 ask for. Nothing here is
+a reason to remove it.
+
+What is *not* settled is whether 0001 has the right shape for that domain,
+and the two design documents disagree:
+
+  * docs/New_emu68.md section 15 draws a push -- Rigel resolves the level and
+    writes INTF.IPL, which is the PiStorm32 branch 0001 enables.
+  * docs/Rigel_integration.md sections 25 and 26 specify a pull --
+    rigel_get_ipl() exposes the current level, "queried after Rigel
+    advancement", which is the shape of the PISTORM_CLASSIC branch 0001
+    routes standalone builds away from.
+
+The pull shape has the better argument. Rigel holds a level derived from
+INTENA & INTREQ rather than delivering an event, and Rigel_integration.md
+section 28 is normative that accepting the exception MUST NOT clear the
+source -- so 0001's auto-clear of INTF.IPL, correct here where nothing would
+ever lower it, is wrong there. Section 29 then requires the effective level
+to be re-evaluated whenever either domain changes, which a latched field does
+not give you and a query does.
+
+Note it cannot be a pure pull either way: the arbitration only runs when
+INT64 != 0, so something must still set a byte in INTF to open that gate.
+Flag to open the gate, query for the authoritative level -- which is exactly
+what PISTORM_CLASSIC does, and is a decomposition rather than a quirk.
+
+None of that has to be decided to land this patch. It is recorded because
+this is the patch that hands INTF.IPL over to the Amiga domain, and the next
+person to touch it should not have to rediscover that the two documents point
+in different directions.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/aarch64/vectors.c | 20 +++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -156,13 +156,15 @@
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x080              \n" // Disable IRQ interrupt so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
+-// Hand the CPU a level through INTF.IPL, the same field an external
+-// interrupt controller writes on PiStorm. No INTENA test and no shadow:
++// Assert the host interrupt on INTF.ARM, the channel the arbitration
++// already maps to level 6 unconditionally. No INTENA test and no shadow:
+ // with no Paula in the machine there is nothing for a guest to arm, and
+-// no register access has to fault to deliver an interrupt.
++// no register access has to fault to deliver an interrupt. The guest
++// deasserts through MOVEC on JITCTRL2 bit 29, which is why the value
++// stored is 1 and not the level -- bit 0 is what that register exposes.
+ "       mov x1, "CTX_POINTER_ASM"       \n" // Load CPU context
+-"       mov w0, #6                      \n" // Set level 6 IRQ
+-"       strb w0, [x1, #%[ipl]]          \n"
++"       mov w0, #1                      \n" // Assert host interrupt
++"       strb w0, [x1, #%[pint]]         \n"
+ "       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "2:     ldp x0, x1, [sp], #16           \n"
+@@ -177,10 +179,10 @@
+ "       mrs x0, SPSR_EL1                \n" // Get SPSR
+ "       orr x0, x0, #0x0c0              \n" // Disable IRQ and FIQ interrupts so that we are not disturbed on return
+ "       msr SPSR_EL1, x0                \n"
+-// Same as the IRQ path above: a level into INTF.IPL, no shadow.
++// Same as the IRQ path above: assert INTF.ARM, no shadow.
+ "       mov x1, "CTX_POINTER_ASM"       \n" // Load CPU context
+-"       mov w0, #6                      \n" // Set level 6 IRQ
+-"       strb w0, [x1, #%[ipl]]          \n"
++"       mov w0, #1                      \n" // Assert host interrupt
++"       strb w0, [x1, #%[pint]]         \n"
+ "       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "                                       \n"

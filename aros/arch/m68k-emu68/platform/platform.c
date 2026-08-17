@@ -25,22 +25,29 @@
  *
  * A real physical IRQ that none of Emu68's own virtual devices claims is
  * handed to the guest as m68k autovector level 6. Emu68's core-0 IRQ fast
- * path (Emu68 src/aarch64/vectors.c, "curr_el_spx_irq") writes that level
- * straight into INTF.IPL -- the same field an external interrupt
- * controller writes on PiStorm -- and the arbitration in ExecutionLoop.c
- * honours it against the SR mask exactly like a real 68k.
+ * path (Emu68 src/aarch64/vectors.c, "curr_el_spx_irq") asserts it on
+ * INTF.ARM, and the arbitration in ExecutionLoop.c maps that channel to
+ * level 6 unconditionally and honours it against the SR mask exactly like
+ * a real 68k.
  *
- * There is nothing for this port to arm and nothing to acknowledge. That
- * is the whole point of the mechanism: an IPL is a level, not a register,
- * so the decision has already been made by the time the CPU sees it. Emu68
- * drops the level as it takes the exception, and the SR mask keeps it from
- * re-entering until our RTE.
+ * There is nothing for this port to *arm*: the decision has already been
+ * made by the time the CPU sees it, and no register access has to fault to
+ * deliver an interrupt. There is one thing to acknowledge, and the guest
+ * owns it -- see platform_host_irq_ack() below.
  *
- * This replaced an emulated Paula: INTENA/INTREQ served from a shadow, one
- * page fault per arm and per acknowledge. That path is not gone -- it is
- * the right answer once there is a chipset that really owns those
- * registers, and it is kept in patches/emu68/0001 and documented in
- * docs/irq.md. It is simply not what a machine with no chipset needs.
+ * Two channels reach the same arbitration and they are not
+ * interchangeable. INTF.ARM is a latch and belongs to the ARM platform;
+ * INTF.IPL is a level, mirrors a physical line on PiStorm, and belongs to
+ * whatever resolves an Amiga IPL. This port used INTF.IPL while it had
+ * neither a chipset nor an acknowledge, which worked and was always
+ * transitional -- docs/New_emu68.md sections 3, 4 and 18 keep INTF.IPL for
+ * Rigel and put platform interrupts back on INTF.ARM, which is what this
+ * code now does.
+ *
+ * Before that this port emulated Paula: INTENA/INTREQ served from a
+ * shadow, one page fault per arm and per acknowledge. That is upstream's
+ * INTF.ARM lifecycle, and it is the part that does not fit a machine with
+ * no chipset -- not the channel itself. docs/irq.md compares all three.
  */
 
 extern const struct PlatformDriver bcm283x_system_timer_driver;
@@ -271,6 +278,42 @@ static BOOL discover(void)
  * arch/m68k-amiga/kernel/amiga_irq.c's DECLARE_TrapCode levels) that hands
  * off to whichever interrupt controller driver was discovered.
  */
+/*
+ * Deassert the host interrupt.
+ *
+ * INTF.ARM is a latch, not a level: nothing in Emu68 lowers it, so leaving
+ * it set re-enters level 6 the moment our RTE drops the SR mask. The guest
+ * owns the deassert, and Emu68 already exposes it -- MOVEC on the JITCTRL2
+ * control register (0x1e0), where bit 29 is INTF.ARM: it reads back as
+ * pending state and writing it back as 1 clears the byte
+ * (Emu68 src/M68k_LINE4.c:2104 for the write, :2365 for the read).
+ *
+ * Register to register. No MMIO, no fault, no chipset register to emulate --
+ * which is the whole reason this channel is usable on a machine with no
+ * Paula, where upstream's INTENA/INTREQ lifecycle is not.
+ *
+ * Read-modify-write rather than a blind store, because the low 29 bits of
+ * the same register are JIT_CONTROL2 and a blind write would clear them.
+ * Bits 29..31 are command bits and are masked out of the stored value, so
+ * what comes back has them clear and cannot re-trigger anything.
+ */
+static inline void platform_host_irq_ack(void)
+{
+    ULONG ctrl;
+
+    __asm__ volatile (
+        "   .word 0x4e7a, 0x01e0    \n"     /* movec JITCTRL2,%%d0        */
+        "   move.l %%d0,%0          \n"
+        : "=r" (ctrl) : : "d0");
+
+    ctrl |= 1UL << 29;
+
+    __asm__ volatile (
+        "   move.l %0,%%d0          \n"
+        "   .word 0x4e7b, 0x01e0    \n"     /* movec %%d0,JITCTRL2        */
+        : : "r" (ctrl) : "d0", "memory");
+}
+
 BOOL Platform_Autovector(void)
 {
     /* Bounded: did level 6 ever reach us at all, independently of whether
@@ -282,13 +325,18 @@ BOOL Platform_Autovector(void)
         platform_trace_val("[exter] LEVEL6 entry ", entries);
     }
 
+    /* Deassert before dispatching, not after. ARM interrupts are masked for
+     * the whole of this handler -- Emu68 sets the I bit on the eret and only
+     * reopens the gate when the guest's SR mask drops below 6 -- so a source
+     * that asserts while we are in here cannot re-latch INTF.ARM, and
+     * clearing afterwards would discard it. Clearing first means the worst
+     * case is one spurious level 6 with nothing to do, instead of a lost one.
+     */
+    platform_host_irq_ack();
+
     if (g_intc_ops)
         g_intc_ops->Dispatch(KernelBase);
 
-    /* No bridge acknowledge: Emu68 dropped the level as it took the
-     * exception, and our RTE lowers the SR mask. Dispatch() has already
-     * drained every source the controller can see, which is the only
-     * acknowledging this port owes anyone. */
     return TRUE;
 }
 
