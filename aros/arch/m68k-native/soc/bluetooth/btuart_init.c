@@ -18,50 +18,28 @@
 #include <proto/btuart.h>
 #include <proto/exec.h>
 #include <proto/kernel.h>
+#include <exec/interrupts.h>
 #include <proto/mbox.h>
 
+#include <hardware/bcm2708.h>
 #include <hardware/videocore.h>
 
 #include "btuart_private.h"
 
 #define GPIO_OFFSET 0x00200000UL
-#define PL011_OFFSET 0x00201000UL
+#define GPIO_OFFSET 0x00200000UL
 
 #define GPIO_GPFSEL3 0x0c
 #define GPIO_GPFSEL4 0x10
 
-#define PL011_DR   0x00
-#define PL011_FR   0x18
-#define PL011_IBRD 0x24
-#define PL011_FBRD 0x28
-#define PL011_LCRH 0x2c
-#define PL011_CR   0x30
-#define PL011_IMSC 0x38
-#define PL011_ICR  0x44
 
-#define PL011_FR_BUSY (1UL << 3)
-#define PL011_FR_RXFE (1UL << 4)
-/* Per-byte receive status, in the upper bits of the data register. OE means
- * the FIFO overflowed and bytes were lost before this one -- the H4 framer
- * downstream then reads payload as a packet type and invents packets, so this
- * is worth reporting rather than masking away. */
-#define PL011_DR_OE   (1UL << 11)
-#define PL011_DR_ERR  (0xfUL << 8)
-#define PL011_FR_TXFF (1UL << 5)
 
-#define PL011_LCRH_FEN   (1UL << 4)
-#define PL011_LCRH_WLEN8 (3UL << 5)
 
-#define PL011_CR_UARTEN (1UL << 0)
-#define PL011_CR_TXE    (1UL << 8)
-#define PL011_CR_RXE    (1UL << 9)
-#define PL011_CR_RTSEN  (1UL << 14)
-#define PL011_CR_CTSEN  (1UL << 15)
+
 
 #define GPIO_ALT3 7UL
 #define GPIO_ALT0 4UL
 #define UART_CLOCK_FALLBACK_HZ 48000000UL
-#define PL011_WAIT_LIMIT 1000000UL
 
 #define CLOCK_GP2CTL_OFFSET 0x00101080UL
 #define CLOCK_GP2DIV_OFFSET 0x00101084UL
@@ -276,6 +254,52 @@ static int btuart_init(struct BTUARTBase *BTUARTBase)
     return TRUE;
 }
 
+/*
+ * Drain the FIFO into the ring. Runs in interrupt context.
+ *
+ * Everything here is a store to MMIO or to the ring: no allocation, no lock,
+ * no call back into AROS. The reader synchronises on rx_head alone, which this
+ * is the only writer of, so no interlock is needed for a single producer and a
+ * single consumer.
+ */
+AROS_INTH1(btuart_rx_handler, struct BTUARTBase *, BTUARTBase)
+{
+    AROS_INTFUNC_INIT
+
+    ULONG head = BTUARTBase->rx_head;
+
+    while (!(mmio_read(BTUARTBase->uart_base, PL011_FR) & PL011_FR_RXFE))
+    {
+        ULONG dr = mmio_read(BTUARTBase->uart_base, PL011_DR);
+        ULONG next = (head + 1) & (BTUART_RX_RING - 1);
+
+        if ((dr & PL011_DR_ERR) != 0 && BTUARTBase->rx_errors < 8)
+        {
+            BTUARTBase->rx_errors++;
+            bug("[BTUART] rx status 0x%lx%s\n", (dr >> 8) & 0xf,
+                (dr & PL011_DR_OE) ? " OVERRUN" : "");
+        }
+        if (next == BTUARTBase->rx_tail)
+        {
+            /* Reader is too far behind. Dropping here is still better than the
+             * FIFO overrunning, because it is counted. */
+            BTUARTBase->rx_dropped++;
+            break;
+        }
+        BTUARTBase->rx_ring[head] = (UBYTE)(dr & 0xff);
+        head = next;
+    }
+    BTUARTBase->rx_head = head;
+
+    /* Acknowledge receive and receive-timeout; overrun is cleared with them so
+     * a single lost byte does not latch the condition forever. */
+    mmio_write(BTUARTBase->uart_base, PL011_ICR,
+               PL011_INT_RX | PL011_INT_RT | PL011_INT_OE);
+    return FALSE;
+
+    AROS_INTFUNC_EXIT
+}
+
 AROS_LH1(long, BTUARTClaim,
     AROS_LHA(void *, owner, A0),
     struct BTUARTBase *, BTUARTBase, 3, Btuart)
@@ -379,6 +403,37 @@ AROS_LH3(long, BTUARTConfigure,
     if (flags & BTUART_CONFIG_RTS_CTS)
         control |= PL011_CR_RTSEN | PL011_CR_CTSEN;
     mmio_write(BTUARTBase->uart_base, PL011_CR, control);
+
+    /*
+     * Arm receive interrupts, once, after the port is configured.
+     *
+     * Order matters: the watermark and the mask are cleared by the LCRH write
+     * above, and enabling the interrupt before UARTEN would deliver on a port
+     * that is not receiving. Registration is idempotent because a second
+     * Configure on the same owner is legitimate -- a baud change, for one.
+     */
+    mmio_write(BTUARTBase->uart_base, PL011_IFLS, PL011_IFLS_RX18);
+    if (!BTUARTBase->rx_irq_armed)
+    {
+        BTUARTBase->rx_irq.is_Node.ln_Name = "btuart";
+        BTUARTBase->rx_irq.is_Node.ln_Pri = 0;
+        BTUARTBase->rx_irq.is_Code = (APTR)btuart_rx_handler;
+        BTUARTBase->rx_irq.is_Data = BTUARTBase;
+        if (KrnAddIRQHandler(IRQ_VC_UART, btuart_rx_handler, BTUARTBase, NULL))
+        {
+            BTUARTBase->rx_irq_armed = TRUE;
+            BTUARTBase->capabilities |= BTUART_CAP_RX_INTERRUPT;
+            bug("[BTUART] rx interrupt armed on irq %lu\n",
+                (ULONG)IRQ_VC_UART);
+        }
+        else
+            bug("[BTUART] KrnAddIRQHandler(%lu) failed -- receive stays polled\n",
+                (ULONG)IRQ_VC_UART);
+    }
+    mmio_write(BTUARTBase->uart_base, PL011_ICR, 0x7ff);
+    if (BTUARTBase->rx_irq_armed)
+        mmio_write(BTUARTBase->uart_base, PL011_IMSC,
+                   PL011_INT_RX | PL011_INT_RT);
     BTUARTBase->baud = baud;
     BTUARTBase->config_flags = flags;
     bug("[BTUART] configure: baud=%lu clock=%lu divisor=%lu/%lu flags=0x%lx\n",
@@ -446,19 +501,25 @@ AROS_LH3(long, BTUARTRead,
         return BTUART_ERR_ARGUMENT;
     if (BTUARTBase->owner != owner)
         return BTUART_ERR_NOT_OWNER;
-    while (read < capacity &&
-           !(mmio_read(BTUARTBase->uart_base, PL011_FR) & PL011_FR_RXFE))
+    /*
+     * From the ring, not from the FIFO.
+     *
+     * Reading the FIFO here made the caller's scheduling the deadline for the
+     * hardware, and no schedule was fast enough: OVERRUN was reported on real
+     * hardware even at a one-millisecond poll. The interrupt owns the FIFO now
+     * and this owns rx_tail, so a slow reader costs latency rather than data.
+     */
+    while (read < capacity && BTUARTBase->rx_tail != BTUARTBase->rx_head)
     {
-        ULONG dr = mmio_read(BTUARTBase->uart_base, PL011_DR);
-
-        if ((dr & PL011_DR_ERR) != 0 && BTUARTBase->rx_errors < 8)
-        {
-            BTUARTBase->rx_errors++;
-            bug("[BTUART] rx status 0x%lx%s\n", (dr >> 8) & 0xf,
-                (dr & PL011_DR_OE) ? " OVERRUN" : "");
-        }
-        bytes[read] = (UBYTE)(dr & 0xff);
+        bytes[read] = BTUARTBase->rx_ring[BTUARTBase->rx_tail];
+        BTUARTBase->rx_tail = (BTUARTBase->rx_tail + 1) & (BTUART_RX_RING - 1);
         read++;
+    }
+    if (BTUARTBase->rx_dropped != 0)
+    {
+        bug("[BTUART] rx ring overflow, %lu byte(s) dropped\n",
+            BTUARTBase->rx_dropped);
+        BTUARTBase->rx_dropped = 0;
     }
     return (LONG)read;
 

@@ -19,6 +19,7 @@
 #include <exec/io.h>
 #include <exec/errors.h>
 
+#include <hardware/bcm2708.h>
 #include <hardware/videocore.h>
 #include <devices/timer.h>
 
@@ -41,7 +42,9 @@ extern IPTR __arm_periiobase;
  * platform/bcm283x/interrupt_controller.c: bank 1 is GPUIRQ_PEND1/ENBL1, so
  * the Arasan SDIO controller's GPU IRQ 30 in bank 1 is 32 + 30.
  */
-#define IRQ_VC_ARASANSDIO               (32 + 30)
+/* From <hardware/bcm2708.h>, which is where this port keeps the BCM283x
+ * interrupt map. It used to be defined here and again in the Bluetooth
+ * driver -- a shared numbering held privately in two places. */
 
 /* Free-running microsecond counter, used for the inter-write delay the
  * controller needs and for sdcard_Udelay(). Same register platform/bcm283x/
