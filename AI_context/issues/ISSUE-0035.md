@@ -87,13 +87,23 @@ symptom, which is why the symptom alone decides nothing.
    because the IconList rejects the drop on itself. This one is distinguishable
    by eye: something visibly happens.
 
+# QEMU cannot answer this, and that is worth knowing before trying
+
+There is **no pointing device under QEMU**. `run.sh` attaches `-device
+usb-tablet` only for graphical runs, and attaching it by hand does not help:
+the controller sees it -- `[USB2OTG] Init: Device connected, resetting port` --
+and nothing enumerates it. The serial log has no HID line, `mouse_move` through
+the QEMU monitor changes not one pixel, and the pointer sits where it started.
+
+So the oracle for this issue is hardware, and every candidate below has to be
+answered there. `boot-timing.py` and `screendump` still work for everything
+*except* the pointer.
+
 # What to do
 
-1. Boot and answer the four questions in "What this claims". Write down which,
+1. On the Pi, answer the four questions in "What this claims". Write down which,
    not a summary.
-2. Repeat under QEMU. If it reproduces there, everything after this is cheap;
-   if it does not, that is itself a strong result and points at input.
-3. Only then pick a candidate.
+2. Only then pick a candidate.
 
 # Notes
 
@@ -110,6 +120,18 @@ being read as one.
 
 # Execution log
 
+- 2026-08-17 -- `arch/m68k-emu68/` put back to what `v0.1.0-rc1` shipped, which
+  is the last state in which the drag is known to have worked; the m68k-native
+  split that followed it is on the `m68k-native-split` branch and the BASE
+  package work on `kickstart-base-package`. This is not a fix and is not
+  evidence: it was done because that work is not the path being taken, and the
+  side effect is that the suspected window is now empty. If the drag works on
+  the next hardware boot, the cause is in one of those two branches and merging
+  them back one at a time says which. If it does not, the regression predates
+  the release and the four candidates all still stand.
+- 2026-08-17 -- Tried to reproduce under QEMU and could not: no pointing device
+  enumerates there. Recorded above, because it decides where this can be worked
+  on at all.
 - 2026-08-17 -- Opened on the user's report, alongside the decision to stop
   adding features until the system is fast and stable. No diagnosis yet: the
   drag path was read to name the candidates, nothing was measured.
