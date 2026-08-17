@@ -19,6 +19,7 @@ struct BTUARTBase
     ULONG uart_clock_hz;
     ULONG baud;
     ULONG config_flags;
+    ULONG rx_errors;   /* receive status reports emitted, see BTUARTRead */
 };
 
 #endif /* BTUART_PRIVATE_H */

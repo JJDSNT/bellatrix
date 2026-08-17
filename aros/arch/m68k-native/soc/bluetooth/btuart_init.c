@@ -41,6 +41,12 @@
 
 #define PL011_FR_BUSY (1UL << 3)
 #define PL011_FR_RXFE (1UL << 4)
+/* Per-byte receive status, in the upper bits of the data register. OE means
+ * the FIFO overflowed and bytes were lost before this one -- the H4 framer
+ * downstream then reads payload as a packet type and invents packets, so this
+ * is worth reporting rather than masking away. */
+#define PL011_DR_OE   (1UL << 11)
+#define PL011_DR_ERR  (0xfUL << 8)
 #define PL011_FR_TXFF (1UL << 5)
 
 #define PL011_LCRH_FEN   (1UL << 4)
@@ -443,7 +449,15 @@ AROS_LH3(long, BTUARTRead,
     while (read < capacity &&
            !(mmio_read(BTUARTBase->uart_base, PL011_FR) & PL011_FR_RXFE))
     {
-        bytes[read] = (UBYTE)(mmio_read(BTUARTBase->uart_base, PL011_DR) & 0xff);
+        ULONG dr = mmio_read(BTUARTBase->uart_base, PL011_DR);
+
+        if ((dr & PL011_DR_ERR) != 0 && BTUARTBase->rx_errors < 8)
+        {
+            BTUARTBase->rx_errors++;
+            bug("[BTUART] rx status 0x%lx%s\n", (dr >> 8) & 0xf,
+                (dr & PL011_DR_OE) ? " OVERRUN" : "");
+        }
+        bytes[read] = (UBYTE)(dr & 0xff);
         read++;
     }
     return (LONG)read;
