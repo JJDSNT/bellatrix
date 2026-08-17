@@ -1,0 +1,45 @@
+include $(SRCDIR)/config/aros.cfg
+
+#
+# dma.resource for the BCM2708 DMA engine, built from arch/arm-native's source.
+#
+# Same arrangement as soc/usb/usb2otg: the source is compiled in place rather
+# than copied, and the .conf is taken from upstream too. rule_compile_multi
+# resolves an absolute basename against its own directory and adds a `vpath`
+# for it, so naming the file with $(SRCDIR) in front is all it takes. One copy
+# of the resource in the tree, and it stays upstream's.
+#
+# What this port supplies underneath it is the same as for USB: <asm/cpu.h>,
+# which arch/m68k-all has no counterpart for, and the register macros in
+# include/hardware/bcm2708.h, which expand against dma_private.h's runtime
+# ARM_PERIIOBASE rather than a compile-time constant this port does not have.
+#
+# The resource is linked into the kernel ELF (modtype=resource, no moduledir),
+# so it is present in a lean build and does not depend on the distribution
+# tree. That matters: a consumer that cannot find it fails at OpenResource()
+# time, deep in a driver, rather than at link time.
+#
+# See AI_context/issues/ISSUE-0013.md.
+#
+DMADIR := $(SRCDIR)/arch/arm-native/soc/broadcom/2708/dma
+
+#
+# -I$(DMADIR) resolves the resource's own `#include "dma_private.h"`, since the
+# compile happens with CURDIR set here rather than at the source. The second
+# brings in <asm/cpu.h> and this target's <hardware/bcm2708.h>. The third is
+# where <hardware/bcm2708_dma.h> lives -- the shared control-block layout and
+# the DMACHF_* flags, which have nothing ARM-specific in them and are named by
+# every consumer of this resource.
+#
+USER_INCLUDES := -I$(DMADIR) \
+                 -I$(SRCDIR)/arch/m68k-emu68/include \
+                 -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/include
+
+FILES := $(addprefix $(DMADIR)/, dma_init)
+
+%build_module mmake=kernel-dma-emu68 \
+    modname=dma modtype=resource \
+    conffile=$(DMADIR)/dma.conf \
+    files="$(FILES)"
+
+%common

@@ -33,11 +33,61 @@
 #define IRQ_VC_USB    (GPUIRQ0_BASE + 9)
 #define IRQ_AUX       (GPUIRQ0_BASE + 29)
 
+#define IRQ_DMA0      (GPUIRQ0_BASE + 16)
+
 #define GPUIRQ1_BASE       (1 << 5)
 #define IRQ_VC_ARASANSDIO  (GPUIRQ1_BASE + 30)
 #define IRQ_VC_UART        (GPUIRQ1_BASE + 25)
 
 #define ARMIRQ_BASE   (2 << 5)
+
+/*
+ * Register macros, for the one case where the note above does not apply.
+ *
+ * The peripheral base is discovered at runtime here, so a header that expands
+ * addresses against a compile-time ARM_PERIIOBASE is normally useless to this
+ * port. arch/arm-native's dma.resource shows the way around it: dma_private.h
+ * defines ARM_PERIIOBASE as a *runtime expression* -- `DMABase->dma_periiobase`
+ * -- immediately before including this header, so the macros expand against
+ * whatever the including file decided the base is.
+ *
+ * These are therefore behind the definition rather than in front of it. A
+ * translation unit that has not said where the peripherals are does not get
+ * addresses, and the failure is a compile error naming ARM_PERIIOBASE rather
+ * than a driver quietly poking address 0x7000.
+ *
+ * Copied verbatim from the same arm-native header as the interrupt map above,
+ * for the same reason: one origin for the numbers.
+ */
+#ifdef ARM_PERIIOBASE
+
+#define SYSTIMER_BASE       (ARM_PERIIOBASE + 0x003000)
+#define SYSTIMER_CS         (SYSTIMER_BASE + 0x00)
+#define SYSTIMER_CLO        (SYSTIMER_BASE + 0x04)
+#define SYSTIMER_CHI        (SYSTIMER_BASE + 0x08)
+
+#define DMA0_BASE           (ARM_PERIIOBASE + 0x007000)
+#define DMA_CH_BASE(ch)     (DMA0_BASE + (ch) * 0x100)
+#define DMA_CS(ch)          (DMA_CH_BASE(ch) + 0x00)
+#define DMA_CONBLK_AD(ch)   (DMA_CH_BASE(ch) + 0x04)
+#define DMA_DEBUG(ch)       (DMA_CH_BASE(ch) + 0x20)
+#define DMA_INT_STATUS      (DMA0_BASE + 0xFE0)
+#define DMA_ENABLE_REG      (DMA0_BASE + 0xFF0)
+
+/* DMA CS bits */
+#define DMA_CS_ACTIVE           (1 << 0)
+#define DMA_CS_END              (1 << 1)
+#define DMA_CS_INT              (1 << 2)
+#define DMA_CS_WAIT_FOR_WRITES  (1 << 28)
+#define DMA_CS_PANIC_PRI(x)     (((x) & 0xF) << 20)
+#define DMA_CS_PRI(x)           (((x) & 0xF) << 16)
+#define DMA_CS_ABORT            (1 << 30)
+#define DMA_CS_RESET            (1 << 31)
+
+/* DMA TI (Transfer Information) bits */
+#define DMA_TI_INTEN            (1 << 0)
+
+#endif /* ARM_PERIIOBASE */
 
 /*
  * The PL011 UART, as offsets from the peripheral base.

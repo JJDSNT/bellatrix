@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 17 Aug 2026 22:00:00 -0300
+Subject: [PATCH 25/25] dma: do not name ARM instructions in a portable
+ resource
+
+Same shape as 0013 did for usb2otg, and for the same reason. dma.resource is
+otherwise portable -- its MMIO goes through AROS_LE2LONG/AROS_LONG2LE, its
+peripheral base comes from KrnGetSystemAttr(KATTR_PeripheralBase), and its
+completion IRQ goes through KrnAddIRQHandler() -- but two places spell a
+barrier as inline AArch64:
+
+    __asm__ __volatile__("dmb sy" ::: "memory");
+
+which does not assemble for m68k, so the resource cannot be built for any
+other CPU as written.
+
+<asm/cpu.h> is where every ARM target already gets dmb(), and this target
+supplies its own (added for the USB driver, 0013). Using it changes nothing on
+ARM -- arch/arm-all's dmb() is that instruction -- and lets the resource build
+here, where the honest answer is a compiler barrier: the guest is an m68k with
+no barrier instruction to issue, what reaches the bus is AArch64 the JIT
+emitted, and ordering against a device is Emu68's to guarantee. See the
+comment in arch/m68k-emu68/include/asm/cpu.h.
+
+Both sites are ordering a store to dma_Wait[].waiter against the IRQ handler
+reading it, not ordering MMIO, so a compiler barrier is what the code actually
+needs on this target.
+
+Upstream would take this: naming the instruction was the accident, and every
+ARM target keeps exactly the semantics it has today.
+
+See AI_context/issues/ISSUE-0013.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ arch/arm-native/soc/broadcom/2708/dma/dma_init.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/dma/dma_init.c b/arch/arm-native/soc/broadcom/2708/dma/dma_init.c
+--- a/arch/arm-native/soc/broadcom/2708/dma/dma_init.c
++++ b/arch/arm-native/soc/broadcom/2708/dma/dma_init.c
+@@ -12,6 +12,8 @@
+ #include <proto/exec.h>
+ #include <proto/dma.h>
+ 
++#include <asm/cpu.h>
++
+ #include <hardware/bcm2708_dma.h>
+ 
+ #include "dma_private.h"
+@@ -255,7 +257,7 @@
+         (dsig = AllocSignal(-1)) >= 0)
+     {
+         DMABase->dma_Wait[channel].sig = dsig;
+-        __asm__ __volatile__("dmb sy" ::: "memory");
++        dmb();
+         DMABase->dma_Wait[channel].waiter = FindTask(NULL);
+ 
+         /* One reusable timer signal for the whole wait — the safety
+@@ -321,7 +323,7 @@
+         /* Stop the IRQ handler from signalling a bit we're about to free */
+         Disable();
+         DMABase->dma_Wait[channel].waiter = NULL;
+-        __asm__ __volatile__("dmb sy" ::: "memory");
++        dmb();
+         if (tsig >= 0)
+             FreeSignal(tsig);
+         FreeSignal(dsig);
