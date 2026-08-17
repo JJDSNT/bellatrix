@@ -38,28 +38,64 @@
 #define GPUIRQ1_BASE       (1 << 5)
 #define IRQ_VC_ARASANSDIO  (GPUIRQ1_BASE + 30)
 #define IRQ_VC_UART        (GPUIRQ1_BASE + 25)
+#define IRQ_VC_SDIO        (GPUIRQ1_BASE + 24)
 
 #define ARMIRQ_BASE   (2 << 5)
 
 /*
- * Register macros, for the one case where the note above does not apply.
+ * Register macros, for the case where the note above does not apply.
  *
  * The peripheral base is discovered at runtime here, so a header that expands
  * addresses against a compile-time ARM_PERIIOBASE is normally useless to this
- * port. arch/arm-native's dma.resource shows the way around it: dma_private.h
- * defines ARM_PERIIOBASE as a *runtime expression* -- `DMABase->dma_periiobase`
- * -- immediately before including this header, so the macros expand against
- * whatever the including file decided the base is.
+ * port. arch/arm-native's own drivers show the way around it: dma_private.h
+ * and sdcard_sdhost_intern.h each define ARM_PERIIOBASE as a *runtime
+ * expression* immediately before including this header, so the macros expand
+ * against whatever the including file decided the base is.
  *
- * These are therefore behind the definition rather than in front of it. A
- * translation unit that has not said where the peripherals are does not get
- * addresses, and the failure is a compile error naming ARM_PERIIOBASE rather
- * than a driver quietly poking address 0x7000.
+ * They are deliberately *not* guarded on ARM_PERIIOBASE being defined here.
+ * A macro is only expanded where it is used, so an unused definition costs
+ * nothing -- while a guard inside an include guard is a trap: the first
+ * translation unit to reach this file before defining ARM_PERIIOBASE takes
+ * the guard, and every later include is a no-op, so the block silently never
+ * appears. That cost an hour. arch/arm-native defines them unconditionally
+ * for the same reason.
  *
  * Copied verbatim from the same arm-native header as the interrupt map above,
  * for the same reason: one origin for the numbers.
  */
-#ifdef ARM_PERIIOBASE
+
+/*
+ * The SoC bases. Nothing here runs on a BCM2711, but drivers shared with
+ * arch/arm-native test for it to decide which controller owns the card slot,
+ * so the constant has to exist. PERIBUSBASE is the VideoCore's view of the
+ * peripherals, which is what a DMA descriptor has to carry.
+ */
+#define BCM2711_PERIIOBASE   0xFE000000
+#define BCM2835_PERIBUSBASE  0x7E000000
+
+#define GPIO_BASE           (ARM_PERIIOBASE + 0x200000)
+#define GPFSEL0             (GPIO_BASE + 0x00)
+#define GPFSEL1             (GPIO_BASE + 0x04)
+#define GPFSEL2             (GPIO_BASE + 0x08)
+#define GPFSEL3             (GPIO_BASE + 0x0C)
+#define GPFSEL4             (GPIO_BASE + 0x10)
+#define GPFSEL5             (GPIO_BASE + 0x14)
+#define GPSET0              (GPIO_BASE + 0x1C)
+#define GPSET1              (GPIO_BASE + 0x20)
+#define GPCLR0              (GPIO_BASE + 0x28)
+#define GPCLR1              (GPIO_BASE + 0x2C)
+#define GPPUD               (GPIO_BASE + 0x94)
+#define GPPUDCLK0           (GPIO_BASE + 0x98)
+#define GPPUDCLK1           (GPIO_BASE + 0x9C)
+
+/*
+ * Guarded because soc/sdcard's own private header defines it too, and a
+ * translation unit that reaches this file through a driver shared with
+ * arch/arm-native can see both.
+ */
+#ifndef BCM2835_PERIPHYSBASE
+#define BCM2835_PERIPHYSBASE 0x20000000
+#endif
 
 #define SYSTIMER_BASE       (ARM_PERIIOBASE + 0x003000)
 #define SYSTIMER_CS         (SYSTIMER_BASE + 0x00)
@@ -86,8 +122,17 @@
 
 /* DMA TI (Transfer Information) bits */
 #define DMA_TI_INTEN            (1 << 0)
-
-#endif /* ARM_PERIIOBASE */
+#define DMA_TI_TDMODE           (1 << 1)
+#define DMA_TI_WAIT_RESP        (1 << 3)
+#define DMA_TI_DEST_INC         (1 << 4)
+#define DMA_TI_DEST_WIDTH       (1 << 5)
+#define DMA_TI_DEST_DREQ        (1 << 6)
+#define DMA_TI_SRC_INC          (1 << 8)
+#define DMA_TI_SRC_WIDTH        (1 << 9)
+#define DMA_TI_SRC_DREQ         (1 << 10)
+#define DMA_TI_BURST_LENGTH(x)  (((x) & 0xF) << 12)
+#define DMA_TI_PERMAP(x)        (((x) & 0x1F) << 16)
+#define DMA_TI_NO_WIDE_BURSTS   (1 << 26)
 
 /*
  * The PL011 UART, as offsets from the peripheral base.

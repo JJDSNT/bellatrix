@@ -18,8 +18,9 @@
 #include <hardware/arasan.h>
 #include <hardware/videocore.h>
 
-APTR            MBoxBase;
-IPTR            __arm_periiobase __attribute__((used)) = 0 ;
+/* Defined in sdcard_bcm2708time.c, the file both backends build. */
+extern APTR     MBoxBase;
+extern IPTR     __arm_periiobase;
 
 /* SDHCI-specific scan-time init: set interrupt mask, clock, power, bus width */
 static void FNAME_BCMSDC(SDBusInit)(struct sdcard_Bus *bus)
