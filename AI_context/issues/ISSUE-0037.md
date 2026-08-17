@@ -1,8 +1,8 @@
 ---
 id: ISSUE-0037
 title: "A CLI task dies on a corrupt block header once the preferences actually load"
-status: backlog
-priority: medium
+status: doing
+priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-17
@@ -114,7 +114,64 @@ intermittent memory defect is the shape of a race or of an
 allocation-size-dependent overrun, not of a deterministic off-by-one on a fixed
 path.
 
-# Parked until it recurs, deliberately (2026-08-17)
+# It recurred, on real hardware, with a USB device attached (2026-08-17)
+
+**Unparked.** The user booted a card built from the current pack on a real Pi 3
+and got the same signature:
+
+```
+[USB2OTG] Init: Device connected, resetting port
+...
+[Kernel:TLSF] free-list corruption at REMOVE_HEADER: mhe=022d07fc
+  requirements=0x00000000 tlsf=022a8a78 bucket=19/0 block=00000000 size=0
+  flags=0x0 head=00000000 prev=00000000 next=00000000 task=0228b880
+[Kernel:TLSF] Backtrace (0 frames):
+[AROS/Emu68] BootUI display takeover
+```
+
+Same defect -- `block=00000000`, `bucket=19/0`, so still `MERGE_PREV()` handed
+a NULL `block->header.prev`. Different task and different addresses, as
+expected on different hardware with a different memory map.
+
+## The lead, and it is the first one this issue has had
+
+`[USB2OTG] Init: Device connected, resetting port`.
+
+**Every previous observation of this corruption was on a machine with no USB
+device attached.** That was established independently while writing ISSUE-0042:
+across the seven instrumented boots of 2026-08-17 every serial log says
+`No device connected`, and `scripts/boot-timing.py` never attaches one. So a
+device enumerating -- descriptors, class binding, interrupt pipes, all of it
+allocating -- is a variable that has never been present before, and it is
+present here.
+
+That is a correlation, not a cause, and it is worth being precise about what
+else changed at the same time, because **three variables moved together**:
+
+| variable | previously | in this boot |
+|---|---|---|
+| host | QEMU | **real Pi 3** |
+| USB device | none, in every run | **connected and enumerating** |
+| card backend | Arasan (PIO) | **SDHOST (DMA)** |
+
+Any of the three could matter. The SDHOST one is the least likely on the
+evidence available: the QEMU boot on SDHOST did *not* corrupt, and the QEMU
+boots that did corrupt were on Arasan. That leaves hardware and USB, and USB is
+both the newer variable and the one with an allocation-heavy path.
+
+## What to do now, cheapest first
+
+1. **Same Pi, same card, no USB device.** One boot. If it is clean, USB is
+   implicated and this stops being a search.
+2. **Same Pi, USB device, USB stack disabled** -- remove the two
+   Startup-Sequence blocks (`AddUSBClasses`, `AddUSBHardware`; see ISSUE-0042).
+   That separates "a device is plugged in" from "the stack enumerates it".
+3. Only then the backtrace, and step 2 of the original list below.
+
+Note step 2 is the same card modification ISSUE-0042 wants for its first
+measurement, so one card serves both.
+
+# Previously: parked until it recurs (2026-08-17)
 
 **The user's call, and the right one.** It has been seen once. Chasing an
 intermittent heap corruption that will not reproduce burns runs and concludes
