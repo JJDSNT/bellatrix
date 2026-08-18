@@ -377,6 +377,33 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-18 -- **The black screen is ours: the driver frees the framebuffer
+  before it knows it can get another.** Two runs settled it. With `mungwall`
+  the boot dies before any bitmap is created and the splash stays up with the
+  clock running; without it the driver initialises and the screen goes black.
+  The display was alive right until vc4gfx touched it.
+
+  `vc4_program_fb()` opens with `VCTAG_FBFREE` and only then asks for a new
+  framebuffer. The firmware drops the surface *and* the display list that
+  scanned it out, so an FBALLOC that comes back empty-handed leaves nothing to
+  put back -- which is exactly the state the dump described: HDMI channel
+  enabled, running, correct 1080p timings, display list one END word. FBALLOC
+  reallocates over an existing framebuffer by itself, so the FBFREE bought
+  nothing.
+
+  The other half: a tagged reply carrying a null pointer means the firmware
+  could not allocate, and the code read it as success. `fb_ptr` came back NULL,
+  and `patches/aros/0037` then substituted the kernel's boot surface -- so the
+  log showed a healthy framebuffer address the firmware was no longer scanning
+  out, and the HVS got blamed for showing nothing. `patches/aros/0042` treats
+  it as the failure it is.
+
+  And the memory to succeed with: `gpu_mem` was 32. vc4gfx programs the mode
+  itself and asks for two pages at the display's depth -- 8.3 MB each at
+  1920x1080x32 -- which 32 MB does not cover once the firmware's own use is
+  counted. `make-sdcard.sh` now writes 128, the same figure arch/aarch64-raspi
+  uses for the same pool.
+
 - 2026-08-18 -- **The list at word 0 is a bare END.** With `head == 0` accepted,
   the dump walked it: `[0000] 0x80000000 END`. One word, no planes -- that
   channel draws background and nothing else. And the channel is live:

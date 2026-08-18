@@ -267,7 +267,14 @@ initramfs aros-emu68-m68k.elf
 
 disable_splash=1
 avoid_warnings=1
-gpu_mem=32
+# The VideoCore split has to hold the framebuffer the graphics driver asks
+# for. vc4gfx programs the mode itself and wants two pages at the display's
+# depth -- 1920x1080 at 32bpp is 8.3 MB a page -- and 32 MB is not enough
+# once the firmware's own use is counted. A refused FBALLOC used to end as a
+# black screen; it is now reported, but reporting it is not the same as
+# having the memory. arch/aarch64-raspi sets 128 for the same reason (its
+# comment is about the GL stack, which is the same pool).
+gpu_mem=128
 
 hdmi_group=2
 hdmi_mode=82

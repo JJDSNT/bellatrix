@@ -1128,6 +1128,38 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-18 -- **Correction: the missing header was mungwall's own bug, not a
+  write.** The dump added the same day answered on the first run, and it said
+  the block was fine:
+
+      [MungWall] header region at 0x020c87e8:
+      [MungWall]   +00: 000000ac 020c8738 020015b0 1adebca1
+      [MungWall]   +10: 00000000 00440000 00003662 f46b0204
+      [MungWall]   +20: 16243662 5934dbdb dbdbdbdb dbdbdbdb
+
+  0x1adebca1 is MUNGWALL_HEADER_ID and it sits at +0x0c, not +0x08. Read from
+  four bytes higher, with m68k's two-byte packing (a 2-byte `BOOL mwh_fault` at
+  +12 and no padding after it), the whole header parses: magic, fault 0,
+  allocsize 68 for an AllocVec of 68, pool 0, owner 0x02041624 -- the very task
+  doing the free. Nothing overwrote anything.
+
+  `MungWall_Check()` rounds the pointer down to `MEMCHUNK_TOTAL` before
+  computing the header address. That is for AllocAbs, and it is wrong whenever
+  the allocator aligns more finely than MEMCHUNK_TOTAL -- which on m68k it
+  does: MEMCHUNK_TOTAL is `sizeof(struct MemChunk)` = 8, `AROS_WORSTALIGN` is
+  4, TLSF hands out 4-aligned blocks. The message printed its own arithmetic:
+  0x020c8830 for a real 0x020c8834, and 72 bytes for a real 68 plus the 4 it
+  had just added. The rounded pointer then went to FreeMem, so TLSF took a
+  block header from inside a wall and called it a double free.
+  `patches/aros/0043` looks where the caller pointed first and only falls back
+  to the AllocAbs alignment when there is no header there.
+
+  So the previous entry's conclusion is withdrawn: that run did not find this
+  issue's writer, and mungwall could not have found anything on m68k in that
+  state. It found why. What survives from it is the call chain -- the failure
+  happens inside `IntuitionInit`, at the mouse pointer, long before `ENV:` --
+  and that only holds if the next mungwall run still stops there.
+
 - 2026-08-18 -- **MungWall moved the failure two thirds of a boot earlier and
   gave it a name.** With `mungwall` on the command line the Pi 3 does not reach
   the CLI crash at all; it dies in `Exec Bootstrap Task` with a sixteen-frame

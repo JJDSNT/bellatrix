@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 18:30:00 -0300
+Subject: [PATCH 43/43] mungwall: believe the pointer the caller gave, before
+ rounding it
+
+The header dump added by the previous patch answered its question on the
+first Pi 3 run, and the answer was that nothing was wrong with the block:
+
+    [MungWall] header region at 0x020c87e8:
+    [MungWall]   +00: 000000ac 020c8738 020015b0 1adebca1
+    [MungWall]   +10: 00000000 00440000 00003662 f46b0204
+    [MungWall]   +20: 16243662 5934dbdb dbdbdbdb dbdbdbdb
+
+0x1adebca1 is MUNGWALL_HEADER_ID, and it is at +0x0c, not at +0x08. Read
+the region from four bytes higher -- with m68k's two-byte packing, which
+puts a 2-byte BOOL at +12 and no padding after it -- and the whole header
+parses: magic 0x1adebca1, fault 0, allocsize 68 for an AllocVec of 68,
+pool 0, and owner 0x02041624, which is precisely the task doing the free.
+The header was never damaged. It was four bytes above where it was looked
+for.
+
+MungWall_Check() rounds the pointer down to MEMCHUNK_TOTAL before
+computing the header address. That exists for AllocAbs, which can return
+an address inside a chunk rather than the chunk's own start, and it is
+wrong for everything else the moment the allocator aligns more finely
+than MEMCHUNK_TOTAL. On m68k it does: MEMCHUNK_TOTAL is
+sizeof(struct MemChunk) = 8, AROS_WORSTALIGN is 4, and TLSF hands out
+4-aligned blocks to match. The arithmetic is visible in the message
+itself -- it printed 0x020c8830 for a real 0x020c8834, and 72 bytes for a
+real 68 plus the 4 it had just added.
+
+The consequence was not cosmetic. The rounded pointer went on to FreeMem,
+so TLSF took a block header from inside somebody's wall, called it a
+double free and stopped the machine. Every 4-aligned AllocMem on this
+architecture was one FreeMem away from that.
+
+So look where the caller pointed first, and only fall back to the
+AllocAbs alignment when there is no header there.
+
+This retracts what the previous patch's commit message concluded. The
+missing header was not somebody else's write, and this run did not find
+ISSUE-0037's writer -- mungwall could not have found anything on m68k in
+this state. What it found is why.
+--- a/rom/exec/mungwall.c
++++ b/rom/exec/mungwall.c
+@@ -179,13 +179,38 @@
+ 
+         D(bug("[MungWall] Freeing %u bytes at 0x%p\n", byteSize, memoryBlock);)
+ 
+-        /* Align size and block to the requirements (needed because of AllocAbs) */
+-        byteSize += (IPTR)memoryBlock & (MEMCHUNK_TOTAL - 1);
+-        memoryBlock = (APTR)AROS_ROUNDDOWN2((IPTR)memoryBlock, MEMCHUNK_TOTAL);
+-
+-        /* Take address of mungwall header */
++        /*
++         * Believe the pointer as given, first.
++         *
++         * The rounding below exists for AllocAbs, which can hand back an
++         * address inside a chunk rather than the chunk's own start. It is
++         * wrong for everything else the moment the allocator's alignment is
++         * finer than MEMCHUNK_TOTAL, and on m68k it is: MEMCHUNK_TOTAL is
++         * sizeof(struct MemChunk) = 8, while AROS_WORSTALIGN is 4 and TLSF
++         * hands out 4-aligned blocks accordingly. Rounding a perfectly good
++         * 4-aligned pointer down to 8 moves the header lookup four bytes too
++         * low, so the magic is not where it is looked for and a healthy
++         * allocation is reported as having no header at all -- after which
++         * the rounded pointer goes to FreeMem and TLSF frees a block header
++         * that is really somebody's wall.
++         *
++         * That is not a hypothesis. A Pi 3 run printed the region and the
++         * header was sitting four bytes above, whole: magic 0x1adebca1,
++         * allocsize 68 for an AllocVec of 68, owner exactly the task doing
++         * the free.
++         *
++         * So look where the caller pointed. Only if there is no header there
++         * do the AllocAbs alignment and look again.
++         */
+         header = memoryBlock - MUNGWALL_BLOCK_SHIFT;
+ 
++        if (header->mwh_magicid != MUNGWALL_HEADER_ID)
++        {
++            byteSize += (IPTR)memoryBlock & (MEMCHUNK_TOTAL - 1);
++            memoryBlock = (APTR)AROS_ROUNDDOWN2((IPTR)memoryBlock, MEMCHUNK_TOTAL);
++            header = memoryBlock - MUNGWALL_BLOCK_SHIFT;
++        }
++
+         /*
+          * A block allocated before mungwall was switched on has no
+          * header - what sits below it is whatever the allocator or the
