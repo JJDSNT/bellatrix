@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0043
 title: "Drive the VideoCore display ourselves, instead of borrowing a framebuffer from the firmware"
-status: backlog
+status: doing
 priority: medium
 type: feature
 owner: unassigned
@@ -275,12 +275,42 @@ that contradicts it would have to be rewritten.
 
 # Acceptance criteria
 
+- [x] **Path C done**: `arch/aarch64-raspi/hidd/fbgfx` builds, boots and drives
+      the display on this target, switchable by one line (`GFX_BACKEND`)
+- [x] The boot UI hands over when the desktop is drawn rather than on the first
+      `Show()` -- reached without a flip, see below
 - [ ] Path A or Path B chosen, with the reason written down
 - [ ] The cost of the Display class's copy is measured on hardware
-- [ ] A flip mechanism exists and `emu68gfx` uses it without the framebuffer
+- [ ] A flip mechanism exists and the driver uses it without the framebuffer
       address being assumed constant
-- [ ] The boot UI hands over on a flip rather than on the first `Show()`
 - [ ] Whether the firmware has to release the display is answered, not assumed
+
+## Where this stands (2026-08-18)
+
+**What landed is path C and only path C.** The driver AROS already had, ported
+and running: 41 symbols in the ELF, a full Wanderer desktop with correct
+colours, and two adaptations that cost two functions --
+`initFBGfxHW()` reading `KATTR_FrameBufferDepth` instead of assuming 32bpp
+(`patches/aros/0031`), and the display class forwarding
+`aHidd_PixFmt_SwapPixelBytes` for a 5:6:5 halfword on a big-endian CPU.
+`fbDoRefreshArea()` needed nothing: it was already format-agnostic.
+
+**No VideoCore register has been written.** The framebuffer still arrives
+ready-made from Emu68 and nothing of ours asks the hardware for anything, which
+is the whole distinction this issue was opened to keep straight. Paths A and B
+are untouched, and ISSUE-0012's hardware cursor still waits on B.
+
+**The boot UI hand-off came for free, and not the way this issue predicted.**
+It was written expecting a flip to make it possible. It did not need one: fbgfx
+refreshes from each bitmap's own buffer, so suppressing that copy leaves the
+splash on the framebuffer while the desktop is assembled behind it -- double
+buffering with the bitmap as the back buffer, already present in the driver
+AROS ships. ISSUE-0021 and ISSUE-0034 closed on it.
+
+**What is now worse, not better, and unmeasured.** The boot time roughly
+doubled, with this port and the frame pointers as the two suspects (above).
+Until that is attributed, "the port paid for itself in speed" is not a claim
+anyone here can make.
 
 # Execution log
 
