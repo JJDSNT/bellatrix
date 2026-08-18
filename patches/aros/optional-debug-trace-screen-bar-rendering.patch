@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 04:10:00 -0300
+Subject: DEBUG: trace who renders the screen bar, and when
+
+Not applied by default -- the filename has no number, so setup.sh's
+[0-9]*.patch glob skips it. Apply it by hand when the question below comes up
+again.
+
+The question it answers is ISSUE-0043's open one. The boot splash holds the
+display until the desktop is drawn, and the screen title bar arrives about
+100 ms after the release signal, drawn by something that has not been
+identified. CreateScreenBar() is ruled out: it runs at screen creation, before
+Show(), and therefore before the hold begins. RenderScreenBar() is reached only
+from there, from ActivateWindow() and from the input handler -- and the last
+two queue through DoASyncAction(), whose queue is drained by the input handler,
+which a boot with no input never runs.
+
+Something draws it anyway. These two files are where the evidence is:
+
+  intuition_misc.c        RenderScreenBar() already carries D(bug(...)), so
+                          every call announces itself
+  inputhandler_actions.c  HandleIntuiActions() and int_showtitle(), so the
+                          queue draining is visible too
+
+Read against the BootUI timestamps -- "hold armed", "hold released",
+"display takeover" -- that places every render on the same timeline as the
+hold, which is what the question needs.
+
+Verbose. This is a bring-up aid, not a setting.
+---
+--- a/rom/intuition/intuition_misc.c
++++ b/rom/intuition/intuition_misc.c
+@@ -41,7 +41,7 @@
+ 
+ 
+ #undef DEBUG
+-#define DEBUG 0
++#define DEBUG 1
+ #   include <aros/debug.h>
+ 
+ ULONG addextragadget(struct Window *w,BOOL is_gzz,struct DrawInfo *dri,LONG relright,ULONG imagetype,ULONG gadgetid,ULONG gadgettype,struct IntuitionBase *IntuitionBase);
+--- a/rom/intuition/inputhandler_actions.c
++++ b/rom/intuition/inputhandler_actions.c
+@@ -37,7 +37,7 @@
+ #include "menus.h"
+ 
+ #undef DEBUG
+-#define DEBUG 0
++#define DEBUG 1
+ #include <aros/debug.h>
+ 
+ #define LOCK_ACTIONS()      ObtainSemaphore(&GetPrivIBase(IntuitionBase)->IntuiActionLock);
