@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 06:30:00 -0300
+Subject: [PATCH 36/36] galliumglue: emit m68k trampolines
+
+The GalliumCoreAPI glue routes every Mesa-core call a pipe driver makes through
+a module-local table, so driver and core can be redeployed independently. The
+routing is done with one assembly trampoline per imported function, and the
+generator knew two architectures:
+
+    ap.add_argument("--arch", default="arm", choices=("arm", "aarch64"),
+
+which is the whole of what stood between this and a VC4 Gallium driver on
+m68k. Everything else was already in place: Mesa 20.0.8 unpacks and builds for
+this target, libmesa.a and libgalliumauxiliary.a are there, and softpipe and
+i915 build as Gallium drivers alongside.
+
+The m68k trampoline is two instructions, and transparent for the same reason
+the ARM one is -- nothing but a call-clobbered scratch register is touched, so
+varargs, struct returns and FP arguments pass through untouched:
+
+    move.l __gca_local+N,%a0
+    jmp (%a0)
+
+a0 and a1 are call-clobbered on m68k and the SysV m68k ABI passes every
+argument on the stack, so no argument can be sitting in the register the
+trampoline uses. Absolute addressing rather than a GOT, since the table is in
+the same module.
+
+166 trampolines come out for libgallium_vc4.a.
+---
+--- a/workbench/libs/mesa/galliumglue.py
++++ b/workbench/libs/mesa/galliumglue.py
+@@ -110,7 +110,7 @@
+                     help="data symbols resolved by extracting the defining "
+                          "provider member into the consumer module")
+     ap.add_argument("--mesa-version", required=True)
+-    ap.add_argument("--arch", default="arm", choices=("arm", "aarch64"),
++    ap.add_argument("--arch", default="arm", choices=("arm", "aarch64", "m68k"),
+                     help="target CPU: picks the trampoline template")
+     ap.add_argument("--abi-flags", default="",
+                     help="ABI-relevant compile flags; part of the hash so "
+@@ -304,6 +304,20 @@
+             s_.append("    ldr ip, 0f")            # ip = &__gca_local
+             s_.append("    ldr pc, [ip, #%d]" % (i * 4))
+             s_.append("0:  .word __gca_local\n")
++    elif args.arch == "m68k":
++        s_.append("    .text\n")
++        for i, s in enumerate(funcs):
++            s_.append("    .balign 2")
++            s_.append("    .globl __gca_%s" % s)
++            s_.append("    .type __gca_%s, %%function" % s)
++            s_.append("__gca_%s:" % s)
++            # a0 and a1 are call-clobbered on m68k and no argument arrives
++            # in a register -- the SysV m68k ABI passes everything on the
++            # stack -- so loading through a0 is as transparent here as ip is
++            # on ARM. Absolute addressing, no GOT: the table is in the same
++            # module.
++            s_.append("    move.l __gca_local+%d,%%a0" % (i * 4))
++            s_.append("    jmp (%a0)\n")
+     else:   # aarch64
+         s_.append("    .text\n")
+         for i, s in enumerate(funcs):

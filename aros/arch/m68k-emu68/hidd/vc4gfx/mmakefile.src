@@ -1,0 +1,48 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM kernel-m68k-emu68-vc4gfx-kobj : kernel-hidd-gfx-includes
+
+#
+# The VideoCore 4 graphics driver from arch/arm-native, built for m68k.
+#
+# This is the real thing, not a framebuffer HIDD: vc4gfx_hvs.c programs the
+# Hardware Video Scaler's display lists, vc4gfx_hdmi.c the encoder,
+# vc4gfx_dma.c the transfers. Where fbgfx is handed a surface and manages
+# bitmaps over it, this one owns the pipeline -- which is what ISSUE-0043 means
+# by driving the VideoCore ourselves, and what ISSUE-0012's hardware cursor
+# needs (a cursor is an HVS plane).
+#
+# Compiled straight out of that directory rather than copied, as the SDHOST
+# backend, dma.resource and usb2otg are: %build_module takes absolute
+# basenames.
+#
+# Not in the kernel link list. It has to compile first, then run, and fbgfx is
+# what boots today.
+#
+VC4DIR := $(SRCDIR)/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx
+
+FILES := \
+    $(VC4DIR)/vc4gfx_init \
+    $(VC4DIR)/vc4gfx_hiddclass \
+    $(VC4DIR)/vc4gfx_dma \
+    $(VC4DIR)/vc4gfx_memory \
+    $(VC4DIR)/vc4gfx_sdtv \
+    $(VC4DIR)/vc4gfx_hdmi \
+    $(VC4DIR)/vc4gfx_hardware \
+    $(VC4DIR)/vc4gfx_hvs \
+    $(VC4DIR)/vc4gfx_pixfmts \
+    $(VC4DIR)/vc4gfx_onbitmap \
+    $(VC4DIR)/vc4gfx_offbitmap
+
+USER_INCLUDES := -I$(VC4DIR) \
+    -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/include \
+    -I$(SRCDIR)/arch/m68k-emu68/include
+USER_CPPFLAGS := -D__EMU68__
+
+%build_module mmake=kernel-m68k-emu68-vc4gfx \
+  modname=vc4gfx modtype=hidd \
+  conffile=$(VC4DIR)/vc4gfx.conf \
+  files="$(FILES)" \
+  uselibs="hiddstubs"
+
+%common
