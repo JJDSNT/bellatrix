@@ -56,6 +56,28 @@ machine showing a frozen splash with a working desktop invisible behind it. So
 the deadline always applies, and the signal, when something can send it, only
 makes the release prompt.
 
+Third revision: the repaint runs from the task that signals, not from a timer.
+
+Two delayed variants were tried and both failed for the same reason -- the
+repaint takes a semaphore and walks OOP objects, so it can only run from a
+task, and no task of ours comes past on its own.
+
+Calling it from the timer that ends the hold earned two recoverable alerts:
+
+    ObtainSemaphore called in supervisor mode!!!
+    sem = 0x0209d6ec task = 0x0209d0d0 (WANDERER:Wanderer)
+
+Deferring it to the next fbDoRefreshArea() removed the alerts and replaced them
+with a seventy-second gap, measured: the hold released at 1:05 and the screen
+changed at 2:15, because once the icons are drawn nothing draws again for a
+long time. Waiting for the drawing to go quiet is worse still -- it releases
+precisely when nothing is left to carry the repaint.
+
+So the driver registers the repaint with the splash, and the splash calls it
+from BOOTUI_STAGE_ICONS, which arrives on Wanderer's own task with the icons
+already in the bitmap. One moment that is both "the desktop is ready" and "we
+are on a task".
+
 ---
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
@@ -91,18 +113,33 @@ makes the release prompt.
      return TRUE;
  }
  
-@@ -120,6 +137,16 @@
+@@ -120,6 +137,31 @@
      ULONG srcmod, dstmod;
      LONG y, w, h, sx, sy;
  
 +#ifdef __EMU68__
 +    /*
 +     * The boot splash still owns the framebuffer. Everything drawn now lands
-+     * in the bitmap's own buffer and stays there; emu68_bootui_hold()'s
-+     * release callback copies the finished screen across in one go.
++     * in the bitmap's own buffer and stays there.
 +     */
 +    if (emu68_bootui_holding())
 +        return;
++
++    /*
++     * The hold has just ended and nothing of the desktop has reached the
++     * framebuffer, so the first refresh after it has to be the whole screen
++     * rather than whatever rectangle the caller asked for.
++     *
++     * Collected here rather than pushed from the timer that ends the hold:
++     * that runs in an interrupt, where taking the framebuffer semaphore is
++     * illegal -- the version that did it earned two "called in supervisor
++     * mode" alerts from Wanderer.
++     */
++    if (emu68_bootui_take_release())
++    {
++        x1 = 0; y1 = 0;
++        x2 = data->width; y2 = data->height;
++    }
 +#endif
 +
      x1 += data->xoffset; y1 += data->yoffset;
@@ -110,7 +147,7 @@ makes the release prompt.
  
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
-@@ -30,6 +30,56 @@
+@@ -30,6 +30,53 @@
  #include "fbgfx_hidd.h"
  #include "fbgfx_support.h"
  
@@ -132,20 +169,17 @@ makes the release prompt.
 + * abstracting two unrelated one-liners would cost more than it saved.
 + */
 +#include <boot.h>
-+#include "fbgfx_bitmap.h"
 +#include "fbgfx_intern.h"
++#include "fbgfx_bitmap.h"
 +
 +/*
-+ * Repainting the whole screen when the splash lets go.
++ * Puts the finished desktop up when the splash lets go.
 + *
-+ * While the hold is on, fbDoRefreshArea() copies nothing, so Intuition and
-+ * Wanderer assemble the desktop in each bitmap's own buffer with the splash
-+ * still on the framebuffer -- double buffering, with the bitmap as the back
-+ * buffer. Nothing has reached the framebuffer by the time the hold ends, so
-+ * the release has to put the whole thing up at once.
-+ *
-+ * Re-asserting aHidd_BitMap_Visible would not do it: the bitmap class only
-+ * refreshes from Set() when the scroll offsets changed.
++ * Nothing of the desktop has reached the framebuffer while the hold was on, so
++ * this is a full-screen copy rather than a rectangle. Called from
++ * emu68_bootui_set_stage() -- Wanderer's task -- so taking the framebuffer
++ * semaphore and walking OOP objects here is legal, which it would not be from
++ * the timer that also can end the hold.
 + */
 +static struct FBGfx_staticdata *fbgfx_held_sd;
 +
@@ -167,7 +201,7 @@ makes the release prompt.
  #include LC_LIBDEFS_FILE
  
  OOP_Object *FBGfxDisplay__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
-@@ -199,6 +249,26 @@
+@@ -199,6 +246,27 @@
  
      D(bug("[FBGfx:Display] Show(0x%p), old visible 0x%p\n", msg->bitMap, data->visible));
  
@@ -187,7 +221,8 @@ makes the release prompt.
 +    if (msg->bitMap)
 +    {
 +        fbgfx_held_sd = data;
-+        emu68_bootui_hold(fbgfx_bootui_released);
++        emu68_bootui_set_release_hook(fbgfx_bootui_released);
++        emu68_bootui_hold();
 +    }
 +#endif
 +

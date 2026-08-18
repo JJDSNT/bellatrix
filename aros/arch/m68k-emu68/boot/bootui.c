@@ -53,18 +53,97 @@ static struct BootUIState bootui;
  * screen while the desktop is assembled behind it, which is double buffering
  * with the bitmap as the back buffer and costs nothing extra.
  *
- * BOOTUI_HOLD_SECONDS is a deadline, not the mechanism. The real signal is
- * BOOTUI_STAGE_ICONS, but nothing is in a position to send it yet, and a hold
- * that never ends is a machine that boots to a frozen splash with a working
- * desktop invisible behind it. So the deadline always applies and the signal,
- * when it exists, only makes the release prompt.
+ * The release is deliberately split in two. The deadline is noticed in
+ * emu68_bootui_clock_tick(), which runs from the system timer *interrupt*
+ * (platform/bcm283x/systimer_heartbeat), and nothing there may take a
+ * semaphore or call into OOP -- the first version did and Wanderer collected
+ * two "called in supervisor mode" alerts for it. So the tick only stops the
+ * hold and records that the screen owes a full repaint; the driver notices on
+ * its next refresh, in task context, and paints there.
+ *
+ * The signal comes from Wanderer. IconVolumeList's first Update says the
+ * backdrop window has its volume icons, which is the closest thing to "the
+ * desktop exists" that anything in the system knows -- IconList has no
+ * attribute or notification for it, so the signal had to be added there.
+ *
+ * It arms the release rather than performing it. "The icons are in the list"
+ * is not yet "the icons are painted": MUI lays out on that message and draws
+ * on the next redraw, so releasing there would copy a screen caught mid-draw.
+ * The signal releases the hold and repaints on the spot. Two delayed variants
+ * were tried and both are dead ends, for the same underlying reason -- the
+ * repaint can only run from a task, and no task of ours comes past:
+ *
+ *   waiting for the drawing to go quiet releases exactly when nothing is left
+ *   to carry the repaint;
+ *
+ *   waiting for the next refresh after that measured seventy seconds on a
+ *   boot, because once the icons are drawn nothing draws again for a long
+ *   time.
+ *
+ * IconVolumeList's Update has already run its super method by the time it
+ * signals, so the icons are in the bitmap, and it signals from Wanderer's own
+ * task. That is the one moment that is both "the desktop is ready" and "we are
+ * on a task", so the work belongs there and nowhere else.
+ *
+ * BOOTUI_HOLD_CAP_SECONDS is not tuning, it is the failure mode. Nothing can
+ * send BOOTUI_STAGE_ICONS yet, and a hold that never ends is a frozen splash
+ * with a working desktop invisible behind it, so the cap always applies.
  */
-#define BOOTUI_HOLD_SECONDS 6
+#define BOOTUI_HOLD_CAP_SECONDS 30
 
-static void (*bootui_release_hook)(void);
+static int bootui_release_pending;
 static int bootui_hold_active;
 static uint32_t bootui_hold_started_at;
+/* Written by the timer interrupt, read by the task that arms the hold. */
+static volatile uint32_t bootui_last_tick_us;
+/*
+ * Called to put the finished desktop up. Registered by the display driver and
+ * invoked ONLY from emu68_bootui_set_stage(), which runs in the task that
+ * sends the signal -- Wanderer's. It takes a semaphore and walks OOP objects,
+ * neither of which is legal from the timer interrupt, and an earlier version
+ * that called it from there earned two "called in supervisor mode" alerts.
+ */
+static void (*bootui_release_hook)(void);
 static void bootui_release(void);
+
+/*
+ * Every BootUI event carries the time it happened, measured from the same
+ * clock the splash shows.
+ *
+ * The alternative was a line per tick to prove the clock was still running,
+ * which answered one question once and then buried the log. Timestamps answer
+ * that one and every later one -- how long the hold lasted, how far the
+ * release was from the repaint -- without a line of their own.
+ */
+static void bootui_event(const char *what)
+{
+    char stamp[16];
+    uint32_t ms = (bootui_last_tick_us - bootui.clock_start_us) / 1000UL;
+    uint32_t s = ms / 1000UL;
+    uint32_t m = s / 60UL;
+
+    s %= 60UL;
+    ms %= 1000UL;
+    if (m > 99)
+        m = 99;
+
+    stamp[0] = '[';
+    stamp[1] = '0' + m / 10;  stamp[2] = '0' + m % 10;
+    stamp[3] = ':';
+    stamp[4] = '0' + s / 10;  stamp[5] = '0' + s % 10;
+    stamp[6] = '.';
+    stamp[7] = '0' + ms / 100;
+    stamp[8] = '0' + (ms / 10) % 10;
+    stamp[9] = '0' + ms % 10;
+    stamp[10] = ']';
+    stamp[11] = ' ';
+    stamp[12] = 0;
+
+    emu68_console_puts("[AROS/Emu68] BootUI ");
+    emu68_console_puts(stamp);
+    emu68_console_puts(what);
+    emu68_console_puts("\n");
+}
 static struct BootUIResource bootui_resource;
 
 static void put_pixel(uint32_t x, uint32_t y, uint16_t color);
@@ -401,7 +480,28 @@ void emu68_bootui_set_stage(uint32_t stage)
 
     if (stage == BOOTUI_STAGE_ICONS)
     {
-        bootui_release();
+        /*
+         * Release here, in the caller's task, and repaint before returning.
+         *
+         * Waiting was tried twice and both are dead ends. Waiting for the
+         * drawing to go quiet releases at the moment nothing is left to carry
+         * the repaint; waiting for the next refresh after that measured
+         * seventy seconds on a boot, because once the icons are drawn nothing
+         * draws again for a long time. The signal is the only moment that is
+         * both "the desktop is ready" and "we are on a task", so it is where
+         * the work belongs.
+         */
+        if (bootui_hold_active)
+        {
+            void (*hook)(void) = bootui_release_hook;
+
+            bootui_event("hold released: icons");
+            bootui_hold_active = 0;
+            bootui_release_pending = 0;
+            emu68_bootui_takeover();
+            if (hook)
+                hook();
+        }
         return;
     }
 
@@ -431,17 +531,20 @@ void emu68_bootui_clock_tick(uint32_t now_us)
 
     if (!bootui.active || !bootui.clock_started)
         return;
+    bootui_last_tick_us = now_us;
     elapsed = (now_us - bootui.clock_start_us) / 1000000UL;
     if (elapsed == bootui.elapsed_seconds)
         return;
     bootui.elapsed_seconds = elapsed;
 
-    if (bootui_hold_active &&
-        elapsed - bootui_hold_started_at >= BOOTUI_HOLD_SECONDS)
+    if (bootui_hold_active)
     {
-        emu68_console_puts("[AROS/Emu68] BootUI hold expired\n");
-        bootui_release();
-        return;
+        if (elapsed - bootui_hold_started_at >= BOOTUI_HOLD_CAP_SECONDS)
+        {
+            bootui_event("hold released: cap");
+            bootui_release();
+            return;
+        }
     }
 
     draw_clock();
@@ -456,33 +559,39 @@ void emu68_bootui_add_resource(void)
     AddResource(&bootui_resource.node);
 }
 
+/*
+ * Decides to let go; does not let go.
+ *
+ * Safe from an interrupt: two flag writes and a raw serial write. In
+ * particular it does NOT call emu68_bootui_takeover() -- that would stop the
+ * splash being drawn while it is still the only thing on the screen, because
+ * the repaint that replaces it cannot happen until a task calls
+ * emu68_bootui_take_release(). Doing both here left the display showing a
+ * frozen splash with a dead clock for the whole gap between the two, which is
+ * exactly what a hold is supposed to prevent.
+ */
 static void bootui_release(void)
 {
-    void (*hook)(void) = bootui_release_hook;
-
     if (!bootui_hold_active)
         return;
 
-    /* Clear first: the hook repaints through the very path holding suppresses,
-     * so it has to see the hold already gone. */
     bootui_hold_active = 0;
-    bootui_release_hook = NULL;
-
-    emu68_bootui_takeover();
-
-    if (hook)
-        hook();
+    bootui_release_pending = 1;
 }
 
-void emu68_bootui_hold(void (*release)(void))
+void emu68_bootui_set_release_hook(void (*hook)(void))
+{
+    bootui_release_hook = hook;
+}
+
+void emu68_bootui_hold(void)
 {
     if (!bootui.active || bootui_hold_active)
         return;
 
-    bootui_release_hook = release;
     bootui_hold_started_at = bootui.elapsed_seconds;
     bootui_hold_active = 1;
-    emu68_console_puts("[AROS/Emu68] BootUI holding the display\n");
+    bootui_event("holding the display");
 }
 
 int emu68_bootui_holding(void)
@@ -490,9 +599,32 @@ int emu68_bootui_holding(void)
     return bootui_hold_active;
 }
 
+/*
+ * Consume-once: TRUE means the hold has just ended and nothing of the desktop
+ * has reached the framebuffer yet, so the caller owes one full-screen repaint.
+ * Asked only from the driver's refresh path, which is task context.
+ */
+int emu68_bootui_take_release(void)
+{
+    int pending = bootui_release_pending;
+
+    if (pending)
+    {
+        /*
+         * Now, and not a moment earlier. The caller repaints the screen
+         * immediately after this returns, so the splash stops being drawn and
+         * gets covered in the same breath -- no interval where it is logically
+         * gone and visually still there.
+         */
+        bootui_release_pending = 0;
+        emu68_bootui_takeover();
+    }
+    return pending;
+}
+
 void emu68_bootui_takeover(void)
 {
     if (bootui.active)
-        emu68_console_puts("[AROS/Emu68] BootUI display takeover\n");
+        bootui_event("display takeover");
     bootui.active = 0;
 }

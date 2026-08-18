@@ -99,7 +99,9 @@ void emu68_bootui_takeover(void);
  * would normally take it, and call `release` when the hold ends so the driver
  * can put the finished desktop up in one go. See bootui.c.
  */
-void emu68_bootui_hold(void (*release)(void));
+void emu68_bootui_hold(void);
+void emu68_bootui_set_release_hook(void (*hook)(void));
 int  emu68_bootui_holding(void);
+int  emu68_bootui_take_release(void);
 
 #endif

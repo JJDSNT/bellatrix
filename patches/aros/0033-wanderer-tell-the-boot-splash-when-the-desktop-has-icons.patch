@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 02:40:00 -0300
+Subject: [PATCH 33/33] wanderer: tell the boot splash when the desktop has icons
+
+m68k-emu68 keeps its boot splash on the framebuffer past the point where the
+display driver would normally take it, so that the boot does not end on several
+seconds of empty Workbench. Deciding when to let go needs to know when the
+icons exist, and nothing in the system was in a position to say so.
+
+Looked for a signal before settling for a heuristic, and there is none.
+IconList has no attribute or notification meaning "the read finished". The
+Startup-Sequence cannot help: it blocks on WANDERER:Wanderer, so a line after
+it runs when Wanderer exits. MUIM_IconWindow_Open is the moment the backdrop
+window opens, which is exactly the too-early moment the hold exists to get past.
+
+So the signal is added where the knowledge already is. IconVolumeList's Update
+is what fills the backdrop window, and a Bellatrix desktop opens on volumes --
+RAM Disk and the boot volume. Sent once, after the super method has taken the
+new entries, through bootui.resource.
+
+It is a hint, not a command, and the splash treats it as one. "The icons are in
+the list" is not "the icons are painted" -- MUI lays out on this message and
+draws on the next redraw -- so the signal only arms the release, and the splash
+still waits for the drawing to settle before letting go. A Wanderer that never
+sends it costs a slower hand-off on a deadline and nothing else, which is why
+this is guarded and unconditional rather than wired into anything.
+---
+--- a/workbench/system/Wanderer/Classes/iconvolumelist.c
++++ b/workbench/system/Wanderer/Classes/iconvolumelist.c
+@@ -5,6 +5,26 @@
+ #define DEBUG 0
+ #include <aros/debug.h>
+ 
++#ifdef __EMU68__
++/*
++ * Telling the boot splash that the desktop has something on it.
++ *
++ * m68k-emu68 keeps its splash on the framebuffer past the point where the
++ * display driver would normally take it, so that the boot does not end on
++ * several seconds of empty Workbench. Deciding when to let go needs to know
++ * when the icons exist, and nothing else in the system is in a position to
++ * say: the Startup-Sequence blocks on WANDERER:Wanderer, and IconList has no
++ * attribute or notification meaning "the read finished".
++ *
++ * This is the place that does know. Sent once, from the volume list that fills
++ * the backdrop window -- the icons a Bellatrix desktop opens with are volumes.
++ * It is a hint and not a command: the splash still waits for the drawing to
++ * settle after this, and gives up on a deadline if it never arrives, so a
++ * Wanderer that never sends it costs a slower hand-off and nothing else.
++ */
++#include <aros/bootui.h>
++#endif
++
+ #include <proto/exec.h>
+ #include <proto/graphics.h>
+ #include <proto/utility.h>
+@@ -834,6 +854,24 @@
+ 
+     DoSuperMethodA(CLASS, obj, (Msg) message);
+ 
++#ifdef __EMU68__
++    {
++        /* Once. Update runs again whenever a volume appears or goes away, and
++         * the splash is long gone by then. */
++        static BOOL bootui_told = FALSE;
++
++        if (!bootui_told)
++        {
++            struct BootUIResource *bootui =
++                (struct BootUIResource *)OpenResource(BOOTUI_RESOURCE_NAME);
++
++            bootui_told = TRUE;
++            if (bootui && bootui->set_stage)
++                bootui->set_stage(BOOTUI_STAGE_ICONS);
++        }
++    }
++#endif
++
+     return 1;
+ }
+ 
