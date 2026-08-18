@@ -1,0 +1,105 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 21:30:00 -0300
+Subject: [PATCH 45/45] kernel: a heap walk that does not move the heap
+
+ISSUE-0037 is a block header that gets overwritten, and the only tool
+aimed at that so far was mungwall -- which cannot see it. mungwall works
+by putting a wall around every allocation, so it moves every allocation,
+and this corruption does not survive the move: a Pi 3 boot with mungwall
+on reaches Wanderer with a clean heap while the same build without it
+raises the requester at the same place it always does. A detector that
+changes the layout is a detector that changes the experiment.
+
+This walks the block chain the allocator already maintains -- area by
+area, each block to the next -- and touches nothing. Size plausible,
+successor inside the area, back link pointing at the block we came from,
+and PREV_FREE agreeing with the previous block's own free flag: that last
+one is precisely the invariant the reporter finds broken, three quarters
+of a boot after the fact, when MERGE_PREV follows a NULL header.prev.
+
+It reports and returns rather than trapping. The caller decides what a
+broken chain is worth, and a scan that took the machine down would be
+usable exactly once.
+--- a/rom/kernel/tlsf.c
++++ b/rom/kernel/tlsf.c
+@@ -1395,6 +1395,79 @@
+     return ret;
+ }
+ 
++/*
++ * Walk every block of every area and report the first inconsistency.
++ *
++ * The point of this is to be layout-neutral. mungwall finds an overrun by
++ * putting a wall around each allocation, which moves every allocation -- and
++ * ISSUE-0037's corruption does not survive that move, so mungwall can watch it
++ * forever without seeing anything. This walks the block chain the allocator
++ * already maintains and touches nothing, so it can be called at boot
++ * checkpoints to say between which two the chain stopped being consistent,
++ * with the heap laid out exactly as it is when the defect happens.
++ *
++ * It reports and returns rather than trapping: the caller decides, and a scan
++ * that took the machine down would only be usable once.
++ */
++BOOL tlsf_scan(struct MemHeaderExt * mhe, CONST_STRPTR where)
++{
++    tlsf_t *tlsf;
++    tlsf_area_t *area;
++    IPTR blocks = 0;
++
++    if (!mhe || mhe->mhe_Alloc != tlsf_malloc)
++        return TRUE;
++
++    tlsf = (tlsf_t *)mhe->mhe_UserData;
++    if (!tlsf)
++        return TRUE;
++
++    for (area = tlsf->memory_area; area; area = area->next)
++    {
++        bhdr_t *prev = MEM_TO_BHDR(area);
++        bhdr_t *b = GET_NEXT_BHDR(prev, GET_SIZE(prev));
++
++        while (b != area->end)
++        {
++            CONST_STRPTR why = NULL;
++            IPTR size = GET_SIZE(b);
++            bhdr_t *next = GET_NEXT_BHDR(b, size);
++
++            if (b < prev || b > area->end)
++                why = "block outside its area";
++            else if (size == 0 || (size & (SIZE_ALIGN - 1)))
++                why = "implausible size";
++            else if (next > area->end)
++                why = "block runs past the end of its area";
++            else if (b->header.prev != prev)
++                why = "prev link does not point at the previous block";
++            else if (FREE_PREV_BLOCK(b) != FREE_BLOCK(prev))
++                why = "PREV_FREE disagrees with the previous block's flag";
++
++            if (why)
++            {
++                bug("[Kernel:TLSF] scan(%s): %s -- block=%p size=%lu "
++                    "flags=0x%lx prev=%p (size=%lu flags=0x%lx) area=%p "
++                    "end=%p after %lu good blocks\n",
++                    where ? (CONST_STRPTR)where : (CONST_STRPTR)"?", why, b, (unsigned long)size,
++                    (unsigned long)GET_FLAGS(b), prev,
++                    (unsigned long)GET_SIZE(prev),
++                    (unsigned long)GET_FLAGS(prev), area, area->end,
++                    (unsigned long)blocks);
++                return FALSE;
++            }
++
++            blocks++;
++            prev = b;
++            b = next;
++        }
++    }
++
++    D(bug("[Kernel:TLSF] scan(%s): %lu blocks consistent\n",
++        where ? (CONST_STRPTR)where : (CONST_STRPTR)"?", (unsigned long)blocks));
++    return TRUE;
++}
++
+ BOOL tlsf_in_bounds(struct MemHeaderExt * mhe, void * begin, void * end)
+ {
+     tlsf_t *tlsf = (tlsf_t *)mhe->mhe_UserData;

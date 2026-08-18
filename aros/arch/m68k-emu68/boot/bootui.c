@@ -10,6 +10,9 @@
 
 #include <aros/bootui.h>
 #include <exec/nodes.h>
+#include <exec/memory.h>
+#include <exec/memheaderext.h>
+#include <exec/execbase.h>
 #include <proto/exec.h>
 
 #include "bootimage.inc"
@@ -488,10 +491,72 @@ void emu68_bootui_init(void)
                            "the boot image\n");
 }
 
+/*
+ * Walk the heap at every stage boundary, when asked to.
+ *
+ * ISSUE-0037 is a block header that gets overwritten: by the time anything
+ * frees the damaged block the writer is long gone, and mungwall cannot help
+ * because its walls move every allocation and the corruption does not survive
+ * the move. A walk of the chain the allocator already maintains changes no
+ * layout at all, so running it at each boot stage brackets the damage between
+ * two stages with the heap exactly as it is when the defect happens.
+ *
+ * Off unless the boot arguments say `heapscan`, because it is O(blocks) and
+ * this port is being measured.
+ */
+static int bootui_heapscan = -1;
+
+static int heapscan_wanted(void)
+{
+    const char *args = emu68_boot_context.bootargs;
+    uint32_t len = emu68_boot_context.bootargs_size;
+    uint32_t i;
+
+    if (!args || len < 8)
+        return 0;
+
+    for (i = 0; i + 8 <= len; i++)
+    {
+        if (args[i] == 'h' && args[i + 1] == 'e' && args[i + 2] == 'a'
+            && args[i + 3] == 'p' && args[i + 4] == 's' && args[i + 5] == 'c'
+            && args[i + 6] == 'a' && args[i + 7] == 'n')
+            return 1;
+    }
+
+    return 0;
+}
+
+/* kernel.resource's TLSF walker; kernel_resource.o keeps public symbols. */
+extern int tlsf_scan(struct MemHeaderExt *mhe, const char *where);
+
+static void bootui_heap_check(const char *where)
+{
+    struct MemHeader *mh;
+
+    if (bootui_heapscan < 0)
+        bootui_heapscan = heapscan_wanted();
+    if (!bootui_heapscan || !SysBase)
+        return;
+
+    ForeachNode(&SysBase->MemList, mh)
+    {
+        if (mh->mh_Attributes & MEMF_MANAGED)
+            tlsf_scan((struct MemHeaderExt *)mh, where);
+    }
+}
+
 void emu68_bootui_set_stage(uint32_t stage)
 {
     const char *status;
     uint32_t progress;
+
+    /* Before anything else, and before any early return: the whole value of
+     * a checkpoint is that it happens at every one of them. */
+    {
+        uint32_t ignored;
+
+        bootui_heap_check(stage_status(stage, &ignored));
+    }
 
     if (stage == BOOTUI_STAGE_REPAINT)
     {

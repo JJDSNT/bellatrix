@@ -377,6 +377,29 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-18 -- **vsync found, on the second takeover only, and the reason was
+  the window.** `bit 8 ticks per frame, using it` / `alive, 5 ticks during
+  check` -- the calibration against DISPSTATX's scanline wrap works, and the
+  storming bits at the bottom were never armed. The first takeover of the same
+  boot measured `probe window = 1 frames` and gave up: the calibration loop
+  reads the HVS and the bit probes read the PixelValve, so one loop count spans
+  a different number of frames through each, and how different depends on what
+  else the machine is doing. `patches/aros/0044` now measures the window in
+  microseconds off the BCM system timer (100 ms, 5-6 frames), which makes the
+  two comparable by construction rather than by luck.
+
+  **Still open: the boot splash does not appear at all with this driver.** The
+  mechanism is not mysterious. Emu68 hands over a surface at 0x3e7fe000 and the
+  boot UI paints into it; vc4gfx programs its own mode and the firmware
+  allocates a *different* framebuffer at 0x3d827000 at 32bpp, so from the first
+  bitmap onwards nothing is scanning the surface the splash lives in. fbgfx
+  never moved it, which is why ISSUE-0021's hand-off worked there. Two ways
+  out, both real work rather than a line: copy the old surface into the new one
+  at mode set (needs RGB565 -> 32bpp conversion), or retarget the boot UI at
+  the new framebuffer (needs the boot UI to paint at 32bpp). The second keeps
+  the stages updating and is the better answer; neither is a one-liner and
+  neither is started.
+
 - 2026-08-18 -- **The takeover is ACTIVE on real hardware.** With `gpu_mem=128`
   and the FBFREE gone, the firmware allocated a framebuffer instead of refusing
   (`phys=0x3d827000 pitch=7680` -- 1920 * 4, so 32bpp, a surface of our own

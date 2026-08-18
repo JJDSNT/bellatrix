@@ -38,23 +38,53 @@ and the frame-rate bits are the high ones here, so descending order finds
 one without ever arming the storming bits at the bottom. A probe that
 never arms bit 0 never takes 150000 interrupts to learn nothing, and the
 whole calibration ends after two windows instead of ten.
+
+Follow-up from the first hardware run: the window is now measured in
+microseconds off the BCM system timer, not in loop iterations. The
+calibration reads the HVS and the bit probes read the PixelValve, and a
+loop count that spans five frames through one of them spanned one frame
+through the other -- which is exactly how the first takeover of a Pi 3
+boot measured a one-frame window and gave up while the second, at
+Wanderer, measured two and found bit 8.
+
 --- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
 +++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-@@ -566,9 +566,32 @@
+@@ -50,7 +50,7 @@
+  * register reads; these give roughly half a second / two seconds. */
+ #define HVS_SPIN_LATCH  5000000
+ #define HVS_SPIN_HOLD   10000000
+-#define HVS_SPIN_PROBEBIT 100000    /* ~2-4 frames per probed INTEN bit */
++#define HVS_PROBE_WINDOW_US 100000  /* 100 ms: 5-6 frames at 50-60 Hz */
+ #define HVS_SPIN_FLIP   500000      /* flip-latch wait bound, ~3 frames */
+ 
+ /*
+@@ -566,9 +566,44 @@
   * PV_VERTA/B gives the expected ratio, so no timer is needed. A short
   * burst of line-rate interrupts is known-survivable (bit 7 ran at
   * 67 kHz for a whole session during bring-up). */
-+/* How many frames pass during one probe window? DISPSTATX's scanline
-+ * counter wraps once per frame, so counting wraps over a window the same
-+ * length as a bit probe gives the expected per-frame tick count directly,
-+ * with no assumption about which interrupt bit means what. */
-+static ULONG hvs_probe_window_frames(void)
++/* The BCM system timer, 1 MHz, same source vc4gfx_dma.c uses. Windows
++ * measured in time rather than in loop iterations: the calibration reads
++ * the HVS and the bit probes read the PixelValve, and a loop count that
++ * means five frames through one of them meant one frame through the
++ * other -- which is exactly how the first takeover on a Pi 3 measured a
++ * one-frame window and gave up. */
++static inline ULONG hvs_now_us(void)
++{
++    return AROS_LE2LONG(*(volatile ULONG *)SYSTIMER_CLO);
++}
++
++/* How many frames pass in a window of the given length? DISPSTATX's
++ * scanline counter wraps once per frame, so counting wraps measures the
++ * expected per-frame tick count directly, with no assumption about which
++ * interrupt bit means what. */
++static ULONG hvs_frames_in_window(ULONG window_us)
 +{
 +    ULONG last = hvs_rd(HVS_DISPSTATX(HVS_CHANNEL_HDMI))
 +               & HVS_DISPSTATX_LINE_MASK;
-+    ULONG frames = 0, i;
++    ULONG start = hvs_now_us();
++    ULONG frames = 0;
 +
-+    for (i = 0; i < HVS_SPIN_PROBEBIT; i++)
++    while (hvs_now_us() - start < window_us)
 +    {
 +        ULONG cur = hvs_rd(HVS_DISPSTATX(HVS_CHANNEL_HDMI))
 +                  & HVS_DISPSTATX_LINE_MASK;
@@ -74,7 +104,7 @@ whole calibration ends after two windows instead of ten.
  
      if (!st->hvs_VSyncIrq)
      {
-@@ -578,51 +601,71 @@
+@@ -578,51 +613,72 @@
  
      if (!st->hvs_VSyncMask)
      {
@@ -107,14 +137,14 @@ whole calibration ends after two windows instead of ten.
 +         * wraps over a window of the same length and the expectation is
 +         * measured rather than inferred.
 +         */
-+        frames = hvs_probe_window_frames();
-+        bug("[VC4HVS] vsync: probe window = %u frames (vtot=%u)\n",
-+            frames, vtot);
++        frames = hvs_frames_in_window(HVS_PROBE_WINDOW_US);
++        bug("[VC4HVS] vsync: probe window = %u frames in %u us (vtot=%u)\n",
++            frames, (ULONG)HVS_PROBE_WINDOW_US, vtot);
  
 -        for (b = 0; b < 10; b++)
 +        if (frames < 2)
 +        {
-+            bug("[VC4HVS] vsync: window too short to calibrate, "
++            bug("[VC4HVS] vsync: no frames during the window, "
 +                "leaving masked\n");
 +            return;
 +        }
@@ -135,8 +165,10 @@ whole calibration ends after two windows instead of ten.
 +            st->hvs_VSyncMask = 1UL << bit;     /* handler counts this bit */
              pv_wr(VC4_PV2_BASE, PV_INTSTAT, 0x3ff);
 -            pv_wr(VC4_PV2_BASE, PV_INTEN, 1UL << b);
+-            for (i = 0; i < HVS_SPIN_PROBEBIT; i++)
 +            pv_wr(VC4_PV2_BASE, PV_INTEN, 1UL << bit);
-             for (i = 0; i < HVS_SPIN_PROBEBIT; i++)
++            i = hvs_now_us();
++            while (hvs_now_us() - i < HVS_PROBE_WINDOW_US)
                  (void)pv_rd(VC4_PV2_BASE, PV_STAT);     /* pace */
              pv_wr(VC4_PV2_BASE, PV_INTEN, 0);
              pv_wr(VC4_PV2_BASE, PV_INTSTAT, 0x3ff);
