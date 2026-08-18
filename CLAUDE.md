@@ -55,6 +55,20 @@ Everything generated lands under `out/`, which is git-ignored.
   crosstools stage against generation of the target headers; under `make -j` gcc
   configures against a half-built sysroot and dies ~15 minutes in with
   `error verifying int64_t uses long long`. Do not "fix" this with `-j`.
+- **Development builds keep frame pointers, on purpose.** `build-aros.sh`
+  defaults `BELLATRIX_FRAME_POINTERS=1`, which makes `configure` pass
+  `-fno-omit-frame-pointer` for the whole target (`patches/aros/0028`). Every
+  m68k target upstream omits them; this one does not, because without a frame
+  chain `KrnBacktraceFromFrame()` and the crash requester's `Stack trace:`
+  section both report nothing at all — a build that cannot say where it broke
+  costs more than the register it saves. `BELLATRIX_FRAME_POINTERS=0` restores
+  upstream's choice.
+  - It is read by `configure`, so **changing it reconfigures and rebuilds the
+    tree** (the toolchain is kept). `build-aros.sh --status` reports the tree's
+    setting and whether the next build will flip it.
+  - **Numbers taken with it on do not compare with `out/boot-timing.jsonl`**,
+    whose 153 runs predate it. Any performance comparison has to fix the
+    setting on both sides.
 - **The m68k cross toolchain is the expensive thing, and it is not the build.**
   The first `build-aros.sh` compiles binutils and gcc from source — hours, and
   ~650 MB under `out/build/aros/bin/<host>/tools/crosstools`. Everything else

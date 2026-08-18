@@ -34,6 +34,44 @@ OUT="$ROOT/out/aros"
 TARGET="${BELLATRIX_AROS_TARGET:-emu68-m68k}"
 ELF="bin/$TARGET/AROS/aros-$TARGET.elf"
 
+# Frame pointers are ON by default here, which is a project decision and not
+# AROS's: every m68k target upstream passes CFLAGS_OMIT_FP. The whole target is
+# built with -fno-omit-frame-pointer so KrnBacktraceFromFrame() has a chain to
+# walk (patches/aros/0028).
+#
+# Why the default is on. Without it the diagnostics that matter here report
+# nothing at all. ISSUE-0037 sat on "Backtrace (0 frames)" and an empty
+# "Stack trace:" in the crash requester; with this on, the same crash produced
+# nine frames naming the exact call path, from the DOS packet down to the free.
+# A development build that cannot say where it broke costs more than the
+# register it saves.
+#
+#   BELLATRIX_FRAME_POINTERS=0 ./scripts/build-aros.sh    to go back
+#
+# Two consequences worth knowing. Boot and throughput numbers taken with this
+# on are NOT comparable with the historical record in out/boot-timing.jsonl,
+# which was measured without it -- a performance comparison has to fix the
+# setting on both sides. And because configure reads it, changing it can only
+# take effect by reconfiguring: a tree configured one way must not be quietly
+# rebuilt the other, since the flag is per-object and a half-converted tree
+# yields half a backtrace. FP_STAMP is what enforces that.
+export BELLATRIX_FRAME_POINTERS="${BELLATRIX_FRAME_POINTERS:-1}"
+FP_STAMP="$BUILD/.bellatrix-frame-pointers"
+
+fp_state() {
+    local want="$BELLATRIX_FRAME_POINTERS"
+    local have
+    have="$(cat "$FP_STAMP" 2>/dev/null || echo "")"
+
+    if [ ! -f "$BUILD/mmake.config" ]; then
+        [ "$want" = 1 ] && echo "on (the next configure)" || echo "off (the next configure)"
+    elif [ "$have" = "$want" ]; then
+        [ "$want" = 1 ] && echo "on" || echo "off"
+    else
+        echo "$( [ "$have" = 1 ] && echo on || echo off ) in this tree, $( [ "$want" = 1 ] && echo on || echo off ) requested — the next build reconfigures and rebuilds"
+    fi
+}
+
 # The ELF alone, not the distribution. arch/m68k-emu68/mmakefile.src has
 #
 #   #MM- AROS-emu68-m68k : kernel-link-emu68-m68k
@@ -300,6 +338,7 @@ if [ "$MODE" = status ]; then
     echo "ccache:      $(if grep -q 'ccache' "$BUILD/config/make.cfg" 2>/dev/null; then echo "in use"
                          elif command -v ccache >/dev/null; then echo "available, not configured into this tree"
                          else echo "not installed"; fi)"
+    echo "frame ptrs:  $(fp_state)"
     echo "toolchain:   $state (key $(toolchain_key))"
     [ "$state" = ready ] && echo "             $(host_tools_dir)/crosstools"
     echo "kernel ELF:  $([ -f "$BUILD/$ELF" ] && stat -c '%y' "$BUILD/$ELF" | cut -d. -f1 || echo "not built")"
@@ -434,6 +473,13 @@ fi
 mkdir -p "$BUILD"
 cd "$BUILD"
 
+if [ -f "$BUILD/mmake.config" ] && \
+   [ "$(cat "$FP_STAMP" 2>/dev/null || echo 0)" != "$BELLATRIX_FRAME_POINTERS" ]; then
+    echo "[aros] BELLATRIX_FRAME_POINTERS changed to $BELLATRIX_FRAME_POINTERS —"
+    echo "[aros] reconfiguring, which rebuilds the tree (the toolchain is kept)"
+    rm -f "$BUILD/mmake.config"
+fi
+
 # configure is only re-run when there is nothing to build with. It regenerates
 # the whole bin/<target>/gen tree, so running it needlessly is not free.
 if [ ! -f "$BUILD/mmake.config" ]; then
@@ -451,6 +497,7 @@ if [ ! -f "$BUILD/mmake.config" ]; then
         echo "[aros] configuring for $TARGET"
     fi
     "$SRC/configure" "${CONFIGURE_ARGS[@]}"
+    echo "$BELLATRIX_FRAME_POINTERS" > "$FP_STAMP"
 else
     echo "[aros] already configured"
 

@@ -17,7 +17,7 @@ PRIV_KERNEL_INCLUDES = \
     -I$(SRCDIR)/rom/exec
 
 FILES := cause cli sti schedule kernel_debug getsystemattr context \
-         kernel_cpu
+         kernel_cpu backtracefromframe
 
 USER_INCLUDES := $(PRIV_KERNEL_INCLUDES) \
     -I$(GENINCDIR) -I$(AROS_DEVELOPER)/include

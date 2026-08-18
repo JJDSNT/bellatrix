@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 18 Aug 2026 01:10:00 -0300
+Subject: [PATCH 28/28] build: let the m68k-emu68 target keep frame pointers
+
+Diagnostics are an exception to the performance work, and until now this
+target could not make that exception: it hard-coded CFLAGS_OMIT_FP.
+
+KrnBacktraceFromFrame() walks the chain GCC builds with link.w/unlk. With
+frame pointers omitted there is no chain, so a backtrace stops at the frame it
+was handed -- and the frame worth seeing is never in the module that detected
+the fault. The heap-corruption reporter in rom/kernel/tlsf.c names the block
+and the task and then has nothing to say about who freed it.
+
+aarch64, x86_64 and riscv64 all append CFLAGS_NO_OMIT_FP unconditionally for
+exactly this reason. m68k gets a switch rather than an unconditional flag,
+because here the cost is paid twice: %a6 is a register the JIT would rather
+have, and this target is built for size.
+
+    BELLATRIX_FRAME_POINTERS=1 ./scripts/build-aros.sh
+
+The variable is read at configure time and therefore applies to the whole
+target uniformly -- which is the point, since the interesting caller is in a
+different module from the detector.
+
+scripts/build-aros.sh defaults it to 1, so a development build of this
+repository keeps frame pointers and only an explicit 0 gives them up. That
+default is the caller's policy and not this patch's: the branch here honours
+whatever it is told, and an unset variable still means what upstream means.
+---
+--- a/configure
++++ b/configure
+@@ -11350,8 +11350,24 @@
+                 aros_isa_flags="$""(ISA_MC68040_FLAGS)"
+                 aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -D__mc68000__ -D__EMU68__"
+                 aros_config_cppflags="$aros_config_cppflags -D__EMU68__"
+-                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_FREESTANDING) $""(CFLAGS_OMIT_FP) $""(CFLAGS_BUILTIN)"
+-                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_OMIT_FP) $""(CFLAGS_BUILTIN)"
++                # Frame pointers are omitted by default: %a6 is a register the
++                # JIT would rather have, and this target is size-optimised.
++                #
++                # BELLATRIX_FRAME_POINTERS=1 keeps them instead, for the whole
++                # target. KrnBacktraceFromFrame() walks the link/unlk chain, so
++                # without this every backtrace stops at the frame it was handed
++                # -- and the frame worth seeing is always in some other module
++                # than the one that detected the fault. aarch64, x86_64 and
++                # riscv64 all pass CFLAGS_NO_OMIT_FP unconditionally for the
++                # same reason; m68k makes it a switch because here it is paid
++                # in JITted code.
++                if test "x$BELLATRIX_FRAME_POINTERS" = "x1"; then
++                    aros_emu68_fp_cflags="$""(CFLAGS_NO_OMIT_FP)"
++                else
++                    aros_emu68_fp_cflags="$""(CFLAGS_OMIT_FP)"
++                fi
++                aros_config_cflags="$aros_config_cflags $""(CFLAGS_NO_STRICT_ALIASING) $""(CFLAGS_FREESTANDING) $aros_emu68_fp_cflags $""(CFLAGS_BUILTIN)"
++                aros_config_cxxflags="$aros_config_cxxflags $""(CFLAGS_NO_STRICT_ALIASING) $aros_emu68_fp_cflags $""(CFLAGS_BUILTIN)"
+                 aros_target_strip_flags="-R.comment --strip-debug"
+                 if test "$optimization" = "default"; then
+                     optimization_level=$toolchain_size_opt_lvl
