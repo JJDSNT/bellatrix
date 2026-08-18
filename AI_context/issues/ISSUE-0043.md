@@ -377,6 +377,37 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-18 -- **The takeover is ACTIVE on real hardware.** With `gpu_mem=128`
+  and the FBFREE gone, the firmware allocated a framebuffer instead of refusing
+  (`phys=0x3d827000 pitch=7680` -- 1920 * 4, so 32bpp, a surface of our own
+  rather than the kernel's boot RGB565 one), published a display list, and the
+  driver inherited its plane:
+
+      ch1: LIST=0994 LACT=0994 CTRL=80780438
+        [2452] 47007817 ff000000 44380780 01a50000 fd827000 fdc03200 00001e00
+          fmt=RGBA8888 unity=1 valid=1  pos2: w=1920 h=1080
+          ptr0=0xfd827000 pitch=7680 <= MATCHES FBALLOC page0  pitch-match
+      takeover: ACTIVE - list 3584, out 1920x1080, fb 1920x1080 -> 1920x1080
+
+  This is path B from the fork at the top of this issue: the display list is
+  ours, flips and cursor moves become dlist repoints, and ISSUE-0012's hardware
+  cursor becomes possible. The boot reaches Wanderer, and reaches it with
+  `mungwall` on -- which also means `patches/aros/0043` fixed mungwall on m68k
+  and that ISSUE-0037 did not fire in this configuration. It has not been shown
+  fixed; it has been shown not to fire here.
+
+  Also settled by this log: the earlier "display list is a bare END" and the
+  black screen were both our own FBFREE. The second dump, taken when Wanderer
+  sets its mode, shows the firmware's list moved to word 1636 -- the 0x664 that
+  arm-native sees -- exactly as predicted once a mode set happens.
+
+  Left failing: the vsync interrupt. `patches/aros/0044` calibrates the probe
+  against DISPSTATX's scanline wrap instead of against another interrupt bit,
+  because the bits it was calibrating from turned out to be level-triggered
+  storms (156959 ticks) rather than line rate. Until that lands and is
+  confirmed, flips are unpaced, which is the most likely reading of the user's
+  "does not look accelerated".
+
 - 2026-08-18 -- **The black screen is ours: the driver frees the framebuffer
   before it knows it can get another.** Two runs settled it. With `mungwall`
   the boot dies before any bitmap is created and the splash stays up with the
