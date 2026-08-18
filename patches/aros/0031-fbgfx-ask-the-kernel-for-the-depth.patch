@@ -36,6 +36,14 @@ row and was already format-agnostic.
 
 Not yet run on hardware -- this compiles and links for m68k, and the arithmetic
 above is the part most likely to be wrong in a way only a screen will show.
+It also stops being silent. Every message in this driver was D() and compiled
+out, so a boot log said nothing about the display at all -- not which driver
+initialised, not the mode, not the address. The newest component in the system
+was the only one that never announced itself, and "which graphics driver is
+this boot running?" was answerable only by remembering what had been compiled.
+One unconditional line at init fixes that, and it reports the depth this patch
+teaches the driver to ask for.
+
 ---
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.h
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.h
@@ -54,7 +62,7 @@ above is the part most likely to be wrong in a way only a screen will show.
      UBYTE	 DAC[768];
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
-@@ -52,20 +52,56 @@
+@@ -52,25 +52,72 @@
      data->width        = KrnGetSystemAttr(KATTR_FrameBufferWidth);
      data->height       = KrnGetSystemAttr(KATTR_FrameBufferHeight);
      data->bytesperline = KrnGetSystemAttr(KATTR_FrameBufferPitch);
@@ -121,7 +129,26 @@ above is the part most likely to be wrong in a way only a screen will show.
 +    }
      data->fbsize = data->height * data->bytesperline;
  
-     D(bug("[FBGfx] HwInit: %ux%ux%u linear FB @ 0x%p, pitch %u\n",
+-    D(bug("[FBGfx] HwInit: %ux%ux%u linear FB @ 0x%p, pitch %u\n",
+-          data->width, data->height, data->depth,
+-          data->framebuffer, data->bytesperline));
++    /*
++     * Unconditional, unlike everything else here.
++     *
++     * Every other message in this driver is D() and compiled out, so a boot
++     * log had nothing at all to say about the display -- not which driver
++     * initialised, not at what mode, not where. That is one line's worth of
++     * silence hiding the newest component in the system, and it made a
++     * question as basic as "which graphics driver is this boot running?"
++     * answerable only by remembering what was compiled.
++     */
++    bug("[FBGfx] %ux%u %ubpp linear FB @ 0x%p, pitch %u%s\n",
++        data->width, data->height, data->bitsperpixel,
++        data->framebuffer, data->bytesperline,
++        data->swappixelbytes ? ", byte-swapped" : "");
+ 
+     ClearBuffer(data);
+     return TRUE;
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
 @@ -52,6 +52,14 @@

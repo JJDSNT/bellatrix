@@ -103,9 +103,9 @@ timer is not.
  
  BOOL initFBGfxHW(struct HWData *data)
  {
-@@ -108,7 +111,21 @@
-           data->width, data->height, data->depth,
-           data->framebuffer, data->bytesperline));
+@@ -119,7 +122,21 @@
+         data->framebuffer, data->bytesperline,
+         data->swappixelbytes ? ", byte-swapped" : "");
  
 +#ifdef __EMU68__
 +    /*
@@ -125,7 +125,7 @@ timer is not.
      return TRUE;
  }
  
-@@ -120,6 +137,31 @@
+@@ -131,6 +148,31 @@
      ULONG srcmod, dstmod;
      LONG y, w, h, sx, sy;
  
