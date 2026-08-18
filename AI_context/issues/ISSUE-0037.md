@@ -334,6 +334,60 @@ did not say so.
 on real silicon.** The card driver stays a first-class suspect alongside the
 RAM: handler.
 
+### It came back, on a different pool and a different path (2026-08-18)
+
+A boot under QEMU, with the vc4gfx driver linked, produced the corruption again
+-- and this time the frame pointers were already on, so it arrived with a
+resolved backtrace:
+
+```
+[Kernel:TLSF] free-list corruption at REMOVE_HEADER: mhe=02000000
+  tlsf=02000058 bucket=19/0 block=00000000 task=022c71b4
+[Kernel:TLSF] Backtrace (7 frames):
+
+tlsf_freemem                  (the call site inside tlsf_freevec)
+nommu_FreeMem         + 0xcc
+Exec_35_FreeMem       + 0x54
+__inline_Exec_FreeMem + 0x16
+freeLocalVars.isra.0  + 0x36
+DosEntry              + 0xa2
+Exec_TaskFinaliser
+```
+
+Load base 0x34600000, established the same way as before: `PC: 0x3461FB9C`
+minus the base is `0x1FB9C`, and the ELF has `1fb9a: 4e47 trap #7`.
+
+**This is not the RAM: handler and not `muddy_pool`.** `mhe=02000000` is the
+system heap. The caller is a shell process finishing:
+`freeLocalVars()` (`rom/dos/createnewproc.c:617`) walking `pr_LocalVars` and
+calling `FreeMem(varNode->lv_Value, varNode->lv_Len)` on the way out.
+
+#### What that does to the hypotheses
+
+**It widens the defect and narrows the explanation.** Two sightings, two
+different pools, two unrelated callers -- `rom/filesys/ram` freeing a name
+string in `muddy_pool`, and `rom/dos` freeing a local variable on the system
+heap. A bug inside either module cannot produce both. Something that scribbles
+across the heap can.
+
+That makes the guard bytes in `patches/aros/0030` insufficient by construction:
+they cover `muddy_pool`'s two allocation kinds and nothing else, so this
+sighting was invisible to them. Whatever is written next has to cover the
+system heap.
+
+**It is not vc4gfx**, tempting though a brand-new driver is. This exact
+signature -- `mhe=02000000`, a CLI task -- is the one this issue opened with,
+months of commits before vc4gfx was built.
+
+**The size argument is not the mechanism, again.** `freeLocalVars()` frees with
+a remembered `lv_Len`, which is the same shape as `SetString()`'s recomputed
+size and just as unable to cause this: `tlsf_freemem()` discards the size and
+works from the block header.
+
+So the conclusion from the RAM: sighting stands and now applies more broadly:
+**something overran an allocation and damaged the neighbouring block header**,
+and it is not confined to one pool.
+
 ### RESOLVED BACKTRACE (2026-08-17) — it is a file being deleted from `RAM:`
 
 The frame-pointer build produced **9 frames**, and they resolve.

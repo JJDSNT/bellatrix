@@ -45,18 +45,25 @@ COREPUBLIC := $(KOBJSDIR)/kernel_resource.o $(KOBJSDIR)/exec_library.o
 # two drivers owning the same framebuffer.
 #
 #   emu68gfx  the driver written for this port. Boots today.
-#   fbgfx     arch/aarch64-raspi's, ported under ISSUE-0043. It has its own
-#             bitmap and display classes, so Show() marks a bitmap visible and
-#             refreshes by area instead of the generic Display class copying
-#             the whole screen on every Show.
+#   fbgfx     arch/aarch64-raspi's. Its own bitmap and display classes, so
+#             Show() marks a bitmap visible and refreshes by area instead of
+#             the generic Display class copying the whole screen every Show.
+#   vc4gfx    arch/arm-native's VideoCore 4 driver: HVS display lists, the
+#             HDMI encoder, its own DMA. The only one of the three that owns
+#             the display pipeline rather than being handed a surface, and the
+#             one ISSUE-0012's hardware cursor needs -- a cursor is an HVS
+#             plane. Builds; has not yet run.
 #
 # Like SDCARD_BACKEND in soc/sdcard, this is edited here rather than passed on
 # the command line: mmake does not forward variables, so `make GFX_BACKEND=...`
 # would silently build the other one.
 #
-GFX_BACKEND := fbgfx
+GFX_BACKEND := vc4gfx
 
-ifeq ($(GFX_BACKEND),fbgfx)
+ifeq ($(GFX_BACKEND),vc4gfx)
+GFX_RESIDENT := vc4gfx_hidd
+GFX_KOBJ     := kernel-m68k-emu68-vc4gfx-kobj
+else ifeq ($(GFX_BACKEND),fbgfx)
 GFX_RESIDENT := fbgfx_hidd
 GFX_KOBJ     := kernel-m68k-emu68-fbgfx-kobj
 else
