@@ -316,7 +316,19 @@ static void draw_clock(void)
 void emu68_bootui_init(void)
 {
     struct Emu68BootContext *ctx = &emu68_boot_context;
-    uint16_t background = RGB565(7, 12, 24);
+    /*
+     * The same black the artwork and the progress band use.
+     *
+     * This was RGB565(7, 12, 24) -- a near-black with a blue cast, which is a
+     * perfectly good colour and the wrong one here. The boot image's own
+     * ground is 0x0000 (see bootimage.inc) and draw_progress() clears its band
+     * to RGB565(0, 0, 0), so a bluish ground drew a visible rectangle around
+     * both: three regions, two blacks, and seams where they met.
+     *
+     * Any single value would remove the seams; black is the one that needs no
+     * change to the artwork.
+     */
+    uint16_t background = RGB565(0, 0, 0);
 
     bootui.active = 0;
     if (!(ctx->flags & EMU68_BOOT_FRAMEBUFFER) ||
