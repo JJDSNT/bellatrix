@@ -217,6 +217,34 @@ five attempts at forcing a redraw failed. `ShowTitle()` and `ActivateWindow()`
 both queue through `DoASyncAction()` and the queue is drained by the input
 handler, so neither runs on a boot with no input.
 
+# Inherited from ISSUE-0021: the boot time doubled, and nobody knows which change did it
+
+Carried here when that issue closed, because it is not a boot UI question.
+
+The user observed the boot going from roughly one minute to two. Two things
+changed in the same period and both are behind a switch:
+
+* **`GFX_BACKEND`**, emu68gfx to fbgfx. The new driver refreshes **by area** --
+  one copy per drawing operation, each with its own bounds arithmetic -- where
+  the old one let the generic Display class copy the whole screen once per
+  `Show()`. Many small copies against few large ones is not obviously the
+  cheaper trade, and it has never been measured.
+* **`BELLATRIX_FRAME_POINTERS`**, turned on the same day. Documented at the
+  time as costing "an unmeasured amount of speed", and `CLAUDE.md` records that
+  numbers taken with it on do not compare with the 153 runs in
+  `out/boot-timing.jsonl`.
+
+Two independent switches, so four combinations; and since flipping the backend
+only needs a relink while flipping frame pointers needs a reconfigure, the
+cheap order is to fix the latter and vary the former first.
+
+**Not measured by decision.** The A/B was offered and declined -- the work at
+hand was the boot UI, not the clock. Recorded so that "the boot got slower" has
+a date, two named suspects and a method attached rather than becoming folklore.
+
+Note this is the same number the issue already asks for above: what the Display
+class's copy costs. Answering that answers half of this.
+
 # What is not known
 
 Ordered by how much each would change the plan:

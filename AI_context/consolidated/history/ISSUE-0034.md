@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0034
 title: "Hold the boot UI until the desktop is drawn, as the one exception to the takeover rule"
-status: backlog
+status: closed
 priority: medium
 type: feature
 owner: unassigned
@@ -121,3 +121,18 @@ finished and stays here as the record; it is not a task waiting to be picked up.
 - 2026-08-17 -- Opened after the splash-scaling work. Identified the takeover
   point and, more usefully, that this driver copies on Show, which is what makes
   the exception clean rather than a race.
+
+# Closed (2026-08-18)
+
+Delivered. The splash now holds the display from the first Show after Wanderer
+starts until the desktop is drawn, so the gap this issue is about -- splash
+leaves, grey empty screen, icons arrive some seconds later -- no longer exists.
+
+The hold was cheap only because of the fbgfx port (ISSUE-0043): that driver
+refreshes from each bitmap's own buffer rather than composing into the
+framebuffer, so suppressing the copy leaves the splash up while the desktop is
+assembled behind it. With the previous driver the same effect would have needed
+a repaint loop fighting Wanderer for the framebuffer.
+
+Mechanism and the six attempts it took are in ISSUE-0043; the acceptance
+criteria are ISSUE-0021's, which this duplicates.

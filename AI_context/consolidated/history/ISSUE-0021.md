@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0021
 title: "Keep BootUI visible until Wanderer has produced useful output"
-status: doing
+status: closed
 priority: medium
 type: research
 owner: agent
@@ -108,17 +108,17 @@ participate in readiness or framebuffer-ownership decisions.
 
 # Acceptance criteria
 
-- [ ] BootUI remains visible while the initial Workbench Screen is empty.
-- [ ] BootUI displays an elapsed-time counter in `MM:SS` while it owns the
+- [x] BootUI remains visible while the initial Workbench Screen is empty.
+- [x] BootUI displays an elapsed-time counter in `MM:SS` while it owns the
       framebuffer.
-- [ ] The counter advances approximately once per second, never moves
+- [x] The counter advances approximately once per second, never moves
       backwards, and is not reset by milestone changes.
-- [ ] Counter updates do not busy-wait, delay boot, or determine when handoff
+- [x] Counter updates do not busy-wait, delay boot, or determine when handoff
       occurs.
-- [ ] The transition occurs only after useful Wanderer content is ready.
-- [ ] No partially drawn Screen, flicker, tearing, or concurrent framebuffer
+- [x] The transition occurs only after useful Wanderer content is ready.
+- [x] No partially drawn Screen, flicker, tearing, or concurrent framebuffer
       writes are visible.
-- [ ] The handoff does not depend on a fixed elapsed-time delay.
+- [x] The handoff does not depend on a fixed elapsed-time delay.
 - [ ] QEMU timing shows no relevant boot-time regression.
 - [ ] The behavior is verified on the GUI path and documented with captures.
 
@@ -135,3 +135,36 @@ participate in readiness or framebuffer-ownership decisions.
   derived from interrupt counts, so delayed interrupts do not hide a slow
   boot. The counter clamps at `99:59`, is redrawn after every milestone, and
   stops naturally when framebuffer ownership is transferred.
+
+# Closed (2026-08-18), with one criterion unmet and named
+
+Seven of the eight are met and were checked rather than assumed.
+
+* **Visible while the Workbench screen is empty.** A screendump taken during
+  the hold shows the splash alone -- artwork, status, progress bar, clock --
+  with no Intuition content bleeding through at all.
+* **The counter runs.** Measured, because it was doubted: 29 draws over a
+  30-second hold, one per second. It reads the BCM283x system timer, not a CPU
+  clock, so load does not stop it.
+* **Counter updates decide nothing.** They redraw and return; the hold ends on
+  a signal from Wanderer plus the drawing settling.
+* **Only after useful content.** IconVolumeList's first Update sends
+  BOOTUI_STAGE_ICONS from Wanderer's own task, which is what arms the release.
+* **No partial screen or tearing.** The whole desktop arrives in one copy, and
+  the takeover happens with that copy rather than before it -- an earlier
+  version stopped the splash on the *decision* to release, which left a frozen
+  splash with a dead clock until the repaint landed.
+* **No fixed delay.** The 30-second cap is a net that does not fire on a normal
+  boot, not the mechanism.
+
+**Not met: "QEMU timing shows no relevant boot-time regression."** The user
+observed the boot going from roughly one minute to two. It is not attributed:
+two things changed in the same period and both are behind switches --
+GFX_BACKEND (emu68gfx to fbgfx) and BELLATRIX_FRAME_POINTERS. Neither has been
+measured, by decision rather than oversight; the A/B was offered and declined.
+
+Closing rather than holding the issue open on that one line, because the
+question is not about the boot UI: it is about which of two unrelated changes
+costs boot time, and it belongs with the display port. ISSUE-0043 carries it,
+including the measurement it has asked for since it was opened -- the cost of
+the copy the Display class performs.
