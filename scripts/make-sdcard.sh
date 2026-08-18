@@ -282,7 +282,21 @@ EOF
 
     # One line, no trailing newline: the firmware hands this to Emu68 as the
     # boot arguments, and nocomposition is what puts AROS on the screen.
-    printf 'nocomposition' > "$STAGE/cmdline.txt"
+    #
+    # BELLATRIX_CMDLINE_EXTRA appends to it, for arguments a diagnostic run
+    # wants and a shipped card must not carry. The ones worth knowing about:
+    #
+    #   mungwall     walls every AllocMem and checks them on FreeMem, so a
+    #                heap overrun is reported by whoever wrote past its
+    #                allocation instead of by the next unrelated free
+    #                (ISSUE-0037). Costs memory and speed; never default.
+    #   sysdebug=..  AROS's runtime debug flags, e.g. sysdebug=InitCode.
+    #
+    #   BELLATRIX_CMDLINE_EXTRA=mungwall ./scripts/make-sdcard.sh --pack
+    #
+    printf 'nocomposition%s' \
+        "${BELLATRIX_CMDLINE_EXTRA:+ $BELLATRIX_CMDLINE_EXTRA}" \
+        > "$STAGE/cmdline.txt"
 fi
 
 # What this card is, written for the same reason config.txt is: a card outlives

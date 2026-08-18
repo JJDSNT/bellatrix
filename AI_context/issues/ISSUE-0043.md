@@ -377,6 +377,23 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-18 -- **The list at word 0 is a bare END.** With `head == 0` accepted,
+  the dump walked it: `[0000] 0x80000000 END`. One word, no planes -- that
+  channel draws background and nothing else. And the channel is live:
+  `DISPSTATX` mode reads RUN and its line counter moves between dumps
+  (a0034290, a00383b6). Something is on the wire that this list does not
+  describe.
+
+  `patches/aros/0040` stops asking DISPLIST/DISPLACT where the list is and
+  scans dlist RAM for the one thing a display list cannot fake -- a word
+  holding our framebuffer's address, alias bits masked. Read-only, bounded to
+  the 4096 words already proven readable (the firmware's filter kernel comes
+  back from word 4084 intact). The DISPBASEX windows tile a region reaching
+  ~20736 words -- ch2 [0,2047], ch1 [2048,15503], ch0 [15504,20735] -- which is
+  a real hint that dlist RAM is larger than assumed, but the far end of it
+  would be peripheral offset 0x416400, past the 0x6000 the SCALER block is
+  documented to occupy. Widening the scan is a separate decision.
+
 - 2026-08-18 -- **The endian fix landed and the dump became readable.** On the
   Pi 3: `ID=0x64647276`, `ch1 CTRL=80780438` (ENABLE | 1920 << 12 | 1080), PV2
   reporting real 1080p timings (hfp 88, hsync 44, hbp 148, vfp 4, vsync 5, vbp

@@ -1128,6 +1128,40 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-18 -- **The chain is resolved through dos.library, and MungWall is
+  the tool this needs.** Against the current ELF (base 0x36600000, link map
+  plus `nm` on the pre-localize objects):
+
+      3661fb9c  fault PC, inside tlsf_freemem's inlined REMOVE_HEADER
+      3662048e  tlsf_freemem
+      3662b106  nommu_FreeMem
+      366264f0  Exec_35_FreeMem
+      366ca226  dos.library __inline_Exec_FreeMem
+      366ca2fe  dos.library freeLocalVars.isra.0
+      366ca54e  dos.library DosEntry
+
+  `freeLocalVars()` (`rom/dos/createnewproc.c:617`) has exactly one FreeMem:
+  `FreeMem(varNode->lv_Value, varNode->lv_Len)`. The report says `block=0`
+  from `MERGE_PREV`, which means the freed block's header claims its
+  predecessor is free while `header.prev` is NULL -- a header that was
+  overwritten, not a bad free. So this call site is the first to *touch* the
+  damage, not its cause, and reading further up the DOS side will not find the
+  writer.
+
+  What finds the writer is `mungwall`: AROS walls every AllocMem and checks the
+  walls on FreeMem, so an overrun is reported against whoever wrote past its own
+  allocation. It is a boot argument, not a build option
+  (`rom/exec/prepareexecbase.c:332` reads it out of `KRN_CmdLine`), so it costs
+  nothing but a run. `scripts/make-sdcard.sh` now takes
+  `BELLATRIX_CMDLINE_EXTRA` for exactly this, and on a card already written it
+  is one word appended to `cmdline.txt`.
+
+  Two upstream observations from reading the same file, neither of them this
+  bug: `copyVars()` leaves `newVar->lv_Value` aliasing the parent's buffer when
+  `lv_Len == 0` (harmless only because `FreeMem` early-returns on size 0), and
+  `SetVar()` dereferences `lv` unconditionally after an `AllocVec` that is
+  allowed to fail.
+
 - 2026-08-18 — **Fatal on hardware, not cosmetic.** On the Pi 3 the same
   `freeLocalVars` chain now raises the requester twice for task `CLI` and the
   boot ends at `PC = 0x00000000` instead of carrying on; in QEMU the same build
