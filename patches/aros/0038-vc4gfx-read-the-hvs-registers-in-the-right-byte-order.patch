@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 09:10:00 -0300
+Subject: [PATCH 38/38] vc4gfx: read the HVS registers in the byte order the
+ HVS uses
+
+The takeover has been declining on every Pi 3 boot with
+
+    [VC4HVS] takeover: HDMI channel not usable (CTRL=38047880 head=0)
+
+and the numbers are the whole story. 0x38047880 is 0x80780438 with its
+bytes reversed, and 0x80780438 is exactly ENABLE | 1920 << 12 | 1080 --
+the channel was enabled and running the mode we expected. The same holds
+for every other register the driver read: HVS_ID came back 0x76726464
+where the header records 0x64647276, and a later dump reported a
+display-list head of 0x64060000, which is word 0x664, a perfectly
+ordinary index into the 4096-word dlist RAM.
+
+hvs_rd() and pv_rd() dereference a volatile ULONG * and hand the result
+straight back. On arm-native that is right, because the CPU and the
+peripheral agree. On m68k they do not: the registers are little-endian
+like every other BCM283x peripheral, so each read arrives byte-reversed
+and the takeover judged a healthy channel to be disabled with an
+out-of-range list.
+
+The rest of this driver already knew that -- vc4gfx_dma.c wraps the DMA
+control registers and the system timer in AROS_LE2LONG/AROS_LONG2LE, and
+so does this port's mbox.resource. The four HVS/PixelValve accessors were
+the ones written for a little-endian host and never revisited. Wrapping
+them costs nothing where the host is little-endian: AROS_LE2LONG compiles
+away and the load is the same instruction it was.
+
+Second change, in the same failure path: the fb-plane search only
+recognised RGBA8888. The surface this port is handed is RGB565 -- 16-bit,
+pitch 3840 for 1920 pixels -- so even reading the list correctly the
+takeover would have walked past its own framebuffer and reported "no
+usable fb plane". The word layout, which is what the size check tests, is
+the same for both; the depth only tells the HVS how to sample. PTR0 ==
+fb_phys remains the identification that matters.
+
+Neither half is verified on hardware yet: what is verified is that the
+values the driver printed cannot be read any other way.
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
+index 209c3250d6..6e44af7e8d 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
+@@ -53,24 +53,37 @@
+ #define HVS_SPIN_PROBEBIT 100000    /* ~2-4 frames per probed INTEN bit */
+ #define HVS_SPIN_FLIP   500000      /* flip-latch wait bound, ~3 frames */
+ 
++/*
++ * HVS and PixelValve registers are little-endian, like every other BCM283x
++ * peripheral -- vc4gfx_dma.c already says so for the DMA engine and the
++ * system timer. On a little-endian CPU the conversion is nothing and the
++ * generated code is the same bare load; on a big-endian one it is the
++ * difference between reading a register and reading its bytes backwards.
++ *
++ * That difference is not academic here. On m68k the raw reads returned
++ * HVS_ID = 0x76726464 (the header records 0x64647276), DISPCTRLX1 =
++ * 0x38047880 (the real 0x80780438 = ENABLE | 1920 << 12 | 1080) and a
++ * display-list head of 0x64060000 for word 0x664 -- so the takeover saw a
++ * disabled channel with an out-of-range list and declined every time.
++ */
+ static inline ULONG hvs_rd(ULONG offset)
+ {
+-    return *(volatile ULONG *)(VC4_HVS_BASE + offset);
++    return AROS_LE2LONG(*(volatile ULONG *)(VC4_HVS_BASE + offset));
+ }
+ 
+ static inline void hvs_wr(ULONG offset, ULONG value)
+ {
+-    *(volatile ULONG *)(VC4_HVS_BASE + offset) = value;
++    *(volatile ULONG *)(VC4_HVS_BASE + offset) = AROS_LONG2LE(value);
+ }
+ 
+ static inline ULONG pv_rd(IPTR base, ULONG offset)
+ {
+-    return *(volatile ULONG *)(base + offset);
++    return AROS_LE2LONG(*(volatile ULONG *)(base + offset));
+ }
+ 
+ static inline void pv_wr(IPTR base, ULONG offset, ULONG value)
+ {
+-    *(volatile ULONG *)(base + offset) = value;
++    *(volatile ULONG *)(base + offset) = AROS_LONG2LE(value);
+ }
+ 
+ static const char * const hvs_fmt_names[] =
+@@ -688,9 +701,17 @@ BOOL vc4_hvs_takeover(struct VideoCoreGfx_staticdata *xsd,
+                 break;
+ 
+             /* Recognize the fb plane by its PTR0. Two known layouts,
+-             * both single-plane RGBA: unity (7 words, ptr at +4) and
+-             * scaled (14 words, ptr at +5, POS1 = dest size at +2). */
+-            if ((ctl0 & HVS_CTL0_FORMAT_MASK) == HVS_PXF_RGBA8888)
++             * both single-plane: unity (7 words, ptr at +4) and scaled
++             * (14 words, ptr at +5, POS1 = dest size at +2). The word
++             * layout is what the size check tests; the depth only picks
++             * how the HVS samples the surface, and both depths this port
++             * can be handed are single-plane packed RGB. RGB565 is the
++             * one the m68k-emu68 bootloader sets up (16-bit surface,
++             * pitch = 2 * width), so a takeover that only knew RGBA8888
++             * could never inherit anything here. PTR0 == fb_phys stays
++             * the real identification. */
++            if ((ctl0 & HVS_CTL0_FORMAT_MASK) == HVS_PXF_RGBA8888
++                || (ctl0 & HVS_CTL0_FORMAT_MASK) == HVS_PXF_RGB565)
+             {
+                 ULONG ptroff = 0;
+ 

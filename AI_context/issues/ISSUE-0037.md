@@ -2,11 +2,11 @@
 id: ISSUE-0037
 title: "The RAM: handler dies on a corrupt block header once the preferences actually load"
 status: doing
-priority: high
+priority: critical
 type: bug
 owner: unassigned
 created_at: 2026-08-17
-updated_at: 2026-08-17
+updated_at: 2026-08-18
 tags:
   - memory
   - tlsf
@@ -1127,6 +1127,18 @@ failure has a name instead of being a silent death, and it is not evidence that
 any of them is wrong.
 
 # Execution log
+
+- 2026-08-18 — **Fatal on hardware, not cosmetic.** On the Pi 3 the same
+  `freeLocalVars` chain now raises the requester twice for task `CLI` and the
+  boot ends at `PC = 0x00000000` instead of carrying on; in QEMU the same build
+  raises it once and reaches Wanderer. Two alerts and a jump to zero is what
+  alert-during-alert looks like: `Exec_UserAlert` needs a screen to draw on,
+  and with `GFX_BACKEND=vc4gfx` the HVS takeover was declining (ISSUE-0043),
+  which is the difference between the two hosts worth testing first. Raised to
+  `critical` at the user's reading: this is now the defect that decides whether
+  a Pi boot finishes, so it outranks the video work it was competing with.
+  The guards from `patches/aros/0030` cover muddy_pool only; this chain frees
+  on the system heap and they never see it.
 
 - 2026-08-17 — **The backtrace works and names the path.** Nine frames, load
   base `0x36600000` established from the `trap #7` instruction rather than

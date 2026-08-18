@@ -116,6 +116,19 @@ deliberately rather than drifting.
 
 # Execution log
 
+- 2026-08-18 -- Answered a follow-up: on aarch64 the driver is still a
+  *resident*, it is simply not in the kernel binary. `arch/arm-native/.../
+  vc4gfx/mmakefile.src` builds it with `%build_module modtype=hidd`, and
+  `arch/aarch64-raspi/boot/mmakefile.src` puts `vc4gfx` in `PKG_HIDDS`, which
+  `%make_package` bundles into `$(ARM_BSP)`. `config.txt` then loads that
+  bundle separately from the kernel -- `kernel=aros-aarch64-raspi.img` plus
+  `initramfs $(ARM_BSP) 0x00800000` -- and the bootstrap registers each
+  module's romtag before Exec init, so a pri-9 gfx HIDD in the package runs at
+  exactly the point it runs today from the ELF. Residency and packaging are
+  independent; only the second is what this issue changes. It also confirms the
+  hard part named above: the Pi firmware loads one initramfs, and on this port
+  Emu68 has already claimed it.
+
 - 2026-08-18 -- Opened at the user's request, from their question about how the
   aarch64/arm targets load their graphics driver. The answer was the one this
   issue is about: they do not link it. Written after checking that

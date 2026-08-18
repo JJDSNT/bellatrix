@@ -377,6 +377,29 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-18 — vc4gfx reached the silicon and read every register backwards.
+  The takeover declined on every Pi 3 boot with `CTRL=38047880 head=0`, and
+  0x38047880 is 0x80780438 byte-reversed -- `ENABLE | 1920 << 12 | 1080`, the
+  channel enabled and running the mode we expected. `HVS_ID` told the same
+  story: 0x76726464 where the header records 0x64647276. `hvs_rd()`/`pv_rd()`
+  dereference a `volatile ULONG *` and return it as-is, which is right on
+  arm-native and wrong here; the registers are little-endian like every other
+  BCM283x peripheral, as `vc4gfx_dma.c` and this port's `mbox.resource` already
+  say in their own code. `patches/aros/0038` wraps the four accessors in
+  `AROS_LE2LONG`/`AROS_LONG2LE` -- a no-op on a little-endian host -- and, in
+  the same failure path, teaches the fb-plane search to recognise RGB565: the
+  surface this port is handed is 16-bit, so a takeover that only knew RGBA8888
+  could never have inherited its own framebuffer. Neither half is confirmed on
+  hardware yet.
+
+  The same day, a build trap: mmake does not expand make variables in `#MM`
+  lines. `#MM- kernel-link-emu68-m68k : ... $(GFX_KOBJ) ...` was a dependency
+  on a metatarget literally named `$(GFX_KOBJ)`, which does not exist and which
+  mmake drops silently -- so no gfx driver was ever a dependency of the kernel
+  link, and vc4gfx was being linked from whatever object happened to be on
+  disk. `aros/arch/m68k-emu68/boot/mmakefile.src` now names all three drivers
+  literally and builds all three; only the one `GFX_BACKEND` selects is linked.
+
 - 2026-08-17 — Opened at the user's request, as a deliberate exception to the
   freeze. Written around the A/B fork after the user pointed out that the
   mailbox's missing framebuffer tags may be irrelevant: they are the interface
