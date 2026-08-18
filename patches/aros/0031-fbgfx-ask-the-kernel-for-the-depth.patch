@@ -1,0 +1,149 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 18 Aug 2026 05:10:00 -0300
+Subject: [PATCH 31/31] fbgfx: ask the kernel for the depth instead of assuming
+ 32bpp
+
+This driver already takes the framebuffer's address, width, height and pitch
+from KrnGetSystemAttr(). The depth was the one property it hard-coded, which
+quietly made it a driver for one bootloader's choice rather than for a linear
+framebuffer -- and KATTR_FrameBufferDepth has existed in aros/kernel.h all
+along, unread.
+
+Reading it lets the same driver serve m68k-emu68, where Emu68 hands over a
+16-bit 5:6:5 surface instead of the firmware's 32-bit R,G,B,x. A kernel with
+nothing to say answers -1, and 32bpp is what this file assumed before, so that
+remains the default and the aarch64 target's behaviour is unchanged.
+
+Two things follow from supporting 16bpp, and only one of them is arithmetic.
+
+The masks and shifts differ. AROS's MAP_COLCOMP convention puts the component
+in the top byte -- (mask << shift) == 0xFF000000 -- so the shift is not the
+mask's own bit position, which the existing comment already warned about.
+
+The other is byte order. A 5:6:5 pixel is a halfword, so unlike the 32bpp case
+(whose masks describe byte order and therefore need nothing) it is sensitive to
+the CPU's endianness, and the VideoCore stores it little-endian whatever the
+CPU is. On a big-endian target every pixel needs its two bytes swapped, which
+is what aHidd_PixFmt_SwapPixelBytes is for; without it int_map_truecolor()
+skips the swap it performs for every other big-endian target's little-endian
+format and every colour arrives reversed. HWData gains a flag for it, set by
+initFBGfxHW() because that is the only part of this driver that knows what the
+hardware produced, and forwarded by the display class without further opinion.
+
+fbDoRefreshArea() needed nothing: it copies bytesperpix-sized pixels row by
+row and was already format-agnostic.
+
+Not yet run on hardware -- this compiles and links for m68k, and the arithmetic
+above is the part most likely to be wrong in a way only a screen will show.
+---
+--- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.h
++++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.h
+@@ -24,6 +24,12 @@
+     ULONG	 greenshift;
+     ULONG	 blueshift;
+     ULONG	 bytesperline;
++    /* TRUE when the surface's pixels are stored in the opposite byte order to
++       the CPU's, which a 16-bit 5:6:5 halfword on a big-endian target is. The
++       display class hands this to aHidd_PixFmt_SwapPixelBytes; deciding it
++       belongs in initFBGfxHW(), which is the only part of this driver that
++       knows what the hardware actually produced. */
++    BOOL	 swappixelbytes;
+     BOOL	 owned;
+     UBYTE	 palettewidth;
+     UBYTE	 DAC[768];
+--- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
++++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
+@@ -52,20 +52,56 @@
+     data->width        = KrnGetSystemAttr(KATTR_FrameBufferWidth);
+     data->height       = KrnGetSystemAttr(KATTR_FrameBufferHeight);
+     data->bytesperline = KrnGetSystemAttr(KATTR_FrameBufferPitch);
+-    data->depth        = 32;
+-    data->bitsperpixel = 32;
+-    data->bytesperpixel = 4;
+ 
+     /*
+-     * The VideoCore surface displays byte order R,G,B,x (see fb.c put()), so
+-     * the pixel masks are red@0-7, green@8-15, blue@16-23. AROS's MAP_COLCOMP
+-     * shift convention is (mask << shift) == 0xFF000000, i.e. shift = 24 minus
+-     * the mask's bit position - NOT the bit position itself.
++     * Ask, rather than assume. This driver already takes width, height and
++     * pitch from the kernel; the depth was the one thing it hard-coded, which
++     * made it a driver for one bootloader's choice instead of for a linear
++     * framebuffer. A kernel with nothing to say answers -1, and 32bpp is what
++     * this file assumed before, so that stays the default.
+      */
+-    data->redmask   = 0x000000FF; data->redshift   = 24;
+-    data->greenmask = 0x0000FF00; data->greenshift = 16;
+-    data->bluemask  = 0x00FF0000; data->blueshift  = 8;
+-    data->palettewidth = 8;
++    {
++        IPTR d = KrnGetSystemAttr(KATTR_FrameBufferDepth);
++
++        if (d != 16 && d != 32)
++            d = 32;
++        data->depth = data->bitsperpixel = d;
++        data->bytesperpixel = d >> 3;
++    }
++
++    /*
++     * AROS's MAP_COLCOMP shift convention is (mask << shift) == 0xFF000000 --
++     * the component ends up in the top byte -- so the shift is *not* the
++     * mask's own bit position.
++     */
++    if (data->bitsperpixel == 16)
++    {
++        /*
++         * 5:6:5 in a halfword. Emu68 hands this over on the Raspberry Pi and
++         * calls it RGB16_LE; the VideoCore stores it little-endian whatever
++         * the CPU is, so on a big-endian target every pixel needs its two
++         * bytes swapped on the way through. Getting this wrong is not subtle
++         * and not silent -- every colour comes out wrong.
++         */
++        data->redmask   = 0x0000F800; data->redshift   = 16;
++        data->greenmask = 0x000007E0; data->greenshift = 21;
++        data->bluemask  = 0x0000001F; data->blueshift  = 27;
++        data->palettewidth = 8;
++        data->swappixelbytes = AROS_BIG_ENDIAN ? TRUE : FALSE;
++    }
++    else
++    {
++        /*
++         * The VideoCore surface displays byte order R,G,B,x (see fb.c put()),
++         * so the pixel masks are red@0-7, green@8-15, blue@16-23. Byte order
++         * rather than word layout, so there is nothing to swap.
++         */
++        data->redmask   = 0x000000FF; data->redshift   = 24;
++        data->greenmask = 0x0000FF00; data->greenshift = 16;
++        data->bluemask  = 0x00FF0000; data->blueshift  = 8;
++        data->palettewidth = 8;
++        data->swappixelbytes = FALSE;
++    }
+     data->fbsize = data->height * data->bytesperline;
+ 
+     D(bug("[FBGfx] HwInit: %ux%ux%u linear FB @ 0x%p, pitch %u\n",
+--- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
++++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
+@@ -52,6 +52,14 @@
+         {aHidd_PixFmt_CLUTShift,    0}, /* 13 */
+         {aHidd_PixFmt_CLUTMask,     0}, /* 14 */
+         {aHidd_PixFmt_BitMapType,   vHidd_BitMapType_Chunky}, /* 15 */
++        /*
++         * Set for a surface whose pixels are stored in the opposite byte order
++         * to the CPU's -- a 5:6:5 halfword on a big-endian target. Without it
++         * int_map_truecolor() skips the swap it performs for every other
++         * big-endian target's little-endian formats and every colour arrives
++         * with its bytes reversed. initFBGfxHW() decides; this only forwards.
++         */
++        {aHidd_PixFmt_SwapPixelBytes, 0}, /* 16 */
+         {TAG_DONE, 0UL }
+     };
+     struct TagItem sync_mode[] =
+@@ -95,6 +103,7 @@
+     pftags[10].ti_Data = XSD(cl)->data.bytesperpixel;
+     pftags[11].ti_Data = (XSD(cl)->data.bitsperpixel > 24) ? 24 : XSD(cl)->data.bitsperpixel;
+     pftags[14].ti_Data = (1 << XSD(cl)->data.depth) - 1;
++    pftags[16].ti_Data = XSD(cl)->data.swappixelbytes;
+ 
+     sync_mode[0].ti_Data = 60 * XSD(cl)->data.width * XSD(cl)->data.height;
+     sync_mode[1].ti_Data = XSD(cl)->data.width;
