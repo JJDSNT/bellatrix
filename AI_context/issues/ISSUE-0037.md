@@ -334,6 +334,25 @@ did not say so.
 on real silicon.** The card driver stays a first-class suspect alongside the
 RAM: handler.
 
+### Confirmed on real hardware, same path (2026-08-18)
+
+The system-heap sighting below was under QEMU. A Pi 3 boot reproduced it
+exactly, with the same seven frames at a different load base (0x36600000
+instead of 0x34600000):
+
+```
+[Kernel:TLSF] free-list corruption at REMOVE_HEADER: mhe=02000000
+  tlsf=02000058 bucket=19/0 block=00000000 task=022c9678
+Task : 0x022C9678 - CLI      PC: 0x3661FB9C
+```
+
+Same offsets throughout -- `3662048e`, `3662b106`, `366264f0`, `366ca01e`,
+`366ca0f6`, `366ca346`, `36624720` -- so the same chain:
+`freeLocalVars` in a finishing shell, freeing on the system heap.
+
+So this is not an emulator artefact and not confined to one host. Two hosts,
+two pools, two unrelated callers.
+
 ### It came back, on a different pool and a different path (2026-08-18)
 
 A boot under QEMU, with the vc4gfx driver linked, produced the corruption again

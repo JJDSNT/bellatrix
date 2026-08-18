@@ -217,6 +217,69 @@ five attempts at forcing a redraw failed. `ShowTitle()` and `ActivateWindow()`
 both queue through `DoASyncAction()` and the queue is drained by the input
 handler, so neither runs on a boot with no input.
 
+# vc4gfx on real hardware: it reaches the silicon and declines (2026-08-18)
+
+The driver ported, linked and booted on a Pi 3. Under QEMU it stood down --
+`no HVS found (ID=0x00000000)` -- which was the right answer there. On hardware
+it is a different machine entirely:
+
+```
+[VC4HVS] ID=0x76726464 DISPCTRL=0xff0f0c9a DISPSTAT=0x00000000 DISPLSTAT=0x00000030
+[VC4HVS] ch1: LIST=0000 LACT=0000 CTRL=38047880 BKGND=00000001 STAT=ee430380
+[VC4HVS] PV2 @ 0xf2807000: CTRL=05701700 VCTRL=03000000 STAT=44040000
+[VC4HVS] fw kernel @4084: 00fceb07 f8ede307 fd054800 ...
+```
+
+`0x76726464` is "vrdd" in ASCII. It reads the HVS identification register, all
+three channels, all three PixelValves and the firmware's own filter kernel, and
+channel 1's STAT advances between reads -- a live display, being scanned out by
+the firmware, correctly observed by our driver.
+
+**Then it refuses the takeover**, and the reason is exact:
+
+```
+[VC4HVS] expecting fb: phys=0x00000000 pitch=0 1920x1080
+[VC4HVS] takeover: HDMI channel not usable (CTRL=38047880 head=0)
+```
+
+`vc4_hvs_takeover()` (`vc4gfx_hvs.c:652`) requires three things of the HDMI
+channel before it will inherit the firmware's framebuffer plane:
+
+```c
+if (!(ctrl & HVS_DISPCTRLX_ENABLE) || head == 0 || head >= HVS_DLIST_WORDS)
+```
+
+`head` is zero. There is no display list to inherit at the moment the driver
+looks.
+
+## Two findings, and neither is "the firmware will not let go"
+
+**The list exists; the driver looks too early.** A second dump later in the
+same boot shows `ch1: LIST=64060000 LACT=64060000`. The firmware publishes its
+display list, just not by the time a resident at priority 9 runs. That reframes
+the largest unknown this issue was opened with: the question is not whether the
+firmware releases the display, it is *when* there is something to take.
+
+The same later dump reports `head=1678114816`, which fails the other half of
+the same test (`head >= HVS_DLIST_WORDS`). A plausible reading is that
+`HVS_DISPLACT` is not the register this check wants, or wants masking; both are
+cheap to establish against the second dump rather than guessed at.
+
+**The driver does not know where the framebuffer is.** `expecting fb:
+phys=0x00000000 pitch=0` while Emu68 reports `[BOOT] Framebuffer @ 3e7fe000`
+and a 1920x1080 display. On arm-native it would learn this from the firmware
+mailbox; here the address is already published by our kernel as
+`KATTR_FrameBuffer` and its pitch companion (added for fbgfx), and nothing
+connects the two. That is the smaller of the two gaps and the more obviously
+fixable.
+
+## What this does to the paths
+
+Path B -- driving the pipeline directly -- is no longer hypothetical. The
+hardware answers, the registers read correctly, and the only thing between here
+and a display list of our own is inheriting or building one. The choice between
+A and B does not need making on faith any more.
+
 # Inherited from ISSUE-0021: the boot time doubled, and nobody knows which change did it
 
 Carried here when that issue closed, because it is not a boot UI question.
