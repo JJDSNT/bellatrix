@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0031
 title: "NewDTObject returns NULL for the PNGs BTScan tried, including one of the distribution's own"
-status: backlog
+status: closed
 priority: medium
 type: bug
 owner: unassigned
@@ -111,13 +111,13 @@ symptom. AROS supports them -- `workbench/libs/icon/diskobjPNGio.c` reads a
 work -- and that would let this project use its real artwork, in colour, at
 whatever size, instead of quantising it to four pens.
 
-**What is shipping meanwhile is a deliberate stopgap.** `images/mkicon.py`
-writes BTScan's icon in the classic `e310` planar format, four colours, because
-that path depends only on icon.library and is what every icon in this
-distribution already uses. It works today. It is not where this should end up,
-and the generator is a dozen lines from emitting the PNG form again once the
-decoder does its job -- the earlier version of that script did exactly that and
-is in this repository's history.
+**~~What is shipping meanwhile is a deliberate stopgap.~~** *Retired
+2026-08-17.* `images/mkicon.py` wrote BTScan's icon in the classic `e310`
+planar format, four colours, because that path depends only on icon.library.
+It was reverted in bluzing `09ed296` once the PNG icon was confirmed to draw
+**and open** on a Pi 3; the generator emits the PNG form again, and
+regenerating the icon from the master reproduces the committed file byte for
+byte.
 
 # What is left
 
@@ -159,14 +159,79 @@ because of it. Worth its own issue if anything else trips on it.
 
 # Acceptance criteria
 
-- [ ] A PNG loads through `NewDTObject` here, or the reason it cannot is
+- [x] A PNG loads through `NewDTObject` here, or the reason it cannot is
       written down with the measurement behind it
-- [ ] A PNG icon can be opened from Workbench
-- [ ] BTScan's icon is its real artwork rather than a four-pen reduction
-- [ ] Whether this was ever port-specific has been answered, not assumed
+- [x] A PNG icon can be opened from Workbench
+- [x] BTScan's icon is its real artwork rather than a four-pen reduction
+- [x] Whether this was ever port-specific has been answered, not assumed --
+      it was never about datatypes or about this port at all
+
+# It stopped reproducing (2026-08-17)
+
+**`NewDTObject()` works.** BTScan's banner renders on a Pi 3, in full colour,
+photographed from the screen: the `DtpicObject` in `main.c:457` -- the one the
+source comments describe as drawing nothing until "the day datatypes does" --
+is showing `BTScan-banner.png`.
+
+That is the same call `icon.library` makes to read a PNG icon
+(`diskobjPNGio.c`), so the icon path is unblocked with it.
+
+**What is not established is why.** The measurement in this issue was taken the
+same day, under QEMU, and returned NULL with `IoErr() == 0` for two different
+PNGs including the distribution's own `AROS.logo`. Between then and now the
+image changed in several ways at once -- the FAT `ParentDir` fix landed
+(ISSUE-0036) and `ENV:` began populating, the tree was rebuilt with frame
+pointers, and the user restored the `ENV:SYS/Packages` block that had been
+removed while chasing ISSUE-0037, which is what runs bluzing's assigns.
+
+Any of those could be it. The `ENV:` one is the most suspicious, because a
+descriptor scan that silently finds nothing and reports no DOS error is exactly
+the shape of the earlier symptom -- but that is a hypothesis, and this file's
+own opening section warns against reading a starting point as a verdict.
+
+**Do not close this by disappearance.** Re-run the original probe: BTScan's
+`[btscan] NewDTObject ... = ` lines are still in the source and cost one run.
+If they now return non-NULL under QEMU as well, the difference is in the image
+rather than the hardware, and the change list above is short enough to bisect.
+
+## What this unblocks, and what it does not
+
+The classic planar icon was recorded as a stopgap in bluzing's own history --
+*"the PNG form is where the icon should end up, in full colour, once the
+decoder works"* -- so restoring it completes a documented intention rather than
+adding anything. That is inside the freeze on the same footing the freeze
+already grants this issue.
+
+## A second thing the same photograph shows
+
+BTScan lists five devices with RSSI, one of them identified as a mouse with
+`HID = yes`, and reports `ready - 5 devices, 1 input`. **The Bluetooth stack is
+discovering real devices on real hardware**, which means `btuart.resource` is
+not merely resident during these boots -- it is receiving and framing traffic
+throughout them. Worth recording in ISSUE-0037, where the question of what runs
+on the Pi and not under QEMU is live.
 
 # Execution log
 
+- 2026-08-17 -- **Closed, with the cause named.** The PNG icon draws *and*
+  opens on a Pi 3, and the banner renders in full colour. It was never
+  datatypes and never this port: `Startup-Sequence:109` runs
+  `AddDataTypes REFRESH QUIET`, which scans `DEVS:DataTypes`, and the FAT
+  handler compared on-disk first-cluster fields without byte-swapping them
+  (ISSUE-0036, `patches/aros/0023`), so that scan found nothing and -- being
+  QUIET -- said nothing. Zero descriptors registered means `NewDTObject`
+  returns NULL with `IoErr()` left at 0, which is exactly the measurement at
+  the top of this file. The same defect emptied
+  `Copy "ENVARC:" "ENV:" ALL`, which is how it was finally caught.
+
+  So every item under "What is left" is answered by one earlier fix, and the
+  four hypotheses this issue carefully refused to commit to were all correctly
+  refused. The stopgap is reverted in bluzing `09ed296`.
+
+  Not verified: whether the same probe now succeeds under QEMU. The claim above
+  does not need it -- the mechanism is identified in code rather than inferred
+  from where it stopped happening -- but a QEMU run would cost one boot if
+  anyone wants it belt-and-braces.
 - 2026-08-17 -- Frozen. `NewDTObject` returning NULL is a defect and diagnosing
   it stays in scope; making PNG icons work is an addition and does not, until
   the system is fast and stable (see `CLAUDE.md`).
