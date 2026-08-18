@@ -1,0 +1,72 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 00:20:00 -0300
+Subject: [PATCH 32/32] fbgfx: hand the boot splash's framebuffer over on m68k-emu68
+
+m68k-emu68 draws a boot splash straight into the linear framebuffer before
+graphics.library exists. There is one framebuffer and no way for two producers
+to share it, so the splash keeps ownership until a display is about to be
+installed and gives it up in the same breath -- which is what that port's own
+driver has always done, in the Show() of arch/m68k-emu68/hidd/emu68gfx.
+
+Building fbgfx for that target instead dropped the hand-off silently: the
+splash simply stopped being drawn on when Wanderer opened over it, with nothing
+in the log to say the transfer never happened. Restoring it here is what lets
+the driver be swapped without the behaviour changing.
+
+Before the lock and before anything is made visible, because the splash writes
+to the framebuffer without taking it -- stopping it after the bitmap is shown
+would leave a window with both drawing.
+
+Guarded on __EMU68__ rather than abstracted. What a bootstrap has to be told
+differs per target, and this file already carries the aarch64 equivalent in
+initFBGfxHW(): RawPutChar(0x03) to detach the framebuffer console. A hook
+generalising two unrelated one-liners would cost more than it saves, and the
+guard keeps the aarch64 build byte-identical.
+---
+--- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
++++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
+@@ -30,6 +30,26 @@
+ #include "fbgfx_hidd.h"
+ #include "fbgfx_support.h"
+ 
++#ifdef __EMU68__
++/*
++ * m68k-emu68 draws a boot splash straight into the framebuffer before
++ * graphics.library exists, and has to be told to stop.
++ *
++ * There is one linear framebuffer and no way for two producers to share it, so
++ * the splash keeps ownership until the display is about to be installed and
++ * gives it up in the same breath. This is the same hand-off the port's own
++ * driver performs -- see the comment above
++ * Emu68Display__Hidd_Display__Show() in arch/m68k-emu68/hidd/emu68gfx -- moved
++ * here so that swapping drivers does not silently drop it.
++ *
++ * Guarded rather than made generic on purpose: what a bootstrap has to be told
++ * differs per target, and this file's own initFBGfxHW() shows the aarch64
++ * equivalent (RawPutChar(0x03), detaching the framebuffer console). A hook
++ * abstracting two unrelated one-liners would cost more than it saved.
++ */
++#include <boot.h>
++#endif
++
+ #include LC_LIBDEFS_FILE
+ 
+ OOP_Object *FBGfxDisplay__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
+@@ -199,6 +219,16 @@
+ 
+     D(bug("[FBGfx:Display] Show(0x%p), old visible 0x%p\n", msg->bitMap, data->visible));
+ 
++#ifdef __EMU68__
++    /*
++     * Before the lock, and before anything is made visible: the splash writes
++     * to the framebuffer without taking it, so stopping it afterwards would
++     * leave a window in which both are drawing.
++     */
++    if (msg->bitMap)
++        emu68_bootui_takeover();
++#endif
++
+     LOCK_FRAMEBUFFER(data);
+ 
+     /* Remove old bitmap from the screen */

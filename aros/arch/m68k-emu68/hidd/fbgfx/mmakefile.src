@@ -26,7 +26,9 @@ FILES := \
     $(FBGFXDIR)/fbgfx_support \
     $(FBGFXDIR)/fbgfx_bitmapclass
 
-USER_INCLUDES := -I$(FBGFXDIR)
+# arch/m68k-emu68/boot for boot.h: the display class hands the boot splash's
+# framebuffer over on the first Show(), guarded by __EMU68__ (patch 0032).
+USER_INCLUDES := -I$(FBGFXDIR) -I$(SRCDIR)/arch/m68k-emu68/boot
 USER_CPPFLAGS := -D__OOP_NOATTRBASES__ -D__EMU68__
 
 %build_module mmake=kernel-m68k-emu68-fbgfx \
