@@ -41,6 +41,30 @@ struct BootUIState
 };
 
 static struct BootUIState bootui;
+
+/*
+ * Holding the display past the driver's hand-off.
+ *
+ * Without this the splash disappears the instant Intuition installs its first
+ * bitmap, which is well before Wanderer has drawn anything, so the boot ends
+ * on several seconds of half-built desktop. Holding is only possible because
+ * fbgfx composes into each bitmap's own buffer and copies to the framebuffer
+ * separately (fbDoRefreshArea): suppressing that copy leaves the splash on
+ * screen while the desktop is assembled behind it, which is double buffering
+ * with the bitmap as the back buffer and costs nothing extra.
+ *
+ * BOOTUI_HOLD_SECONDS is a deadline, not the mechanism. The real signal is
+ * BOOTUI_STAGE_ICONS, but nothing is in a position to send it yet, and a hold
+ * that never ends is a machine that boots to a frozen splash with a working
+ * desktop invisible behind it. So the deadline always applies and the signal,
+ * when it exists, only makes the release prompt.
+ */
+#define BOOTUI_HOLD_SECONDS 6
+
+static void (*bootui_release_hook)(void);
+static int bootui_hold_active;
+static uint32_t bootui_hold_started_at;
+static void bootui_release(void);
 static struct BootUIResource bootui_resource;
 
 static void put_pixel(uint32_t x, uint32_t y, uint16_t color);
@@ -375,6 +399,12 @@ void emu68_bootui_set_stage(uint32_t stage)
     const char *status;
     uint32_t progress;
 
+    if (stage == BOOTUI_STAGE_ICONS)
+    {
+        bootui_release();
+        return;
+    }
+
     if (!bootui.active)
         return;
     status = stage_status(stage, &progress);
@@ -405,6 +435,15 @@ void emu68_bootui_clock_tick(uint32_t now_us)
     if (elapsed == bootui.elapsed_seconds)
         return;
     bootui.elapsed_seconds = elapsed;
+
+    if (bootui_hold_active &&
+        elapsed - bootui_hold_started_at >= BOOTUI_HOLD_SECONDS)
+    {
+        emu68_console_puts("[AROS/Emu68] BootUI hold expired\n");
+        bootui_release();
+        return;
+    }
+
     draw_clock();
 }
 
@@ -415,6 +454,40 @@ void emu68_bootui_add_resource(void)
     bootui_resource.node.ln_Type = NT_RESOURCE;
     bootui_resource.set_stage = emu68_bootui_set_stage;
     AddResource(&bootui_resource.node);
+}
+
+static void bootui_release(void)
+{
+    void (*hook)(void) = bootui_release_hook;
+
+    if (!bootui_hold_active)
+        return;
+
+    /* Clear first: the hook repaints through the very path holding suppresses,
+     * so it has to see the hold already gone. */
+    bootui_hold_active = 0;
+    bootui_release_hook = NULL;
+
+    emu68_bootui_takeover();
+
+    if (hook)
+        hook();
+}
+
+void emu68_bootui_hold(void (*release)(void))
+{
+    if (!bootui.active || bootui_hold_active)
+        return;
+
+    bootui_release_hook = release;
+    bootui_hold_started_at = bootui.elapsed_seconds;
+    bootui_hold_active = 1;
+    emu68_console_puts("[AROS/Emu68] BootUI holding the display\n");
+}
+
+int emu68_bootui_holding(void)
+{
+    return bootui_hold_active;
 }
 
 void emu68_bootui_takeover(void)

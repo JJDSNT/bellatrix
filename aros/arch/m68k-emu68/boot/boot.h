@@ -94,5 +94,12 @@ void emu68_bootui_set_stage(uint32_t stage);
 void emu68_bootui_clock_start(uint32_t now_us);
 void emu68_bootui_clock_tick(uint32_t now_us);
 void emu68_bootui_takeover(void);
+/*
+ * Keep the splash on the framebuffer past the point where the display driver
+ * would normally take it, and call `release` when the hold ends so the driver
+ * can put the finished desktop up in one go. See bootui.c.
+ */
+void emu68_bootui_hold(void (*release)(void));
+int  emu68_bootui_holding(void);
 
 #endif

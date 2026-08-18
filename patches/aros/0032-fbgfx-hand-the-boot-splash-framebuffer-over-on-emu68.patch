@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Jaime Dias <jaimejosediasnt@gmail.com>
 Date: Tue, 19 Aug 2026 00:20:00 -0300
-Subject: [PATCH 32/32] fbgfx: hand the boot splash's framebuffer over on m68k-emu68
+Subject: [PATCH 32/32] fbgfx: let the boot splash hold the display until the
+ desktop is drawn
 
 m68k-emu68 draws a boot splash straight into the linear framebuffer before
 graphics.library exists. There is one framebuffer and no way for two producers
@@ -18,15 +19,98 @@ Before the lock and before anything is made visible, because the splash writes
 to the framebuffer without taking it -- stopping it after the bitmap is shown
 would leave a window with both drawing.
 
+It also has to stop clearing. initFBGfxHW() ends with ClearBuffer(), a memset
+of the whole surface at driver init -- long before the hand-off -- which wipes
+the splash artwork while the boot is still running. Only the artwork: the
+progress band is repainted on every stage change and comes back, so the symptom
+is a loader floating on black rather than a blank screen, which is what the
+user reported. The aarch64 path keeps the clear because by that point it has
+already detached its framebuffer console and nothing else owns the surface.
+
 Guarded on __EMU68__ rather than abstracted. What a bootstrap has to be told
 differs per target, and this file already carries the aarch64 equivalent in
 initFBGfxHW(): RawPutChar(0x03) to detach the framebuffer console. A hook
 generalising two unrelated one-liners would cost more than it saves, and the
 guard keeps the aarch64 build byte-identical.
+
+Second revision: the hand-off became a *hold*.
+
+Taking the framebuffer at the first Show() is right for a driver that composes
+straight into it. This one does not -- it refreshes from each bitmap's own
+buffer through fbDoRefreshArea() -- so suppressing that copy leaves the splash
+on screen while Intuition and Wanderer assemble the desktop behind it. That is
+double buffering with the bitmap as the back buffer, at no extra cost, and it
+is what makes "keep the splash until the icons are up" cheap here when it was
+not with a driver that drew into the framebuffer directly.
+
+The hold ends on BOOTUI_STAGE_ICONS or on its own deadline, whichever comes
+first, and the release callback repaints the whole screen in one go -- nothing
+has reached the framebuffer by then. Re-asserting aHidd_BitMap_Visible would
+not do it: the bitmap class only refreshes from Set() when the scroll offsets
+changed.
+
+The deadline is not a detail to tidy away later. Nothing is yet in a position
+to send the ICONS stage -- the Startup-Sequence blocks on WANDERER:Wanderer, so
+a line after it runs when Wanderer exits -- and a hold that never ends is a
+machine showing a frozen splash with a working desktop invisible behind it. So
+the deadline always applies, and the signal, when something can send it, only
+makes the release prompt.
+
 ---
+--- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
++++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
+@@ -22,6 +22,9 @@
+ 
+ #include "fbgfx_intern.h"
+ #include "fbgfx_hidd.h"
++#ifdef __EMU68__
++#include <boot.h>
++#endif
+ 
+ BOOL initFBGfxHW(struct HWData *data)
+ {
+@@ -108,7 +111,21 @@
+           data->width, data->height, data->depth,
+           data->framebuffer, data->bytesperline));
+ 
++#ifdef __EMU68__
++    /*
++     * Not here on this target. m68k-emu68's bootstrap is still drawing its
++     * splash on this surface and does not give it up until the first Show()
++     * (see the __EMU68__ block in fbgfx_displayclass.c), so clearing at driver
++     * init wipes the artwork while the boot is still running -- and only the
++     * artwork, because the progress band is repainted on every stage change
++     * and comes back. The symptom is a loader floating on black.
++     *
++     * The aarch64 path clears because it has already detached its framebuffer
++     * console above, so by this point nothing else owns the surface.
++     */
++#else
+     ClearBuffer(data);
++#endif
+     return TRUE;
+ }
+ 
+@@ -120,6 +137,16 @@
+     ULONG srcmod, dstmod;
+     LONG y, w, h, sx, sy;
+ 
++#ifdef __EMU68__
++    /*
++     * The boot splash still owns the framebuffer. Everything drawn now lands
++     * in the bitmap's own buffer and stays there; emu68_bootui_hold()'s
++     * release callback copies the finished screen across in one go.
++     */
++    if (emu68_bootui_holding())
++        return;
++#endif
++
+     x1 += data->xoffset; y1 += data->yoffset;
+     x2 += data->xoffset; y2 += data->yoffset;
+ 
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_displayclass.c
-@@ -30,6 +30,26 @@
+@@ -30,6 +30,56 @@
  #include "fbgfx_hidd.h"
  #include "fbgfx_support.h"
  
@@ -48,23 +132,63 @@ guard keeps the aarch64 build byte-identical.
 + * abstracting two unrelated one-liners would cost more than it saved.
 + */
 +#include <boot.h>
++#include "fbgfx_bitmap.h"
++#include "fbgfx_intern.h"
++
++/*
++ * Repainting the whole screen when the splash lets go.
++ *
++ * While the hold is on, fbDoRefreshArea() copies nothing, so Intuition and
++ * Wanderer assemble the desktop in each bitmap's own buffer with the splash
++ * still on the framebuffer -- double buffering, with the bitmap as the back
++ * buffer. Nothing has reached the framebuffer by the time the hold ends, so
++ * the release has to put the whole thing up at once.
++ *
++ * Re-asserting aHidd_BitMap_Visible would not do it: the bitmap class only
++ * refreshes from Set() when the scroll offsets changed.
++ */
++static struct FBGfx_staticdata *fbgfx_held_sd;
++
++static void fbgfx_bootui_released(void)
++{
++    struct FBGfx_staticdata *sd = fbgfx_held_sd;
++    struct FBGfxBitMapData *bmdata;
++
++    if (!sd || !sd->visible)
++        return;
++
++    bmdata = OOP_INST_DATA(sd->bmclass, sd->visible);
++    LOCK_FRAMEBUFFER(sd);
++    fbDoRefreshArea(&sd->data, bmdata, 0, 0, bmdata->width, bmdata->height);
++    UNLOCK_FRAMEBUFFER(sd);
++}
 +#endif
 +
  #include LC_LIBDEFS_FILE
  
  OOP_Object *FBGfxDisplay__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
-@@ -199,6 +219,16 @@
+@@ -199,6 +249,26 @@
  
      D(bug("[FBGfx:Display] Show(0x%p), old visible 0x%p\n", msg->bitMap, data->visible));
  
 +#ifdef __EMU68__
 +    /*
-+     * Before the lock, and before anything is made visible: the splash writes
-+     * to the framebuffer without taking it, so stopping it afterwards would
-+     * leave a window in which both are drawing.
++     * Do not take the framebuffer here -- hold it.
++     *
++     * Taking it at the first Show() is correct for a driver that composes
++     * straight into the framebuffer, and this one does not: it refreshes from
++     * the bitmap's own buffer. So the splash can stay up while the desktop is
++     * built behind it, and the hand-off becomes one repaint of a finished
++     * screen instead of several seconds of half-drawn Workbench.
++     *
++     * emu68_bootui_hold() ends the hold on BOOTUI_STAGE_ICONS or on its own
++     * deadline, whichever comes first, and calls back to put the result up.
 +     */
 +    if (msg->bitMap)
-+        emu68_bootui_takeover();
++    {
++        fbgfx_held_sd = data;
++        emu68_bootui_hold(fbgfx_bootui_released);
++    }
 +#endif
 +
      LOCK_FRAMEBUFFER(data);

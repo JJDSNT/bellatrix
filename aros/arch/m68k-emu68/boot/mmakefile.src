@@ -54,7 +54,7 @@ COREPUBLIC := $(KOBJSDIR)/kernel_resource.o $(KOBJSDIR)/exec_library.o
 # the command line: mmake does not forward variables, so `make GFX_BACKEND=...`
 # would silently build the other one.
 #
-GFX_BACKEND := emu68gfx
+GFX_BACKEND := fbgfx
 
 ifeq ($(GFX_BACKEND),fbgfx)
 GFX_RESIDENT := fbgfx_hidd

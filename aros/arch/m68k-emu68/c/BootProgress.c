@@ -26,6 +26,12 @@ int main(void)
         stage = BOOTUI_STAGE_STARTUP;
     else if (!strcmp((const char *)args[0], "WANDERER"))
         stage = BOOTUI_STAGE_DESKTOP;
+    /* Ends the display hold: the splash has been covering a desktop that was
+     * being assembled behind it, and this says the desktop is worth looking
+     * at. Nothing sends it during a normal boot yet -- the hold expires on its
+     * own -- so this is here for whatever ends up in a position to. */
+    else if (!strcmp((const char *)args[0], "ICONS"))
+        stage = BOOTUI_STAGE_ICONS;
 
     resource = (struct BootUIResource *)OpenResource(BOOTUI_RESOURCE_NAME);
     if (stage && resource && resource->set_stage)

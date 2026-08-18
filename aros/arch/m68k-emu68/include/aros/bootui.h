@@ -9,6 +9,14 @@
 #define BOOTUI_STAGE_DOS_READY 0x45303231UL
 #define BOOTUI_STAGE_STARTUP   0x45303232UL
 #define BOOTUI_STAGE_DESKTOP   0x45303233UL
+/*
+ * The desktop is drawn and the splash may go. Sent after Wanderer has icons on
+ * screen, which nothing in the Startup-Sequence can say -- it blocks on
+ * WANDERER:Wanderer, so a line after that runs when Wanderer *exits*. Until
+ * something is in a position to send it, the hold expires on its own; see
+ * emu68_bootui_hold().
+ */
+#define BOOTUI_STAGE_ICONS     0x45303234UL
 
 struct BootUIResource
 {
