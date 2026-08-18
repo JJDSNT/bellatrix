@@ -168,6 +168,55 @@ its bitmaps before either can own the scanout. Worth establishing before
 committing to it: where `fbgfx` gets its framebuffer, and whether its
 displayclass still leaves the generic copy in place.
 
+# The boot UI hold, and what its timestamps taught (2026-08-18)
+
+The splash now holds the display from the first Show after Wanderer starts
+until the desktop is drawn, which is what the fbgfx port made cheap: that
+driver refreshes from each bitmap's own buffer, so suppressing the copy leaves
+the splash up while the desktop is assembled behind it.
+
+**The release mechanism took six attempts, and the log finally explained why
+only one shape works.** A boot that came out right:
+
+```
+00:53.913  holding the display
+01:12.633  hold armed: icons
+01:12.653  hold released: settled
+01:12.753  display takeover
+```
+
+Twenty milliseconds between armed and settled. The quiet window -- 1.5 s of no
+drawing -- was already satisfied long before the signal arrived, so waiting for
+the drawing to settle contributed **nothing** to the timing. That was the
+explanation offered at the time and it is wrong.
+
+What actually matters is the hundred milliseconds after it. The release only
+marks the screen as owing a repaint; the copy happens on the next
+`fbDoRefreshArea()`, which is a real drawing operation. Copying at the signal
+-- which the "granular" version did, synchronously inside `set_stage()` --
+is about 120 ms too early, and the screen title bar is not in the bitmap yet.
+Copying on the next draw catches it.
+
+So the working shape is: **decide in one place, copy on the next draw.** Not
+because deferral is elegant, but because the deferral is what puts the copy
+after whatever finishes the screen.
+
+**The risk this carries is real and is not hypothetical.** An earlier boot
+measured seventy seconds between release and repaint, because nothing drew in
+between. The 30-second cap bounds it but does not fix it, and the failure mode
+is a splash sitting over a finished desktop. If that recurs, the answer is not
+to copy sooner -- that is the bug this section describes -- but to find what
+draws the screen bar and wait for that specifically.
+
+**What still has no explanation**: what draws the bar in those 100 ms.
+`CreateScreenBar()` runs at screen creation, before `Show()` and therefore
+before the hold begins, so the obvious answer is ruled out. `RenderScreenBar()`
+is reached only from there, from `ActivateWindow()` and from the input handler;
+there is no invalidate-and-redraw entry point in the API at all, which is why
+five attempts at forcing a redraw failed. `ShowTitle()` and `ActivateWindow()`
+both queue through `DoASyncAction()` and the queue is drained by the input
+handler, so neither runs on a boot with no input.
+
 # What is not known
 
 Ordered by how much each would change the plan:
