@@ -89,6 +89,7 @@ static struct BootUIState bootui;
  * send BOOTUI_STAGE_ICONS yet, and a hold that never ends is a frozen splash
  * with a working desktop invisible behind it, so the cap always applies.
  */
+#define BOOTUI_HOLD_QUIET_US    1500000UL
 #define BOOTUI_HOLD_CAP_SECONDS 30
 
 static int bootui_release_pending;
@@ -96,6 +97,13 @@ static int bootui_hold_active;
 static uint32_t bootui_hold_started_at;
 /* Written by the timer interrupt, read by the task that arms the hold. */
 static volatile uint32_t bootui_last_tick_us;
+/* Set from the driver's refresh path -- task context -- every time something
+ * is drawn while the hold is on. Cleared by the tick, which is how a stretch
+ * with no drawing is noticed. */
+static volatile int bootui_hold_drawing;
+static uint32_t bootui_hold_quiet_since_us;
+static int bootui_hold_quiet_valid;
+static int bootui_hold_armed;
 /*
  * Set when the Startup-Sequence reports it is about to run Wanderer. The hold
  * is for the screen that opens after that and for no other: anything opening a
@@ -497,17 +505,21 @@ void emu68_bootui_set_stage(uint32_t stage)
     if (stage == BOOTUI_STAGE_ICONS)
     {
         /*
-         * Release here, in the caller's task, and repaint before returning.
+         * Arms; does not release.
          *
-         * Waiting was tried twice and both are dead ends. Waiting for the
-         * drawing to go quiet releases at the moment nothing is left to carry
-         * the repaint; waiting for the next refresh after that measured
-         * seventy seconds on a boot, because once the icons are drawn nothing
-         * draws again for a long time. The signal is the only moment that is
-         * both "the desktop is ready" and "we are on a task", so it is where
-         * the work belongs.
+         * "The icons are in the list" is not "the desktop is finished" -- the
+         * screen title bar is drawn after this, and releasing here copies a
+         * screen that does not have it yet, which is exactly what happened:
+         * a black bar that nothing ever redraws, because intuition renders it
+         * once at screen creation and thereafter only on input or window
+         * activation. Waiting for the drawing to settle catches it; a signal
+         * fired mid-way does not.
          */
-        emu68_bootui_release_now("hold released: icons");
+        if (bootui_hold_active && !bootui_hold_armed)
+        {
+            bootui_hold_armed = 1;
+            bootui_event("hold armed: icons");
+        }
         return;
     }
 
@@ -538,6 +550,27 @@ void emu68_bootui_clock_tick(uint32_t now_us)
     if (!bootui.active || !bootui.clock_started)
         return;
     bootui_last_tick_us = now_us;
+
+    if (bootui_hold_active)
+    {
+        /* Checked every tick, not once a second: a burst of drawing between
+         * seconds would otherwise go unseen and the screen be called settled
+         * while it is still being built. */
+        if (bootui_hold_drawing || !bootui_hold_quiet_valid)
+        {
+            bootui_hold_drawing = 0;
+            bootui_hold_quiet_valid = 1;
+            bootui_hold_quiet_since_us = now_us;
+        }
+        else if (bootui_hold_armed &&
+                 now_us - bootui_hold_quiet_since_us >= BOOTUI_HOLD_QUIET_US)
+        {
+            bootui_event("hold released: settled");
+            bootui_release();
+            return;
+        }
+    }
+
     elapsed = (now_us - bootui.clock_start_us) / 1000000UL;
     if (elapsed == bootui.elapsed_seconds)
         return;
@@ -647,12 +680,17 @@ void emu68_bootui_hold(void)
     }
 
     bootui_hold_started_at = bootui.elapsed_seconds;
+    bootui_hold_quiet_valid = 0;
+    bootui_hold_drawing = 0;
+    bootui_hold_armed = 0;
     bootui_hold_active = 1;
     bootui_event("holding the display");
 }
 
 int emu68_bootui_holding(void)
 {
+    if (bootui_hold_active)
+        bootui_hold_drawing = 1;
     return bootui_hold_active;
 }
 
