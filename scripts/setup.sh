@@ -192,8 +192,8 @@ failed=0
 # Submodules we take unmodified: no patch series, so the loop below never sees
 # them, and nothing else would check them out.  Initialise them explicitly so a
 # fresh clone does not end up with an empty directory that only fails later —
-# aros-bluzing as a dangling injected symlink, xsysinfo as a missing build tree.
-PLAIN=(aros-bluzing xsysinfo)
+# aros-bluzing as a dangling injected symlink.
+PLAIN=(aros-bluzing)
 
 for name in "${PLAIN[@]}"; do
     repo="$ROOT/external/$name"
@@ -208,8 +208,8 @@ for name in "${PLAIN[@]}"; do
     git -C "$ROOT" submodule update --init "external/$name"
 done
 
-# Their own submodules, in turn: xsysinfo builds flexcat and identify from
-# 3rdparty/, and an empty one there fails deep inside its Makefile.
+# Their own submodules, in turn: a package that carries 3rdparty/ fails deep
+# inside its own Makefile if that is left empty.
 for name in "${PLAIN[@]}"; do
     repo="$ROOT/external/$name"
     [ -f "$repo/.gitmodules" ] || continue

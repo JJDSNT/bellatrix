@@ -10,6 +10,3 @@
 	path = external/aros-bluzing
 	url = https://github.com/JJDSNT/aros-bluzing.git
 	ignore = dirty
-[submodule "external/xsysinfo"]
-	path = external/xsysinfo
-	url = https://github.com/reinauer/xSysInfo.git
