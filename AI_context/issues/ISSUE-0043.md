@@ -377,6 +377,25 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-18 -- **The endian fix landed and the dump became readable.** On the
+  Pi 3: `ID=0x64647276`, `ch1 CTRL=80780438` (ENABLE | 1920 << 12 | 1080), PV2
+  reporting real 1080p timings (hfp 88, hsync 44, hbp 148, vfp 4, vsync 5, vbp
+  36), and the firmware's PPF kernel reading back as a symmetric 11-tap filter.
+  Every register the driver touches is now correct.
+
+  `head=0` survived, and it is not a failure. `LACT=0000` is where a firmware
+  *boot* display list lives -- the bottom of dlist RAM. arm-native never sees it
+  because it asks the firmware for a framebuffer first, and that FBALLOC makes
+  the firmware rebuild its list mid-RAM (word 0x664, which is exactly what the
+  second dump in the previous run showed once a mode had been set). This port
+  asks for nothing, so the boot list is still what is on the channel. Linux's
+  vc4 agrees from the other side: it reserves the first words as "the
+  bootloader's dlist" rather than treating word 0 as free. `patches/aros/0039`
+  drops the `head == 0` rejection from the takeover, the probe and the dump; the
+  real test was always walking the list for a plane whose PTR0 is our
+  framebuffer, and a head of zero that leads nowhere still declines one entry
+  later.
+
 - 2026-08-18 — vc4gfx reached the silicon and read every register backwards.
   The takeover declined on every Pi 3 boot with `CTRL=38047880 head=0`, and
   0x38047880 is 0x80780438 byte-reversed -- `ENABLE | 1920 << 12 | 1080`, the

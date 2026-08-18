@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 11:20:00 -0300
+Subject: [PATCH 39/39] vc4gfx: word 0 is a display list, not the absence of one
+
+With the registers read in the right byte order (patch 0038) the Pi 3
+dump is finally readable, and it says the takeover was right about the
+channel and wrong about the list:
+
+    [VC4HVS] ID=0x64647276 DISPCTRL=0x9a0c0fff
+    [VC4HVS] ch1: LIST=0000 LACT=0000 CTRL=80780438 ...
+    [VC4HVS] PV2: hactive=1920 hfp=88 hsync=44 hbp=148
+                  vactive=1080 vfp=4 vsync=5 vbp=36
+    [VC4HVS] takeover: HDMI channel not usable (CTRL=80780438 head=0)
+
+CTRL now decodes as ENABLE | 1920 << 12 | 1080, PV2 carries real 1080p
+timings, and the firmware's PPF kernel reads back as a symmetric 11-tap
+filter. Everything is where it should be. LACT really is zero -- and zero
+is where the firmware's boot display list starts.
+
+arch/arm-native never meets this. By the time vc4gfx runs there it has
+already asked the firmware for a framebuffer, and that FBALLOC makes the
+firmware rebuild its list in the middle of dlist RAM -- word 0x664 on the
+Pi 3 that produced the reference dumps, which is exactly what the second
+dump in yesterday's log showed once a mode had been set. This port asks
+for nothing: Emu68 sets the mode up before AROS starts, so what is on the
+HDMI channel is still the boot list, at the bottom of dlist RAM. Linux's
+vc4 says the same from the other side: it reserves the first words as
+"the bootloader's dlist" and allocates above them rather than treating
+word 0 as free.
+
+So the head being in range is all this check can honestly test. Whether
+the list leads anywhere was always decided further down, by walking it
+and finding a plane whose PTR0 is our framebuffer; a head of zero that
+leads nowhere still declines there, one entry later. The dump gets the
+same treatment, and now walks any channel the HVS has enabled.
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
+@@ -219,7 +219,7 @@
+     for (attempt = 0; attempt < 3 && !stable; attempt++)
+     {
+         head = hvs_rd(HVS_DISPLACT(HVS_CHANNEL_HDMI));
+-        if (head == 0 || head >= HVS_DLIST_WORDS)
++        if (head >= HVS_DLIST_WORDS)
+         {
+             bug("[VC4HVS] probe: bad list head %u, aborting\n", head);
+             return;
+@@ -679,8 +679,27 @@
+ 
+         ctrl = hvs_rd(HVS_DISPCTRLX(HVS_CHANNEL_HDMI));
+         head = hvs_rd(HVS_DISPLACT(HVS_CHANNEL_HDMI));
+-        if (!(ctrl & HVS_DISPCTRLX_ENABLE) || head == 0
+-            || head >= HVS_DLIST_WORDS)
++
++        /*
++         * head == 0 is a list, not the absence of one.
++         *
++         * arch/arm-native never sees it because by the time vc4gfx runs
++         * there it has already asked the firmware for a framebuffer, and
++         * that FBALLOC makes the firmware rebuild its list somewhere in
++         * the middle of dlist RAM (word 0x664, on the Pi 3 that produced
++         * the reference dumps). This port asks for nothing: Emu68 sets
++         * the mode up before AROS starts, so what is still on the HDMI
++         * channel is the firmware's *boot* list, and that one sits at the
++         * bottom of dlist RAM. Linux's vc4 says the same thing from the
++         * other side -- it reserves the first words as "the bootloader's
++         * dlist" and allocates above them rather than describing word 0
++         * as free.
++         *
++         * The head being in range is all this can honestly check. Whether
++         * the list leads anywhere is decided below, by walking it and
++         * finding a plane that points at our framebuffer.
++         */
++        if (!(ctrl & HVS_DISPCTRLX_ENABLE) || head >= HVS_DLIST_WORDS)
+         {
+             bug("[VC4HVS] takeover: HDMI channel not usable "
+                 "(CTRL=%08x head=%u)\n", ctrl, head);
+@@ -1098,9 +1117,14 @@
+             hvs_rd(HVS_DISPCTRLX(ch)), hvs_rd(HVS_DISPBKGNDX(ch)),
+             hvs_rd(HVS_DISPSTATX(ch)), hvs_rd(HVS_DISPBASEX(ch)));
+ 
+-        /* An idle channel parks LIST/LACT at 0 or at an END word; only
+-         * walk lists that lead anywhere. */
+-        if (lact != 0 && lact < HVS_DLIST_WORDS)
++        /* Word 0 is a real list head, not an idle marker: a firmware
++         * boot display list starts at the bottom of dlist RAM, which is
++         * why Linux's vc4 reserves the first words as "the bootloader's
++         * dlist" and allocates above them. Walk any channel the HVS has
++         * enabled and let the entry decode say whether it leads
++         * anywhere. */
++        if ((hvs_rd(HVS_DISPCTRLX(ch)) & HVS_DISPCTRLX_ENABLE)
++            && lact < HVS_DLIST_WORDS)
+         {
+             bug("[VC4HVS]  walking active list of ch%d:\n", ch);
+             hvs_dump_list(lact, fb_phys, fb_pitch, fb_width, fb_height);
