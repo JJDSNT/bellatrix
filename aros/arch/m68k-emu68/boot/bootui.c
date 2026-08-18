@@ -97,6 +97,13 @@ static uint32_t bootui_hold_started_at;
 /* Written by the timer interrupt, read by the task that arms the hold. */
 static volatile uint32_t bootui_last_tick_us;
 /*
+ * Set when the Startup-Sequence reports it is about to run Wanderer. The hold
+ * is for the screen that opens after that and for no other: anything opening a
+ * screen earlier -- a requester, an alert -- has a better claim on the display
+ * than a splash, and must not be covered by one.
+ */
+static int bootui_wanderer_started;
+/*
  * Called to put the finished desktop up. Registered by the display driver and
  * invoked ONLY from emu68_bootui_set_stage(), which runs in the task that
  * sends the signal -- Wanderer's. It takes a semaphore and walks OOP objects,
@@ -478,6 +485,15 @@ void emu68_bootui_set_stage(uint32_t stage)
     const char *status;
     uint32_t progress;
 
+    if (stage == BOOTUI_STAGE_REPAINT)
+    {
+        emu68_bootui_repaint();
+        return;
+    }
+
+    if (stage == BOOTUI_STAGE_DESKTOP)
+        bootui_wanderer_started = 1;
+
     if (stage == BOOTUI_STAGE_ICONS)
     {
         /*
@@ -491,17 +507,7 @@ void emu68_bootui_set_stage(uint32_t stage)
          * both "the desktop is ready" and "we are on a task", so it is where
          * the work belongs.
          */
-        if (bootui_hold_active)
-        {
-            void (*hook)(void) = bootui_release_hook;
-
-            bootui_event("hold released: icons");
-            bootui_hold_active = 0;
-            bootui_release_pending = 0;
-            emu68_bootui_takeover();
-            if (hook)
-                hook();
-        }
+        emu68_bootui_release_now("hold released: icons");
         return;
     }
 
@@ -579,6 +585,46 @@ static void bootui_release(void)
     bootui_release_pending = 1;
 }
 
+/*
+ * End the hold and put the desktop up, from the caller's task.
+ *
+ * Must not be called from an interrupt: the hook takes the framebuffer
+ * semaphore and walks OOP objects. The two callers are the icons signal, which
+ * arrives on Wanderer's task, and the display driver's Show(), which runs on
+ * whichever task opened a screen.
+ */
+void emu68_bootui_release_now(const char *why)
+{
+    void (*hook)(void) = bootui_release_hook;
+
+    if (!bootui_hold_active)
+        return;
+
+    bootui_event(why);
+    bootui_hold_active = 0;
+    bootui_release_pending = 0;
+    emu68_bootui_takeover();
+    if (hook)
+        hook();
+}
+
+/*
+ * Copy the screen across again, after the release.
+ *
+ * The release copies the bitmap as it stands, and "as it stands" turned out to
+ * include a screen title bar caught one character into its text -- a lone "W"
+ * on black, still there in a screenshot taken five seconds later. Whatever
+ * finishes that bar does not produce a refresh that reaches us, so a second
+ * copy a beat later is what puts it on screen.
+ *
+ * Task context only, same as the hook itself.
+ */
+void emu68_bootui_repaint(void)
+{
+    if (bootui_release_hook)
+        bootui_release_hook();
+}
+
 void emu68_bootui_set_release_hook(void (*hook)(void))
 {
     bootui_release_hook = hook;
@@ -588,6 +634,17 @@ void emu68_bootui_hold(void)
 {
     if (!bootui.active || bootui_hold_active)
         return;
+
+    /*
+     * Not this one. A screen opening before Wanderer was started is something
+     * the user needs to see now, so the splash gets out of its way instead of
+     * holding the display in front of it.
+     */
+    if (!bootui_wanderer_started)
+    {
+        emu68_bootui_takeover();
+        return;
+    }
 
     bootui_hold_started_at = bootui.elapsed_seconds;
     bootui_hold_active = 1;

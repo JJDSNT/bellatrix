@@ -101,6 +101,8 @@ void emu68_bootui_takeover(void);
  */
 void emu68_bootui_hold(void);
 void emu68_bootui_set_release_hook(void (*hook)(void));
+void emu68_bootui_release_now(const char *why);
+void emu68_bootui_repaint(void);
 int  emu68_bootui_holding(void);
 int  emu68_bootui_take_release(void);
 

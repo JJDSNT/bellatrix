@@ -25,6 +25,28 @@ draws on the next redraw -- so the signal only arms the release, and the splash
 still waits for the drawing to settle before letting go. A Wanderer that never
 sends it costs a slower hand-off on a deadline and nothing else, which is why
 this is guarded and unconditional rather than wired into anything.
+It also asks for the screen title bar back, and finding out why took four
+wrong answers.
+
+The release copies the screen bitmap as it stands, and the bar is not in it:
+it arrives as a lone "W" on black. A second full copy half a second later
+shows the same thing, so this is not a race against the copy -- the bar was
+never drawn while the splash held the display.
+
+Nothing generic redraws it, which is the part worth writing down. RenderScreenBar()
+is internal to intuition and reached from ActivateWindow() and the input
+handler; there is no "redraw the screen" entry point that passes through it, so
+MakeScreen()/RethinkDisplay() left it alone and a second bitmap copy could not
+invent it. ShowTitle() is the public way in.
+
+A methodological note, because it cost a wrong conclusion. ShowTitle() queues
+through DoASyncAction() and the queue is drained by the input handler, so a
+headless boot with no input at all can leave the request pending. A screendump
+from such a run showed the bar still missing and was read here as "ShowTitle
+does nothing"; the user's graphical session showed it working. For anything
+that intuition renders in response to input, a headless capture is the wrong
+instrument.
+
 ---
 --- a/workbench/system/Wanderer/Classes/iconvolumelist.c
 +++ b/workbench/system/Wanderer/Classes/iconvolumelist.c
@@ -55,7 +77,7 @@ this is guarded and unconditional rather than wired into anything.
  #include <proto/exec.h>
  #include <proto/graphics.h>
  #include <proto/utility.h>
-@@ -834,6 +854,24 @@
+@@ -834,6 +854,55 @@
  
      DoSuperMethodA(CLASS, obj, (Msg) message);
  
@@ -72,7 +94,38 @@ this is guarded and unconditional rather than wired into anything.
 +
 +            bootui_told = TRUE;
 +            if (bootui && bootui->set_stage)
++            {
++                struct Screen *scr = (struct Screen *)_screen(obj);
++
 +                bootui->set_stage(BOOTUI_STAGE_ICONS);
++
++                /*
++                 * And ask for the screen title bar back.
++                 *
++                 * The release copies the screen bitmap as it stands and the
++                 * bar is not in it: it arrives as a lone "W" on black, and a
++                 * second copy half a second later shows the same thing, so it
++                 * is not a race against the copy -- the bar was simply never
++                 * drawn while the splash held the display.
++                 *
++                 * Nothing generic redraws it. RenderScreenBar() is internal to
++                 * intuition and reached from ActivateWindow() and the input
++                 * handler, which is why MakeScreen()/RethinkDisplay() left it
++                 * untouched. ShowTitle() is the public way in.
++                 *
++                 * Note for anyone testing this headlessly: ShowTitle() queues
++                 * through DoASyncAction(), and the queue is drained by the
++                 * input handler. A boot with no input at all can leave the
++                 * request pending, so a screenshot from a headless run is not
++                 * evidence that this does nothing -- it was read that way once
++                 * already.
++                 */
++                if (scr)
++                {
++                    ShowTitle(scr, FALSE);
++                    ShowTitle(scr, TRUE);
++                }
++            }
 +        }
 +    }
 +#endif

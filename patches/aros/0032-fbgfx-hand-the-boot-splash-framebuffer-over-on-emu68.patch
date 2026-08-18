@@ -78,6 +78,18 @@ from BOOTUI_STAGE_ICONS, which arrives on Wanderer's own task with the icons
 already in the bitmap. One moment that is both "the desktop is ready" and "we
 are on a task".
 
+Fourth revision: the hold is scoped to the first screen.
+
+It exists to cover the gap between the Workbench screen appearing and Wanderer
+drawing its icons, so engaging on the first Show -- which at boot is that
+screen -- is right, and staying engaged across later ones is not. Anything that
+opens a screen afterwards has a better claim on the display than a splash, so a
+subsequent Show ends the hold rather than being held behind it.
+
+Both paths run on a task: Show() executes on whoever opened the screen, which
+is what makes calling the release from there legal where calling it from a
+timer is not.
+
 ---
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
@@ -201,7 +213,7 @@ are on a task".
  #include LC_LIBDEFS_FILE
  
  OOP_Object *FBGfxDisplay__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
-@@ -199,6 +246,27 @@
+@@ -199,6 +246,45 @@
  
      D(bug("[FBGfx:Display] Show(0x%p), old visible 0x%p\n", msg->bitMap, data->visible));
  
@@ -220,9 +232,27 @@ are on a task".
 +     */
 +    if (msg->bitMap)
 +    {
-+        fbgfx_held_sd = data;
-+        emu68_bootui_set_release_hook(fbgfx_bootui_released);
-+        emu68_bootui_hold();
++        /*
++         * The hold is for the Workbench screen and nothing else.
++         *
++         * It exists to cover the gap between that screen appearing and
++         * Wanderer drawing its icons, so it engages on the first screen shown
++         * -- which at boot is that one -- and any *later* Show means something
++         * else wants the display now. Whatever that is has a better claim than
++         * a splash, so it ends the hold instead of being held behind it.
++         *
++         * Both paths are task context: Show() runs on whoever opened the
++         * screen, so calling the release from here is legal in a way that
++         * calling it from a timer is not.
++         */
++        if (emu68_bootui_holding())
++            emu68_bootui_release_now("hold released: another screen");
++        else
++        {
++            fbgfx_held_sd = data;
++            emu68_bootui_set_release_hook(fbgfx_bootui_released);
++            emu68_bootui_hold();
++        }
 +    }
 +#endif
 +
