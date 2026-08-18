@@ -134,6 +134,40 @@ Intuition composes into the other, and one flip swaps them when we choose.
 urgent item on any list here, and it should not be what decides between Path A
 and Path B.
 
+# Path C, and it is the one the user named: port `aarch64-raspi/hidd/fbgfx`
+
+AROS already has a Raspberry Pi framebuffer HIDD for aarch64, at
+`arch/aarch64-raspi/hidd/fbgfx/`. Porting it is the same mechanism this project
+already used for the SDHOST backend, `dma.resource` and `usb2otg`, and it
+should be assumed to be the cheapest route until shown otherwise.
+
+**What it gives us, checked by reading the directory rather than assumed:**
+
+```
+fbgfx.conf  fbgfx_init.c  fbgfx_hiddclass.c
+fbgfx_bitmapclass.c  fbgfx_displayclass.c  fbgfx_support.c
+```
+
+That is a *complete* HIDD. Ours is `emu68gfx_hiddclass.c` plus
+`emu68gfx_init.c` and leans on AROS's generic bitmap and display classes for
+everything else -- which is exactly why the generic Display class ends up
+copying the shown bitmap into our framebuffer. A driver with its own
+bitmapclass and displayclass is where that decision stops being someone
+else's.
+
+**What it does not give us.** Grepped for `SET_VIRTUAL_OFFSET`,
+`SET_VIRTUAL`, `VCTAG`, `mbox` and `Mailbox` across the whole directory:
+**no matches.** It is a framebuffer HIDD, not a VideoCore driver -- it manages
+bitmaps over a framebuffer it is handed, the same one we are handed. So on its
+own it delivers neither the flip nor the removal of the copy, which are the two
+things this issue was opened for.
+
+That makes Path C a **foundation rather than an alternative**: it is plausibly
+the right first move under either A or B, because both need a driver that owns
+its bitmaps before either can own the scanout. Worth establishing before
+committing to it: where `fbgfx` gets its framebuffer, and whether its
+displayclass still leaves the generic copy in place.
+
 # What is not known
 
 Ordered by how much each would change the plan:
