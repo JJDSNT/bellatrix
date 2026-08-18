@@ -1,0 +1,31 @@
+.key
+; ISSUE-0037 -- write and delete in RAM:, with no Execute.
+;
+; Half of ram-stress-c. If this reproduces on its own, the temporary file
+; Execute makes for itself is not needed and the defect is in the plain
+; create/write/delete path. If it stays quiet while ram-stress-b does not, the
+; opposite.
+;
+; Sizes and name lengths vary within the iteration on purpose: SYS:C and
+; SYS:Libs list to different lengths, so the data blocks differ too, not only
+; the names.
+
+Echo "[ram-stress-a] start"
+
+Lab loop
+
+Echo "[ram-stress-a] ."
+
+List "SYS:C" NOHEAD FILES TO "T:P" LFORMAT="; %N"
+Delete "T:P" QUIET
+
+List "SYS:Libs" NOHEAD FILES TO "T:a" LFORMAT="; %N"
+Delete "T:a" QUIET
+
+List "SYS:C" NOHEAD FILES TO "T:a-considerably-longer-name-than-that" LFORMAT="; %N"
+Delete "T:a-considerably-longer-name-than-that" QUIET
+
+List "SYS:Devs" NOHEAD FILES TO "T:xy" LFORMAT="; %N"
+Delete "T:xy" QUIET
+
+Skip loop BACK

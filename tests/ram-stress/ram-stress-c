@@ -1,0 +1,33 @@
+.key
+; ISSUE-0037 -- the boot's own sequence, in a loop.
+;
+; Startup-Sequence:151-155 verbatim, minus the guard on ENV:SYS/Packages and
+; minus the package startup it drives, so that what repeats is the RAM: file
+; traffic and nothing else. Two create/write/delete cycles per iteration: T:P
+; here, and Execute's own T:TmpNNNNN temporary.
+;
+; The names vary deliberately. muddy_pool holds file data blocks and name
+; strings and nothing else, and the crash was freeing a name string, so a
+; fixed-length name would probe one allocation size forever.
+
+Echo "[ram-stress-c] start"
+
+Lab loop
+
+Echo "[ram-stress-c] ."
+
+List "SYS:C" NOHEAD FILES TO "T:P" LFORMAT="; %N"
+Execute "T:P"
+Delete "T:P" QUIET
+
+List "SYS:C" NOHEAD FILES TO "T:PackagesList" LFORMAT="; %N"
+Execute "T:PackagesList"
+Delete "T:PackagesList" QUIET
+
+List "SYS:Libs" NOHEAD FILES TO "T:a" LFORMAT="; %N"
+Delete "T:a" QUIET
+
+List "SYS:Libs" NOHEAD FILES TO "T:a-considerably-longer-name-than-that" LFORMAT="; %N"
+Delete "T:a-considerably-longer-name-than-that" QUIET
+
+Skip loop BACK

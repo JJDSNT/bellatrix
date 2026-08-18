@@ -1,0 +1,25 @@
+.key
+; ISSUE-0037 -- Execute's own temporary file, and nothing else.
+;
+; The payload is built once, on the card, so that the only RAM: traffic in the
+; loop is the T:TmpNNNNN file Execute creates for itself, fills a character at
+; a time through the DOS buffer, and deletes (Execute.c:149-170).
+;
+; That temporary is the one allocation in this whole sequence whose *name
+; length varies between iterations* -- it is built from the task number and
+; four clock fields -- which is why it deserves isolating from ram-stress-a.
+;
+; The payload is comment lines, so executing it does nothing but read it.
+
+Echo "[ram-stress-b] building the payload"
+List "SYS:C" NOHEAD FILES TO "S:ram-stress-payload" LFORMAT="; %N"
+
+Echo "[ram-stress-b] start"
+
+Lab loop
+
+Echo "[ram-stress-b] ."
+
+Execute "S:ram-stress-payload"
+
+Skip loop BACK

@@ -1,0 +1,216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 18 Aug 2026 03:20:00 -0300
+Subject: [PATCH 30/30] ram: guard bytes on every muddy_pool allocation
+
+Diagnostic for ISSUE-0037, where TLSF reports a damaged block header while
+this handler is freeing an object's name string. That says something wrote
+past the end of an allocation. It does not say who, and the two answers lead
+in opposite directions:
+
+  - this handler overran one of its own blocks, or
+  - something else scribbled into the puddle and this handler is merely the
+    first code to walk over the damage.
+
+AROS's own mungwall cannot answer it. CreatePool() here produces a managed
+pool, so FreePooled() takes the IsManagedMem() branch and calls mhe_Free
+directly; InternalFreePooled(), where MungWall_Check() lives, is never
+reached. Confirmed in the disassembly of the exact frame the backtrace names:
+
+    260d6:  cmpil #1299072868,%a0@(32)   ; 'MnGd' = MEMHEADER_EXT_MAGIC
+    260e0:  moveal %a0@(56),%a2          ; mhe->mhe_Free
+    260ee:  jsr %a2@
+
+So the guard goes where the pool is. muddy_pool holds exactly two kinds of
+allocation -- file data blocks from AddDataBlock() and name/comment strings
+from SetString() -- across six call sites, all of them here. Each allocation
+is padded by eight bytes carrying a magic and a size-dependent second word,
+verified on free.
+
+Guard broken says this handler overran its own allocation, and names which
+kind and by how much. Guard intact, with TLSF still reporting a damaged
+header, says the writer is somewhere else and takes this file off the list.
+Either way the question stops being open.
+
+WriteData() also gets one comparison per block. block->length is a UWORD and
+block_pos a UPINT, so `block->length - block_pos` promotes to int and then
+converts to unsigned long: should block_pos ever exceed the length, the result
+is not negative but enormous, the `block_length == 0` test fails, the loop
+never advances to the next block, and CopyMem() runs off the end. Nothing has
+been shown to produce that state -- this reports it if anything does.
+
+RAM_GUARD 0 in handler.h compiles all of it away.
+---
+--- a/rom/filesys/ram/handler.h
++++ b/rom/filesys/ram/handler.h
+@@ -85,6 +85,81 @@
+ };
+ 
+ 
++/*
++ * Guard bytes on every muddy_pool allocation -- ISSUE-0037.
++ *
++ * The heap corruption in that issue is detected when this handler frees a
++ * name string and TLSF finds the neighbouring block header damaged. That says
++ * something wrote past the end of an allocation; it does not say who, and the
++ * two candidates are not equally easy to tell apart from the outside:
++ *
++ *   - this handler overran one of its own blocks, or
++ *   - something else in the system scribbled into the puddle, and this handler
++ *     is only the first code to walk over the damage.
++ *
++ * AROS's own mungwall cannot answer that here: CreatePool() produces a managed
++ * pool, so FreePooled() calls mhe_Free directly and InternalFreePooled(), where
++ * MungWall_Check() lives, is never reached. Verified in the disassembly of the
++ * exact frame the ISSUE-0037 backtrace names.
++ *
++ * So: pad every allocation in muddy_pool, stamp the padding, and check it when
++ * the allocation is freed. muddy_pool holds exactly two kinds of thing --
++ * file data blocks (AddDataBlock) and name/comment strings (SetString) -- so
++ * six call sites cover all of it.
++ *
++ * The discriminator is the point. Guard broken => this handler overran its own
++ * allocation, and the report says which kind and by how much. Guard intact
++ * while TLSF still reports a damaged header => the writer is somewhere else,
++ * and this file stops being the suspect.
++ *
++ * Set RAM_GUARD to 0 to compile all of it away.
++ */
++#define RAM_GUARD 1
++
++#if RAM_GUARD
++/* This module has no debug header of its own. rom/filesys/fat, which links
++ * into the same ELF, reaches bug() through <aros/debug.h>, so kprintf does
++ * resolve here -- it just has to be asked for. */
++#include <aros/debug.h>
++#define RAM_GUARD_SIZE  8
++#define RAM_GUARD_MAGIC 0x5241474dUL    /* 'RAGM' */
++
++/* Written twice so a single-longword overwrite is still caught, and so the
++ * report can say whether the damage stopped inside the guard. */
++static inline void RamGuardSet(APTR mem, UPINT size)
++{
++   ULONG *g = (ULONG *)((UBYTE *)mem + size);
++   g[0] = RAM_GUARD_MAGIC;
++   g[1] = RAM_GUARD_MAGIC ^ (ULONG)size;
++}
++
++static inline BOOL RamGuardOk(APTR mem, UPINT size)
++{
++   const ULONG *g = (const ULONG *)((UBYTE *)mem + size);
++   return g[0] == RAM_GUARD_MAGIC && g[1] == (RAM_GUARD_MAGIC ^ (ULONG)size);
++}
++
++#define RAM_GUARD_TOTAL(size)      ((size) + RAM_GUARD_SIZE)
++#define RAM_GUARD_SET(mem, size)   RamGuardSet((mem), (size))
++#define RAM_GUARD_CHECK(what, mem, size)                                      \
++   do {                                                                       \
++      if(!RamGuardOk((mem), (size)))                                          \
++      {                                                                       \
++         const ULONG *g_ = (const ULONG *)((UBYTE *)(mem) + (size));          \
++         bug("[ram:guard] %s overran: mem=%p size=%lu guard=%08lx,%08lx "      \
++             "expected=%08lx,%08lx\n", (what), (mem), (unsigned long)(size),   \
++             (unsigned long)g_[0], (unsigned long)g_[1],                       \
++             (unsigned long)RAM_GUARD_MAGIC,                                   \
++             (unsigned long)(RAM_GUARD_MAGIC ^ (ULONG)(size)));                \
++      }                                                                       \
++   } while(0)
++#else
++#define RAM_GUARD_TOTAL(size)             (size)
++#define RAM_GUARD_SET(mem, size)          do { } while(0)
++#define RAM_GUARD_CHECK(what, mem, size)  do { } while(0)
++#endif
++
++
+ struct Lock
+ {
+    struct FileLock lock;
+--- a/rom/filesys/ram/filesystem.c
++++ b/rom/filesys/ram/filesystem.c
+@@ -398,8 +398,12 @@
+             != NULL)
+          {
+             if(block->length != 0)
+-               FreePooled(handler->muddy_pool, block,
+-                  sizeof(struct Block) + block->length);
++            {
++               UPINT bsize = sizeof(struct Block) + block->length;
++
++               RAM_GUARD_CHECK("data block (delete)", block, bsize);
++               FreePooled(handler->muddy_pool, block, RAM_GUARD_TOTAL(bsize));
++            }
+          }
+       }
+ 
+@@ -888,6 +892,22 @@
+ 
+    while(remainder > 0 && error == 0)
+    {
++      /*
++       * ISSUE-0037. block->length is a UWORD and block_pos a UPINT, so this
++       * subtraction promotes the first to int and then converts it to unsigned
++       * long: if block_pos ever exceeds block->length the result is not
++       * negative, it is enormous. The `block_length == 0` test below then
++       * fails, the loop never moves to the next block, write_length becomes
++       * the whole remainder, and the CopyMem() runs off the end of the block
++       * into whatever follows it in muddy_pool.
++       *
++       * Nothing has been shown to produce that state; this says so if it
++       * happens, which costs one comparison per block.
++       */
++      if(block_pos > block->length)
++         bug("[ram:guard] WriteData block_pos %lu > length %u (block %p)\n",
++            (unsigned long)block_pos, (unsigned)block->length, block);
++
+       block_length = block->length - block_pos;
+ 
+       /* Move on to next block if end of current block reached */
+@@ -1300,9 +1320,11 @@
+    while(block == NULL && alloc_size >= limit)
+    {
+       alloc_size = ((alloc_size - 1) & (~MEM_BLOCKMASK)) + MEM_BLOCKSIZE;
+-      block = AllocPooled(handler->muddy_pool, alloc_size);
++      block = AllocPooled(handler->muddy_pool, RAM_GUARD_TOTAL(alloc_size));
+       if(block == NULL)
+          alloc_size >>= 1;
++      else
++         RAM_GUARD_SET(block, alloc_size);
+    }
+ 
+    /* Add the block to the end of the file */
+@@ -1360,7 +1382,8 @@
+    {
+       alloc_size = sizeof(struct Block) + block->length;
+       file->block_count -= alloc_size >> MEM_BLOCKSHIFT;
+-      FreePooled(handler->muddy_pool, block, alloc_size);
++      RAM_GUARD_CHECK("data block", block, alloc_size);
++      FreePooled(handler->muddy_pool, block, RAM_GUARD_TOTAL(alloc_size));
+    }
+ 
+    return;
+--- a/rom/filesys/ram/support.c
++++ b/rom/filesys/ram/support.c
+@@ -66,10 +66,11 @@
+    size = StrSize(new_str);
+    if(size > 1)
+    {
+-      str_copy = AllocPooled(handler->muddy_pool, size);
++      str_copy = AllocPooled(handler->muddy_pool, RAM_GUARD_TOTAL(size));
+       if(str_copy != NULL)
+       {
+          CopyMem(new_str, str_copy, size);
++         RAM_GUARD_SET(str_copy, size);
+       }
+       else
+          error = ERROR_DISK_FULL;
+@@ -87,7 +88,9 @@
+       if(old_str != NULL)
+       {
+          size = StrSize(old_str);
+-         FreePooled(handler->muddy_pool, old_str, size);
++         /* This is the exact free the ISSUE-0037 backtrace lands on. */
++         RAM_GUARD_CHECK("name string", old_str, size);
++         FreePooled(handler->muddy_pool, old_str, RAM_GUARD_TOTAL(size));
+          block_diff -= MEMBLOCKS(size);
+       }
+ 

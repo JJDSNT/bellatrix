@@ -223,6 +223,24 @@ for entry in "${ENTRIES[@]}"; do
     cp -al "$DIST/$entry" "$STAGE/$entry"
 done
 
+# tests/ram-stress/ goes on every card, and nothing runs it.
+#
+# They are diagnostic scripts for ISSUE-0037, where the trigger happens four
+# times per boot and the fault appears in roughly one boot in four -- so the
+# expensive part of that investigation is waiting, not looking. Put on the card
+# they turn one boot into as many iterations as you have patience for:
+#
+#     Execute "S:ram-stress-c"
+#
+# Copied here rather than by hand because a diagnostic that has to be
+# re-injected after every build is one that quietly stops being there. That
+# already happened once with C:xSysInfo.
+if [ -d "$ROOT/tests/ram-stress" ]; then
+    for s in "$ROOT/tests/ram-stress/ram-stress-"*; do
+        [ -f "$s" ] && cp "$s" "$STAGE/S/$(basename "$s")"
+    done
+fi
+
 if [ "$PI" = 1 ]; then
     # Emu68's own build installs it as Emu68.img.gz, and on the card it is ours:
     # the kernel a Bellatrix card boots. The firmware picks a kernel by the name
