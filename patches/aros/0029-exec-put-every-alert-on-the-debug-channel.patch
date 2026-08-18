@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 18 Aug 2026 01:40:00 -0300
+Subject: [PATCH 29/29] exec: put every alert on the debug channel, not only the
+ ones nobody can read
+
+Alert() has two exits and only one of them reaches serial.
+
+When Intuition is up, Exec_UserAlert() draws the "Software Failure!" requester
+and the machine keeps running. Everything that requester knows -- the alert
+code, the task, the PC, the register dump -- then exists only as pixels. On a
+headless boot it is lost outright; on a real machine it has to be photographed
+and typed back in, which is how the reports in ISSUE-0037 arrived, one register
+at a time and with the interesting fields missing.
+
+Exec_SystemAlert() does log, but it is reached only when the requester *cannot*
+be drawn -- precisely the case where the machine is least able to explain
+itself.
+
+So log first, then display. Alert_DisplayKrnAlert() already builds exactly the
+text Exec_SystemAlert() would, and hands it to KrnDisplayAlert(), whose generic
+implementation (rom/kernel/_displayalert.c) prints the framed text through
+krnPutC() and returns -- it does not halt, does not reboot, and does not need
+Intuition. On a target with no debug channel the whole thing costs one
+formatting pass into a buffer that already exists in SysBase.
+---
+--- a/rom/exec/alert.c
++++ b/rom/exec/alert.c
+@@ -15,6 +15,10 @@
+ #include "exec_util.h"
+ #include "etask.h"
+ 
++/* Defined in systemalert.c, which declares it locally rather than in a header. */
++void Alert_DisplayKrnAlert(struct Task *task, ULONG alertNum, APTR location, APTR stack, UBYTE type, APTR data,
++        struct ExecBase *SysBase);
++
+ /*****************************************************************************
+ 
+     NAME */
+@@ -141,6 +145,24 @@
+     }
+ 
+     /*
++     * Put the alert on the debug channel before anything is displayed.
++     *
++     * Alert() has two exits and only one of them says anything on serial. When
++     * Intuition is up, Exec_UserAlert() draws the requester and the machine
++     * carries on, so everything the requester knows -- the alert code, the task,
++     * the PC, the register dump -- exists only on a screen, and on a headless or
++     * photographed boot it is lost. Exec_SystemAlert() is reached only when the
++     * requester cannot be drawn, which is exactly when the machine is in no
++     * state to be asked questions.
++     *
++     * So log first, then display. Alert_DisplayKrnAlert() builds the same text
++     * Exec_SystemAlert() would and hands it to KrnDisplayAlert(), whose generic
++     * implementation prints it and returns -- no halt, no reboot, no dependency
++     * on Intuition being alive.
++     */
++    Alert_DisplayKrnAlert(task, alertNum, location, stack, type, data, SysBase);
++
++    /*
+      * If we are running in user mode we should first try to report a problem
+      * using Intuition display.
+      */
