@@ -19,7 +19,11 @@ PRIV_KERNEL_INCLUDES = \
 FILES := cause cli sti schedule kernel_debug getsystemattr context \
          kernel_cpu backtracefromframe
 
+# arch/m68k-emu68/boot for boot.h: getsystemattr.c republishes the framebuffer
+# Emu68 handed over as KATTR_FrameBuffer and friends, and that lives in
+# emu68_boot_context. hidd/emu68gfx does the same thing for the same reason.
 USER_INCLUDES := $(PRIV_KERNEL_INCLUDES) \
+    -I$(SRCDIR)/arch/m68k-emu68/boot \
     -I$(GENINCDIR) -I$(AROS_DEVELOPER)/include
 USER_CFLAGS := -Os
 

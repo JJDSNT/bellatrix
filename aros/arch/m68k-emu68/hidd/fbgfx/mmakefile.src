@@ -1,0 +1,37 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM kernel-m68k-emu68-fbgfx-kobj : kernel-hidd-gfx-includes
+
+#
+# The Raspberry Pi framebuffer HIDD from arch/aarch64-raspi, built for m68k.
+#
+# Compiled straight out of that directory rather than copied here: %build_module
+# takes absolute basenames (unlike %build_archspecific, see soc/sdcard), so the
+# sources have one home and this target has no fork of them to keep in step.
+# The same arrangement the SDHOST backend, dma.resource and usb2otg use.
+#
+# What that driver needs from us is only KrnGetSystemAttr(KATTR_FrameBuffer*),
+# which kernel/getsystemattr.c now answers -- initFBGfxHW() does nothing else
+# to find its surface.
+#
+# Not in the kernel link list yet. emu68gfx is still the driver that boots;
+# this one has to compile, then run, before anything is switched over.
+#
+FBGFXDIR := $(SRCDIR)/arch/aarch64-raspi/hidd/fbgfx
+
+FILES := \
+    $(FBGFXDIR)/fbgfx_init \
+    $(FBGFXDIR)/fbgfx_hiddclass \
+    $(FBGFXDIR)/fbgfx_displayclass \
+    $(FBGFXDIR)/fbgfx_support \
+    $(FBGFXDIR)/fbgfx_bitmapclass
+
+USER_INCLUDES := -I$(FBGFXDIR)
+USER_CPPFLAGS := -D__OOP_NOATTRBASES__ -D__EMU68__
+
+%build_module mmake=kernel-m68k-emu68-fbgfx \
+  modname=fbgfx modtype=hidd \
+  conffile=$(FBGFXDIR)/fbgfx.conf \
+  files="$(FILES)"
+
+%common

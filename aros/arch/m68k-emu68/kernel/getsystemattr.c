@@ -23,6 +23,22 @@
  */
 extern ULONG platform_periiobase;
 
+/*
+ * The framebuffer Emu68 handed over, republished as kernel attributes.
+ *
+ * AROS already defines KATTR_FrameBuffer and its companions (aros/kernel.h),
+ * and arch/aarch64-raspi's fbgfx driver reads the display it drives from
+ * exactly those -- initFBGfxHW() in hidd/fbgfx/fbgfx_support.c does nothing
+ * else to find the surface. Answering them here is what lets that driver be
+ * ported to this target without its hardware layer having to know anything
+ * about Emu68.
+ *
+ * Reaching emu68_boot_context from a different module is already established
+ * practice here: hidd/emu68gfx/emu68gfx_init.c does it, with the boot
+ * directory on its include path.
+ */
+#include <boot.h>
+
 AROS_LH1(intptr_t, KrnGetSystemAttr,
     AROS_LHA(uint32_t, id, D0),
     struct KernelBase *, KernelBase, 29, Kernel)
@@ -36,6 +52,33 @@ AROS_LH1(intptr_t, KrnGetSystemAttr,
 
     case KATTR_PeripheralBase:
         return (intptr_t)platform_periiobase;
+
+    /*
+     * Zero rather than -1 when there is no framebuffer: a caller that only
+     * checks for -1 then still sees "nothing", and fbgfx checks for both.
+     */
+    case KATTR_FrameBuffer:
+        if (!(emu68_boot_context.flags & EMU68_BOOT_FRAMEBUFFER))
+            return 0;
+        return (intptr_t)emu68_boot_context.framebuffer;
+
+    case KATTR_FrameBufferWidth:
+        return (intptr_t)emu68_boot_context.framebuffer_width;
+
+    case KATTR_FrameBufferHeight:
+        return (intptr_t)emu68_boot_context.framebuffer_height;
+
+    case KATTR_FrameBufferPitch:
+        return (intptr_t)emu68_boot_context.framebuffer_pitch;
+
+    /*
+     * 16, not 32. Emu68 hands over an RGB16_LE surface -- little-endian
+     * 5:6:5 on a big-endian CPU -- where the aarch64 target's firmware
+     * framebuffer is 32bpp R,G,B,x. Any driver ported from there has to be
+     * told this rather than assuming its own case.
+     */
+    case KATTR_FrameBufferDepth:
+        return 16;
 
     default:
         return -1;
