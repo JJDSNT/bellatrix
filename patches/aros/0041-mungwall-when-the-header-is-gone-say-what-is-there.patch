@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 19 Aug 2026 15:40:00 -0300
+Subject: [PATCH 41/41] mungwall: when the header is gone, say what is there
+ and who broke it
+
+A `mungwall` boot on the Pi 3 moved ISSUE-0037's failure two thirds of a
+boot earlier and gave it a call chain:
+
+    IntuitionInit -> MakePointerFromPrefs -> MakePointerFromData
+      -> NewObjectA (pointerclass) -> AllocSpriteDataA
+        -> Graphics BitMapScale -> HIDD BitMapScale -> FreeVec(dstbuf)
+
+    [MungWall] FreeMem(0x020c8830, 72) from FreeMem: no mungwall header
+    [Kernel:TLSF] free-list corruption at double free: block=020c8828
+        size=3688618968 flags=0x3 prev=dbdbdbdb next=00000044
+
+0xDBDBDBD8 and prev=0xdbdbdbdb are wall fill, so the memory under that
+pointer is a mungwall wall -- the header that should sit below it is not
+there. `BM__Hidd_BitMap__BitMapScale()` allocates three buffers and frees
+the same three pointers, so the pointer is not the bug; the header being
+gone is.
+
+That leaves one question -- gone how -- and the existing message cannot
+answer it. Three very different situations print the same line: a block
+older than mungwall reads as whatever the allocator left behind, a block
+whose header was overwritten reads as somebody else's data, and a block
+that is all 0xDB is a wall, meaning the pointer never was the start of an
+allocation. Only the words tell them apart, so print them.
+
+Then run MungWall_Scan() from the same place. It checks every live
+allocation's walls, and a neighbour that overran its own block reports
+"Post-wall broken" together with the task and the caller that allocated
+it. That caller is the writer this whole exercise is looking for, and
+catching it at the first sign of damage rather than at the next unrelated
+free is the entire reason for turning mungwall on.
+
+Diagnostic only, and only on a path that has already found damage:
+mungwall is a boot argument, so nothing here runs on a normal boot.
+diff --git a/rom/exec/mungwall.c b/rom/exec/mungwall.c
+index c7f514e45b..a9b304d660 100644
+--- a/rom/exec/mungwall.c
++++ b/rom/exec/mungwall.c
+@@ -198,10 +198,41 @@ APTR MungWall_Check(APTR memoryBlock, IPTR byteSize, struct TraceLocation *loc,
+          */
+         if (header->mwh_magicid != MUNGWALL_HEADER_ID)
+         {
++            const ULONG *w = (const ULONG *)header;
++            unsigned int i;
++
+             bug("[MungWall] FreeMem(0x%p, %lu) from %s: no mungwall header"
+                 " (pre-mungwall or foreign allocation) - freeing as-is\n",
+                 memoryBlock, (unsigned long)byteSize,
+                 loc && loc->function ? loc->function : "<unknown>");
++
++            /*
++             * Say what is there instead. A block allocated before mungwall
++             * came on reads as whatever the allocator left behind; one whose
++             * header was overwritten reads as somebody else's data; one that
++             * is all 0xDB is a wall, which means this pointer is not the
++             * start of an allocation at all. The three are worth telling
++             * apart, and the words are the only thing that tells them apart.
++             */
++            bug("[MungWall] header region at 0x%p:", header);
++            for (i = 0; i < MUNGWALL_BLOCK_SHIFT / sizeof(ULONG); i++)
++            {
++                if ((i & 3) == 0)
++                    bug("\n[MungWall]   +%02x:", (unsigned)(i * sizeof(ULONG)));
++                bug(" %08x", w[i]);
++            }
++            bug("\n");
++
++            /*
++             * Then ask every live allocation whether its walls are intact.
++             * A neighbour that overran its own block reports "Post-wall
++             * broken" with the task and caller that allocated it, which is
++             * the writer this whole exercise is looking for -- and finding it
++             * here, at the first sign of damage, is the point of turning
++             * mungwall on at all.
++             */
++            MungWall_Scan(NULL, loc, SysBase);
++
+             return memoryBlock;
+         }
+ 

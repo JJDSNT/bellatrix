@@ -1128,6 +1128,45 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-18 -- **MungWall moved the failure two thirds of a boot earlier and
+  gave it a name.** With `mungwall` on the command line the Pi 3 does not reach
+  the CLI crash at all; it dies in `Exec Bootstrap Task` with a sixteen-frame
+  chain, resolved against the current ELF:
+
+      IntuitionInit -> MakePointerFromPrefs -> MakePointerFromData
+        -> NewObjectA (pointerclass) -> AllocSpriteDataA
+          -> Graphics_113_BitMapScale -> HIDD_DoMethod
+            -> BM__Hidd_BitMap__BitMapScale -> FreeVec
+
+      [MungWall] FreeMem(0x020c8830, 72) from FreeMem: no mungwall header
+      [Kernel:TLSF] free-list corruption at double free: block=020c8828
+          size=3688618968 flags=0x3 prev=dbdbdbdb next=00000044
+
+  The disassembly places the return address (`BitMapScale+0xbc`) at the second
+  of the three tail frees, so the pointer is `dstbuf`. 0xDBDBDBD8 and
+  `prev=0xdbdbdbdb` are wall fill: the memory under that pointer is a mungwall
+  wall and the header that belongs below it is not there.
+
+  `BM__Hidd_BitMap__BitMapScale()` allocates three buffers and frees the same
+  three pointers -- read it and there is no mismatch -- so the pointer is not
+  the defect. A missing header on a correctly-freed pointer is somebody else's
+  write, which is the same conclusion the CLI crash reached from the other end
+  and now with a live neighbour to look at.
+
+  `patches/aros/0041` makes that path answer the remaining question. Three
+  different situations print the same "no mungwall header" line today -- a
+  block older than mungwall, a block whose header was overwritten, and a
+  pointer that was never the start of an allocation -- and only the raw words
+  separate them, so it prints them. It then runs `MungWall_Scan()`, which
+  checks every live allocation's walls and reports a broken one together with
+  the task and caller that allocated it. A neighbour that overran its own block
+  shows up there as "Post-wall broken", with the writer attached.
+
+  Note what this already rules out: whatever is wrong happens before Intuition
+  has a mouse pointer, i.e. long before `ENV:` or the RAM: handler, which is
+  where the first three sightings pointed. The earlier readings were all of the
+  same damage seen later.
+
 - 2026-08-18 -- **The chain is resolved through dos.library, and MungWall is
   the tool this needs.** Against the current ELF (base 0x36600000, link map
   plus `nm` on the pre-localize objects):
