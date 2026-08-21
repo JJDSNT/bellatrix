@@ -119,6 +119,7 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
     ULONG value;
     ULONG channel;
     ULONG count;
+    ULONG active_channels = 0;
 
     if (unit->initialized)
         return unit->hardware_ok;
@@ -178,12 +179,20 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
     for (channel = 0; channel < unit->host_channels; channel++)
     {
         value = dwc2_readl(device, DWC2_HCCHAR(channel));
+        if (value & DWC2_HCCHAR_CHENA)
+            active_channels |= 1UL << channel;
         value &= ~(DWC2_HCCHAR_CHENA | DWC2_HCCHAR_EPDIR_IN);
         value |= DWC2_HCCHAR_CHDIS;
         dwc2_writel(device, DWC2_HCCHAR(channel), value);
     }
     for (channel = 0; channel < unit->host_channels; channel++)
     {
+        if (!(active_channels & (1UL << channel)))
+        {
+            dwc2_writel(device, DWC2_HCINT(channel), DWC2_HCINT_ALL);
+            dwc2_writel(device, DWC2_HCINTMSK(channel), 0);
+            continue;
+        }
         value = dwc2_readl(device, DWC2_HCCHAR(channel));
         value &= ~DWC2_HCCHAR_EPDIR_IN;
         value |= DWC2_HCCHAR_CHDIS | DWC2_HCCHAR_CHENA;
