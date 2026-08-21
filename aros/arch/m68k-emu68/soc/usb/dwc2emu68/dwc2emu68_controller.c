@@ -19,6 +19,7 @@
 #include <proto/kernel.h>
 
 #define DWC2_WAIT_LOOPS 100
+#define DWC2_HALT_WAIT_LOOPS 100000
 #define DWC2_MAX_CHANNELS 16
 
 AROS_INTH1(DWC2_FNAME(SoftIRQ), struct DWC2Unit *, unit)
@@ -117,6 +118,7 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
     struct DWC2Device *device = unit->device;
     ULONG value;
     ULONG channel;
+    ULONG count;
 
     if (unit->initialized)
         return unit->hardware_ok;
@@ -169,14 +171,33 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
         dwc2_readl(device, DWC2_GHWCFG2));
     if (unit->host_channels > DWC2_MAX_CHANNELS)
         unit->host_channels = DWC2_MAX_CHANNELS;
+    /* Synopsys specifies a two-phase shutdown. First publish CHDIS with
+     * CHENA clear for every channel; only then request the forced halt. The
+     * BCM2837 core needs substantially longer than QEMU to retire that
+     * request, so this path has its own bounded wait. */
+    for (channel = 0; channel < unit->host_channels; channel++)
+    {
+        value = dwc2_readl(device, DWC2_HCCHAR(channel));
+        value &= ~(DWC2_HCCHAR_CHENA | DWC2_HCCHAR_EPDIR_IN);
+        value |= DWC2_HCCHAR_CHDIS;
+        dwc2_writel(device, DWC2_HCCHAR(channel), value);
+    }
     for (channel = 0; channel < unit->host_channels; channel++)
     {
         value = dwc2_readl(device, DWC2_HCCHAR(channel));
         value &= ~DWC2_HCCHAR_EPDIR_IN;
         value |= DWC2_HCCHAR_CHDIS | DWC2_HCCHAR_CHENA;
         dwc2_writel(device, DWC2_HCCHAR(channel), value);
-        if (!wait_clear(device, DWC2_HCCHAR(channel), DWC2_HCCHAR_CHENA))
-            bug("[DWC2/Emu68] channel %lu halt timed out\n", channel);
+        for (count = 0; count < DWC2_HALT_WAIT_LOOPS; count++)
+            if (!(dwc2_readl(device, DWC2_HCCHAR(channel)) &
+                DWC2_HCCHAR_CHENA))
+                break;
+        if (count == DWC2_HALT_WAIT_LOOPS)
+        {
+            bug("[DWC2/Emu68] channel %lu halt timed out HCCHAR=%08lx\n",
+                channel, dwc2_readl(device, DWC2_HCCHAR(channel)));
+            goto failed;
+        }
         dwc2_writel(device, DWC2_HCINT(channel), DWC2_HCINT_ALL);
         dwc2_writel(device, DWC2_HCINTMSK(channel), 0);
     }
