@@ -29,8 +29,8 @@ not published its display list by the time a resident at priority 9 looks, and
 that is the other half of the problem. It removes one of the two reasons it
 cannot.
 ---
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
 @@ -11,6 +11,10 @@
  
  #include <proto/oop.h>

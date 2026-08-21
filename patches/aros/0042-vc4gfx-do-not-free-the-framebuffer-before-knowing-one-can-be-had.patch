@@ -33,8 +33,8 @@ that, fails, saying what it asked for and what it got.
 Neither half is confirmed on hardware yet. What is confirmed is the
 sequence: display alive before the driver, gone after, and the only thing
 in between that can free a framebuffer is the call that frees it.
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
 @@ -161,14 +161,21 @@
           * (FBFREE -> batched mode/depth/pixfmt/FBALLOC -> GETPITCH). */
          VC4_MBOX_LOCK(xsd);

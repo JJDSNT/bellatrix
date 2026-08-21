@@ -1,0 +1,24 @@
+include $(SRCDIR)/config/aros.cfg
+
+# Bellatrix-owned DWC2 driver. It is deliberately built alongside the legacy
+# arm-native-derived usb2otg.device until it can enumerate devices on QEMU.
+DWC2EMU68DIR := $(SRCDIR)/arch/m68k-emu68/soc/usb/dwc2emu68
+
+USER_INCLUDES := -I$(DWC2EMU68DIR) -I$(SRCDIR)/arch/m68k-emu68/include
+
+FILES := $(addprefix $(DWC2EMU68DIR)/, \
+    dwc2emu68_controller \
+    dwc2emu68_device \
+    dwc2emu68_platform \
+    dwc2emu68_root \
+    dwc2emu68_transfer \
+    dwc2emu68_unit)
+
+%build_module mmake=kernel-usb-dwc2emu68 \
+    modname=dwc2emu68 modtype=device \
+    conffile=$(DWC2EMU68DIR)/dwc2emu68.conf \
+    moduledir=Devs/USBHardware \
+    files="$(FILES)" \
+    uselibs="hiddstubs debug"
+
+%common

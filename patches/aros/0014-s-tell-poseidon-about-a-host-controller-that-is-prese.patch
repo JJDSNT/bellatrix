@@ -10,29 +10,28 @@ stack comes up with nothing attached and no USB device is ever seen.
 Guarded on the device file existing, so it is inert anywhere the driver is
 not installed.
 ---
- workbench/s/Startup-Sequence | 10 ++++++++++
- 1 file changed, 10 insertions(+)
+ workbench/s/Startup-Sequence | 9 +++++++++
+ 1 file changed, 9 insertions(+)
 
 diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
-index 18039db7dc..4f32a1dede 100644
+index 1a5b9fffb1..8a2aef5f81 100644
 --- a/workbench/s/Startup-Sequence
 +++ b/workbench/s/Startup-Sequence
-@@ -103,6 +103,16 @@
+@@ -105,6 +105,15 @@
  If EXISTS "C:PsdStackLoader"
      PsdStackLoader >NIL:
  EndIf
-+
 +; A host controller in DEVS:USBHardware is not found by itself: PsdStackLoader
 +; starts the stack and restores saved preferences, but a machine that has never
 +; had Poseidon configured has no hardware in them. Tell it about the controller
 +; that is actually present, if one is.
 +If EXISTS "DEVS:USBHardware/usb2otg.device"
 +    Echo "starting AddUSBHardware" >"SDCARD0P0:usb-hardware.log"
-+    AddUSBHardware usb2otg.device >>"SDCARD0P0:usb-hardware.log"
++    AddUSBHardware DEVS:USBHardware/usb2otg.device >>"SDCARD0P0:usb-hardware.log"
 +    Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
 +EndIf
- Run <NIL: >NIL: QUIET ConClip
- 
- If EXISTS "C:RexxMast"
+ If EXISTS "C:BTStackLoader"
+     BTStackLoader >NIL:
+ EndIf
 -- 
 2.43.0

@@ -1,0 +1,30 @@
+From: Bellatrix contributors
+Subject: [PATCH] test/smp: build libatomic before linking SmallPT
+
+TARGET_CXX_LDFLAGS makes the C++ link request libatomic on targets that need
+it, but the SmallPT target does not order the corresponding link library into
+the build. A clean full m68k distribution therefore reaches the test before
+libatomic exists and fails with "cannot find -latomic".
+
+Declare the dependency directly on the program target, as the Mesa and Gallium
+users already do. Placing it only on the test-smp aggregate would leave its
+children unordered and could still run the link first.
+
+---
+ developer/debug/test/smp/smp-smallpt/mmakefile.src | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/developer/debug/test/smp/smp-smallpt/mmakefile.src b/developer/debug/test/smp/smp-smallpt/mmakefile.src
+index 1f29ebed26..cd7c753cdf 100644
+--- a/developer/debug/test/smp/smp-smallpt/mmakefile.src
++++ b/developer/debug/test/smp/smp-smallpt/mmakefile.src
+@@ -8,6 +8,7 @@ EXEDIR  := $(AROS_TESTS)/smp
+ 
+ #MM- test-smp : test-smp-smp-smallpt
+ #MM- test-smp-quick : test-smp-smp-smallpt-quick
++#MM test-smp-smp-smallpt : linklibs-libatomic
+ 
+ #USER_CFLAGS := $(PARANOIA_CFLAGS)
+ 
+-- 
+2.51.0

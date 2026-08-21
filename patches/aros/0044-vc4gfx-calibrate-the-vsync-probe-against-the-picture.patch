@@ -47,9 +47,9 @@ through the other -- which is exactly how the first takeover of a Pi 3
 boot measured a one-frame window and gave up while the second, at
 Wanderer, measured two and found bit 8.
 
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-@@ -50,7 +50,7 @@
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
+@@ -50,15 +50,15 @@
   * register reads; these give roughly half a second / two seconds. */
  #define HVS_SPIN_LATCH  5000000
  #define HVS_SPIN_HOLD   10000000
@@ -57,12 +57,20 @@ Wanderer, measured two and found bit 8.
 +#define HVS_PROBE_WINDOW_US 100000  /* 100 ms: 5-6 frames at 50-60 Hz */
  #define HVS_SPIN_FLIP   500000      /* flip-latch wait bound, ~3 frames */
  
+ /* Every register below is VideoCore IV's; BCM2711 carries HVS5 instead.
+  * Gates the entry points that reach hardware before an hvs_Active check -
+  * the rest already no-ops while hvs_Active is FALSE. */
+ static inline BOOL hvs_hw_known(struct VideoCoreGfx_staticdata *xsd)
+ {
+     return !xsd->vcsd_IsBCM2711;
+ }
+ 
  /*
 @@ -566,9 +566,44 @@
   * PV_VERTA/B gives the expected ratio, so no timer is needed. A short
   * burst of line-rate interrupts is known-survivable (bit 7 ran at
   * 67 kHz for a whole session during bring-up). */
-+/* The BCM system timer, 1 MHz, same source vc4gfx_dma.c uses. Windows
++/* The BCM system timer, 1 MHz, same source vcgfx_dma.c uses. Windows
 + * measured in time rather than in loop iterations: the calibration reads
 + * the HVS and the bit probes read the PixelValve, and a loop count that
 + * means five frames through one of them meant one frame through the
@@ -208,8 +216,8 @@ Wanderer, measured two and found bit 8.
                  break;
              }
          }
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.h
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.h
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.h
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.h
 @@ -54,6 +54,7 @@
  #define HVS_DISPCTRLX_H_SHIFT   0
  #define HVS_DISPBKGNDX(ch)      (0x0044 + 0x10 * (ch))  /* background fill */

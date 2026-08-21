@@ -1,0 +1,22 @@
+From: Bellatrix Project <bellatrix@localhost>
+Subject: [PATCH] Workbook: keep icon.library call out of line on m68k
+
+GCC 6.5 inlines the small wrapper at -Os, recreating the address-register
+pressure that the wrapper avoids.  Keep this library-base call out of line.
+---
+ workbench/system/Workbook/wbicon.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/workbench/system/Workbook/wbicon.c b/workbench/system/Workbook/wbicon.c
+--- a/workbench/system/Workbook/wbicon.c
++++ b/workbench/system/Workbook/wbicon.c
+@@ -38,6 +38,7 @@ const struct TagItem wbIcon_DrawTags[] = {
+     { TAG_DONE },
+ };
+ 
++__attribute__((noinline))
+ static void wbIcon_GetRectangle(struct WorkbookBase *wb, struct wbIcon *my,
+     struct Rectangle *rect)
+ {
+-- 
+2.43.0

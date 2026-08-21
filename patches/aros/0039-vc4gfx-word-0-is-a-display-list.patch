@@ -34,8 +34,8 @@ the list leads anywhere was always decided further down, by walking it
 and finding a plane whose PTR0 is our framebuffer; a head of zero that
 leads nowhere still declines there, one entry later. The dump gets the
 same treatment, and now walks any channel the HVS has enabled.
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
 @@ -219,7 +219,7 @@
      for (attempt = 0; attempt < 3 && !stable; attempt++)
      {

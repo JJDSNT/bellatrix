@@ -23,7 +23,7 @@ like every other BCM283x peripheral, so each read arrives byte-reversed
 and the takeover judged a healthy channel to be disabled with an
 out-of-range list.
 
-The rest of this driver already knew that -- vc4gfx_dma.c wraps the DMA
+The rest of this driver already knew that -- vcgfx_dma.c wraps the DMA
 control registers and the system timer in AROS_LE2LONG/AROS_LONG2LE, and
 so does this port's mbox.resource. The four HVS/PixelValve accessors were
 the ones written for a little-endian host and never revisited. Wrapping
@@ -40,17 +40,17 @@ fb_phys remains the identification that matters.
 
 Neither half is verified on hardware yet: what is verified is that the
 values the driver printed cannot be read any other way.
-diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
 index 209c3250d6..6e44af7e8d 100644
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-@@ -53,24 +53,37 @@
- #define HVS_SPIN_PROBEBIT 100000    /* ~2-4 frames per probed INTEN bit */
- #define HVS_SPIN_FLIP   500000      /* flip-latch wait bound, ~3 frames */
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
+@@ -62,24 +62,37 @@ static inline BOOL hvs_hw_known(struct VideoCoreGfx_staticdata *xsd)
+     return !xsd->vcsd_IsBCM2711;
+ }
  
 +/*
 + * HVS and PixelValve registers are little-endian, like every other BCM283x
-+ * peripheral -- vc4gfx_dma.c already says so for the DMA engine and the
++ * peripheral -- vcgfx_dma.c already says so for the DMA engine and the
 + * system timer. On a little-endian CPU the conversion is nothing and the
 + * generated code is the same bare load; on a big-endian one it is the
 + * difference between reading a register and reading its bytes backwards.

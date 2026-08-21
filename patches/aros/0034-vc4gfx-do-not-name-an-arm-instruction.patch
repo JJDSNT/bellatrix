@@ -18,8 +18,8 @@ source line at all.
 __sync_synchronize() is the compiler's own full barrier and emits the right
 instruction for the target, including none where none is needed.
 ---
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_dma.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_dma.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_dma.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_dma.c
 @@ -29,7 +29,21 @@
  extern APTR KernelBase;
  APTR DMABase = NULL;

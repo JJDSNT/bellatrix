@@ -9,13 +9,13 @@ Hand the newly allocated surface to the port's boot UI before HVS takeover.
 This keeps the early display coherent across the framebuffer mode change.
 
 ---
- .../2708/hidd/vc4gfx/vc4gfx_onbitmap.c         | 6 ++++++
+ .../2708/hidd/vcgfx/vcgfx_onbitmap.c         | 6 ++++++
  1 file changed, 6 insertions(+)
 
-diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
 index 550a54de3a..92549b58f1 100644
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_onbitmap.c
 @@ -13,6 +13,7 @@
  #include <proto/mbox.h>
  #ifdef __EMU68__

@@ -65,12 +65,13 @@
  */
 
 /*
- * The SoC bases. Nothing here runs on a BCM2711, but drivers shared with
- * arch/arm-native test for it to decide which controller owns the card slot,
- * so the constant has to exist. PERIBUSBASE is the VideoCore's view of the
+ * The SoC bases. Nothing here runs on a BCM2711 or BCM2712, but drivers shared
+ * with arch/arm-native test for them to select SoC-specific implementations,
+ * so the constants have to exist. PERIBUSBASE is the VideoCore's view of the
  * peripherals, which is what a DMA descriptor has to carry.
  */
 #define BCM2711_PERIIOBASE   0xFE000000
+#define BCM2712_PERIIOBASE   0x107C000000ULL
 #define BCM2835_PERIBUSBASE  0x7E000000
 
 #define GPIO_BASE           (ARM_PERIIOBASE + 0x200000)

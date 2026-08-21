@@ -130,25 +130,44 @@ host_tools_dir() {
     return 1
 }
 
-# What the toolchain is made of, and nothing else: the two version files and
-# the crosstools sources, all inside the AROS pin, plus any patch of ours that
-# reaches them. This describes the gcc toolchain, which is what m68k uses; a
-# target built with LLVM instead would have to bring config/llvm_def in here. It deliberately does not move when the port sources or the rest
-# of the patch series change -- the most expensive thing to build is the thing
-# that changes least, and a digest that moved every day would be worthless.
+# What the m68k GNU toolchain is made of, and nothing else: the two selected
+# versions, their exact upstream patches and the GNU crosstools recipe, plus
+# any patch of ours that reaches them. Hashing all of tools/crosstools is too
+# broad: the 2026-08-21 AROS update changed only GCC 16 and LLVM 23 files and
+# incorrectly invalidated the published GCC 6.5/binutils 2.32 toolchain.
+# A target built with LLVM would need its own key.
 # Both halves end in `|| true` deliberately: no patch of ours reaching the
 # toolchain is the normal case, and grep answers "no match" with status 1. Under
 # `set -e` and `pipefail` that status propagates out of the group, out of the
 # pipeline, and kills the caller -- which is how the first version of this
 # managed to abort the build immediately after writing the stamp.
 toolchain_digest() {
-    {
-        git -C "$SRC" rev-parse HEAD:config/gcc_def HEAD:config/binutils_def \
-                                HEAD:tools/crosstools 2>/dev/null || true
+    local gcc_version binutils_version digest
+    gcc_version="$(git -C "$SRC" show HEAD:config/gcc_def)"
+    binutils_version="$(git -C "$SRC" show HEAD:config/binutils_def)"
+
+    digest="$({
+        git -C "$SRC" rev-parse \
+            HEAD:config/gcc_def \
+            HEAD:config/binutils_def \
+            HEAD:tools/crosstools/gnu/mmakefile.src \
+            HEAD:tools/crosstools/gnu/gcc-"$gcc_version"-aros.diff \
+            HEAD:tools/crosstools/gnu/binutils-"$binutils_version"-aros.diff \
+            2>/dev/null || true
         grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
             "$ROOT"/patches/aros/[0-9]*.patch 2>/dev/null | sort |
             xargs -r sha256sum || true
-    } | sha256sum | cut -c1-16
+    } | sha256sum | cut -c1-16)"
+
+    # Compatibility with the already-published toolchain release. The old
+    # algorithm produced this key while the five effective inputs above had
+    # exactly the 57f9... digest. Keeping the public key avoids a pointless
+    # 175 MB re-upload and, more importantly, a multi-hour rebuild for users.
+    if [ "$digest" = 57f9e2fe4ed626c1 ]; then
+        echo a88db85e62ede04f
+    else
+        echo "$digest"
+    fi
 }
 
 toolchain_stamp() {

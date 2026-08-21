@@ -26,8 +26,8 @@ block is documented to occupy. Word 4084 is proven readable, since the
 firmware's filter kernel comes back from there intact, so the scan stays
 inside what the hardware has already answered for. Widening it is a
 separate decision with its own risk, not a side effect of a diagnostic.
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.c
 @@ -1131,6 +1131,40 @@
          }
      }
@@ -69,8 +69,8 @@ separate decision with its own risk, not a side effect of a diagnostic.
      pv_dump("PV0", VC4_PV0_BASE);
      pv_dump("PV1", VC4_PV1_BASE);
      pv_dump("PV2", VC4_PV2_BASE);
---- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.h
-+++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_hvs.h
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.h
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hvs.h
 @@ -67,6 +67,16 @@
  #define HVS_DLIST_START         0x2000
  #define HVS_DLIST_WORDS         4096
