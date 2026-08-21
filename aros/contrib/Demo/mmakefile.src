@@ -1,0 +1,6 @@
+include $(SRCDIR)/config/aros-contrib.cfg
+
+#MM- contrib-demo : contrib-demo-gl
+#MM- contrib-demo-quick : contrib-demo-gl-quick
+
+%common

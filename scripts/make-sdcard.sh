@@ -119,6 +119,25 @@ for d in "${REQUIRED[@]}"; do
 done
 [ -f "$DIST/AROS.boot" ] || missing+=("AROS.boot")
 
+# VC4 is not only the display HIDD.  Its 3D path crosses Mesa's GL frontend,
+# Gallium and vc4gallium.hidd, so a distributable hardware pack must carry the
+# complete matching stack and at least the diagnostic/demo programs used to
+# exercise it on a Pi.  Failing here prevents a successful-looking archive
+# made from a stale distribution tree that contains only the 2D driver.
+REQUIRED_3D=(
+    Libs/gl.library
+    Libs/mesa3dgl20-0.library
+    Libs/gallium.library
+    Devs/Drivers/gallium.hidd
+    Devs/Drivers/vc4gallium.hidd
+    Extras/Demos/GL/glinfo
+    Extras/Demos/GL/gears
+    Extras/Demos/GL/gearbox
+)
+for f in "${REQUIRED_3D[@]}"; do
+    [ -f "$DIST/$f" ] || missing+=("$f")
+done
+
 if [ "${#missing[@]}" -ne 0 ]; then
     echo "ERROR: $DIST is missing: ${missing[*]}" >&2
     echo "       The lean 'kernel-link-<target>' build only produces the ELF." >&2

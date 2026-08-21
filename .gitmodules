@@ -10,3 +10,7 @@
 	path = external/aros-bluzing
 	url = https://github.com/JJDSNT/aros-bluzing.git
 	ignore = dirty
+[submodule "external/aros-contrib"]
+	path = external/aros-contrib
+	url = https://github.com/aros-development-team/contrib.git
+	ignore = dirty

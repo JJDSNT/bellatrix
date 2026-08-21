@@ -60,3 +60,30 @@ Also inspect HDMI output. A serial pass cannot prove colours, cursor movement,
 absence of tearing, or that later desktop drawing remains stable. Preserve the
 complete log and a photograph or capture of the final desktop as the hardware
 evidence for `AI_context/issues/ISSUE-0043.md`.
+
+## VC4 3D gate
+
+The Pi pack carries the official AROS MesaGL examples under
+`AROS/Extras/Demos/GL`. From an AROS shell on the Pi, first record the renderer
+and then run a simple animated workload:
+
+```text
+SYS:Extras/Demos/GL/glinfo
+SYS:Extras/Demos/GL/gears
+```
+
+`glinfo` must open successfully and identify the VC4/Gallium renderer; a
+software renderer or failure to open `mesa3dgl20.library`, `gallium.library` or
+`vc4gallium.hidd` is not a hardware 3D pass. `gears` must render continuously
+with correct colours and geometry, and must remain responsive when its window
+is moved or closed. For a broader smoke test, `gearbox`, `bounce`, `morph3d`
+and the texture demos are installed beside it; texture assets are in the
+`images` subdirectory.
+
+QEMU is not the 3D gate: its Raspberry Pi model does not emulate the VideoCore
+IV V3D block used by vc4gallium. Preserve the `glinfo` output, serial log and a
+photo or capture of `gears` running on a real Pi 3.
+
+The first Pi 3 attempt on 2026-08-21 hung the machine when `gears` was launched.
+Consequently 3D is packaged but not yet runtime-validated; investigation and
+the evidence still needed are tracked in `AI_context/issues/ISSUE-0045.md`.

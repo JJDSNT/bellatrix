@@ -192,8 +192,9 @@ failed=0
 # Submodules we take unmodified: no patch series, so the loop below never sees
 # them, and nothing else would check them out.  Initialise them explicitly so a
 # fresh clone does not end up with an empty directory that only fails later —
-# aros-bluzing as a dangling injected symlink.
-PLAIN=(aros-bluzing)
+# aros-bluzing or the selected official contrib sources as dangling injected
+# symlinks.
+PLAIN=(aros-bluzing aros-contrib)
 
 for name in "${PLAIN[@]}"; do
     repo="$ROOT/external/$name"

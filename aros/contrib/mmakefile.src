@@ -1,0 +1,7 @@
+# Selected components from the pinned official AROS contrib repository.
+
+include $(SRCDIR)/config/aros-contrib.cfg
+
+#MM- contrib-bellatrix : contrib-demo-gl
+
+%common
