@@ -8,6 +8,7 @@
 #define DWC2_GINTMSK            0x0018
 #define DWC2_GRXFSIZ            0x0024
 #define DWC2_GNPTXFSIZ          0x0028
+#define DWC2_GNPTXSTS           0x002c
 #define DWC2_GHWCFG2            0x0048
 #define DWC2_GHWCFG3            0x004c
 #define DWC2_HPTXFSIZ           0x0100

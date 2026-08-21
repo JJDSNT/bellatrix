@@ -128,6 +128,7 @@ static void finish(struct DWC2Unit *unit, BYTE error)
 
     unit->active_request = NULL;
     unit->transfer_stage = 0;
+    unit->watchdog_ticks = 0;
     ioreq->iouh_DriverPrivate1 = NULL;
     dwc2_writel(device, DWC2_HAINTMSK, 0);
     dwc2_writel(device, DWC2_GINTMSK,
@@ -195,6 +196,7 @@ static BOOL arm(struct DWC2Unit *unit, BOOL input, ULONG endpoint_type,
         return FALSE;
     packets = length == 0 ? 1 : (length + mps - 1) / mps;
     unit->active_length = length;
+    unit->watchdog_ticks = 0;
 
     if (input && length != 0)
         CacheClearE(unit->dma_buffer, length, CACRF_InvalidateD);
@@ -546,5 +548,47 @@ void dwc2_transfer_irq(struct DWC2Unit *unit)
         unit->data_toggle[ioreq->iouh_DevAddr & 0x7f] ^=
             1UL << ioreq->iouh_Endpoint;
         finish(unit, 0);
+    }
+}
+
+void dwc2_transfer_watchdog(struct DWC2Unit *unit)
+{
+    struct DWC2Device *device = unit->device;
+    ULONG status;
+
+    if (unit->active_request == NULL)
+        return;
+    status = dwc2_readl(device, DWC2_HCINT(DWC2_CHANNEL));
+    if (unit->watchdog_log_count < 8)
+    {
+        unit->watchdog_log_count++;
+        bug("[DWC2/Emu68:WD] #%u stage=%u GINT=%08lx/%08lx "
+            "HAINT=%08lx/%08lx HCINT=%08lx/%08lx CHAR=%08lx "
+            "TSIZ=%08lx DMA=%08lx NPTX=%08lx HFNUM=%08lx\n",
+            unit->watchdog_log_count, unit->transfer_stage,
+            dwc2_readl(device, DWC2_GINTSTS),
+            dwc2_readl(device, DWC2_GINTMSK),
+            dwc2_readl(device, DWC2_HAINT),
+            dwc2_readl(device, DWC2_HAINTMSK), status,
+            dwc2_readl(device, DWC2_HCINTMSK(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HCTSIZ(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HCDMA(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_GNPTXSTS),
+            dwc2_readl(device, DWC2_HFNUM));
+    }
+    if (status != 0)
+    {
+        unit->channel_pending |= status;
+        unit->irq_pending |= DWC2_GINTSTS_HCHINT;
+        dwc2_controller_drain_irq(unit);
+        return;
+    }
+    if (++unit->watchdog_ticks >= 100)
+    {
+        bug("[DWC2/Emu68:WD] transfer timed out stage=%u CHAR=%08lx\n",
+            unit->transfer_stage,
+            dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL)));
+        dwc2_transfer_abort_active(unit);
     }
 }

@@ -63,6 +63,8 @@ struct DWC2Unit
     UBYTE                   periodic_log_count;
     UBYTE                   sof_log_count;
     UBYTE                   transfer_log_count;
+    UBYTE                   watchdog_log_count;
+    UBYTE                   watchdog_ticks;
     BOOL                    opened;
 };
 
@@ -101,6 +103,7 @@ BOOL dwc2_transfer_submit(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq);
 void dwc2_transfer_irq(struct DWC2Unit *unit);
 void dwc2_transfer_sof(struct DWC2Unit *unit);
 void dwc2_transfer_service(struct DWC2Unit *unit);
+void dwc2_transfer_watchdog(struct DWC2Unit *unit);
 void dwc2_transfer_abort_active(struct DWC2Unit *unit);
 void dwc2_watchdog_arm(struct DWC2Unit *unit);
 void dwc2_watchdog_cancel(struct DWC2Unit *unit);

@@ -182,6 +182,7 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
         {
             WaitIO((struct IORequest *)unit->timer_request);
             unit->watchdog_active = FALSE;
+            dwc2_transfer_watchdog(unit);
         }
         if (unit->hub_interrupt != NULL &&
             unit->hub_interrupt->iouh_DriverPrivate2 != NULL)
