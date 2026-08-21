@@ -180,9 +180,14 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
     {
         value = dwc2_readl(device, DWC2_HCCHAR(channel));
         if (value & DWC2_HCCHAR_CHENA)
+        {
             active_channels |= 1UL << channel;
-        value &= ~(DWC2_HCCHAR_CHENA | DWC2_HCCHAR_EPDIR_IN);
-        value |= DWC2_HCCHAR_CHDIS;
+            value &= ~(DWC2_HCCHAR_CHENA | DWC2_HCCHAR_EPDIR_IN);
+            value |= DWC2_HCCHAR_CHDIS;
+        }
+        else
+            value &= ~(DWC2_HCCHAR_CHENA | DWC2_HCCHAR_CHDIS |
+                DWC2_HCCHAR_EPDIR_IN);
         dwc2_writel(device, DWC2_HCCHAR(channel), value);
     }
     for (channel = 0; channel < unit->host_channels; channel++)

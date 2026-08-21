@@ -94,6 +94,33 @@ static void wait_control_window(struct DWC2Device *device)
     } while ((microframe < 2 || microframe > 5) && --count != 0);
 }
 
+static BOOL reset_halted_channel(struct DWC2Unit *unit)
+{
+    struct DWC2Device *device = unit->device;
+    ULONG hcchar = dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL));
+    ULONG count;
+
+    /* A bare CHHLTD leaves the BCM2837 channel state machine unable to run a
+     * later transaction. Drive one real disable cycle while the endpoint
+     * context is still present, then scrub the channel before reprogramming. */
+    dwc2_writel(device, DWC2_HCCHAR(DWC2_CHANNEL),
+        hcchar | DWC2_HCCHAR_CHENA | DWC2_HCCHAR_CHDIS);
+    for (count = 0; count < 200000; count++)
+        if (!(dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL)) &
+            DWC2_HCCHAR_CHENA))
+            break;
+    if (count == 200000)
+    {
+        bug("[DWC2/Emu68:XFER] channel recovery timed out HCCHAR=%08lx\n",
+            dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL)));
+        return FALSE;
+    }
+    dwc2_writel(device, DWC2_HCINT(DWC2_CHANNEL), DWC2_HCINT_ALL);
+    dwc2_writel(device, DWC2_HCSPLT(DWC2_CHANNEL), 0);
+    dwc2_writel(device, DWC2_HCCHAR(DWC2_CHANNEL), 0);
+    return TRUE;
+}
+
 static void finish(struct DWC2Unit *unit, BYTE error)
 {
     struct IOUsbHWReq *ioreq = unit->active_request;
@@ -457,6 +484,11 @@ void dwc2_transfer_irq(struct DWC2Unit *unit)
     if ((status & DWC2_HCINT_CHHLTD) &&
         !(status & DWC2_HCINT_XFERCOMP))
     {
+        if (!reset_halted_channel(unit))
+        {
+            finish(unit, UHIOERR_HOSTERROR);
+            return;
+        }
         retry(unit);
         return;
     }
