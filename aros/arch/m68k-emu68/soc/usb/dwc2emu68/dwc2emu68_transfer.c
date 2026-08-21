@@ -22,6 +22,7 @@
 static void start_next(struct DWC2Unit *unit);
 
 #define DWC2_FRAME_MASK 0x07ffUL
+#define DWC2_CONTROL_GATE_LOOPS 8000000UL
 
 static ULONG current_frame(struct DWC2Unit *unit)
 {
@@ -76,6 +77,21 @@ static void update_sof_irq(struct DWC2Unit *unit)
 static ULONG dma_address(const void *address)
 {
     return 0xc0000000UL | (ULONG)(IPTR)address;
+}
+
+static void wait_control_window(struct DWC2Device *device)
+{
+    ULONG count = DWC2_CONTROL_GATE_LOOPS;
+    ULONG microframe;
+
+    /* BCM2837 can deschedule a non-split control channel when it is armed at
+     * the frame boundary, reporting only CHHLTD and leaving HCTSIZ untouched.
+     * Arm in the stable middle of a frame; completion-chained stages pass
+     * through the same gate so SETUP/DATA/STATUS use one rule. */
+    do
+    {
+        microframe = dwc2_readl(device, DWC2_HFNUM) & 7;
+    } while ((microframe < 2 || microframe > 5) && --count != 0);
 }
 
 static void finish(struct DWC2Unit *unit, BYTE error)
@@ -186,6 +202,8 @@ static BOOL arm(struct DWC2Unit *unit, BOOL input, ULONG endpoint_type,
     dwc2_writel(device, DWC2_HAINTMSK, 1UL << DWC2_CHANNEL);
     dwc2_writel(device, DWC2_GINTMSK,
         dwc2_readl(device, DWC2_GINTMSK) | DWC2_GINTSTS_HCHINT);
+    if (endpoint_type == DWC2_HCCHAR_EPTYPE_CONTROL)
+        wait_control_window(device);
     hcchar = dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL));
     dwc2_writel(device, DWC2_HCCHAR(DWC2_CHANNEL),
         hcchar | DWC2_HCCHAR_CHENA);
@@ -385,9 +403,12 @@ void dwc2_transfer_irq(struct DWC2Unit *unit)
     if (unit->transfer_log_count < 32)
     {
         unit->transfer_log_count++;
-        bug("[DWC2/Emu68:XFER] irq #%u stage=%u HCINT=%08lx HCTSIZ=%08lx\n",
+        bug("[DWC2/Emu68:XFER] irq #%u stage=%u HCINT=%08lx HCTSIZ=%08lx "
+            "HCCHAR=%08lx HFNUM=%08lx\n",
             unit->transfer_log_count, unit->transfer_stage, status,
-            dwc2_readl(device, DWC2_HCTSIZ(DWC2_CHANNEL)));
+            dwc2_readl(device, DWC2_HCTSIZ(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HFNUM));
     }
     if (status & (DWC2_HCINT_STALL | DWC2_HCINT_AHBERR |
                   DWC2_HCINT_XACTERR | DWC2_HCINT_BBLERR |
@@ -430,6 +451,12 @@ void dwc2_transfer_irq(struct DWC2Unit *unit)
             start_next(unit);
             return;
         }
+        retry(unit);
+        return;
+    }
+    if ((status & DWC2_HCINT_CHHLTD) &&
+        !(status & DWC2_HCINT_XFERCOMP))
+    {
         retry(unit);
         return;
     }
