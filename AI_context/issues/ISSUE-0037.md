@@ -18,12 +18,32 @@ related_files:
   - external/aros/rom/filesys/ram/filesystem.c
   - external/aros/rom/filesys/ram/handler.h
   - external/aros/workbench/s/Startup-Sequence
+  - external/aros/workbench/classes/zune/nlist/nlisttree_mcc/NListtree.c
   - AI_context/consolidated/history/ISSUE-0036.md
   - patches/aros/0011-kernel-avoid-undersized-tlsf-free-blocks.patch
   - patches/aros/0007-kernel-refuse-to-free-a-pointer-outside-the-heap-and.patch
 ---
 
 # Summary
+
+## Matching upstream defect backported, but not this first event (2026-08-20)
+
+AROS upstream commit `6897aa2dc5` fixes a heap overwrite in
+`NListtree.mcc` with the same failure shape. `InsertTreeImages()` and
+`InsertImage()` appended image specifications with
+`strncat(data->buf, tmpbuf, DATA_BUF_SIZE)`. That bound applies to the source,
+not to the remaining space in `data->buf`, so a nearly-full destination was
+overrun and the adjacent TLSF block header was overwritten.
+
+`patches/aros/0046` backports the upstream correction: format one specifier in
+a small temporary buffer and append it with `strlcat(..., DATA_BUF_SIZE)`.
+
+The controlled QEMU rerun after rebuilding `NListtree.mcc` and `sd.img` still
+reported the familiar `REMOVE_HEADER` NULL block at `STARTING DOS`, before
+NListtree/Wanderer was loaded. Therefore this backport removes one proven heap
+writer but does **not** explain that earlier event. Keep the issue open; the
+same build continued to Wanderer and the vc4gfx mailbox framebuffer displayed
+the desktop with the requester on top.
 
 With `ISSUE-0036` fixed, `ENV:` is populated and the Startup-Sequence runs the
 work it has been skipping since this port existed. A task then dies — a CLI in
