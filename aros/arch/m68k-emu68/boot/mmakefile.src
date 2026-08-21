@@ -52,7 +52,8 @@ COREPUBLIC := $(KOBJSDIR)/kernel_resource.o $(KOBJSDIR)/exec_library.o
 #             HDMI encoder, its own DMA. The only one of the three that owns
 #             the display pipeline rather than being handed a surface, and the
 #             one ISSUE-0012's hardware cursor needs -- a cursor is an HVS
-#             plane. Builds; has not yet run.
+#             plane. Runs through mailbox fallback on QEMU and owns the HVS
+#             display list on a Pi 3.
 #
 # Like SDCARD_BACKEND in soc/sdcard, this is edited here rather than passed on
 # the command line: mmake does not forward variables, so `make GFX_BACKEND=...`

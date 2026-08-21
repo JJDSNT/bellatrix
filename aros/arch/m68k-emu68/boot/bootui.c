@@ -26,7 +26,9 @@ struct BootUIState
     uint32_t pitch;
     uint32_t width;
     uint32_t height;
+    uint32_t depth;
     uint32_t progress;
+    const char *status;
     /*
      * One integer magnification for everything drawn here.
      *
@@ -114,6 +116,7 @@ static int bootui_hold_armed;
  * than a splash, and must not be covered by one.
  */
 static int bootui_wanderer_started;
+static int bootui_direct_scanout;
 /*
  * Called to put the finished desktop up. Registered by the display driver and
  * invoked ONLY from emu68_bootui_set_stage(), which runs in the task that
@@ -291,9 +294,25 @@ static void put_pixel(uint32_t x, uint32_t y, uint16_t color)
 
     if (x >= bootui.width || y >= bootui.height)
         return;
-    pixel = bootui.framebuffer + y * bootui.pitch + x * 2;
-    pixel[0] = color & 0xff;
-    pixel[1] = color >> 8;
+    pixel = bootui.framebuffer + y * bootui.pitch
+          + x * (bootui.depth == 32 ? 4 : 2);
+    if (bootui.depth == 32)
+    {
+        uint8_t r5 = (color >> 11) & 0x1f;
+        uint8_t g6 = (color >> 5) & 0x3f;
+        uint8_t b5 = color & 0x1f;
+
+        /* vc4gfx requests VCPXFMT_BGR: B, G, R, padding in memory. */
+        pixel[0] = (b5 << 3) | (b5 >> 2);
+        pixel[1] = (g6 << 2) | (g6 >> 4);
+        pixel[2] = (r5 << 3) | (r5 >> 2);
+        pixel[3] = 0;
+    }
+    else
+    {
+        pixel[0] = color & 0xff;
+        pixel[1] = color >> 8;
+    }
 }
 
 static void fill_rect(uint32_t x, uint32_t y, uint32_t width,
@@ -462,6 +481,7 @@ void emu68_bootui_init(void)
     bootui.pitch = ctx->framebuffer_pitch;
     bootui.width = ctx->framebuffer_width;
     bootui.height = ctx->framebuffer_height;
+    bootui.depth = 16;
 
     {
         uint32_t by_width = bootui.width / BOOT_IMAGE_WIDTH;
@@ -475,6 +495,7 @@ void emu68_bootui_init(void)
     }
 
     bootui.progress = 0;
+    bootui.status = NULL;
     bootui.clock_start_us = 0;
     bootui.elapsed_seconds = 0;
     bootui.clock_started = 0;
@@ -489,6 +510,75 @@ void emu68_bootui_init(void)
     if (!draw_boot_image())
         emu68_console_puts("[AROS/Emu68] BootUI: framebuffer too small for "
                            "the boot image\n");
+}
+
+void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
+                           uint32_t width, uint32_t height, uint32_t depth)
+{
+    uint32_t bytes_per_pixel;
+
+    if (!bootui.active)
+    {
+        emu68_console_puts("[AROS/Emu68] BootUI: retarget ignored (inactive)\n");
+        return;
+    }
+    if (!framebuffer || !width || !height)
+    {
+        bootui_event("retarget rejected: incomplete geometry");
+        return;
+    }
+    if (depth != 16 && depth != 32)
+    {
+        bootui_event("retarget rejected: unsupported depth");
+        return;
+    }
+
+    bytes_per_pixel = depth / 8;
+    if (pitch < width * bytes_per_pixel)
+    {
+        bootui_event("retarget rejected: short pitch");
+        return;
+    }
+
+    bootui.framebuffer = framebuffer;
+    bootui.pitch = pitch;
+    bootui.width = width;
+    bootui.height = height;
+    bootui.depth = depth;
+    bootui_direct_scanout = 1;
+
+    {
+        uint32_t by_width = width / BOOT_IMAGE_WIDTH;
+        uint32_t by_height = height / BOOT_IMAGE_HEIGHT;
+
+        bootui.scale = by_width < by_height ? by_width : by_height;
+        if (bootui.scale < 1)
+            bootui.scale = 1;
+        if (bootui.scale > 3)
+            bootui.scale = 3;
+    }
+
+    /* The mode change that opens Wanderer's screen is the hand-off point for
+     * a direct-scanout driver. Unlike fbgfx, vc4gfx has no private desktop
+     * buffer to build behind the splash: keeping the BootUI active here would
+     * make its timer repaint the clock over the live Workbench framebuffer. */
+    if (bootui_wanderer_started)
+    {
+        fill_rect(0, 0, width, height, RGB565(0, 0, 0));
+        bootui_event("display takeover: vc4 mode");
+        bootui.active = 0;
+        return;
+    }
+
+    fill_rect(0, 0, width, height, RGB565(0, 0, 0));
+    draw_boot_image();
+    if (bootui.status)
+    {
+        draw_progress(bootui.progress, bootui.status);
+        draw_clock();
+    }
+    bootui_event(depth == 32 ? "retargeted to RGB32 framebuffer"
+                             : "retargeted to RGB16 framebuffer");
 }
 
 /*
@@ -594,11 +684,17 @@ void emu68_bootui_set_stage(uint32_t stage)
     if (!status || progress < bootui.progress)
         return;
     bootui.progress = progress;
+    bootui.status = status;
     emu68_console_puts("[AROS/Emu68] BootUI: ");
     emu68_console_puts(status);
     emu68_console_puts("\n");
     draw_progress(progress, status);
     draw_clock();
+    if (stage == BOOTUI_STAGE_DESKTOP && bootui_direct_scanout)
+    {
+        bootui_event("display takeover: direct scanout");
+        bootui.active = 0;
+    }
 }
 
 void emu68_bootui_clock_start(uint32_t now_us)

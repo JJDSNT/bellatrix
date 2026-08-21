@@ -93,6 +93,8 @@ void emu68_bootui_add_resource(void);
 void emu68_bootui_set_stage(uint32_t stage);
 void emu68_bootui_clock_start(uint32_t now_us);
 void emu68_bootui_clock_tick(uint32_t now_us);
+void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
+                           uint32_t width, uint32_t height, uint32_t depth);
 void emu68_bootui_takeover(void);
 /*
  * Keep the splash on the framebuffer past the point where the display driver

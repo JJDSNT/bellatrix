@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0043
 title: "Drive the VideoCore display ourselves, instead of borrowing a framebuffer from the firmware"
-status: doing
+status: done
 priority: medium
 type: feature
 owner: unassigned
 created_at: 2026-08-17
-updated_at: 2026-08-17
+updated_at: 2026-08-20
 tags:
   - videocore
   - graphics
@@ -342,11 +342,13 @@ that contradicts it would have to be rewritten.
       the display on this target, switchable by one line (`GFX_BACKEND`)
 - [x] The boot UI hands over when the desktop is drawn rather than on the first
       `Show()` -- reached without a flip, see below
-- [ ] Path A or Path B chosen, with the reason written down
+- [x] Path B chosen: own the HVS display list on hardware, with mailbox
+      framebuffer fallback when QEMU exposes no HVS
 - [ ] The cost of the Display class's copy is measured on hardware
-- [ ] A flip mechanism exists and the driver uses it without the framebuffer
+- [x] A flip mechanism exists and the driver uses it without the framebuffer
       address being assumed constant
-- [ ] Whether the firmware has to release the display is answered, not assumed
+- [x] The firmware does not need an explicit release: FBALLOC rebuilds its
+      list and vc4gfx safely inherits the live framebuffer plane
 
 ## Where this stands (2026-08-18)
 
@@ -376,6 +378,72 @@ Until that is attributed, "the port paid for itself in speed" is not a claim
 anyone here can make.
 
 # Execution log
+
+- 2026-08-20 -- **The current packed build passes the Raspberry Pi 3 hardware
+  gate.** `pi3-vc4.log`, captured after installing
+  `out/aros/bellatrix-pi3.tar.xz`, passes every check in
+  `scripts/check-vc4-log.sh pi`: BootUI retarget, Wanderer, direct-scanout
+  hand-off, FBALLOC/flip/DMA health, HVS discovery and ownership, and live
+  PixelValve vsync.
+
+  The first 1920x1080 mode proves that the driver found the firmware's actual
+  seven-word RGBA8888 plane at list word 2452, including an exact pointer and
+  pitch match (`0xfd827000`, 7680 bytes), then installed its own list:
+
+      HVS ID=0x64647276
+      takeover: ACTIVE - list 3584, out 1920x1080,
+          fb 1920x1080 -> 1920x1080 at 0,0
+      vsync: probe window = 3 frames in 100000 us (vtot=1125)
+      vsync: bit 8 -> 6 ticks
+      vsync: bit 8 ticks per frame, using it
+      vsync: alive, 5 ticks during check (count=11)
+
+  Later mode changes also succeed: an 800x600 framebuffer is scaled by the HVS
+  to 1440x1080 at x=240, and the final 1920x1080 surface returns to unity
+  scaling. Both takeovers report five live vsync ticks. The port-specific
+  hand-off is present in the same boot:
+
+      BootUI: STARTING WANDERER...
+      BootUI [00:13.840] display takeover: direct scanout
+
+  This closes the VC4 driver requirement: it is the native AROS HIDD, uses the
+  mailbox framebuffer fallback under QEMU, and owns the real HVS display list
+  and PixelValve interrupt on a Pi 3. No Picasso96 path participates.
+
+  The same log contains two independent TLSF alerts, one from `CLI` at
+  `STARTING DOS` and another while `ScreenMode` disposes an NList/NFloattext
+  object. They are heap diagnostics for ISSUE-0037, not VC4 failures: all HVS
+  takeovers and vsync checks succeed, and Wanderer is reached between them.
+
+- 2026-08-20 -- **The QEMU framebuffer hand-off is clean and the Pi image is
+  ready for the corresponding hardware run.** The two screenshots supplied by
+  the user exposed a transition bug, not a scanout failure: vc4gfx changed the
+  firmware surface from RGB565 to BGRX8888 while BootUI kept the old pointer,
+  pitch and two-byte pixels, producing a duplicated splash and a horizontal
+  split. `patches/aros/0048` tells the Emu68 BootUI about every successful
+  FBALLOC; the port now redraws its live progress UI using the new pitch,
+  geometry and 32-bit byte order.
+
+  A first validation found a second, smaller ownership bug: the desktop was
+  correct but BootUI's timer continued painting its purple clock over the
+  bottom edge. vc4gfx is direct scanout, unlike fbgfx's private bitmap buffer,
+  so the port now ends BootUI ownership at `BOOTUI_STAGE_DESKTOP`. The final
+  log is explicit:
+
+      BootUI [00:01.202] retargeted to RGB32 framebuffer
+      VC4HVS no HVS found (ID=0x00000000) - QEMU or unmapped, skipping
+      BootUI: STARTING WANDERER...
+      BootUI [00:41.210] display takeover: direct scanout
+
+  A QEMU screendump after takeover shows the complete 640x480 Wanderer desktop
+  with correct colours and no duplicated image, black divider or BootUI clock.
+  This validates the intended QEMU path: mailbox framebuffer plus
+  SETVOFFSET, because QEMU does not model the HVS. The real-hardware artifact
+  containing the same 1,290,336-byte ELF is
+  `out/aros/bellatrix-pi3.tar.xz`, generated with `--pi --pack` and extracted
+  at the root of the card's FAT32 partition. Confirming HVS takeover and vsync
+  from that pack is the remaining validation step; the raw image is only an
+  intermediate option and is not the project's normal Pi test flow.
 
 - 2026-08-18 -- **vsync found, on the second takeover only, and the reason was
   the window.** `bit 8 ticks per frame, using it` / `alive, 5 ticks during

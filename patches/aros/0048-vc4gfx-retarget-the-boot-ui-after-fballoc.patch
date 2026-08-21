@@ -1,0 +1,40 @@
+From: Bellatrix Project <bellatrix@localhost>
+Subject: [PATCH] vc4gfx: retarget the boot UI after FBALLOC
+
+The Emu68 boot UI starts on the firmware's RGB565 surface.  vc4gfx later
+asks the firmware for a BGRX8888 framebuffer, so continuing to draw through
+the old geometry and pixel format briefly duplicates and splits the splash.
+
+Hand the newly allocated surface to the port's boot UI before HVS takeover.
+This keeps the early display coherent across the framebuffer mode change.
+
+---
+ .../2708/hidd/vc4gfx/vc4gfx_onbitmap.c         | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
+index 550a54de3a..92549b58f1 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gfx/vc4gfx_onbitmap.c
+@@ -13,6 +13,7 @@
+ #include <proto/mbox.h>
+ #ifdef __EMU68__
+ #include <aros/kernel.h>
++#include <aros/bootui.h>
+ #include <proto/kernel.h>
+ #endif
+ #include <proto/utility.h>
+@@ -332,6 +333,11 @@ static BOOL vc4_program_fb(struct VideoCoreGfx_staticdata *xsd,
+     }
+ #endif
+ 
++#ifdef __EMU68__
++    emu68_bootui_retarget(fb_ptr, fb_pitch, aligned_width, height,
++                          bitsperpixel);
++#endif
++
+     /* Phase-1 HVS bring-up: dump the firmware's live display list and PV
+      * timing for this mode (read-only, self-skips on QEMU). */
+     vc4_hvs_dump(xsd, (ULONG)(IPTR)fb_ptr, fb_pitch, aligned_width, height);
+-- 
+2.39.5

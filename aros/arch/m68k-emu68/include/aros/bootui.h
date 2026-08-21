@@ -32,4 +32,10 @@ struct BootUIResource
     void (*set_stage)(ULONG stage);
 };
 
+/* Move the live early-boot UI to a framebuffer allocated by the display
+ * driver. The BootUI accepts the two scanout formats used by this port:
+ * little-endian RGB565 and byte-addressed BGRX8888. */
+void emu68_bootui_retarget(APTR framebuffer, ULONG pitch,
+                           ULONG width, ULONG height, ULONG depth);
+
 #endif
