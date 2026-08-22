@@ -66,7 +66,7 @@ include $(SRCDIR)/config/aros.cfg
 # a virtual one. The Pi's onboard controller hangs off the PL011 that
 # soc/bluetooth/btuart.resource already owns, and nothing yet bridges the two.
 # See ISSUE-0046.
-#MM- kernel-bluetooth-m68k-emu68 : kernel-bluetooth
+#MM- kernel-bluetooth-m68k-emu68 : kernel-bluetooth kernel-bthciuart
 
 
 #
