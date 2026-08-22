@@ -577,10 +577,27 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # The USB host controller is disabled for now -- see the comment on the
     # kernel-usb alias in arch/m68k-emu68/mmakefile.src. Still built, because
     # code that stops being compiled stops being code; just not installed.
-    make kernel-usb-dwc2emu68
-    # The HCI transport is a disk module too, and for the same reason: the
-    # Bluetooth stack loads it from DEVS:Bluetooth at runtime.
     make kernel-bthciuart
+
+    #
+    # The USB host controller: compiled, then uninstalled.
+    #
+    # USB is disabled (see the kernel-usb alias in
+    # arch/m68k-emu68/mmakefile.src) and the two halves of that have to be
+    # said separately, because doing only one is what let it keep booting.
+    # Commenting out the alias stops the *distribution* target rebuilding it;
+    # it does nothing about a copy already in the tree, and %build_module
+    # installs straight into Devs/USBHardware, so building it here to keep it
+    # compiling put it back on every card.
+    #
+    # Both properties are wanted: code that stops being compiled stops being
+    # code, and a machine with fewer variables is easier to debug. So build it
+    # and then remove what it installed. Re-enabling is uncommenting the alias
+    # and deleting this block.
+    #
+    make kernel-usb-dwc2emu68
+    rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
+    echo "[aros] USB built and left off the card (see mmakefile.src)"
 fi
 
 # Record what the toolchain was built from, so a later `clean` can tell whether
