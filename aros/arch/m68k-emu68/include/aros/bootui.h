@@ -56,6 +56,22 @@
  * exactly why the boundary belongs above both.
  */
 #define BOOTUI_STAGE_PRESENTED 0x45303236UL
+/*
+ * The boot display has been handed over.
+ *
+ * Reported by graphics.library when a native driver claims the hardware a
+ * DDRV_BootMode driver was serving, which is the moment the surface the boot
+ * presentation has been drawing into stops being its to draw into: the
+ * incoming driver programs its own mode, and the framebuffer may move, change
+ * pitch or change depth without anything asking.
+ *
+ * It is a display-ownership fact, not a request. That it happens to end a
+ * splash is this side's business; no driver reports it, and none needs to
+ * know a splash exists. A boot with no native driver never sends it, and
+ * there the boot presentation keeps the surface until the desktop is ready,
+ * which is exactly right -- nothing took it away.
+ */
+#define BOOTUI_STAGE_HANDOVER  0x45303237UL
 
 struct BootUIResource
 {

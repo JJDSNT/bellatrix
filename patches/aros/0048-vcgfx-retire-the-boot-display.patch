@@ -1,0 +1,92 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 22 Aug 2026 15:45:00 -0300
+Subject: [PATCH 48/48] vcgfx: retire the boot display before taking the
+ hardware
+
+This machine now boots with a DDRV_BootMode framebuffer driver in the
+kickstart and this one arriving from DEVS:Monitors, which is how AROS
+expects display drivers to be installed. What it did not do was finish
+the arrangement: graphics.library offers an incoming native driver the
+handover interface so it can retire whatever is still writing to the
+hardware, and this driver never looked at DDRVA_Handover.
+
+The result was two owners of one display. fbgfx stayed registered and
+kept refreshing its 640x480 16bpp bitmap into the firmware's framebuffer
+while this driver programmed a 32bpp mode of its own over the top, and
+the boot presentation kept its clock running on the old geometry. On
+screen that was the desktop drawn twice and the splash smeared twice
+across the width -- neither a rendering bug, both the same missing
+handshake.
+
+The interface is only valid inside New(), where graphics.library holds
+the display database on the driver's behalf, so it is used there and not
+kept. workbench/hidds/nouveau does the same thing for the same reason.
+
+No DisplayRange list is passed. Ranges exist so a boot driver serving a
+second, unrelated card survives the arrival of a driver for the first;
+there is one display on a Pi, and a NULL list means "assume it
+conflicts", which is the truth here rather than a shortcut.
+
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hiddclass.c b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hiddclass.c
+index 257f3da5e7..3460be2d6c 100644
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hiddclass.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vcgfx/vcgfx_hiddclass.c
+@@ -21,6 +21,7 @@
+ #include <graphics/view.h>
+ #include <hardware/custom.h>
+ #include <hidd/hidd.h>
++#include <graphics/driver.h>
+ #include <hidd/gfx.h>
+ #include <hidd/gallium.h>
+ #include <oop/oop.h>
+@@ -157,6 +158,49 @@ OOP_Object *MNAME_ROOT(New)(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
+ 
+     EnterFunc(bug("VideoCoreGfx::New()\n"));
+ 
++    /*
++     * Retire whatever was driving this display before touching it.
++     *
++     * graphics.library offers the handover interface here and only here, in
++     * New(), where it is holding the display database on our behalf -- so it
++     * must be used now and never stashed. Without this a DDRV_BootMode driver
++     * that was serving the firmware's framebuffer stays registered and keeps
++     * refreshing into it while this driver programs its own mode over the top:
++     * two owners of one display, which showed up as the desktop drawn twice
++     * and the boot splash smeared across a framebuffer of the new width.
++     *
++     * No ranges are passed. They exist so that a boot driver serving a second,
++     * unrelated card survives, and there is one display on this machine;
++     * a NULL range list means "assume it conflicts", which is the truth here.
++     */
++    {
++        struct DisplayHandover *handover = (struct DisplayHandover *)
++            GetTagData(DDRVA_Handover, 0, msg->attrList);
++
++        if (handover)
++        {
++            APTR handle;
++            ULONG retired = 0;
++
++            while ((handle = handover->dho_FindDisplay(handover->dho_Context,
++                                                       NULL)) != NULL)
++            {
++                if (!handover->dho_ExpungeDisplay(handover->dho_Context, handle))
++                {
++                    bug("[VideoCoreGfx] boot display 0x%p still in use, cannot "
++                        "take the hardware\n", handle);
++                    return NULL;
++                }
++                retired++;
++            }
++
++            bug("[VideoCoreGfx] handover: %lu boot display(s) retired\n",
++                (unsigned long)retired);
++        }
++        else
++            bug("[VideoCoreGfx] handover: not offered, boot drivers left alone\n");
++    }
++
+     NewList(&vc_modelist);
+ 
+     FNAME_SUPPORT(SDTV_SyncGen)(&vc_modelist, cl);

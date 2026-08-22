@@ -671,6 +671,33 @@ void bootui_set_stage(uint32_t stage)
     if (stage == BOOTUI_STAGE_DESKTOP)
         bootui_wanderer_started = 1;
 
+    if (stage == BOOTUI_STAGE_HANDOVER)
+    {
+        /*
+         * Let go of the framebuffer, for good.
+         *
+         * A native display driver now owns the hardware, and the first thing
+         * such a driver does is program its own mode -- on this machine that
+         * moves the surface and changes it from 16bpp to 32bpp. Everything
+         * drawn here after that lands at the old geometry, which is not
+         * "stale pixels" but active corruption: the clock tick alone was
+         * enough to paint the splash twice across a framebuffer of the new
+         * width.
+         *
+         * There is nothing to follow it to. Asking where the new surface is
+         * would mean asking the driver, and a driver that answers questions
+         * about a splash is the arrangement this is built to avoid. Once the
+         * display has an owner, the boot presentation's raw-surface era is
+         * over.
+         */
+        if (bootui.active)
+        {
+            bootui.active = 0;
+            bootui_event("display handed over to a native driver");
+        }
+        return;
+    }
+
     if (stage == BOOTUI_STAGE_PRESENTED)
     {
         /*

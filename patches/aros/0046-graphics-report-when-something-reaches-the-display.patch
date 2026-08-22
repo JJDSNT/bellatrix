@@ -26,8 +26,26 @@ load, and removing the observer entirely requires no change here.
 
 Guarded by __EMU68__ because bootui.resource is this port's, and because
 a target with no such resource should not pay even that.
+
+Second report, same principle: when a driver that is not a boot driver
+registers a display, say so. Anything that has been drawing into the
+surface a boot driver was serving has to stop before the new owner
+programs a mode, because the framebuffer can change address, pitch and
+depth without asking -- and drawing into the old geometry afterwards does
+not leave stale pixels, it corrupts the new owner's screen. On a Pi 3 and
+under QEMU that showed as the splash painted twice across the width and
+the desktop drawn twice.
+
+Registration rather than the handover interface, and deliberately. The
+handover only finds boot displays that reached the CDD chain; a boot
+driver whose display is still on the boot queue is invisible to it, and
+on this machine that is exactly where fbgfx's is -- the handover was
+offered to vcgfx and retired zero displays. Registration is the earliest
+point that is certainly above every driver and certainly before any mode
+is programmed.
+
 diff --git a/rom/graphics/graphics_display.c b/rom/graphics/graphics_display.c
-index a4f89d37cd..2cce06a973 100644
+index a4f89d37cd..58b0e2d17c 100644
 --- a/rom/graphics/graphics_display.c
 +++ b/rom/graphics/graphics_display.c
 @@ -5,6 +5,9 @@
@@ -40,7 +58,43 @@ index a4f89d37cd..2cce06a973 100644
  
  #include <proto/exec.h>
  #include <proto/graphics.h>
-@@ -508,6 +511,31 @@ ULONG display_PrepareViewPorts(struct monitor_displaydata *mdd, struct HIDD_View
+@@ -405,6 +408,35 @@ void display_Register(OOP_Object *display, struct gfxdriver_data *cfg, BOOL forc
+             D(bug("[graphics.library/display] %s: Inserting driver 0x%p, ID 0x%08lX\n", __func__, mdd, mdd->display_idbase));
+             display_Queue(mdd, (struct gfxdisplay_data *)CDD(GfxBase), GfxBase);
+             display_Enable(mdd, GfxBase);
++
++            /*
++             * A driver that is not a boot driver has just taken the display.
++             *
++             * Anything that was drawing into the surface a boot driver was
++             * serving has to stop now, before this one programs a mode: the
++             * framebuffer can change address, pitch and depth without asking,
++             * and drawing into the old geometry afterwards does not leave
++             * stale pixels, it corrupts the new owner's screen.
++             *
++             * Said here rather than at the handover, because the handover
++             * only finds boot displays that reached this chain -- a boot
++             * driver still sitting on the boot queue is invisible to it, and
++             * on this machine that is exactly where it is. Registration is
++             * the earliest point that is certainly above every driver and
++             * certainly before the mode changes.
++             *
++             * Stated, not acted upon; the observer is optional.
++             */
++#ifdef __EMU68__
++            if (!(mdd->display_flags & DF_BootMode))
++            {
++                struct BootUIResource *bootui =
++                    (struct BootUIResource *)OpenResource(BOOTUI_RESOURCE_NAME);
++
++                if (bootui && bootui->set_stage)
++                    bootui->set_stage(BOOTUI_STAGE_HANDOVER);
++            }
++#endif
+         }
+     }
+ }
+@@ -508,6 +540,31 @@ ULONG display_PrepareViewPorts(struct monitor_displaydata *mdd, struct HIDD_View
   * in it will screw up the display, likely with no chance to recover.
   * Because of this we always return zero here.
   */
@@ -72,7 +126,7 @@ index a4f89d37cd..2cce06a973 100644
  ULONG display_LoadViewPorts(struct monitor_displaydata *mdd, struct HIDD_ViewPortData *vpd, struct View *v, struct GfxBase *GfxBase)
  {
      struct BitMap *bitmap;
-@@ -521,6 +549,8 @@ ULONG display_LoadViewPorts(struct monitor_displaydata *mdd, struct HIDD_ViewPor
+@@ -521,6 +578,8 @@ ULONG display_LoadViewPorts(struct monitor_displaydata *mdd, struct HIDD_ViewPor
      if (HIDD_Display_ShowViewPorts(mdd->mdisplay.display_obj, vpd))
      {
          DEBUG_LOADVIEW(bug("[graphics.library/display] %s: ShowViewPorts() worked\n", __func__));
@@ -81,7 +135,7 @@ index a4f89d37cd..2cce06a973 100644
          return 0;
      }
  
-@@ -586,6 +616,8 @@ ULONG display_LoadViewPorts(struct monitor_displaydata *mdd, struct HIDD_ViewPor
+@@ -586,6 +645,8 @@ ULONG display_LoadViewPorts(struct monitor_displaydata *mdd, struct HIDD_ViewPor
       	 */
      	mdd->frontbm = bitmap;
  

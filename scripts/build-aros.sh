@@ -560,6 +560,22 @@ fi
 echo "[aros] building $METATARGET (serial — see comment in this script)"
 make "$METATARGET"
 
+# The display driver is not in the ELF any more.
+#
+# vcgfx installs the way AROS installs display drivers -- DEVS:Drivers plus a
+# DEVS:Monitors loader -- so it hangs off the distribution target, not off the
+# link. A lean build would then leave whatever .hidd happened to be in the tree
+# on the card, and a boot would run a driver older than the source, silently.
+# That already happened once here, and it is the same trap CLAUDE.md records
+# for the other modules: if a change is not in the kernel ELF, check where the
+# module on the card came from.
+#
+# Building it after the link costs seconds and removes the question.
+if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
+    echo "[aros] building the disk-installed display driver"
+    make kernel-m68k-emu68-vcgfx
+fi
+
 # Record what the toolchain was built from, so a later `clean` can tell whether
 # preserving it is sound. Written after the build because that is when it is
 # true.
