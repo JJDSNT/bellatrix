@@ -572,8 +572,9 @@ make "$METATARGET"
 #
 # Building it after the link costs seconds and removes the question.
 if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
-    echo "[aros] building the disk-installed display driver"
+    echo "[aros] building the disk-installed drivers"
     make kernel-m68k-emu68-vcgfx
+    make kernel-usb-dwc2emu68
 fi
 
 # Record what the toolchain was built from, so a later `clean` can tell whether

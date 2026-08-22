@@ -287,20 +287,27 @@ fi
 
 # BELLATRIX_BOOT_TEST runs one of them at boot.
 #
-# Inserted before Wanderer is started rather than appended after it: the last
-# thing the sequence does is run Wanderer and EndCLI, so anything after that
-# executes when Wanderer *exits*. Before it, DOS and the display and the
-# assigns all exist, and a hang cannot be mistaken for a desktop problem.
+# As early as the assigns allow, and that is a measurement decision rather
+# than a tidiness one. Placed before Wanderer, a probe waits out the entire
+# boot -- five minutes under QEMU -- to reach the few seconds it is there to
+# observe, and every iteration of the investigation pays that. Placed after
+# LIBS:, FONTS: and the rest are in place, which is all a program needs to be
+# loaded and opened, it runs within a fraction of that.
+#
+# BELLATRIX_BOOT_TEST_LATE=1 restores the old position for anything that
+# genuinely needs a finished system.
 if [ -n "${BELLATRIX_BOOT_TEST:-}" ]; then
     if [ ! -f "$STAGE/S/$BELLATRIX_BOOT_TEST" ]; then
         echo "ERROR: no S:$BELLATRIX_BOOT_TEST to run at boot" >&2
         exit 1
     fi
-    awk -v script="$BELLATRIX_BOOT_TEST" '
-        /^If EXISTS "WANDERER:Wanderer"/ && !done {
-            print "Execute \"S:" script "\""
-            done = 1
-        }
+    if [ "${BELLATRIX_BOOT_TEST_LATE:-0}" = 1 ]; then
+        anchor='^If EXISTS "WANDERER:Wanderer"'
+    else
+        anchor='^Assign "IMAGES:"'
+    fi
+    awk -v script="$BELLATRIX_BOOT_TEST" -v anchor="$anchor" '
+        $0 ~ anchor && !done { print; print "Execute \"S:" script "\""; done = 1; next }
         { print }
     ' "$STAGE/S/Startup-Sequence" > "$STAGE/S/Startup-Sequence.new" \
         && mv "$STAGE/S/Startup-Sequence.new" "$STAGE/S/Startup-Sequence"
