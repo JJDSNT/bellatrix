@@ -1148,6 +1148,45 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-22 (later) -- **Correction: the AROS master bump did change this, and
+  I said it did not.** That claim came from one run, and one run was not
+  enough. Measured after it, same build, QEMU:
+
+      card                runs   TLSF reports
+      plain                 7       2
+      with `heapscan`       3       0
+
+  Before the bump it was in every full boot log examined during the day. It is
+  now intermittent, roughly two in seven, and the three clean `heapscan` runs
+  prove nothing about `heapscan` -- plain runs came out clean too. That is
+  worth writing down precisely because it nearly became a false finding: three
+  clean runs in a row, and the temptation was to announce that walking the heap
+  at each stage had exposed a timing dependency.
+
+  What the upstream commits plausibly did is lower the frequency. Which of them
+  is unknown; the candidates remain
+
+      exec: protect ETask lifetime under SMP
+      exec: arbitrate task state, signalling and scheduling
+      exec: fix ObtainSemaphoreList's obtained-count check
+
+  and the first two touch `remtask.c`, `signal.c`, `wait.c` and `exec_util.c`
+  -- the task teardown path this fault sits in.
+
+  **The heap walk found nothing, at any stage, in any run.** `tlsf_scan()`
+  checks size, successor bounds, the back link and PREV_FREE against the
+  previous block's own flag, at every BootUI stage boundary, and never
+  reported. So whatever breaks the chain does it between the last stage
+  boundary and the free that trips over it -- which on this path is inside a
+  single CLI's lifetime, not spread across the boot.
+
+  Intermittency is itself the finding. A defect that survives an AROS bump but
+  gets rarer, and that is absent under mungwall's layout change, is not a
+  plain overrun at a fixed offset. The next measurement should be a long series
+  on one configuration -- the discipline this repository already records for
+  boot timing -- rather than another single run with another hypothesis
+  attached.
+
 - 2026-08-22 -- **A second mechanism, and it is not an overrun.** A `mungwall`
   boot produced a wild jump rather than a free-list complaint:
 
