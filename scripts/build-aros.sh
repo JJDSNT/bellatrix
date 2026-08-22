@@ -578,6 +578,9 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # kernel-usb alias in arch/m68k-emu68/mmakefile.src. Still built, because
     # code that stops being compiled stops being code; just not installed.
     make kernel-usb-dwc2emu68
+    # The HCI transport is a disk module too, and for the same reason: the
+    # Bluetooth stack loads it from DEVS:Bluetooth at runtime.
+    make kernel-bthciuart
 fi
 
 # Record what the toolchain was built from, so a later `clean` can tell whether
