@@ -237,15 +237,24 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
      * particular QEMU starts with HPRT.CONNDET asserted; enabling PRTINT here
      * would create a guest interrupt storm before the root hub is online. */
     dwc2_writel(device, DWC2_GINTSTS, 0xffffffffUL);
-    dwc2_writel(device, DWC2_GINTMSK, 0);
+    dwc2_writel(device, DWC2_GINTMSK, DWC2_GINTSTS_SOF);
     value = dwc2_readl(device, DWC2_GAHBCFG);
     value |= DWC2_GAHBCFG_DMAEN | DWC2_GAHBCFG_HBSTLEN_INCR |
-        DWC2_GAHBCFG_WAIT_AXI_WRITES | DWC2_GAHBCFG_NPTXFEMPLVL |
-        DWC2_GAHBCFG_GLBLINTRMSK;
+        DWC2_GAHBCFG_NPTXFEMPLVL | DWC2_GAHBCFG_GLBLINTRMSK;
     dwc2_writel(device, DWC2_GAHBCFG, value);
 
+    bug("[DWC2/Emu68] config AHB=%08lx USB=%08lx HW2=%08lx HW3=%08lx "
+        "HCFG=%08lx HFIR=%08lx\n",
+        dwc2_readl(device, DWC2_GAHBCFG),
+        dwc2_readl(device, DWC2_GUSBCFG),
+        dwc2_readl(device, DWC2_GHWCFG2),
+        dwc2_readl(device, DWC2_GHWCFG3),
+        dwc2_readl(device, DWC2_HCFG),
+        dwc2_readl(device, DWC2_HFIR));
+    dwc2_platform_log_clocks(device);
+
     unit->hardware_ok = TRUE;
-    bug("[DWC2/Emu68] host initialized with %lu channels, SOF masked\n",
+    bug("[DWC2/Emu68] host initialized with %lu channels, SOF enabled\n",
         (ULONG)unit->host_channels);
     return TRUE;
 

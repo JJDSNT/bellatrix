@@ -75,6 +75,7 @@ struct DWC2Device
     IPTR                    peripheral_base;
     IPTR                    register_base;
     APTR                    kernel_base;
+    APTR                    mbox_base;
     struct Library         *utility_base;
 };
 
@@ -93,6 +94,7 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit);
 AROS_INTP(DWC2_FNAME(SoftIRQ));
 BOOL dwc2_platform_probe(struct DWC2Device *device);
 void dwc2_platform_cpu0_mask(struct DWC2Unit *unit);
+void dwc2_platform_log_clocks(struct DWC2Device *device);
 BOOL dwc2_controller_start(struct DWC2Unit *unit);
 void dwc2_controller_drain_irq(struct DWC2Unit *unit);
 BOOL dwc2_delay_us(struct DWC2Unit *unit, ULONG microseconds);

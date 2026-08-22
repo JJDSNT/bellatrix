@@ -7,6 +7,7 @@
 
 #include <aros/debug.h>
 
+#include <asm/cpu.h>
 #include <exec/memory.h>
 #include <proto/exec.h>
 
@@ -39,10 +40,11 @@ static void set_sof_irq(struct DWC2Unit *unit, BOOL enabled)
     struct DWC2Device *device = unit->device;
     ULONG mask = dwc2_readl(device, DWC2_GINTMSK);
 
-    if (enabled)
-        mask |= DWC2_GINTSTS_SOF;
-    else
-        mask &= ~DWC2_GINTSTS_SOF;
+    (void)enabled;
+    /* Keep SOF running while hardware bring-up is being validated.  The
+     * established BCM2708 driver operates this way, and correctness on the
+     * OT2.80a core takes precedence over deadline-driven IRQ masking here. */
+    mask |= DWC2_GINTSTS_SOF;
     dwc2_writel(device, DWC2_GINTMSK, mask);
 }
 
@@ -202,6 +204,7 @@ static BOOL arm(struct DWC2Unit *unit, BOOL input, ULONG endpoint_type,
         CacheClearE(unit->dma_buffer, length, CACRF_InvalidateD);
     else if (length != 0)
         CacheClearE(unit->dma_buffer, length, CACRF_ClearD);
+    dsb();
 
     hcchar = DWC2_HCCHAR_DEVADDR(ioreq->iouh_DevAddr) |
         DWC2_HCCHAR_EPNUM(ioreq->iouh_Endpoint) |
@@ -233,6 +236,14 @@ static BOOL arm(struct DWC2Unit *unit, BOOL input, ULONG endpoint_type,
         dwc2_readl(device, DWC2_GINTMSK) | DWC2_GINTSTS_HCHINT);
     if (endpoint_type == DWC2_HCCHAR_EPTYPE_CONTROL)
         wait_control_window(device);
+    if (unit->transfer_log_count < 32)
+        bug("[DWC2/Emu68:XFER] arm stage=%u CHAR=%08lx TSIZ=%08lx "
+            "DMA=%08lx NPTX=%08lx HFNUM=%08lx\n", unit->transfer_stage,
+            dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HCTSIZ(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_HCDMA(DWC2_CHANNEL)),
+            dwc2_readl(device, DWC2_GNPTXSTS),
+            dwc2_readl(device, DWC2_HFNUM));
     hcchar = dwc2_readl(device, DWC2_HCCHAR(DWC2_CHANNEL));
     dwc2_writel(device, DWC2_HCCHAR(DWC2_CHANNEL),
         hcchar | DWC2_HCCHAR_CHENA);
