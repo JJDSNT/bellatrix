@@ -690,11 +690,23 @@ void bootui_set_stage(uint32_t stage)
          * display has an owner, the boot presentation's raw-surface era is
          * over.
          */
+        /*
+         * Noted, and that is all.
+         *
+         * Letting go here was wrong: the handover says who owns the hardware,
+         * not that the desktop is worth looking at. Between the two lies the
+         * whole reason a boot presentation exists -- the screen opens, and
+         * then Wanderer spends seconds filling it in. Ending the splash at
+         * the handover puts that assembly on screen, which is exactly what
+         * BOOTUI_STAGE_ICONS is for.
+         *
+         * The surface moving is handled without stopping anything: a driver
+         * publishes where the scanout went and the tick follows it. So the
+         * splash survives the mode change and ends where it should, on the
+         * icons or on its own deadline.
+         */
         if (bootui.active)
-        {
-            bootui.active = 0;
-            bootui_event("display handed over to a native driver");
-        }
+            bootui_event("display owned by a native driver");
         return;
     }
 
