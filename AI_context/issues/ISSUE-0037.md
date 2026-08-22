@@ -1148,6 +1148,50 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-22 -- **A second mechanism, and it is not an overrun.** A `mungwall`
+  boot produced a wild jump rather than a free-list complaint:
+
+      [JIT] opcode f390:3061 at 00000066 not implemented
+      [AROS/Emu68] CPU exception vector 0x0000002c at PC 0x00000066
+        A0 0xffffdbdb   A6 0x02047dd0 -> 'oop.library'
+        SSP: dbdbdbdb dbdbdbdb dbdbdbdb ...
+
+  Vector 0x2c is the F-line emulator and 0x66 is inside the vector table, so
+  this is a wild jump whose landing bytes happen to decode as F-line -- the
+  JIT's "not implemented" line is it reporting the garbage, not a gap in the
+  JIT. `A0` and the whole supervisor stack top are 0xDB, which is mungwall's
+  fill for *freed* memory, and A6 is oop.library's base. Something read a
+  pointer out of a freed block and jumped through it.
+
+  That is a use-after-free, and it is a different defect from the overrun this
+  issue has been chasing: an overrun damages a neighbour's header, a
+  use-after-free follows a pointer into memory that has been handed back. They
+  need different searches. Without mungwall the freed bytes stay
+  stale-but-plausible, which is very likely why the same underlying fault has
+  been reaching us as free-list corruption instead.
+
+  Two return addresses on the user stack resolve to `tlsf_validate_remove+0x76`
+  and `tlsf_validate_insert+0x30`, consistent with the fault happening during
+  an allocation or free -- with the caveat that addresses on a stack can be
+  stale frames rather than a live chain.
+
+  It also retires my earlier conclusion that mungwall could not help here.
+  It could; it just needed its own bug fixed first (see 0043 in the series).
+
+# To do
+
+- Read the *first* mungwall report of a boot rather than the crash that follows
+  it -- CheckHeader names the owning task, the allocating function and the
+  caller, and the crash above is a consequence, not the origin.
+- Review our own patch series against this. `patches/aros/0030` added guard
+  bytes to the RAM: handler's muddy_pool only; nothing covers the system heap,
+  and the OOP path implicated here is not the RAM: handler at all.
+- Search recent upstream AROS commits for fixes in this area: `rom/exec`
+  allocation paths, `rom/oop`, and the graphics HIDD object lifecycle. The AROS
+  pin was refreshed on 2026-08-21 and one of our patches (the DMA-copy
+  backport) was dropped because upstream had already taken it -- the same may
+  be true here, and it is cheaper to find than to re-derive.
+
 - 2026-08-22 -- **This is what stops the boot splash reaching the desktop.**
   The boot presentation is meant to stay up until Wanderer reports its icons
   (video.md §12), and it does not: it goes at ~18-20s on every QEMU boot. The

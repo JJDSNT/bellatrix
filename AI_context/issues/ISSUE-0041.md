@@ -168,3 +168,50 @@ what the port does not yet cover.
   CherryUSB-based stack failed the other way round, on older ones. No
   measurement yet — the symptom has not been reduced to a device, a speed, or a
   point in the enumeration sequence.
+
+- 2026-08-21 — The Bellatrix-owned `dwc2emu68.device` replacement was tested
+  on a real BCM2837/OT2.80a.  Controller and root-hub setup complete, the port
+  resets and enables at full speed, and Poseidon submits the first eight-byte
+  device-descriptor SETUP to address zero.  The channel then remains enabled
+  forever with no channel interrupt:
+
+  ```text
+  HCCHAR=80100008 HCTSIZ=60080008
+  HCDMA=c252e600 -> c252e608
+  GNPTXSTS=00080100 -> 010700fe
+  HAINT=00000000 HCINT=00000000
+  ```
+
+  This localises the failure below Poseidon and above the physical frame
+  engine: DMA consumes the eight setup bytes and the non-periodic request queue
+  consumes an entry, but the OT2.80a scheduler never executes the transaction.
+  QEMU's OT2.94a model accepts the same simplified engine, so QEMU enumeration
+  is not evidence that its channel programming is valid on BCM2837.
+
+  Two controlled comparisons were negative.  Keeping SOF permanently enabled,
+  as the established AROS driver does, produced and acknowledged SOF interrupts
+  but did not change the stalled channel.  Matching the AROS AArch64 driver's
+  `dsb; MMIO store; dmb` ordering and placing a full `dsb` between cache
+  maintenance and `HCDMA` also produced the identical state.  Therefore neither
+  dynamic SOF masking nor the weaker write barrier caused this failure.
+
+  The machine clocks were measured through the firmware mailbox and DWC2
+  frame interval: ARM 1.2 GHz, core 400 MHz, SDRAM 400 MHz, UART 48 MHz,
+  SD/eMMC 200 MHz and USB host 60 MHz (`HFIR=60000`).  `HFNUM` advances, so the
+  USB host clock and frame counter are alive.
+
+  The earlier Bellatrix build of the patched AROS AArch64/ARM-native
+  `usb2otg.device` did enumerate on this hardware.  Its pinned AROS revision was
+  `85705361ca0fd88d02318382f181361485f074a5`; the refreshed tree is
+  `97575297b1e975f1b7a56e63917d861be9796483`, and there are no upstream changes
+  to the `usb2otg` source between those revisions.  The working implementation
+  and Bellatrix patch series therefore remain available locally as the exact
+  reference.
+
+  **Decision:** stop adding isolated workarounds to the simplified single-
+  channel engine.  Replace its transfer/controller core with a faithful,
+  project-owned port of the patched AROS AArch64 `usb2otg` implementation,
+  preserving its control, IRQ, recovery and split-transaction machinery while
+  adapting only the Emu68 platform boundary and module identity.  CherryUSB is
+  explicitly not an implementation source for this work.  Correctness comes
+  before revisiting SOF interrupt cost.
