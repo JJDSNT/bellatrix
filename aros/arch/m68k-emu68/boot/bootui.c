@@ -116,6 +116,13 @@ static int bootui_hold_armed;
  * than a splash, and must not be covered by one.
  */
 static int bootui_wanderer_started;
+/*
+ * Whether a presentation has already been seen. The first one is the desktop
+ * handoff candidate and starts the hold; every later one ends it. Kept apart
+ * from bootui_hold_active because the hold can end on its own deadline, and a
+ * presentation arriving after that must not start a second one.
+ */
+static int bootui_holding_seen;
 static int bootui_direct_scanout;
 /*
  * Called to put the finished desktop up. Registered by the display driver and
@@ -656,6 +663,53 @@ void emu68_bootui_set_stage(uint32_t stage)
 
     if (stage == BOOTUI_STAGE_DESKTOP)
         bootui_wanderer_started = 1;
+
+    if (stage == BOOTUI_STAGE_PRESENTED)
+    {
+        /*
+         * AROS put something on the display. graphics.library says only that;
+         * what it means for the splash is decided here, which is the whole
+         * point of the boundary living above the drivers.
+         *
+         * The first one is the desktop handoff candidate: at boot it is
+         * Wanderer's screen, and covering the gap between that screen
+         * appearing and its icons being drawn is what the hold is for. Any
+         * later one is something else asking for the display -- an alert, a
+         * requester, an application that started before Wanderer finished --
+         * and whatever it is has a better claim than a splash. So it ends the
+         * hold rather than being held behind it, which is the rule that keeps
+         * errors from being hidden.
+         *
+         * Task context: LoadView() runs on whoever opened the screen, so
+         * releasing from here is legal in a way that releasing from the timer
+         * is not.
+         */
+        if (!bootui.active)
+            return;
+
+        if (!bootui_holding_seen)
+        {
+            bootui_holding_seen = 1;
+            emu68_bootui_hold();
+            return;
+        }
+
+        /*
+         * A later presentation is only "something else wants the display"
+         * until Wanderer is on its way. Before that, anything reaching the
+         * display is an alert or a requester, has a better claim than a
+         * splash, and must not be covered by one. After it, the presentations
+         * are the desktop being assembled -- a mode change, a second screen --
+         * and ending the hold on them would put a half-drawn Workbench up,
+         * which is the whole thing the hold exists to prevent.
+         *
+         * From there the hold ends where it always did: on the icons, or on
+         * its own deadline.
+         */
+        if (!bootui_wanderer_started && emu68_bootui_holding())
+            emu68_bootui_release_now("hold released: another presentation");
+        return;
+    }
 
     if (stage == BOOTUI_STAGE_ICONS)
     {

@@ -91,6 +91,17 @@ is what makes calling the release from there legal where calling it from a
 timer is not.
 
 ---
+
+Reworked 2026-08-22: the driver no longer decides the boot lifecycle. It
+registers the means -- a callback that puts the finished screen up -- and
+nothing else. Whether anything is held, and until when, is decided from
+the presentation boundary graphics.library reports above every driver,
+because a driver deciding when a splash ends is the dependency that has
+to go. What stays here is genuinely this driver's own business: it
+refreshes from each bitmap's own buffer, so not taking the framebuffer at
+the first Show() is a property of how it composes, not a favour to
+anything.
+
 --- a/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
 +++ b/arch/aarch64-raspi/hidd/fbgfx/fbgfx_support.c
 @@ -22,6 +22,9 @@
@@ -213,46 +224,31 @@ timer is not.
  #include LC_LIBDEFS_FILE
  
  OOP_Object *FBGfxDisplay__Root__New(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
-@@ -199,6 +246,45 @@
+@@ -199,6 +246,30 @@
  
      D(bug("[FBGfx:Display] Show(0x%p), old visible 0x%p\n", msg->bitMap, data->visible));
  
 +#ifdef __EMU68__
 +    /*
-+     * Do not take the framebuffer here -- hold it.
++     * Do not take the framebuffer here -- offer to hold it.
 +     *
 +     * Taking it at the first Show() is correct for a driver that composes
 +     * straight into the framebuffer, and this one does not: it refreshes from
-+     * the bitmap's own buffer. So the splash can stay up while the desktop is
-+     * built behind it, and the hand-off becomes one repaint of a finished
-+     * screen instead of several seconds of half-drawn Workbench.
++     * the bitmap's own buffer. So a boot presentation can stay up while the
++     * desktop is built behind it, and the hand-off becomes one repaint of a
++     * finished screen instead of several seconds of half-drawn Workbench.
 +     *
-+     * emu68_bootui_hold() ends the hold on BOOTUI_STAGE_ICONS or on its own
-+     * deadline, whichever comes first, and calls back to put the result up.
++     * What is registered here is the means, not the policy. Whether anything
++     * is held, and for how long, is decided on the other side, from the
++     * presentation boundary graphics.library reports above every driver -- a
++     * driver deciding a boot lifecycle is the dependency this arrangement
++     * exists to avoid. All this says is "if you want to hold, here is how to
++     * put the result up when you are done".
 +     */
 +    if (msg->bitMap)
 +    {
-+        /*
-+         * The hold is for the Workbench screen and nothing else.
-+         *
-+         * It exists to cover the gap between that screen appearing and
-+         * Wanderer drawing its icons, so it engages on the first screen shown
-+         * -- which at boot is that one -- and any *later* Show means something
-+         * else wants the display now. Whatever that is has a better claim than
-+         * a splash, so it ends the hold instead of being held behind it.
-+         *
-+         * Both paths are task context: Show() runs on whoever opened the
-+         * screen, so calling the release from here is legal in a way that
-+         * calling it from a timer is not.
-+         */
-+        if (emu68_bootui_holding())
-+            emu68_bootui_release_now("hold released: another screen");
-+        else
-+        {
-+            fbgfx_held_sd = data;
-+            emu68_bootui_set_release_hook(fbgfx_bootui_released);
-+            emu68_bootui_hold();
-+        }
++        fbgfx_held_sd = data;
++        emu68_bootui_set_release_hook(fbgfx_bootui_released);
 +    }
 +#endif
 +

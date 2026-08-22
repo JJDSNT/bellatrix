@@ -25,6 +25,22 @@
  * into the kernel's symbols.
  */
 #define BOOTUI_STAGE_REPAINT   0x45303235UL
+/*
+ * AROS put something on the display.
+ *
+ * Reported by graphics.library from display_LoadViewPorts(), which is the one
+ * place above every driver where a bitmap becomes the frontmost one -- it
+ * covers ShowViewPorts, the software compositor and a plain Show() alike. It
+ * is a statement of fact, not an instruction: the sender says what it did and
+ * this side decides what that means for the splash.
+ *
+ * A hook in the generic Display class's Show() would not do. fbgfx overrides
+ * Show() and never calls OOP_DoSuperMethod(), so its presentations never reach
+ * the base class, while vcgfx does not override Show() at all and always does.
+ * Two drivers on the same machine, on opposite sides of that behaviour, is
+ * exactly why the boundary belongs above both.
+ */
+#define BOOTUI_STAGE_PRESENTED 0x45303236UL
 
 struct BootUIResource
 {
