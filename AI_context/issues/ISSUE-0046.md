@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0046
 title: "Integrate the Raspberry Pi Bluetooth UART with the native AROS Bluetooth stack"
-status: backlog
+status: doing
 priority: high
 type: feature
 owner: agent
@@ -115,6 +115,51 @@ Bellatrix btuart.resource
       firmware interface.
 
 # Execution log
+
+- 2026-08-22 -- **AROS HEAD ships the stack, and it builds for m68k unchanged.**
+  The 2026-08-21 pin refresh brought `rom/bluetooth` -- library, stack,
+  classes, firmware, prefs, and one HCI device -- and `rom/bluetooth/stack`
+  carries `LICENSE.aros-bluzing`, so it is the same code we vendored, imported
+  upstream.
+
+  It was never built here because `rom/` and `workbench/` select it through
+  `kernel-bluetooth-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU)` and this target
+  defined no such alias -- the same per-target pattern as USB. That absence is
+  what made the submodule look necessary: the card carries a
+  `bluetooth.library` from `Extras/aros-bluzing` because nothing was putting
+  AROS's own there.
+
+  One line in `arch/m68k-emu68/mmakefile.src` turns it on, and it compiles
+  with no adaptation at all:
+
+      Libs/bluetooth.library        172 KB
+      Devs/Bluetooth/vbthci.device   28 KB
+      Devs/Bluetooth/FWLoaders/
+      Prefs/Bluetooth
+      C/BTStackLoader
+
+  `C:BTStackLoader` is already invoked by the stock Startup-Sequence, so
+  nothing of ours has to start it.
+
+# What is left, after this
+
+1. **The transport.** The stack talks to HCI devices in `DEVS:Bluetooth`, and
+   the only one upstream is `vbthci`, which is virtual.
+   `rom/bluetooth/hardware/vbthci/mmakefile.src` is the model:
+   `%build_module modtype=device moduledir=Devs/Bluetooth uselibs="btcore"`.
+   The Pi's onboard controller sits on the PL011 that
+   `soc/bluetooth/btuart.resource` already owns -- exclusive claim, PL011
+   configuration, `BT_REG_EN`, GPCLK2 as the 32.768 kHz LPO, polled read and
+   write. What does not exist is the device that presents that as HCI.
+2. **Two bluetooth.library, one system.** Enabling the alias and keeping the
+   `Extras/aros-bluzing` package puts two of them on the card. The package
+   goes when the transport works, not before -- it is what BTScan currently
+   binds to.
+3. **The submodule.** `external/aros-bluzing` can be removed once nothing on
+   the card comes from it. `scripts/setup.sh` and
+   `soc/bluetooth/README.md` name it and will need updating; the README's
+   planned bring-up order still says "connect aros-bluzing/ports/aros/
+   transport-uart to this resource", which is now the wrong target.
 
 - 2026-08-21 — Compared the deprecated standalone Bluzing tree with AROS HEAD.
   Confirmed that the portable core and tests were incorporated into

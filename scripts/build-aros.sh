@@ -574,6 +574,9 @@ make "$METATARGET"
 if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     echo "[aros] building the disk-installed drivers"
     make kernel-m68k-emu68-vcgfx
+    # The USB host controller is disabled for now -- see the comment on the
+    # kernel-usb alias in arch/m68k-emu68/mmakefile.src. Still built, because
+    # code that stops being compiled stops being code; just not installed.
     make kernel-usb-dwc2emu68
 fi
 
