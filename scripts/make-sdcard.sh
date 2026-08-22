@@ -138,6 +138,22 @@ for f in "${REQUIRED_3D[@]}"; do
     [ -f "$DIST/$f" ] || missing+=("$f")
 done
 
+# The display driver proper, and the DEVS:Monitors program that loads it.
+#
+# Checked separately from the 3D stack because its absence does not look like
+# a failure. The kickstart carries a framebuffer driver registered with
+# DDRV_BootMode, so a card without these still boots to a desktop -- on the
+# surface the firmware set up, with no HVS ownership and no hardware cursor.
+# It looks like a slow machine rather than a missing driver, which is a much
+# worse thing to ship than a build error.
+REQUIRED_GFX=(
+    Devs/Drivers/vcgfx.hidd
+    Devs/Monitors/VideoCore
+)
+for f in "${REQUIRED_GFX[@]}"; do
+    [ -f "$DIST/$f" ] || missing+=("$f")
+done
+
 if [ "${#missing[@]}" -ne 0 ]; then
     echo "ERROR: $DIST is missing: ${missing[*]}" >&2
     echo "       The lean 'kernel-link-<target>' build only produces the ELF." >&2

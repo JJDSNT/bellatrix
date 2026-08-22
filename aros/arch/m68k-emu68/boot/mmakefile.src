@@ -40,30 +40,36 @@ COREPUBLIC := $(KOBJSDIR)/kernel_resource.o $(KOBJSDIR)/exec_library.o
 # arch/arm-raspi's answer for the same hardware, carried across unchanged.
 #
 #
-# Which graphics driver gets linked in. Exactly one, because both register a
-# Gfx class at residentpri 9 and nothing in the DeviceList would warn about
-# two drivers owning the same framebuffer.
+# Which *boot* driver gets linked in.
 #
-#   emu68gfx  the driver written for this port. Boots today.
-#   fbgfx     arch/aarch64-raspi's. Its own bitmap and display classes, so
-#             Show() marks a bitmap visible and refreshes by area instead of
-#             the generic Display class copying the whole screen every Show.
-#   vcgfx     arch/arm-native's VideoCore graphics driver: HVS display lists,
-#             HDMI encoder, its own DMA. The only one of the three that owns
-#             the display pipeline rather than being handed a surface, and the
-#             one ISSUE-0012's hardware cursor needs -- a cursor is an HVS
-#             plane. Runs through mailbox fallback on QEMU and owns the HVS
-#             display list on a Pi 3.
+# This is not the machine's display driver. AROS expects a kickstart-resident
+# driver that registers with DDRV_BootMode so there is something to draw on
+# before any filesystem exists -- the boot menu, an early alert -- and expects
+# the real driver to arrive from DEVS:Monitors later and retire it. vcgfx is
+# that real driver and is installed from disk (see hidd/vcgfx/mmakefile.src);
+# it is deliberately not on this list any more.
+#
+# That separation is also where the framebuffer fallback comes from. While the
+# two were alternatives chosen here at link time, a machine built with vcgfx
+# had no framebuffer driver at all, and a VideoCore that would not come up
+# meant no display -- which is exactly what a Pi 3 showed. Now the boot driver
+# stays unless something better replaces it.
+#
+#   fbgfx     arch/aarch64-raspi's, and the one to use. Its own bitmap and
+#             display classes, so Show() marks a bitmap visible and refreshes
+#             by area instead of the generic Display class copying the whole
+#             screen every Show. Shared with a maintained upstream target.
+#   emu68gfx  the driver written for this port, before fbgfx was tried here.
+#             A third implementation of the same role; kept selectable only
+#             until fbgfx has booted a Pi as the boot driver, then it goes.
 #
 # Like SDCARD_BACKEND in soc/sdcard, this is edited here rather than passed on
 # the command line: mmake does not forward variables, so `make GFX_BACKEND=...`
 # would silently build the other one.
 #
-GFX_BACKEND := vcgfx
+GFX_BACKEND := fbgfx
 
-ifeq ($(GFX_BACKEND),vcgfx)
-GFX_RESIDENT := vcgfx_hidd
-else ifeq ($(GFX_BACKEND),fbgfx)
+ifeq ($(GFX_BACKEND),fbgfx)
 GFX_RESIDENT := fbgfx_hidd
 else
 GFX_RESIDENT := emu68gfx_hidd
@@ -122,12 +128,13 @@ USER_INCLUDES := -I$(SRCDIR)/rom/kernel -I$(SRCDIR)/rom/exec \
 # compile it, and the only reason the .o was there at all is that it had been
 # built by hand.
 #
-# So all three drivers are named, and all three are built. Only the one
-# GFX_BACKEND selects is linked; the other two cost a few seconds and are worth
-# it for keeping every backend compiling.
+# So both boot drivers are named, and both are built. Only the one GFX_BACKEND
+# selects is linked; the other costs a few seconds and is worth it for keeping
+# it compiling. vcgfx is not here at all -- it is a disk module now, pulled in
+# by software-emu68-m68k.
 #
-#MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-m68k-emu68-fbgfx-kobj kernel-m68k-emu68-vcgfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-dma-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
-#MM- kernel-link-emu68-m68k-quick : kernel-kernel-kobj-quick kernel-exec-kobj-quick kernel-timer-kobj-quick kernel-utility-kobj-quick kernel-oop-kobj-quick kernel-hidd-kobj-quick kernel-bootloader-kobj-quick kernel-openfirmware-kobj-quick kernel-battclock-kobj-quick kernel-hidd-gfx-kobj-quick kernel-m68k-emu68-emu68gfx-kobj-quick kernel-m68k-emu68-fbgfx-kobj-quick kernel-m68k-emu68-vcgfx-kobj-quick kernel-graphics-kobj-quick kernel-layers-kobj-quick kernel-keymap-kobj-quick kernel-hidd-input-kobj-quick kernel-hidd-kbd-kobj-quick kernel-hidd-mouse-kobj-quick kernel-keyboard-kobj-quick kernel-gameport-kobj-quick kernel-input-kobj-quick kernel-intuition-kobj-quick kernel-expansion-kobj-quick kernel-partition-kobj-quick kernel-mbox-emu68-kobj-quick kernel-btuart-emu68-kobj-quick kernel-dma-emu68-kobj-quick kernel-sdcard-kobj-quick kernel-filesystem-kobj-quick kernel-fs-fat-kobj-quick kernel-dos-kobj-quick kernel-aros-kobj-quick kernel-debug-kobj-quick kernel-processor-kobj-quick kernel-task-kobj-quick kernel-console-kobj-quick kernel-lddemon-kobj-quick kernel-fs-ram-kobj-quick kernel-fs-con-kobj-quick kernel-shell-kobj-quick kernel-shellcommands-kobj-quick kernel-dosboot-kobj-quick
+#MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-m68k-emu68-fbgfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-dma-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
+#MM- kernel-link-emu68-m68k-quick : kernel-kernel-kobj-quick kernel-exec-kobj-quick kernel-timer-kobj-quick kernel-utility-kobj-quick kernel-oop-kobj-quick kernel-hidd-kobj-quick kernel-bootloader-kobj-quick kernel-openfirmware-kobj-quick kernel-battclock-kobj-quick kernel-hidd-gfx-kobj-quick kernel-m68k-emu68-emu68gfx-kobj-quick kernel-m68k-emu68-fbgfx-kobj-quick kernel-graphics-kobj-quick kernel-layers-kobj-quick kernel-keymap-kobj-quick kernel-hidd-input-kobj-quick kernel-hidd-kbd-kobj-quick kernel-hidd-mouse-kobj-quick kernel-keyboard-kobj-quick kernel-gameport-kobj-quick kernel-input-kobj-quick kernel-intuition-kobj-quick kernel-expansion-kobj-quick kernel-partition-kobj-quick kernel-mbox-emu68-kobj-quick kernel-btuart-emu68-kobj-quick kernel-dma-emu68-kobj-quick kernel-sdcard-kobj-quick kernel-filesystem-kobj-quick kernel-fs-fat-kobj-quick kernel-dos-kobj-quick kernel-aros-kobj-quick kernel-debug-kobj-quick kernel-processor-kobj-quick kernel-task-kobj-quick kernel-console-kobj-quick kernel-lddemon-kobj-quick kernel-fs-ram-kobj-quick kernel-fs-con-kobj-quick kernel-shell-kobj-quick kernel-shellcommands-kobj-quick kernel-dosboot-kobj-quick
 #MM kernel-link-emu68-m68k: $(BOOTELF)
 #MM kernel-link-emu68-m68k-quick: $(BOOTELF)
 kernel-link-emu68-m68k: $(BOOTELF)

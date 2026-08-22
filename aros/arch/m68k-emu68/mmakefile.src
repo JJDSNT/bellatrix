@@ -46,7 +46,7 @@ include $(SRCDIR)/config/aros.cfg
 #MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k \
 #MM                         workbench-c-emu68-bootprogress \
 #MM                         compiler-posixc compiler-stdcio external-openurl-lib \
-#MM                         hidd-vc4gallium contrib contrib-bellatrix
+#MM                         kernel-m68k-emu68-vcgfx hidd-vc4gallium contrib contrib-bellatrix
 #MM- workbench-emu68-m68k : workbench-complete workbench
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k

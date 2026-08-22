@@ -1,6 +1,8 @@
 include $(SRCDIR)/config/aros.cfg
 
-#MM kernel-m68k-emu68-vcgfx-kobj : kernel-hidd-gfx-includes kernel-mbox-emu68-includes kernel-dma-emu68-includes
+#MM kernel-m68k-emu68-vcgfx : kernel-hidd-gfx-includes kernel-mbox-emu68-includes kernel-dma-emu68-includes \
+#MM     kernel-m68k-emu68-vcgfx-monitor
+#MM kernel-m68k-emu68-vcgfx-monitor : kernel-hidd-gfx-includes
 
 #
 # The VideoCore 4 graphics driver from arch/arm-native, built for m68k.
@@ -16,8 +18,18 @@ include $(SRCDIR)/config/aros.cfg
 # backend, dma.resource and usb2otg are: %build_module takes absolute
 # basenames.
 #
-# Not in the kernel link list. It has to compile first, then run, and fbgfx is
-# what boots today.
+# Not in the kernel link list, and not because it is unfinished.
+#
+# This is the machine's real display driver, and AROS installs those from disk:
+# %build_module puts the .hidd in DEVS:Drivers, AROSMonDrvs (rom/dos/boot.c)
+# runs everything in DEVS:Monitors at boot, and the loader below brings this
+# one in. Registering through AddDisplayDriver() without DDRV_BootMode is what
+# tells graphics.library to retire the boot driver -- and if the VideoCore is
+# not there, nothing registers and the boot driver simply stays. That is the
+# framebuffer fallback, and it exists only because the two drivers are no
+# longer alternatives chosen at link time.
+#
+# rom/hidds/gfx/headless is the worked example of the same arrangement.
 #
 VC4DIR := $(SRCDIR)/arch/arm-native/soc/broadcom/2708/hidd/vcgfx
 
@@ -39,10 +51,16 @@ USER_INCLUDES := -I$(VC4DIR) \
     -I$(SRCDIR)/arch/m68k-emu68/include
 USER_CPPFLAGS := -D__EMU68__
 
+MONITORDIR := $(AROSDIR)/Devs/Monitors
+
 %build_module mmake=kernel-m68k-emu68-vcgfx \
   modname=vcgfx modtype=hidd \
   conffile=$(VC4DIR)/vcgfx.conf \
   files="$(FILES)" \
   uselibs="hiddstubs"
+
+%build_prog mmake=kernel-m68k-emu68-vcgfx-monitor \
+  progname=VideoCore targetdir=$(MONITORDIR) \
+  files=disk_startup
 
 %common
