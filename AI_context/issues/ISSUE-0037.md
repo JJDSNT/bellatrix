@@ -1148,6 +1148,28 @@ any of them is wrong.
 
 # Execution log
 
+- 2026-08-22 -- **This is what stops the boot splash reaching the desktop.**
+  The boot presentation is meant to stay up until Wanderer reports its icons
+  (video.md §12), and it does not: it goes at ~18-20s on every QEMU boot. The
+  reason is not the splash logic, which is behaving exactly as designed.
+
+      [BootUI] STARTING DOS...
+      [Kernel:TLSF] free-list corruption at REMOVE_HEADER ...
+      ############ Software Failure! ############
+      [graphics/display] LoadViewPorts ... (the requester's screen)
+      [BootUI] [00:20.094] display takeover
+
+  `bootui_hold()` refuses to hold for a screen that opens before Wanderer has
+  been announced -- "a screen opening before Wanderer was started is something
+  the user needs to see now" -- which is §5's rule that a boot presentation
+  must never hide an error. The requester this issue produces is that screen.
+  So the splash steps aside for it, correctly, and never comes back.
+
+  Two consequences worth stating. The first is that "splash until icons" needs
+  no further work in the graphics stack; it needs this defect fixed. The second
+  is that this is now visible on every boot rather than only when someone reads
+  the serial log, which is a better place for it to be.
+
 - 2026-08-18 -- **Correction: the missing header was mungwall's own bug, not a
   write.** The dump added the same day answered on the first run, and it said
   the block was fine:
