@@ -379,6 +379,25 @@ anyone here can make.
 
 # Execution log
 
+- 2026-08-22 -- **The driver is installed the normal way now.** `fbgfx` is the
+  kickstart boot driver (`DDRV_BootMode`), `vcgfx` is
+  `DEVS:Drivers/vcgfx.hidd` + `DEVS:Monitors/VideoCore`, loaded by
+  `AROSMonDrvs` at boot. Registering without `DDRV_BootMode` is what retires
+  the boot driver, through HEAD's handover interface -- which matches CPU
+  address ranges and replays the boot driver if a native driver's handover
+  fails. That is the framebuffer fallback, and it did not exist while
+  `GFX_BACKEND` linked exactly one driver: a build with `vcgfx` had no
+  framebuffer driver at all, which is what the black screen was.
+
+  `patches/aros/0048` deleted with it -- it called `emu68_bootui_retarget()`
+  from `vcgfx_onbitmap.c`, the dependency video.md §8 forbids, and it existed
+  only because vcgfx ran early enough to move the framebuffer under the splash.
+
+  Knowingly regressed by this: `patches/aros/0032` holds the splash inside
+  `fbgfx`'s `Show()`, and vcgfx now takes over before Wanderer opens a screen,
+  so splash-until-icons will not survive as written. Replacing it with the
+  generic `Show()` boundary is the next piece.
+
 - 2026-08-20 -- **The current packed build passes the Raspberry Pi 3 hardware
   gate.** `pi3-vc4.log`, captured after installing
   `out/aros/bellatrix-pi3.tar.xz`, passes every check in
