@@ -336,7 +336,15 @@ EOF
     #
     #   BELLATRIX_CMDLINE_EXTRA=mungwall ./scripts/make-sdcard.sh --pack
     #
-    printf 'nocomposition%s' \
+    #
+    # BELLATRIX_CMDLINE replaces the whole line, for asking whether a default
+    # is still earned. `nocomposition` has been on since emu68gfx was the only
+    # display driver and the software compositor left the screen on the Emu68
+    # logo; with fbgfx and vcgfx in its place that premise wants re-testing,
+    # and a card that cannot be built without the flag cannot test it.
+    #
+    printf '%s%s' \
+        "${BELLATRIX_CMDLINE-nocomposition}" \
         "${BELLATRIX_CMDLINE_EXTRA:+ $BELLATRIX_CMDLINE_EXTRA}" \
         > "$STAGE/cmdline.txt"
 fi
