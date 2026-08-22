@@ -6,6 +6,7 @@
 #include <hidd/gfx.h>
 
 #include "emu68gfx_intern.h"
+#include "../../boot/bootui_api.h"
 
 #include LC_LIBDEFS_FILE
 
@@ -206,7 +207,7 @@ OOP_Object *Emu68Display__Hidd_Display__Show(
     OOP_Class *cl, OOP_Object *o, struct pHidd_Display_Show *msg)
 {
     if (msg->bitMap)
-        emu68_bootui_takeover();
+        bootui_takeover();
 
     return (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
 }

@@ -7,6 +7,8 @@
  */
 
 #include "boot.h"
+#include <aros/bootui.h>
+#include "bootui_api.h"
 
 #include <aros/kernel.h>
 #include <exec/memory.h>
@@ -59,12 +61,38 @@ extern const struct M68KException emu68_exception_table[];
 
 static struct TagItem emu68_boot_tags[9];
 
+/*
+ * Our boot milestones are ours; the boot presentation's are its own. Report
+ * progress in its vocabulary rather than handing it ours, so that neither
+ * side has to learn the other's -- and so that the stages this port has that
+ * no presentation cares about (the timer soak, the scheduler checks) simply
+ * do not translate.
+ */
+static uint32_t bootui_stage_for(uint32_t stage)
+{
+    switch (stage)
+    {
+    case EMU68_STAGE_ENTRY:          return BOOTUI_STAGE_ENTRY;
+    case EMU68_STAGE_EXEC_READY:     return BOOTUI_STAGE_EXEC;
+    case EMU68_STAGE_SINGLETASK:     return BOOTUI_STAGE_SYSTEM;
+    case EMU68_STAGE_KERNEL_READY:   return BOOTUI_STAGE_KERNEL;
+    case EMU68_STAGE_COLDSTART:      return BOOTUI_STAGE_COLDSTART;
+    case EMU68_STAGE_GRAPHICS_READY: return BOOTUI_STAGE_GRAPHICS;
+    case EMU68_STAGE_DOS_READY:      return BOOTUI_STAGE_DOS_READY;
+    case EMU68_STAGE_STARTUP:        return BOOTUI_STAGE_STARTUP;
+    case EMU68_STAGE_DESKTOP:        return BOOTUI_STAGE_DESKTOP;
+    default:                         return 0;
+    }
+}
+
 void emu68_set_stage(uint32_t stage)
 {
     struct Emu68BootContext *ctx = &emu68_boot_context;
+    uint32_t reported = bootui_stage_for(stage);
 
     ctx->stage = stage;
-    emu68_bootui_set_stage(stage);
+    if (reported)
+        bootui_set_stage(reported);
 
     /*
      * The first page is kept out of the allocator. Leave a big-endian marker
@@ -594,7 +622,7 @@ static void start_aros(struct Emu68BootContext *ctx)
         m68k_ExecInstallPreserveAll(sys_base);
         ctx->exec_base = sys_base;
         ctx->flags |= EMU68_BOOT_EXEC_READY;
-        emu68_bootui_add_resource();
+        bootui_add_resource();
         emu68_set_stage(EMU68_STAGE_EXEC_READY);
         emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
 
@@ -658,7 +686,7 @@ void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
     if (framebuffer && pitch && width && height)
         emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
 
-    emu68_bootui_init();
+    bootui_init();
     emu68_set_stage(EMU68_STAGE_ENTRY);
     emu68_console_init(framebuffer, pitch, width, height);
     emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");

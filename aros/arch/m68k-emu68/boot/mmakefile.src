@@ -4,7 +4,7 @@ TARGETDIR := $(GENDIR)/$(CURDIR)
 BOOTOBJ   := $(TARGETDIR)/entry.o $(TARGETDIR)/usermode.o $(TARGETDIR)/boot.o \
              $(TARGETDIR)/console.o $(TARGETDIR)/bootui.o $(TARGETDIR)/selftest.o \
              $(TARGETDIR)/superstack_swap.o $(TARGETDIR)/trapprobe.o \
-             $(TARGETDIR)/dma_probe.o
+             $(TARGETDIR)/dma_probe.o $(TARGETDIR)/bootui_platform.o
 BOOTELF   := $(AROSDIR)/aros-emu68-m68k.elf
 BOOTMAP   := $(GENDIR)/boot/aros-emu68-m68k.elf.map
 COREPUBLIC := $(KOBJSDIR)/kernel_resource.o $(KOBJSDIR)/exec_library.o

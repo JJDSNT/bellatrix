@@ -88,24 +88,10 @@ void emu68_console_init(void *framebuffer, uint32_t pitch,
 int emu68_console_putc(int chr);
 void emu68_console_puts(const char *text);
 void emu68_set_stage(uint32_t stage);
-void emu68_bootui_init(void);
-void emu68_bootui_add_resource(void);
-void emu68_bootui_set_stage(uint32_t stage);
-void emu68_bootui_clock_start(uint32_t now_us);
-void emu68_bootui_clock_tick(uint32_t now_us);
-void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
-                           uint32_t width, uint32_t height, uint32_t depth);
-void emu68_bootui_takeover(void);
 /*
  * Keep the splash on the framebuffer past the point where the display driver
  * would normally take it, and call `release` when the hold ends so the driver
  * can put the finished desktop up in one go. See bootui.c.
  */
-void emu68_bootui_hold(void);
-void emu68_bootui_set_release_hook(void (*hook)(void));
-void emu68_bootui_release_now(const char *why);
-void emu68_bootui_repaint(void);
-int  emu68_bootui_holding(void);
-int  emu68_bootui_take_release(void);
 
 #endif

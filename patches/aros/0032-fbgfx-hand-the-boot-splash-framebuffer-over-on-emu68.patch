@@ -109,7 +109,7 @@ anything.
  #include "fbgfx_intern.h"
  #include "fbgfx_hidd.h"
 +#ifdef __EMU68__
-+#include <boot.h>
++#include <bootui_api.h>
 +#endif
  
  BOOL initFBGfxHW(struct HWData *data)
@@ -145,7 +145,7 @@ anything.
 +     * The boot splash still owns the framebuffer. Everything drawn now lands
 +     * in the bitmap's own buffer and stays there.
 +     */
-+    if (emu68_bootui_holding())
++    if (bootui_holding())
 +        return;
 +
 +    /*
@@ -158,7 +158,7 @@ anything.
 +     * illegal -- the version that did it earned two "called in supervisor
 +     * mode" alerts from Wanderer.
 +     */
-+    if (emu68_bootui_take_release())
++    if (bootui_take_release())
 +    {
 +        x1 = 0; y1 = 0;
 +        x2 = data->width; y2 = data->height;
@@ -191,7 +191,7 @@ anything.
 + * equivalent (RawPutChar(0x03), detaching the framebuffer console). A hook
 + * abstracting two unrelated one-liners would cost more than it saved.
 + */
-+#include <boot.h>
++#include <bootui_api.h>
 +#include "fbgfx_intern.h"
 +#include "fbgfx_bitmap.h"
 +
@@ -200,7 +200,7 @@ anything.
 + *
 + * Nothing of the desktop has reached the framebuffer while the hold was on, so
 + * this is a full-screen copy rather than a rectangle. Called from
-+ * emu68_bootui_set_stage() -- Wanderer's task -- so taking the framebuffer
++ * bootui_set_stage() -- Wanderer's task -- so taking the framebuffer
 + * semaphore and walking OOP objects here is legal, which it would not be from
 + * the timer that also can end the hold.
 + */
@@ -248,7 +248,7 @@ anything.
 +    if (msg->bitMap)
 +    {
 +        fbgfx_held_sd = data;
-+        emu68_bootui_set_release_hook(fbgfx_bootui_released);
++        bootui_set_release_hook(fbgfx_bootui_released);
 +    }
 +#endif
 +

@@ -6,6 +6,21 @@
 
 #define BOOTUI_RESOURCE_NAME "bootui.resource"
 
+/*
+ * The milestones the boot presentation understands.
+ *
+ * This is its own vocabulary, not any bootloader's. Whoever is bringing the
+ * machine up translates its own progress into these -- see emu68_set_stage()
+ * in arch/m68k-emu68/boot/boot.c -- so the two can diverge without either
+ * side learning about the other. The numbers are shared with nothing.
+ */
+#define BOOTUI_STAGE_ENTRY     0x42553031UL
+#define BOOTUI_STAGE_EXEC      0x42553032UL
+#define BOOTUI_STAGE_SYSTEM    0x42553033UL
+#define BOOTUI_STAGE_KERNEL    0x42553034UL
+#define BOOTUI_STAGE_COLDSTART 0x42553035UL
+#define BOOTUI_STAGE_GRAPHICS  0x42553036UL
+
 #define BOOTUI_STAGE_DOS_READY 0x45303231UL
 #define BOOTUI_STAGE_STARTUP   0x45303232UL
 #define BOOTUI_STAGE_DESKTOP   0x45303233UL
@@ -14,7 +29,7 @@
  * screen, which nothing in the Startup-Sequence can say -- it blocks on
  * WANDERER:Wanderer, so a line after that runs when Wanderer *exits*. Until
  * something is in a position to send it, the hold expires on its own; see
- * emu68_bootui_hold().
+ * bootui_hold().
  */
 #define BOOTUI_STAGE_ICONS     0x45303234UL
 /*
@@ -51,7 +66,7 @@ struct BootUIResource
 /* Move the live early-boot UI to a framebuffer allocated by the display
  * driver. The BootUI accepts the two scanout formats used by this port:
  * little-endian RGB565 and byte-addressed BGRX8888. */
-void emu68_bootui_retarget(APTR framebuffer, ULONG pitch,
+void bootui_retarget(APTR framebuffer, ULONG pitch,
                            ULONG width, ULONG height, ULONG depth);
 
 #endif
