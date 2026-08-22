@@ -276,6 +276,37 @@ if [ -d "$ROOT/tests/ram-stress" ]; then
     done
 fi
 
+# tests/gl/ for the same reason: probes that report through DEBUG:, so that
+# what they found survives a machine that has stopped responding.
+if [ -d "$ROOT/tests/gl" ]; then
+    for s in "$ROOT/tests/gl/"*; do
+        case "$s" in *.md) continue ;; esac
+        [ -f "$s" ] && cp "$s" "$STAGE/S/$(basename "$s")"
+    done
+fi
+
+# BELLATRIX_BOOT_TEST runs one of them at boot.
+#
+# Inserted before Wanderer is started rather than appended after it: the last
+# thing the sequence does is run Wanderer and EndCLI, so anything after that
+# executes when Wanderer *exits*. Before it, DOS and the display and the
+# assigns all exist, and a hang cannot be mistaken for a desktop problem.
+if [ -n "${BELLATRIX_BOOT_TEST:-}" ]; then
+    if [ ! -f "$STAGE/S/$BELLATRIX_BOOT_TEST" ]; then
+        echo "ERROR: no S:$BELLATRIX_BOOT_TEST to run at boot" >&2
+        exit 1
+    fi
+    awk -v script="$BELLATRIX_BOOT_TEST" '
+        /^If EXISTS "WANDERER:Wanderer"/ && !done {
+            print "Execute \"S:" script "\""
+            done = 1
+        }
+        { print }
+    ' "$STAGE/S/Startup-Sequence" > "$STAGE/S/Startup-Sequence.new" \
+        && mv "$STAGE/S/Startup-Sequence.new" "$STAGE/S/Startup-Sequence"
+    echo "[sd] boot test: S:$BELLATRIX_BOOT_TEST"
+fi
+
 if [ "$PI" = 1 ]; then
     # Emu68's own build installs it as Emu68.img.gz, and on the card it is ours:
     # the kernel a Bellatrix card boots. The firmware picks a kernel by the name

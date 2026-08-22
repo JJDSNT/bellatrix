@@ -55,6 +55,44 @@ V3D, submitting the first command list, or waiting for completion.
    freeze.
 4. Re-run `gears`, preserving the complete serial log and HDMI state.
 
+# It reproduces without V3D (2026-08-22)
+
+`glinfo` was run automatically at boot under QEMU, with all output on
+`DEBUG:` so that it survives a machine that stops responding
+(`tests/gl/gl-probe`, run by `BELLATRIX_BOOT_TEST=gl-probe`). The result:
+
+    [gl-probe] libraries present:
+    gl.library                  9552
+    gallium.library            18168
+    mesa3dgl20-0.library     10456700
+    [gl-probe] drivers present:
+    gallium.hidd                9620
+    vc4gallium.hidd           444700
+    softpipe.hidd            1016912
+    [gl-probe] running glinfo
+    <nothing further>
+
+Two things follow.
+
+**The chain is complete and the failure is not packaging.** Every library and
+driver the runtime needs is present and openable from the running system, not
+merely present in the archive.
+
+**QEMU has no V3D, and it still does not come back.** vc4gallium should fail
+its probe there and softpipe should take over, so whatever this is, it is not
+specific to the 3D hardware. That matters more for the investigation than for
+the diagnosis: it means this can be worked on without a Pi.
+
+The caveat is real: it is not established that the QEMU stop and the Pi 3 hang
+are the same fault. What is established is that a machine with no V3D at all
+also fails to return from the first GL program.
+
+**Second hypothesis, not yet excluded: it is not hung, it is crawling.**
+`mesa3dgl20-0.library` is 10 MB. Loading and relocating that on m68k, through
+a JIT that has to translate every basic block it touches for the first time,
+is not obviously a bounded wait. A longer run distinguishes the two, and until
+one has been done, "hang" is an interpretation rather than an observation.
+
 # Acceptance criteria
 
 - `glinfo` identifies the VC4/Gallium renderer on a real Pi 3.

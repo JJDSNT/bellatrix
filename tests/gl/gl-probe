@@ -1,0 +1,20 @@
+.KEY demo
+.BRA {
+.KET }
+;
+; What the GL stack says about itself, before anything tries to draw.
+;
+; ISSUE-0045 records a hang when the first MesaGL workload starts, and the
+; missing evidence is where in the chain it stops: opening the library,
+; binding the GalliumCoreAPI table, creating the VC4 screen, or submitting.
+; Everything here writes to DEBUG:, so the answer survives a machine that
+; stops responding -- a hang with no serial output and a hang with output up
+; to a known line are different findings.
+;
+Echo >DEBUG: "[gl-probe] libraries present:"
+List >DEBUG: LIBS:gl.library LIBS:gallium.library LIBS:mesa3dgl20-0.library
+Echo >DEBUG: "[gl-probe] drivers present:"
+List >DEBUG: DEVS:Drivers/gallium.hidd DEVS:Drivers/vc4gallium.hidd DEVS:Drivers/softpipe.hidd
+Echo >DEBUG: "[gl-probe] running glinfo"
+SYS:Extras/Demos/GL/glinfo >DEBUG:
+Echo >DEBUG: "[gl-probe] glinfo returned"
