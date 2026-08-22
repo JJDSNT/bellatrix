@@ -1164,14 +1164,27 @@ any of them is wrong.
   at each stage had exposed a timing dependency.
 
   What the upstream commits plausibly did is lower the frequency. Which of them
-  is unknown; the candidates remain
+  is unknown. The pin moved from `97575297b1` (2026-08-21) to `8ffa39399e`,
+  39 commits, and these are the three candidates, with hashes because a subject
+  line stops being findable once more commits land:
 
-      exec: protect ETask lifetime under SMP
-      exec: arbitrate task state, signalling and scheduling
-      exec: fix ObtainSemaphoreList's obtained-count check
+  | commit | subject | files |
+  |---|---|---|
+  | `da12ddd7b0` | exec: protect ETask lifetime under SMP | `childfree.c` `childorphan.c` `etask.h` `exec_util.c` `exec_util.h` |
+  | `9c1f9604ef` | exec: arbitrate task state, signalling and scheduling | `cause.c` `newaddtask.c` `prepareexecbase.c` `remtask.c` `service.c` `setexcept.c` `setsignal.c` `settaskpri.c` `signal.c` `wait.c` |
+  | `c9a46b3991` | exec: fix ObtainSemaphoreList's obtained-count check | `obtainsemaphorelist.c` |
 
-  and the first two touch `remtask.c`, `signal.c`, `wait.c` and `exec_util.c`
-  -- the task teardown path this fault sits in.
+  All three are Bo Ståle Kopperud's, all in `rom/exec/`. The first two are the
+  interesting ones: this fault is at `Exec_TaskFinaliser` -> `DosEntry` ->
+  `freeLocalVars` -> `FreeMem`, and between them they rewrite the child-list
+  and ETask handling that runs at task exit and the task state, signalling and
+  wait paths. `da12ddd7b0` says outright that it makes a dying child move to
+  its parent's port atomically so a concurrent scan cannot miss it -- a race at
+  exactly the moment this crashes.
+
+  Isolating which one is a bisect over three commits, not a search. It is worth
+  doing only with a run count that can tell 2-in-7 from 0-in-7, which is not
+  three runs.
 
   **The heap walk found nothing, at any stage, in any run.** `tlsf_scan()`
   checks size, successor bounds, the back link and PREV_FREE against the
