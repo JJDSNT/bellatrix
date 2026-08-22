@@ -9,6 +9,7 @@
 #include "boot.h"
 #include <aros/bootui.h>
 #include "bootui_api.h"
+#include "bootui_platform.h"
 
 #include <aros/kernel.h>
 #include <exec/memory.h>
@@ -623,6 +624,7 @@ static void start_aros(struct Emu68BootContext *ctx)
         ctx->exec_base = sys_base;
         ctx->flags |= EMU68_BOOT_EXEC_READY;
         bootui_add_resource();
+        bootui_platform_add_scanout_resource();
         emu68_set_stage(EMU68_STAGE_EXEC_READY);
         emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
 

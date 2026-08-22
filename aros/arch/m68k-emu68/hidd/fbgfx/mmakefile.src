@@ -3,21 +3,19 @@ include $(SRCDIR)/config/aros.cfg
 #MM kernel-m68k-emu68-fbgfx-kobj : kernel-hidd-gfx-includes
 
 #
-# The Raspberry Pi framebuffer HIDD from arch/aarch64-raspi, built for m68k.
+# The boot display driver. Started as arch/aarch64-raspi's framebuffer HIDD and
+# is ours now, for the same reason vcgfx is: it is code we change, and a patch
+# series is the wrong shape for that.
 #
-# Compiled straight out of that directory rather than copied here: %build_module
-# takes absolute basenames (unlike %build_archspecific, see soc/sdcard), so the
-# sources have one home and this target has no fork of them to keep in step.
-# The same arrangement the SDHOST backend, dma.resource and usb2otg use.
+# It is the DDRV_BootMode driver -- the one in the kickstart that gives the
+# machine something to draw on before any filesystem exists, and that
+# graphics.library retires when a native driver claims the hardware.
 #
 # What that driver needs from us is only KrnGetSystemAttr(KATTR_FrameBuffer*),
 # which kernel/getsystemattr.c now answers -- initFBGfxHW() does nothing else
 # to find its surface.
 #
-# Not in the kernel link list yet. emu68gfx is still the driver that boots;
-# this one has to compile, then run, before anything is switched over.
-#
-FBGFXDIR := $(SRCDIR)/arch/aarch64-raspi/hidd/fbgfx
+FBGFXDIR := $(SRCDIR)/$(CURDIR)
 
 FILES := \
     $(FBGFXDIR)/fbgfx_init \
@@ -26,8 +24,8 @@ FILES := \
     $(FBGFXDIR)/fbgfx_support \
     $(FBGFXDIR)/fbgfx_bitmapclass
 
-# arch/m68k-emu68/boot for boot.h: the display class hands the boot splash's
-# framebuffer over on the first Show(), guarded by __EMU68__ (patch 0032).
+# arch/m68k-emu68/boot for bootui_api.h: the display class registers the
+# callback that puts the finished screen up.
 USER_INCLUDES := -I$(FBGFXDIR) -I$(SRCDIR)/arch/m68k-emu68/boot
 USER_CPPFLAGS := -D__OOP_NOATTRBASES__ -D__EMU68__
 

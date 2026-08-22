@@ -14,9 +14,20 @@ include $(SRCDIR)/config/aros.cfg
 # by driving the VideoCore ourselves, and what ISSUE-0012's hardware cursor
 # needs (a cursor is an HVS plane).
 #
-# Compiled straight out of that directory rather than copied, as the SDHOST
-# backend, dma.resource and usb2otg are: %build_module takes absolute
-# basenames.
+# These sources are ours.
+#
+# They started as arch/arm-native's and were carried across rather than
+# patched, because a patch series is the wrong shape for code we are actively
+# changing: nine patches had accumulated on one driver, every one of them
+# needing to be regenerated whenever a neighbouring hunk moved, and a rebase
+# of the AROS pin silently dropped one of them. What is here now is the
+# convergence the direction document asks for -- arm-native's driver as the
+# starting point, with the endian, display-list, framebuffer-allocation,
+# vsync-probe and handover work folded in.
+#
+# The cost is real and worth naming: fixes upstream makes to its copy no
+# longer arrive by rebasing a patch. Several of ours are bugs on any host and
+# belong upstream; sending them is the way to keep the two from diverging.
 #
 # Not in the kernel link list, and not because it is unfinished.
 #
@@ -31,7 +42,7 @@ include $(SRCDIR)/config/aros.cfg
 #
 # rom/hidds/gfx/headless is the worked example of the same arrangement.
 #
-VC4DIR := $(SRCDIR)/arch/arm-native/soc/broadcom/2708/hidd/vcgfx
+VC4DIR := $(SRCDIR)/$(CURDIR)
 
 FILES := \
     $(VC4DIR)/vcgfx_init \

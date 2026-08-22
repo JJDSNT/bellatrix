@@ -34,4 +34,16 @@ void bootui_platform_log(const char *text);
 /* The boot arguments, as one string, or NULL. Not parsed here. */
 const char *bootui_platform_args(uint32_t *length);
 
+/* Publish scanout.resource, once Exec can hold resources. */
+void bootui_platform_add_scanout_resource(void);
+
+/*
+ * Has a driver published a surface this caller has not seen? Reads memory and
+ * nothing else -- it is called from the timer interrupt, where a resource
+ * lookup would not be welcome.
+ */
+int bootui_platform_scanout_changed(void **framebuffer, uint32_t *pitch,
+                                    uint32_t *width, uint32_t *height,
+                                    uint32_t *depth);
+
 #endif /* BOOTUI_PLATFORM_H */

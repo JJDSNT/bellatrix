@@ -798,6 +798,24 @@ void bootui_clock_tick(uint32_t now_us)
 
     if (!bootui.active || !bootui.clock_started)
         return;
+
+    /*
+     * Follow the scanout if a driver has moved it.
+     *
+     * A display driver that programs a mode publishes where the surface went;
+     * until this notices, everything drawn here lands at the old geometry and
+     * the picture appears as copies of itself. The check is a pointer
+     * comparison against what was last seen, so the ordinary tick pays
+     * nothing, and the redraw happens once per change.
+     */
+    {
+        void *fb;
+        uint32_t pitch, width, height, depth;
+
+        if (bootui_platform_scanout_changed(&fb, &pitch, &width, &height,
+                                            &depth))
+            bootui_retarget(fb, pitch, width, height, depth);
+    }
     bootui_last_tick_us = now_us;
 
     if (bootui_hold_active)
