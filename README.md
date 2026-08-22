@@ -158,16 +158,14 @@ some devices are not usable yet.
 
 ```
 external/emu68      submodule → michalsc/Emu68            (pinned 9b4379a)
-external/aros       submodule → aros-development-team/AROS (pinned 8570536)
-external/aros-bluzing submodule → JJDSNT/aros-bluzing
+external/aros       submodule → aros-development-team/AROS (pinned 9757529)
 external/aros-contrib submodule → aros-development-team/contrib
 
 aros/arch/m68k-emu68  the AROS port — our source, symlinked into the AROS tree
-aros/contrib/aros-bluzing Bluetooth stack injection → external/aros-bluzing
 aros/contrib/Demo/GL selected MesaGL examples → external/aros-contrib
 aros/contrib/gfx/libs/glut GLUT link library → external/aros-contrib
-patches/emu68/        7 patches on Emu68
-patches/aros/        22 patches on AROS
+patches/emu68/       10 patches on Emu68
+patches/aros/        34 patches on AROS
 
 scripts/            setup, build, build-aros, make-sdcard
 run.sh              boot under QEMU (Emu68, or Emu68 + AROS + SD card)

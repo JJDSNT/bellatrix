@@ -116,6 +116,30 @@ Bellatrix btuart.resource
 
 # Execution log
 
+- 2026-08-22 -- **The submodule is gone and the transport exists.**
+  `bthciuart.device` (`soc/bluetooth/bthciuart/`) presents `btuart.resource`
+  to AROS's stack as an HCI device in `DEVS:Bluetooth`: H4 framing and the
+  AROS device protocol, nothing about the board. `external/aros-bluzing` was
+  removed after checking that nothing in it was still ours -- the stack is
+  upstream and ahead (same code, headers renamespaced `bluetooth/` ->
+  `btcore/`, plus LE scan and LE security encoders we did not have), and
+  BTScan cannot come across because it is written against the bluzing port's
+  own manager task and UART transport, which is the architecture being
+  replaced. AROS ships `Prefs/Bluetooth` for that half.
+
+  The card now carries one Bluetooth: `bluetooth.library`, `BTStackLoader`,
+  `bthid.class`, the firmware loaders, `vbthci.device` and `bthciuart.device`.
+  A stale `Prefs/Env-Archive/SYS/Packages/aros-bluzing` was removed with it --
+  a card shipping that has the Startup-Sequence looking for a package that is
+  not there.
+
+  **None of it has run.** `C:BTStackLoader` is called by the stock
+  Startup-Sequence, so the next boot is the first time this path has all its
+  pieces. Three things are unknown and none should be assumed: whether the
+  stack picks our device over `vbthci`, whether `btuart.resource` yields the
+  PL011 when the unit task claims it, and whether a BCM43438 answers HCI at
+  all before a patchram upload -- which this port still does not do.
+
 - 2026-08-22 -- **AROS HEAD ships the stack, and it builds for m68k unchanged.**
   The 2026-08-21 pin refresh brought `rom/bluetooth` -- library, stack,
   classes, firmware, prefs, and one HCI device -- and `rom/bluetooth/stack`
