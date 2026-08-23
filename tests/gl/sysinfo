@@ -1,0 +1,13 @@
+.KEY x
+.BRA {
+.KET }
+;
+; xSysInfo's own report, as one more data point (sdcard.md sec.11).
+;
+; FULL writes to the CLI instead of opening the GUI -- src/main.c's template is
+; "DEBUG/S,BRIEF/S,FULL/S,DARK/S" -- which is the only reason this can be run
+; from a script at all.
+;
+Echo >DEBUG: "[sysinfo] xSysInfo FULL"
+xSysInfo FULL >DEBUG:
+Echo >DEBUG: "[sysinfo] done"

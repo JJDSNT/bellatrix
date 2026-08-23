@@ -322,6 +322,18 @@ if [ -d "$ROOT/tests/gl" ]; then
     done
 fi
 
+# tests/sysinfo/ holds third-party measurement binaries -- currently xSysInfo,
+# which sdcard.md sec.11 lists as one additional data point. It goes to C: so a
+# boot test can call it by name; it takes a CLI template (DEBUG/S, BRIEF/S,
+# FULL/S, DARK/S) and FULL writes its report to the shell rather than opening
+# the GUI, which is what makes it scriptable at all.
+if [ -d "$ROOT/tests/sysinfo" ]; then
+    for b in "$ROOT/tests/sysinfo/"*; do
+        case "$b" in *.md) continue ;; esac
+        [ -f "$b" ] && cp "$b" "$STAGE/C/$(basename "$b")"
+    done
+fi
+
 # BELLATRIX_BOOT_TEST runs one of them at boot.
 #
 # As early as the assigns allow, and that is a measurement decision rather
