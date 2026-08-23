@@ -125,31 +125,31 @@ What this settles:
   (`glinfo`'s own stdout is buffered and proves nothing either way. `bug()`
   goes straight to the serial line and is what carries the argument.)
 
-## Two defects found on the way, both ours
+## One defect found on the way, and one wrong accusation
 
-**1. Our display driver hands back a VC4 Gallium object without checking there
-is a V3D.**
+**Corrected the same day: the V3D probe and the softpipe fallback are present
+and correct, in ours exactly as upstream.**
 
-`createpipe.c:98-111` asks the *display* to create the Gallium object and only
-falls back to `softpipe.hidd` if that returns NULL. Our
-`vcgfx_hiddclass.c:760-774` answers by opening `vc4gallium.hidd` and creating
-`hidd.gallium.vc4` whenever the library opens -- which it always does, because
-it is on the card. The comment there says "else: object stays NULL; CreatePipe
-will use its softpipe fallback", but that branch is only reached when
-`OpenLibrary` *fails*.
+I first read `vcgfx_hiddclass.c:760-774` -- which opens `vc4gallium.hidd` and
+creates `hidd.gallium.vc4` whenever the library opens -- as our own deviation,
+committing to VC4 one level above the probe. Two checks say otherwise:
 
-Upstream's driver does have the probe -- `vc4_v3d_init()`
-(`vc4_v3d.c:236-266`) reads V3D IDENT0, reports `V3D not found`, sets
-`v3d_available = FALSE`, and `CreatePipeScreen` then returns NULL
-(`vc4_galliumclass.c:278`). So the intended fallback exists end to end. Ours
-just never lets it decide, because we commit to VC4 one level higher.
+- Our `CreateObject` is **byte-identical** to upstream's
+  (`diff` of the two function bodies is empty).
+- The decision is not made there. It is made inside the class:
+  `HiddVC4Gallium::New` (`vc4_galliumclass.c:278-284`) tests `v3d_available`,
+  prints `[VC4Gallium] V3D hardware not available`, disposes the object and
+  returns NULL -- at which point `object` stays NULL in `CreateObject` and
+  `createpipe.c` takes its softpipe fallback exactly as designed.
 
-This is the same discipline as ISSUE-0049's release hook: claim a capability
-only where it is real. It is not established that this *causes* the hang -- we
-never get far enough to know -- but a machine with no V3D should be on softpipe
-and is not.
+So the chain that should land a V3D-less machine on softpipe is complete end to
+end and needs no change. It simply never runs, which is what the missing
+`[VC4Gallium]` lines were already saying -- and now say twice over, because
+there are two unconditional `bug()` calls on that path (`vc4_init.c:373` and
+`vc4_galliumclass.c:280`) and neither appears.
 
-**2. `BELLATRIX_BOOT_TEST` without `_LATE` runs the probe too early to speak.**
+**The real defect: `BELLATRIX_BOOT_TEST` without `_LATE` runs the probe too
+early to speak.**
 
 At the default anchor (`Assign "IMAGES:"`, line 30 of the Startup-Sequence) the
 boot enters the script and never leaves: `STARTING DOS` is reached,
@@ -168,8 +168,9 @@ evidence about the anchor.
    `workbench/libs/gallium/createpipe.c` and rerun. Every branch of the driver
    selection prints there. That is a small rebuild of one library, not of Mesa,
    and it should say whether `CreatePipe` is even reached.
-2. Make `vcgfx` probe V3D before answering with a VC4 object, so a machine
-   without one lands on softpipe by design rather than by accident.
+2. Make the boot test refuse the early anchor, or say why its output vanishes
+   there. A probe that cannot report is worse than no probe: it produced two
+   confident readings that were about the harness.
 
 # Acceptance criteria
 
