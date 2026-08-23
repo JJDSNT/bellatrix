@@ -9,4 +9,10 @@ USER_CFLAGS := -noposixc
     progname=BootProgress files=BootProgress targetdir=$(AROS_C) \
     coverageinstr=no
 
+#MM- workbench-c-emu68-serialsay : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-serialsay \
+    progname=SerialSay files=SerialSay targetdir=$(AROS_C) \
+    coverageinstr=no
+
 %common

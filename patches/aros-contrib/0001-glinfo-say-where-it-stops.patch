@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 23 Aug 2026 20:00:00 -0300
+Subject: [PATCH 1/1] glinfo: say where it stops
+
+ISSUE-0045 is a program that does not return, and its own output proves
+nothing about how far it got: printf goes through stdio, which buffers, so
+a machine that stops mid-way prints nothing at all whether it stopped in
+the first call or the last. Five runs were spent reading that silence.
+
+bug() goes straight to the serial line -- no buffering, no redirection --
+and survives a machine that has stopped answering.
+
+Three calls happen before this program prints anything, and they are not
+equivalent. glutCreateWindow is the one that builds the GL context, which
+is where CreatePipe chooses a driver, so whether it was entered and
+whether it came back is the entire question.
+---
+--- a/Demo/GL/MesaGL/glinfo.c
++++ b/Demo/GL/MesaGL/glinfo.c
+@@ -9,15 +9,80 @@
+ 
+ #include <stdio.h>
+ #include <GL/glut.h>
++#include <aros/debug.h>
++#include <proto/dos.h>
++#include <aros/symbolsets.h>
+ 
++/*
++ * Say where this stops.
++ *
++ * ISSUE-0045: this program does not return, and its own output proves
++ * nothing about how far it got -- printf goes through stdio, which buffers,
++ * so a machine that stops mid-way prints nothing at all whether it stopped in
++ * the first call or the last. bug() goes straight to the serial line: no
++ * buffering, no redirection, and it survives a machine that has stopped
++ * answering.
++ *
++ * Three calls happen before anything is printed, and they are not equivalent.
++ * glutCreateWindow is the one that builds the GL context, which is where
++ * CreatePipe picks a driver -- so knowing whether it was entered, and whether
++ * it came back, is the whole question.
++ */
++/*
++ * Two ways out on purpose.
++ *
++ * bug() goes to the raw serial line and owes nothing to DOS. Printf() goes to
++ * this program's own output, which the caller redirects to DEBUG:, and
++ * Flush() makes it leave now instead of when the buffer fills. The first run
++ * of this instrumentation printed nothing at all, and a silent marker cannot
++ * be told from a program that never reached it -- so use both until one is
++ * known to arrive.
++ */
++#define STEP(x) do { \
++    bug("[glinfo] " x "\n"); \
++    Printf("[glinfo:dos] " x "\n"); \
++    Flush(Output()); \
++} while (0)
++
++/*
++ * Bracket the constructors.
++ *
++ * A control program on this machine is heard through both routes above, and
++ * this program is heard through neither -- so it does not reach main(), and
++ * the library autoinit visibly completed (gl, gallium, gallium.hidd,
++ * intuition, graphics, layers, cybergraphics and the C runtime all opened).
++ * What runs in between is the init sets of everything linked in, GLUT and
++ * Mesa included. One marker at each end says which side of them the machine
++ * stops on.
++ */
++static int glinfo_ctor_first(void)
++{
++    bug("[glinfo] ctor first\n");
++    return 1;
++}
++
++static int glinfo_ctor_last(void)
++{
++    bug("[glinfo] ctor last\n");
++    return 1;
++}
++
++ADD2INIT(glinfo_ctor_first, 110);
++ADD2INIT(glinfo_ctor_last, -110);
+ 
+ int main( int argc, char *argv[] )
+ {
++   STEP("main entered");
+    glutInit( &argc, argv );
++   STEP("glutInit returned");
+    glutInitDisplayMode( GLUT_RGB );
++   STEP("glutInitDisplayMode returned");
+    glutCreateWindow(argv[0]);
++   STEP("glutCreateWindow returned");
+ 
++   STEP("asking GL_VERSION");
+    printf("GL_VERSION: %s\n", (char *) glGetString(GL_VERSION));
++   STEP("GL_VERSION answered");
+    printf("GL_EXTENSIONS: %s\n", (char *) glGetString(GL_EXTENSIONS));
+    printf("GL_RENDERER: %s\n", (char *) glGetString(GL_RENDERER));
+    printf("GL_VENDOR: %s\n", (char *) glGetString(GL_VENDOR));
+@@ -29,5 +94,7 @@
+    printf("GLUT_XLIB_IMPLEMENTATION: %d\n", GLUT_XLIB_IMPLEMENTATION);
+ #endif
+ 
++   fflush(stdout);
++   STEP("done");
+    return 0;
+ }

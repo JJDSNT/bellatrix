@@ -172,6 +172,72 @@ evidence about the anchor.
    there. A probe that cannot report is worse than no probe: it produced two
    confident readings that were about the harness.
 
+# Instrumented, and mostly instrumenting the harness (2026-08-23, later)
+
+`glinfo` was instrumented (`patches/aros-contrib/0001`, a new series -- the
+first this repository has for contrib) with markers through two routes: `bug()`
+to the raw serial and `Printf()`+`Flush()` to the program's own output. A
+control program built for the purpose, `C:SerialSay`, prints through **both**
+from a shell command on this machine.
+
+## What has to be retracted
+
+**"glinfo produces no output" was largely the harness muting the machine.**
+Redirecting a long-running program's output to `DEBUG:` holds the serial for as
+long as the handle is open: `bug()`, the boot presentation and the display
+driver all go quiet behind it. Several runs were read as evidence about GL and
+were evidence about the redirect. That is the same shape of mistake as the boot
+anchor above, in the same session.
+
+## What is real, and reproducible
+
+**Synchronous and asynchronous do not behave the same, with the same binary
+and the same stack setting.**
+
+| launched as | mode change | machine afterwards |
+|---|---|---|
+| `SYS:Extras/Demos/GL/glinfo` (in the shell's process) | none | serial stops for everyone |
+| `Run ... glinfo` (own process) | **yes, at ~1 s** | answers for as long as you wait |
+
+Launched into its own process, the display driver programs a mode right after
+the launch -- `retargeted to RGB32 framebuffer`, `assembling off-scanout`,
+`display takeover` -- so the program reaches the point where a GL context wants
+a screen. Then it spins, with QEMU at 380% host CPU, and the shell that
+launched it goes on printing `20s`, `60s`, `120s` beside it.
+
+Run synchronously it never gets that far: no mode change at all, and nothing
+further on the serial.
+
+That difference is the closest thing to a cause this issue has, and it is
+exactly the situation the machine is reported to hang in.
+
+**Stack is not it, at least not at the shell's level.** The default is
+`AROS_STACKSIZE` = `0xA000` = 40 KB on m68k
+(`arch/m68k-all/include/aros/cpu.h:146`), confirmed live by `Stack` reporting
+40960 bytes. Raising it to 1 MB before launching changes nothing: same silence,
+same absence of a mode change.
+
+## The instrument is not trustworthy yet
+
+Not one `[glinfo]` marker has ever appeared, in any configuration, including
+those where the program demonstrably runs far enough to program a display mode.
+The binary on the card carries all nine marker strings, `kprintf` is linked into
+it, and `C:SerialSay` -- same `bug()`, same machine, same shell -- is heard.
+
+The one structural difference found so far: `SerialSay` is built `-static
+-noposixc`, `glinfo` links posixc and stdc. Until that is understood, no
+reading taken with these markers means anything.
+
+## Next
+
+1. Find why `kprintf` is silent from a posixc-linked contrib program. Compare
+   `SerialSay` (`-noposixc`) against `glinfo` for what happens to the debug
+   output on the way. Without this there is no instrument.
+2. Then bracket `glutCreateWindow`, which is where the mode change comes from
+   and therefore where a GL context is being built.
+3. Explain the synchronous/asynchronous difference. Same binary, same stack,
+   different process, and one of them takes the serial down.
+
 # Acceptance criteria
 
 - `glinfo` identifies the VC4/Gallium renderer on a real Pi 3.

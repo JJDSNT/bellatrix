@@ -36,8 +36,41 @@ Date >DEBUG:
 Version >DEBUG: gl.library
 Date >DEBUG:
 
-Echo >DEBUG: "[gl-probe] --- running glinfo"
-Date >DEBUG:
-SYS:Extras/Demos/GL/glinfo >DEBUG:
-Date >DEBUG:
-Echo >DEBUG: "[gl-probe] glinfo returned"
+; Control: can a shell program be heard at all, both ways?
+Echo >DEBUG: "[gl-probe] --- control: SerialSay"
+SerialSay >DEBUG:
+Echo >DEBUG: "[gl-probe] --- control done"
+
+; The shell gives every command AROS_STACKSIZE, which on m68k is 0xA000 --
+; 40 KB. Mesa's startup is not a 40 KB kind of program. Raise it and say what
+; it was, so the run reports the condition it ran under.
+Echo >DEBUG: "[gl-probe] --- stack as the shell left it:"
+Stack >DEBUG:
+Stack 1048576
+Echo >DEBUG: "[gl-probe] --- stack now:"
+Stack >DEBUG:
+
+; Launched with Run, and with its output thrown away.
+;
+; Both halves matter and each was learned the hard way.
+;
+; Run: launched synchronously from the shell, this program never even reaches
+; the mode change, and the serial stops for everyone. Launched into its own
+; process it reaches glutCreateWindow -- the display driver programs a mode --
+; and the machine goes on answering for as long as you care to wait. Same
+; binary, same stack setting; only the process differs.
+;
+; NIL: not DEBUG:. Redirecting a long-running program's output to DEBUG: holds
+; the serial while the handle is open, and bug(), the boot presentation and
+; the display driver all go quiet behind it. Several runs were read as "glinfo
+; produces nothing" and were the harness muting the machine.
+Echo >DEBUG: "[gl-probe] --- launching glinfo (own process, output to NIL:)"
+Run >NIL: <NIL: SYS:Extras/Demos/GL/glinfo >NIL: <NIL:
+Echo >DEBUG: "[gl-probe] --- launched"
+Wait 20
+Echo >DEBUG: "[gl-probe] --- 20s"
+Wait 40
+Echo >DEBUG: "[gl-probe] --- 60s"
+Wait 60
+Echo >DEBUG: "[gl-probe] --- 120s"
+Echo >DEBUG: "[gl-probe] --- done"
