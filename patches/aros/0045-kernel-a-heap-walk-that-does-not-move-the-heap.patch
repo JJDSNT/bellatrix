@@ -23,7 +23,7 @@ broken chain is worth, and a scan that took the machine down would be
 usable exactly once.
 --- a/rom/kernel/tlsf.c
 +++ b/rom/kernel/tlsf.c
-@@ -1395,6 +1395,79 @@
+@@ -1418,6 +1418,89 @@
      return ret;
  }
  
@@ -69,6 +69,16 @@ usable exactly once.
 +                why = "block outside its area";
 +            else if (size == 0 || (size & (SIZE_ALIGN - 1)))
 +                why = "implausible size";
++            /*
++             * A block too small to hold its own free node destroys its
++             * neighbour's header the moment it is freed, and by then the
++             * evidence is gone. It is legal to see one only if the allocator
++             * stopped enforcing MIN_PAYLOAD, so say so here rather than
++             * waiting for the wreckage. ISSUE-0037 was exactly this, and this
++             * walk missed it for days by not asking.
++             */
++            else if (size < MIN_PAYLOAD)
++                why = "payload too small to hold a free node";
 +            else if (next > area->end)
 +                why = "block runs past the end of its area";
 +            else if (b->header.prev != prev)

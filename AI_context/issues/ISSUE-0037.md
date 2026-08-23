@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0037
 title: "The RAM: handler dies on a corrupt block header once the preferences actually load"
-status: doing
+status: done
 priority: critical
 type: bug
 owner: unassigned
 created_at: 2026-08-17
-updated_at: 2026-08-18
+updated_at: 2026-08-23
 tags:
   - memory
   - tlsf
@@ -20,11 +20,89 @@ related_files:
   - external/aros/workbench/s/Startup-Sequence
   - external/aros/workbench/classes/zune/nlist/nlisttree_mcc/NListtree.c
   - AI_context/consolidated/history/ISSUE-0036.md
-  - patches/aros/0011-kernel-avoid-undersized-tlsf-free-blocks.patch
+  - patches/aros/0011-kernel-give-every-tlsf-block-room-for-its-own-free-node.patch
   - patches/aros/0007-kernel-refuse-to-free-a-pointer-outside-the-heap-and.patch
 ---
 
 # Summary
+
+## Resolved 2026-08-23: a block too small to hold its own free node
+
+A free block keeps its two free-list pointers **in its payload**:
+`INSERT_FREE_BLOCK` writes a `free_node_t` over the memory the caller was
+using. A payload smaller than a free node cannot be freed without writing past
+the block -- straight through the following block's `hdr_t.prev`, the first
+word after it.
+
+Nothing in TLSF guaranteed that payload. The only thing rounding an allocation
+is `ROUNDUP()`, which rounds to `SIZE_ALIGN`, which is `AROS_WORSTALIGN`:
+
+    arch/m68k-all/include/aros/cpu.h:26:#define AROS_WORSTALIGN 4
+
+Eight on the 64-bit targets and on aarch64, **four on m68k**, while
+`free_node_t` is two pointers. So `AllocMem(1)` produced a four-byte block, and
+freeing it wrote eight bytes: four into itself and four into its neighbour's
+header. The neighbour became a busy block whose header said something false,
+and the failure surfaced in whoever next merged or unlinked around it -- as
+`free-list corruption at REMOVE_HEADER` with a NULL head, typically three
+quarters of a boot after the write.
+
+That is why this target is the only one that sees it, and why the corruption
+never sat where the crash did.
+
+The fix is `patches/aros/0011`, which now names the invariant once as
+`MIN_PAYLOAD` and enforces it in the two places that can violate it: the size a
+request is served at, and the remainder a split leaves behind. The earlier
+revision of 0011 fixed only the second. Fixing half is why the defect survived
+the patch that was aimed at it -- the allocator stopped manufacturing an
+unusable *remainder* and went on manufacturing unusable *blocks*.
+
+### Why mungwall could never see it
+
+mungwall adds its walls to the size **before** the allocator sees it, so with
+mungwall on, no four-byte block is ever created. Every mungwall boot was clean
+because turning the detector on removed the cause. This retires the long-running
+puzzle in this issue about a corruption that "does not survive the layout
+change": it was not surviving a layout change, it was not happening.
+
+`patches/aros/0045`'s heap walk now checks the invariant too. It would have
+named the block at the first checkpoint after the first `AllocMem(1)`; it
+missed the defect for days by validating everything about a block except
+whether it was big enough to be freed.
+
+### How it was pinned down
+
+1. A symbolised backtrace -- `Exec_TaskFinaliser -> DosEntry -> freeLocalVars
+   -> FreeMem -> tlsf_freemem` -- resolved by subtracting the kernel load base
+   (`0x34600000`, printed by `[BOOT] Loading ELF executable ... to`) and running
+   `m68k-aros-addr2line` against the relocatable ELF.
+2. Removing the Poseidon USB stack from the card made the failure
+   **deterministic**: 2 boots in 8 became 8 in 8. It was not the cause -- it was
+   an asynchronous `Run AddUSBClasses` perturbing allocation order. A
+   deterministic reproducer was worth more than the intermittent one.
+3. Instrumenting `freeLocalVars()` named the allocations: the shell variables
+   `process`, `RC` and `Result2`, each with `lv_Len` of **1**.
+4. `AllocMem(1)` with `SIZE_ALIGN == 4` and `sizeof(free_node_t) == 8` is the
+   whole defect.
+
+Verified: the configuration that failed 8 boots out of 8 passes 8 out of 8
+after the change.
+
+### What this retires
+
+- **The three upstream `rom/exec` bisect candidates** (`da12ddd7b0`,
+  `9c1f9604ef`, `c9a46b3991`) are not implicated. The bisect they were recorded
+  for is not needed. They stay listed below as what was considered.
+- **`et_Parent` as a use-after-free mechanism.** Guards added in
+  `patches/aros/0047` -- `Exec_CheckTask()` in `Exec_CleanupETask()` and a node
+  type check in `rom/dos` -- stayed silent across every failing boot, with DOS
+  children already dead. The guards are kept: they turn three unchecked writes
+  through a raw task pointer into reports, which is worth having whether or not
+  they ever fire.
+- **The boot presentation.** With `nobootui` the corruption still occurred, so
+  BootUI is not the writer. It does change the timing sharply, which is what
+  made the reproducer deterministic. See ISSUE-0049.
+
 
 ## Matching upstream defect backported, but not this first event (2026-08-20)
 

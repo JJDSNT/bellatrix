@@ -467,6 +467,8 @@ static void draw_clock(void)
     draw_text(text, bootui.height - 15 * scale, scale, RGB565(116, 83, 234));
 }
 
+static int bootui_disabled(void);
+
 void bootui_init(void)
 {
     void *framebuffer = NULL;
@@ -486,6 +488,11 @@ void bootui_init(void)
     uint16_t background = RGB565(0, 0, 0);
 
     bootui.active = 0;
+    if (bootui_disabled())
+    {
+        bootui_platform_log("[BootUI] disabled by nobootui\n");
+        return;
+    }
     if (!bootui_platform_surface(&framebuffer, &pitch, &width, &height, &depth))
         return;
     if (!framebuffer || !pitch || !width || !height || pitch < width * 2)
@@ -610,24 +617,64 @@ void bootui_retarget(void *framebuffer, uint32_t pitch,
  */
 static int bootui_heapscan = -1;
 
-static int heapscan_wanted(void)
+/* No strstr() here: this file runs before any library is open. */
+static int bootui_arg(const char *want)
 {
     uint32_t len = 0;
     const char *args = bootui_platform_args(&len);
-    uint32_t i;
+    uint32_t wlen = 0, i, j;
 
-    if (!args || len < 8)
+    while (want[wlen])
+        wlen++;
+
+    if (!args || len < wlen)
         return 0;
 
-    for (i = 0; i + 8 <= len; i++)
+    for (i = 0; i + wlen <= len; i++)
     {
-        if (args[i] == 'h' && args[i + 1] == 'e' && args[i + 2] == 'a'
-            && args[i + 3] == 'p' && args[i + 4] == 's' && args[i + 5] == 'c'
-            && args[i + 6] == 'a' && args[i + 7] == 'n')
+        for (j = 0; j < wlen && args[i + j] == want[j]; j++)
+            ;
+        if (j == wlen)
             return 1;
     }
 
     return 0;
+}
+
+static int heapscan_wanted(void)
+{
+    return bootui_arg("heapscan");
+}
+
+/*
+ * `nobootui` takes the presentation out of the boot entirely -- no surface is
+ * claimed, nothing is drawn, no hold is taken. It exists because a boot
+ * presentation writes to a framebuffer for the whole length of the boot, and
+ * that is exactly the shape of thing one has to be able to subtract before
+ * blaming anything else for memory damage. Answering "is it us?" should not
+ * require rebuilding without the file.
+ */
+static int bootui_disabled(void)
+{
+    static int cached = -1;
+    uint32_t len = 0;
+
+    /*
+     * bootui_init() runs before the boot context carries the arguments, so a
+     * "no" answered then is an answer about the arguments not being there
+     * yet, not about what they say. Only cache an answer once there is a
+     * command line to read; until then keep asking. bootui_set_stage() asks
+     * again at the first stage, which is late enough.
+     */
+    if (cached >= 0)
+        return cached;
+
+    if (!bootui_platform_args(&len) || !len)
+        return 0;
+
+    cached = bootui_arg("nobootui");
+
+    return cached;
 }
 
 /* kernel.resource's TLSF walker; kernel_resource.o keeps public symbols. */
@@ -653,6 +700,17 @@ void bootui_set_stage(uint32_t stage)
 {
     const char *status;
     uint32_t progress;
+
+    /*
+     * The arguments were not readable yet when bootui_init() claimed the
+     * surface, so this is the first point at which `nobootui` can be honoured.
+     * Give the surface back and stay out of the rest of the boot.
+     */
+    if (bootui.active && bootui_disabled())
+    {
+        bootui.active = 0;
+        bootui_platform_log("[BootUI] disabled by nobootui\n");
+    }
 
     /* Before anything else, and before any early return: the whole value of
      * a checkpoint is that it happens at every one of them. */

@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 23 Aug 2026 12:00:00 -0300
+Subject: [PATCH 47/47] exec, dos: report a child that outlives the parent it
+ names
+
+ISSUE-0037 has two mechanisms and only one of them is an overrun. The
+other is a use-after-free, and `et_Parent` is the best-shaped candidate
+for it in the path where the crash happens: a raw `struct Task *` cached
+for the whole life of a child, with nothing in exec keeping the task it
+names alive.
+
+Every user of it writes through it. `internal_ChildFree()` clears a bit
+in `pr_Flags` and Signals the task, which relinks it between TaskWait and
+TaskReady through `ln_Succ`/`ln_Pred` read out of the same block.
+`Exec_CleanupETask()` links the dying child into `parent->et_Children`
+and, when notified, into `parent->et_TaskMsgPort`. Through a freed parent
+each of those is a wild *write*, so it damages a neighbouring allocation
+in silence and the failure surfaces later, in whatever allocation next
+touches the wreckage -- which is exactly the shape we keep seeing.
+
+None of the three sites checks anything. So check, and report rather than
+follow:
+
+  - exec has a liveness oracle already, `Exec_CheckTask()`, which on this
+    non-SMP target scans ThisTask, TaskReady and TaskWait and is therefore
+    complete for a cooperative single core. Use it, and orphan the ETask
+    when it says no, which is what the else branch below already does for
+    a child that never had a parent.
+  - it also reports a live parent that carries no ETask, because that case
+    leaves the children with a non-NULL `et_Parent` and on no list at all
+    -- the way a dangling pointer is manufactured for the next generation.
+  - dos cannot call an exec-internal function, so `liveParent()` checks
+    the node type instead. A live Process carries NT_PROCESS; freed memory
+    does not, and under mungwall it reads back as 0xDB.
+
+This is a diagnostic, not a lifetime fix. If it stays silent across a boot
+it retires the whole family and the search moves back to the overrun; if it
+fires it names the task and the pointer, which is more than a bisect over
+three upstream commits would tell us.
+---
+--- a/rom/exec/exec_util.c
++++ b/rom/exec/exec_util.c
+@@ -240,8 +240,38 @@
+     /* If we have an ETask parent, tell it we have exited. */
+     if(et->et_Parent != NULL)
+     {
++        /*
++         * et_Parent is a raw Task pointer with no lifetime guarantee: the
++         * task it names may have been freed while this child was running.
++         * Everything below writes through the ETask it resolves to -- the
++         * child gets linked into parent->et_Children and, when notified, into
++         * parent->et_TaskMsgPort -- so following a dead one corrupts the heap
++         * rather than crashing here.  Report it and orphan instead.
++         * Diagnostic for ISSUE-0037; see also liveParent() in rom/dos.
++         */
++        if (!Exec_CheckTask(et->et_Parent, SysBase))
++        {
++            bug("[EXEC:ETask] Cleanup: %s names a parent %p that is not a live task\n",
++                task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "<unnamed>",
++                et->et_Parent);
++            et->et_Parent = NULL;
++        }
++    }
++
++    if(et->et_Parent != NULL)
++    {
+         parent = GetETask(et->et_Parent);
+ 
++        /*
++         * A live task with no ETask still leaves the children below with a
++         * non-NULL et_Parent and on no list at all, which is how a dangling
++         * parent pointer is manufactured for the next generation.
++         */
++        if (parent == NULL)
++            bug("[EXEC:ETask] Cleanup: live parent %p of %s carries no ETask\n",
++                et->et_Parent,
++                task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "<unnamed>");
++
+ #if defined(__AROSEXEC_SMP__)
+         EXEC_SPINLOCK_LOCK(&IntETask(et)->iet_TaskLock, NULL, SPINLOCK_MODE_WRITE);
+ #endif
+--- a/rom/dos/createnewproc.c
++++ b/rom/dos/createnewproc.c
+@@ -665,10 +665,49 @@
+ }
+ 
+ 
++/*
++ * et_Parent is a raw Task pointer cached for the whole life of the child.
++ * Nothing in exec guarantees the task it names still exists when the child
++ * finally dies, and both users of it below write through it -- a store into
++ * pr_Flags and a Signal() that relinks the task between TaskWait and
++ * TaskReady.  Through a freed parent that is a wild write, not a wild read,
++ * so it damages the heap silently and the crash surfaces much later in some
++ * other allocation.
++ *
++ * Report it instead of following it.  A live Process still carries its node
++ * type; freed memory does not, and under mungwall it reads back as 0xDB.
++ * This is a diagnostic for ISSUE-0037, not a lifetime fix -- the fix belongs
++ * in whoever left the pointer dangling.
++ */
++static struct Process *liveParent(struct Task *task, const char *what)
++{
++    struct Process *parent = (struct Process *)(GetETask(task)->et_Parent);
++
++    if (parent == NULL)
++    {
++        bug("[DOS] %s: %s has no parent recorded\n",
++            what, task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "<unnamed>");
++        return NULL;
++    }
++
++    if (parent->pr_Task.tc_Node.ln_Type != NT_PROCESS)
++    {
++        bug("[DOS] %s: %s points at a dead parent %p (ln_Type=0x%02x)\n",
++            what, task->tc_Node.ln_Name ? task->tc_Node.ln_Name : "<unnamed>",
++            parent, parent->pr_Task.tc_Node.ln_Type);
++        return NULL;
++    }
++
++    return parent;
++}
++
+ void internal_ChildFree(APTR tid, struct DosLibrary * DOSBase)
+ {
+     struct Task    *task   = (struct Task *)tid;
+-    struct Process *parent = (struct Process *)(GetETask(task)->et_Parent);
++    struct Process *parent = liveParent(task, "ChildFree");
++
++    if (parent == NULL)
++        return;
+ 
+     D(bug("Awakening the parent task %p (called %s)\n", parent, parent->pr_Task.tc_Node.ln_Name));
+ 
+@@ -944,7 +983,10 @@
+      */
+     if (me->pr_Flags & PRF_NOTIFYONDEATH)
+     {
+-        Signal(GetETask(me)->et_Parent, SIGF_CHILD);
++        struct Process *parent = liveParent(&me->pr_Task, "NotifyOnDeath");
++
++        if (parent != NULL)
++            Signal(&parent->pr_Task, SIGF_CHILD);
+     }
+ 
+     CloseLibrary((APTR)DOSBase);

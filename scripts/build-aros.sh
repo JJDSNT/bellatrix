@@ -597,6 +597,28 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     #
     make kernel-usb-dwc2emu68
     rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
+
+    # Removing the controller was not enough to stop USB running.
+    # Startup-Sequence line 39 tests SYS:Classes/USB, and that directory is
+    # still there, so every boot still does
+    #
+    #     Run <NIL: >NIL: QUIET AddUSBClasses
+    #
+    # which loads poseidon.library and some twenty classes *asynchronously*,
+    # alongside the rest of the sequence, on a machine that now has no host
+    # controller for any of it to bind to. PsdStackLoader is the same story.
+    # A TLSF backtrace caught AddUSBClasses in the act, and an async task is
+    # exactly the shape that makes a heap fault land in a different task each
+    # time. Take the directory away and the sequence skips the whole block on
+    # its own -- no patch to Startup-Sequence needed.
+    #
+    # bluetooth.class goes with it. That one is the HCI transport for a USB
+    # dongle; Bluetooth here comes off the PL011 through bthciuart, and
+    # Classes/Bluetooth is a separate directory that stays.
+    rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
+    rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \
+          "$BUILD/bin/$TARGET/AROS/C/AddUSBHardware" \
+          "$BUILD/bin/$TARGET/AROS/C/PsdStackLoader"
     echo "[aros] USB built and left off the card (see mmakefile.src)"
 fi
 
