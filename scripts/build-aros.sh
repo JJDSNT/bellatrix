@@ -595,6 +595,15 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # and then remove what it installed. Re-enabling is uncommenting the alias
     # and deleting this block.
     #
+    # The SFS handler, for the FAT-versus-SFS comparison sdcard.md asks for.
+    #
+    # It is not in CORERESIDENTS and does not need to be: an MBR partition of
+    # type 0x2f is mapped to DOSType SFS\0 by partition.library, which then
+    # looks for a handler by name, and L:sfs-handler is where it looks. Built
+    # unconditionally because it costs seconds and a card without an SFS
+    # partition never loads it.
+    make kernel-fs-sfs
+
     make kernel-usb-dwc2emu68
     rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
 

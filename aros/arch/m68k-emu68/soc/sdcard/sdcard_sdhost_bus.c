@@ -411,21 +411,97 @@ void FNAME_SDHOSTBUS(SetBusWidth)(UBYTE width, struct sdcard_Bus *bus)
  * in: two increments per command and a report every 512, which on a boot is a
  * few dozen lines.
  */
+/*
+ * Where a command's time goes.
+ *
+ * The card delivers 177-384 KB/s, which at 8 KB per command is about 21 ms
+ * each -- far too long to be the transfer. A DMA engine moving 8 KB across
+ * this bus is microseconds; the rest is the apparatus around it. Splitting the
+ * command into wait, cache maintenance and bounce copy says which, and that is
+ * what decides whether Emu68's burst-oriented PIO loop -- which has none of
+ * this apparatus and drives the same controller on the same machine -- is
+ * worth borrowing.
+ */
+static ULONG sdhost_n_direct;
+static ULONG sdhost_n_unaligned;
+static ULONG sdhost_n_unreachable;
+
+static ULONG sdhost_us_wait;
+static ULONG sdhost_us_cache;
+static ULONG sdhost_us_copy;
+
 static ULONG sdhost_stat_cmds;
 static ULONG sdhost_stat_blocks;
 static ULONG sdhost_stat_last_report;
+static ULONG sdhost_stat_last_blocks;
+static ULONG sdhost_stat_last_us;
+
+/*
+ * Off by default. sdcard.md sec.25: a measurement taken while the hot path is
+ * logging is not a measurement of the hot path. Counting is nearly free but
+ * the timer reads that bracket each phase are not, and neither is a serial
+ * line every 512 commands.
+ *
+ * Compile-time rather than a boot argument: the driver has no cheap way to
+ * read the command line this early, and an investigation that needs the
+ * counters can afford a rebuild.
+ */
+#define SDHOST_STATS 0
+
+static int sdhost_stats_on(void)
+{
+    return SDHOST_STATS;
+}
 
 static void sdhost_stat_tick(struct sdcard_Bus *bus, ULONG blocks)
 {
+    if (!sdhost_stats_on())
+        return;
+
     sdhost_stat_cmds++;
     sdhost_stat_blocks += blocks;
 
     if ((sdhost_stat_cmds - sdhost_stat_last_report) >= 512)
     {
+        ULONG now = sdcard_CurrentTime();
+        ULONG dus = now - sdhost_stat_last_us;
+        ULONG dkb = (sdhost_stat_blocks - sdhost_stat_last_blocks) / 2;
+
+        /*
+         * Rate, not just a total.
+         *
+         * Whether to borrow Emu68's burst-oriented PIO loop is a question
+         * about throughput, and throughput was never measured here -- only
+         * totals were. KB/s over the interval answers it: if DMA is already
+         * near what the card can give, a different data loop cannot help, and
+         * the cost is elsewhere.
+         *
+         * SYSTIMER_CLO is 1 MHz and free-running, so this is microseconds and
+         * owes nothing to the CPU. Integer maths, guarded: the first report
+         * has no interval.
+         */
+        if (sdhost_stat_last_us && dus)
+        {
+            bug("[SDHost%02u] %u cmds, %u KB, %u KB in %u ms = %u KB/s"
+                "  [wait %u ms, cache %u ms, copy %u ms]\n",
+                bus->sdcb_BusNum, sdhost_stat_cmds,
+                sdhost_stat_blocks / 2, dkb, dus / 1000,
+                (dus >= 1000) ? (dkb * 1000) / (dus / 1000) : 0,
+                sdhost_us_wait / 1000, sdhost_us_cache / 1000,
+                sdhost_us_copy / 1000);
+            bug("[SDHost%02u]   direct %u, bounced %u unaligned + %u"
+                " unreachable\n", bus->sdcb_BusNum, sdhost_n_direct,
+                sdhost_n_unaligned, sdhost_n_unreachable);
+            sdhost_us_wait = sdhost_us_cache = sdhost_us_copy = 0;
+        }
+        else
+            bug("[SDHost%02u] %u cmds, %u blocks (%u KB)\n",
+                bus->sdcb_BusNum, sdhost_stat_cmds, sdhost_stat_blocks,
+                sdhost_stat_blocks / 2);
+
         sdhost_stat_last_report = sdhost_stat_cmds;
-        bug("[SDHost%02u] %u commands, %u blocks (%u KB)\n",
-            bus->sdcb_BusNum, sdhost_stat_cmds, sdhost_stat_blocks,
-            sdhost_stat_blocks / 2);
+        sdhost_stat_last_blocks = sdhost_stat_blocks;
+        sdhost_stat_last_us = now;
     }
 }
 
@@ -488,13 +564,46 @@ ULONG FNAME_SDHOSTBUS(SendCmd)(struct TagItem *CmdTags, struct sdcard_Bus *bus)
         sdhost_write(bus, SDHBCT, blklen);
         sdhost_write(bus, SDHBLC, nblks);
 
-        /* Diagnostic: always route through the bounce buffer so every
-         * transfer uses one well-aligned, known-good DMA address. Direct
-         * DMA is only used as a fallback if the bounce buffer is too
-         * small or unavailable. */
+        /*
+         * DMA straight into the caller's buffer where that is safe, and
+         * through the bounce only where it is not.
+         *
+         * The line this replaces routed *every* transfer through the bounce,
+         * described in its own comment as a diagnostic. Measured, that
+         * diagnostic is most of what the driver costs: over 4 MB the DMA
+         * engine itself takes 79 ms and the bounce copy takes 4420 ms --
+         * fifty-five times as long -- because on m68k sdhost_neon_copy is a
+         * plain word loop and every one of its 2048 iterations per 8 KB is
+         * JITted.
+         *
+         * Two conditions make the caller's buffer usable, and both are the
+         * bounce's own reasons for existing:
+         *
+         *   - 32-byte alignment, because CacheClearE on an unaligned buffer
+         *     touches the cache lines either side of it and writes stale data
+         *     over a neighbour;
+         *   - reachable by the DMA engine, which addresses the low 1 GB.
+         *
+         * Anything else still bounces, so nothing that worked stops working.
+         */
         {
-            if (priv->dma_bounce && sdDataLen <= priv->dma_bounce_size)
+            APTR  phys      = KrnVirtualToPhysical(sdData);
+            BOOL  aligned   = (((IPTR)sdData & 31) == 0);
+            BOOL  reachable = BCM2708_DMA_ADDRESSABLE(phys)
+                           && BCM2708_DMA_ADDRESSABLE((IPTR)phys + sdDataLen);
+
+            if (aligned && reachable)
             {
+                dma_buf = sdData;
+                used_bounce = FALSE;
+                sdhost_n_direct++;
+            }
+            else if (priv->dma_bounce && sdDataLen <= priv->dma_bounce_size)
+            {
+                if (!aligned)
+                    sdhost_n_unaligned++;
+                else
+                    sdhost_n_unreachable++;
                 dma_buf = priv->dma_bounce;
                 used_bounce = TRUE;
                 if (!is_read)
@@ -531,20 +640,37 @@ ULONG FNAME_SDHOSTBUS(SendCmd)(struct TagItem *CmdTags, struct sdcard_Bus *bus)
     /* Wait for the DMA engine to drain the FIFO. */
     if (has_data)
     {
-        if (sdhost_dma_wait(bus, 1000000) != 0)
         {
-            retval = -1;
-            goto done;
+            ULONG t0 = sdhost_stats_on() ? sdcard_CurrentTime() : 0;
+            int   rc = sdhost_dma_wait(bus, 1000000);
+
+            if (t0)
+                sdhost_us_wait += sdcard_CurrentTime() - t0;
+            if (rc != 0)
+            {
+                retval = -1;
+                goto done;
+            }
         }
 
         if (is_read)
         {
-            APTR dma_dest = used_bounce ? priv->dma_bounce
-                                        : (APTR)priv->dma_data_addr;
+            APTR  dma_dest = used_bounce ? priv->dma_bounce
+                                         : (APTR)priv->dma_data_addr;
+            ULONG t0 = sdhost_stats_on() ? sdcard_CurrentTime() : 0;
+
             CacheClearE(dma_dest, sdDataLen, CACRF_ClearD);
+            if (t0)
+                sdhost_us_cache += sdcard_CurrentTime() - t0;
+
             if (used_bounce)
+            {
+                t0 = sdhost_stats_on() ? sdcard_CurrentTime() : 0;
                 sdhost_neon_copy((APTR)priv->dma_data_addr,
                                   priv->dma_bounce, sdDataLen);
+                if (t0)
+                    sdhost_us_copy += sdcard_CurrentTime() - t0;
+            }
         }
 
         priv->xfer_active = FALSE;

@@ -1,0 +1,15 @@
+.KEY x
+.BRA {
+.KET }
+;
+; FAT versus SFS on the same card, same driver (sdcard.md, the 2x2 matrix).
+;
+; The Pi boots from FAT and always will, so SYS: does not move. The second
+; partition -- MBR type 0x2f, which partition.library maps to DOSType SFS\0 --
+; is a work volume beside it. Everything below the filesystem is identical.
+;
+Echo >DEBUG: "[sfs] devices the system knows:"
+Info >DEBUG:
+Echo >DEBUG: "[sfs] assigns and volumes:"
+Assign >DEBUG:
+Echo >DEBUG: "[sfs] done listing"

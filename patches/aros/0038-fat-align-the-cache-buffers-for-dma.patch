@@ -1,0 +1,58 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 24 Aug 2026 02:30:00 -0300
+Subject: [PATCH 38/38] fat: align the cache buffers so the card can DMA into
+ them
+
+These buffers are what the SD driver is handed, and on this machine it can DMA
+straight into them -- but only if they are 32-byte aligned, because the cache
+invalidate after a DMA read works on whole lines and an unaligned buffer takes
+its neighbours' dirty lines with it.
+
+They never are. The data starts immediately after the header inside one
+AllocVec, so its alignment is whatever sizeof(struct BlockRange) leaves.
+
+Measured under ISSUE-0051, with counters in our own SDHOST driver: of 509
+transfers, 505 were rejected for alignment and went through a bounce buffer
+instead. That copy is a plain word loop -- there is no NEON on m68k -- and
+every one of its 2048 iterations per 8 KB is JITted. Over 4 MB the DMA engine
+itself costs 79 ms and the bounce copy costs 4420 ms.
+
+Thirty-one bytes of slack per buffer buys all of them the direct path.
+---
+--- a/rom/filesys/fat/cache.c
++++ b/rom/filesys/fat/cache.c
+@@ -113,12 +113,31 @@
+ 
+         for(i = 0; i < block_count && success; i++)
+         {
+-            b = AllocVec(sizeof(struct BlockRange)
++            /*
++             * Room to push the data past a 32-byte boundary.
++             *
++             * These buffers are what the SD driver is handed, and it can DMA
++             * straight into them -- but only if they are 32-byte aligned,
++             * because the cache invalidate that follows a DMA read works on
++             * whole cache lines and an unaligned buffer would take its
++             * neighbours' dirty lines with it.
++             *
++             * They never are: the data starts immediately after the header
++             * inside one AllocVec, so its alignment is whatever
++             * sizeof(struct BlockRange) leaves. Measured under ISSUE-0051,
++             * 505 transfers out of 509 were rejected for alignment and copied
++             * through a bounce buffer instead, and that copy is a JITted word
++             * loop costing fifty-five times the DMA it replaces.
++             *
++             * Thirty-one bytes buys all of them the direct path.
++             */
++            b = AllocVec(sizeof(struct BlockRange) + 31
+                 + (c->block_size << RANGE_SHIFT), MEMF_PUBLIC);
+             b->use_count = 0;
+             b->state = BS_EMPTY;
+             b->num = 0;
+-            b->data = (UBYTE *)b + sizeof(struct BlockRange);
++            b->data = (UBYTE *)((((IPTR)b + sizeof(struct BlockRange)) + 31)
++                & ~(IPTR)31);
+ 
+             if(b != NULL)
+                 c->blocks[i] = b;

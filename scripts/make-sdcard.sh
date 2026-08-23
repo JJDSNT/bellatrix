@@ -222,14 +222,51 @@ if [ "$PACK" = 0 ]; then
     echo "[sd] $SIZE image at $OUT"
     truncate -s "$SIZE" "$OUT"
 
-    sfdisk -q "$OUT" >/dev/null <<'EOF'
+    # BELLATRIX_SFS=1 adds a second partition for the FAT-versus-SFS comparison
+    # sdcard.md asks for.
+    #
+    # The Pi's firmware can only boot from FAT, so SYS: stays where it is and
+    # the SFS volume is a work partition beside it: same card, same driver,
+    # same everything except the filesystem, which is the only way the 2x2
+    # matrix means anything.
+    #
+    # NOT FINISHED, and the reason is recorded here rather than in a commit
+    # message nobody will find.
+    #
+    # Type 0x2f is what rom/partition/partition_types.c:33 maps to DOSType
+    # SFS\0, which is why it was chosen. It is not enough: booted with such a
+    # partition present, the system lists only SDCARD0P0 and no device node
+    # appears for the second one at all.
+    #
+    # The supported path is an RDB nested inside the MBR.
+    # rom/partition/partitionrdb.c:198 will only look for a RigidDiskBlock
+    # inside an MBR partition of type 0x30 or 0x76, and the Amiga-side DOSType
+    # then comes from the RDB's partition blocks rather than from the MBR type
+    # byte. Writing that RDB -- RigidDiskBlock plus PartitionBlocks, with
+    # checksums -- is what remains.
+    if [ "${BELLATRIX_SFS:-0}" = 1 ]; then
+        FATSECTORS=$(( 128 * 1024 * 1024 / 512 ))
+        sfdisk -q "$OUT" >/dev/null <<EOF
+label: dos
+unit: sectors
+start=2048, size=$FATSECTORS, type=c, bootable
+start=$(( 2048 + FATSECTORS )), type=2f
+EOF
+        echo "[sd] second partition: SFS (type 0x2f), unformatted"
+    else
+        sfdisk -q "$OUT" >/dev/null <<'EOF'
 label: dos
 unit: sectors
 start=2048, type=c, bootable
 EOF
+    fi
 
     # @@1M is the mtools offset to the partition at LBA 2048.
-    SECTORS=$(( ($(stat -c%s "$OUT") / 512) - 2048 ))
+    if [ "${BELLATRIX_SFS:-0}" = 1 ]; then
+        SECTORS=$FATSECTORS
+    else
+        SECTORS=$(( ($(stat -c%s "$OUT") / 512) - 2048 ))
+    fi
     mformat -i "$OUT@@1M" -F -v AROS -T "$SECTORS" ::
 fi
 
