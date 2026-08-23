@@ -51,4 +51,6 @@ Stack 1048576
 Echo >DEBUG: "[gl-probe] --- stack now:"
 Stack >DEBUG:
 
-Echo >DEBUG: "[gl-probe] --- done (controls only)"
+Echo >DEBUG: "[gl-probe] --- running glinfo (startup trace on)"
+SYS:Extras/Demos/GL/glinfo >NIL: <NIL:
+Echo >DEBUG: "[gl-probe] --- glinfo returned"

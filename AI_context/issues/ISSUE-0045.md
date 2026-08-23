@@ -441,7 +441,64 @@ So: the macro-level plumbing is right, and the target has simply never been
 exercised. That is a reason to keep reading the source at the point of failure
 rather than a reason to suspect any particular line.
 
+# Located: OpenLibrary("mesa3dgl20-0.library") from inside gl.library (2026-08-23)
+
+Instrumented downward, each step narrowing the last, with `bug()` on the raw
+serial so nothing depends on DOS or on redirection:
+
+1. **`PROGRAM_ENTRIES`** (`patches/aros/0037`, new trace). glinfo climbs to
+   entry 3 and never returns. Resolved by symbol spacing against the binary
+   (`fromwb`->`stdiowin` = 0x18A, `fromwb`->`initexit` = 0xBC): entry 3 is
+   **`__startup_initexit`**.
+2. **Inside it**, `set_call_funcs()` is never reached -- so it stops in
+   `set_open_libraries()`, the first thing it does. That also explains why
+   constructors added at ADD2INIT priority 110 and -110 never printed: the INIT
+   set is never called at all.
+3. **`libraries.c`'s own trace**, switched on, names the library:
+
+        [Autoinit] Opening libraries...
+        [Autoinit] gl.library version 0...
+
+   and never the address that follows. `OpenLibrary("gl.library", 0)` does not
+   return.
+4. **gl.library's own trace**, switched on, goes all the way through its
+   init -- `dos.library`, the ENV: notification process, `StartNotify` on
+   `RAM Disk:ENV/sys/GL`, reading the variable -- and stops on the last line
+   it prints:
+
+        [GL] GetGLVar: using 'mesa3dgl20-0.library' for mesa3dgl20-0
+        [GL] GL_1_Gl_LibOpen()
+        [GL] GL_1_Gl_LibOpen: Attempting to use 'mesa3dgl20-0.library' version 0
+
+So the whole failure is one call: **`OpenLibrary("mesa3dgl20-0.library", 0)`,
+made from inside gl.library's LibOpen, which is itself inside
+`OpenLibrary("gl.library")`, which is inside the program's autoinit.**
+
+## Why that is interesting rather than obvious
+
+The same open, made plainly from the shell, **works**: `Version
+mesa3dgl20-0.library` in `gl-probe` costs 19 seconds -- the 10 MB load -- and
+completes. Nested inside another library's open it does not, and QEMU sits at
+380% host CPU throughout, so whatever this is, it is not an idle wait on a
+semaphore.
+
+Not yet distinguished: hung, or merely far slower in this context. The plain
+open is bounded and measured; this one has been given five minutes.
+
 ## Next
+
+1. Give the nested open a much longer window and find out whether it ever
+   returns. Everything else depends on the answer, and it is one run.
+2. If it returns: this is a performance problem in a nested disk-library open,
+   not a GL problem, and the demos work by waiting.
+3. If it does not: compare what is different about the nested path -- ramlib
+   re-entry while the outer open is in progress is the obvious candidate, and
+   it would be a defect that has nothing to do with GL.
+4. Retire the earlier "find what writes onto the stack" line for glinfo: it
+   never reaches its own code, so nothing of glinfo writes anything. That
+   observation belongs to gears, which is a separate failure and still open.
+
+## Superseded
 
 1. Find what writes onto the stack. This is now a memory-corruption hunt in
    GLUT/Mesa startup, not a GL driver problem: `mungwall` and `stacksnoop`

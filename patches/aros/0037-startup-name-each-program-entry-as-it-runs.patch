@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 23 Aug 2026 23:30:00 -0300
+Subject: [PATCH 37/37] startup: name each program entry as it runs
+
+ISSUE-0045: a program stops between its library autoinit -- which a RamLib
+trace shows completing, down to stdcio, z1 and posixc -- and its first
+init-set call. Nothing inside the program is ever reached, so nothing inside
+the program can report it: markers on the first line of main() and on
+constructors at both ends of the priority range have never printed, and a
+control program linked the same way proves that is not the instrument.
+
+PROGRAM_ENTRIES is the ladder between those two points. __startup_fromwb,
+__startup_stdiowin, __initcommandline, __stdc_startup, __startup_initexit and
+finally __startup_main, each one calling the next through
+___startup_entries_next(). An entry that never calls the next stops the program
+with no diagnosis at all, which is exactly what is being seen.
+
+So name each one as it is entered, and say when it comes back. Addresses rather
+than names, because there are none here; resolve them with addr2line against
+the program.
+
+Diagnostic, and loud: one line per startup entry per program. Carried only
+while ISSUE-0045 is open.
+---
+--- a/compiler/autoinit/programentries.c
++++ b/compiler/autoinit/programentries.c
+@@ -4,9 +4,33 @@
+     Desc: autoinit library - functions for handling the PROGRAM_ENTRIES symbolset
+ */
+ #include <aros/symbolsets.h>
++#include <aros/debug.h>
+ 
+ DEFINESET(PROGRAM_ENTRIES);
+ 
++/*
++ * Say which startup entry is about to run.
++ *
++ * ISSUE-0045: a program stops between its library autoinit -- which a RamLib
++ * trace shows completing -- and its first init-set call, and nothing inside
++ * the program is ever reached, so nothing inside the program can report it.
++ * Markers on the first line of main() and on constructors at both ends of the
++ * priority range have never printed, and a control program proves that is not
++ * the instrument.
++ *
++ * This set is the ladder between those two points: __startup_fromwb,
++ * __startup_stdiowin, __initcommandline, __stdc_startup, __startup_initexit
++ * and finally __startup_main, each one calling the next. An entry that never
++ * calls the next stops the program with no diagnosis at all, which is exactly
++ * what is being seen. Naming each one as it is entered turns that into a line.
++ *
++ * The address is printed rather than a name because there is none to print
++ * here; resolve it with addr2line against the program.
++ *
++ * Diagnostic. It costs one serial line per startup entry per program, which is
++ * loud, and it is meant to be carried only while this is open.
++ */
++
+ static int __startup_entry_pos;
+ 
+ void __startup_entries_init(void)
+@@ -19,9 +43,13 @@
+     void (*entry_func)(struct ExecBase *SysBase);
+  
+     entry_func = SETNAME(PROGRAM_ENTRIES)[__startup_entry_pos];
++    bug("[startup] entry %d @ 0x%p\n", __startup_entry_pos, entry_func);
+     if (entry_func)
+     {
+         __startup_entry_pos++;
+         entry_func(SysBase);
++        bug("[startup] entry %d returned\n", __startup_entry_pos - 1);
+     }
++    else
++        bug("[startup] end of entries\n");
+ }
+--- a/compiler/autoinit/functions.c
++++ b/compiler/autoinit/functions.c
+@@ -4,7 +4,18 @@
+     Desc: autoinit library - functions sets handling
+ */
+ 
+-#define DEBUG 0
++/*
++ * On, for ISSUE-0045.
++ *
++ * __startup_initexit is entered and never returns -- established by naming
++ * each PROGRAM_ENTRIES member as it runs -- so the program stops inside one of
++ * the INIT set's functions, before any constructor this repository added at
++ * priority 110 could run. This file already had the trace for that; it was
++ * only switched off.
++ *
++ * Loud: one line per set element per program. Carried only while that is open.
++ */
++#define DEBUG 1
+ 
+ #include <aros/symbolsets.h>
+ #include <aros/debug.h>
+--- a/compiler/autoinit/libraries.c
++++ b/compiler/autoinit/libraries.c
+@@ -4,6 +4,22 @@
+     Desc: autoinit library - automatic library opening/closing handling
+ */
+ 
++/*
++ * On, for ISSUE-0045.
++ *
++ * __startup_initexit is entered and never returns, and it never reaches
++ * set_call_funcs() either -- so it stops inside set_open_libraries(), the
++ * first thing it does. This file already names each library before opening
++ * it; the trace was only switched off.
++ *
++ * RamLib's own trace cannot answer this: it logs what ramlib loads from disk,
++ * and a library already resident opens without passing through it, so the
++ * order seen there is not the order asked for.
++ *
++ * Loud: two lines per library per program. Carried only while that is open.
++ */
++#define DEBUG 1
++
+ #include <aros/debug.h>
+ #include <proto/exec.h>
+ #include <dos/dos.h>
+--- a/workbench/libs/gl/gl_init.c
++++ b/workbench/libs/gl/gl_init.c
+@@ -3,6 +3,19 @@
+ */
+ 
+ //#define DEBUG 1
++/*
++ * On, for ISSUE-0045.
++ *
++ * OpenLibrary("gl.library", 0) is entered and never returns -- established by
++ * naming each library as the autoinit set opens it. Everything below this line
++ * is inside that call: opening dos.library, creating a process for filesystem
++ * notification on ENV:SYS/GL.default, starting that notification, reading the
++ * variable, and then LibOpen opening whatever it names.
++ *
++ * Each of those already prints. Turning it on says which one is the last.
++ */
++#define DEBUG 1
++
+ #include <aros/debug.h>
+ 
+ #include <proto/exec.h>
