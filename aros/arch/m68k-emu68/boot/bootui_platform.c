@@ -35,6 +35,19 @@ static struct
     ULONG width;
     ULONG height;
     ULONG depth;
+    /*
+     * How many times a driver has said this. Not a value to compare against
+     * the last one -- a count of statements made.
+     *
+     * Programming a mode clears the surface before publishing it, and a driver
+     * may well re-publish the same address at the same geometry: same page,
+     * same pitch, contents gone. Comparing the values then says "nothing
+     * changed" about a surface that has just been wiped, and whoever was
+     * drawing there stops repainting a picture that is no longer on screen.
+     * That is how the boot presentation ended up as a clock on a black field
+     * for the whole hold.
+     */
+    ULONG generation;
 } scanout;
 
 static struct ScanoutResource scanout_resource;
@@ -47,6 +60,7 @@ static void scanout_publish(APTR framebuffer, ULONG pitch, ULONG width,
     scanout.width       = width;
     scanout.height      = height;
     scanout.depth       = depth;
+    scanout.generation++;
 }
 
 static BOOL scanout_current(APTR *framebuffer, ULONG *pitch, ULONG *width,
@@ -77,12 +91,12 @@ int bootui_platform_scanout_changed(void **framebuffer, uint32_t *pitch,
                                     uint32_t *width, uint32_t *height,
                                     uint32_t *depth)
 {
-    static APTR seen;
+    static ULONG seen;
 
-    if (!scanout.framebuffer || scanout.framebuffer == seen)
+    if (!scanout.framebuffer || scanout.generation == seen)
         return 0;
 
-    seen         = scanout.framebuffer;
+    seen         = scanout.generation;
     *framebuffer = scanout.framebuffer;
     *pitch       = scanout.pitch;
     *width       = scanout.width;

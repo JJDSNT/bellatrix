@@ -175,7 +175,43 @@ static void vcgfx_bootui_released(void)
     if (data->VideoData == (UBYTE *)(IPTR)xsd->vcsd_FBPage[xsd->vcsd_FBFront])
         return;
 
-    vc4_fb_flip(xsd);
+    /*
+     * Publish by moving the scanout, where that is real.
+     *
+     * vc4_hvs_flip_page() rewrites the fb plane's pointer in the live display
+     * list and the hardware latches it at frame start. SETVOFFSET is the
+     * fallback and it cannot be trusted: QEMU's firmware emulation stores the
+     * value and hands it back, so the round-trip test at mode-set time passes
+     * while the display never moves.
+     */
+    if (xsd->vcsd_HVS.hvs_Active && vc4_fb_flip(xsd))
+        return;
+
+    /*
+     * Otherwise publish by copying, which is what fbgfx does and works
+     * wherever memory does.
+     *
+     * One pass over the framebuffer puts the finished desktop on the page
+     * being scanned out; rendering then goes back to that page, so everything
+     * drawn afterwards -- a screen title bar finishing late, the first mouse
+     * move -- lands where it can be seen. That is why this needs no settling
+     * period and no second copy: after it, what is rendered is what is shown,
+     * which is the same property the flip has.
+     */
+    {
+        ULONG front = xsd->vcsd_FBPage[xsd->vcsd_FBFront];
+        struct TagItem btags[] =
+        {
+            { xsd->vcsd_attrBases[2] + aoHidd_ChunkyBM_Buffer, front },
+            { TAG_DONE, 0 }
+        };
+
+        CopyMem(data->VideoData, (APTR)(IPTR)front,
+                data->bytesperrow * data->height);
+
+        data->VideoData = (UBYTE *)(IPTR)front;
+        OOP_SetAttrs(xsd->vcsd_FBObj, btags);
+    }
 }
 
 /*
@@ -195,25 +231,12 @@ static BOOL vcgfx_assemble_offscreen(struct VideoCoreGfx_staticdata *xsd,
         return FALSE;
 
     /*
-     * Only claim this when the flip really moves the scanout.
-     *
-     * Two pages are not enough. The SETVOFFSET path is accepted by QEMU's
-     * firmware emulation -- the round-trip test at mode-set time passes,
-     * because the value is stored and handed back -- and the display does not
-     * follow it. Rendering then lands on the page that is being scanned out
-     * after all, and the presentation would sit on top of a desktop assembling
-     * in plain sight: worse than not holding, and it would be claimed as
-     * working.
-     *
-     * The HVS path does move it: vc4_hvs_flip_page() rewrites the fb plane's
-     * pointer in the live display list and the hardware latches it at frame
-     * start. So the capability is exactly hvs_Active -- this driver owning the
-     * display list -- and on a machine without an HVS the presentation ends at
-     * the mode change as it did before.
+     * All this needs is somewhere out of sight to draw. Whether the finished
+     * screen is then published by moving the scanout or by copying it is
+     * decided at release time -- see vcgfx_bootui_released() -- because only
+     * one of the two can be trusted on any given machine and neither changes
+     * what happens here.
      */
-    if (!xsd->vcsd_HVS.hvs_Active)
-        return FALSE;
-
     back = vc4_fb_backpage(xsd);
     if (!back)
         return FALSE;
@@ -745,6 +768,21 @@ IPTR MNAME_ROOT(Set)(OOP_Class *cl, OOP_Object *o, struct pRoot_Set *msg)
                         (int)aligned_width, (int)height, (int)data->bpp,
                         fb_ptr, (int)fb_pitch, (int)result));
 
+#ifdef __EMU68__
+                    /*
+                     * The reprogram above put rendering back on the page being
+                     * scanned out. This is the path Wanderer's screen takes --
+                     * gfx.hidd switches the mode through SetAttrs on us -- so
+                     * without redoing it here the desktop assembles in plain
+                     * sight and the retarget done in New() is silently undone.
+                     */
+                    if (vcgfx_assemble_offscreen(xsd, o, data))
+                        bug("[VideoCoreGfx] assembling off-scanout (front page"
+                            " 0x%p, rendering to 0x%p) so the boot presentation"
+                            " can stay\n",
+                            (APTR)(IPTR)xsd->vcsd_FBPage[xsd->vcsd_FBFront],
+                            data->VideoData);
+#endif
                     vc4_restore_cursor(xsd);
                     return result;
                 }
