@@ -142,3 +142,41 @@ while ISSUE-0045 is open.
  #include <aros/debug.h>
  
  #include <proto/exec.h>
+@@ -141,13 +154,32 @@
+ 
+     D(bug("[GL] %s()\n", __func__));
+ 
+-    while (TRUE)
+     {
+-        WaitPort (&pr->pr_MsgPort);
+-        while ((msg = GetMsg (&pr->pr_MsgPort)))
+-            ReplyMsg(msg);
++        ULONG rounds = 0;
++
++        while (TRUE)
++        {
++            WaitPort (&pr->pr_MsgPort);
++            while ((msg = GetMsg (&pr->pr_MsgPort)))
++                ReplyMsg(msg);
++
++            /*
++             * ISSUE-0045. StartNotify is armed with NRF_NOTIFY_INITIAL, so one
++             * notification arrives immediately; this loop then reads the same
++             * variable it is watching. If reading it re-arms the notification,
++             * this spins forever, and the program that started it -- still
++             * inside OpenLibrary("gl.library") -- never gets its open finished.
++             * That would match what is seen: the open never returns, and the
++             * machine burns CPU rather than waiting on anything.
++             *
++             * Count the rounds and say so. One notification is normal; a
++             * thousand is the answer.
++             */
++            if (++rounds <= 8 || (rounds % 1000) == 0)
++                bug("[GL] EnvNotify: round %u\n", rounds);
+ 
+-        GetGLVar(base, "SYS/GL", &GLB(base)->glb_GLImpl);
++            GetGLVar(base, "SYS/GL", &GLB(base)->glb_GLImpl);
++        }
+     }
+ }
+ 

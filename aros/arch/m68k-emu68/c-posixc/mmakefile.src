@@ -15,4 +15,10 @@ include $(SRCDIR)/config/aros.cfg
     progname=SerialSayP files=SerialSayP targetdir=$(AROS_C) \
     coverageinstr=no
 
+#MM- workbench-c-emu68-openmesa : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-openmesa \
+    progname=OpenMesa files=OpenMesa targetdir=$(AROS_C) \
+    coverageinstr=no
+
 %common

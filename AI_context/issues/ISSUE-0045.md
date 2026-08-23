@@ -474,7 +474,52 @@ So the whole failure is one call: **`OpenLibrary("mesa3dgl20-0.library", 0)`,
 made from inside gl.library's LibOpen, which is itself inside
 `OpenLibrary("gl.library")`, which is inside the program's autoinit.**
 
-## Why that is interesting rather than obvious
+## It is not GL at all: a bare OpenLibrary of mesa3dgl never returns
+
+`C:OpenMesa` (`aros/arch/m68k-emu68/c-posixc/OpenMesa.c`) does one thing: takes
+a library name, calls `OpenLibrary(name, 0)`, and says what came back. No GL,
+no gl.library, no nesting -- its own startup completes visibly, INIT sets and
+all, before it makes the call.
+
+    [openmesa] opening 'gallium.library'         18 KB  -> 0x02540e34, v4.0
+    [openmesa] opening 'freetype2.library'      574 KB  -> 0x02587e04, v6.10
+    [openmesa] opening 'tiff.library'           496 KB  -> 0x028c1c2c, v50.4
+    [openmesa] opening 'mesa3dgl20-0.library'    10 MB  -> never returns
+
+So the demos do not fail because of GL, or Gallium, or a driver, or nesting, or
+the boot presentation. **A 10 MB disk library cannot be opened on this port**,
+and everything above it in this issue is downstream of that.
+
+Both demos reach exactly this call and no further: glinfo and gears are the
+same failure, which had not been established until now.
+
+### What this retires
+
+- **The nesting theory**, and the measurement it rested on. `Version
+  mesa3dgl20-0.library` costing 19 seconds was read as "the same open works
+  plainly". `Version` does not have to open a library to answer -- it can read
+  the version string out of the file, and 19 seconds is about what reading
+  10 MB costs. That comparison was never an `OpenLibrary`.
+- **The notification livelock.** gl.library arms `StartNotify` with
+  `NRF_NOTIFY_INITIAL` and its notify process re-reads the variable it watches,
+  which looked like a loop that could spin. Counting the rounds settles it: the
+  process prints its entry and then sits in `WaitPort` for ever. Zero rounds.
+- **glu.library as a size control.** It hangs too, but it depends on
+  gl.library, so it went straight back to the same call. freetype2 and tiff are
+  the same order of size, depend on nothing here, and both open.
+
+### What is still open
+
+Whether the 10 MB open is stuck or merely far slower than anything else has
+been given ten minutes at 390% host CPU, against 574 KB opening promptly. It is
+not an idle wait: something is executing.
+
+The next place to look is the loader itself -- `rom/dos/internalloadseg_elf.c`
+-- which already carries `D()` traces through section reading and relocation.
+Whether it is crawling through relocations or looping in one is one build away,
+and the reproducer is now a single command with no graphics in it.
+
+## Why the nesting looked interesting (superseded)
 
 The same open, made plainly from the shell, **works**: `Version
 mesa3dgl20-0.library` in `gl-probe` costs 19 seconds -- the 10 MB load -- and

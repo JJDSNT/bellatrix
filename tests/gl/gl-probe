@@ -51,6 +51,20 @@ Stack 1048576
 Echo >DEBUG: "[gl-probe] --- stack now:"
 Stack >DEBUG:
 
-Echo >DEBUG: "[gl-probe] --- running glinfo (startup trace on)"
-SYS:Extras/Demos/GL/glinfo >NIL: <NIL:
-Echo >DEBUG: "[gl-probe] --- glinfo returned"
+; One plain OpenLibrary, nothing else in the way.
+; Is it any disk library, or this one? glu.library is 580 KB and gallium.library
+; is 18 KB; mesa3dgl20-0.library is 10 MB. Same call, three sizes.
+Echo >DEBUG: "[gl-probe] --- OpenMesa gallium.library (18 KB)"
+OpenMesa gallium.library >NIL: <NIL:
+; glu.library was a bad control: it depends on gl.library, so it went straight
+; back to the same call. freetype2 is the same order of size and depends on
+; nothing here.
+Echo >DEBUG: "[gl-probe] --- OpenMesa freetype2.library (574 KB)"
+OpenMesa freetype2.library >NIL: <NIL:
+Echo >DEBUG: "[gl-probe] --- OpenMesa tiff.library (496 KB)"
+OpenMesa tiff.library >NIL: <NIL:
+Echo >DEBUG: "[gl-probe] --- OpenMesa mesa3dgl20-0.library (10 MB)"
+Date >DEBUG:
+OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+Date >DEBUG:
+Echo >DEBUG: "[gl-probe] --- OpenMesa returned"
