@@ -375,6 +375,46 @@ at load time and nothing at call time. Not carried as a patch: it is unrelated
 to what gears actually does, and the Mesa rebuild it needs is not worth
 spending on a safety net while the real fault is open.
 
+## Reading the source instead of running it
+
+The build succeeding says nothing about whether anyone has ever run this
+combination. Big-endian m68k is a target Mesa's AROS port was not written for,
+so the plumbing was read rather than assumed.
+
+**Endianness is correctly detected, and this was checked rather than trusted.**
+`src/util/u_endian.h` has an `__AROS__` branch that keys off `AROS_BIG_ENDIAN`,
+which is `1` for this target (`arch/m68k-all/include/aros/cpu.h:17`), and the
+header ends in a `#error` if neither macro ends up defined -- so a target it
+did not recognise could not have built at all. `HAVE_ENDIAN_H`, which would
+shadow that branch, is not defined for this build. Gallium's `p_config.h` does
+no detection of its own; it includes `u_endian.h`.
+
+**But m68k is four lines of the whole port.** The AROS Mesa patch
+(`Ports/mesa/mesa-20.0.8-aros.diff`, 1197 lines, dated 2021) mentions m68k
+exactly once:
+
+    +#if defined(__mc68000__)
+    +#define PIPE_ARCH_M68K
+    +#endif
+
+That is the entire m68k adaptation. Everything else in that patch is about
+AROS as an OS -- and it was written for AROS on little-endian hosts.
+
+**And some of it is a stub, not a port.** Two worth naming, found while
+reading:
+
+    #define fpclassify(x) FP_NORMAL      /* include/c99_math.h */
+    #define pthread_sigmask(a,b,c)  (1)  /* include/c11/threads_posix.h */
+
+On AROS, Mesa can never detect a NaN or an infinity: `fpclassify` answers
+"normal" for every value. That is not an endianness problem and not obviously
+this bug, but it is the shape of thing this port is made of, and it is the
+answer to "it built, so it works".
+
+So: the macro-level plumbing is right, and the target has simply never been
+exercised. That is a reason to keep reading the source at the point of failure
+rather than a reason to suspect any particular line.
+
 ## Next
 
 1. Find what writes onto the stack. This is now a memory-corruption hunt in
