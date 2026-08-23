@@ -508,6 +508,42 @@ same failure, which had not been established until now.
   gl.library, so it went straight back to the same call. freetype2 and tiff are
   the same order of size, depend on nothing here, and both open.
 
+### It is stuck inside a 180-byte read
+
+The ELF loader was traced (`patches/aros/0037`, `DEBUG 1` in
+`rom/dos/internalloadseg_elf.c`). Loading mesa3dgl means **6844
+`elf_read_block` calls and 4145 hunks** -- Mesa is built with
+`-ffunction-sections`, so the library has thousands of sections and most of the
+reads are tiny (12, 24, 36, 180 bytes).
+
+That looked at first like a duration problem: 21455 trace lines in the first
+45 seconds, and the file offsets climbing to 96%. It is not. Given 25 minutes:
+
+- the log stops growing entirely at **26167 lines**;
+- `elf_read_block` calls stop at **8363**, and stay there -- zero in a
+  measured 121-second window;
+- QEMU sits at **391% host CPU** for the whole time, so it is executing, not
+  waiting;
+- the last line is `elf_read_block (offset=8928, size=180)`, entered and never
+  returned.
+
+**A 180-byte read at a low offset does not come back.** Everything above this
+in the issue -- GL, Gallium, nesting, the boot presentation, the stack -- is
+downstream of a read that wedges. Small libraries load because they make few
+enough reads not to reach it; freetype2 at 574 KB is fine, and mesa3dgl at
+10 MB is not.
+
+That moves this out of graphics entirely and into the storage path: DOS Read,
+the FAT handler, the SD driver. It is also, unlike everything else tried here,
+territory this repository patches -- `0003` and `0024` on sdcard, `0027` on
+sdhost, `0006`/`0008`/`0023` on FAT.
+
+Checked and cleared so far: `0024` reports the PIO data loop's cost **per
+megabyte, not per transfer**, precisely so the instrument does not change what
+it measures, and it prints nothing in these runs. The FAT handler does cache
+FAT blocks (`fat_cache_block` in `rom/filesys/fat/fat.c`), so a seek is not
+re-reading the table from the card.
+
 ### What is still open
 
 Whether the 10 MB open is stuck or merely far slower than anything else has

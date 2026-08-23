@@ -180,3 +180,23 @@ while ISSUE-0045 is open.
      }
  }
  
+--- a/rom/dos/internalloadseg_elf.c
++++ b/rom/dos/internalloadseg_elf.c
+@@ -4,6 +4,17 @@
+     Desc: Code to dynamically load ELF executables
+ */
+ 
++/*
++ * On, for ISSUE-0045.
++ *
++ * OpenLibrary("mesa3dgl20-0.library") never returns, while libraries of
++ * 574 KB open promptly, and the machine executes rather than waits. The load
++ * is the only thing between those two facts, and this file already reports
++ * every phase of it -- sections, allocations, relocations. DEBUG 1 leaves the
++ * per-symbol DB2() trace off, which would be one line per relocation.
++ */
++#define DEBUG 1
++
+ #include <aros/debug.h>
+ 
+ #include <proto/dos.h>
