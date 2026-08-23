@@ -52,9 +52,11 @@ Echo >DEBUG: "[gl-probe] --- stack now:"
 Stack >DEBUG:
 
 ; One plain OpenLibrary, nothing else in the way.
-; Only the big one, and time it. The loader trace showed it 93% through the
-; file when a 300-second run was cut off, so this is a duration, not a hang.
-Echo >DEBUG: "[gl-probe] --- OpenMesa mesa3dgl20-0.library (10 MB)"
+; Only the big one, and time it -- with no loader trace in the way. The last
+; attempt ran with DEBUG 1 in internalloadseg_elf.c, which writes thousands of
+; lines through the raw serial, and "the log stopped growing" cannot be told
+; from "the serial stopped accepting" when the serial is what is being flooded.
+Echo >DEBUG: "[gl-probe] --- OpenMesa mesa3dgl20-0.library (10 MB), quiet"
 Date >DEBUG:
 OpenMesa mesa3dgl20-0.library >NIL: <NIL:
 Date >DEBUG:
