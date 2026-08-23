@@ -1,0 +1,23 @@
+.KEY x
+.BRA {
+.KET }
+;
+; Sequential read, buffer sweep -- descending, then the smallest again.
+;
+; The ascending sweep gave 824 KB/s at 4 KB and 12452 KB/s at 64 KB, which
+; looks like sec.7's "fails to benefit from larger requests" case. It could
+; equally be sec.13's cold-versus-warm, since the 4 KB pass was simply first.
+;
+; Descending puts the largest buffer on the cold pass. Repeating 4 KB at the
+; end puts the smallest on the warmest one. If 4 KB is slow both times and
+; 64 KB is fast both times, the buffer size is the variable; if the first pass
+; is slow whatever its size, the cache is.
+;
+Echo >DEBUG: "[sdbench] descending sweep, then 4KB again"
+SDBench LIBS:mesa3dgl20-0.library 256 >DEBUG:
+SDBench LIBS:mesa3dgl20-0.library 64 >DEBUG:
+SDBench LIBS:mesa3dgl20-0.library 16 >DEBUG:
+SDBench LIBS:mesa3dgl20-0.library 4 >DEBUG:
+SDBench LIBS:mesa3dgl20-0.library 64 >DEBUG:
+SDBench LIBS:mesa3dgl20-0.library 4 >DEBUG:
+Echo >DEBUG: "[sdbench] done"

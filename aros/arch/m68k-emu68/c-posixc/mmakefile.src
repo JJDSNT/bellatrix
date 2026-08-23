@@ -21,4 +21,10 @@ include $(SRCDIR)/config/aros.cfg
     progname=OpenMesa files=OpenMesa targetdir=$(AROS_C) \
     coverageinstr=no
 
+#MM- workbench-c-emu68-sdbench : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-sdbench \
+    progname=SDBench files=SDBench targetdir=$(AROS_C) \
+    coverageinstr=no
+
 %common
