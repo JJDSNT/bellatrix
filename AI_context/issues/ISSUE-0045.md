@@ -333,9 +333,54 @@ Not established: that this is what happens. What is established is that the
 table is zero until bound, that nothing stops a trampoline being called before
 then, and that the failure mode of doing so matches what gears does.
 
+## The driver is not involved, and gears is executing its own stack
+
+Two facts from the same run, with the serial free and the trap reporter fixed:
+
+**`vc4gallium.hidd` is never loaded.** Not one `[VC4Gallium]` line appears,
+and its `InitLib` opens with an unconditional `bug()`. So `CreatePipe` is never
+reached, no Gallium driver is chosen, and the GalliumCoreAPI trampolines --
+which live in the driver -- cannot be involved in this crash at all. gears
+fails before it asks for a GL context.
+
+**The CPU is executing the stack.** In the open-bus report:
+
+    m68kPC 02003d40   A7 02003d34
+
+The program counter is **twelve bytes above the stack pointer**. That is not a
+wild pointer into unrelated memory; it is the machine running code out of its
+own stack, which is what a smashed return address looks like.
+
+**And it is not the stack's size.** `CreateNewProc` inherits
+`cli_DefaultStack` whenever it exceeds `AROS_STACKSIZE`
+(`rom/dos/createnewproc.c:139-145`), so the `Stack 1048576` set before the
+launch does reach a `Run`-launched process. gears runs with a megabyte and
+smashes it anyway. Something writes past a buffer, or through a bad pointer,
+onto the stack.
+
+## Worth doing regardless, though it is not this bug
+
+`gca_bind()` fills the consumer table only after every check passes and returns
+without filling anything if one fails, so until then every slot is whatever the
+table started as -- and it lives in BSS, so that is **zero**. The trampolines
+then tail-jump through a null pointer.
+
+On ARM and aarch64 that faults at once. Here it does not: this port maps the
+low page -- 68k vectors and AbsExecBase -- DIRECT, so the CPU executes the
+vector table instead of faulting. A design that relies on null faulting stops
+working, silently, on a target where null is readable.
+
+Pointing every slot at a stub that reports would cost one relocation per slot
+at load time and nothing at call time. Not carried as a patch: it is unrelated
+to what gears actually does, and the Mesa rebuild it needs is not worth
+spending on a safety net while the real fault is open.
+
 ## Next
 
-1. Resolve `pc=0202012e` to a module. It is in the heap, so it needs the load
+1. Find what writes onto the stack. This is now a memory-corruption hunt in
+   GLUT/Mesa startup, not a GL driver problem: `mungwall` and `stacksnoop`
+   both exist and neither has been tried on this.
+2. Resolve `pc=0202012e` to a module. It is in the heap, so it needs the load
    address of whatever is mapped there -- the `RamLib`/`LoadSeg` trace can
    give it.
 2. Find where the render target's base comes from and why it is not the
