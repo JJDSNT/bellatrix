@@ -169,10 +169,48 @@ filesystem split requests. They are not: `rom/devs/sdcard/sdcard_bus.c:494`
 declares `DE_MAXTRANSFER = 0x00200000` -- 2 MB -- and `DE_MASK = 0x7FFFFFFE`.
 Both are more generous than the working ArosOne disk's `0x1fe00`.
 
+### QEMU does not need the FAT partition at all
+
+`run.sh` passes `-kernel Emu68.img -dtb ... -initrd aros-emu68-m68k.elf`. **The
+Pi firmware never runs under QEMU**, so nothing reads `config.txt` and nothing
+requires a FAT partition. The card is attached purely as a block device for
+AROS, and Emu68 gets its m68k ELF from `-initrd`.
+
+That means the legacy shape is available here: a whole-disk RDB, no MBR. It
+also means the card could carry two RDB partitions -- one for SYS: and one for
+SFS -- which is the cleanest way to fill rows B and D of the matrix.
+
+Built and verified with rdbtool, though not yet booted:
+
+    Partition: #0 'DH0'   50.00%  FAT2/0x46415402
+    Partition: #1 'DH1'   50.00%  SFS0/0x53465300
+    FileSystem #0 SFS0/0x53465300 version=1.86 size=135328
+
+DH0 takes DOSType `FAT\2` so `mformat`/`mcopy` can write it from the host and
+this port's own `fat_handler` can mount it. What stopped the attempt was
+populating DH0: `mcopy` into a partition at an offset flattened the tree, and
+chasing that was not worth more of the session.
+
+### The other shape, from Emu68 itself
+
+Emu68's own SD layout is reported to be **FAT with a nested RDB**, which is
+exactly what was tried first (MBR type 0x30 + RDB) and did not mount. That
+makes the nested case more likely to be workable than the survey of legacy
+disks suggested -- none of those had an MBR at all -- and it moves suspicion to
+the RDB's own geometry, since rdbtool wrote it as though it were a standalone
+disk rather than a region inside a partition.
+
 ### Next
 
-The method that has worked all session and has not been applied here yet:
-instrument downward. Whether `PartitionMBROpenPartitionTable` produces a
+Two experiments, either of which closes this:
+
+1. Instrument downward, the method that has worked everywhere else this
+   session and has not been pointed here: does `PartitionMBROpenPartitionTable`
+   make a handle for the type 0x30 entry, and does `bootscan.c` call
+   `OpenPartitionTable` on it?
+2. Compare our nested RDB against a real Emu68 card's, field by field. If the
+   difference is geometry expressed relative to the wrong origin, it will show
+   there immediately. Whether `PartitionMBROpenPartitionTable` produces a
 handle for the 0x30 partition at all, and whether `bootscan.c` calls
 `OpenPartitionTable` on it, is two `bug()` calls away.
 
