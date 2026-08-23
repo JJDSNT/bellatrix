@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0049
 title: "The boot presentation starts its clock late and ends before the icons"
-status: open
+status: doing
 priority: medium
 type: bug
 owner: unassigned
@@ -22,6 +22,63 @@ related_files:
 ---
 
 # Summary
+
+## 1 fixed, 2 mechanised but unverified on hardware (2026-08-23)
+
+**The clock is fixed.** `patches/emu68/0011` reads the SoC's free-running
+microsecond counter at the instant the first m68k instruction runs and hands it
+over in D3, with a magic in D4 so a stock Emu68's leftover registers cannot be
+mistaken for an origin. `bootui_clock_start()` keeps the first origin it is
+given, so the timer driver's call became a fallback rather than a silent
+replacement. At the same retarget the clock reads 00:04.9 where it read 00:03.6.
+
+Measured on the way: `platform_init` and `systimer_init` are 30ms apart, so
+moving the origin to the earliest point AROS can reach by itself would have
+recovered nothing. The counter already reads ~1.9s by then. Only Emu68 could
+answer this.
+
+**The hold now has a mechanism, and it is honest about when it works.**
+
+The old code ended the presentation at `BOOTUI_STAGE_DESKTOP` whenever
+`bootui_direct_scanout` was set -- and that flag was set by *any* retarget. Two
+mistakes at once: a retarget says the surface moved, not that the driver renders
+into it; and being set by every driver made the icons path unreachable on all of
+them. That is why `BOOTUI_STAGE_ICONS` never appeared to arrive: it did arrive,
+at a presentation that had already given up.
+
+Replaced by a capability the driver states. `struct BootUIResource` gained
+`active()` -- "is the presentation still on the display?", which a driver asks
+so it can decide *where* to assemble -- and `set_release_hook(hook, flags)`,
+which is the driver saying "if you hold, here is how to put the finished screen
+up". The presentation holds exactly when somebody has said they can finish it.
+`BOOTUI_RELEASE_INSTANT` distinguishes a driver that publishes what is being
+drawn (a scanout repoint: nothing to wait for) from one that publishes a copy
+(fbgfx: has to wait for the screen to settle, or it catches a title bar
+mid-draw).
+
+vcgfx implements it by pointing *rendering* at the framebuffer page that is not
+being scanned out, so Wanderer assembles a whole desktop out of sight, and the
+release is one flip. Verified end to end: `holding the display` ->
+`hold released: icons` -> `display takeover`, and the desktop that appears is
+complete -- title bar, wallpaper, both icons, no splash residue.
+
+### What is not verified, and why
+
+**Two framebuffer pages are not enough, and QEMU proves it by lying.** The
+mode-set code decides flipping is available by round-tripping SETVOFFSET, and
+QEMU's firmware emulation stores the value and hands it back without moving the
+display. A screendump taken mid-hold showed Wanderer's half-built desktop, not
+the presentation: rendering had landed on the scanned-out page after all.
+
+So the capability is gated on `vcsd_HVS.hvs_Active` -- this driver owning the
+display list, where `vc4_hvs_flip_page()` rewrites the plane pointer and the
+hardware latches it at frame start. Under QEMU there is no HVS, the hook is not
+registered, and the presentation ends at the mode change exactly as before,
+saying so: `display takeover: no driver can finish the desktop`.
+
+**Therefore the hold has never been seen working on a display that honours the
+flip.** It needs a Pi 3 with the HVS path active. Until then, treat the
+mechanism as built and the behaviour as unconfirmed.
 
 Two defects in the boot presentation, both about *when* rather than *what*.
 Neither affects correctness of the display; both make the presentation say

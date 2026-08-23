@@ -73,10 +73,58 @@
  */
 #define BOOTUI_STAGE_HANDOVER  0x45303237UL
 
+/*
+ * The hook publishes what is *being drawn*, not a copy of it -- so the screen
+ * does not have to stop changing first.
+ *
+ * A driver that publishes by copying has to wait for the desktop to settle:
+ * copying it mid-draw catches things like a screen title bar one character
+ * into its text, and nothing redraws that afterwards. A driver that publishes
+ * by pointing the scanout at the page already being rendered has no such
+ * moment -- whatever is drawn next simply appears. Saying so lets the
+ * presentation end on the icons instead of on a quiet period it does not need.
+ */
+#define BOOTUI_RELEASE_INSTANT  (1UL << 0)
+
 struct BootUIResource
 {
     struct Node node;
     void (*set_stage)(ULONG stage);
+
+    /*
+     * Is the boot presentation still on the display?
+     *
+     * A driver about to put a screen up asks this so it can decide *where* to
+     * assemble it. A driver that renders straight into the scanned-out
+     * surface, as this port's VideoCore driver does, would otherwise have
+     * Wanderer paint its half-built desktop over a presentation that is still
+     * showing -- and the presentation cannot cover it, because there is only
+     * one surface and they share it.
+     *
+     * The answer is a fact about the display, not an instruction. What the
+     * driver does with it is the driver's business.
+     */
+    BOOL (*active)(void);
+
+    /*
+     * "If you hold, here is how to put the finished screen up."
+     *
+     * A driver that can assemble a screen out of sight registers this and the
+     * presentation may then hold until the desktop is worth looking at. A
+     * driver that cannot -- one framebuffer, no way to build behind --
+     * registers nothing, and the presentation ends when the driver takes the
+     * display, because holding would mean covering a desktop nobody can
+     * repaint afterwards.
+     *
+     * So the hold is not guessed from a mode change or a retarget: it happens
+     * exactly when somebody has said they can finish it. The driver states a
+     * capability and never learns a boot lifecycle; this side keeps the
+     * policy and never learns a driver.
+     *
+     * Called from a task, never from the timer: the two callers are the icons
+     * signal, on Wanderer's task, and a driver's own Show().
+     */
+    void (*set_release_hook)(void (*hook)(void), ULONG flags);
 };
 
 /* Move the live early-boot UI to a framebuffer allocated by the display

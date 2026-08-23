@@ -130,7 +130,6 @@ static int bootui_wanderer_started;
  * presentation arriving after that must not start a second one.
  */
 static int bootui_holding_seen;
-static int bootui_direct_scanout;
 /*
  * Called to put the finished desktop up. Registered by the display driver and
  * invoked ONLY from bootui_set_stage(), which runs in the task that
@@ -139,6 +138,11 @@ static int bootui_direct_scanout;
  * that called it from there earned two "called in supervisor mode" alerts.
  */
 static void (*bootui_release_hook)(void);
+/*
+ * Whether that hook publishes what is being drawn rather than a copy of it.
+ * See BOOTUI_RELEASE_INSTANT in <aros/bootui.h>.
+ */
+static int bootui_release_instant;
 static void bootui_release(void);
 
 /*
@@ -566,7 +570,6 @@ void bootui_retarget(void *framebuffer, uint32_t pitch,
     bootui.width = width;
     bootui.height = height;
     bootui.depth = depth;
-    bootui_direct_scanout = 1;
 
     {
         uint32_t by_width = width / BOOT_IMAGE_WIDTH;
@@ -579,14 +582,25 @@ void bootui_retarget(void *framebuffer, uint32_t pitch,
             bootui.scale = 3;
     }
 
-    /* The mode change that opens Wanderer's screen is the hand-off point for
-     * a direct-scanout driver. Unlike fbgfx, vc4gfx has no private desktop
-     * buffer to build behind the splash: keeping the BootUI active here would
-     * make its timer repaint the clock over the live Workbench framebuffer. */
-    if (bootui_wanderer_started)
+    /*
+     * The mode change that opens Wanderer's screen.
+     *
+     * If nobody can put the finished desktop up, this is the hand-off point:
+     * a driver that renders straight into the scanned-out surface has no
+     * private buffer to build behind the presentation, and keeping it active
+     * would repaint the clock over a live Workbench that nothing would then
+     * repair.
+     *
+     * If a driver *has* said it can finish -- by registering a release hook,
+     * which for this port's VideoCore driver means it is assembling on the
+     * page that is not being scanned out -- then this is the opposite: the
+     * moment the presentation is most needed, because what is behind it is a
+     * desktop mid-assembly. Stay, and end on the icons.
+     */
+    if (bootui_wanderer_started && !bootui_release_hook)
     {
         fill_rect(0, 0, width, height, RGB565(0, 0, 0));
-        bootui_event("display takeover: vc4 mode");
+        bootui_event("display takeover: mode change, nothing can finish it");
         bootui.active = 0;
         return;
     }
@@ -830,6 +844,24 @@ void bootui_set_stage(uint32_t stage)
          */
         if (bootui_hold_active && !bootui_hold_armed)
         {
+            /*
+             * A driver that publishes by pointing has nothing to wait for: the
+             * page it makes visible is the one being drawn, so a title bar
+             * that finishes a moment later finishes on screen. Ending here is
+             * both correct and the earliest honest moment.
+             *
+             * This also runs on Wanderer's task, which the settle path does
+             * not -- that one is noticed by the timer and has to be collected
+             * by somebody in a task. fbgfx collects it in its refresh; a
+             * driver that renders straight into the scanout has no refresh to
+             * collect it in, so for those the hold would never end at all.
+             */
+            if (bootui_release_instant)
+            {
+                bootui_release_now("hold released: icons");
+                return;
+            }
+
             bootui_hold_armed = 1;
             bootui_event("hold armed: icons");
         }
@@ -848,9 +880,23 @@ void bootui_set_stage(uint32_t stage)
     bootui_platform_log("\n");
     draw_progress(progress, status);
     draw_clock();
-    if (stage == BOOTUI_STAGE_DESKTOP && bootui_direct_scanout)
+    /*
+     * Wanderer is starting. Whether the presentation can stay for it is not a
+     * property of this moment, it is whether anybody can put the finished
+     * desktop up afterwards -- so ask that, and ask it of the driver rather
+     * than inferring it.
+     *
+     * This used to end the presentation whenever a retarget had happened,
+     * which was two mistakes at once: a retarget says the surface moved, not
+     * that the driver renders into it; and it was set by *any* driver, so the
+     * icons the hold exists for were unreachable on every one of them. What is
+     * left is a driver that genuinely cannot assemble out of sight, and there
+     * ending here is right -- holding would cover a desktop nothing can
+     * repaint.
+     */
+    if (stage == BOOTUI_STAGE_DESKTOP && !bootui_release_hook)
     {
-        bootui_event("display takeover: direct scanout");
+        bootui_event("display takeover: no driver can finish the desktop");
         bootui.active = 0;
     }
 }
@@ -936,12 +982,25 @@ void bootui_clock_tick(uint32_t now_us)
     draw_clock();
 }
 
+static BOOL bootui_resource_active(void)
+{
+    return bootui.active ? TRUE : FALSE;
+}
+
+static void bootui_resource_set_release_hook(void (*hook)(void), ULONG flags)
+{
+    bootui_release_instant = (flags & BOOTUI_RELEASE_INSTANT) ? 1 : 0;
+    bootui_set_release_hook(hook);
+}
+
 void bootui_add_resource(void)
 {
     bootui_resource.node.ln_Name = BOOTUI_RESOURCE_NAME;
     bootui_resource.node.ln_Pri = 0;
     bootui_resource.node.ln_Type = NT_RESOURCE;
     bootui_resource.set_stage = bootui_set_stage;
+    bootui_resource.active = bootui_resource_active;
+    bootui_resource.set_release_hook = bootui_resource_set_release_hook;
     AddResource(&bootui_resource.node);
 }
 
@@ -1069,4 +1128,16 @@ void bootui_takeover(void)
     if (bootui.active)
         bootui_event("display takeover");
     bootui.active = 0;
+
+    /*
+     * A driver that was assembling out of sight has a finished screen nobody
+     * can see. Whatever stopped the presentation -- the icons, the deadline,
+     * an alert with a better claim -- that screen has to go up, or the display
+     * keeps showing a splash that is no longer being drawn.
+     *
+     * The hook is required to be idempotent for exactly this: bootui_release_now()
+     * calls it after this, and bootui_repaint() calls it again later.
+     */
+    if (bootui_release_hook)
+        bootui_release_hook();
 }

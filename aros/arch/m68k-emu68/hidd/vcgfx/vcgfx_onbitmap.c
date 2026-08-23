@@ -13,6 +13,7 @@
 #include <proto/mbox.h>
 #ifdef __EMU68__
 #include <aros/scanout.h>
+#include <aros/bootui.h>
 #endif
 #include <proto/utility.h>
 #include <assert.h>
@@ -131,6 +132,108 @@ BOOL vc4_fb_flip(struct VideoCoreGfx_staticdata *xsd)
     VC4_MBOX_UNLOCK(xsd);
     return TRUE;
 }
+
+#ifdef __EMU68__
+/*
+ * Assembling a screen out of sight, so a boot presentation can stay up.
+ *
+ * This driver renders straight into the surface being scanned out, so a
+ * screen opening while the presentation is still showing would paint its
+ * half-built desktop over it -- and the presentation could not cover that,
+ * because there is only one surface and they share it. Ending the
+ * presentation at the mode change instead is what used to happen, and it puts
+ * several seconds of desktop assembly on screen, which is the thing a boot
+ * presentation exists to avoid.
+ *
+ * The framebuffer already has two pages when the firmware honours SETVOFFSET,
+ * for flipping. So point *rendering* at the page that is not being scanned
+ * out and leave the scanout where the presentation is drawing. Wanderer then
+ * builds a whole desktop nobody can see, and putting it up is one flip.
+ *
+ * The driver states the capability and never learns what a boot is; the
+ * presentation decides whether and how long to hold, and never learns what a
+ * page is.
+ */
+static struct VideoCoreGfx_staticdata *vcgfx_held_xsd;
+
+static void vcgfx_bootui_released(void)
+{
+    struct VideoCoreGfx_staticdata *xsd = vcgfx_held_xsd;
+    struct BitmapData *data;
+
+    if (!xsd || !xsd->vcsd_FBObj)
+        return;
+
+    data = OOP_INST_DATA(xsd->vcsd_VideoCoreGfxOnBMClass, xsd->vcsd_FBObj);
+
+    /*
+     * Idempotent on purpose. The presentation calls this again a moment after
+     * the release, to catch a screen title bar that finishes drawing late, and
+     * a second flip would put the wrong page back up. Nothing to do once what
+     * is rendered is what is shown.
+     */
+    if (data->VideoData == (UBYTE *)(IPTR)xsd->vcsd_FBPage[xsd->vcsd_FBFront])
+        return;
+
+    vc4_fb_flip(xsd);
+}
+
+/*
+ * Render off the scanned-out page while the presentation still owns it.
+ * Returns TRUE if rendering was moved, so the caller knows a hold is possible.
+ */
+static BOOL vcgfx_assemble_offscreen(struct VideoCoreGfx_staticdata *xsd,
+                                     OOP_Object *o, struct BitmapData *data)
+{
+    struct BootUIResource *bootui =
+        (struct BootUIResource *)OpenResource(BOOTUI_RESOURCE_NAME);
+    ULONG back;
+
+    if (!bootui || !bootui->active || !bootui->set_release_hook)
+        return FALSE;
+    if (!bootui->active())
+        return FALSE;
+
+    /*
+     * Only claim this when the flip really moves the scanout.
+     *
+     * Two pages are not enough. The SETVOFFSET path is accepted by QEMU's
+     * firmware emulation -- the round-trip test at mode-set time passes,
+     * because the value is stored and handed back -- and the display does not
+     * follow it. Rendering then lands on the page that is being scanned out
+     * after all, and the presentation would sit on top of a desktop assembling
+     * in plain sight: worse than not holding, and it would be claimed as
+     * working.
+     *
+     * The HVS path does move it: vc4_hvs_flip_page() rewrites the fb plane's
+     * pointer in the live display list and the hardware latches it at frame
+     * start. So the capability is exactly hvs_Active -- this driver owning the
+     * display list -- and on a machine without an HVS the presentation ends at
+     * the mode change as it did before.
+     */
+    if (!xsd->vcsd_HVS.hvs_Active)
+        return FALSE;
+
+    back = vc4_fb_backpage(xsd);
+    if (!back)
+        return FALSE;
+
+    {
+        struct TagItem btags[] =
+        {
+            { xsd->vcsd_attrBases[2] + aoHidd_ChunkyBM_Buffer, back },
+            { TAG_DONE, 0 }
+        };
+
+        data->VideoData = (UBYTE *)(IPTR)back;
+        OOP_SetAttrs(o, btags);
+    }
+
+    vcgfx_held_xsd = xsd;
+    bootui->set_release_hook(vcgfx_bootui_released, BOOTUI_RELEASE_INSTANT);
+    return TRUE;
+}
+#endif /* __EMU68__ */
 
 /* Drive the firmware framebuffer to the requested geometry; report back the
  * CPU pointer and scanout pitch. Used by BitMap::New and BitMap::Set.
@@ -524,6 +627,14 @@ OOP_Object *MNAME_ROOT(New)(OOP_Class *cl, OOP_Object *o, struct pRoot_New *msg)
         data->dispwidth   = width;
 
         xsd->vcsd_FBObj   = o;
+
+#ifdef __EMU68__
+        if (vcgfx_assemble_offscreen(xsd, o, data))
+            bug("[VideoCoreGfx] assembling off-scanout (front page 0x%p,"
+                " rendering to 0x%p) so the boot presentation can stay\n",
+                (APTR)(IPTR)xsd->vcsd_FBPage[xsd->vcsd_FBFront],
+                data->VideoData);
+#endif
 
         D(bug("[VideoCoreGfx] OnBitMap::New: object @ 0x%p, FB @ 0x%p, pitch %d\n",
             o, data->VideoData, (int)fb_pitch));
