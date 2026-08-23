@@ -246,13 +246,49 @@ if [ "$PACK" = 0 ]; then
     # checksums -- is what remains.
     if [ "${BELLATRIX_SFS:-0}" = 1 ]; then
         FATSECTORS=$(( 128 * 1024 * 1024 / 512 ))
+        SECTORS2=$(( ($(stat -c%s "$OUT") / 512) - 2048 - FATSECTORS ))
         sfdisk -q "$OUT" >/dev/null <<EOF
 label: dos
 unit: sectors
 start=2048, size=$FATSECTORS, type=c, bootable
-start=$(( 2048 + FATSECTORS )), type=2f
+start=$(( 2048 + FATSECTORS )), type=30
 EOF
-        echo "[sd] second partition: SFS (type 0x2f), unformatted"
+        echo "[sd] second partition: type 0x30, RDB container"
+
+        # An RDB inside it, with one partition of DOSType SFS\0.
+        #
+        # rom/partition/partitionrdb.c:198 accepts a RigidDiskBlock only inside
+        # an MBR partition of type 0x30 or 0x76, and the Amiga DOSType comes
+        # from the RDB's partition blocks rather than the MBR type byte. Type
+        # 0x2f maps to SFS\0 in partition_types.c and produces no device node
+        # at all, which is what was tried first.
+        #
+        # rdbtool comes from external/amitools. Geometry has to be given
+        # explicitly -- it cannot infer one from a bare file -- and heads=1,
+        # sectors=32 matches what the SD device reports (sdcu_Heads = 1).
+        RDBIMG="$OUT.rdb"
+        RDBCYL=$(( (SECTORS2) / 32 ))
+        rm -f "$RDBIMG"
+        # The handler goes *inside* the RDB, in FSHD/LSEG.
+        #
+        # A partition whose DOSType is SFS\0 tells AROS what the volume is, not
+        # how to serve it. The legacy tree's working SFS disk carried the
+        # driver in the RDB for exactly this reason, and rdbtool's fsadd is how
+        # it gets there. 24 RDB cylinders because the default reserves 32
+        # blocks and the handler is 135 KB.
+        SFSHANDLER="$DIST/L/sfs-handler"
+        if PYTHONPATH="$ROOT/external/amitools" python3 \
+                "$ROOT/external/amitools/bin/rdbtool" "$RDBIMG" \
+                create chs=$RDBCYL,1,32 + init rdb_cyls=24 \
+                + add size=100% fs=0x53465300 \
+                + fsadd "$SFSHANDLER" fs=0x53465300 >/dev/null 2>&1; then
+            dd if="$RDBIMG" of="$OUT" bs=512 seek=$(( 2048 + FATSECTORS )) \
+                conv=notrunc status=none
+            rm -f "$RDBIMG"
+            echo "[sd] RDB written: one partition, DOSType SFS\\0"
+        else
+            echo "[sd] WARNING: rdbtool failed; the second partition has no RDB" >&2
+        fi
     else
         sfdisk -q "$OUT" >/dev/null <<'EOF'
 label: dos

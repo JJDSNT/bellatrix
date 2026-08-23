@@ -10,3 +10,6 @@
 	path = external/aros-contrib
 	url = https://github.com/aros-development-team/contrib.git
 	ignore = dirty
+[submodule "external/amitools"]
+	path = external/amitools
+	url = https://github.com/cnvogelg/amitools
