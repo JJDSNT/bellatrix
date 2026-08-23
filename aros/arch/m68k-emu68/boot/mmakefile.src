@@ -168,6 +168,20 @@ $(TARGETDIR)/%.o: %.c
 	@$(MKDIR) $(@D)
 	%compile_q cmd="$(KERNEL_CC)" opt="$(strip $(CFLAGS) $(CPPFLAGS))"
 
+#
+# Header dependencies, stated by hand.
+#
+# %compile_q emits no .d files, so nothing here notices a changed header. That
+# is not a slow rebuild, it is a wrong one. boot.h defines struct
+# Emu68BootContext, and an object compiled against an older layout reads a
+# different field than the one boot.c writes: adding boot_time_us to that
+# struct left a stale bootui_platform.o reading it as exec_base, found it
+# non-zero, and called OpenResource() before Exec existed. The machine took a
+# wild jump 99 instructions into the boot, which looks like anything except a
+# build problem.
+#
+$(BOOTOBJ): $(wildcard $(SRCDIR)/$(CURDIR)/*.h)
+
 #MM
 clean ::
 	-$(RM) $(BOOTELF) $(BOOTMAP) $(BOOTOBJ) $(CORELOCAL) \

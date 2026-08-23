@@ -9,6 +9,12 @@
  *   D2 = framebuffer height
  *   A0 = framebuffer address
  *
+ * A Bellatrix-patched Emu68 adds, at the moment the first m68k instruction
+ * runs (patches/emu68/0011):
+ *   D3 = SoC free-running microsecond counter
+ *   D4 = 0xB0071115, so a stock Emu68's leftover registers are not mistaken
+ *        for an origin
+ *
  * Emu68 loads ET_REL images by section and enters at the beginning of the
  * read-only allocation. Keep this stub first in .text.boot.
  */
@@ -23,15 +29,18 @@ _start:
 	 * GCC's m68k ABI passes arguments on the stack, right to left.
 	 * Preserve Emu68's register ABI in a normal C call:
 	 *
-	 * emu68_bootstrap(fdt, framebuffer, pitch, width, height)
+	 * emu68_bootstrap(fdt, framebuffer, pitch, width, height,
+	 *                 boot_us, boot_stamp)
 	 */
+	move.l	%d4,-(%sp)
+	move.l	%d3,-(%sp)
 	move.l	%d2,-(%sp)
 	move.l	%d1,-(%sp)
 	move.l	%d0,-(%sp)
 	move.l	%a0,-(%sp)
 	move.l	%a6,-(%sp)
 	jsr	emu68_bootstrap
-	lea	20(%sp),%sp
+	lea	28(%sp),%sp
 
 	/*
 	 * emu68_bootstrap() is noreturn. Keep a safe fallback if that contract

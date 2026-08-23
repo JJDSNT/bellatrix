@@ -73,6 +73,14 @@ struct Emu68BootContext
 
     uint32_t timer_soak_seconds;
 
+    /*
+     * The SoC microsecond counter as it read when the first m68k instruction
+     * ran, handed over by a Bellatrix-patched Emu68. Zero if the running Emu68
+     * does not stamp it, in which case nothing here knows when the boot began
+     * and the clock falls back to starting when the system timer comes up.
+     */
+    uint32_t boot_time_us;
+
     void *exec_base;
     uint32_t stage;
 };
@@ -80,8 +88,12 @@ struct Emu68BootContext
 extern struct Emu68BootContext emu68_boot_context;
 
 void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
-                     uint32_t width, uint32_t height)
+                     uint32_t width, uint32_t height,
+                     uint32_t boot_us, uint32_t boot_stamp)
     __attribute__((noreturn));
+
+/* Emu68 says "this register really is a timestamp", not a leftover. */
+#define EMU68_BOOT_STAMP 0xB0071115UL
 
 void emu68_console_init(void *framebuffer, uint32_t pitch,
                         uint32_t width, uint32_t height);

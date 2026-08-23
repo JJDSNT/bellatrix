@@ -857,6 +857,16 @@ void bootui_set_stage(uint32_t stage)
 
 void bootui_clock_start(uint32_t now_us)
 {
+    /*
+     * First origin wins. Emu68 hands over the instant the first m68k
+     * instruction ran, which is the honest start of this boot; the system
+     * timer driver also offers one when it comes up, tens of stages later, and
+     * taking that would silently discard everything measured so far. The
+     * driver's call is the fallback for an Emu68 that does not stamp.
+     */
+    if (bootui.clock_started)
+        return;
+
     bootui.clock_start_us = now_us;
     bootui.elapsed_seconds = 0;
     bootui.clock_started = 1;

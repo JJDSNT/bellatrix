@@ -669,7 +669,8 @@ static void start_aros(struct Emu68BootContext *ctx)
 }
 
 void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
-                     uint32_t width, uint32_t height)
+                     uint32_t width, uint32_t height,
+                     uint32_t boot_us, uint32_t boot_stamp)
 {
     emu68_boot_context.magic = EMU68_BOOT_MAGIC;
     emu68_boot_context.abi_version = EMU68_BOOT_ABI;
@@ -685,10 +686,20 @@ void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
     emu68_boot_context.bootargs = 0;
     emu68_boot_context.bootargs_size = 0;
     emu68_boot_context.exec_base = 0;
+    emu68_boot_context.boot_time_us =
+        (boot_stamp == EMU68_BOOT_STAMP) ? boot_us : 0;
     if (framebuffer && pitch && width && height)
         emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
 
     bootui_init();
+    /*
+     * Start the clock from the instant the machine started running m68k code,
+     * not from whenever a timer driver came up tens of stages later. Both are
+     * readings of the same free-running SoC counter, so the difference is
+     * elapsed time and nothing here has to keep count.
+     */
+    if (emu68_boot_context.boot_time_us)
+        bootui_clock_start(emu68_boot_context.boot_time_us);
     emu68_set_stage(EMU68_STAGE_ENTRY);
     emu68_console_init(framebuffer, pitch, width, height);
     emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");
