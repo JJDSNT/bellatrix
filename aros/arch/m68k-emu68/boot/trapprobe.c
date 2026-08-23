@@ -195,6 +195,37 @@ static void dump_stack(const char *what, ULONG sp)
  */
 void emu68_trap_report(ULONG *regs)
 {
+    /*
+     * Report the first trap and nothing else.
+     *
+     * This function never returns -- it ends in a halt loop -- so a trap taken
+     * while it is running does not unwind, it re-enters. Everything below then
+     * runs again on a machine that is already broken: it walks two stacks and
+     * follows A6 as a library base, and any one of those reads can be the
+     * fault that brings it back here. Emu68 sees the result and says so:
+     *
+     *     [JIT:SYS] RE-ENTERED at depth 1 on core 0
+     *     [JIT:SYS] runaway exception recursion, halting core 0
+     *
+     * and the core is halted with none of the first trap's registers printed.
+     * That is the worst possible outcome for a reporter: the crash that
+     * mattered is replaced by the crash the reporter caused.
+     *
+     * So the second entry says one line and stops. Observed chasing gears
+     * under ISSUE-0045, where the whole report was lost this way.
+     */
+    static int reporting;
+
+    if (reporting)
+    {
+        emu68_console_puts("[AROS/Emu68] trap while reporting a trap"
+                           " -- stopping here\n");
+        for (;;)
+            ;
+    }
+    reporting = 1;
+
+    {
     static const char *const dnames[] = {
         "  D0 0x", "  D1 0x", "  D2 0x", "  D3 0x",
         "  D4 0x", "  D5 0x", "  D6 0x", "  D7 0x"
@@ -233,6 +264,7 @@ void emu68_trap_report(ULONG *regs)
 
     dump_stack("  SSP 0x", (ULONG)&regs[16] + 8);
     dump_stack("  USP 0x", regs[0]);
+    }
 
     for (;;)
         ;

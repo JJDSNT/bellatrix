@@ -238,6 +238,73 @@ reading taken with these markers means anything.
 3. Explain the synchronous/asynchronous difference. Same binary, same stack,
    different process, and one of them takes the serial down.
 
+# gears does not hang -- it crashes, and differently (2026-08-23)
+
+`glinfo` spins. `gears` does not. Launched the same way (own process, output to
+`NIL:`) it produces, within a second of the launch:
+
+    Undefined Line0 000d
+    Undefined Line0 000d
+    [JIT:SYS] open bus read:  guest 0xffffdb87 m68kPC 02003d40 A7 02003d34
+    [JIT:SYS] open bus write: guest 0xffffdb87 m68kPC 02003d40 A7 02003d34
+    ... alternating, eight times, then suppressed
+    [BELLATRIX] bus R8 addr=00003462 pc=0202013a [classic domain, unclassified]
+    [BELLATRIX] bus W8 addr=00003462 pc=0202013a
+
+`Undefined Line0` means the CPU is already executing data before any of this.
+The wild address is sign-extended from 16 bits (`0xffffdb87` is `0xdb87`
+widened), so something loaded a word and used it as a pointer.
+
+## The reporter was eating the evidence
+
+The first run of this ended:
+
+    [JIT:SYS] RE-ENTERED at depth 1 on core 0
+    [JIT:SYS] runaway exception recursion, halting core 0
+
+with **no register dump at all**. The guest return address on the faulting
+access resolves to `emu68_trap_report` -- our own trap reporter was on the
+stack when the second fault arrived.
+
+It never returns: it ends in a halt loop. So a trap taken while it runs does
+not unwind, it re-enters, and everything in it runs again on a machine that is
+already broken -- it walks two stacks and follows A6 as a library base, and any
+one of those reads can be the fault that brings it back. The crash that
+mattered was replaced by the crash the reporter caused.
+
+Fixed: the second entry prints one line and stops. The same run then produced
+75 lines of bus trace instead of nothing, which is the whole finding below.
+
+## What gears actually does
+
+With the reporter no longer destroying it, gears does not take a CPU exception
+at all. It walks low memory:
+
+    R8/W8 at 0x3462, 0x346e, 0x347a, 0x3486, 0x3492 ... 0x35fa
+
+**A read-modify-write of one byte, striding 12, climbing steadily**, all from
+`pc=0202012e`, with occasional `R16` reads at 0x204e and 0x6d77. Our bus
+classifier calls it `[classic domain, unclassified]` -- the guest believes it
+is writing to chip RAM.
+
+A tight loop doing byte read-modify-write at a fixed stride, over a region that
+is not its own, is what rendering into a bad target looks like. Twelve bytes is
+three pixels at 32bpp. The working hypothesis is a render target whose base
+address is near zero rather than the framebuffer -- which would also explain
+why nothing appears on screen and why the machine survives: it is not faulting,
+it is scribbling.
+
+## Next
+
+1. Resolve `pc=0202012e` to a module. It is in the heap, so it needs the load
+   address of whatever is mapped there -- the `RamLib`/`LoadSeg` trace can
+   give it.
+2. Find where the render target's base comes from and why it is not the
+   framebuffer.
+3. `glinfo` and `gears` are still not established as the same fault. One spins
+   without faulting; the other executes data within a second. Do not merge them
+   until something ties them together.
+
 # Acceptance criteria
 
 - `glinfo` identifies the VC4/Gallium renderer on a real Pi 3.
