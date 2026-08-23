@@ -287,12 +287,51 @@ at all. It walks low memory:
 classifier calls it `[classic domain, unclassified]` -- the guest believes it
 is writing to chip RAM.
 
-A tight loop doing byte read-modify-write at a fixed stride, over a region that
-is not its own, is what rendering into a bad target looks like. Twelve bytes is
-three pixels at 32bpp. The working hypothesis is a render target whose base
-address is near zero rather than the framebuffer -- which would also explain
-why nothing appears on screen and why the machine survives: it is not faulting,
-it is scribbling.
+**Correction: "the guest thinks it is writing to chip RAM" was my reading of
+our own label, not a fact about the program.** `classic domain, unclassified`
+is what this port's memory map calls that range, and the map says why:
+
+    $00000000-$00000fff DIRECT   vectors + AbsExecBase
+    $00001000-$00ffffff UNMAPPED classic domain, unclassified
+
+`0x3462` is simply **unmapped**. Reads return open bus, writes go nowhere, and
+that is why the machine survives instead of faulting. Nothing here is aimed at
+a chipset, and nothing is built for the wrong port: there is no `MEMF_CHIP` in
+mesa, glut, gallium or the gallium hidd, and the only AROS target built in this
+tree is `emu68-m68k`.
+
+What the two anomalies share is more useful than the label. `0xffffdb87` is
+`0xdb87` widened with sign, and `0x3462` is a small number -- **both are
+pointers that do not carry 32 bits of address.**
+
+## The Gallium trampolines, checked and cleared
+
+Suspicion fell on `patches/aros/0036`, which teaches the GalliumCoreAPI glue
+generator to emit m68k trampolines:
+
+    move.l __gca_local+N,%a0
+    jmp (%a0)
+
+`move.l <abs>,%a0` can assemble absolute-short, which would truncate to 16 bits
+and sign-extend -- precisely the observed shape. It does not:
+
+- the encoding is `2079`, `movea.l (xxx).L` -- absolute **long**;
+- there are **167** `R_68K_32` relocations against `__gca_local` in the built
+  `vc4gallium.hidd`, one per trampoline;
+- `__gca_local` is defined, at `0xc4` in **BSS**.
+
+So the mechanism is sound and the loader will fix the addresses up.
+
+That last point is where the suspicion moves rather than ends. A table in BSS
+starts as **zeros**, and it is filled when the driver binds to mesa3dgl's half
+at `CreatePipeScreen`. Any Mesa-core call made through a trampoline *before*
+that binding jumps through a null entry -- into the vector page, which this
+port maps DIRECT, so it executes whatever is there rather than faulting.
+`Undefined Line0` is what executing that looks like.
+
+Not established: that this is what happens. What is established is that the
+table is zero until bound, that nothing stops a trampoline being called before
+then, and that the failure mode of doing so matches what gears does.
 
 ## Next
 
