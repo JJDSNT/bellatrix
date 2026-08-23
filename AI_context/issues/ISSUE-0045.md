@@ -217,7 +217,33 @@ exactly the situation the machine is reported to hang in.
 40960 bytes. Raising it to 1 MB before launching changes nothing: same silence,
 same absence of a mode change.
 
-## The instrument is not trustworthy yet
+## The instrument is sound; the silence is real (settled)
+
+`C:SerialSayP` -- the same program as `C:SerialSay` but in its own directory so
+that it links the full C runtime, the way a contrib demo does -- prints through
+**all three** routes on this machine:
+
+    [serialsayp] via bug()
+    [serialsayp] via Printf()
+    [serialsayp] via printf()
+
+So the C runtime linkage is not what silences glinfo, and the difference that
+had been suspected turns out to be on our side anyway: the `-noposixc` in
+`arch/m68k-emu68/c/mmakefile.src` is ours, set for `BootProgress`, and every
+program in that directory inherits it. The contrib demos link the full runtime
+and are otherwise ordinary.
+
+**Therefore glinfo really does not reach its constructors or its `main()`.**
+Markers at `ADD2INIT` priority 110 and -110 and on the first line of `main()`
+have never printed, and now that is a fact about glinfo rather than about the
+instrument.
+
+That places the failure between the library autoinit -- which the `RamLib`
+trace shows completing, down to `stdcio`, `z1` and `posixc` -- and the first
+init-set call. It is a startup failure, not a GL failure, and the GL chain is
+merely what is being started.
+
+## The instrument was not trustworthy (superseded above)
 
 Not one `[glinfo]` marker has ever appeared, in any configuration, including
 those where the program demonstrably runs far enough to program a display mode.

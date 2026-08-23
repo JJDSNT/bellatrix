@@ -39,6 +39,7 @@ Date >DEBUG:
 ; Control: can a shell program be heard at all, both ways?
 Echo >DEBUG: "[gl-probe] --- control: SerialSay"
 SerialSay >DEBUG:
+SerialSayP >DEBUG:
 Echo >DEBUG: "[gl-probe] --- control done"
 
 ; The shell gives every command AROS_STACKSIZE, which on m68k is 0xA000 --
@@ -50,29 +51,4 @@ Stack 1048576
 Echo >DEBUG: "[gl-probe] --- stack now:"
 Stack >DEBUG:
 
-; Launched with Run, and with its output thrown away.
-;
-; Both halves matter and each was learned the hard way.
-;
-; Run: launched synchronously from the shell, a GL program never even reaches
-; the mode change and the serial stops for everyone. Launched into its own
-; process it reaches glutCreateWindow -- the display driver programs a mode --
-; and the machine goes on answering. Same binary, same stack; only the process
-; differs.
-;
-; NIL: not DEBUG:. Redirecting a long-running program's output to DEBUG: holds
-; the serial while the handle is open, and bug(), the boot presentation and
-; the display driver all go quiet behind it.
-;
-; {demo} selects which one; gears by default, because that is the program
-; ISSUE-0045 was opened about.
-Echo >DEBUG: "[gl-probe] --- launching {demo$gears} (own process, output to NIL:)"
-Run >NIL: <NIL: SYS:Extras/Demos/GL/{demo$gears} >NIL: <NIL:
-Echo >DEBUG: "[gl-probe] --- launched"
-Wait 20
-Echo >DEBUG: "[gl-probe] --- 20s, machine still answering"
-Wait 40
-Echo >DEBUG: "[gl-probe] --- 60s, machine still answering"
-Wait 60
-Echo >DEBUG: "[gl-probe] --- 120s, machine still answering"
-Echo >DEBUG: "[gl-probe] --- done"
+Echo >DEBUG: "[gl-probe] --- done (controls only)"
