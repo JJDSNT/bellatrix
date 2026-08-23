@@ -111,8 +111,37 @@ Not ahead of us:
 
 # Worth doing, in order
 
-1. Port `7b81016a77`, the 128-bit linear DMA copy. Small, measurable, and it is
-   making existing code faster rather than adding anything.
+1. Port `7b81016a77`, the 128-bit linear DMA copy -- **behind a flag, and
+   measured on a Pi 3 before it becomes the default.**
+
+   Safe by construction and plausible on the silicon: `DMA_TI_SRC_WIDTH`
+   (bit 9) and `DMA_TI_DEST_WIDTH` (bit 5) are BCM2835 DMA features, unchanged
+   on the BCM2837, and they are a full-engine capability -- we already hold a
+   full engine, because `DMACHF_TDMODE` is documented as "Needs a full engine"
+   and the resource hands out lite channels first otherwise
+   (`bcm2708_dma.h:20-24`). The objection this tree already recorded --
+   "needs the row length a multiple of 16; what the engine does with the
+   trailing partial write otherwise is unverified" (`vcgfx_dma.c:145`) --
+   stops existing: the head/aligned-middle/tail split means the wide burst
+   only ever covers 16-byte-aligned, 16-byte-multiple memory and there is no
+   partial wide write at all.
+
+   What we do *not* have is evidence for this board:
+
+   - The commit is dated 2026-08-21, between HVS5/BCM2711 commits, so it was
+     almost certainly developed and measured on a **Pi 4**.
+   - Its own message records that widening a *strided* transfer
+     **black-screened the machine**. The safe subset was found empirically.
+     This engine has a way to go wrong in exactly this area.
+   - We already have one DMA operation that hangs on real hardware: the 2D
+     *fill*, which is why the page clear is a CPU `memset`
+     (`vcgfx_onbitmap.c:435`).
+   - Nothing in `AI_context` records the DMA *copy* path being exercised on a
+     Pi 3 at all -- neither working nor failing.
+
+   So the risk is not the alignment maths, it is that this driver's DMA has
+   never been characterised on our board. Opt-in, then measure a full-window
+   scroll both ways.
 2. Read `SetPanning()` before testing ISSUE-0049's flip path on a Pi 3. It
    solves the same problem on the same hardware and has been run in anger.
 3. Leave scaling alone until something needs it. Authoring kernels means taking
