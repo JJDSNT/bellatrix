@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0051
-title: "Reading a 10 MB file costs more than reading it"
+title: "Opening mesa3dgl20-0.library does not finish, and the I/O is not why"
 status: doing
 priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-24
-updated_at: 2026-08-24
+updated_at: 2026-08-23
 tags:
   - sdcard
   - sdhost
@@ -453,8 +453,281 @@ things depending on who is asking:
 3. xSysInfo aligns a pool to 4 and `Allocate` wants 8.
 
 No number from xSysInfo until that is resolved, and the resolution is not
-obviously ours: a program aligning to the target's own `AROS_WORSTALIGN` and
-being rejected is at least arguable.
+this issue's: it is Exec's, and it is not obviously a defect in the program.
+A binary aligning to the target's own `AROS_WORSTALIGN` and being refused by
+that target's allocator is an incompatibility, and Bellatrix's answer to an
+incompatibility cannot be to recompile the Amiga program. Split out as
+[ISSUE-0052](ISSUE-0052.md).
+
+# The load finishes. It is not the load.
+
+`patches/aros/0039` now clocks the ELF loader from inside: microseconds spent
+reading against microseconds spent relocating, counted per load and reported
+once, and only when the load took over a second. Running `OpenMesa
+mesa3dgl20-0.library` as the boot test, twice:
+
+    [ELF Loader] 10301 KB in 6844 reads: read 12008 ms, relocate 401 ms over 2612 sections
+    [ELF Loader] 10301 KB in 6844 reads: read 11076 ms, relocate 408 ms over 2612 sections
+
+Three things follow, and the third is the one that matters.
+
+**The relocation is not the cost.** It was the standing hypothesis -- 4145
+hunks and some four thousand sections, all m68k under a JIT -- and it is wrong
+by a factor of thirty. Four hundred milliseconds over 2612 sections.
+
+**The reading is twelve seconds, and that is the whole of the I/O.** It agrees
+with what the driver reports for the same run, and it is the entire budget:
+10301 KB, which is the file, read once.
+
+**The loader returns.** The line is printed after `load_seg_elf_int` comes
+back, so by the time it appears the library is loaded, relocated and in memory
+-- and `OpenMesa` still does not return, in four hundred seconds. Everything
+this issue has measured so far has been measuring the wrong twelve seconds of
+a four-hundred-second wait.
+
+So the question moves, intact, past the loader: what runs after `LoadSeg` and
+before `OpenLibrary` returns. That is `LDInit` in `rom/lddemon/lddemon.c`, and
+it does two separable things -- it scans every loaded segment two bytes at a
+time looking for a romtag, and then it calls `InitResident`, which runs the
+library's own init. `patches/aros/0040` clocks those apart.
+
+## What the driver said about the same twelve seconds
+
+    [SDHost00] 1024 cmds, 8020 KB, 4096 KB in 5742 ms = 713 KB/s  [wait 150 ms, cache 34 ms, copy 0 ms]
+    [SDHost00]   command total 7162 ms of which transfer 150 ms
+    [SDHost00]   direct 502, bounced 7 unaligned + 0 unreachable
+
+The alignment work from `patches/aros/0038` holds: 502 direct against 7
+bounced, and the copy time is zero. But of 7162 ms of command time, 150 ms
+moved data. The cost is per command, not per byte, at roughly 7 ms a command.
+
+Magnitudes under QEMU are not evidence, but a ratio of 48:1 between command
+overhead and payload is shape, and shape is. It says that whatever makes this
+card slow will not be fixed by transferring faster, only by issuing fewer
+commands -- which is a separate finding from this issue, and belongs to the
+driver.
+
+
+# Past the loader: the romtag scan costs six seconds, and is not the answer
+
+`patches/aros/0040` clocks the two halves of `LDInit` apart, and says the first
+half *before* running the second -- deliberately, because a report that waits
+for both to finish prints nothing at all when the second one never returns,
+which is the case this is here to decide.
+
+    [LDInit] vcgfx.hidd: InitResident 1334 ms
+    [LDInit] mesa3dgl20-0.library: romtag found after 5997 ms, 0 segments (0 KB) scanned
+
+`0 segments scanned` means the romtag was found in the very first one -- and
+finding it there still took six seconds, because the scan walks that segment
+two bytes at a time looking for `RTC_MATCHWORD`. That is a real cost, it is
+paid by every large library, and it is not the failure: six seconds against
+four hundred.
+
+What it does do is close the last alternative. The open now accounts for:
+
+| stage | cost |
+|---|---|
+| ELF load (read) | ~11 s |
+| ELF load (relocate) | ~0.4 s |
+| romtag scan | ~6 s |
+| `InitResident` | does not return |
+
+Every measurable stage is seconds. The one that does not finish is
+`InitResident`, and for an `RTF_AUTOINIT` library that is `MakeLibrary` and
+then a single call into the library's own init vector -- Mesa's own code.
+
+`patches/aros/0041` splits those two, printing `MakeLibrary` time and the
+address of the init vector *before* entering it, so that a run which stops
+inside Mesa's init says so instead of going silent.
+
+
+# It is Mesa's own init, and nothing before it
+
+`patches/aros/0041` clocks `MakeLibrary` and then names the init vector
+*before* entering it, so a run that stops inside it says so rather than going
+silent:
+
+    [InitResident] mesa3dgl20-0.library: MakeLibrary 1 ms, calling init @ 0x04690aac
+
+`MakeLibrary` is one millisecond. The call is entered and does not return.
+
+That closes the account. Opening this library costs, in order:
+
+| stage | cost | measured by |
+|---|---|---|
+| ELF read | ~11-12 s | `patches/aros/0039` |
+| ELF relocate | ~0.4 s | `patches/aros/0039` |
+| romtag scan | ~6 s | `patches/aros/0040` |
+| `MakeLibrary` | 1 ms | `patches/aros/0041` |
+| the library's own init | **does not return** | `patches/aros/0041` |
+
+Everything AROS does for this open is about eighteen seconds. Everything after
+that is Mesa's code, running under the JIT, and it is where the four hundred
+seconds are.
+
+This is worth stating plainly because three separate explanations have now
+been excluded by measurement rather than by argument: the SD driver's transfer
+model, the filesystem's I/O amplification, and the loader's relocation work.
+None of them was ever going to account for the failure, and two of them were
+improved for their own sake while being ruled out.
+
+`MESA3DGLInit` -- the `ADD2INIT` in `workbench/libs/mesa/mesa3dgl_init.c` --
+calls `st_gl_api_create()`, which in mesa-20.0.8 is one line returning the
+address of a static struct. So it is not that either, and the init vector runs
+more than that one function: it runs the whole `INIT` symbol set.
+
+`patches/aros/0042` names each member of that set before entering it. It has
+to be linked into the library itself, not into the kernel, so it needs
+`mesa3dgl-library` rebuilt and the card remade -- the trap CLAUDE.md records:
+if a change is not in the kernel ELF, check where the module on the card came
+from.
+
+
+# It is not slow. It crashes.
+
+Every run so far was killed a few minutes into the init, and the conclusion
+drawn from that -- "does not return in four hundred seconds" -- was the wrong
+shape of conclusion. Left alone, it does not hang. It dies:
+
+    23:47:23 [InitResident] mesa3dgl20-0.library: MakeLibrary 1 ms, calling init @ 0x04690aac
+    23:47:24 [InitResident] posixc.library: MakeLibrary 2 ms, calling init @ 0x044cc452
+    23:47:25 [JIT:SYS] open bus read: guest 0xfffffe0e ... m68kPC fffffe0e ret 04a35a58
+    23:47:25 [AROS/Emu68] CPU exception vector 0x0000002c at PC 0xfffffe0e
+
+One second from `posixc.library`'s init to the exception. `PC 0xfffffe0e`
+with `A6 0x00000000` in the register dump is `jsr -498(a6)` on a null library
+base: a library call through a base that was never set.
+
+The chain to it, which the init reports give in full, is
+`mesa3dgl20-0.library` -> `gallium.library` -> `gallium.hidd` ->
+`cybergraphics.library` -> `stdcio.library` -> `z1.library` ->
+`posixc.library`, and the exception is one second into the last of them.
+
+## The control run
+
+The instrumentation in `patches/aros/0039`-`0042` is this session's, and a
+diagnostic that creates the defect it reports is worse than no diagnostic. So
+the three kernel patches were taken out of the series properly -- cleared
+`skip-worktree`, `setup.sh --reset`, verified back to 37 patches -- and the
+tree rebuilt without them.
+
+    23:59:04 [openmesa] opening 'mesa3dgl20-0.library'
+    23:59:22 [JIT:SYS] open bus read: guest 0xfffffe0e ... ret 044c8da4
+    23:59:22 [AROS/Emu68] CPU exception vector 0x0000002c at PC 0xfffffe0e
+
+Same exception, same PC, eighteen seconds in.
+
+**That control was wrong, and the conclusion drawn from it was wrong.** It
+removed `0039`-`0041`, which live in the kernel ELF, and left `0042`, which
+does not: `0042` patches `compiler/autoinit/functions.c`, which is compiled
+into `libautoinit.a` and linked into every *module*. Rebuilding the kernel
+does not touch a module that was already linked. The two modules that had
+been relinked with it -- `mesa3dgl20-0.library` at 22:45 and
+`dos64.library` at 23:50 -- kept it, and they are precisely the two the crash
+moved between.
+
+**The crash was ours.** `0042` put an unconditional `bug()` inside
+`_set_call_funcs`. `bug()` resolves to the module's own `kprintf`, `kprintf`
+loads the module's global `SysBase`, and the generated libinit calls
+`_set_call_funcs` before that global has been set -- so `jsr -498(a6)` runs
+with `a6` zero. Disassembly puts the faulting instruction inside `kprintf` in
+both modules, at exactly the addresses the two runs reported:
+
+| module carrying `0042` | reported `ret` | site |
+|---|---|---|
+| `dos64.library` | `0x044c8da4` | `kprintf+0x1c` (base `0x044c7740`) |
+| `mesa3dgl20-0.library` | `0x04a35a58` | `kprintf+0x1c` (base `0x04690a0c`) |
+
+Removing `0042` and rebuilding `dos64.library` moved the crash from the first
+row to the second -- to the one module that still had it. That is the
+experiment that decides it, and it decides against the instrumentation.
+
+So "it crashes" is retracted. What the timestamps did establish stands: the
+init is entered, and the earlier runs were killed by hand rather than
+finishing.
+
+## The clean run, at last
+
+`0042` out of the series, `libautoinit.a` rebuilt, `dos64.library` rebuilt and
+`mesa3dgl20-0.library` relinked -- verified by `nm`, no `aisd_now` in either:
+
+    00:54:42 [openmesa] opening 'mesa3dgl20-0.library'
+    00:55:05 [InitResident] mesa3dgl20-0.library: MakeLibrary 1 ms, calling init @ 0x04690aac
+    00:55:05 [InitResident] gallium.library ... gallium.hidd ... cybergraphics ... stdcio ... z1
+    00:55:06 [InitResident] posixc.library: MakeLibrary 1 ms, calling init @ 0x044cc452
+    00:55:06 [InitResident] dos64.library: MakeLibrary 0 ms, calling init @ 0x044c774e
+    01:41:43 -- nothing further, QEMU still running
+
+**Forty-six minutes inside the init, no crash, no return.** It walks the whole
+dependency chain in one second, enters `dos64.library`'s init, and from there
+produces nothing at all.
+
+Two things this settles:
+
+- `dos64.library` is right to be there. It initialises and returns cleanly
+  now; the only thing killing it was our own `bug()`. The packaging defect it
+  exposed was real and is fixed in `build-aros.sh`.
+- The original description was right after all, for the wrong reasons. The
+  init does not finish. Everything measured around it -- eleven seconds of
+  reading, six of romtag scanning, one millisecond of `MakeLibrary` -- is
+  noise beside it.
+
+## What the next instrument must not do
+
+`0042` is the cautionary case, and the trap is worth stating because it is not
+obvious and it cost this session hours:
+
+**A patch to `compiler/autoinit` is not in the kernel. It is inside every
+module already linked.** Rebuilding the ELF does not remove it; each module
+has to be relinked. That is why removing the kernel patches and re-running
+looked like a clean control and was not.
+
+And the defect itself: `bug()` inside a module resolves to that module's own
+`kprintf`, which reads that module's global `SysBase`. In `_set_call_funcs`
+that global is not set yet -- even though `SysBase` is right there as a
+function parameter. Any instrument placed that early has to use the parameter,
+not the global, or not print at all.
+
+The safer instrument for "where inside the init" touches no AROS module: Emu68
+owns the CPU and can sample the guest PC. A periodic PC sample would say where
+the init is spending forty-six minutes without linking a single line into
+anything.
+
+## dos64.library was missing, and was not it
+
+The `OpenLibrary` reporting added to `0040` named one failure outright:
+
+    [LDDemon] OpenLibrary("dos64.library", 50) opened but returned NULL
+
+`posixc.library` and `stdcio.library` both reference `dos64.library` by name,
+and it existed nowhere: not in `Libs/`, not as a symbol in the kernel ELF,
+only as headers. `rom/dos64/mmakefile.src` builds it as an ordinary
+`%build_module modtype=library` under the target `kernel-dos64`; it simply was
+never being built here. `make kernel-dos64` produces it in seconds.
+
+With it present the failure line is gone and no `OpenLibrary` fails at all --
+**and the crash is unchanged**, same PC, same second. So a real packaging
+defect was found and fixed on the way past, and it was not the cause.
+
+## Where the null base is
+
+`jsr -498(a6)` is LVO index 83. In `posixc.library` there are exactly four
+such call sites, and disassembly gives the base register's source for each:
+
+| site | base loaded from | index 83 in that library |
+|---|---|---|
+| `0x000000aa` | `.rodata` | — |
+| `0x00004254` (`__entropy_available`) | `SysBase` | `OpenResource` |
+| `0x00006870` (`__vfork`) | `DOSBase` | `CreateNewProc` |
+| `0x000143b8` (`kprintf`) | `SysBase` | `OpenResource` |
+
+Which of them fired is not yet decided. The return address cannot be mapped
+to a site by arithmetic, because the ELF loader places hunks at unrelated
+addresses -- taking the reported `ret` against each candidate puts the known
+init vector on no symbol at all in every case. That needs the load map, not
+more inference.
+
 
 # Next
 

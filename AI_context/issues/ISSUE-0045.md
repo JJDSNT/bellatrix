@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0045
-title: "VC4 Gallium hangs when the first MesaGL workload starts"
+title: "No MesaGL demo has ever run on this port"
 status: investigating
 priority: high
 type: bug
@@ -13,6 +13,7 @@ tags:
   - mesa
   - raspberry-pi-3
   - graphics
+  - loader
 related_files:
   - aros/arch/m68k-emu68/hidd/vc4gallium
   - external/aros/workbench/libs/mesa
