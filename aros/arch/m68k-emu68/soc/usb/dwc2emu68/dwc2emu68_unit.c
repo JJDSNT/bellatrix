@@ -27,8 +27,9 @@ static const UWORD supported_commands[] =
     UHCMD_USBOPER,
     UHCMD_CONTROLXFER,
     UHCMD_INTXFER,
+    UHCMD_BULKXFER,
     /*
-     * UHCMD_BULKXFER and UHCMD_ISOXFER are deliberately absent.
+     * UHCMD_ISOXFER is deliberately absent.
      *
      * They were listed here while the switch in handle_request() sent them to
      * its default case, which answers IOERR_NOCMD -- so the device told
@@ -36,7 +37,7 @@ static const UWORD supported_commands[] =
      * table is a promise about what the switch does, and this one was not
      * true.
      *
-     * Add each back in the same change that implements it. Until then
+     * Add it back in the same change that implements it. Until then
      * ../usb2otg is the side with full coverage.
      */
     NSCMD_DEVICEQUERY,
@@ -139,6 +140,12 @@ static void process_request(struct IOUsbHWReq *ioreq)
                 reply = !dwc2_transfer_submit(unit, ioreq);
                 error = reply ? UHIOERR_HOSTERROR : 0;
             }
+            break;
+
+        case UHCMD_BULKXFER:
+            /* No such thing as a bulk endpoint on the root hub. */
+            reply = !dwc2_transfer_submit(unit, ioreq);
+            error = reply ? UHIOERR_HOSTERROR : 0;
             break;
 
         case UHCMD_INTXFER:

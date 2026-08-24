@@ -623,7 +623,28 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # is how the other stops being code.
     make kernel-usb-arosotg
     make kernel-usb-dwc2emu68
-    rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
+
+    # BELLATRIX_USB=1 puts it on the card instead of removing it.
+    #
+    # USB is off by default (see the alias comment in
+    # arch/m68k-emu68/mmakefile.src) and that is still the baseline. But the
+    # only way to find out whether either driver enumerates anything is to let
+    # one boot, and rebuilding the tree by hand each time to do that is how a
+    # test stops being run. BELLATRIX_USB_DRIVER picks which one goes on the
+    # card; both are always built.
+    if [ "${BELLATRIX_USB:-0}" = 1 ]; then
+        make kernel-usb-nopci
+        keep="${BELLATRIX_USB_DRIVER:-dwc2emu68}"
+        for d in "$BUILD/bin/$TARGET/AROS/Devs/USBHardware/"*.device; do
+            [ -e "$d" ] || continue
+            case "$(basename "$d")" in
+                "$keep.device") ;;
+                *) rm -f "$d" ;;
+            esac
+        done
+        echo "[aros] USB ENABLED on the card, host controller: $keep.device"
+    else
+        rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
 
     # Removing the controller was not enough to stop USB running.
     # Startup-Sequence line 39 tests SYS:Classes/USB, and that directory is
@@ -642,11 +663,12 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # bluetooth.class goes with it. That one is the HCI transport for a USB
     # dongle; Bluetooth here comes off the PL011 through bthciuart, and
     # Classes/Bluetooth is a separate directory that stays.
-    rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
-    rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \
-          "$BUILD/bin/$TARGET/AROS/C/AddUSBHardware" \
-          "$BUILD/bin/$TARGET/AROS/C/PsdStackLoader"
-    echo "[aros] USB built and left off the card (see mmakefile.src)"
+        rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
+        rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \
+              "$BUILD/bin/$TARGET/AROS/C/AddUSBHardware" \
+              "$BUILD/bin/$TARGET/AROS/C/PsdStackLoader"
+        echo "[aros] USB built and left off the card (see mmakefile.src)"
+    fi
 fi
 
 # Record what the toolchain was built from, so a later `clean` can tell whether

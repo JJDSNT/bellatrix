@@ -19,6 +19,7 @@
 #define STAGE_DATA   2
 #define STAGE_STATUS 3
 #define STAGE_INT_IN 4
+#define STAGE_BULK   5
 
 static void start_next(struct DWC2Unit *unit);
 
@@ -296,19 +297,68 @@ static BOOL arm_status(struct DWC2Unit *unit)
         DWC2_HCTSIZ_PID_DATA1, 0);
 }
 
+/*
+ * Data toggle, per endpoint AND per direction.
+ *
+ * data_toggle[] is one ULONG per device address, and this used to index it by
+ * endpoint number alone. USB endpoint 1 IN and endpoint 1 OUT are two
+ * different endpoints with two independent toggles, so a device using both --
+ * which every bulk device does -- would have had them share one bit and
+ * desynchronise. Sixteen endpoints in the low half, the same sixteen IN in
+ * the high half, which is exactly the 32 bits available.
+ */
+static ULONG toggle_bit(struct IOUsbHWReq *ioreq, BOOL input)
+{
+    return 1UL << ((ioreq->iouh_Endpoint & 15) + (input ? 16 : 0));
+}
+
+static ULONG toggle_pid(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq,
+    BOOL input)
+{
+    return (unit->data_toggle[ioreq->iouh_DevAddr & 0x7f] &
+        toggle_bit(ioreq, input)) ? DWC2_HCTSIZ_PID_DATA1
+                                  : DWC2_HCTSIZ_PID_DATA0;
+}
+
+static void toggle_flip(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq,
+    BOOL input)
+{
+    unit->data_toggle[ioreq->iouh_DevAddr & 0x7f] ^= toggle_bit(ioreq, input);
+}
+
+/*
+ * One chunk of a bulk transfer.
+ *
+ * The DMA buffer is 16 KB and a bulk request can be far larger -- a mass
+ * storage read is routinely 64 KB -- so a request is armed a chunk at a time
+ * and iouh_Actual carries the progress between them. Submitting used to
+ * refuse anything longer than the buffer outright.
+ */
+static BOOL arm_bulk(struct DWC2Unit *unit)
+{
+    struct IOUsbHWReq *ioreq = unit->active_request;
+    BOOL input = (ioreq->iouh_Dir == UHDIR_IN);
+    ULONG remaining = ioreq->iouh_Length - ioreq->iouh_Actual;
+    ULONG length = remaining > unit->dma_length ? unit->dma_length : remaining;
+
+    if (!input && length != 0)
+        CopyMem((UBYTE *)ioreq->iouh_Data + ioreq->iouh_Actual,
+            unit->dma_buffer, length);
+    unit->transfer_stage = STAGE_BULK;
+    return arm(unit, input, DWC2_HCCHAR_EPTYPE_BULK,
+        toggle_pid(unit, ioreq, input), length);
+}
+
 static BOOL arm_interrupt(struct DWC2Unit *unit)
 {
     struct IOUsbHWReq *ioreq = unit->active_request;
-    ULONG toggle = (unit->data_toggle[ioreq->iouh_DevAddr & 0x7f] >>
-        ioreq->iouh_Endpoint) & 1;
 
     unit->transfer_stage = STAGE_INT_IN;
     /* QEMU enforces periodic endpoint type and frame parity. arm() selects
      * the next microframe through HCCHAR.ODDFRM; the task still applies the
      * requested polling interval after NAK without enabling SOF interrupts. */
     return arm(unit, TRUE, DWC2_HCCHAR_EPTYPE_INTERRUPT,
-        toggle ? DWC2_HCTSIZ_PID_DATA1 : DWC2_HCTSIZ_PID_DATA0,
-        ioreq->iouh_Length);
+        toggle_pid(unit, ioreq, TRUE), ioreq->iouh_Length);
 }
 
 BOOL dwc2_transfer_submit(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq)
@@ -320,7 +370,10 @@ BOOL dwc2_transfer_submit(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq)
         AddTail(&unit->transfer_queue, &ioreq->iouh_Req.io_Message.mn_Node);
         return TRUE;
     }
-    if (ioreq->iouh_Length > unit->dma_length)
+    /* Bulk is armed a chunk at a time and may exceed the DMA buffer; the
+     * others are armed once and may not. */
+    if (ioreq->iouh_Req.io_Command != UHCMD_BULKXFER &&
+        ioreq->iouh_Length > unit->dma_length)
         return FALSE;
 
     unit->active_request = ioreq;
@@ -339,6 +392,8 @@ BOOL dwc2_transfer_submit(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq)
     else if (ioreq->iouh_Req.io_Command == UHCMD_INTXFER &&
         ioreq->iouh_Dir == UHDIR_IN)
         armed = arm_interrupt(unit);
+    else if (ioreq->iouh_Req.io_Command == UHCMD_BULKXFER)
+        armed = arm_bulk(unit);
     else
         armed = FALSE;
     if (!armed)
@@ -535,6 +590,31 @@ void dwc2_transfer_irq(struct DWC2Unit *unit)
     }
     else if (unit->transfer_stage == STAGE_STATUS)
         finish(unit, 0);
+    else if (unit->transfer_stage == STAGE_BULK)
+    {
+        BOOL input = (ioreq->iouh_Dir == UHDIR_IN);
+
+        if (input && moved != 0)
+        {
+            CacheClearE(unit->dma_buffer, moved, CACRF_InvalidateD);
+            CopyMem(unit->dma_buffer,
+                (UBYTE *)ioreq->iouh_Data + ioreq->iouh_Actual, moved);
+        }
+        ioreq->iouh_Actual += moved;
+        toggle_flip(unit, ioreq, input);
+
+        /*
+         * A chunk shorter than armed is a short packet, and a short packet
+         * ends a bulk transfer whatever is left of iouh_Length -- that is how
+         * a device says "this is all there was". Otherwise keep going until
+         * the request is satisfied.
+         */
+        if (moved < unit->active_length ||
+            ioreq->iouh_Actual >= ioreq->iouh_Length)
+            finish(unit, 0);
+        else if (!arm_bulk(unit))
+            finish(unit, UHIOERR_HOSTERROR);
+    }
     else
     {
         ULONG address = ioreq->iouh_DevAddr & 0x7f;
@@ -556,8 +636,7 @@ void dwc2_transfer_irq(struct DWC2Unit *unit)
                 moved > 4 ? unit->dma_buffer[4] : 0,
                 moved > 5 ? unit->dma_buffer[5] : 0);
         }
-        unit->data_toggle[ioreq->iouh_DevAddr & 0x7f] ^=
-            1UL << ioreq->iouh_Endpoint;
+        toggle_flip(unit, ioreq, TRUE);
         finish(unit, 0);
     }
 }

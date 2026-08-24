@@ -81,18 +81,62 @@ Measured from the command dispatch, not from intent:
 |---|---|---|
 | `UHCMD_CONTROLXFER` | `cmdControlXFer` | implemented, root hub and devices |
 | `UHCMD_INTXFER` | `cmdIntXFer` | implemented, root hub and devices |
-| `UHCMD_BULKXFER` | `cmdBulkXFer` | falls to `default:` -> `IOERR_NOCMD` |
-| `UHCMD_ISOXFER` | `cmdIsoXFer` | falls to `default:` -> `IOERR_NOCMD` |
+| `UHCMD_BULKXFER` | `cmdBulkXFer` | implemented 2026-08-24 |
+| `UHCMD_ISOXFER` | queues, never completes | `IOERR_NOCMD` |
 
-So the rewrite covers HID -- control plus interrupt, which is keyboard and
-mouse -- and cannot do storage, audio or video. The adopted engine is the only
-side with full coverage, which is the concrete reason not to delete it yet.
+**The iso row is a correction.** An earlier version of this section said the
+adopted engine had full coverage and the rewrite did not. It does not:
+`usb2otg_intern.h` says so in as many words --
 
-**A defect found while establishing this:** the rewrite's `NSCMD_DEVICEQUERY`
-table listed `UHCMD_BULKXFER` and `UHCMD_ISOXFER` as supported while the
-switch answered `IOERR_NOCMD` to both -- the device promised Poseidon
-transfers it then refused. The table now lists only what the switch does, with
-a note to add each back in the same change that implements it.
+    /* ISO is intentionally absent: cmdIsoXFer queues but nothing drains. */
+
+-- and `cmdIsoXFer` does exactly that: `AddTail` to `hu_IsoXFerQueue`, return
+`RC_DONTREPLY`, with the `Cause()` that would drain the queue commented out.
+The request is never answered. That is worse than refusing it, because a
+caller waits forever instead of getting an error.
+
+So with bulk done, the rewrite's coverage is equal or better on every row.
+Implementing isochronous properly would be capability this port has never
+had, which the 2026-08-17 freeze puts out of scope; the honest error stays.
+
+**Two defects fixed while doing this:**
+
+- the `NSCMD_DEVICEQUERY` table advertised `UHCMD_BULKXFER` and
+  `UHCMD_ISOXFER` while the switch answered `IOERR_NOCMD` to both, so the
+  device promised Poseidon transfers it then refused;
+- the data toggle was indexed by endpoint number alone. Endpoint 1 IN and
+  endpoint 1 OUT are two endpoints with independent toggles and were sharing
+  one bit -- harmless while only interrupt IN existed, wrong the moment a
+  device uses both directions, which every bulk device does.
+
+## Validated end to end, 2026-08-24
+
+`BELLATRIX_USB=1 BELLATRIX_USB_DRIVER=dwc2emu68 ./scripts/build-aros.sh`, then
+`./run.sh` with the usb-tablet QEMU attaches to the raspi3b DWC2:
+
+    [DWC2/Emu68] OT2 core OT2.94a at f2980000
+    [DWC2/Emu68] host initialized with 8 channels, SOF enabled
+    [DWC2/Emu68] root port powered, HPRT=00021003
+    [DWC2/Emu68:RH] port reset complete HPRT=0002100d
+    [DWC2/Emu68:XFER] submit #8 cmd=12 addr=2 ep=0 len=18
+
+and on the card, written by the Startup-Sequence:
+
+    Adding hardware DEVS:USBHardware/dwc2emu68.device, unit 0...okay!
+
+Poseidon accepted the driver, enumerated the virtual root hub over 24 control
+transfers, reset port 1, addressed the attached device as address 2 and read
+its descriptors over 7 more. No errors, no stalls. The boot still reaches
+`hold released: icons`, at 1:20 against 1:06 with USB off.
+
+"End-to-end input remains under investigation" is therefore retired: it
+enumerates.
+
+**Not clean, though:** 8 watchdog recoveries fired during enumeration
+(`[DWC2/Emu68:WD]`), all on control data stages that completed without
+raising a channel interrupt. Nothing failed, but a transfer engine that needs
+its watchdog eight times in one enumeration is relying on it, and that is
+worth understanding before the comparison decides anything.
 
 **USB remains disabled**, separately and deliberately: the
 `kernel-usb-m68k-emu68` alias is commented out and `build-aros.sh` deletes
@@ -101,10 +145,13 @@ going on a card. Re-enabling is a decision of its own.
 
 # Remaining work
 
-- port `cmdBulkXFer`, then `cmdIsoXFer`, adding each to the DEVICEQUERY table
-  in the same change;
-- re-enable USB and enumerate a keyboard under QEMU with each driver;
-- compare, and delete one.
+- understand the 8 watchdog recoveries: which control stages complete without
+  a channel interrupt, and why;
+- run the same enumeration against `BELLATRIX_USB_DRIVER=usb2otg` and compare
+  the two logs;
+- decide which one stays, and delete the other.
+
+Isochronous is deliberately not on this list. Neither driver has ever had it.
 
 # Final implementation
 
