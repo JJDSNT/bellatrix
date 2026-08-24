@@ -965,7 +965,11 @@ static void handle_SOF(struct USB2OTGUnit *USBUnit, struct ExecBase *SysBase, UL
 #endif
         }
 
-        FNAME_DEV(Cause)(USB2OTGBase, &USBUnit->hu_PendingInt);
+        /* patches/aros/0022: only wake the softint when a transfer is
+         * actually due. int_scheduled was already being set and never read,
+         * so this fired on every SOF whether there was work or not. */
+        if (int_scheduled)
+            FNAME_DEV(Cause)(USB2OTGBase, &USBUnit->hu_PendingInt);
 
         /*
          * Do NOT arm INT channels from here: arming a direct periodic

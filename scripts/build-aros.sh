@@ -579,6 +579,17 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # code that stops being compiled stops being code; just not installed.
     make kernel-bthciuart
 
+    # S:Startup-Sequence, because a patch to it otherwise never reaches a card.
+    #
+    # make-sdcard.sh copies the sequence out of the distribution tree, and the
+    # lean target does not rebuild it -- so patches/aros/0053 could be applied,
+    # verified and still absent from the image. That happened: an image was
+    # built whose Startup-Sequence named a host controller that was not on it,
+    # which would have meant no USB at all on real hardware. Same trap
+    # CLAUDE.md records for modules: if a change is not in the kernel ELF,
+    # check where the copy on the card came from.
+    make workbench-s
+
     # debug-handler, without which DEBUG: silently swallows everything.
     #
     # Devs/DOSDrivers/DEBUG is on the card and says "Handler = debug-handler",

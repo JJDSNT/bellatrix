@@ -97,7 +97,10 @@ static int FNAME_DEV(Init)(LIBBASETYPEPTR USB2OTGBase)
 
     if (!FNAME_DEV(DTEnabled)())
     {
-        D(bug("[USB2OTG] %s: disabled in the device tree\n", __PRETTY_FUNCTION__));
+        /* patches/aros/0016: unconditional -- a controller silently absent
+         * because the device tree disabled it is exactly the case that needs
+         * to say so. */
+        bug("[USB2OTG] %s: disabled in the device tree\n", __PRETTY_FUNCTION__);
         return FALSE;
     }
 

@@ -28,6 +28,65 @@ static const UWORD __suported_cmds[] =
     0
 };
 
+/*
+ * Settle delays through a task-local timer.
+ *
+ * This is patches/aros/0021, which was lost when the driver was copied in as
+ * ours -- the counted spin loops it had replaced came back with the copy. They
+ * were sized for a 1.2 GHz Cortex-A53 ("30M NOPs" for 25 ms); as JITted m68k
+ * under Emu68 the same loop runs for minutes, so the boot stopped after
+ * "Init: Core soft reset" with no error, because it was not hanging, it was
+ * counting.
+ *
+ * The port and request are created here rather than reusing hd_TimerReq, and
+ * that is the whole point of 0021 over its predecessor 0018: hd_TimerReq is
+ * created by the device Init task, while OpenUnit runs on Poseidon's
+ * AddUSBHardware task, so waiting on the Init task's reply port never wakes
+ * the caller. Using it would have replaced one hang with another.
+ */
+static BOOL usb2otg_delay(ULONG microseconds)
+{
+    struct MsgPort *port;
+    struct timerequest *req;
+    BOOL result = FALSE;
+
+    port = CreateMsgPort();
+    if (port == NULL)
+    {
+        bug("[USB2OTG] Failed to create delay timer port\n");
+        return FALSE;
+    }
+
+    req = (struct timerequest *)CreateIORequest(port,
+        sizeof(struct timerequest));
+    if (req == NULL)
+    {
+        bug("[USB2OTG] Failed to create delay timer request\n");
+        DeleteMsgPort(port);
+        return FALSE;
+    }
+
+    if (OpenDevice("timer.device", UNIT_MICROHZ,
+            (struct IORequest *)req, 0) != 0)
+    {
+        bug("[USB2OTG] Failed to open delay timer\n");
+        DeleteIORequest((struct IORequest *)req);
+        DeleteMsgPort(port);
+        return FALSE;
+    }
+
+    req->tr_node.io_Command = TR_ADDREQUEST;
+    req->tr_time.tv_secs = microseconds / 1000000;
+    req->tr_time.tv_micro = microseconds % 1000000;
+    DoIO((struct IORequest *)req);
+    result = req->tr_node.io_Error == 0;
+
+    CloseDevice((struct IORequest *)req);
+    DeleteIORequest((struct IORequest *)req);
+    DeleteMsgPort(port);
+    return result;
+}
+
 struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
                         LONG unitnr,
                         LIBBASETYPEPTR USB2OTGBase)
@@ -56,18 +115,53 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
             /* Save firmware GUSBCFG before reset to restore PHY settings. */
             ULONG saved_gusbcfg = rd32le(USB2OTG_USB);
 
-            /* Step 1: Core soft reset (wait AHB IDLE -> CSFTRST -> wait clear). */
-            bug("[USB2OTG] Init: Core soft reset\n");
-            usb2otg_wait_ahb_idle(100000, "before core soft reset");
+            /*
+             * Quiesce the AHB master before waiting for it to go idle.
+             *
+             * GRSTCTL.AHBIDLE only comes up once the core has no bus activity
+             * left, and a core that still has DMA enabled -- from the firmware,
+             * or from a previous owner of the controller -- need never get
+             * there. Step 2 below re-enables both bits after the reset, on the
+             * assumption that the reset cleared them; that says nothing about
+             * the state going *in*.
+             *
+             * Observed as a hang here under QEMU: "Init: Core soft reset" and
+             * then nothing, with the boot never reaching the desktop. The
+             * Bellatrix driver beside this one clears the same two bits before
+             * its own wait and resets cleanly on the same emulated hardware,
+             * which is what identified this.
+             */
+            otg_RegVal = rd32le(USB2OTG_AHB);
+            otg_RegVal &= ~(USB2OTG_AHB_DMAENABLE | USB2OTG_AHB_INTENABLE);
+            wr32le(USB2OTG_AHB, otg_RegVal);
+            wr32le(USB2OTG_INTRMASK, 0);
+            D(bug("[USB2OTG] Init: AHB master quiesced\n"));
+
+            /*
+             * Step 1: Core soft reset (wait AHB IDLE -> CSFTRST -> wait clear).
+             *
+             * patches/aros/0020, restored: the polling helpers return a
+             * status and this ignored it, so a core that will not reset looked
+             * like a hung device open and initialisation carried on with
+             * unusable hardware. The timeouts are the patch's too -- 1000 and
+             * 10000 rather than 100000 and 1000000 -- because a bounded wait
+             * that reports beats a long one that hides.
+             */
+            bug("[USB2OTG] Init: Core soft reset, GRSTCTL=%08x\n",
+                rd32le(USB2OTG_RESET));
+            if (!usb2otg_wait_ahb_idle(1000, "before core soft reset"))
+                goto reset_failed;
             wr32le(USB2OTG_RESET, USB2OTG_RESET_CORESOFT);
-            usb2otg_wait_reset_bit_clear(USB2OTG_RESET_CORESOFT, 1000000,
-                "Init: Core soft reset");
+            bug("[USB2OTG] Init: CSFTRST written, GRSTCTL=%08x\n",
+                rd32le(USB2OTG_RESET));
+            if (!usb2otg_wait_reset_bit_clear(USB2OTG_RESET_CORESOFT, 10000,
+                    "Init: Core soft reset"))
+                goto reset_failed;
+            bug("[USB2OTG] Init: Core reset complete, GRSTCTL=%08x\n",
+                rd32le(USB2OTG_RESET));
             /* Wait for internal logic to settle after core reset */
-            {
-                volatile int i;
-                for (i = 0; i < 100000; i++)
-                    USB2OTG_RELAX();
-            }
+            if (!usb2otg_delay(1000))
+                goto reset_failed;
 
             /*
              * Step 2: Re-enable DMA + global IRQs (cleared by core reset).
@@ -85,12 +179,9 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
             saved_gusbcfg &= ~USB2OTG_USB_FORCE_DEV_MODE;
             saved_gusbcfg |= USB2OTG_USB_FORCE_HOST_MODE;
             wr32le(USB2OTG_USB, saved_gusbcfg);
-            /* 25 ms for mode switch — ~30M NOPs on 1.2 GHz Cortex-A53. */
-            {
-                volatile int i;
-                for (i = 0; i < 30000000; i++)
-                    USB2OTG_RELAX();
-            }
+            /* 25 ms for the mode switch, timed rather than counted. */
+            if (!usb2otg_delay(25000))
+                goto reset_failed;
 
             /* Step 4: Configure HOSTCFG (FSLSPCLKSEL) after core reset. */
             otg_RegVal = rd32le(USB2OTG_HARDWARE2);
@@ -301,6 +392,12 @@ struct Unit * FNAME_DEV(OpenUnit)(struct IOUsbHWReq *ioreq,
         return (&otg_Unit->hu_Unit);
     }
 
+    return (NULL);
+
+reset_failed:
+    /* patches/aros/0020: hand the unit back rather than run on a core that
+     * never reset. */
+    otg_Unit->hu_UnitAllocated = FALSE;
     return (NULL);
 }
 
