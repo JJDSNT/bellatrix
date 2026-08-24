@@ -449,6 +449,30 @@ gpu_mem=128
 hdmi_group=2
 hdmi_mode=82
 
+# HDMI rather than DVI, which is what carries audio.
+#
+# hdmi_drive=1 is DVI: video only, no audio packets on the link at all. The
+# firmware picks DVI when nothing says otherwise, so hdmiaudio.audio can
+# initialise, program the MAI block and produce nothing audible -- the driver
+# is fine and the wire is in the wrong mode. arch/arm-raspi sets this for the
+# same reason.
+hdmi_drive=2
+
+# NOT setting dtoverlay=miniuart-bt here, deliberately.
+#
+# On a stock Pi 3 that overlay is what gives Bluetooth the PL011 and moves the
+# console to the mini-UART, which is the arrangement the comment below assumes.
+# But this image ships no overlays/ directory at all, and a dtoverlay line
+# naming a file the firmware cannot find is ignored without a word -- which
+# would read as "configured" while changing nothing.
+#
+# It may not be needed: btuart.resource reports "[BTUART] ready:
+# PL011=0xf2201000" on hardware and the transport reaches the HCI layer, so
+# something is already routing the PL011 to the radio. Whether that is Emu68's
+# device tree or the firmware default has not been established. Settle that
+# before adding the line, and ship overlays/ with it if it turns out to be
+# needed.
+
 # Serial console on GPIO 14/15. Bluetooth owns the PL011 on a Pi 3, so the
 # console comes out of the mini-UART instead, and the mini-UART's baud rate
 # follows the core clock -- pinning that clock is what keeps it readable.
