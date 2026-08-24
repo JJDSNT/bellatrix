@@ -1,0 +1,50 @@
+s: register the Bluetooth controller with the stack
+
+S:Startup-Sequence runs AddBTClasses and BTStackLoader but never
+AddBTHardware, so the stack starts with no controller registered. btParseCfg()
+then finds no hardware to configure, and BTStackLoader reports "Error loading
+bluetooth.prefs!" -- which reads as a missing preferences file when the prefs
+was never the problem.
+
+The prefs only records *which* registered controllers stay enabled. The code
+says as much: with no hardware data present it deliberately removes nothing,
+"because this could render the system useless (no USB mice or keyboards to
+configure the hardware!)". Nothing registers the controller in the first
+place.
+
+Added before BTStackLoader, since that is what loads and parses the config
+against the registered hardware, and guarded on the device existing -- the
+same shape as the AddUSBHardware block above it.
+
+Output goes to a file rather than NIL: because this is the call that answers
+whether the radio responds at all. AddBTHardware runs btEnumerateHardware()
+and prints "okay!" or "enumeration failed!", and a BCM43438 answers HCI_Reset
+from ROM with no patchram, so it does not depend on firmware.
+
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -136,6 +136,24 @@
+     AddUSBHardware DEVS:USBHardware/usb2otg.device >>"SDCARD0P0:usb-hardware.log"
+     Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
+ EndIf
++; Tell the Bluetooth stack about the controller that is present, the same way
++; AddUSBHardware does above. Without this the stack loads, finds no hardware
++; registered, and btParseCfg() has nothing to configure -- which reads as a
++; missing prefs file when the prefs was never the problem.
++;
++; Before BTStackLoader, because that is what loads the config and parses it
++; against the registered hardware.
++;
++; The output goes to a file rather than NIL: because this is the call that
++; answers whether the radio responds at all: AddBTHardware runs
++; btEnumerateHardware() and prints "okay!" or "enumeration failed!". A BCM43438
++; answers HCI_Reset from ROM, with no patchram, so this does not depend on
++; firmware.
++If EXISTS "DEVS:Bluetooth/bthciuart.device"
++    Echo "starting AddBTHardware" >"SDCARD0P0:bt-hardware.log"
++    AddBTHardware DEVS:Bluetooth/bthciuart.device >>"SDCARD0P0:bt-hardware.log"
++    Echo "finished AddBTHardware" >>"SDCARD0P0:bt-hardware.log"
++EndIf
+ If EXISTS "C:BTStackLoader"
+     BTStackLoader >NIL:
+ EndIf
