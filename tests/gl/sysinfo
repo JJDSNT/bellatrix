@@ -8,6 +8,13 @@
 ; "DEBUG/S,BRIEF/S,FULL/S,DARK/S" -- which is the only reason this can be run
 ; from a script at all.
 ;
-Echo >DEBUG: "[sysinfo] xSysInfo FULL"
-xSysInfo FULL >DEBUG:
-Echo >DEBUG: "[sysinfo] done"
+; Written to the card, not to DEBUG:. An Echo or a redirect to DEBUG: from a
+; boot script produces nothing on the serial line here -- verified across two
+; separate runs of two different boot tests -- so a probe that reports that way
+; reports nothing at all. SDCARD0P0: is where S:Startup-Sequence already sends
+; the AddUSBHardware log for the same reason, and the file can be read out of
+; the image afterwards with mtype.
+;
+Echo >"SDCARD0P0:sysinfo.log" "[sysinfo] xSysInfo FULL"
+xSysInfo FULL >>"SDCARD0P0:sysinfo.log"
+Echo >>"SDCARD0P0:sysinfo.log" "[sysinfo] done"

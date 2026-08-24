@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0052
 title: "xSysInfo cannot allocate from its own MemHeader, and the program is not what should change"
-status: open
+status: done
 priority: medium
 type: bug
 owner: unassigned
 created_at: 2026-08-23
-updated_at: 2026-08-23
+updated_at: 2026-08-24
 tags:
   - exec
   - memory
@@ -119,8 +119,51 @@ so this blocks a measurement we want. But the reason to fix it is not the
 measurement: any Amiga program that manages its own memory pool — and that is
 a common enough pattern — meets this on the first `Allocate()`.
 
+# Resolved 2026-08-24
+
+`patches/aros/0055`. `xSysInfo FULL` runs to its full report -- hardware,
+caches, and the library list with versions and addresses -- from the shipped
+binary with no changes to it.
+
+The fix is the one this issue recommended, applied in three places rather than
+one, because the same conflation appears three times:
+
+| where | was | now |
+|---|---|---|
+| `memory_nommu.c` `stdAlloc` | address and size both vs `MEMCHUNK_TOTAL` | address vs `AROS_WORSTALIGN`, size vs `MEMCHUNK_TOTAL` |
+| `memory.c` `validateHeader` | `mh_First` vs `MEMCHUNK_TOTAL` | vs `AROS_WORSTALIGN` (`mh_Free` unchanged) |
+| `memory.c` `validateChunk` | `mc_Next` vs `MEMCHUNK_TOTAL`; gap >= `MEMCHUNK_TOTAL` | `mc_Next` vs `AROS_WORSTALIGN`; gap >= `AROS_WORSTALIGN` |
+
+The third took a second look to get right. Rule 3 required at least
+`MEMCHUNK_TOTAL` **allocated** bytes between two free chunks -- but allocated
+bytes never have to hold a `MemChunk`. The smallest gap that can exist is the
+smallest allocation the target can make, which is its worst-case alignment.
+xSysInfo produced a legitimate 4-byte gap and it was called corruption. The
+upper bound still uses `MEMCHUNK_TOTAL`, because the last free chunk does have
+to hold one.
+
+## What this cost, methodologically
+
+Two mistakes worth recording, both of the same kind -- believing a result
+before the method could produce it.
+
+**The first fix changed the message, not the decision.** `memory.c:85` is the
+reporter that formats the alert; `validateHeader` 350 lines below is what
+raises it. Fixing only the reporter made the "Unaligned first chunk address"
+line disappear while the alert stayed, which looked like partial progress and
+was actually a diagnostic that had stopped telling the truth.
+
+**And a boot test that reports to `DEBUG:` reports nothing.** `Echo >DEBUG:`
+and `xSysInfo FULL >DEBUG:` produce no serial output on this port -- verified
+across two runs of two different boot tests, with zero occurrences of any
+marker. A run was read as "the crash is gone" when the crash simply could not
+have been printed. `tests/gl/sysinfo` now writes to `SDCARD0P0:sysinfo.log`,
+the way `S:Startup-Sequence` already logs `AddUSBHardware`, and the file is
+read back out of the image with `mtype`.
+
 # Verification
 
-`xSysInfo FULL` runs to its report, from the binary in `tests/sysinfo/` with
-no changes to it. `make-sdcard.sh` already stages it to `C:`, and
-`S:sysinfo` already runs it.
+Done. `xSysInfo FULL` reaches its report from the unmodified binary, and a
+plain boot still reaches `hold released: icons` at 1:03 -- unchanged from
+baseline, which matters because this patch touches the Exec allocator's
+validator.
