@@ -66,7 +66,31 @@ include $(SRCDIR)/config/aros.cfg
 # a virtual one. The Pi's onboard controller hangs off the PL011 that
 # soc/bluetooth/btuart.resource already owns, and nothing yet bridges the two.
 # See ISSUE-0046.
-#MM- kernel-bluetooth-m68k-emu68 : kernel-bluetooth kernel-bthciuart
+# The components of kernel-bluetooth, minus the firmware loaders.
+#
+# kernel-bluetooth pulls kernel-bluetooth-firmware, and rom/bluetooth/firmware
+# holds exactly two loaders, both Realtek. This board's radio is a Broadcom
+# BCM43438 on the PL011, and BTStackLoader calls bLoadFirmwareLoaders()
+# unconditionally -- so every card carried two modules that can never match the
+# hardware, and on a real Pi they surface in the stack as Realtek parts that
+# are not there.
+#
+# The chip does not need them: a BCM43438 runs from ROM, answers HCI_Reset and
+# reports its BD_ADDR with no patchram at all. Firmware adds fixes and
+# features; it is not a precondition for the controller working.
+#
+# Listing the parts rather than the aggregate keeps this out of upstream's
+# mmakefile, where an ifeq would not work anyway -- mmake reads #MM lines as
+# text when it scans, so a conditional around them is not seen. When a
+# Broadcom loader exists, kernel-bluetooth-firmware goes back on this line.
+# See ISSUE-0053.
+#MM- kernel-bluetooth-m68k-emu68 : \
+#MM      kernel-bluetooth-library \
+#MM      kernel-bluetooth-classes \
+#MM      bluetooth-shellcommands \
+#MM      kernel-bluetooth-hardware \
+#MM      kernel-bluetooth-prefs \
+#MM      kernel-bthciuart
 
 
 #
