@@ -249,15 +249,33 @@ BOOL DriverInit(struct DriverBase *AHIsubBase)
             return FALSE;
         }
     }
-    else if (RPiHDMIBase->periiobase == BCM2836_PERIPHYSBASE || RPiHDMIBase->periiobase == BCM2835_PERIPHYSBASE)
-    {
-        RPiHDMIBase->soc[0] = &rpihdmi_bcm283x_soc;
-        RPiHDMIBase->num_outputs = 1;
-    }
     else
     {
-        Req("Unsupported Raspberry Pi HDMI audio hardware.\n");
-        return FALSE;
+        /*
+         * Anything else is a BCM283x reached through Emu68, which is this
+         * port.
+         *
+         * The tests above compare KrnGetSystemAttr(KATTR_PeripheralBase)
+         * against fixed *physical* constants -- 0x20000000 for BCM2835,
+         * 0x3f000000 for BCM2836. That works on bare-metal ARM, where the
+         * guest sees physical addresses. Under Emu68 it cannot: Emu68 maps the
+         * Pi peripherals into a window of its own choosing and tells the guest
+         * where through that same attribute. On a Pi 3 here the window is
+         * 0xf2000000 -- the Bluetooth resource reports its PL011 at
+         * 0xf2201000, which is that base plus the PL011's 0x201000 offset.
+         *
+         * So this driver refused the hardware it was written for, because the
+         * address did not match a constant it was never going to match. Every
+         * register access already goes through periiobase, so the base being
+         * unfamiliar is exactly the case that is fine; what mattered was only
+         * that the kernel gave one at all, which the zero test above covers.
+         *
+         * The BCM2711 and BCM2712 branches above keep their comparisons: those
+         * boards are reached through the device tree rather than this window,
+         * and this port does not run on them yet.
+         */
+        RPiHDMIBase->soc[0] = &rpihdmi_bcm283x_soc;
+        RPiHDMIBase->num_outputs = 1;
     }
 
     return TRUE;
