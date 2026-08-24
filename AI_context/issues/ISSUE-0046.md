@@ -206,12 +206,18 @@ controller and scanned. So patchram is **not** the blocker, and attributing
 the AA:AA:AA:AA:AA:AA address to its absence was wrong -- that address needs
 its own explanation.
 
-What legacy did have, in `bt_hal_raspi3.c`, is an RX ring fed by a bounded
-interrupt top half, with `s_rx_ring_overflow` counting bytes lost when the
-ring filled. Our `btuart.resource` does arm an RX interrupt
-(`PL011_IFLS_RX18`, a quarter of the 32-byte FIFO) so that is not the
-difference -- but it has **no overflow counter**, so if bytes are being
-dropped nothing says so.
+Legacy also had an RX ring in `bt_hal_raspi3.c` with `s_rx_ring_overflow`
+counting bytes lost when it filled. **We have the same, and better** -- an
+8 KB ring against legacy's 2 KB, `rx_dropped` and `rx_errors`, and
+`BTUARTRead()` reports `[BTUART] rx ring overflow, N byte(s) dropped`
+whenever any were lost. An earlier version of this section said the counter
+was missing; it was not, and that claim was made without checking.
+
+That matters for the diagnosis rather than for the code: **the hardware log
+does not report an overflow**, so bytes are not being lost, and the idea that
+step 14 fails because `READ_LOCAL_NAME`'s 248-byte reply overruns the receive
+path is already excluded by evidence that was on screen. Whatever stops the
+command stream after step 13, it is not the FIFO.
 
 That is worth chasing because of *where* the bring-up stops. Steps 0-13 are
 short commands with short replies. Step 14 is `READ_LOCAL_NAME`, whose
