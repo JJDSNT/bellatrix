@@ -200,6 +200,47 @@ disks suggested -- none of those had an MBR at all -- and it moves suspicion to
 the RDB's own geometry, since rdbtool wrote it as though it were a standalone
 disk rather than a region inside a partition.
 
+### Measured on the RDB card
+
+A whole-disk RDB (no MBR) boots this build: `DH0`, DOSType `FAT\2`, mounts as
+SYS: and the machine comes up. Sequential read of the same 10 MB file, 64 KB
+buffer, cold: **1037 KB/s** -- the same as the MBR card's ~900 KB/s, so the
+container costs nothing.
+
+`DH1`, DOSType `SFS\0` in the same RDB, is **not measured**: it is still
+unformatted, and `SFSformat DRIVE DH1:` answers `Unknown device DH1:`.
+
+The boot scan does not reject it. With `patches/aros/0039` turned on it says:
+
+    AddPartitionVolume: Partition name: DH1 bootable: 0
+    AddPartitionVolume: Found on-disk filesystem 0x53465300
+    AddPartitionVolume: AddBootNode(DH1, 0, 0x53465300, NULL)
+
+So the partition is seen, the handler embedded in the RDB's FSHD **is found**,
+and a BootNode is added. What does not happen is the node reaching the DOS
+device list. That is a much smaller question than the one this started as.
+
+### xSysInfo: numbers, but not the drive test
+
+`xSysInfo BRIEF` runs on this machine:
+
+    CPU: 68040 MHz: 142   MMU: 68040 enabled
+    Dhrystones: 56060   MIPS: 31.90   MFLOPS: 20.00
+    Chip RAM speed: 3464 MB/s
+    Fast RAM speed: 3355 MB/s
+    ROM speed: 1.25 MB/s
+
+Useful context rather than a drive number: memory runs at ~3.4 GB/s while the
+card reads at ~1 MB/s cold, three orders of magnitude apart.
+
+**The drive benchmark is in `FULL`, and `FULL` crashes** -- the private
+`MemHeader` aligned to 4 against `MEMCHUNK_TOTAL` 8, recorded above. So there is
+still no xSysInfo drive figure.
+
+Also worth noting from its `DEBUG` output: *"emu68: NO devicetree.resource
+found! Assuming real CPU"*. It looks for Emu68's devicetree.resource, which
+arrives on the Zorro III board this port does not carry.
+
 ### Next
 
 Two experiments, either of which closes this:

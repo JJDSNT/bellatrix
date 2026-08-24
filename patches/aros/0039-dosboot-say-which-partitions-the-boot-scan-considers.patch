@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 24 Aug 2026 05:00:00 -0300
+Subject: [PATCH 39/39] dosboot: say which partitions the boot scan considers
+
+ISSUE-0051. A whole-disk RDB card with two partitions mounts one of them: DH0,
+DOSType FAT\2, appears and boots. DH1, DOSType SFS\0, in the same RDB with the
+handler embedded in FSHD/LSEG, produces no device node at all -- "Unknown
+device DH1:".
+
+The obvious rejection does not explain it. AddPartitionVolume skips a partition
+only when its DosEnvec is too short or its DOSType is zero, and DH1's is
+0x53465300. So something else drops it, and this file already reports every
+step it takes; the trace was only switched off.
+
+Diagnostic, and loud. Carried only while that is open.
+---
+--- a/rom/dosboot/bootscan.c
++++ b/rom/dosboot/bootscan.c
+@@ -4,6 +4,8 @@
+     Desc: Discover all mountable partitions
+ */
+ 
++#define DEBUG 1
++
+ #include <string.h>
+ #include <stdlib.h>
+ 
