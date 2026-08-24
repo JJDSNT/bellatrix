@@ -98,6 +98,18 @@
 #define BCM2835_PERIPHYSBASE 0x20000000
 #endif
 
+/*
+ * And the one this machine actually has.
+ *
+ * BCM2836 -- the Pi 2 and Pi 3 -- moved the peripheral window to 0x3f000000.
+ * This header carried only the BCM2835 value, so any driver shared with
+ * arch/arm-native that tests for the Pi 3 base did not compile here; the
+ * arm-native copy of this file has defined both from the start.
+ */
+#ifndef BCM2836_PERIPHYSBASE
+#define BCM2836_PERIPHYSBASE 0x3f000000
+#endif
+
 #define SYSTIMER_BASE       (ARM_PERIIOBASE + 0x003000)
 #define SYSTIMER_CS         (SYSTIMER_BASE + 0x00)
 #define SYSTIMER_CLO        (SYSTIMER_BASE + 0x04)
