@@ -614,6 +614,14 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # partition never loads it.
     make kernel-fs-sfs
 
+    # Both USB drivers, because there are two and both are ours.
+    #
+    # kernel-usb-arosotg is the AROS DWC2 engine, adopted from arm-native and
+    # ours to modify; kernel-usb-dwc2emu68 is the Bellatrix rewrite replacing
+    # it (ISSUE-0047). They are built, run and compared before either is
+    # deleted -- the same shape as the two SD card backends. Building only one
+    # is how the other stops being code.
+    make kernel-usb-arosotg
     make kernel-usb-dwc2emu68
     rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
 

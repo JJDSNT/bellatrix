@@ -26,9 +26,19 @@ static const UWORD supported_commands[] =
     UHCMD_USBSUSPEND,
     UHCMD_USBOPER,
     UHCMD_CONTROLXFER,
-    UHCMD_ISOXFER,
     UHCMD_INTXFER,
-    UHCMD_BULKXFER,
+    /*
+     * UHCMD_BULKXFER and UHCMD_ISOXFER are deliberately absent.
+     *
+     * They were listed here while the switch in handle_request() sent them to
+     * its default case, which answers IOERR_NOCMD -- so the device told
+     * Poseidon it supported transfers it then refused. A NSCMD_DEVICEQUERY
+     * table is a promise about what the switch does, and this one was not
+     * true.
+     *
+     * Add each back in the same change that implements it. Until then
+     * ../usb2otg is the side with full coverage.
+     */
     NSCMD_DEVICEQUERY,
     0
 };

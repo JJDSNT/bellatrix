@@ -1,30 +1,36 @@
 include $(SRCDIR)/config/aros.cfg
 
-# The engine is here now, not patched into place from arch/arm-native.
+# The Bellatrix DWC2 driver, written here rather than inherited.
 #
-# It arrived as that driver and is being replaced file by file by the
-# dwc2emu68_* sources beside it (ISSUE-0047); until that finishes both sets
-# live here, and the usb2otg_* names are kept precisely so it stays obvious
-# which half is still inherited. What changed is only where they are: a patch
-# series is the wrong shape for code under active repair, which is what the
-# graphics drivers already demonstrated -- ten patches, each needing to be
-# regenerated whenever a neighbouring hunk moved, and one silently lost to a
-# pin refresh.
+# One of two. The AROS engine this is meant to replace lives beside it in
+# ../usb2otg, as our own copy to modify -- both are ours, both build, and the
+# plan (ISSUE-0047) is to finish the port, compare the two running, and only
+# then delete one. Same shape as the two SD card backends in soc/sdcard.
 #
-# The ARM-instruction fixes that used to be patches/aros/0054 are in these
-# copies.
+# This directory used to hold both, with the inherited sources renamed at
+# compile time by -Dusb2otg=dwc2emu68. That made one module out of two
+# drivers and meant only one could exist; the rename is gone.
+#
+# What it does differently: a unit task owning all request and controller
+# state, an interrupt top half that only acknowledges and signals, an
+# explicit MMIO/DMA/cache boundary for emu68, and SOF enabled by event
+# rather than a permanent 1 kHz guest interrupt.
+#
+# What it does not do yet: UHCMD_BULKXFER and UHCMD_ISOXFER. Control and
+# interrupt transfers are implemented, which is enough for HID and not
+# enough for storage. Until those land, ../usb2otg is the only side with
+# full coverage.
+#
 DWC2EMU68DIR := $(SRCDIR)/arch/m68k-emu68/soc/usb/dwc2emu68
-USB2OTGDIR := $(DWC2EMU68DIR)
+USER_INCLUDES := -I$(DWC2EMU68DIR) -I$(SRCDIR)/arch/m68k-emu68/include
 
-USER_INCLUDES := -I$(USB2OTGDIR) -I$(SRCDIR)/arch/m68k-emu68/include
-USER_CFLAGS := -Dusb2otg=dwc2emu68
-
-FILES := $(addprefix $(USB2OTGDIR)/, \
-    usb2otg_device \
-    usb2otg_core \
-    usb2otg_intr \
-    usb2otg_hub \
-    usb2otg_schedule)
+FILES := $(addprefix $(DWC2EMU68DIR)/, \
+    dwc2emu68_device \
+    dwc2emu68_controller \
+    dwc2emu68_platform \
+    dwc2emu68_root \
+    dwc2emu68_transfer \
+    dwc2emu68_unit)
 
 %build_module mmake=kernel-usb-dwc2emu68 \
     modname=dwc2emu68 modtype=device \

@@ -1,0 +1,44 @@
+include $(SRCDIR)/config/aros.cfg
+
+# The AROS DWC2 engine, adopted.
+#
+# This is the arm-native usb2otg driver. It used to be reached through a patch
+# series against arch/arm-native, then it was copied in here -- but it was
+# copied into the Bellatrix driver's directory and renamed at compile time with
+# -Dusb2otg=dwc2emu68, so it built as dwc2emu68.device and the two could not
+# exist at once. A rename is not ownership, and one module cannot be two
+# drivers.
+#
+# It lives on its own now, under its own name, as our copy to modify: the
+# ARM-instruction fixes that used to be patches/aros/0054 are already in it.
+# The Bellatrix rewrite is beside it in ../dwc2emu68 (ISSUE-0047), and the two
+# are meant to be built, run and compared before either is deleted -- the same
+# shape as the two SD card backends in soc/sdcard.
+#
+# It implements all four transfer types. The rewrite currently implements
+# control and interrupt only, which is why deleting this one would cost the
+# only bulk and isochronous support the port has.
+# The metatarget is kernel-usb-arosotg, not kernel-usb-usb2otg: arm-native
+# already defines the latter for the original of this code, and mmake matches
+# metatargets by name across the whole tree -- asking for it here built
+# arch/arm-native's copy instead and died on a `yield` instruction the m68k
+# assembler has never heard of.
+USB2OTGDIR := $(SRCDIR)/arch/m68k-emu68/soc/usb/usb2otg
+
+USER_INCLUDES := -I$(USB2OTGDIR) -I$(SRCDIR)/arch/m68k-emu68/include
+
+FILES := $(addprefix $(USB2OTGDIR)/, \
+    usb2otg_device \
+    usb2otg_core \
+    usb2otg_intr \
+    usb2otg_hub \
+    usb2otg_schedule)
+
+%build_module mmake=kernel-usb-arosotg \
+    modname=usb2otg modtype=device \
+    conffile=$(USB2OTGDIR)/usb2otg.conf \
+    moduledir=Devs/USBHardware \
+    files="$(FILES)" \
+    uselibs="hiddstubs debug"
+
+%common
