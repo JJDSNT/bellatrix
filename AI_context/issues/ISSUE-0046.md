@@ -6,7 +6,7 @@ priority: high
 type: feature
 owner: agent
 created_at: 2026-08-21
-updated_at: 2026-08-21
+updated_at: 2026-08-24
 tags:
   - bluetooth
   - btuart
@@ -165,7 +165,33 @@ Bellatrix btuart.resource
   `C:BTStackLoader` is already invoked by the stock Startup-Sequence, so
   nothing of ours has to start it.
 
-# What is left, after this
+# Corrected 2026-08-24
+
+Two of the three items below are no longer true, and the issue was read as
+current for three days after they stopped being so.
+
+**The transport exists.** `aros/arch/m68k-emu68/soc/bluetooth/bthciuart` builds
+`Devs/Bluetooth/bthciuart.device` -- H4 framing over the PL011 that
+`btuart.resource` owns -- and `build-aros.sh` builds it. It is on the card.
+
+**There is only one bluetooth.library on the card.** The
+`kernel-bluetooth-m68k-emu68` alias is enabled, so `Libs/bluetooth.library`
+(176 KB) is AROS's own; nothing on the card comes from `Extras/aros-bluzing`.
+Which means item 3 -- removing the `external/aros-bluzing` submodule -- is
+unblocked and only wants doing.
+
+**What actually remains is firmware.** A BCM43438 runs from ROM until it is
+sent a patchram `.hcd`, we have no such blob (the WiFiPi submodule's firmware
+directory has none either), and the Broadcom vendor protocol that uploads one
+lives outside both the transport and the resource.
+
+**And there is a way to make progress without a Pi**, which nothing here has
+tried: `vbthci.device` is a *virtual* HCI transport, and the card already
+carries `AddBTHardware`, `BTStackLoader`, `BTDevLister` and `BTErrorLog`.
+Loading the stack against vbthci under QEMU separates "the stack works" from
+"the radio needs firmware" -- worth knowing before investing in patchram.
+
+# What was left, as written on 2026-08-21
 
 1. **The transport.** The stack talks to HCI devices in `DEVS:Bluetooth`, and
    the only one upstream is `vbthci`, which is virtual.
