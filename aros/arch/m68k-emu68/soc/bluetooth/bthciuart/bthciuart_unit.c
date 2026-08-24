@@ -189,16 +189,61 @@ static void bthciuart_Reassemble(struct BTHCIUARTUnit *unit)
     }
 }
 
-/* Send one packet, type byte first. */
+/*
+ * Send one packet, type byte first.
+ *
+ * BTUARTWrite() returns the number of bytes it accepted, not a status: a
+ * successful one-byte write returns 1. This compared that against BTUART_OK,
+ * which is 0, so every successful write was read as a failure and every HCI
+ * command came back as "HCI transmission failed, host error (3)" -- the
+ * transport being up made that look like the radio not answering.
+ *
+ * It is also a non-blocking write that stops at TXFF, so a full FIFO means a
+ * short write rather than an error. The caller has to push the remainder,
+ * which nothing did.
+ */
+static LONG bthciuart_WriteAll(struct BTHCIUARTUnit *unit, const UBYTE *data,
+                               ULONG length)
+{
+    ULONG done = 0;
+    ULONG spins = 0;
+
+    while (done < length)
+    {
+        LONG n = BTUARTWrite(unit, data + done, length - done);
+
+        if (n < 0)
+        {
+            bug("[bthciuart] BTUARTWrite failed, rc=%ld\n", (LONG)n);
+            return BTIOERR_HOSTERROR;
+        }
+        if (n == 0)
+        {
+            /* FIFO full: give it room rather than spinning forever. */
+            if (++spins > 100000)
+            {
+                bug("[bthciuart] transmit FIFO stayed full, %lu of %lu sent\n",
+                    done, length);
+                return BTIOERR_HOSTERROR;
+            }
+            continue;
+        }
+        spins = 0;
+        done += (ULONG)n;
+    }
+    return 0;
+}
+
 static LONG bthciuart_Send(struct BTHCIUARTUnit *unit, UBYTE type,
                            const UBYTE *data, ULONG length)
 {
     UBYTE hdr = type;
+    LONG err = bthciuart_WriteAll(unit, &hdr, 1);
 
-    if (BTUARTWrite(unit, &hdr, 1) != BTUART_OK)
-        return BTIOERR_HOSTERROR;
-    if (length && BTUARTWrite(unit, data, length) != BTUART_OK)
-        return BTIOERR_HOSTERROR;
+    if (err)
+        return err;
+    if (length)
+        return bthciuart_WriteAll(unit, data, length);
 
     return 0;
 }
@@ -335,19 +380,46 @@ void bthciuart_UnitTask(void)
         ((struct Process *)self)->pr_Task.tc_UserData;
     struct Task *waiter;
 
+    /*
+     * Say which step failed.
+     *
+     * There are four of them and none of them said anything, so a failure
+     * arrived at AddBTHardware as the single word "failed" -- with the
+     * resource itself reporting "[BTUART] ready" a moment earlier, which
+     * makes the two impossible to tell apart from a log. Each step now names
+     * itself and its return code.
+     */
     BTUARTBase = OpenResource("btuart.resource");
-
-    if (BTUARTBase
-        && BTUARTClaim(unit) == BTUART_OK)
+    if (!BTUARTBase)
+        bug("[bthciuart] btuart.resource not available\n");
+    else
     {
-        if (BTUARTSetPower(unit, 1) == BTUART_OK
-            && BTUARTConfigure(unit, BTHCIUART_BAUD, BTUART_CONFIG_RTS_CTS)
-                   == BTUART_OK)
-        {
-            unit->hu_Task = self;
-        }
+        LONG rc = BTUARTClaim(unit);
+
+        if (rc != BTUART_OK)
+            bug("[bthciuart] BTUARTClaim failed, rc=%ld\n", (LONG)rc);
         else
-            BTUARTRelease(unit);
+        {
+            rc = BTUARTSetPower(unit, 1);
+            if (rc != BTUART_OK)
+                bug("[bthciuart] BTUARTSetPower failed, rc=%ld\n", (LONG)rc);
+            else
+            {
+                rc = BTUARTConfigure(unit, BTHCIUART_BAUD,
+                        BTUART_CONFIG_RTS_CTS);
+                if (rc != BTUART_OK)
+                    bug("[bthciuart] BTUARTConfigure(%lu baud) failed,"
+                        " rc=%ld\n", (ULONG)BTHCIUART_BAUD, (LONG)rc);
+                else
+                {
+                    bug("[bthciuart] transport up at %lu baud\n",
+                        (ULONG)BTHCIUART_BAUD);
+                    unit->hu_Task = self;
+                }
+            }
+            if (!unit->hu_Task)
+                BTUARTRelease(unit);
+        }
     }
 
     /* Tell the opener whether there is a controller, either way. */

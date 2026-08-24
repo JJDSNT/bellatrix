@@ -23,7 +23,7 @@ from ROM with no patchram, so it does not depend on firmware.
 
 --- a/workbench/s/Startup-Sequence
 +++ b/workbench/s/Startup-Sequence
-@@ -136,6 +136,24 @@
+@@ -136,6 +136,29 @@
      AddUSBHardware DEVS:USBHardware/usb2otg.device >>"SDCARD0P0:usb-hardware.log"
      Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
  EndIf
@@ -43,6 +43,11 @@ from ROM with no patchram, so it does not depend on firmware.
 +If EXISTS "DEVS:Bluetooth/bthciuart.device"
 +    Echo "starting AddBTHardware" >"SDCARD0P0:bt-hardware.log"
 +    AddBTHardware DEVS:Bluetooth/bthciuart.device >>"SDCARD0P0:bt-hardware.log"
++    ; AddBTHardware prints "failed" and nothing else. The reason is recorded
++    ; through btAddErrorMsg(), which is what BTErrorLog reports -- without it
++    ; the log says something went wrong and never what.
++    Echo "--- BTErrorLog ---" >>"SDCARD0P0:bt-hardware.log"
++    BTErrorLog >>"SDCARD0P0:bt-hardware.log"
 +    Echo "finished AddBTHardware" >>"SDCARD0P0:bt-hardware.log"
 +EndIf
  If EXISTS "C:BTStackLoader"
