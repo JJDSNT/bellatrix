@@ -266,7 +266,48 @@ Also worth noting from its `DEBUG` output: *"emu68: NO devicetree.resource
 found! Assuming real CPU"*. It looks for Emu68's devicetree.resource, which
 arrives on the Zorro III board this port does not carry.
 
-### Next
+#### The amplification is 2x, not 5x, and it is not what costs the time
+
+Two corrections, both to numbers stated earlier in this issue.
+
+**The FAT cache range is 16 KB, and the cache was never 32 KB.**
+`cache.c:61` has `RANGE_SHIFT 5`, so a range is 32 sectors. The original
+`Cache_CreateCache(glob, 64, 64, ...)` was therefore **64 x 16 KB = 1 MB**, not
+the 32 KB `patches/aros/0037` claims in its own commit message. That patch's
+premise is wrong; raising the count to 2048 makes it 32 MB, which is why it
+changed nothing measurable -- 1 MB was already enough to keep the cache hitting.
+
+**And the amplification is modest.** The device counters report ~20 MB read
+while opening a 10 MB file: **2x**, not the five-fold figure quoted from
+6844 reads x 8 KB. That arithmetic assumed every read missed; most hit.
+
+Which removes I/O as the explanation for the failure. 20 MB at the device rate
+measured here is on the order of **twelve seconds**, and the open does not
+return in four hundred. Whatever consumes that time is not the card and not the
+filesystem.
+
+**What is left is the loading work itself**: 4145 hunks and roughly four
+thousand sections to allocate and relocate, all of it m68k running under a JIT.
+That is CPU, not I/O, and it is where the next measurement belongs.
+
+## An upstream defect found while reading the cache
+
+`cache.c` writes through the pointer before testing it:
+
+    b = AllocVec(...);
+    b->use_count = 0;
+    b->state = BS_EMPTY;
+    b->num = 0;
+    b->data = ...;
+    if (b != NULL)          /* four writes too late */
+
+On a target where a failed allocation faults, this is a clean crash. On this
+one it is not: the low page is mapped DIRECT -- 68k vectors and AbsExecBase --
+so a NULL `b` would quietly write over the vector table instead. Not implicated
+in anything measured here, since these allocations succeed, but worth fixing on
+a port that cannot rely on null faulting.
+
+# Next
 
 Two experiments, either of which closes this:
 
