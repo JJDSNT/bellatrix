@@ -21,10 +21,14 @@ related_files:
 
 # Summary
 
-## Resolved on hardware: Mesa needs a very large stack (2026-08-24)
+## Mesa needs a very large stack -- but this is not our build (2026-08-24)
 
-On a Raspberry Pi 3, with `stack 100000000` -- one hundred megabytes -- the
-demos work:
+**Not resolved.** What follows is evidence about Mesa's stack appetite, from a
+Raspberry Pi 3 running **a different AROS build, not this one**. It shows what
+the stack has to be; it does not show that this port's demos work, and nothing
+here has demonstrated that they do.
+
+With `stack 100000000` -- one hundred megabytes -- on that build:
 
     3.Work:> stack 100000000
     3.Work:> gl_test
@@ -46,21 +50,31 @@ magnitude below what the demos need, so the test proved nothing and the
 conclusion drawn from it was false. `S:gl-run` now sets the stack before
 launching a demo.
 
-## And the QEMU failure is a different thing
+## Our build, with the same stack, still fails
 
-With the same 100 MB stack under QEMU, `OpenLibrary("mesa3dgl20-0.library")`
-still does not return in 400 seconds. So the two failures this issue has been
-treating as one are not:
+`Stack 100000000` then `OpenMesa mesa3dgl20-0.library` under QEMU: the open
+does not return in 400 seconds, exactly as it did at 1 MB and at the default.
 
-- **on hardware**, the demos were blocked by the stack, and are not any more;
-- **under QEMU**, the 10 MB library still cannot be loaded, and that is an
-  emulation problem -- see ISSUE-0051, where device-level throughput and the
-  I/O amplification are measured, both of which are far worse under QEMU than
-  on silicon because every MMIO access costs a host round trip.
+So the stack is **necessary and not sufficient here**, and the earlier claim
+that this splits into "hardware fixed, QEMU slow" was written before it was
+known that the working machine was running something else. What is actually
+established:
 
-Everything below this line was written while those two were conflated. It is
-kept because the measurements are real and ISSUE-0051 depends on them, but the
-framing -- "the demos do not work" -- was only ever true of QEMU.
+- Mesa's initialisation needs a stack of that order. This port gives a command
+  `AROS_STACKSIZE` = `0xA000` = **40 KB**, so ours was never going to be
+  enough, whatever else is wrong.
+- Raising it does not make this port's `OpenLibrary` return, and no
+  configuration of this port has yet been seen to run a GL demo.
+
+`S:gl-run` sets the stack regardless: it removes one certain obstacle, and a
+test run without it cannot mean anything.
+
+### A test of mine that proved nothing
+
+The stack was reported here as excluded on the strength of raising it to 1 MB
+and seeing no change. 1 MB is two orders of magnitude below what Mesa needs, so
+that measurement could not have distinguished anything, and the exclusion drawn
+from it was worthless. It was pointed out twice before it was checked properly.
 
 The native VC4 2D/HVS path passes its hardware validation on a Raspberry Pi 3,
 but the first 3D smoke test does not. Running the official MesaGL `gears`
