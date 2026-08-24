@@ -579,6 +579,16 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # code that stops being compiled stops being code; just not installed.
     make kernel-bthciuart
 
+    # dos64.library, which nothing here was building.
+    #
+    # posixc.library and stdcio.library both reference it by name. It existed
+    # nowhere on the card -- not in Libs/, not as a symbol in the ELF, only as
+    # headers -- so every open of it returned NULL, and a caller that does not
+    # check gets a jsr through a null base. Found while chasing ISSUE-0051.
+    #
+    # It is an ordinary %build_module in rom/dos64 and costs seconds.
+    make kernel-dos64
+
     #
     # The USB host controller: compiled, then uninstalled.
     #
