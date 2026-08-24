@@ -1,0 +1,85 @@
+exec: say when a library init is entered, not only when it returns
+
+ISSUE-0051. Opening mesa3dgl20-0.library accounts for eleven seconds of
+reading, four hundred milliseconds of relocation and six seconds of romtag
+scanning, and then does not return in four hundred. Everything past that
+point is one call: the init vector of an RTF_AUTOINIT library, which for
+this library is Mesa's own code.
+
+MakeLibrary is clocked, and the fact of entering init is printed before
+entering it -- with the vector's address, so the stop can be placed. A
+report that waits for the call to come back says nothing when it does not,
+which is the whole of what is being asked here.
+
+Both lines are gated on a second, so nothing changes for an ordinary open.
+
+--- a/rom/exec/initresident.c
++++ b/rom/exec/initresident.c
+@@ -12,6 +12,15 @@
+ #include "exec_debug.h"
+ #include "exec_intern.h"
+ 
++/*
++ * ISSUE-0051: a free-running microsecond clock, to say where an init goes.
++ * SYSTIMER_CLO on this platform.
++ */
++static ULONG ir_now(void)
++{
++    return AROS_LE2LONG(*((volatile ULONG *)0xf2003004));
++}
++
+ /*****************************************************************************
+ 
+     NAME */
+@@ -63,6 +72,7 @@
+     AROS_LIBFUNC_INIT
+ 
+     struct Library *library = NULL;
++    ULONG ir_t0, ir_mklib_us = 0;
+     
+     DINITRESIDENT("InitResident begin 0x%p (\"%s\")", resident, resident->rt_Name);
+ 
+@@ -90,8 +100,10 @@
+             Make the library. Don't call the Init routine yet, but delay
+             that until we can copy stuff from the tag to the libbase.
+         */
++        ir_t0 = ir_now();
+         library = MakeLibrary(init->vectors, init->structure,
+                               NULL, init->dSize, segList);
++        ir_mklib_us = ir_now() - ir_t0;
+ 
+         if(library != NULL)
+         {
+@@ -124,11 +136,32 @@
+             */
+             if(init->init)
+             {
++                /*
++                 * ISSUE-0051: said before the call, not after.
++                 *
++                 * mesa3dgl20-0.library loads in twelve seconds and its romtag
++                 * is found six seconds later, and then OpenLibrary does not
++                 * return at all. Everything past that point is inside this
++                 * one call into the library's own init, and a report that
++                 * waits for it to come back says nothing when it does not.
++                 *
++                 * So: how long MakeLibrary took, and then the fact of
++                 * entering init. A run that stops here has said so.
++                 */
++                bug("[InitResident] %s: MakeLibrary %u ms, calling init"
++                    " @ 0x%p\n", resident->rt_Name, ir_mklib_us / 1000,
++                    (APTR)init->init);
++
++                ir_t0 = ir_now();
+                 library = AROS_UFC3(struct Library *, init->init,
+                     AROS_UFCA(struct Library *,  library, D0),
+                     AROS_UFCA(BPTR,              segList, A0),
+                     AROS_UFCA(struct ExecBase *, SysBase, A6)
+                 );
++                ir_t0 = ir_now() - ir_t0;
++                if (ir_t0 > 1000000)
++                    bug("[InitResident] %s: init returned after %u ms\n",
++                        resident->rt_Name, ir_t0 / 1000);
+             }
+ 
+             /*

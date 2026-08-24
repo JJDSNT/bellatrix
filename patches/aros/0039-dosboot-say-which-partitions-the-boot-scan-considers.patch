@@ -26,3 +26,131 @@ Diagnostic, and loud. Carried only while that is open.
  #include <string.h>
  #include <stdlib.h>
  
+--- a/rom/dos/internalloadseg_elf.c
++++ b/rom/dos/internalloadseg_elf.c
+@@ -59,6 +59,32 @@
+     APTR    srb_Buffer;
+ };
+ 
++/*
++ * Where a load actually spends its time.
++ *
++ * ISSUE-0051: opening a 10 MB library reads about 20 MB, which at the rate this
++ * card gives is on the order of twelve seconds, and the open does not return in
++ * four hundred. So the cost is not the I/O, and the only other thing a load
++ * does is allocate and relocate -- 4145 hunks and some four thousand sections
++ * for this file, all of it m68k under a JIT.
++ *
++ * Counters and two clocks, reported once per load. Cheap enough to leave on:
++ * a timer read per block and per section, against work that is already
++ * milliseconds.
++ */
++static ULONG ilsd_us_read, ilsd_us_reloc;
++static ULONG ilsd_n_read, ilsd_n_reloc, ilsd_bytes_read;
++
++static ULONG ilsd_now(void)
++{
++    /* SYSTIMER_CLO on this platform; free-running microseconds. */
++    return AROS_LE2LONG(*((volatile ULONG *)0xf2003004));
++}
++
++static int elf_read_block_timed(BPTR file, ULONG offset, APTR buffer,
++    ULONG size, SIPTR *funcarray, struct SRBuffer *srb,
++    struct DosLibrary *DOSBase);
++
+ static int elf_read_block
+ (
+     BPTR               file,
+@@ -72,6 +98,30 @@
+ {
+     D(bug("[ELF Loader] elf_read_block (offset=%d, size=%d)\n", offset, size));
+ 
++    {
++        ULONG t0 = ilsd_now();
++        int   rc = elf_read_block_timed(file, offset, buffer, size, funcarray,
++                                        srb, DOSBase);
++
++        ilsd_us_read += ilsd_now() - t0;
++        ilsd_n_read++;
++        ilsd_bytes_read += size;
++        return rc;
++    }
++}
++
++static int elf_read_block_timed
++(
++    BPTR               file,
++    ULONG              offset,
++    APTR               buffer,
++    ULONG              size,
++    SIPTR              *funcarray,
++    struct SRBuffer    *srb,
++    struct DosLibrary  *DOSBase
++)
++{
++
+     if (size <= LOADSEG_SMALL_READ && (offset >= srb->srb_FileOffset) &&
+             ((offset + size) <= (srb->srb_FileOffset + srb->srb_Len)) &&
+             srb->srb_Buffer != NULL)
+@@ -1734,6 +1784,21 @@
+                                arena ? &arena_cursor : NULL,
+                                force31 ? MEMF_31BIT : 0, &srb, DOSBase))
+                     goto error;
++
++                /*
++                 * ISSUE-0051: where the big code sections landed.
++                 *
++                 * A crash reports a return address, and nothing in the
++                 * system can turn that back into a file offset: the loader
++                 * places each section at an unrelated address, so
++                 * subtracting a guessed base from a reported address lands
++                 * on no symbol at all. One line per large executable
++                 * section is enough to map it, and large is where the code
++                 * is -- a module contributes one or two such lines.
++                 */
++                if ((sh[i].flags & SHF_EXECINSTR) && sh[i].size >= 65536)
++                    bug("[ELF Loader] exec section %u at 0x%p, %u KB\n",
++                        i, sh[i].addr, (ULONG)(sh[i].size / 1024));
+             }
+         }
+     }
+@@ -1771,7 +1836,15 @@
+         if ((sh[i].type == SHT_REL || sh[i].type == SHT_RELA) && sh[sh[i].info].addr)
+         {
+             sh[i].addr = load_block(file, sh[i].offset, sh[i].size, funcarray, &srb, DOSBase);
+-            if (!sh[i].addr || !relocate(&eh, sh, i, symtab_shndx, reloc_out_of_range, DOSBase))
++            ULONG relt0 = ilsd_now();
++            int   relok = !sh[i].addr
++                        || relocate(&eh, sh, i, symtab_shndx,
++                                    reloc_out_of_range, DOSBase);
++
++            ilsd_us_reloc += ilsd_now() - relt0;
++            ilsd_n_reloc++;
++
++            if (!relok)
+                 goto error;
+ 
+             ilsFreeMem(sh[i].addr, sh[i].size);
+@@ -1841,8 +1914,22 @@
+     BOOL reloc_out_of_range = FALSE;
+     BPTR seg;
+ 
++    ilsd_us_read = ilsd_us_reloc = 0;
++    ilsd_n_read = ilsd_n_reloc = ilsd_bytes_read = 0;
++
+     seg = load_seg_elf_int(file, funcarray, FALSE, &reloc_out_of_range, DOSBase);
+ 
++    /*
++     * One line per load, saying where the time went. A load that costs
++     * milliseconds is invisible in a boot; a load that costs minutes is the
++     * whole question.
++     */
++    if ((ilsd_us_read + ilsd_us_reloc) > 1000000)
++        bug("[ELF Loader] %u KB in %u reads: read %u ms, relocate %u ms"
++            " over %u sections\n",
++            ilsd_bytes_read / 1024, ilsd_n_read, ilsd_us_read / 1000,
++            ilsd_us_reloc / 1000, ilsd_n_reloc);
++
+ #if defined(__x86_64__)
+     if (!seg && reloc_out_of_range)
+     {

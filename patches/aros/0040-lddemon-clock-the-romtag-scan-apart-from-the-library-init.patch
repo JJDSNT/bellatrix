@@ -1,0 +1,135 @@
+lddemon: clock the romtag scan apart from the library init
+
+The ELF loader now reports that mesa3dgl20-0.library finishes loading in
+about twelve seconds -- 12008 ms reading, 401 ms relocating over 2612
+sections -- and yet OpenLibrary does not return in four hundred. So the
+load is not the problem, and everything after the load happens in LDInit.
+
+There are two things in LDInit, and a single "the open is slow" cannot
+tell them apart:
+
+  - the romtag scan, which walks every segment two bytes at a time looking
+    for RTC_MATCHWORD, before InitResident is ever reached;
+  - InitResident, which runs the library's own init.
+
+One line per open, printed only when the two together exceed a second.
+
+--- a/rom/lddemon/lddemon.c
++++ b/rom/lddemon/lddemon.c
+@@ -184,6 +184,30 @@
+ }
+ 
+ /*
++ * Where an open spends its time, after the load is done.
++ *
++ * ISSUE-0051: the ELF loader reports that mesa3dgl20-0.library finishes
++ * loading in about twelve seconds -- 12008 ms reading, 401 ms relocating over
++ * 2612 sections -- and yet the OpenLibrary does not return in four hundred.
++ * Everything past the load happens here, and there are two things here, not
++ * one:
++ *
++ *   - the romtag scan below, which walks every segment two bytes at a time
++ *     looking for RTC_MATCHWORD. Ten megabytes of that is five million
++ *     iterations of a JITted m68k loop, and it runs before InitResident is
++ *     ever reached;
++ *   - InitResident itself, which runs the library's own init.
++ *
++ * A single "the open is slow" cannot tell those apart, so they are clocked
++ * apart.
++ */
++static ULONG ldd_now(void)
++{
++    /* SYSTIMER_CLO on this platform; free-running microseconds. */
++    return AROS_LE2LONG(*((volatile ULONG *)0xf2003004));
++}
++
++/*
+   Library *LDInit(seglist, DOSBase)
+     Initialise the library.
+ */
+@@ -191,6 +215,8 @@
+ {
+     struct Node *node = NULL;
+     BPTR seg = seglist;
++    ULONG scan_t0 = ldd_now(), scan_us = 0, init_us = 0, scan_segs = 0;
++    ULONG scan_bytes = 0;
+ 
+     /* we may not have any extension fields */
+     const int sizeofresident = offsetof(struct Resident, rt_Init) + sizeof(APTR);
+@@ -221,15 +247,45 @@
+                  * Evidently InitResident()'s return code was not
+                  * reliable for some early AOS libraries.
+                  */
++                scan_us = ldd_now() - scan_t0;
++
++                /*
++                 * Said before InitResident, not after. A report that only
++                 * prints once both halves are done cannot tell a slow scan
++                 * from a slow init, because a scan that never finishes
++                 * prints nothing at all -- which is exactly the case this
++                 * is here to decide.
++                 */
++                if (scan_us > 1000000)
++                    bug("[LDInit] %s: romtag found after %u ms,"
++                        " %u segments (%u KB) scanned\n",
++                        res->rt_Name, scan_us / 1000, scan_segs,
++                        scan_bytes / 1024);
++
+                 Forbid();
++                init_us = ldd_now();
+                 InitResident(res, seglist);
++                init_us = ldd_now() - init_us;
+                 node = FindName(list, res->rt_Name);
+                 Permit();
++
++                if (init_us > 1000000)
++                    bug("[LDInit] %s: InitResident %u ms\n",
++                        res->rt_Name, init_us / 1000);
+                 D(bug("[LDInit] Done calling InitResident(%p) on %s, seg %p, node %p\n", res, res->rt_Name, BADDR(seglist), node));
+ 
+                 return (struct Library*)node;
+             }
+         }
++        scan_segs++;
++        scan_bytes += *(ULONG *)((STRPTR)((IPTR)BADDR(seg) - sizeof(ULONG)));
++
++        /* And progress while it runs, so a scan that never finishes still
++         * says how far it got and how fast it was going. */
++        if ((scan_segs & 1023) == 0)
++            bug("[LDInit] scanning: %u segments, %u KB, %u ms\n",
++                scan_segs, scan_bytes / 1024, (ldd_now() - scan_t0) / 1000);
++
+         seg = *(BPTR *)BADDR(seg);
+     }
+     D(bug("[LDInit] Couldn't find Resident for %p\n", seglist));
+@@ -513,13 +569,30 @@
+     object = LDRequestObject(libname, version, "libs", &SysBase->LibList, SysBase);
+ 
+     if (!object)
++    {
++        /*
++         * ISSUE-0051: name the ones that do not open.
++         *
++         * An OpenLibrary that returns NULL is ordinary -- probing for an
++         * optional library is a normal thing to do -- but a caller that
++         * does not check gets a jsr through a null base, which lands as an
++         * exception at 0xfffffeXX with A6 zero and no indication of which
++         * library was missing. That is exactly how mesa3dgl20-0.library's
++         * init dies. One line per failure costs nothing and names it.
++         */
++        bug("[LDDemon] OpenLibrary(\"%s\", %u) FAILED\n", libname, version);
+         return NULL;
++    }
+ 
+     /* Call the EXEC's OpenLibrary function */
+     library = ExecOpenLibrary(object->ldon_Node.ln_Name, version);
+ 
+     LDReleaseObject(object, SysBase);
+ 
++    if (!library)
++        bug("[LDDemon] OpenLibrary(\"%s\", %u) opened but returned NULL\n",
++            libname, version);
++
+     return library;
+ 
+     AROS_LIBFUNC_EXIT

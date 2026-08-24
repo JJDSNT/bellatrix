@@ -1,0 +1,20 @@
+;
+; One load, nothing else in the way.
+;
+; The ELF loader now says where a load spends its time (patch 0039): bytes
+; read and milliseconds reading, against sections relocated and milliseconds
+; relocating, printed once per load and only when the load took over a second.
+;
+; ISSUE-0051 established that the I/O cannot account for the failure -- 20 MB
+; read at the rate this card gives is about twelve seconds, against an open
+; that does not return in four hundred. This is the measurement that says what
+; the rest of it is.
+;
+; Nothing is opened before the big one, so the line that comes out belongs to
+; mesa3dgl20-0.library and to nothing else.
+;
+Echo >DEBUG: "[gl-load] --- OpenMesa mesa3dgl20-0.library (10 MB)"
+Date >DEBUG:
+OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+Date >DEBUG:
+Echo >DEBUG: "[gl-load] --- returned"
