@@ -1,14 +1,15 @@
-ahi: build the Bellatrix HDMI audio driver on m68k
+ahi: build the Bellatrix audio drivers on m68k
 
 AHI's Raspberry Pi audio drivers are gated on two things: proto/dma.h, which
 this target has, and $(filter arm aarch64,$(host_cpu)), which it does not
 pass. So RPiHDMI has never been built here, and this machine has had no
 audio path at all.
 
-hdmiaudio is our copy of that driver, ported to m68k: the `dsb sy` / `dmb sy`
+hdmiaudio, i2saudio and pwmaudio are our copies of RPiHDMI, RPiI2S and
+RPiPWM, ported to m68k. For hdmiaudio and pwmaudio the `dsb sy` / `dmb sy`
 it emitted around every register access are replaced with the compiler
 barriers arch/m68k-emu68/include/asm/cpu.h already defines for the DMA and
-USB paths. Under Emu68 there is no guest instruction that orders the host's
+USB paths; RPiI2S had no assembly at all and needed none. Under Emu68 there is no guest instruction that orders the host's
 memory system -- the JIT and the host CPU do that -- and what is still needed
 is to stop the compiler moving an access across the barrier.
 
@@ -24,7 +25,7 @@ not ours and this target is not theirs.
 
 --- a/workbench/devs/AHI/Drivers/Makefile.in
 +++ b/workbench/devs/AHI/Drivers/Makefile.in
-@@ -92,6 +92,18 @@
+@@ -92,6 +92,20 @@
  SUBDIRS		+= RPiHDMI
  SUBDIRS		+= RPiI2S
  endif
@@ -39,17 +40,21 @@ not ours and this target is not theirs.
 +#
 +ifneq ($(filter m68k,$(host_cpu)),)
 +SUBDIRS		+= hdmiaudio
++SUBDIRS		+= i2saudio
++SUBDIRS		+= pwmaudio
 +endif
  endif
  
  all:
 --- a/workbench/devs/AHI/configure.in
 +++ b/workbench/devs/AHI/configure.in
-@@ -375,6 +375,7 @@
+@@ -375,6 +375,9 @@
            Drivers/WASAPI/Makefile
            Drivers/RPiPWM/Makefile
            Drivers/RPiHDMI/Makefile
 +          Drivers/hdmiaudio/Makefile
++          Drivers/i2saudio/Makefile
++          Drivers/pwmaudio/Makefile
            Drivers/RPiI2S/Makefile
            Drivers/NVHDMI/Makefile
            Examples/Makefile
@@ -60,15 +65,17 @@ not ours and this target is not theirs.
  
  
 -ac_config_files="$ac_config_files Makefile AHI/Makefile AHI-Handler/Makefile AddAudioModes/Makefile Device/Makefile Docs/Makefile Drivers/Makefile Drivers/Common/Makefile.common Drivers/Device/Makefile Drivers/Filesave/Makefile Drivers/Void/Makefile Drivers/ac97/Makefile Drivers/VIA-AC97/Makefile Drivers/HDAudio/Makefile Drivers/CMI8738/Makefile Drivers/SB128/Makefile Drivers/EMU10kx/Makefile Drivers/Envy24HT/Makefile Drivers/Envy24/Makefile Drivers/Alsa/Makefile Drivers/OSS/Makefile Drivers/PulseAudio/Makefile Drivers/WASAPI/Makefile Drivers/RPiPWM/Makefile Drivers/RPiHDMI/Makefile Drivers/RPiI2S/Makefile Drivers/NVHDMI/Makefile Examples/Makefile Examples/Device/PlayTest/Makefile Examples/Extras/CloneAudioModes/Makefile Examples/Low-level/PlaySineEverywhere/Makefile Examples/Low-level/Test-7.1/Makefile Examples/Low-level/ScanAudioModes/Makefile Include/Makefile"
-+ac_config_files="$ac_config_files Makefile AHI/Makefile AHI-Handler/Makefile AddAudioModes/Makefile Device/Makefile Docs/Makefile Drivers/Makefile Drivers/Common/Makefile.common Drivers/Device/Makefile Drivers/Filesave/Makefile Drivers/Void/Makefile Drivers/ac97/Makefile Drivers/VIA-AC97/Makefile Drivers/HDAudio/Makefile Drivers/CMI8738/Makefile Drivers/SB128/Makefile Drivers/EMU10kx/Makefile Drivers/Envy24HT/Makefile Drivers/Envy24/Makefile Drivers/Alsa/Makefile Drivers/OSS/Makefile Drivers/PulseAudio/Makefile Drivers/WASAPI/Makefile Drivers/RPiPWM/Makefile Drivers/RPiHDMI/Makefile Drivers/hdmiaudio/Makefile Drivers/RPiI2S/Makefile Drivers/NVHDMI/Makefile Examples/Makefile Examples/Device/PlayTest/Makefile Examples/Extras/CloneAudioModes/Makefile Examples/Low-level/PlaySineEverywhere/Makefile Examples/Low-level/Test-7.1/Makefile Examples/Low-level/ScanAudioModes/Makefile Include/Makefile"
++ac_config_files="$ac_config_files Makefile AHI/Makefile AHI-Handler/Makefile AddAudioModes/Makefile Device/Makefile Docs/Makefile Drivers/Makefile Drivers/Common/Makefile.common Drivers/Device/Makefile Drivers/Filesave/Makefile Drivers/Void/Makefile Drivers/ac97/Makefile Drivers/VIA-AC97/Makefile Drivers/HDAudio/Makefile Drivers/CMI8738/Makefile Drivers/SB128/Makefile Drivers/EMU10kx/Makefile Drivers/Envy24HT/Makefile Drivers/Envy24/Makefile Drivers/Alsa/Makefile Drivers/OSS/Makefile Drivers/PulseAudio/Makefile Drivers/WASAPI/Makefile Drivers/RPiPWM/Makefile Drivers/RPiHDMI/Makefile Drivers/hdmiaudio/Makefile Drivers/i2saudio/Makefile Drivers/pwmaudio/Makefile Drivers/RPiI2S/Makefile Drivers/NVHDMI/Makefile Examples/Makefile Examples/Device/PlayTest/Makefile Examples/Extras/CloneAudioModes/Makefile Examples/Low-level/PlaySineEverywhere/Makefile Examples/Low-level/Test-7.1/Makefile Examples/Low-level/ScanAudioModes/Makefile Include/Makefile"
  
  ac_config_commands="$ac_config_commands default"
  
-@@ -6738,6 +6738,7 @@
+@@ -6738,6 +6738,9 @@
      "Drivers/WASAPI/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/WASAPI/Makefile" ;;
      "Drivers/RPiPWM/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/RPiPWM/Makefile" ;;
      "Drivers/RPiHDMI/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/RPiHDMI/Makefile" ;;
 +    "Drivers/hdmiaudio/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/hdmiaudio/Makefile" ;;
++    "Drivers/i2saudio/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/i2saudio/Makefile" ;;
++    "Drivers/pwmaudio/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/pwmaudio/Makefile" ;;
      "Drivers/RPiI2S/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/RPiI2S/Makefile" ;;
      "Drivers/NVHDMI/Makefile") CONFIG_FILES="$CONFIG_FILES Drivers/NVHDMI/Makefile" ;;
      "Examples/Makefile") CONFIG_FILES="$CONFIG_FILES Examples/Makefile" ;;
