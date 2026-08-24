@@ -1,151 +1,478 @@
 /*
+    Copyright (C) 2013-2019, The AROS Development Team. All rights reserved.
     Copyright (C) 2026, The Bellatrix Project. All rights reserved.
 
-    Desc: BCM283x interrupt numbering for the legacy interrupt controller.
+    Desc: BCM283x register map and interrupt numbering.
 */
 
 #ifndef HARDWARE_BCM2708_H
 #define HARDWARE_BCM2708_H
 
 /*
- * The numbering arch/arm-native uses, carried here rather than included.
+ * arch/arm-native's BCM283x header, adopted whole.
  *
- * The definitions below are copied verbatim from
- * arch/arm-native/soc/broadcom/2708/include/hardware/bcm2708.h so the numbers
- * have one origin. That file is not put on this target's include path because
- * its directory also holds a videocore.h and an arasan.h, and this port has
- * its own with the same names -- adding the -I would make which one wins
- * depend on include order.
+ * This file used to carry only the interrupt map, on the reasoning that the
+ * register macros expand against ARM_PERIIOBASE and this port has no
+ * compile-time peripheral base. That reasoning was wrong in a way that cost
+ * three ports in a row: upstream does not define ARM_PERIIOBASE either -- its
+ * own comment says "caller must provide ARM_PERIIOBASE" -- and every driver
+ * here already defines it as a runtime expression before including this
+ * (__arm_periiobase, or SDIOBase->sdio_periiobase). The macros expand against
+ * whatever the including file decided the base is, which works.
  *
- * Only the interrupt map is carried. The register macros in that header expand
- * against ARM_PERIIOBASE, a compile-time constant this port deliberately does
- * not have: the peripheral base is discovered at runtime from the device tree
- * and reaches drivers through KrnGetSystemAttr(KATTR_PeripheralBase).
+ * So the header grew a constant at a time, each one added when a port failed
+ * to compile: BCM2836_PERIPHYSBASE for the audio driver, then the whole clock
+ * manager and BCM2711_GPUIRQ_OFFSET for the WiFi SDIO transport. Carrying the
+ * subset that happened to be needed yet is not a design, it is a queue of
+ * future failures, so the whole map is here now and the next port will not
+ * find it missing.
  *
- * Two drivers were each defining the one number they needed, which is how a
- * shared numbering quietly becomes two private ones that can disagree.
+ * The file is still copied rather than included, for the original reason: its
+ * upstream directory also holds a videocore.h and an arasan.h and this port
+ * has its own with those names, so putting that directory on the include path
+ * would make which one wins depend on include order.
+ *
+ * TRAP, and the reason not to reach for every macro below: the BCM2836_*
+ * block near the end builds its addresses from BCM2836_PERIPHYSBASE, a fixed
+ * physical constant, rather than from ARM_PERIIOBASE. Emu68 maps the Pi
+ * peripherals wherever it likes and tells the guest through
+ * KrnGetSystemAttr(KATTR_PeripheralBase) -- on QEMU that window is around
+ * 0xf2000000, not 0x3f000000. Those macros are correct for bare-metal ARM and
+ * wrong here. Anything addressing the local interrupt controller has to go
+ * through the runtime base like every other driver in this port does.
  */
 
-#define IRQ_MASK(irq) (1 << ((irq) & 0x1f))
-#define IRQ_BANK(irq) ((irq) >> 5)
+#define CLID_I2C_BCM2708                                "hidd.i2c.bcm2708"
 
-#define GPUIRQ0_BASE  (0 << 5)
-#define IRQ_VC_USB    (GPUIRQ0_BASE + 9)
-#define IRQ_AUX       (GPUIRQ0_BASE + 29)
+#define BCM2835_PERIPHYSBASE                            0x20000000                      // Peripheral physical base address
+#define BCM2836_PERIPHYSBASE                            0x3f000000                       // Peripheral physical base address
+#define BCM2708_PERIPHYSSIZE                            0x1000000
+#define BCM2835_PERIBUSBASE                             0x7E000000
 
-#define IRQ_DMA0      (GPUIRQ0_BASE + 16)
+#define BCM_BUSBASE                                     BCM2835_PERIBUSBASE
+#define ARM_PERIIOSIZE                                  BCM2708_PERIPHYSSIZE
 
-#define GPUIRQ1_BASE       (1 << 5)
-#define IRQ_VC_ARASANSDIO  (GPUIRQ1_BASE + 30)
-#define IRQ_VC_UART        (GPUIRQ1_BASE + 25)
-#define IRQ_VC_SDIO        (GPUIRQ1_BASE + 24)
-
-#define ARMIRQ_BASE   (2 << 5)
-
-/*
- * Register macros, for the case where the note above does not apply.
- *
- * The peripheral base is discovered at runtime here, so a header that expands
- * addresses against a compile-time ARM_PERIIOBASE is normally useless to this
- * port. arch/arm-native's own drivers show the way around it: dma_private.h
- * and sdcard_sdhost_intern.h each define ARM_PERIIOBASE as a *runtime
- * expression* immediately before including this header, so the macros expand
- * against whatever the including file decided the base is.
- *
- * They are deliberately *not* guarded on ARM_PERIIOBASE being defined here.
- * A macro is only expanded where it is used, so an unused definition costs
- * nothing -- while a guard inside an include guard is a trap: the first
- * translation unit to reach this file before defining ARM_PERIIOBASE takes
- * the guard, and every later include is a no-op, so the block silently never
- * appears. That cost an hour. arch/arm-native defines them unconditionally
- * for the same reason.
- *
- * Copied verbatim from the same arm-native header as the interrupt map above,
- * for the same reason: one origin for the numbers.
- */
-
-/*
- * The SoC bases. Nothing here runs on a BCM2711 or BCM2712, but drivers shared
- * with arch/arm-native test for them to select SoC-specific implementations,
- * so the constants have to exist. PERIBUSBASE is the VideoCore's view of the
- * peripherals, which is what a DMA descriptor has to carry.
- */
-#define BCM2711_PERIIOBASE   0xFE000000
-#define BCM2712_PERIIOBASE   0x107C000000ULL
-#define BCM2835_PERIBUSBASE  0x7E000000
-
-#define GPIO_BASE           (ARM_PERIIOBASE + 0x200000)
-#define GPFSEL0             (GPIO_BASE + 0x00)
-#define GPFSEL1             (GPIO_BASE + 0x04)
-#define GPFSEL2             (GPIO_BASE + 0x08)
-#define GPFSEL3             (GPIO_BASE + 0x0C)
-#define GPFSEL4             (GPIO_BASE + 0x10)
-#define GPFSEL5             (GPIO_BASE + 0x14)
-#define GPSET0              (GPIO_BASE + 0x1C)
-#define GPSET1              (GPIO_BASE + 0x20)
-#define GPCLR0              (GPIO_BASE + 0x28)
-#define GPCLR1              (GPIO_BASE + 0x2C)
-#define GPPUD               (GPIO_BASE + 0x94)
-#define GPPUDCLK0           (GPIO_BASE + 0x98)
-#define GPPUDCLK1           (GPIO_BASE + 0x9C)
-
-/*
- * Guarded because soc/sdcard's own private header defines it too, and a
- * translation unit that reaches this file through a driver shared with
- * arch/arm-native can see both.
- */
-#ifndef BCM2835_PERIPHYSBASE
-#define BCM2835_PERIPHYSBASE 0x20000000
+#if (1)
+// TODO: Move to a more generic ARM header..
+#define ARM_VIRTBASE                                    0xF0000000
+#define ARM_PRIMECELLID                                 0xB105F00D
+#define ARM_PRIMECELLPERISIZE                           0x1000
 #endif
 
 /*
- * And the one this machine actually has.
- *
- * BCM2836 -- the Pi 2 and Pi 3 -- moved the peripheral window to 0x3f000000.
- * This header carried only the BCM2835 value, so any driver shared with
- * arch/arm-native that tests for the Pi 3 base did not compile here; the
- * arm-native copy of this file has defined both from the start.
+   caller must provide ARM_PERIIOBASE
+*/
+
+/* Peripheral window of the BCM2711, which differs from the earlier SoCs. */
+#define BCM2711_PERIIOBASE                              0xFE000000
+
+/* Peripheral window of the BCM2712 (Raspberry Pi 5). */
+#define BCM2712_PERIIOBASE                              0x107C000000ULL
+
+/*
+ * The BCM2711 presents the GPU interrupts of the earlier controller as
+ * GIC shared interrupts, offset by this much: GPU interrupt n arrives as
+ * INTID n + 96. Anything using an IRQ_* number below has to add it when
+ * running on that SoC.
  */
-#ifndef BCM2836_PERIPHYSBASE
-#define BCM2836_PERIPHYSBASE 0x3f000000
-#endif
+#define BCM2711_GPUIRQ_OFFSET                           96
 
-#define SYSTIMER_BASE       (ARM_PERIIOBASE + 0x003000)
-#define SYSTIMER_CS         (SYSTIMER_BASE + 0x00)
-#define SYSTIMER_CLO        (SYSTIMER_BASE + 0x04)
-#define SYSTIMER_CHI        (SYSTIMER_BASE + 0x08)
+#define SYSTIMER_BASE                                   (ARM_PERIIOBASE + 0x003000)
+#define ARMTIMER_BASE                                   (ARM_PERIIOBASE + 0x00b000)
+#define IRQ_BASE                                        (ARM_PERIIOBASE + 0x00b200)
+#define GPIO_PADS                                       (ARM_PERIIOBASE + 0x100000)
+#define CLOCK_BASE                                      (ARM_PERIIOBASE + 0x101000)
+#define GPIO_BASE                                       (ARM_PERIIOBASE + 0x200000)
 
-#define DMA0_BASE           (ARM_PERIIOBASE + 0x007000)
-#define DMA_CH_BASE(ch)     (DMA0_BASE + (ch) * 0x100)
-#define DMA_CS(ch)          (DMA_CH_BASE(ch) + 0x00)
-#define DMA_CONBLK_AD(ch)   (DMA_CH_BASE(ch) + 0x04)
-#define DMA_DEBUG(ch)       (DMA_CH_BASE(ch) + 0x20)
-#define DMA_INT_STATUS      (DMA0_BASE + 0xFE0)
-#define DMA_ENABLE_REG      (DMA0_BASE + 0xFF0)
+#define SPI0_BASE                                       (ARM_PERIIOBASE + 0x204000)
+#define BSC0_BASE                                       (ARM_PERIIOBASE + 0x205000)
+#define GPIO_PWM                                        (ARM_PERIIOBASE + 0x20C000)
+#define DMA0_BASE                                       (ARM_PERIIOBASE + 0x007000)
+#define V3D_BASE                                        (ARM_PERIIOBASE + 0xc00000)
+
+/* PWM registers */
+#define PWM_CTL                                         (GPIO_PWM + 0x00)
+#define PWM_STA                                         (GPIO_PWM + 0x04)
+#define PWM_DMAC                                        (GPIO_PWM + 0x08)
+#define PWM_RNG1                                        (GPIO_PWM + 0x10)
+#define PWM_DAT1                                        (GPIO_PWM + 0x14)
+#define PWM_FIF1                                        (GPIO_PWM + 0x18)
+#define PWM_RNG2                                        (GPIO_PWM + 0x20)
+#define PWM_DAT2                                        (GPIO_PWM + 0x24)
+
+/* PWM CTL bits */
+#define PWM_CTL_PWEN1                                   (1 << 0)
+#define PWM_CTL_MODE1                                   (1 << 1)
+#define PWM_CTL_RPTL1                                   (1 << 2)
+#define PWM_CTL_SBIT1                                   (1 << 3)
+#define PWM_CTL_POLA1                                   (1 << 4)
+#define PWM_CTL_USEF1                                   (1 << 5)
+#define PWM_CTL_CLRF1                                   (1 << 6)
+#define PWM_CTL_MSEN1                                   (1 << 7)
+#define PWM_CTL_PWEN2                                   (1 << 8)
+#define PWM_CTL_MODE2                                   (1 << 9)
+#define PWM_CTL_RPTL2                                   (1 << 10)
+#define PWM_CTL_SBIT2                                   (1 << 11)
+#define PWM_CTL_POLA2                                   (1 << 12)
+#define PWM_CTL_USEF2                                   (1 << 13)
+#define PWM_CTL_MSEN2                                   (1 << 15)
+
+/* PWM STA bits */
+#define PWM_STA_FULL1                                   (1 << 0)
+#define PWM_STA_EMPT1                                   (1 << 1)
+#define PWM_STA_WERR1                                   (1 << 2)
+#define PWM_STA_RERR1                                   (1 << 3)
+#define PWM_STA_GAPO1                                   (1 << 4)
+#define PWM_STA_GAPO2                                   (1 << 5)
+#define PWM_STA_BERR                                    (1 << 8)
+#define PWM_STA_STA1                                    (1 << 9)
+#define PWM_STA_STA2                                    (1 << 10)
+
+/* PWM DMAC bits */
+#define PWM_DMAC_ENAB                                   (1 << 31)
+#define PWM_DMAC_PANIC(x)                               (((x) & 0xFF) << 8)
+#define PWM_DMAC_DREQ(x)                                (((x) & 0xFF) << 0)
+
+/* Clock Manager PWM */
+#define CM_PWMCTL                                       (CLOCK_BASE + 0xA0)
+#define CM_PWMDIV                                       (CLOCK_BASE + 0xA4)
+#define CM_PASSWORD                                     0x5A000000
+#define CM_SRC_OSC                                      1
+#define CM_SRC_PLLD                                     6
+#define CM_BUSY                                         (1 << 7)
+#define CM_ENAB                                         (1 << 4)
+#define CM_MASH(x)                                      (((x) & 3) << 9)
+
+/* DMA controller */
+#define DMA_CH_BASE(ch)                                 (DMA0_BASE + (ch) * 0x100)
+#define DMA_CS(ch)                                      (DMA_CH_BASE(ch) + 0x00)
+#define DMA_CONBLK_AD(ch)                               (DMA_CH_BASE(ch) + 0x04)
+#define DMA_DEBUG(ch)                                   (DMA_CH_BASE(ch) + 0x20)
+#define DMA_INT_STATUS                                  (DMA0_BASE + 0xFE0)
+#define DMA_ENABLE_REG                                  (DMA0_BASE + 0xFF0)
 
 /* DMA CS bits */
-#define DMA_CS_ACTIVE           (1 << 0)
-#define DMA_CS_END              (1 << 1)
-#define DMA_CS_INT              (1 << 2)
-#define DMA_CS_WAIT_FOR_WRITES  (1 << 28)
-#define DMA_CS_PANIC_PRI(x)     (((x) & 0xF) << 20)
-#define DMA_CS_PRI(x)           (((x) & 0xF) << 16)
-#define DMA_CS_ABORT            (1 << 30)
-#define DMA_CS_RESET            (1 << 31)
+#define DMA_CS_ACTIVE                                   (1 << 0)
+#define DMA_CS_END                                      (1 << 1)
+#define DMA_CS_INT                                      (1 << 2)
+#define DMA_CS_WAIT_FOR_WRITES                          (1 << 28)
+#define DMA_CS_PANIC_PRI(x)                             (((x) & 0xF) << 20)
+#define DMA_CS_PRI(x)                                   (((x) & 0xF) << 16)
+#define DMA_CS_ABORT                                    (1 << 30)
+#define DMA_CS_RESET                                    (1 << 31)
 
 /* DMA TI (Transfer Information) bits */
-#define DMA_TI_INTEN            (1 << 0)
-#define DMA_TI_TDMODE           (1 << 1)
-#define DMA_TI_WAIT_RESP        (1 << 3)
-#define DMA_TI_DEST_INC         (1 << 4)
-#define DMA_TI_DEST_WIDTH       (1 << 5)
-#define DMA_TI_DEST_DREQ        (1 << 6)
-#define DMA_TI_SRC_INC          (1 << 8)
-#define DMA_TI_SRC_WIDTH        (1 << 9)
-#define DMA_TI_SRC_DREQ         (1 << 10)
-#define DMA_TI_BURST_LENGTH(x)  (((x) & 0xF) << 12)
-#define DMA_TI_PERMAP(x)        (((x) & 0x1F) << 16)
-#define DMA_TI_NO_WIDE_BURSTS   (1 << 26)
+#define DMA_TI_INTEN                                    (1 << 0)
+#define DMA_TI_TDMODE                                   (1 << 1)
+#define DMA_TI_WAIT_RESP                                (1 << 3)
+#define DMA_TI_DEST_INC                                 (1 << 4)
+#define DMA_TI_DEST_WIDTH                               (1 << 5)
+#define DMA_TI_DEST_DREQ                                (1 << 6)
+#define DMA_TI_SRC_INC                                  (1 << 8)
+#define DMA_TI_SRC_WIDTH                                (1 << 9)
+#define DMA_TI_SRC_DREQ                                 (1 << 10)
+#define DMA_TI_BURST_LENGTH(x)                          (((x) & 0xF) << 12)
+#define DMA_TI_PERMAP(x)                                (((x) & 0x1F) << 16)
+#define DMA_TI_NO_WIDE_BURSTS                           (1 << 26)
+
+/* DMA 2D mode transfer length encoding */
+#define DMA_TXFR_LEN_2D(xlength, ylength)               (((ylength) << 16) | (xlength))
+/* DMA 2D mode stride encoding (both signed 16-bit) */
+#define DMA_STRIDE_2D(src_stride, dst_stride)            (((dst_stride) << 16) | ((src_stride) & 0xFFFF))
+
+/* DMA DREQ peripheral map IDs */
+#define DMA_DREQ_PWM                                    5
+
+#define SYSTIMER_CS                                     (SYSTIMER_BASE + 0x00)
+#define SYSTIMER_CLO                                    (SYSTIMER_BASE + 0x04)
+#define SYSTIMER_CHI                                    (SYSTIMER_BASE + 0x08)
+#define SYSTIMER_C0                                     (SYSTIMER_BASE + 0x0c)
+#define SYSTIMER_C1                                     (SYSTIMER_BASE + 0x10)
+#define SYSTIMER_C2                                     (SYSTIMER_BASE + 0x14)
+#define SYSTIMER_C3                                     (SYSTIMER_BASE + 0x18)
+
+#define SYSTIMER_M0                                     (1 << 0)
+#define SYSTIMER_M1                                     (1 << 1)
+#define SYSTIMER_M2                                     (1 << 2)
+#define SYSTIMER_M3                                     (1 << 3)
+
+#define ARMTIMER_LOAD                                   (ARMTIMER_BASE + 0x400)
+#define ARMTIMER_VALUE                                  (ARMTIMER_BASE + 0x404)
+#define ARMTIMER_CONTROL                                (ARMTIMER_BASE + 0x408)
+#define ARMTIMER_IRQ_ACK                                (ARMTIMER_BASE + 0x40c)
+#define ARMTIMER_IRQ_RAW                                (ARMTIMER_BASE + 0x410)
+#define ARMTIMER_IRQ_MSK                                (ARMTIMER_BASE + 0x414)
+#define ARMTIMER_RELOAD                                 (ARMTIMER_BASE + 0x418)
+#define ARMTIMER_PREDIV                                 (ARMTIMER_BASE + 0x41c)
+#define ARMTIMER_FRC                                    (ARMTIMER_BASE + 0x420)
+
+#define ARMIRQ_PEND                                     (IRQ_BASE + 0x00)
+#define GPUIRQ_PEND0                                    (IRQ_BASE + 0x04)               // Pending IRQs
+#define GPUIRQ_PEND1                                    (IRQ_BASE + 0x08)
+#define ARMFIQ_CTRL                                     (IRQ_BASE + 0x0C)               // FIQ source select/enable
+#define GPUIRQ_ENBL0                                    (IRQ_BASE + 0x10)               // IRQ enable bits
+#define GPUIRQ_ENBL1                                    (IRQ_BASE + 0x14)
+#define ARMIRQ_ENBL                                     (IRQ_BASE + 0x18)
+#define GPUIRQ_DIBL0                                    (IRQ_BASE + 0x1C)               // IRQ disable bits
+#define GPUIRQ_DIBL1                                    (IRQ_BASE + 0x20)
+#define ARMIRQ_DIBL                                     (IRQ_BASE + 0x24)
+
+#define IRQ_MASK(irq)                                   (1 << (irq & 0x1f))
+#define IRQ_BANK(irq)                                   (irq >> 5)
+
+#define GPUIRQ0_BASE                                    (0 << 5)
+#define IRQ_TIMER0                                      (GPUIRQ0_BASE + 0)
+#define IRQ_TIMER1                                      (GPUIRQ0_BASE + 1)
+#define IRQ_TIMER2                                      (GPUIRQ0_BASE + 2)
+#define IRQ_TIMER3                                      (GPUIRQ0_BASE + 3)
+#define IRQ_CODEC0                                      (GPUIRQ0_BASE + 4)
+#define IRQ_CODEC1                                      (GPUIRQ0_BASE + 5)
+#define IRQ_CODEC2                                      (GPUIRQ0_BASE + 6)
+#define IRQ_VC_JPEG                                     (GPUIRQ0_BASE + 7)
+#define IRQ_ISP                                         (GPUIRQ0_BASE + 8)
+#define IRQ_VC_USB                                      (GPUIRQ0_BASE + 9)
+#define IRQ_VC_3D                                       (GPUIRQ0_BASE + 10)
+#define IRQ_TRANSPOSER                                  (GPUIRQ0_BASE + 11)
+#define IRQ_MULTICORESYNC0                              (GPUIRQ0_BASE + 12)
+#define IRQ_MULTICORESYNC1                              (GPUIRQ0_BASE + 13)
+#define IRQ_MULTICORESYNC2                              (GPUIRQ0_BASE + 14)
+#define IRQ_MULTICORESYNC3                              (GPUIRQ0_BASE + 15)
+#define IRQ_DMA0                                        (GPUIRQ0_BASE + 16)
+#define IRQ_DMA1                                        (GPUIRQ0_BASE + 17)
+#define IRQ_VC_DMA2                                     (GPUIRQ0_BASE + 18)
+#define IRQ_VC_DMA3                                     (GPUIRQ0_BASE + 19)
+#define IRQ_DMA4                                        (GPUIRQ0_BASE + 20)
+#define IRQ_DMA5                                        (GPUIRQ0_BASE + 21)
+#define IRQ_DMA6                                        (GPUIRQ0_BASE + 22)
+#define IRQ_DMA7                                        (GPUIRQ0_BASE + 23)
+#define IRQ_DMA8                                        (GPUIRQ0_BASE + 24)
+#define IRQ_DMA9                                        (GPUIRQ0_BASE + 25)
+#define IRQ_DMA10                                       (GPUIRQ0_BASE + 26)
+#define IRQ_DMA11                                       (GPUIRQ0_BASE + 27)
+#define IRQ_DMA12                                       (GPUIRQ0_BASE + 28)
+#define IRQ_AUX                                         (GPUIRQ0_BASE + 29)
+#define IRQ_ARM                                         (GPUIRQ0_BASE + 30)
+#define IRQ_VPUDMA                                      (GPUIRQ0_BASE + 31)
+
+#define GPUIRQ1_BASE                                    (1 << 5)
+#define IRQ_HOSTPORT                                    (GPUIRQ1_BASE + 0)
+#define IRQ_VIDEOSCALER                                 (GPUIRQ1_BASE + 1)
+#define IRQ_CCP2TX                                      (GPUIRQ1_BASE + 2)
+#define IRQ_SDC                                         (GPUIRQ1_BASE + 3)
+#define IRQ_DSI0                                        (GPUIRQ1_BASE + 4)
+#define IRQ_AVE                                         (GPUIRQ1_BASE + 5)
+#define IRQ_CAM0                                        (GPUIRQ1_BASE + 6)
+#define IRQ_CAM1                                        (GPUIRQ1_BASE + 7)
+#define IRQ_HDMI0                                       (GPUIRQ1_BASE + 8)
+#define IRQ_HDMI1                                       (GPUIRQ1_BASE + 9)
+#define IRQ_PIXELVALVE1                                 (GPUIRQ1_BASE + 10)
+#define IRQ_I2CSPISLV                                   (GPUIRQ1_BASE + 11)
+#define IRQ_DSI1                                        (GPUIRQ1_BASE + 12)
+#define IRQ_PWA0                                        (GPUIRQ1_BASE + 13)
+#define IRQ_PWA1                                        (GPUIRQ1_BASE + 14)
+#define IRQ_CPR                                         (GPUIRQ1_BASE + 15)
+#define IRQ_SMI                                         (GPUIRQ1_BASE + 16)
+#define IRQ_GPIO0                                       (GPUIRQ1_BASE + 17)
+#define IRQ_GPIO1                                       (GPUIRQ1_BASE + 18)
+#define IRQ_GPIO2                                       (GPUIRQ1_BASE + 19)
+#define IRQ_GPIO3                                       (GPUIRQ1_BASE + 20)
+#define IRQ_VC_I2C                                      (GPUIRQ1_BASE + 21)
+#define IRQ_VC_SPI                                      (GPUIRQ1_BASE + 22)
+#define IRQ_VC_I2SPCM                                   (GPUIRQ1_BASE + 23)
+#define IRQ_VC_SDIO                                     (GPUIRQ1_BASE + 24)
+#define IRQ_VC_UART                                     (GPUIRQ1_BASE + 25)
+#define IRQ_SLIMBUS                                     (GPUIRQ1_BASE + 26)
+#define IRQ_VEC                                         (GPUIRQ1_BASE + 27)
+#define IRQ_CPG                                         (GPUIRQ1_BASE + 28)
+#define IRQ_RNG                                         (GPUIRQ1_BASE + 29)
+#define IRQ_VC_ARASANSDIO                               (GPUIRQ1_BASE + 30)
+#define IRQ_AVSPMON                                     (GPUIRQ1_BASE + 31)
+
+#define ARMIRQ_BASE                                     (2 << 5)
+#define IRQ_ARM_TIMER                                   (ARMIRQ_BASE + 0)
+#define IRQ_ARM_MAILBOX                                 (ARMIRQ_BASE + 1)
+#define IRQ_ARM_DOORBELL_0                              (ARMIRQ_BASE + 2)
+#define IRQ_ARM_DOORBELL_1                              (ARMIRQ_BASE + 3)
+#define IRQ_VPU0_HALTED                                 (ARMIRQ_BASE + 4)
+#define IRQ_VPU1_HALTED                                 (ARMIRQ_BASE + 5)
+#define IRQ_ILLEGAL_TYPE0                               (ARMIRQ_BASE + 6)
+#define IRQ_ILLEGAL_TYPE1                               (ARMIRQ_BASE + 7)
+#define IRQ_PENDING1                                    (ARMIRQ_BASE + 8)
+#define IRQ_PENDING2                                    (ARMIRQ_BASE + 9)
+
+#define GPIO_PADS_0_27                                  0x002c
+#define GPIO_PADS_28_45                                 0x0030
+#define GPIO_PADS_46_53                                 0x0034
+
+#define GPFSEL0                                         (GPIO_BASE + 0x0)               // GPIO Function Selectors..
+#define GPFSEL1                                         (GPIO_BASE + 0x4)
+#define GPFSEL2                                         (GPIO_BASE + 0x8)
+#define GPFSEL3                                         (GPIO_BASE + 0xC)
+#define GPFSEL4                                         (GPIO_BASE + 0x10)
+#define GPFSEL5                                         (GPIO_BASE + 0x14)
+#define GPSET0                                          (GPIO_BASE + 0x1C)              // GPIO Pin Output control..
+#define GPSET1                                          (GPIO_BASE + 0x20)
+#define GPCLR0                                          (GPIO_BASE + 0x28)
+#define GPCLR1                                          (GPIO_BASE + 0x2C)
+#define GPLEV0                                          (GPIO_BASE + 0x34)              // GPIO Pin Levels..
+#define GPLEV1                                          (GPIO_BASE + 0x38)
+#define GPEDS0                                          (GPIO_BASE + 0x40)              // GPIO Pin Event Detect Status ..
+#define GPEDS1                                          (GPIO_BASE + 0x44)
+#define GPREN0                                          (GPIO_BASE + 0x4C)              // GPIO Pin Rising Edge Detect Enables..
+#define GPREN1                                          (GPIO_BASE + 0x50)
+#define GPFEN0                                          (GPIO_BASE + 0x58)              // GPIO Pin Falling Edge Detect Enables..
+#define GPFEN1                                          (GPIO_BASE + 0x5C)
+#define GPHEN0                                          (GPIO_BASE + 0x64)
+#define GPHEN1                                          (GPIO_BASE + 0x68)
+#define GPLEN0                                          (GPIO_BASE + 0x70)
+#define GPLEN1                                          (GPIO_BASE + 0x74)
+#define GPAREN0                                         (GPIO_BASE + 0x7c)
+#define GPAREN1                                         (GPIO_BASE + 0x80)
+#define GPAFEN0                                         (GPIO_BASE + 0x88)
+#define GPAFEN1                                         (GPIO_BASE + 0x8c)
+#define GPPUD                                           (GPIO_BASE + 0x94)
+#define GPPUDCLK0                                       (GPIO_BASE + 0x98)
+#define GPPUDCLK1                                       (GPIO_BASE + 0x9c)
+
+#define SPI0_CS                                         (0x00)
+#define SPI0_FIFO                                       (0x04)
+#define SPI0_CLK                                        (0x08)
+#define SPI0_DLEN                                       (0x0c)
+#define SPI0_LTOH                                       (0x10)
+#define SPI0_DC                                         (0x14)
+
+#define BSC0_CONTROL                                    (BSC0_BASE + 0x00)
+#define BSC0_STATUS                                     (BSC0_BASE + 0x04)
+#define BSC0_DATALEN                                    (BSC0_BASE + 0x08)
+#define BSC0_FIFO                                       (BSC0_BASE + 0x10)
+
+#define BSC_CONTROL_READ                                (1 << 0)
+#define BSC_CONTROL_CLEAR                               (1 << 4)
+#define BSC_CONTROL_ST                                  (1 << 7)
+#define BSC_CONTROL_INTD                                (1 << 8)
+#define BSC_CONTROL_INTT                                (1 << 9)
+#define BSC_CONTROL_INTR                                (1 << 10)
+#define BSC_CONTROL_I2CEN                               (1 << 15)
+
+#define BSC_STATUS_TA                                   (1 << 0)
+#define BSC_STATUS_DONE                                 (1 << 1)
+#define BSC_STATUS_TXW                                  (1 << 2)
+#define BSC_STATUS_RXR                                  (1 << 3)
+#define BSC_STATUS_TXD                                  (1 << 4)
+#define BSC_STATUS_RXD                                  (1 << 5)
+#define BSC_STATUS_TXE                                  (1 << 6)
+#define BSC_STATUS_RXF                                  (1 << 7)
+#define BSC_STATUS_ERR                                  (1 << 8)
+#define BSC_STATUS_CLKT                                 (1 << 9)
+
+#define BSC_READ                                        BSC_CONTROL_I2CEN|BSC_CONTROL_ST|BSC_CONTROL_CLEAR|BSC_CONTROL_READ
+#define BSC_WRITE                                       BSC_CONTROL_I2CEN|BSC_CONTROL_ST
+#define BSC_CLEAR                                       BSC_STATUS_CLKT|BSC_STATUS_ERR|BSC_STATUS_DONE
+
+#define AUX_IRQ                                         (ARM_PERIIOBASE + 0x215000)       // Auxiliary Interrupt status
+#define AUX_ENABLES                                     (ARM_PERIIOBASE + 0x215004)       // Auxiliary enables
+#define AUX_MU_IO_REG                                   (ARM_PERIIOBASE + 0x215040)       // AUX_MU_IO_REG Mini Uart I/O Data
+#define AUX_MU_IER_REG                                  (ARM_PERIIOBASE + 0x215044)       // Mini Uart Interrupt Enable
+#define AUX_MU_IIR_REG                                  (ARM_PERIIOBASE + 0x215048)       // Mini Uart Interrupt Identify
+#define AUX_MU_LCR_REG                                  (ARM_PERIIOBASE + 0x21504C)       // Mini Uart Line Control
+#define AUX_MU_MCR_REG                                  (ARM_PERIIOBASE + 0x215050)       // Mini Uart Modem Control
+#define AUX_MU_LSR_REG                                  (ARM_PERIIOBASE + 0x215054)       // Mini Uart Line Status
+#define AUX_MU_MSR_REG                                  (ARM_PERIIOBASE + 0x215058)       // Mini Uart Modem Status
+#define AUX_MU_SCRATCH                                  (ARM_PERIIOBASE + 0x21505C)       // Mini Uart Scratch
+#define AUX_MU_CNTL_REG                                 (ARM_PERIIOBASE + 0x215060)       // Mini Uart Extra Control
+#define AUX_MU_STAT_REG                                 (ARM_PERIIOBASE + 0x215064)       // Mini Uart Extra Status
+#define AUX_MU_BAUD_REG                                 (ARM_PERIIOBASE + 0x215068)       // Mini Uart Baudrate
+#define AUX_SPI0_CNTL0_REG                              (ARM_PERIIOBASE + 0x215080)       // SPI 1 Control register 0
+#define AUX_SPI0_CNTL1_REG                              (ARM_PERIIOBASE + 0x215084)       // SPI 1 Control register 1
+#define AUX_SPI0_STAT_REG                               (ARM_PERIIOBASE + 0x215088)       // SPI 1 Status
+#define AUX_SPI0_IO_REG                                 (ARM_PERIIOBASE + 0x215090)       // SPI 1 Data
+#define AUX_SPI0_PEEK_REG                               (ARM_PERIIOBASE + 0x215094)       // SPI 1 Peek
+#define AUX_SPI1_CNTL0_REG                              (ARM_PERIIOBASE + 0x2150C0)       // SPI 2 Control register 0
+#define AUX_SPI1_CNTL1_REG                              (ARM_PERIIOBASE + 0x2150C4)       // SPI 2 Control register 1
+#define AUX_SPI1_STAT_REG                               (ARM_PERIIOBASE + 0x2150C8)       // SPI 2 Status
+#define AUX_SPI1_IO_REG                                 (ARM_PERIIOBASE + 0x2150D0)       // SPI 2 Data
+#define AUX_SPI1_PEEK_REG                               (ARM_PERIIOBASE + 0x2150D4)       // SPI 2 Peek
+
+/*
+    BCM2836
+ */
+
+#define BCM2836_CTRL		                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x000)
+#define BCM2836_PRESCALER		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x008)
+#define BCM2836_GPU_INT_ROUTING	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x00C)
+#define BCM2836_PM_ROUTING_SET	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x010)
+#define BCM2836_PM_ROUTING_CLR	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x014)
+#define BCM2836_TIMER_LS		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x01C)
+#define BCM2836_TIMER_MS		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x020)
+#define BCM2836_INT_ROUTING		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x024)
+#define BCM2836_AXI_COUNT		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x02C)
+#define BCM2836_AXI_IRQ		                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x030)
+#define BCM2836_TIMER_CTRL		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x034)
+#define BCM2836_TIMER_WRITE		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x038)
+
+#define BCM2836_TIMER_INT_CTRL0	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x040)
+#define BCM2836_TIMER_INT_CTRL1	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x044)
+#define BCM2836_TIMER_INT_CTRL2	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x048)
+#define BCM2836_TIMER_INT_CTRL3	                        (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x04C)
+
+#define BCM2836_MAILBOX_INT_CTRL0	                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x050)
+#define BCM2836_MAILBOX_INT_CTRL1	                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x054)
+#define BCM2836_MAILBOX_INT_CTRL2	                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x058)
+#define BCM2836_MAILBOX_INT_CTRL3	                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x05C)
+
+#define BCM2836_IRQ_PEND0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x060)
+#define BCM2836_IRQ_PEND1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x064)
+#define BCM2836_IRQ_PEND2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x068)
+#define BCM2836_IRQ_PEND3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x06C)
+
+#define BCM2836_FIQ_PEND0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x070)
+#define BCM2836_FIQ_PEND1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x074)
+#define BCM2836_FIQ_PEND2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x078)
+#define BCM2836_FIQ_PEND3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x07C)
+
+#define BCM2836_MAILBOX0_SET0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x080)
+#define BCM2836_MAILBOX1_SET0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x084)
+#define BCM2836_MAILBOX2_SET0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x088)
+#define BCM2836_MAILBOX3_SET0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x08C)
+
+#define BCM2836_MAILBOX0_SET1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x090)
+#define BCM2836_MAILBOX1_SET1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x094)
+#define BCM2836_MAILBOX2_SET1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x098)
+#define BCM2836_MAILBOX3_SET1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x09C)
+
+#define BCM2836_MAILBOX0_SET2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0A0)
+#define BCM2836_MAILBOX1_SET2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0A4)
+#define BCM2836_MAILBOX2_SET2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0A8)
+#define BCM2836_MAILBOX3_SET2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0AC)
+
+#define BCM2836_MAILBOX0_SET3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0B0)
+#define BCM2836_MAILBOX1_SET3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0B4)
+#define BCM2836_MAILBOX2_SET3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0B8)
+#define BCM2836_MAILBOX3_SET3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0BC)
+
+#define BCM2836_MAILBOX0_CLR0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0C0)
+#define BCM2836_MAILBOX1_CLR0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0C4)
+#define BCM2836_MAILBOX2_CLR0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0C8)
+#define BCM2836_MAILBOX3_CLR0		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0CC)
+
+#define BCM2836_MAILBOX0_CLR1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0D0)
+#define BCM2836_MAILBOX1_CLR1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0D4)
+#define BCM2836_MAILBOX2_CLR1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0D8)
+#define BCM2836_MAILBOX3_CLR1		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0DC)
+
+#define BCM2836_MAILBOX0_CLR2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0E0)
+#define BCM2836_MAILBOX1_CLR2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0E4)
+#define BCM2836_MAILBOX2_CLR2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0E8)
+#define BCM2836_MAILBOX3_CLR2		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0EC)
+
+#define BCM2836_MAILBOX0_CLR3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0F0)
+#define BCM2836_MAILBOX1_CLR3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0F4)
+#define BCM2836_MAILBOX2_CLR3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0F8)
+#define BCM2836_MAILBOX3_CLR3		                (BCM2836_PERIPHYSBASE + BCM2708_PERIPHYSSIZE + 0x0FC)
+
+/*
+ * Below here: Bellatrix additions, not present upstream.
+ */
 
 /*
  * The PL011 UART, as offsets from the peripheral base.
@@ -160,8 +487,6 @@
  * Emu68's include/support_rpi.h, in arm-native's own header, and privately in
  * this port's Bluetooth driver.
  */
-#define PL011_OFFSET 0x00201000UL
-
 #define PL011_OFFSET 0x00201000UL
 #define PL011_DR   0x00
 #define PL011_FR   0x18
@@ -199,6 +524,5 @@
 #define PL011_CR_RTSEN  (1UL << 14)
 #define PL011_CR_CTSEN  (1UL << 15)
 #define PL011_WAIT_LIMIT 1000000UL
-
 
 #endif /* HARDWARE_BCM2708_H */

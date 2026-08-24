@@ -13,3 +13,6 @@
 [submodule "external/amitools"]
 	path = external/amitools
 	url = https://github.com/cnvogelg/amitools
+[submodule "external/wifipi"]
+	path = external/wifipi
+	url = https://github.com/michalsc/WiFiPi.device.git
