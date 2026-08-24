@@ -579,6 +579,26 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # code that stops being compiled stops being code; just not installed.
     make kernel-bthciuart
 
+    # WiFi: the SDIO transport, the chip resource, the SANA-II device, and the
+    # firmware without which the driver associates with nothing.
+    #
+    # Three modules and a download, none of which the distribution target
+    # pulls in on its own. Built here for the same reason the USB drivers are:
+    # a module that stops being compiled stops being code.
+    #
+    # This is only possible because the card is on SDHOST (SDCARD_BACKEND in
+    # soc/sdcard). The BCM43438 is on the Arasan controller and the card can
+    # be too; they cannot share it, so a card on Arasan means no WiFi at all.
+    #
+    # BELLATRIX_WIFI_FW=0 skips the fetch for an offline build -- the modules
+    # still build, they just have nothing to load.
+    make kernel-sdio-emu68
+    make kernel-bwfm-emu68
+    make workbench-devs-networks-bwfm
+    if [ "${BELLATRIX_WIFI_FW:-1}" = 1 ]; then
+        make distfiles-emu68-wifi-fw
+    fi
+
     # dos64.library, which nothing here was building.
     #
     # posixc.library and stdcio.library both reference it by name. It existed

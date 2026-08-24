@@ -87,3 +87,33 @@ include $(SRCDIR)/config/aros.cfg
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k
 #MM- distfiles-emu68-m68k-quick : AROS-emu68-m68k-quick
+
+#
+# WiFi firmware for bwfm.device, fetched the way arch/arm-raspi already does.
+#
+# The chip has no firmware of its own: bwfm.device loads
+# DEVS:Firmware/brcmfmac<id>-sdio.bin and its .txt NVRAM at runtime, and
+# without them the driver attaches and associates with nothing. This target
+# is a copy of arm-raspi's distfiles-raspi-wifi-fw, narrowed to the one chip
+# this board has -- the BCM43430 on a Pi 3 -- rather than every Pi's.
+#
+# The branch matters and is not a version preference: "buster" keeps real
+# files under brcm/, while newer branches symlink them to cypress/ and
+# GitHub's ?raw= would hand back the link text instead of the blob. That is
+# arm-raspi's finding, kept here with it.
+#
+# Fetched rather than vendored: the blobs are ~400 KB and redistributable
+# under LICENCE.broadcom_bcm43xx, which comes along for that reason.
+#
+EMU68WIFIFW_BRANCH := buster
+EMU68WIFIFW_URI    := https://github.com/RPi-Distro/firmware-nonfree/blob/$(EMU68WIFIFW_BRANCH)
+EMU68WIFIFW_FILES  := brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt \
+                     LICENCE.broadcom_bcm43xx
+
+#MM
+distfiles-emu68-wifi-fw:
+	@$(MKDIR) $(AROSDIR)/Devs/Firmware
+	@for f in $(EMU68WIFIFW_FILES) ; do \
+	    wget -t 5 -T 15 -c "$(EMU68WIFIFW_URI)/$$f?raw=true" -O "$(AROSDIR)/Devs/Firmware/$${f##*/}" \
+	        || $(ECHO) "WARNING: could not fetch WiFi firmware $$f" ; \
+	done
