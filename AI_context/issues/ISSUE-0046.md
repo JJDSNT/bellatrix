@@ -165,6 +165,44 @@ Bellatrix btuart.resource
   `C:BTStackLoader` is already invoked by the stock Startup-Sequence, so
   nothing of ours has to start it.
 
+# The radio answers, 2026-08-24
+
+On a Raspberry Pi 3, with `AddBTHardware` added to `S:Startup-Sequence`
+(`patches/aros/0056`) and the transport write contract fixed:
+
+    Adding hardware DEVS:Bluetooth/bthciuart.device, unit 0...okay!
+    ...bring-up complete - HCI 7.0 LMP 7.8713, BR/EDR+LE, addr AA:AA:AA:AA:AA:AA
+    ...ready: AA:AA:AA:AA:AA:AA, HCI 4.1, LMP 4.1 (Broadcom), BR/EDR + LE
+    New hardware ... added (Raspberry Pi onboard Bluetooth, ...)
+
+The controller resets, reports its version, features and buffer sizes, and the
+stack registers it. Steps 0 through 13 of the HCI bring-up all return ok.
+
+**What blocks a mouse is step 15.** Counting `enum` HCB_* in
+`bluetooth/hwtask.h`, step 14 is `HCB_READ_LOCAL_NAME` and step 15 is
+`HCB_WRITE_SCAN_ENABLE`, and both time out. Write_Scan_Enable is what turns on
+page scan and inquiry scan; without it the controller does not answer paging,
+which is exactly the failure seen when connecting a mouse. Step 13
+(`WRITE_LOCAL_NAME`) succeeded and step 14 only reads that name back, so the
+pair reads as "the controller stopped answering here" rather than as two
+commands being special.
+
+**And the address is not real.** `AA:AA:AA:AA:AA:AA` is what a BCM43438 that
+has never been given a patchram reports; the true BD_ADDR arrives with the
+firmware. An invalid address breaks pairing independently of the scan problem.
+
+So the two open threads are:
+
+1. why the command stream stops responding after step 13 -- flow control, a
+   missing event, or a response the parser drops. This is ours to find and
+   does not need firmware.
+2. the patchram. We have no `.hcd` and no vendor upload protocol, which is
+   what a real BD_ADDR needs.
+
+**A parsing bug is visible in the same two lines**: one says HCI 7.0 /
+LMP 7.8713, the next says HCI 4.1 / LMP 4.1 for the same controller. At least
+one of them is misreading the Read_Local_Version response.
+
 # Corrected 2026-08-24
 
 Two of the three items below are no longer true, and the issue was read as
