@@ -213,6 +213,29 @@ framebuffer.
   `AI_context/consolidated/history/`. `AI_context/README.md` has the grep
   recipes for querying state — no tooling needed.
 
+## Probes that report from inside a boot
+
+`BELLATRIX_BOOT_TEST=<name>` makes `make-sdcard.sh` insert
+`Execute "S:<name>"` into `S:Startup-Sequence`, and `tests/gl/` holds the
+scripts. They report by redirecting to `DEBUG:`, which reaches the serial
+line and therefore the `run.sh` log.
+
+Two things had to be true for that to work, and both were false until
+2026-08-24 -- for months, silently, across seven scripts:
+
+- `DEVS:DOSDrivers/DEBUG` names `L:debug-handler`, and nothing built it. The
+  target is `workbench-fs-debug`.
+- the probe is inserted **after** `S:Startup-Sequence` mounts
+  `DEVS:DOSDrivers`, not before. It used to be anchored twenty lines earlier,
+  so it ran before `DEBUG:` existed as a device.
+
+**A probe that prints nothing and a probe that never ran look identical**, and
+reading the first as the second is how an investigation goes hours in the
+wrong direction. If a script goes quiet, check the handler and the anchor
+before concluding anything about what it was measuring.
+`BELLATRIX_BOOT_TEST_LATE=1` moves it to just before Wanderer for anything
+that needs a finished system.
+
 ## Measuring a boot
 
 The AROS boot to desktop is **timing-sensitive and intermittent**. Never conclude
