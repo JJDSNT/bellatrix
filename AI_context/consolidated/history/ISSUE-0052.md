@@ -89,7 +89,7 @@ listing because each occurrence looked like an unrelated bug:
 2. the FAT cache aligned its DMA buffers to whatever a header left, and the
    SD driver needs 32 — `patches/aros/0038`;
 3. `MEMCHUNK_TOTAL` 8 against `AROS_WORSTALIGN` 4 in `rom/exec/memory.c:85`,
-   noted while chasing [ISSUE-0051](ISSUE-0051.md);
+   noted while chasing [ISSUE-0051](../../issues/ISSUE-0051.md);
 4. this.
 
 # What is not yet decided

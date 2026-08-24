@@ -1,12 +1,12 @@
 ---
 id: ISSUE-0019
 title: "Port the BCM2708 USB OTG host controller and Poseidon from arm-native"
-status: doing
+status: done
 priority: high
 type: feature
 owner: unassigned
 created_at: 2026-08-14
-updated_at: 2026-08-14
+updated_at: 2026-08-24
 tags:
   - usb
   - dma
@@ -807,3 +807,35 @@ dependency files (`bluetooth_start.d`, NUL bytes, `missing separator`) and sent
 the investigation after failures that were artefacts. `ps | grep make` did not
 show them because the shell hook rewrites command lines; `pgrep -x make` did.
 **Check `pgrep -x make` before starting a build.**
+
+
+# Resolved 2026-08-24
+
+The goal of this issue -- build the Synopsys DWC2 host controller for
+`m68k-emu68` and put Poseidon behind it -- is met, and further than it asked:
+there are two host controllers, both ours, and one of them has been shown
+enumerating a device end to end.
+
+    [DWC2/Emu68] OT2 core OT2.94a at f2980000
+    [DWC2/Emu68] host initialized with 8 channels, SOF enabled
+    [DWC2/Emu68:RH] port reset complete HPRT=0002100d
+    [DWC2/Emu68:XFER] submit #8 cmd=12 addr=2 ep=0 len=18
+
+and, written by `S:Startup-Sequence` on the card:
+
+    Adding hardware DEVS:USBHardware/dwc2emu68.device, unit 0...okay!
+
+Poseidon accepted the driver, enumerated the virtual root hub over 24 control
+transfers, reset port 1, addressed the attached device as address 2 and read
+its descriptors over 7 more, with no errors and no stalls.
+
+The DMA prerequisite this issue identified as the real work -- "this port
+cannot do DMA correctly yet, and USB would be its first consumer" -- was
+delivered by ISSUE-0013's `dma.resource` and is now used by the SD card and
+audio drivers as well.
+
+What is left is not this issue's question. Choosing between the two drivers,
+and finishing the rewrite so it covers what the adopted engine does, is
+[ISSUE-0047](../../issues/ISSUE-0047.md). USB also remains **disabled by default** on the
+card -- `BELLATRIX_USB=1` enables it -- which is a separate decision recorded
+there.

@@ -457,7 +457,7 @@ this issue's: it is Exec's, and it is not obviously a defect in the program.
 A binary aligning to the target's own `AROS_WORSTALIGN` and being refused by
 that target's allocator is an incompatibility, and Bellatrix's answer to an
 incompatibility cannot be to recompile the Amiga program. Split out as
-[ISSUE-0052](ISSUE-0052.md).
+[ISSUE-0052](../consolidated/history/ISSUE-0052.md).
 
 # The load finishes. It is not the load.
 

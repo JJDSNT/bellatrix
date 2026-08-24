@@ -20,7 +20,7 @@ related_files:
   - aros/arch/m68k-emu68/soc/usb/usb2otg/mmakefile.src
   - patches/aros/0013-usb2otg-do-not-name-arm-instructions-in-a-portable-dr.patch
   - patches/aros/0022-usb2otg-only-schedule-work-for-due-sof-transfers.patch
-  - AI_context/issues/ISSUE-0019.md
+  - AI_context/consolidated/history/ISSUE-0019.md
 ---
 
 # Summary

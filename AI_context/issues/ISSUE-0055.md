@@ -58,7 +58,8 @@ reasons for restoring are worth keeping:
 
 - `proto/openfirmware.h` is present for this target, so the device-tree probe
   those SoCs need compiles here;
-- [ISSUE-0069](ISSUE-0069.md) already has a second board in view;
+- a second board is a stated direction for this port, so a driver that
+  already knows three SoCs is worth more than one narrowed to ours;
 - deleting them widens the gap with the upstream driver, turning its future
   fixes into something to re-derive rather than apply.
 

@@ -19,7 +19,7 @@ related_files:
   - external/aros/arch/arm-native/soc/broadcom/2708/mmakefile.src
   - external/aros/config/make.tmpl
   - external/aros/rom/dos/cliinit.c
-  - AI_context/issues/ISSUE-0043.md
+  - AI_context/consolidated/history/ISSUE-0043.md
 ---
 
 # Summary
