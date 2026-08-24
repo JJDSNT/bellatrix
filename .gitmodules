@@ -16,3 +16,4 @@
 [submodule "external/wifipi"]
 	path = external/wifipi
 	url = https://github.com/michalsc/WiFiPi.device.git
+	ignore = dirty
