@@ -153,13 +153,24 @@ raises it. Fixing only the reporter made the "Unaligned first chunk address"
 line disappear while the alert stayed, which looked like partial progress and
 was actually a diagnostic that had stopped telling the truth.
 
-**And a boot test that reports to `DEBUG:` reports nothing.** `Echo >DEBUG:`
-and `xSysInfo FULL >DEBUG:` produce no serial output on this port -- verified
-across two runs of two different boot tests, with zero occurrences of any
-marker. A run was read as "the crash is gone" when the crash simply could not
-have been printed. `tests/gl/sysinfo` now writes to `SDCARD0P0:sysinfo.log`,
-the way `S:Startup-Sequence` already logs `AddUSBHardware`, and the file is
-read back out of the image with `mtype`.
+**And a boot test that reports to `DEBUG:` reported nothing.** `Echo >DEBUG:`
+produced no serial output at all, across two runs of two different boot tests.
+A run was read as "the crash is gone" when the crash simply could not have
+been printed.
+
+That turned out to have two causes, both since fixed, and neither of them a
+reason to stop using `DEBUG:`:
+
+- `DEVS:DOSDrivers/DEBUG` names `L:debug-handler`, and nothing built it. The
+  target `workbench-fs-debug` existed and compiles first time; it is in
+  `build-aros.sh` now.
+- `make-sdcard.sh` inserted boot tests after `Assign "IMAGES:"`, which is line
+  30 of `S:Startup-Sequence`, while `DEVS:DOSDrivers` is mounted on line 53.
+  The probe ran twenty lines before the device it wrote to existed. The anchor
+  is now immediately after the `Mount`, which is still long before Wanderer.
+
+With both, `DEBUG:` reaches the serial line and `tests/gl/sysinfo` reports
+there like the other six probes. Seven scripts had been writing into nothing.
 
 # Verification
 

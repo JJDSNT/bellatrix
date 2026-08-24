@@ -8,13 +8,12 @@
 ; "DEBUG/S,BRIEF/S,FULL/S,DARK/S" -- which is the only reason this can be run
 ; from a script at all.
 ;
-; Written to the card, not to DEBUG:. An Echo or a redirect to DEBUG: from a
-; boot script produces nothing on the serial line here -- verified across two
-; separate runs of two different boot tests -- so a probe that reports that way
-; reports nothing at all. SDCARD0P0: is where S:Startup-Sequence already sends
-; the AddUSBHardware log for the same reason, and the file can be read out of
-; the image afterwards with mtype.
+; DEBUG: works here, but only because two things were fixed for it: L:debug-
+; handler is now built (workbench-fs-debug, which nothing was invoking), and
+; make-sdcard.sh inserts boot tests after S:Startup-Sequence mounts
+; DEVS:DOSDrivers rather than twenty lines before it. A probe placed before the
+; Mount has no DEBUG: device to write to and reports into nothing.
 ;
-Echo >"SDCARD0P0:sysinfo.log" "[sysinfo] xSysInfo FULL"
-xSysInfo FULL >>"SDCARD0P0:sysinfo.log"
-Echo >>"SDCARD0P0:sysinfo.log" "[sysinfo] done"
+Echo >DEBUG: "[sysinfo] xSysInfo FULL"
+xSysInfo FULL >DEBUG:
+Echo >DEBUG: "[sysinfo] done"

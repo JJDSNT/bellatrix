@@ -579,6 +579,15 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # code that stops being compiled stops being code; just not installed.
     make kernel-bthciuart
 
+    # debug-handler, without which DEBUG: silently swallows everything.
+    #
+    # Devs/DOSDrivers/DEBUG is on the card and says "Handler = debug-handler",
+    # but L:debug-handler was never built, so the mount fails quietly and every
+    # redirection to DEBUG: writes to nothing. Seven scripts under tests/gl/
+    # report that way and had been reporting nothing at all -- which is how a
+    # run with no output got read as a run with no problem.
+    make workbench-fs-debug
+
     # WiFi: the SDIO transport, the chip resource, the SANA-II device, and the
     # firmware without which the driver associates with nothing.
     #

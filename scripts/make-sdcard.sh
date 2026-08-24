@@ -379,6 +379,18 @@ fi
 # LIBS:, FONTS: and the rest are in place, which is all a program needs to be
 # loaded and opened, it runs within a fraction of that.
 #
+# After the Mount, not before it, and that is not a detail.
+#
+# The anchor used to be `Assign "IMAGES:"`, which is line 30 of the sequence.
+# DEVS:DOSDrivers is mounted on line 53. So a probe ran before DEBUG: existed
+# as a device at all, and every redirection to it went nowhere -- for months,
+# across seven scripts, silently. A run that printed nothing was read as a run
+# that never got that far, which is the worst way for a diagnostic to fail.
+#
+# Moving the anchor after the Mount costs the handful of lines between them --
+# a Path, a couple of assigns -- and buys a working DEBUG:. It is still long
+# before Wanderer, which is the whole point of not using the LATE position.
+#
 # BELLATRIX_BOOT_TEST_LATE=1 restores the old position for anything that
 # genuinely needs a finished system.
 if [ -n "${BELLATRIX_BOOT_TEST:-}" ]; then
@@ -389,7 +401,7 @@ if [ -n "${BELLATRIX_BOOT_TEST:-}" ]; then
     if [ "${BELLATRIX_BOOT_TEST_LATE:-0}" = 1 ]; then
         anchor='^If EXISTS "WANDERER:Wanderer"'
     else
-        anchor='^Assign "IMAGES:"'
+        anchor='^Mount >NIL: "DEVS:DOSDrivers'
     fi
     awk -v script="$BELLATRIX_BOOT_TEST" -v anchor="$anchor" '
         $0 ~ anchor && !done { print; print "Execute \"S:" script "\""; done = 1; next }
