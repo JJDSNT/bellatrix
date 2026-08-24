@@ -1,0 +1,19 @@
+.KEY x
+.BRA {
+.KET }
+;
+; Device level, no DOS and no filesystem (sdcard.md sec.10).
+;
+; Everything measured so far went through DOS and FAT. If the device alone is
+; already about 1 MB/s then that is the medium and there is no loss to find
+; above it; if it is much faster, the loss is between the device and the file.
+;
+Echo >DEBUG: "[raw] device-level reads"
+SDRaw 4 4 >DEBUG:
+SDRaw 16 8 >DEBUG:
+SDRaw 64 8 >DEBUG:
+SDRaw 256 8 >DEBUG:
+Echo >DEBUG: "[raw] and the same again, to separate cold from warm"
+SDRaw 64 8 >DEBUG:
+SDRaw 4 4 >DEBUG:
+Echo >DEBUG: "[raw] done"

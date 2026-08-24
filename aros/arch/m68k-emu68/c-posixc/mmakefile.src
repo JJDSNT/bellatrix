@@ -27,4 +27,10 @@ include $(SRCDIR)/config/aros.cfg
     progname=SDBench files=SDBench targetdir=$(AROS_C) \
     coverageinstr=no
 
+#MM- workbench-c-emu68-sdraw : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-sdraw \
+    progname=SDRaw files=SDRaw targetdir=$(AROS_C) \
+    coverageinstr=no
+
 %common

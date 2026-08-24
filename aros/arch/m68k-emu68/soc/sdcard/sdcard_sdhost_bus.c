@@ -426,6 +426,9 @@ static ULONG sdhost_n_direct;
 static ULONG sdhost_n_unaligned;
 static ULONG sdhost_n_unreachable;
 
+static ULONG sdhost_cmd_t0;
+static ULONG sdhost_us_total;
+
 static ULONG sdhost_us_wait;
 static ULONG sdhost_us_cache;
 static ULONG sdhost_us_copy;
@@ -446,7 +449,7 @@ static ULONG sdhost_stat_last_us;
  * read the command line this early, and an investigation that needs the
  * counters can afford a rebuild.
  */
-#define SDHOST_STATS 0
+#define SDHOST_STATS 1
 
 static int sdhost_stats_on(void)
 {
@@ -489,6 +492,10 @@ static void sdhost_stat_tick(struct sdcard_Bus *bus, ULONG blocks)
                 (dus >= 1000) ? (dkb * 1000) / (dus / 1000) : 0,
                 sdhost_us_wait / 1000, sdhost_us_cache / 1000,
                 sdhost_us_copy / 1000);
+            bug("[SDHost%02u]   command total %u ms of which transfer %u ms\n",
+                bus->sdcb_BusNum, sdhost_us_total / 1000,
+                sdhost_us_wait / 1000);
+            sdhost_us_total = 0;
             bug("[SDHost%02u]   direct %u, bounced %u unaligned + %u"
                 " unreachable\n", bus->sdcb_BusNum, sdhost_n_direct,
                 sdhost_n_unaligned, sdhost_n_unreachable);
@@ -520,6 +527,17 @@ ULONG FNAME_SDHOSTBUS(SendCmd)(struct TagItem *CmdTags, struct sdcard_Bus *bus)
     BOOL   has_data = (sdDataLen != 0);
 
     sdhost_stat_tick(bus, (sdDataLen + 511) / 512);
+    {
+        /*
+         * The whole command, against its parts.
+         *
+         * Device-level reads top out at 1.6 MB/s -- 39 ms per 64 KB command --
+         * while the DMA engine itself moves 4 MB in 79 ms. So the transport is
+         * not the cost and the rest of the command is. This times the rest.
+         */
+        if (sdhost_stats_on())
+            sdhost_cmd_t0 = sdcard_CurrentTime();
+    }
     BOOL   used_bounce = FALSE;
     APTR   dma_buf;
     ULONG  cmdval;
@@ -727,6 +745,12 @@ done:
         sdhost_dsb();
         sdhost_flush_fifo(bus);
     }
+    if (sdhost_cmd_t0)
+    {
+        sdhost_us_total += sdcard_CurrentTime() - sdhost_cmd_t0;
+        sdhost_cmd_t0 = 0;
+    }
+
     /* W1C the sticky status bits so the next command sees a clean slate. */
     sdhost_write(bus, SDHSTS, sdhost_read(bus, SDHSTS));
     return retval;

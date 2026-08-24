@@ -23,6 +23,31 @@ related_files:
 
 # Summary
 
+## What these measurements are worth (read first)
+
+Everything timed below was taken under QEMU, and QEMU is not a timing model of
+this hardware. Its SD controller is emulated with data coming from a host file
+and no real latency, and an MMIO access costs far more there than in silicon --
+which penalises exactly the thing being measured, a driver that makes many
+accesses per transfer. **Absolute rates here are the emulation's, not the
+card's.**
+
+What survives, and what does not:
+
+| credible under QEMU | not credible under QEMU |
+|---|---|
+| the bounce copy cost **55x** the DMA | 79 ms and 4420 ms as absolutes |
+| DMA and burst-PIO drivers perform **the same** | how long either takes |
+| **4 direct against 761** rejected for alignment | -- |
+| **6844 reads, 4145 hunks, 8 KB per 12-byte request** | -- |
+| request size **saturates at 64 KB** | 1.6 MB/s being a ceiling |
+| FAT costs **~40%** over device level | whether ~1 MB/s is slow |
+
+So the *structure* of the problem is established here and the *magnitude* is
+not. "Do we have a speed problem" needs a Pi. This repository already said so
+-- magnitude on hardware, shape under QEMU -- and these measurements were taken
+without that caveat attached until now.
+
 Split out of ISSUE-0045, which turned out not to be about GL at all.
 `OpenLibrary("mesa3dgl20-0.library")` -- a 10 MB disk library -- does not
 return, while a 574 KB one opens promptly. The minimal reproducer is
