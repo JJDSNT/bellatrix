@@ -619,6 +619,13 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
         make distfiles-emu68-wifi-fw
     fi
 
+    # Bluetooth patchram, for the same reason and with the same switch. Without
+    # it the controller still answers, but from ROM and with a placeholder
+    # BD_ADDR, which pairing cannot use.
+    if [ "${BELLATRIX_BT_FW:-1}" = 1 ]; then
+        make distfiles-emu68-bt-fw
+    fi
+
     # dos64.library, which nothing here was building.
     #
     # posixc.library and stdcio.library both reference it by name. It existed

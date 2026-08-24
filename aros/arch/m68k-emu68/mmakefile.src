@@ -90,7 +90,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM      bluetooth-shellcommands \
 #MM      kernel-bluetooth-hardware \
 #MM      kernel-bluetooth-prefs \
-#MM      kernel-bthciuart
+#MM      kernel-bthciuart \
+#MM      kernel-brcmfw
 
 
 #
@@ -133,6 +134,30 @@ EMU68WIFIFW_BRANCH := buster
 EMU68WIFIFW_URI    := https://github.com/RPi-Distro/firmware-nonfree/blob/$(EMU68WIFIFW_BRANCH)
 EMU68WIFIFW_FILES  := brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt \
                      LICENCE.broadcom_bcm43xx
+
+#
+# Bluetooth patchram for the onboard controller.
+#
+# A BCM43438 runs from ROM until it is sent a patchram image: it answers
+# HCI_Reset and reports its version without one, but with a placeholder
+# BD_ADDR of AA:AA:AA:AA:AA:AA, and pairing needs a real address.
+#
+# soc/bluetooth/brcmfw reads this at runtime from DEVS:Firmware/brcm/. The
+# legacy tree fetched the same file and converted it to a C source at build
+# time (BTstack's convert_hcd.py) to link it in; keeping it a file means
+# changing controllers is changing a file.
+#
+# Same source the legacy build used. BCM43430A1 is the Pi 3 and Zero W part.
+#
+EMU68BTFW_DEVICE := BCM43430A1
+EMU68BTFW_URI    := https://github.com/OpenELEC/misc-firmware/raw/master/firmware/brcm
+
+#MM
+distfiles-emu68-bt-fw:
+	@$(MKDIR) $(AROSDIR)/Devs/Firmware/brcm
+	@wget -t 5 -T 15 -c "$(EMU68BTFW_URI)/$(EMU68BTFW_DEVICE).hcd" \
+	    -O "$(AROSDIR)/Devs/Firmware/brcm/$(EMU68BTFW_DEVICE).hcd" \
+	    || $(ECHO) "WARNING: could not fetch Bluetooth firmware $(EMU68BTFW_DEVICE).hcd"
 
 #MM
 distfiles-emu68-wifi-fw:
