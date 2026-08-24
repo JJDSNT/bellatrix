@@ -191,7 +191,39 @@ commands being special.
 has never been given a patchram reports; the true BD_ADDR arrives with the
 firmware. An invalid address breaks pairing independently of the scan problem.
 
-So the two open threads are:
+## What the legacy branch says about firmware
+
+**It never uploaded any.** `src/io/bluetooth/bt_firmware_stub.c` on `legacy`
+is, in full:
+
+    const uint8_t brcm_patchram_buf[] = {};
+    const int brcm_patch_ram_length = 0;
+    const char brcm_patch_version[] = "none";
+
+and `patches/0005-btstack-baremetal-bcm-init.patch` logs "bcm: no init script
+present, continuing without PatchRAM upload". That build talked to the
+controller and scanned. So patchram is **not** the blocker, and attributing
+the AA:AA:AA:AA:AA:AA address to its absence was wrong -- that address needs
+its own explanation.
+
+What legacy did have, in `bt_hal_raspi3.c`, is an RX ring fed by a bounded
+interrupt top half, with `s_rx_ring_overflow` counting bytes lost when the
+ring filled. Our `btuart.resource` does arm an RX interrupt
+(`PL011_IFLS_RX18`, a quarter of the 32-byte FIFO) so that is not the
+difference -- but it has **no overflow counter**, so if bytes are being
+dropped nothing says so.
+
+That is worth chasing because of *where* the bring-up stops. Steps 0-13 are
+short commands with short replies. Step 14 is `READ_LOCAL_NAME`, whose
+response carries **248 bytes** of name field -- the first reply in the
+sequence that cannot fit in the PL011's FIFO. A receive path that loses bytes
+under a long reply would fail exactly here, and would then desynchronise the
+command stream, which is what step 15 timing out as well looks like.
+
+Not established. But it is a testable hypothesis and the counter to test it
+with is one the legacy branch already had.
+
+So the open threads are:
 
 1. why the command stream stops responding after step 13 -- flow control, a
    missing event, or a response the parser drops. This is ours to find and
