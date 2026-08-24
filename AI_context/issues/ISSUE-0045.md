@@ -21,6 +21,47 @@ related_files:
 
 # Summary
 
+## Resolved on hardware: Mesa needs a very large stack (2026-08-24)
+
+On a Raspberry Pi 3, with `stack 100000000` -- one hundred megabytes -- the
+demos work:
+
+    3.Work:> stack 100000000
+    3.Work:> gl_test
+    DEBUG: Window created successfully.
+    DEBUG: glAmigaCreateContext returned
+    DEBUG: Calling glAmigaMakeCurrent...
+    DEBUG: glAmigaMakeCurrent finished.
+    GL_VENDOR:   Broadcom
+    GL_RENDERER: VC4 V3D 2.1
+    GL_VERSION:  2.1 Mesa 20.0.8
+    DEBUG: Entering render loop.
+
+The shell gives a command `AROS_STACKSIZE`, which is `0xA000` -- **40 KB** --
+on m68k. Mesa's initialisation is nowhere near that shallow.
+
+**This was reported here as excluded, and that was wrong.** The stack was
+tested at 1 MB, found to change nothing, and written off. 1 MB is two orders of
+magnitude below what the demos need, so the test proved nothing and the
+conclusion drawn from it was false. `S:gl-run` now sets the stack before
+launching a demo.
+
+## And the QEMU failure is a different thing
+
+With the same 100 MB stack under QEMU, `OpenLibrary("mesa3dgl20-0.library")`
+still does not return in 400 seconds. So the two failures this issue has been
+treating as one are not:
+
+- **on hardware**, the demos were blocked by the stack, and are not any more;
+- **under QEMU**, the 10 MB library still cannot be loaded, and that is an
+  emulation problem -- see ISSUE-0051, where device-level throughput and the
+  I/O amplification are measured, both of which are far worse under QEMU than
+  on silicon because every MMIO access costs a host round trip.
+
+Everything below this line was written while those two were conflated. It is
+kept because the measurements are real and ISSUE-0051 depends on them, but the
+framing -- "the demos do not work" -- was only ever true of QEMU.
+
 The native VC4 2D/HVS path passes its hardware validation on a Raspberry Pi 3,
 but the first 3D smoke test does not. Running the official MesaGL `gears`
 example from `SYS:Extras/Demos/GL` hangs the machine.
