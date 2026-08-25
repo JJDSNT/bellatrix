@@ -84,6 +84,50 @@ from `arm-native` (101 defines to 379) rather than continuing to grow one
 constant per failed port. See the commit for
 `feat(wifi): port the AROS Broadcom driver, and adopt the whole BCM283x header`.
 
+# The MAI_CTL bit map is wrong for this SoC, 2026-08-24
+
+HDMI audio is silent on a Pi 3 while PWM works. Instrumentation showed
+everything reachable to be correct -- periiobase 0xf2000000, N=6272,
+SMP=000e8000 (163680000/44100 = 3712), CTS 165000 after a rounding fix,
+SCHED=000cb02b and RAMPKT_STA=00000015 with the audio infoframe transmitting
+in slot 4. Only the control register looked odd, and it is.
+
+The `legacy` branch has a validated HDMI audio driver for this exact silicon
+(`src/host/raspi3/hdmi_audio.c`; it played a stereo chirp). Its MAI_CTL bit
+map does not match the one we inherited from AHI's RPiHDMI:
+
+| bit | legacy (BCM2837, validated) | RPiHDMI (ours) |
+|---|---|---|
+| 0 | `ENABLE` | `RESET` |
+| 1 | `BUSY` | `ERRORF` |
+| 2 | `CHALIGN` | `ERRORE` |
+| 3 | -- | `ENABLE` |
+| 8 | `FLUSH` | `PAREN` |
+| 18 | `RESET` | -- |
+| 19 | `CHNUM` shift | -- (CHNUM at 4) |
+| 24 | `WHOLSMP` | -- |
+
+Hardware reported `MAI_CTL=00003428`. Read with the legacy map, **bit 0 is
+clear: the MAI was never enabled.** We write ENABLE into bit 3, which is not
+what enables it on this part.
+
+RPiHDMI is written for BCM2711/2712, where the register was laid out
+differently. The SoC table we kept carries the right *offsets* for BCM283x and
+the wrong *bit definitions*, which is why every other value checked out.
+
+Two more findings from the same comparison, both from the legacy driver's own
+comments:
+
+- **`EXTERNAL_CTS_EN` does not mean "ignore the hardware"**. The block
+  measures CTS against the live pixel clock and treats the written value as a
+  seed, "which makes a fixed CTS seed valid regardless of the actual
+  pixel/HSM clock". That is the mechanism that survives a resolution change.
+  It was briefly cleared here on the opposite theory and has been restored.
+- **CPU-polled feeding does not work**: "CPU-polled feeding of MAI_DATA
+  produced a discontinuous IEC958 stream that the sink muted; the DMA's HDMI
+  DREQ paces the FIFO steadily." Worth confirming our DMA path does the same
+  once the control register is right.
+
 # Verification
 
 Only on hardware:

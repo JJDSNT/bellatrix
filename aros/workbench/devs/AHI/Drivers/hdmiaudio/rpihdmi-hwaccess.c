@@ -21,6 +21,17 @@
 
 #define DEBUG 0
 #include <aros/debug.h>
+#include <aros/macros.h>
+
+#include <proto/exec.h>
+#include <proto/mbox.h>
+
+/* videocore.h builds VCMB_BASE from ARM_PERIIOBASE, and this port has no
+ * compile-time peripheral base -- it is per-controller, in dd->periiobase.
+ * Define it to nothing and address the mailbox explicitly below. */
+#define ARM_PERIIOBASE 0
+#include <hardware/videocore.h>
+#undef ARM_PERIIOBASE
 
 #include "DriverData.h"
 #include "rpihdmi-hwaccess.h"
@@ -208,6 +219,45 @@ static void hdmi_write_audio_infoframe(struct RPiHDMIData *dd)
  * - Channel map: 3-bit fields at bits 0-2 (ch0) and 4-6 (ch1)
  * - MAI_SMP: N = hsm_clock / samplerate, M = 0
  */
+/*
+ * Ask the firmware what the pixel clock actually is.
+ *
+ * CTS depends on it, and everything else here either assumes a mode
+ * (1080p60) or trusts the HDMI block to derive it. The firmware programmed
+ * the mode, so it is the one party that knows -- VCTAG_GETCLKRATE with
+ * VCCLOCK_PIXEL is a direct question with a direct answer, and it stays right
+ * when the resolution changes.
+ *
+ * Returns the rate in Hz, or 0 if the mailbox is unavailable or answers
+ * nothing, which leaves the caller's other paths intact.
+ */
+static ULONG hdmi_pixel_clock_hz(struct RPiHDMIData *dd)
+{
+    struct DriverBase *AHIsubBase = (struct DriverBase *)dd->ahisubbase;
+    APTR mb = (APTR)(dd->periiobase + VCMB_OFFSET);
+    APTR MBoxBase;
+    ULONG msg[8];
+
+    (void)AHIsubBase;
+    if ((MBoxBase = OpenResource("mbox.resource")) == NULL)
+        return 0;
+
+    msg[0] = AROS_LONG2LE(8 * 4);
+    msg[1] = AROS_LONG2LE(VCTAG_REQ);
+    msg[2] = AROS_LONG2LE(VCTAG_GETCLKRATE);
+    msg[3] = AROS_LONG2LE(8);
+    msg[4] = AROS_LONG2LE(4);
+    msg[5] = AROS_LONG2LE(VCCLOCK_PIXEL);
+    msg[6] = 0;
+    msg[7] = 0;
+
+    MBoxWrite(mb, VCMB_PROPCHAN, msg);
+    if (MBoxRead(mb, VCMB_PROPCHAN) != msg)
+        return 0;
+
+    return AROS_LE2LONG(msg[6]);
+}
+
 void hdmi_mai_init(struct RPiHDMIData *dd)
 {
     struct DriverBase *AHIsubBase =
@@ -299,34 +349,27 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
      * We read CTS_0 first to get the hardware-derived value, then write it back.
      */
     /*
-     * Ask the hardware for CTS first; only supply one if it will not.
+     * EXTERNAL_CTS_EN stays on, and that is what makes this survive a mode
+     * change.
      *
-     * EXTERNAL_CTS_EN means "use the CTS software wrote", not "derive it" --
-     * the comment above had that backwards, and with the bit set from the
-     * start the block never computes anything, which is why the first read
-     * returned zero and every later read returned our own value back. The
-     * fallback was therefore the only path, and it assumes 1080p60: change
-     * the display mode and the audio clock no longer matches the pixel clock.
+     * It does not mean "ignore the hardware and use what software wrote". The
+     * block *measures* CTS against the live pixel clock and treats the written
+     * value as a seed -- which is why a fixed seed stays valid at any
+     * resolution. Bellatrix's own earlier HDMI audio driver says so in as many
+     * words: it "hardcodes N/CTS/SMP and relies on the block's external CTS
+     * measurement (EXTERNAL_CTS_EN), which makes a fixed CTS seed valid
+     * regardless of the actual pixel/HSM clock".
      *
-     * Cleared, the block derives CTS from the pixel clock actually in use,
-     * which is correct at every resolution and needs no table. Kept as a
-     * preference rather than a rule: if it yields nothing we still write a
-     * computed value, because silence is worse than an approximation.
+     * This was briefly cleared here on the theory that the bit blocked
+     * derivation. It does the opposite: clearing it removes the very
+     * mechanism that tracks the pixel clock.
      */
-    wr32le(HDMI_CRP_CFG(dd), CRP_CFG_N(n_value));
-    udelay(pb, 100);
+    wr32le(HDMI_CRP_CFG(dd), CRP_CFG_EXTERNAL_CTS_EN | CRP_CFG_N(n_value));
 
     {
         ULONG cts = rd32le(HDMI_CTS_0(dd));
         ULONG hw_cts = cts;
 
-        if (cts == 0)
-        {
-            /* Nothing derived: fall back, and switch the block to the value
-             * we are about to supply. */
-            wr32le(HDMI_CRP_CFG(dd),
-                CRP_CFG_EXTERNAL_CTS_EN | CRP_CFG_N(n_value));
-        }
 
         if (cts == 0) {
             /*
@@ -350,8 +393,13 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
              *   148500 * (6272/128) * 10 / (44100/100)
              *     = 148500 * 49 * 10 / 441 = 165000
              */
-            cts = (148500UL * (n_value / 128) * 10UL)
+            ULONG pixel_hz = hdmi_pixel_clock_hz(dd);
+            ULONG pixel_khz = pixel_hz ? (pixel_hz / 1000) : 148500UL;
+
+            cts = (pixel_khz * (n_value / 128) * 10UL)
                 / (dd->samplerate / 100);
+            bug("[hdmiaudio] init: pixel clock %lu kHz (%s)\n",
+                pixel_khz, pixel_hz ? "mailbox" : "assumed 1080p60");
         }
         /*
          * CTS is what locks the audio clock to the HDMI pixel clock. Get it
@@ -362,13 +410,11 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
          */
         bug("[hdmiaudio] init: CTS hw=%lu used=%lu%s\n",
             hw_cts, cts,
-            hw_cts ? " (derived from the live pixel clock)"
-                   : " (FALLBACK, assumes 1080p60)");
-        if (hw_cts == 0)
-        {
-            wr32le(HDMI_CTS_0(dd), cts);
-            wr32le(HDMI_CTS_1(dd), cts);
-        }
+            hw_cts ? " (already programmed -- NOT proof the block derived it;"
+                     " a value we wrote earlier reads back the same way)"
+                   : " (computed)");
+        wr32le(HDMI_CTS_0(dd), cts);
+        wr32le(HDMI_CTS_1(dd), cts);
     }
 
     /* Write Audio InfoFrame to RAM packet memory */
