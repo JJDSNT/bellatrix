@@ -1,12 +1,12 @@
-#ifndef AHI_Drivers_RPiHDMI_iec958_h
-#define AHI_Drivers_RPiHDMI_iec958_h
+#ifndef RPIHDMI_MAIWORD_H
+#define RPIHDMI_MAIWORD_H
 
 #include <exec/types.h>
 
-/* IEC958/SPDIF channel status setup (separate L/R per IEC 60958-3) */
-void spdif_setup_channel_status(UBYTE *cs_left, UBYTE *cs_right, ULONG samplerate);
+/*
+ * Convert an AHI mix buffer (signed 16-bit stereo) into MAI FIFO words.
+ * One word per channel sample: left, right, left, ...
+ */
+void convert_mix_to_mai(WORD *src, ULONG *dst, ULONG frames);
 
-/* IEC958 sample conversion */
-void convert_mix_to_iec958(WORD *src, ULONG *dst, ULONG frames, UBYTE *cs_left, UBYTE *cs_right, ULONG *frame_counter);
-
-#endif
+#endif /* RPIHDMI_MAIWORD_H */

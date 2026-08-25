@@ -63,9 +63,6 @@ struct RPiHDMIData {
     ULONG samplerate;
 
     /* IEC958 state — separate channel status for L and R per IEC 60958-3 */
-    UBYTE channel_status_l[24]; /* Left channel status block (192 bits) */
-    UBYTE channel_status_r[24]; /* Right channel status block (192 bits) */
-    ULONG frame_counter;        /* Current frame within IEC958 block (0-191) */
 
     struct RPiHDMISoc *soc; /* Pointer to underlaying SOC implementation */
     UBYTE output;

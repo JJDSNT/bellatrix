@@ -260,7 +260,7 @@ void Slave(struct ExecBase *SysBase)
                      * touch the CB that is not playing, which assumes the
                      * refill completes within one buffer period.
                      */
-                    dd->cb[fillbuf]->txfr_len = frames * 2 * sizeof(ULONG);
+                    dd->cb[fillbuf]->txfr_len = AROS_LONG2LE(frames * 2 * sizeof(ULONG));
                     CacheClearE(dd->cb[fillbuf], sizeof(struct BCM2708DMACB), CACRF_ClearD);
                 }
             }

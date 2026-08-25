@@ -354,6 +354,7 @@ _AHIsub_Start(ULONG flags, struct AHIAudioCtrlDrv *AudioCtrl, struct DriverBase 
         /* The FIFO now holds the same level the data register is transmitting,
          * so switching the channels over to it is not a step. */
         pwm_fifo_enable(dd->periiobase);
+        pwm_report_state_after(dd->periiobase, dd->dma_channel);
     }
 
     if (flags & AHISF_RECORD) {

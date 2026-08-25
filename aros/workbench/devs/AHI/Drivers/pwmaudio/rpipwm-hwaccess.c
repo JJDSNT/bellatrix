@@ -539,8 +539,75 @@ void pwm_ramp_dc(IPTR peribase, ULONG from, ULONG to)
  * Hand the channels over to the FIFO. The DMA has already filled it with the
  * level the data register is holding, so the switch is not a step.
  */
+/*
+ * Say whether the PWM is in a state to ask for data.
+ *
+ * The DMA is provably fine: it takes a channel, reads its control block and
+ * goes ACTIVE with no error -- and then sits with DREQ_STOPS_DMA set, waiting
+ * for a request that never comes. DREQ comes from the PWM, so the question
+ * moves here: is the PWM clocked, is the FIFO in use, is it reporting an
+ * error. None of that was observable.
+ *
+ * CM_PWMCTL bit 7 is BUSY -- the clock generator actually running -- and bit 4
+ * is ENAB. PWM_STA carries the FIFO flags and the per-channel error bits.
+ */
+static void pwm_report_state(IPTR peribase, const char *where)
+{
+    static int reported = 0;
+
+    if (reported >= 6)
+        return;
+    reported++;
+
+    {
+        ULONG ctl = rd32le(peribase + 0x20C000);          /* PWM_CTL  */
+        ULONG sta = rd32le(peribase + 0x20C004);          /* PWM_STA  */
+        ULONG dmac = rd32le(peribase + 0x20C008);         /* PWM_DMAC */
+        ULONG cmctl = rd32le(peribase + 0x1010A0);        /* CM_PWMCTL */
+        ULONG cmdiv = rd32le(peribase + 0x1010A4);        /* CM_PWMDIV */
+
+        bug("[pwmaudio] %s: CTL=%08lx STA=%08lx DMAC=%08lx"
+            " CM_CTL=%08lx%s%s CM_DIV=%08lx\n",
+            where, ctl, sta, dmac, cmctl,
+            (cmctl & (1 << 7)) ? " BUSY" : " NOT-BUSY",
+            (cmctl & (1 << 4)) ? " ENAB" : " DISABLED",
+            cmdiv);
+    }
+}
+
+/*
+ * Report after USEF is on, and say whether the DMA is actually draining.
+ *
+ * The DMA CS logged at arm time is sampled before USEF1/USEF2 are set, so the
+ * PWM is still in DAT mode and has no reason to raise DREQ -- reading bit 3
+ * clear there says nothing, and reading it as a stuck channel is a mistake
+ * this instrumentation invited. What settles it is TXFR_LEN: it counts down
+ * as words leave, so two samples a millisecond apart distinguish "paced and
+ * moving" from "waiting on a DREQ that never comes".
+ */
+void pwm_report_state_after(IPTR peribase, ULONG channel)
+{
+    IPTR dma = peribase + 0x007000 + channel * 0x100;
+    ULONG cs1, len1, cs2, len2;
+
+    pwm_report_state(peribase, "after FIFO enable");
+
+    cs1 = rd32le(dma + 0x00);
+    len1 = rd32le(dma + 0x14);
+    udelay(peribase, 1000);
+    cs2 = rd32le(dma + 0x00);
+    len2 = rd32le(dma + 0x14);
+
+    bug("[pwmaudio] after FIFO enable: DMA ch%lu CS=%08lx->%08lx"
+        " TXFR_LEN=%lu->%lu %s%s\n",
+        (ULONG) channel, cs1, cs2, len1, len2,
+        (len2 != len1) ? "DRAINING" : "STALLED",
+        (cs2 & (1 << 3)) ? " DREQ" : " no-DREQ");
+}
+
 void pwm_fifo_enable(IPTR peribase)
 {
+    pwm_report_state(peribase, "before FIFO enable");
     IPTR pwm_base = pwm_block(peribase);
 
     wr32le(pwm_base + 0x00,
@@ -640,13 +707,13 @@ ULONG dma_probe_dreq(struct DriverBase *AHIsubBase, struct RPiPWMData *dd, ULONG
         wr32le(dma_base + 0x00, DMA_CS_RESET);
         udelay(peribase, 100);
 
-        dd->cb[0]->ti = DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ | DMA_TI_SRC_INC |
-                        DMA_TI_PERMAP(n) | DMA_TI_NO_WIDE_BURSTS;
-        dd->cb[0]->source_ad = GPU_BUS_ADDR(dd->dmabuf[0]);
-        dd->cb[0]->dest_ad = pwm_fifo_bus(peribase);
-        dd->cb[0]->txfr_len = len;
-        dd->cb[0]->stride = 0;
-        dd->cb[0]->nextconbk = 0;
+        dd->cb[0]->ti = AROS_LONG2LE(DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ | DMA_TI_SRC_INC |
+            DMA_TI_PERMAP(n) | DMA_TI_NO_WIDE_BURSTS);
+        dd->cb[0]->source_ad = AROS_LONG2LE(GPU_BUS_ADDR(dd->dmabuf[0]));
+        dd->cb[0]->dest_ad = AROS_LONG2LE(pwm_fifo_bus(peribase));
+        dd->cb[0]->txfr_len = AROS_LONG2LE(len);
+        dd->cb[0]->stride = AROS_LONG2LE(0);
+        dd->cb[0]->nextconbk = AROS_LONG2LE(0);
         CacheClearE(dd->cb[0], sizeof(struct BCM2708DMACB), CACRF_ClearD);
 
         wr32le(dma_base + 0x04, GPU_BUS_ADDR(dd->cb[0]));
@@ -691,15 +758,15 @@ void dma_build_control_blocks(struct RPiPWMData *dd, IPTR peribase)
     for (i = 0; i < 2; i++) {
         struct BCM2708DMACB *cb = dd->cb[i];
 
-        cb->ti = DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ | DMA_TI_SRC_INC | DMA_TI_PERMAP(pwm_dreq(peribase)) |
-                 DMA_TI_NO_WIDE_BURSTS;
+        cb->ti = AROS_LONG2LE(DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ |
+            DMA_TI_SRC_INC | DMA_TI_PERMAP(pwm_dreq(peribase)) | DMA_TI_NO_WIDE_BURSTS);
 
-        cb->source_ad = GPU_BUS_ADDR(dd->dmabuf[i]);
-        cb->dest_ad = pwm_fifo_bus(peribase);
-        cb->txfr_len = dd->dmabuf_size;
-        cb->stride = 0;
+        cb->source_ad = AROS_LONG2LE(GPU_BUS_ADDR(dd->dmabuf[i]));
+        cb->dest_ad = AROS_LONG2LE(pwm_fifo_bus(peribase));
+        cb->txfr_len = AROS_LONG2LE(dd->dmabuf_size);
+        cb->stride = AROS_LONG2LE(0);
         /* Chain to the other CB */
-        cb->nextconbk = GPU_BUS_ADDR(dd->cb[1 - i]);
+        cb->nextconbk = AROS_LONG2LE(GPU_BUS_ADDR(dd->cb[1 - i]));
         cb->reserved[0] = 0;
         cb->reserved[1] = 0;
     }

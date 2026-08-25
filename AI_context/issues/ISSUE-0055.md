@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0055
-title: "Audio exists on this port for the first time, and is unproven"
-status: open
+title: "Audio on this port: HDMI confirmed working"
+status: resolved
 priority: low
 type: feature
 owner: unassigned
@@ -166,3 +166,204 @@ Only on hardware:
 
 The legacy tree got as far as a stereo chirp playing over HDMI, so the output
 path is known to work in principle. That was a different build.
+
+# Three corrections against the legacy driver, 2026-08-24
+
+Comparing register by register against `src/host/raspi3/hdmi_audio.c` on the
+`legacy` branch -- the only HDMI audio driver that has produced sound on this
+silicon -- turned up three differences. Two of the checks came back clean and
+are recorded so they are not re-run:
+
+- **`MAI_CTL` is identical.** An earlier note here claimed the bit map was
+  wrong for BCM283x. The `#define`s do differ between the trees, but both
+  drivers *write* `(1<<3)|(2<<4)|(1<<12)|(1<<13)` = `0x3028`. The `0x3428`
+  seen in the readback has bit 10 set by the hardware. Retracted.
+- **`MAI_CONFIG` is identical** -- `0x0C000003` on both sides -- and **the CTS
+  arithmetic is right**: `f_pixel * N / (128 * fs)` gives 165000 at 148.5 MHz
+  and 44.1 kHz, which is what the driver logged.
+
+The three that were wrong:
+
+## 1. The IEC958 framing was being written twice
+
+`rpihdmi-iec958.c` built complete subframes: preamble in bits 3:0, validity,
+user and channel-status at 30:28, even parity at 31, around the sample at
+27:12. With `MAI_CONFIG` programmed as it is, **the MAI block writes those
+same bits itself**. The legacy driver says so plainly --
+
+    (void)subframe_in_block; /* HW does IEC958 framing; no software block counting */
+
+-- and writes only the sample, low nibble cleared. Software framing on top of
+hardware framing corrupts the stream a sink is entitled to mute.
+
+The file now emits the proven word format and nothing else; the channel-status
+blocks and the 192-frame counter went with it, since nothing reads them. The
+sample position was already correct on both sides -- the bug was the extra
+bits, not where the sample sat.
+
+## 2. `MAI_THR` was set from a table this board does not match
+
+The SoC table asks 0x10 in all four DREQ/PANIC fields; the legacy driver wrote
+`0x08080608`. These are the levels at which the block raises DREQ, so a
+threshold the FIFO never reaches is a DREQ that never fires -- and a DMA
+channel that sits ACTIVE forever waiting for one, which is exactly what both
+audio paths were observed doing. Now `MAI_THR_PROVEN`.
+
+## 3. `hsm_clock` in the SoC table is wrong, so every N was wrong
+
+`MAI_SMP` holds N at 31:8 and M at 7:0, and N/(M+1) is the HSM clock over the
+sample rate. We computed it as `hsm_clock / samplerate` with M = 0, from the
+table's 163680000. The legacy driver writes `0x0DCD21F3` at 48 kHz: N=904481,
+M=243, a ratio of 3722.14, implying an HSM clock near **178.66 MHz** -- 9% off
+what the table claims. The legacy driver also notes it could never read the
+HSM rate back, which is presumably how the table's figure came to be a guess.
+
+Rather than recompute from a number that cannot be trusted, the driver now
+scales the proven one: M is kept and N derived from the 48 kHz value,
+
+    N = (0x0DCD21 * 480) / (samplerate / 100)
+
+which reproduces `0x0DCD21F3` exactly at 48 kHz and stays on the same clock at
+other rates. Multiplying by 480 and dividing by samplerate/100 keeps every
+intermediate inside 32 bits and avoids the division error a /1000 introduces
+at 44.1 kHz.
+
+## Status
+
+All three are in the pack of 2026-08-24 23:20 and **none of them is verified**:
+this can only be tested on hardware. Item 2 is the one that would also explain
+the PWM path's stuck DMA, but the PWM driver has its own thresholds and has not
+been touched here.
+
+# Second round, same day: the mailbox call was corrupting memory
+
+The log from the pack above stops dead one line after the new `MAI_SMP`, and
+never reaches the CTS report. The only thing between them is
+`hdmi_pixel_clock_hz()`, which this session had added, and it was wrong in two
+independent ways:
+
+- **the message lived on the stack.** The mailbox register carries the buffer
+  address in bits 31:4 and the channel in 3:0, so an address that is not
+  16-byte aligned has its low nibble taken as the channel and the firmware
+  writes its 32-byte reply *somewhere else*. That is a silent write into
+  whatever sat near the stack. The caller only ever saw a reply address that
+  did not match and returned 0 -- which is exactly the "the mailbox returns 0"
+  symptom recorded earlier, misread at the time as the firmware declining to
+  answer.
+- **it split the transaction** into `MBoxWrite` + `MBoxRead`. A concurrent
+  mailbox user takes the reply in between.
+
+`pwmaudio` already had this right, and its comment says both things in as many
+words. `hdmiaudio` now uses the same mechanism: `MBoxCall`, a heap buffer
+aligned to and confined within one 64-byte cache line, and a reply accepted
+only when the address, the response code and the tag-processed bit all agree.
+
+`dma_dreq = 17` was checked against the legacy driver at the same time and is
+correct -- `DMA_TI_PERMAP_HDMI (17u << 16) /* DREQ peripheral 17 = HDMI */`.
+
+# The PWM "stuck DMA" was an artefact of where the log sampled
+
+Recorded because it sent this investigation the wrong way once already.
+
+    [pwmaudio] DMA start: CS=10f80021 ... ACTIVE
+    [pwmaudio] before FIFO enable: CTL=00008181
+    [pwmaudio] after  FIFO enable: CTL=0000a1a1
+
+`CS` bit 3 (DREQ) reads clear, and that looked like a channel waiting forever
+on a request line. But `CS` is sampled at arm time, *before* `USEF1`/`USEF2`
+are set -- `CTL=0x8181` has no USEF, `0xa1a1` does. Until then the PWM is in
+DAT mode and has no reason to raise a FIFO DREQ, so a clear bit there means
+nothing. Nothing in the log sampled the channel after the switch.
+
+`pwm_report_state_after()` now takes the channel and reads `CS` and
+`TXFR_LEN` twice, a millisecond apart, printing `DRAINING` or `STALLED`.
+`TXFR_LEN` counts down as words leave, so this distinguishes the two outright
+instead of inviting the inference again.
+
+The claim "the DMA waits on a DREQ the PWM never raises" is therefore
+**withdrawn** -- it was never measured. The next boot log decides it.
+
+# The actual reason no Pi audio driver has ever made a sound
+
+`TXFR_LEN=0->0 STALLED` is what the new PWM instrumentation reported, and the
+value that matters is not the `STALLED` label but the **0**. It is not a
+counter failing to decrease: the channel is ACTIVE and its transfer length is
+zero, which means the engine fetched a control block full of zeroes.
+
+Two defects, both inherited unexamined from the arm-native drivers these were
+copied from, and both invisible on the CPU they were written for.
+
+## 1. The DMA was given m68k virtual addresses
+
+    #define GPU_BUS_ADDR(x) BCM2708_DMA_BUS_ADDR(x)   /* 0xC0000000 | x */
+
+On arm-native the kernel identity-maps low memory, so the virtual address and
+the ARM physical address are the same number and `| 0xC0000000` is the whole
+translation. Under Emu68 they are not the same number. Every control block
+address, every sample buffer address and every chained `nextconbk` pointed at
+whatever that number happened to land on. `CB=c5512f20` in the log is
+`0xC0000000 | 0x05512f20`, and `0x05512f20` is where the *m68k* holds the
+block.
+
+The sdcard driver in this tree has always done it correctly:
+
+    BCM2708_DMA_BUS_ADDR((ULONG)(IPTR)KrnVirtualToPhysical(virt))
+
+All three audio drivers now do the same. Each already opened
+`kernel.resource`; only the translation was missing.
+
+## 2. No control block field was byte-swapped
+
+The DMA engine reads control blocks little-endian. `cb->txfr_len = len` on
+m68k stores big-endian. The sdcard driver writes every field through
+`AROS_LONG2LE()`; the audio drivers wrote all six raw. 31 field writes across
+the three drivers are now wrapped.
+
+Either defect alone is fatal, which is why no amount of work on the MAI
+registers was ever going to produce sound: the register programming was being
+debugged while the data path could not move a byte.
+
+## What this explains
+
+- PWM "only beeps, does not play the WAV". The beep is `pwm_ramp_dc()` and the
+  DAT-mode writes -- CPU stores straight to `PWM_DAT`, which work. The WAV goes
+  through DMA, which never moved.
+- HDMI silent with every MAI register correct.
+- I2S never tested, and it had the same two defects.
+
+## Still unverified
+
+Only hardware decides. The next log should show `TXFR_LEN` counting down and
+`DRAINING` instead of `STALLED`.
+
+# Resolved on hardware, 2026-08-24: HDMI audio plays
+
+The user confirms sound over HDMI on a Raspberry Pi 3. That is the first audio
+this port has produced.
+
+What it took, in the order the defects were actually found -- the last one was
+the one that mattered, and the first three were necessary but could not have
+been enough on their own:
+
+1. `MAI_THR` from the SoC table was the BCM2711 value; BCM283x wants
+   `0x08080608` (Linux vc4 uses the same figure);
+2. `MAI_SMP` was computed from an `hsm_clock` that is ~9% wrong, and is now
+   scaled from the value the legacy driver proved;
+3. the IEC958 framing was being written in software on top of the framing the
+   MAI block writes in hardware;
+4. **the DMA path could not move a byte** -- virtual addresses handed to the
+   engine untranslated, and no control block field byte-swapped.
+
+A tree sweep confirms `sdcard` and `vcgfx`, the other two DMA users on this
+port, always did (4) correctly. The three AHI drivers copied from arm-native
+were the only offenders.
+
+## Still open, separately
+
+- **PWM and I2S are unverified.** They carried the same two DMA defects and are
+  fixed the same way, but neither has been heard. PWM previously produced only
+  a beep, which was `pwm_ramp_dc()` writing `PWM_DAT` from the CPU -- its DMA
+  path has never run. The instrumentation now prints `DRAINING`/`STALLED` with
+  `TXFR_LEN`, which settles it in one boot.
+- The bring-up instrumentation in all three drivers is unconditional `bug()`.
+  It should come down to `D()` once PWM and I2S are confirmed too.

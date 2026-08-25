@@ -7,11 +7,30 @@
 #include "DriverData.h"
 
 /*
- * GPU bus address for uncached DMA access.
- * On BCM2835/2836, ARM physical 0x00000000 maps to GPU bus 0xC0000000
- * (uncached alias).
+ * Bus address for the DMA engine.
+ *
+ * This used to be `0xC0000000 | virt`, inherited from the arm-native driver
+ * where the kernel identity-maps low memory and the two are the same number.
+ * Under Emu68 they are not: the address a m68k pointer holds is not the ARM
+ * physical address the DMA engine addresses, so the engine fetched control
+ * blocks and sample data from wherever that number happened to land -- which
+ * is why TXFR_LEN read back 0 with the channel ACTIVE. It had loaded a block
+ * of zeroes.
+ *
+ * The sdcard driver next door has always done this correctly:
+ *
+ *     BCM2708_DMA_BUS_ADDR((ULONG)(IPTR)KrnVirtualToPhysical(virt))
+ *
+ * KrnVirtualToPhysical handles both the identity-mapped low memory and the
+ * offset kernel mapping; the 0xC0000000 alias then selects the uncached view
+ * of SDRAM, which is what keeps the engine from reading behind our cache
+ * flushes.
  */
-#define GPU_BUS_ADDR(x) BCM2708_DMA_BUS_ADDR(x)
+#include <proto/kernel.h>
+extern APTR KernelBase;
+
+#define GPU_BUS_ADDR(x) \
+    BCM2708_DMA_BUS_ADDR((ULONG)(IPTR)KrnVirtualToPhysical((APTR)(IPTR)(x)))
 
 /*
  * Register access helpers: little-endian registers, and a barrier that means
@@ -99,6 +118,16 @@ static inline void wr32le(ULONG addr, ULONG val)
     ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.ram_packet_status))
 #define HDMI_AUDIO_PACKET_CFG(dd) \
     ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.audio_packet_cfg))
+
+/*
+ * Values proven on a Raspberry Pi 3 by Bellatrix's earlier bare-metal HDMI
+ * audio driver (legacy branch, src/host/raspi3/hdmi_audio.c). See the notes
+ * at their use sites: the SoC table's hsm_clock and threshold figures do not
+ * match this board, and these do.
+ */
+#define MAI_SMP_N_48K    0x0DCD21UL   /* N at 48 kHz; scale for other rates */
+#define MAI_SMP_M        0xF3UL       /* M, kept fixed across rates */
+#define MAI_THR_PROVEN   0x08080608UL /* DREQ/PANIC levels that raise DREQ */
 
 /* MAI_CTL bits */
 #define MAI_CTL_RESET    (1 << 0)

@@ -7,11 +7,30 @@
 #include "DriverData.h"
 
 /*
- * GPU bus address for uncached DMA access.
- * On BCM2835/2836, ARM physical 0x00000000 maps to GPU bus 0xC0000000
- * (uncached alias).
+ * Bus address for the DMA engine.
+ *
+ * This used to be `0xC0000000 | virt`, inherited from the arm-native driver
+ * where the kernel identity-maps low memory and the two are the same number.
+ * Under Emu68 they are not: the address a m68k pointer holds is not the ARM
+ * physical address the DMA engine addresses, so the engine fetched control
+ * blocks and sample data from wherever that number happened to land -- which
+ * is why TXFR_LEN read back 0 with the channel ACTIVE. It had loaded a block
+ * of zeroes.
+ *
+ * The sdcard driver next door has always done this correctly:
+ *
+ *     BCM2708_DMA_BUS_ADDR((ULONG)(IPTR)KrnVirtualToPhysical(virt))
+ *
+ * KrnVirtualToPhysical handles both the identity-mapped low memory and the
+ * offset kernel mapping; the 0xC0000000 alias then selects the uncached view
+ * of SDRAM, which is what keeps the engine from reading behind our cache
+ * flushes.
  */
-#define GPU_BUS_ADDR(x) BCM2708_DMA_BUS_ADDR(x)
+#include <proto/kernel.h>
+extern APTR KernelBase;
+
+#define GPU_BUS_ADDR(x) \
+    BCM2708_DMA_BUS_ADDR((ULONG)(IPTR)KrnVirtualToPhysical((APTR)(IPTR)(x)))
 
 /* Register access helpers (little-endian, with ARM memory barriers) */
 /*
@@ -158,6 +177,7 @@ void pwm_rearm(IPTR peribase, ULONG range);
 void pwm_stop(IPTR peribase);
 void pwm_ramp_dc(IPTR peribase, ULONG from, ULONG to);
 void pwm_fifo_enable(IPTR peribase);
+void pwm_report_state_after(IPTR peribase, ULONG channel);
 void pwm_dat_hold(IPTR peribase, ULONG value);
 ULONG dma_current_level(struct RPiPWMData *dd);
 void dma_setup(IPTR peribase, ULONG channel, ULONG cb_bus_addr);

@@ -9,7 +9,11 @@
 
 #include <exec/types.h>
 #include <aros/macros.h>
+#include <proto/kernel.h>
+
 #include "DriverData.h"
+
+extern APTR KernelBase;
 
 /* BCM2835 I2S register offsets */
 #define I2S_CS_A    0x00
@@ -78,7 +82,16 @@
 #define DMA_CS_PANIC_PRI(x)    (((x) & 0xF) << 20)
 #define DMA_CS_PRI(x)          (((x) & 0xF) << 16)
 
-static inline ULONG gpu_bus_addr(IPTR arm_phys) { return 0xC0000000 | (ULONG)(arm_phys & 0x3FFFFFFF); }
+/* See the note in pwmaudio: the argument is a m68k virtual address, not an ARM
+ * physical one, and under Emu68 those differ. KrnVirtualToPhysical is what the
+ * sdcard driver has always used; the 0xC0000000 alias then selects the
+ * uncached view of SDRAM. */
+static inline ULONG gpu_bus_addr(IPTR virt)
+{
+    IPTR phys = (IPTR) KrnVirtualToPhysical((APTR) virt);
+
+    return 0xC0000000 | (ULONG)(phys & 0x3FFFFFFF);
+}
 static inline ULONG i2s_rd(IPTR base, ULONG off) { return AROS_LE2LONG(*(volatile ULONG *)(base + off)); }
 static inline void i2s_wr(IPTR base, ULONG off, ULONG val) { *(volatile ULONG *)(base + off) = AROS_LONG2LE(val); }
 

@@ -231,31 +231,89 @@ static void hdmi_write_audio_infoframe(struct RPiHDMIData *dd)
  * Returns the rate in Hz, or 0 if the mailbox is unavailable or answers
  * nothing, which leaves the caller's other paths intact.
  */
+/*
+ * Single-tag VideoCore property transaction.
+ *
+ * This replaces a version that got both halves of the contract wrong, and it
+ * is worth naming them because neither fails loudly:
+ *
+ * - the message lived on the stack. The mailbox register carries the buffer
+ *   address in bits 31:4 and the channel in 3:0, so an address that is not
+ *   16-byte aligned has its low nibble read as the channel and the firmware
+ *   writes its 32-byte reply *somewhere else*. On a stack buffer that is a
+ *   silent write into whatever is nearby, and the caller merely sees a reply
+ *   address that does not match and gives up.
+ * - it split the transaction into MBoxWrite + MBoxRead. Between the two, a
+ *   concurrent mailbox user takes the reply.
+ *
+ * The pwmaudio driver in this tree already had this right; this is the same
+ * mechanism, and the same reasoning applies word for word: MBoxCall is atomic,
+ * and the buffer is confined to one 64-byte cache line so the reply invalidate
+ * cannot discard a dirty neighbour on the heap.
+ */
+#define HDMI_FW_MSG_BYTES 64 /* one full cache line, >= 6+3 message words */
+
+static BOOL hdmi_fw_property(struct RPiHDMIData *dd, ULONG tag, ULONG *vals, ULONG nvals)
+{
+    struct DriverBase *AHIsubBase = (struct DriverBase *) dd->ahisubbase;
+    APTR mbox = (APTR) (dd->periiobase + VCMB_OFFSET);
+    ULONG msgwords = 6 + nvals; /* header 2, tag header 3, values, end tag */
+    ULONG allocsz = HDMI_FW_MSG_BYTES + 63;
+    ULONG *raw, *m;
+    ULONG i;
+    BOOL ok = FALSE;
+    APTR MBoxBase;
+
+    (void) AHIsubBase;
+
+    if ((MBoxBase = OpenResource("mbox.resource")) == NULL)
+        return FALSE;
+    if (msgwords * 4 > HDMI_FW_MSG_BYTES)
+        return FALSE;
+
+    raw = AllocMem(allocsz, MEMF_PUBLIC | MEMF_CLEAR);
+    if (raw == NULL)
+        return FALSE;
+
+    m = (ULONG *) (((IPTR) raw + 63) & ~63);
+
+    m[0] = AROS_LONG2LE(msgwords * 4);
+    m[1] = AROS_LONG2LE(VCTAG_REQ);
+    m[2] = AROS_LONG2LE(tag);
+    m[3] = AROS_LONG2LE(nvals * 4);
+    m[4] = AROS_LONG2LE(nvals * 4);
+    for (i = 0; i < nvals; i++)
+        m[5 + i] = AROS_LONG2LE(vals[i]);
+    m[5 + nvals] = 0; /* end tag */
+
+    /*
+     * Require our buffer back, a success response code and the tag-processed
+     * bit -- an error reply leaves the request values in place, spoofing a
+     * result.
+     */
+    if ((APTR) MBoxCall(mbox, VCMB_PROPCHAN, m) == (APTR) m
+        && AROS_LE2LONG(m[1]) == VCTAG_RESP
+        && (AROS_LE2LONG(m[4]) & VCTAG_RESP)) {
+        for (i = 0; i < nvals; i++)
+            vals[i] = AROS_LE2LONG(m[5 + i]);
+        ok = TRUE;
+    }
+
+    FreeMem(raw, allocsz);
+    return ok;
+}
+
+/* Pixel clock in Hz, or 0 if the firmware would not say. */
 static ULONG hdmi_pixel_clock_hz(struct RPiHDMIData *dd)
 {
-    struct DriverBase *AHIsubBase = (struct DriverBase *)dd->ahisubbase;
-    APTR mb = (APTR)(dd->periiobase + VCMB_OFFSET);
-    APTR MBoxBase;
-    ULONG msg[8];
+    ULONG vals[2];
 
-    (void)AHIsubBase;
-    if ((MBoxBase = OpenResource("mbox.resource")) == NULL)
+    vals[0] = VCCLOCK_PIXEL;
+    vals[1] = 0;
+    if (!hdmi_fw_property(dd, VCTAG_GETCLKRATE, vals, 2))
         return 0;
 
-    msg[0] = AROS_LONG2LE(8 * 4);
-    msg[1] = AROS_LONG2LE(VCTAG_REQ);
-    msg[2] = AROS_LONG2LE(VCTAG_GETCLKRATE);
-    msg[3] = AROS_LONG2LE(8);
-    msg[4] = AROS_LONG2LE(4);
-    msg[5] = AROS_LONG2LE(VCCLOCK_PIXEL);
-    msg[6] = 0;
-    msg[7] = 0;
-
-    MBoxWrite(mb, VCMB_PROPCHAN, msg);
-    if (MBoxRead(mb, VCMB_PROPCHAN) != msg)
-        return 0;
-
-    return AROS_LE2LONG(msg[6]);
+    return vals[1];
 }
 
 void hdmi_mai_init(struct RPiHDMIData *dd)
@@ -299,10 +357,16 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
     /*
      * FIFO thresholds.
      */
-    ULONG dreq_threshold = dd->soc->mai_dreq_threshold;
-    ULONG panic_threshold = dd->soc->mai_panic_threshold;
-
-    wr32le(HDMI_MAI_THR(dd), MAI_THR_DREQL(dreq_threshold) | MAI_THR_DREQH(dreq_threshold) | MAI_THR_PANICL(panic_threshold) | MAI_THR_PANICH(panic_threshold));
+    /*
+     * FIFO thresholds, also taken from the driver that worked.
+     *
+     * The SoC table asks for 0x10 in all four fields; the legacy driver wrote
+     * 0x08080608 and produced sound. These are the levels at which the block
+     * raises DREQ and PANIC, so a threshold the FIFO never reaches is a DREQ
+     * that never fires -- and a DMA channel that sits ACTIVE waiting for one,
+     * which is what the PWM path was observed doing.
+     */
+    wr32le(HDMI_MAI_THR(dd), MAI_THR_PROVEN);
 
     /* MAI_CONFIG: temporarily test one MAI channel at a time. */
     wr32le(HDMI_MAI_CONFIG(dd),
@@ -331,13 +395,33 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
         rd32le(HDMI_MAI_CONFIG(dd)),
         rd32le(HDMI_AUDIO_PKT_CFG(dd))));
     /*
-     * Sample rate clock divider.
-     * MAI_SMP register: bits 31:8 = N (numerator), bits 7:0 = M (denominator-1).
-     * Clock ratio = N / (M+1) = hsm_clock / samplerate. Round N (rather than
-     * truncate) to halve the residual rate error.
+     * Sample rate clock divider, anchored on a value proven on this silicon.
+     *
+     * N/(M+1) is the ratio between the HSM clock and the sample rate, and the
+     * obvious spelling -- hsm_clock/samplerate with M=0 -- gives the wrong
+     * answer here, because `hsm_clock` in the SoC table is wrong for this
+     * board. Bellatrix's earlier bare-metal HDMI audio driver (legacy branch,
+     * src/host/raspi3/hdmi_audio.c), which did produce sound on this exact
+     * hardware, writes 0x0DCD21F3 at 48 kHz. That decodes to N=904481,
+     * M=243, a ratio of 3722.14 -- implying an HSM clock near 178.66 MHz, not
+     * the 163.68 MHz the table claims. The same driver notes it could never
+     * read the HSM rate back (it returns 0), which is presumably why the
+     * table's figure was a guess in the first place.
+     *
+     * So rather than recompute from a number we cannot trust, scale the
+     * proven one: keep M and derive N from the 48 kHz value. That reproduces
+     * 0x0DCD21F3 exactly at 48 kHz and stays on the same clock elsewhere.
+     * Multiplying by 480 and dividing by samplerate/100 keeps every
+     * intermediate inside 32 bits and avoids the integer-division error that
+     * a /1000 would introduce at 44.1 kHz.
      */
-    wr32le(HDMI_MAI_SMP(dd),
-           ((dd->soc->hsm_clock + dd->samplerate / 2) / dd->samplerate) << 8);
+    {
+        ULONG n = (MAI_SMP_N_48K * 480UL) / (dd->samplerate / 100);
+
+        wr32le(HDMI_MAI_SMP(dd), (n << 8) | MAI_SMP_M);
+        bug("[hdmiaudio] init: MAI_SMP N=%lu M=%lu -> %08lx\n",
+            n, (ULONG)MAI_SMP_M, (n << 8) | MAI_SMP_M);
+    }
 
     /*
      * CTS/N audio clock recovery.
@@ -430,8 +514,6 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
     wr32le(HDMI_MAI_CTL(dd), MAI_CTL_CHALIGN | MAI_CTL_WHOLSMP | MAI_CTL_CHNUM(2) | MAI_CTL_ENABLE);
 
     /* Initialize IEC958 channel status for this sample rate (separate L/R) */
-    spdif_setup_channel_status(dd->channel_status_l, dd->channel_status_r, dd->samplerate);
-    dd->frame_counter = 0;
 
     /*
      * Read back what the block actually took.

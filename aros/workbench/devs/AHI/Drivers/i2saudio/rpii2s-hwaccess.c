@@ -46,13 +46,13 @@ void dma_build_control_blocks(struct RPiI2SData *dd) {
     int i;
     for (i = 0; i < 2; i++) {
         struct DMAControlBlock *cb = dd->cb[i];
-        cb->ti = DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ |
-                 DMA_TI_SRC_INC | DMA_TI_PERMAP(DMA_DREQ_I2S_TX) | DMA_TI_NO_WIDE_BURSTS;
-        cb->source_ad = gpu_bus_addr((IPTR)dd->dmabuf[i]);
-        cb->dest_ad = fifo_bus;
-        cb->txfr_len = dd->dmabuf_size;
-        cb->stride = 0;
-        cb->nextconbk = gpu_bus_addr((IPTR)dd->cb[1 - i]);
+        cb->ti = AROS_LONG2LE(DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ |
+            DMA_TI_SRC_INC | DMA_TI_PERMAP(DMA_DREQ_I2S_TX) | DMA_TI_NO_WIDE_BURSTS);
+        cb->source_ad = AROS_LONG2LE(gpu_bus_addr((IPTR)dd->dmabuf[i]));
+        cb->dest_ad = AROS_LONG2LE(fifo_bus);
+        cb->txfr_len = AROS_LONG2LE(dd->dmabuf_size);
+        cb->stride = AROS_LONG2LE(0);
+        cb->nextconbk = AROS_LONG2LE(gpu_bus_addr((IPTR)dd->cb[1 - i]));
         cb->reserved[0] = cb->reserved[1] = 0;
     }
 }

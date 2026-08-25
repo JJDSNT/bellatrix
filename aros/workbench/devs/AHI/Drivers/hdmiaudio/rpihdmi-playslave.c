@@ -85,28 +85,20 @@ void Slave(struct ExecBase *SysBase)
 
     if (dd->slavesignal != -1) {
         /*
-         * Pre-fill both DMA buffers with silent IEC958 subframes.
-         * Silence still needs valid Z/M/W preambles and channel status bits.
-         * Encode the full DMA buffer width so the MAI never sees zero
-         * (invalid) subframes in the tail.
+         * Pre-fill both DMA buffers with silence, over their whole width,
+         * so the MAI never reads a tail the mixer has not written.
          */
         ULONG i;
 
         for (i = 0; i < dd->dmabuf_samples * 2; i++)
             ((WORD *) dd->mixbuffer)[i] = 0;
 
-        convert_mix_to_iec958((WORD *) dd->mixbuffer,
+        convert_mix_to_mai((WORD *) dd->mixbuffer,
                               dd->dmabuf[0],
-                              dd->dmabuf_samples,
-                              dd->channel_status_l,
-                              dd->channel_status_r,
-                              &dd->frame_counter);
-        convert_mix_to_iec958((WORD *) dd->mixbuffer,
+                              dd->dmabuf_samples);
+        convert_mix_to_mai((WORD *) dd->mixbuffer,
                               dd->dmabuf[1],
-                              dd->dmabuf_samples,
-                              dd->channel_status_l,
-                              dd->channel_status_r,
-                              &dd->frame_counter);
+                              dd->dmabuf_samples);
 
         /* Flush silence data from cache to physical RAM for DMA */
         CacheClearE(dd->dmabuf[0], dd->dmabuf_size, CACRF_ClearD);
@@ -161,21 +153,16 @@ void Slave(struct ExecBase *SysBase)
                      * Encode exactly the frames the mixer produced (the
                      * DMA length below is shortened to match) — padding
                      * the tail with silence stretched playback.
-                     * frame_counter advances by 'frames', keeping the
-                     * 192-frame IEC958 block continuous.
                      */
-                    convert_mix_to_iec958((WORD *) dd->mixbuffer,
+                    convert_mix_to_mai((WORD *) dd->mixbuffer,
                                           dd->dmabuf[fillbuf],
-                                          frames,
-                                          dd->channel_status_l,
-                                          dd->channel_status_r,
-                                          &dd->frame_counter);
+                                          frames);
 
                     /* Flush converted data to physical RAM for DMA */
                     CacheClearE(dd->dmabuf[fillbuf], frames * 2 * sizeof(ULONG), CACRF_ClearD);
 
                     /* Play exactly the encoded frames (see PWM driver notes). */
-                    dd->cb[fillbuf]->txfr_len = frames * 2 * sizeof(ULONG);
+                    dd->cb[fillbuf]->txfr_len = AROS_LONG2LE(frames * 2 * sizeof(ULONG));
                     CacheClearE(dd->cb[fillbuf], sizeof(struct BCM2708DMACB), CACRF_ClearD);
                 }
             }

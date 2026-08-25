@@ -33,14 +33,15 @@ void dma_build_control_blocks(struct RPiHDMIData *dd)
     for (i = 0; i < 2; i++) {
         struct BCM2708DMACB *cb = dd->cb[i];
 
-        cb->ti = DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ | DMA_TI_SRC_INC | DMA_TI_BURST_LENGTH(2) |
-                 DMA_TI_PERMAP(dd->dma_dreq) | DMA_TI_NO_WIDE_BURSTS;
+        cb->ti = AROS_LONG2LE(DMA_TI_INTEN | DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ |
+            DMA_TI_SRC_INC | DMA_TI_BURST_LENGTH(2) | DMA_TI_PERMAP(dd->dma_dreq) |
+            DMA_TI_NO_WIDE_BURSTS);
 
-        cb->source_ad = GPU_BUS_ADDR(dd->dmabuf[i]);
-        cb->dest_ad = soc->mai_data_bus;
-        cb->txfr_len = dd->dmabuf_size;
-        cb->stride = 0;
-        cb->nextconbk = GPU_BUS_ADDR(dd->cb[1 - i]);
+        cb->source_ad = AROS_LONG2LE(GPU_BUS_ADDR(dd->dmabuf[i]));
+        cb->dest_ad = AROS_LONG2LE(soc->mai_data_bus);
+        cb->txfr_len = AROS_LONG2LE(dd->dmabuf_size);
+        cb->stride = AROS_LONG2LE(0);
+        cb->nextconbk = AROS_LONG2LE(GPU_BUS_ADDR(dd->cb[1 - i]));
         cb->reserved[0] = 0;
         cb->reserved[1] = 0;
     }
@@ -126,14 +127,14 @@ ULONG dma_probe_dreq(struct RPiHDMIData *dd, ULONG expect)
         wr32le(dma_base + 0x00, DMA_CS_RESET);
         udelay(peribase, 100);
 
-        dd->cb[0]->ti = DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ | DMA_TI_SRC_INC |
-                        DMA_TI_PERMAP(n) | DMA_TI_NO_WIDE_BURSTS;
+        dd->cb[0]->ti = AROS_LONG2LE(DMA_TI_WAIT_RESP | DMA_TI_DEST_DREQ | DMA_TI_SRC_INC |
+            DMA_TI_PERMAP(n) | DMA_TI_NO_WIDE_BURSTS);
 
-        dd->cb[0]->source_ad = GPU_BUS_ADDR(dd->dmabuf[0]);
-        dd->cb[0]->dest_ad = dd->soc->mai_data_bus;
-        dd->cb[0]->txfr_len = len;
-        dd->cb[0]->stride = 0;
-        dd->cb[0]->nextconbk = 0;
+        dd->cb[0]->source_ad = AROS_LONG2LE(GPU_BUS_ADDR(dd->dmabuf[0]));
+        dd->cb[0]->dest_ad = AROS_LONG2LE(dd->soc->mai_data_bus);
+        dd->cb[0]->txfr_len = AROS_LONG2LE(len);
+        dd->cb[0]->stride = AROS_LONG2LE(0);
+        dd->cb[0]->nextconbk = AROS_LONG2LE(0);
 
         CacheClearE(dd->cb[0], sizeof(struct BCM2708DMACB), CACRF_ClearD);
 
