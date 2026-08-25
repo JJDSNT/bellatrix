@@ -74,6 +74,17 @@ _AHIsub_AllocAudio(struct TagItem *taglist, struct AHIAudioCtrlDrv *AudioCtrl, s
         dd->ahisubbase = RPiPWMBase;
         dd->periiobase = RPiPWMBase->periiobase;
         dd->dma_channel = DMAAllocChannel(0);
+        /*
+         * Say whether we got a channel.
+         *
+         * Neither audio driver produces sound on this board, and the one
+         * thing they share is dma.resource -- so the first question is
+         * whether the DMA is even reachable. AllocAudio runs when something
+         * asks to play, not at init, which is why both drivers open cleanly
+         * and then do nothing audible: a failure here was invisible.
+         */
+        bug("[%s] AllocAudio: DMA channel %ld\n",
+            "pwmaudio", (LONG)dd->dma_channel);
         dd->pwm_range = PWM_AUDIO_RANGE;
     } else {
         return AHISF_ERROR;

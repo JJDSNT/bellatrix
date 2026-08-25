@@ -728,6 +728,33 @@ void dma_setup(IPTR peribase, ULONG channel, ULONG cb_bus_addr)
     /* Start DMA. The IRQ handler re-writes this same value with the W1C flags
      * added, so the priorities survive the session; see bcm2708_dma.h. */
     wr32le(dma_base + 0x00, BCM2708_DMA_CS_RUN);
+
+    /*
+     * Did it actually start?
+     *
+     * Writing RUN is not the same as the channel running: a control block at
+     * an address the DMA engine cannot reach, or one the CPU wrote and never
+     * flushed, leaves ACTIVE clear or raises an error bit immediately. With no
+     * sound from either driver and dma.resource the only thing they share,
+     * this is the first place the two stories can differ -- and until now the
+     * whole sequence was silent about itself.
+     *
+     * CS bit 0 is ACTIVE, bit 1 END, bit 2 INT, bit 8 ERROR.
+     */
+    {
+        static int reported = 0;
+
+        if (reported < 4) {
+            ULONG cs = rd32le(dma_base + 0x00);
+            ULONG cb = rd32le(dma_base + 0x04);
+
+            reported++;
+            bug("[pwmaudio] DMA start: CS=%08lx CB=%08lx (wrote %08lx)%s%s\n",
+                cs, cb, (ULONG)cb_bus_addr,
+                (cs & 1) ? " ACTIVE" : " NOT-ACTIVE",
+                (cs & 0x100) ? " ERROR" : "");
+        }
+    }
 }
 
 /*
