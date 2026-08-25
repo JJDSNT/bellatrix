@@ -305,8 +305,29 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
         ULONG hw_cts = cts;
 
         if (cts == 0) {
-            /* Fallback: compute CTS assuming 148500 kHz pixel clock */
-            cts = (148500UL * n_value) / (128 * (dd->samplerate / 1000));
+            /*
+             * Fallback: CTS for a 148500 kHz pixel clock (1080p60).
+             *
+             * CTS = (pixel_clock * N) / (128 * samplerate), and the obvious
+             * spelling of that overflows 32 bits, so the original divided the
+             * sample rate by 1000 first -- which is integer division: 44100
+             * became 44, not 44.1. The denominator came out 5632 instead of
+             * 5644.8 and CTS 165375 instead of the standard's 165000, 0.23%
+             * high. That is enough for the audio clock to drift against the
+             * video clock, and a sink that cannot lock them discards the audio
+             * packets while the picture stays perfect -- which is exactly the
+             * symptom this driver had on hardware.
+             *
+             * Divide in an order that stays exact and inside 32 bits: N is
+             * always a multiple of 128 (6272 for 44.1 kHz, 6144 for 48), and
+             * every standard rate is a multiple of 100, so scaling by 10/100
+             * clears the fraction without ever exceeding ~73 million.
+             *
+             *   148500 * (6272/128) * 10 / (44100/100)
+             *     = 148500 * 49 * 10 / 441 = 165000
+             */
+            cts = (148500UL * (n_value / 128) * 10UL)
+                / (dd->samplerate / 100);
         }
         /*
          * CTS is what locks the audio clock to the HDMI pixel clock. Get it
