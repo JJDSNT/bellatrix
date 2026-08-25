@@ -298,11 +298,35 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
      * RPi 3B+ default pixel clock ≈ 148500 kHz (1080p60) or 74250 kHz (720p60).
      * We read CTS_0 first to get the hardware-derived value, then write it back.
      */
-    wr32le(HDMI_CRP_CFG(dd), CRP_CFG_EXTERNAL_CTS_EN | CRP_CFG_N(n_value));
+    /*
+     * Ask the hardware for CTS first; only supply one if it will not.
+     *
+     * EXTERNAL_CTS_EN means "use the CTS software wrote", not "derive it" --
+     * the comment above had that backwards, and with the bit set from the
+     * start the block never computes anything, which is why the first read
+     * returned zero and every later read returned our own value back. The
+     * fallback was therefore the only path, and it assumes 1080p60: change
+     * the display mode and the audio clock no longer matches the pixel clock.
+     *
+     * Cleared, the block derives CTS from the pixel clock actually in use,
+     * which is correct at every resolution and needs no table. Kept as a
+     * preference rather than a rule: if it yields nothing we still write a
+     * computed value, because silence is worse than an approximation.
+     */
+    wr32le(HDMI_CRP_CFG(dd), CRP_CFG_N(n_value));
+    udelay(pb, 100);
 
     {
         ULONG cts = rd32le(HDMI_CTS_0(dd));
         ULONG hw_cts = cts;
+
+        if (cts == 0)
+        {
+            /* Nothing derived: fall back, and switch the block to the value
+             * we are about to supply. */
+            wr32le(HDMI_CRP_CFG(dd),
+                CRP_CFG_EXTERNAL_CTS_EN | CRP_CFG_N(n_value));
+        }
 
         if (cts == 0) {
             /*
@@ -337,9 +361,14 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
          * it is wrong by construction and this line is how anyone would know.
          */
         bug("[hdmiaudio] init: CTS hw=%lu used=%lu%s\n",
-            hw_cts, cts, hw_cts ? "" : " (FALLBACK, assumes 1080p60)");
-        wr32le(HDMI_CTS_0(dd), cts);
-        wr32le(HDMI_CTS_1(dd), cts);
+            hw_cts, cts,
+            hw_cts ? " (derived from the live pixel clock)"
+                   : " (FALLBACK, assumes 1080p60)");
+        if (hw_cts == 0)
+        {
+            wr32le(HDMI_CTS_0(dd), cts);
+            wr32le(HDMI_CTS_1(dd), cts);
+        }
     }
 
     /* Write Audio InfoFrame to RAM packet memory */
