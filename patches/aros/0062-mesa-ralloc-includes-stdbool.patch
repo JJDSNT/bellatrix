@@ -1,0 +1,27 @@
+From 68145309291597cd5097458014779e7210910062 Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 11:20:00 -0300
+Subject: [PATCH] mesa: include stdbool before os_memory
+
+The fallback aligned-memory helper exposes a bool-returning inline function.
+Include the standard boolean definition before pulling it into ralloc.c.
+---
+ workbench/libs/mesa/mesa-20.0.8-aros.diff | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/workbench/libs/mesa/mesa-20.0.8-aros.diff b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+index 6b9003be72..ee15a2f8cd 100644
+--- a/workbench/libs/mesa/mesa-20.0.8-aros.diff
++++ b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+@@ -1202,7 +1202,8 @@
+  #include <string.h>
+  #include <stdint.h>
+  
+-+#include "os_memory.h"
+++#include <stdbool.h>
+++#include "os_memory.h"
+  /* Some versions of MinGW are missing _vscprintf's declaration, although they
+   * still provide the symbol in the import library. */
+  #ifdef __MINGW32__
+-- 
+2.43.0

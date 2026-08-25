@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Tue, 25 Aug 2026 15:00:00 -0300
+Subject: [PATCH 57/57] pthread: m68k test-and-set returns the old value
+
+The m68k fallback for __sync_lock_test_and_set stores the new value and then
+returns that new value. GCC's atomic primitive returns the previous value.
+
+Consequently pthread_spin_lock always sees a nonzero return after setting the
+lock to one and loops through sched_yield forever. Mesa hits this before any GL
+or Gallium code while libstdc++ initialises std::locale through pthread_once.
+
+Preserve and return the old value while interrupts are disabled. This restores
+the semantics expected by pthread_spin_lock without changing the locking model.
+---
+ compiler/pthread/pthread.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/compiler/pthread/pthread.c b/compiler/pthread/pthread.c
+index 1111111..2222222 100644
+--- a/compiler/pthread/pthread.c
++++ b/compiler/pthread/pthread.c
+@@ -119,11 +119,14 @@ static int __m68k_sync_val_compare_and_swap(int *v, int o, int n)
+ 
+ static int __m68k_sync_lock_test_and_set(int *v, int n)
+ {
++    int old;
++
+     Disable();
++    old = *v;
+     (*v) = (n);
+     Enable();
+ 
+-    return n;
++    return old;
+ }
+ #undef __sync_lock_test_and_set
+ #define __sync_lock_test_and_set(v, n) __m68k_sync_lock_test_and_set(v, n)
+-- 
+2.43.0

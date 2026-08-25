@@ -1,0 +1,22 @@
+From bbccddee0011223344556677889900aabbccddee Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 12:35:00 -0300
+Subject: [PATCH] mesa: keep debug header from enabling DEBUG
+
+AROS debug.h defines DEBUG to zero, while Mesa uses #ifdef DEBUG.  Undefine it
+after importing bug() so the diagnostic does not change Mesa's build mode.
+---
+ workbench/libs/mesa/mesa-20.0.8-aros.diff | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/workbench/libs/mesa/mesa-20.0.8-aros.diff b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+index fbd343e664..4db315bda1 100644
+--- a/workbench/libs/mesa/mesa-20.0.8-aros.diff
++++ b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+@@ -1238,3 +1238,4 @@
+ +#ifdef __AROS__
+ +#include <aros/debug.h>
+++#undef DEBUG
+ +#endif
+-- 
+2.43.0

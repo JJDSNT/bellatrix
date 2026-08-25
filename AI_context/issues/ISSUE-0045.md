@@ -22,6 +22,46 @@ related_files:
 
 # Summary
 
+## QEMU now reaches fixed-function shader linking (2026-08-25)
+
+Three independent blockers have been isolated in sequence:
+
+- The m68k pthread test-and-set returned the new value instead of the old
+  value, deadlocking Mesa's library open path. Patch 0057 fixes that ABI bug.
+- stdc's 64 KiB malloc puddles forced TLSF validation across 788 areas during
+  context creation. Patch 0058 raises the puddle size to 1 MiB; all five
+  `glGetString` queries in `glinfo` then returned.
+- Mesa's linear `ralloc` requires eight-byte payload alignment, while m68k
+  malloc may return an address congruent to four modulo eight. Patches
+  0061-0062 use Mesa's aligned allocator. With that change, `gears` creates
+  its SoftPipe display target and passes the former `ralloc.c:684` assertion.
+
+The next observed failure is later, while building the fixed-function shaders:
+
+    [SoftPipe] HiddSoftpipe_CreateDisplaytarget: fmt #1
+    [Mesa] fixed-function fragment link: status=0 linked=1d897a58 program=00000000 log=
+    Assertion (fp) failed in .../mesa/main/ffvertex_prog.c:161
+
+The aligned allocation change exposed a paired defect in `ralloc::resize()`:
+it still passed the adjusted aligned pointer to libc `realloc()`, although only
+the hidden original pointer may be passed to libc. Patch 0066 retains the
+payload size and implements aligned allocate/copy/free resize. Patch 0067 fixes
+the final nested-diff marker so a clean setup reproduces the tested source.
+
+With those patches, the same QEMU SoftPipe run reports:
+
+    [SoftPipe] HiddSoftpipe_CreateDisplaytarget: fmt #1
+    [Mesa] fixed-function fragment link: status=1 linked=1d899108 program=1d899170 log=
+    FSIN
+    FCOS
+
+There is no assertion or software failure afterward. In a headless boot GLUT
+does not receive a visible-window event, so `gears` removes its idle callback
+and waits; static front/back framebuffer samples are therefore expected and do
+not validate animation. The Mesa context, display target and fixed-function
+shader pipeline now initialize successfully. A visible QEMU or Pi run remains
+the appropriate final animation/presentation test.
+
 ## Mesa needs a very large stack -- but this is not our build (2026-08-24)
 
 **Not resolved.** What follows is evidence about Mesa's stack appetite, from a
@@ -655,3 +695,90 @@ open is bounded and measured; this one has been given five minutes.
 - `gears` renders continuously and closes cleanly.
 - No TLSF corruption, alert, command-submit timeout or stuck V3D wait occurs.
 
+# 2026-08-25: first real cause fixed -- broken m68k test-and-set
+
+The 46-minute stop in `mesa3dgl20-0.library` was located without adding code
+to the module. QEMU's monitor sampled Emu68's live m68k PC (`x18`) and the
+guest stack was read from physical memory. The active frames resolved to:
+
+    std::locale::_S_initialize_once
+        -> pthread_once
+        -> pthread_spin_lock
+        -> sched_yield
+
+The lock address was `0x05129054`, exactly `_ZNSt6locale7_S_onceE + 8` in the
+loaded library. The m68k pthread fallback implemented
+`__sync_lock_test_and_set` like this:
+
+    *v = n;
+    return n;
+
+GCC's primitive returns the **old** value. Since `pthread_spin_lock` sets the
+value to one and loops while the return is nonzero, the m68k implementation
+could never acquire any spinlock. `patches/aros/0057` preserves the value
+before the store and returns it.
+
+The fix was rebuilt first into `libpthread.a`, then into each consumer tested:
+`mesa3dgl20-0.library`, `softpipe.hidd`, and `vc4gallium.hidd`. Disassembly of
+the resulting `pthread_spin_lock` confirms that `%d2` receives `*lock` before
+the store and is tested after `Enable()`.
+
+The minimal `C:OpenMesa mesa3dgl20-0.library` reproducer now succeeds:
+
+    [InitResident] mesa3dgl20-0.library: init returned after 1586 ms
+    [openmesa] OpenLibrary returned 0x0475dd5c
+    [openmesa] 'mesa3dgl20-0.library' version 21.3
+    [openmesa] closed
+
+This retires the original library-open failure. It was a generic m68k pthread
+atomic-semantics bug reached by libstdc++ locale initialisation, before Mesa,
+Gallium, softpipe, or VC4 did graphics work.
+
+`glinfo` now also advances through all points that were previously unreachable:
+
+    [glinfo] main entered
+    [glinfo] glutInit returned
+    [glinfo] glutInitDisplayMode returned
+    [VC4Gallium] V3D hardware not available
+    [InitResident] softpipe.hidd: MakeLibrary 0 ms, calling init ...
+
+QEMU correctly rejects VC4 and selects softpipe. A second stop remains during
+`softpipe.hidd` initialisation even after that HIDD was relinked with the fixed
+pthread implementation. It is therefore a new, later blocker and must not be
+reported as the original spinlock bug recurring without another PC/stack
+sample. The next discriminator is the same external QEMU-monitor capture at
+this new stop, followed by resolving the live stack against the rebuilt
+softpipe module.
+
+# 2026-08-25: softpipe context creation works -- stdc pool scaling fixed
+
+The second stop was not in the HIDD resident init. Repeated external stack
+samples first resolved inside softpipe shader creation (`ureg_*`) and then in
+the kernel TLSF validation path. A physical-memory dump showed that the stdc
+heap had 788 valid, terminating memory areas. The general stdc malloc pool used
+64 KiB autogrow puddles, while the allocator's defensive free-list validation
+walks the complete area list for blocks in older areas. Mesa therefore turned
+the hardening into a pathological hot path without any heap corruption.
+
+`patches/aros/0058` raises only the stdc malloc puddle to 1 MiB. It retains all
+TLSF validation and the 4 KiB large-allocation threshold. The affected targets
+were rebuilt serially with `compiler-stdc-quick`, `hidd-softpipe-quick`, and
+`mesa3dgl-library-quick`; only `stdc.library`, `mesa3dgl20-0.library`, and
+`softpipe.hidd` were copied to the existing SD image.
+
+The next QEMU run passed the former stop:
+
+    [SoftPipe] HiddSoftpipe_IsFormatSupported: fmt #108
+    [SoftPipe] HiddSoftpipe_CreateDisplaytarget: fmt #1
+    [glinfo] glutCreateWindow returned
+    [glinfo] asking GL_VERSION
+    [glinfo] GL_VERSION answered
+
+A sample while context creation was still busy had already moved beyond TLSF
+and `ureg_*` into Mesa's `_mesa_init_remap_table` and `_glapi_add_dispatch`.
+This establishes that softpipe can create a display target and GLUT can create
+an OpenGL window under QEMU. The remaining `glinfo` run did not reach its final
+`done` marker during the observation window; its next uninstrumented operation
+is obtaining/printing `GL_EXTENSIONS`. That later delay remains to be separated
+from slow console output or extension-string construction. It is not the TLSF
+area walk recurring.

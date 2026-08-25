@@ -1,0 +1,62 @@
+From 5a9b7c8d9e0f112233445566778899aabbccddee Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 12:05:00 -0300
+Subject: [PATCH] mesa: report fixed-function link result
+
+Complete the tail of the ralloc inner patch, which was accidentally omitted by
+the outer patch's line count, then add the diagnostic.  The normal Mesa problem
+report follows the application's standard error, which is intentionally
+redirected during headless demo tests.  Mirror the fixed-function fragment
+shader link result to the AROS debug output so a NULL linked program can be
+diagnosed from the serial log.
+---
+ workbench/libs/mesa/mesa-20.0.8-aros.diff | 35 ++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/workbench/libs/mesa/mesa-20.0.8-aros.diff b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+index ee15a2f8cd..f2318e9a9d 100644
+--- a/workbench/libs/mesa/mesa-20.0.8-aros.diff
++++ b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+@@ -1221,1 +1221,36 @@
+     if (info->destructor != NULL)
++       info->destructor(PTR_FROM_HEADER(info));
++ 
++-   free(info);
++++   os_free_aligned(info);
++ }
++ 
++ void
++diff -ruN mesa-20.0.8/src/mesa/main/ff_fragment_shader.cpp mesa-20.0.8.aros/src/mesa/main/ff_fragment_shader.cpp
++--- mesa-20.0.8/src/mesa/main/ff_fragment_shader.cpp	2020-06-12 01:21:16.000000000 +0000
+++++ mesa-20.0.8.aros/src/mesa/main/ff_fragment_shader.cpp	2026-08-25 12:05:00.000000000 -0300
++@@ -49,6 +49,10 @@
++ #include "program/prog_parameter.h"
++ #include "program/prog_print.h"
++ 
+++#ifdef __AROS__
+++#include <aros/debug.h>
+++#endif
+++
++ #include "compiler/glsl/glsl_parser_extras.h"
++ #include "compiler/glsl/ir.h"
++ #include "compiler/glsl/ir_builder.h"
++@@ -1134,6 +1138,17 @@
++ 
++    _mesa_glsl_link_shader(ctx, p.shader_program);
++ 
+++#ifdef __AROS__
+++   struct gl_linked_shader *linked =
+++      p.shader_program->_LinkedShaders[MESA_SHADER_FRAGMENT];
+++   bug("[Mesa] fixed-function fragment link: status=%ld linked=%p "
+++       "program=%p log=%s\n",
+++       (long)p.shader_program->data->LinkStatus, linked,
+++       linked ? linked->Program : NULL,
+++       p.shader_program->data->InfoLog ?
+++          p.shader_program->data->InfoLog : "<none>");
+++#endif
+++
++    if (!p.shader_program->data->LinkStatus)
++       _mesa_problem(ctx, "Failed to link fixed function fragment shader: %s\n",
++                     p.shader_program->data->InfoLog);
+-- 
+2.43.0

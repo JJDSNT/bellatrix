@@ -1,0 +1,37 @@
+From aabbccddeeff0011223344556677889900aabbcc Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 12:20:00 -0300
+Subject: [PATCH] mesa: fix inner patch context
+
+Anchor the debug include after the actual final program headers in the nested
+Mesa patch.
+---
+ workbench/libs/mesa/mesa-20.0.8-aros.diff | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/workbench/libs/mesa/mesa-20.0.8-aros.diff b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+index f2318e9a9d..fbd343e664 100644
+--- a/workbench/libs/mesa/mesa-20.0.8-aros.diff
++++ b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+@@ -1232,14 +1232,14 @@
+ @@ -49,6 +49,10 @@
+  #include "program/prog_parameter.h"
+  #include "program/prog_print.h"
+- 
++ #include "program/prog_statevars.h"
++ #include "util/bitscan.h"
+++
+ +#ifdef __AROS__
+ +#include <aros/debug.h>
+ +#endif
+-+
+- #include "compiler/glsl/glsl_parser_extras.h"
+- #include "compiler/glsl/ir.h"
+- #include "compiler/glsl/ir_builder.h"
++ 
++ using namespace ir_builder;
+ @@ -1134,6 +1138,17 @@
+  
+     _mesa_glsl_link_shader(ctx, p.shader_program);
+-- 
+2.43.0
