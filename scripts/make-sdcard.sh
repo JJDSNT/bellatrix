@@ -358,6 +358,20 @@ if [ -d "$ROOT/tests/gl" ]; then
     done
 fi
 
+# tests/media/ is for sample files a test needs to have something to work on.
+#
+# Audio bring-up needs a real file to play, and copying one onto the card by
+# hand between builds is how a test stops being run. Anything dropped in that
+# directory lands in the card's root; nothing is required to be there.
+#
+# Not committed to the repository: these are large and are somebody's audio.
+# tests/media/ is in .gitignore for that reason.
+if [ -d "$ROOT/tests/media" ]; then
+    for m in "$ROOT/tests/media/"*; do
+        [ -f "$m" ] && cp "$m" "$STAGE/$(basename "$m")"
+    done
+fi
+
 # tests/sysinfo/ holds third-party measurement binaries -- currently xSysInfo,
 # which sdcard.md sec.11 lists as one additional data point. It goes to C: so a
 # boot test can call it by name; it takes a CLI template (DEBUG/S, BRIEF/S,
