@@ -84,6 +84,33 @@ from `arm-native` (101 defines to 379) rather than continuing to grow one
 constant per failed port. See the commit for
 `feat(wifi): port the AROS Broadcom driver, and adopt the whole BCM283x header`.
 
+# Neither driver plays, 2026-08-24 (corrects the section below)
+
+PWM does **not** work. An earlier report that it did -- which the whole
+section below reasons from -- turned out to be a system beep, not a played
+file; a WAV through `C:Play` produces nothing on either driver.
+
+That moves the fault out of the HDMI-specific path. `hdmiaudio` and
+`pwmaudio` share exactly one significant dependency, and both open it:
+**dma.resource**. If nothing is feeding the FIFO, neither driver can produce
+sound regardless of how correctly its control registers are programmed.
+
+This is also what the legacy driver warns about in `src/host/raspi3/
+hdmi_audio.c`: "CPU-polled feeding of MAI_DATA produced a discontinuous IEC958
+stream that the sink muted; the DMA's HDMI DREQ paces the FIFO steadily."
+The DMA is not an optimisation here, it is what makes audio exist.
+
+**Next step is therefore the DMA path, not the MAI registers**: does the
+driver obtain a channel, does the control block get built, does the transfer
+start, does DREQ pace it. None of that is instrumented. The MAI_CTL finding
+below stays on the list -- it is still a real discrepancy against a validated
+driver -- but it cannot be the reason PWM is silent, and fixing it first
+would have proved nothing.
+
+Method note, since it cost a whole investigation: "PWM works" was taken as
+given and every inference was built on it. A single WAV through C:Play would
+have tested it at any point.
+
 # The MAI_CTL bit map is wrong for this SoC, 2026-08-24
 
 HDMI audio is silent on a Pi 3 while PWM works. Instrumentation showed
