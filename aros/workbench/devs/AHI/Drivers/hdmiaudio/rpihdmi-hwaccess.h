@@ -90,6 +90,15 @@ static inline void wr32le(ULONG addr, ULONG val)
     ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.scheduler_control))
 #define HDMI_RAM_PKT_START(dd)   \
     ((dd->periiobase) + (dd->soc->packet_base) + (dd->soc->regs.packet_start))
+/* Bring-up readback only: the SoC tables already carry these offsets, but
+ * nothing addressed them, so there was no way to see whether the packet
+ * scheduler had a video stream to attach audio to. */
+#define HDMI_RAM_PACKET_CFG(dd)  \
+    ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.ram_packet_cfg))
+#define HDMI_RAM_PACKET_STATUS(dd) \
+    ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.ram_packet_status))
+#define HDMI_AUDIO_PACKET_CFG(dd) \
+    ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.audio_packet_cfg))
 
 /* MAI_CTL bits */
 #define MAI_CTL_RESET    (1 << 0)

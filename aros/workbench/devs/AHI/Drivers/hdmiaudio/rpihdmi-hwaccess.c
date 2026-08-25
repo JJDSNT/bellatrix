@@ -218,6 +218,21 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
     ULONG n_value = srate_to_n(dd->samplerate);
 
     /*
+     * Bring-up instrumentation.
+     *
+     * PWM output works on this board and HDMI does not, with driver code that
+     * is byte-for-byte the aarch64 original -- so what differs is the state
+     * this driver is handed, not what it does with it. Every value it decides
+     * from is printed here, because none of them were observable and a fix
+     * chosen without them would be a guess.
+     */
+    bug("[hdmiaudio] init: periiobase=0x%08lx mai=0x%08lx hdmi=0x%08lx\n",
+        (ULONG)pb, (ULONG)dd->soc->mai_base, (ULONG)dd->soc->hdmi_base);
+    bug("[hdmiaudio] init: rate=%lu enum=%lu N=%lu hsm_clock=%lu\n",
+        (ULONG)dd->samplerate, (ULONG)srate_enum, (ULONG)n_value,
+        (ULONG)dd->soc->hsm_clock);
+
+    /*
      * Reset MAI.
      * Three separate writes: RESET, then clear ERRORF, then FLUSH.
      * This resets the internal channel counter and FIFO state.
@@ -287,10 +302,21 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
 
     {
         ULONG cts = rd32le(HDMI_CTS_0(dd));
+        ULONG hw_cts = cts;
+
         if (cts == 0) {
             /* Fallback: compute CTS assuming 148500 kHz pixel clock */
             cts = (148500UL * n_value) / (128 * (dd->samplerate / 1000));
         }
+        /*
+         * CTS is what locks the audio clock to the HDMI pixel clock. Get it
+         * wrong and the sink discards the audio packets silently while the
+         * picture stays perfect -- which is exactly the reported symptom. The
+         * fallback assumes 1080p60; if the display negotiated anything else,
+         * it is wrong by construction and this line is how anyone would know.
+         */
+        bug("[hdmiaudio] init: CTS hw=%lu used=%lu%s\n",
+            hw_cts, cts, hw_cts ? "" : " (FALLBACK, assumes 1080p60)");
         wr32le(HDMI_CTS_0(dd), cts);
         wr32le(HDMI_CTS_1(dd), cts);
     }
@@ -310,6 +336,27 @@ void hdmi_mai_init(struct RPiHDMIData *dd)
     /* Initialize IEC958 channel status for this sample rate (separate L/R) */
     spdif_setup_channel_status(dd->channel_status_l, dd->channel_status_r, dd->samplerate);
     dd->frame_counter = 0;
+
+    /*
+     * Read back what the block actually took.
+     *
+     * Writing a register is not the same as the block accepting it, and on a
+     * VideoCore that the firmware also owns it is entirely possible for a
+     * write to land somewhere inert. These four say whether the MAI is
+     * enabled, what format and thresholds it ended up with, and -- the one
+     * that matters most -- whether the HDMI scheduler thinks there is an
+     * active video stream to hang audio packets on. Audio into an idle
+     * scheduler goes nowhere, and looks exactly like a driver bug.
+     */
+    bug("[hdmiaudio] armed: MAI_CTL=%08lx FMT=%08lx THR=%08lx SMP=%08lx\n",
+        rd32le(HDMI_MAI_CTL(dd)), rd32le(HDMI_MAI_FMT(dd)),
+        rd32le(HDMI_MAI_THR(dd)), rd32le(HDMI_MAI_SMP(dd)));
+    bug("[hdmiaudio] armed: SCHED=%08lx RAMPKT_CFG=%08lx RAMPKT_STA=%08lx"
+        " CRP=%08lx\n",
+        rd32le(HDMI_SCHEDULER_CONTROL(dd)), rd32le(HDMI_RAM_PACKET_CFG(dd)),
+        rd32le(HDMI_RAM_PACKET_STATUS(dd)), rd32le(HDMI_CRP_CFG(dd)));
+    bug("[hdmiaudio] armed: AUDIO_PKT_CFG=%08lx\n",
+        rd32le(HDMI_AUDIO_PACKET_CFG(dd)));
 }
 
 /*
