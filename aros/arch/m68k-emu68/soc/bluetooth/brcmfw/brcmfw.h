@@ -28,6 +28,17 @@ struct BrcmFwBase
 #define HC_OP_BRCM_WRITE_RAM        BRCM_OP(0x004c)
 #define HC_OP_BRCM_LAUNCH_RAM       BRCM_OP(0x004e)
 
+/* Host Control group: HCI_Reset, the smallest command a controller answers. */
+#define HC_OP_HCI_RESET             ((UWORD)(((UWORD)0x03 << 10) | 0x0003))
+
+/*
+ * Recovering from the restart that Launch_RAM causes. Settle, then ask the
+ * controller whether it is back, a bounded number of times -- see
+ * brcmWaitRestart().
+ */
+#define BRCM_RESTART_SETTLE_MS      300
+#define BRCM_RESTART_PROBES         3
+
 #define BT_MANUFACTURER_BROADCOM    15           /* Bluetooth SIG company id */
 #define BRCM_FW_DIR                 "DEVS:Firmware/brcm/"
 

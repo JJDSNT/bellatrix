@@ -107,6 +107,55 @@ static APTR brcmReadFile(struct DosLibrary *DOSBase, CONST_STRPTR path,
 }
 /* \\\ */
 
+/* /// "brcmWaitRestart()" */
+/*
+ * Launch_RAM was the last record, and the controller restarts on it.
+ *
+ * The caller resumes the bring-up the moment this returns -- hwtask.c runs
+ * bDoFirmware() and then bBringupStep() with nothing in between -- so
+ * returning early sends the next HCI command to a chip that is not there.
+ * That is not hypothetical: with a fixed 50 ms wait, the step after the
+ * firmware timed out on every boot, the bring-up failed, and the radio never
+ * reached BHS_READY -- which presents as a Bluetooth prefs with no radio in
+ * it, because btEnumerateHardware() only reports controllers in that state.
+ *
+ * A bigger fixed number would be a better guess and still a guess, so ask the
+ * controller instead. HCI_Reset is the smallest command it answers and it is
+ * idempotent, so the stack issuing its own immediately afterwards costs
+ * nothing. A completed command also proves the H4 stream has resynchronised
+ * past the framing errors and zero bytes that a restarting UART peer leaves
+ * on the line.
+ *
+ * Probing is not free -- an unanswered command costs the stack's own command
+ * timeout -- so settle first and probe a bounded number of times.
+ */
+static LONG brcmWaitRestart(struct BtFirmwareContext *ctx)
+{
+    ULONG attempt;
+
+    for (attempt = 0; attempt < BRCM_RESTART_PROBES; attempt++)
+    {
+        UBYTE status = 0;
+
+        Delay(BRCM_RESTART_SETTLE_MS * TICKS_PER_SECOND / 1000);
+
+        if (ctx->fwc_HciCommand(ctx, HC_OP_HCI_RESET, NULL, 0,
+                                &status, NULL, NULL, 0) == 0 && status == 0)
+        {
+            return 0;
+        }
+
+        ctx->fwc_Log(ctx, RETURN_WARN,
+            "brcmfw: controller has not answered %ld probe(s) since Launch_RAM",
+            (LONG)(attempt + 1));
+    }
+
+    ctx->fwc_Log(ctx, RETURN_ERROR,
+        "brcmfw: controller did not come back after Launch_RAM");
+    return -1;
+}
+/* \\\ */
+
 /* /// "brcmLoad()" */
 /*
  * The patchram protocol, which is simpler than its reputation:
@@ -207,13 +256,7 @@ static LONG brcmLoad(struct BtFirmwareLoader *self,
     ctx->fwc_Log(ctx, RETURN_OK,
         "brcmfw: %ld records applied; controller restarting", records);
 
-    /*
-     * Launch_RAM was the last record and the controller is restarting. It
-     * will not answer for a while, and the stack's next command would time
-     * out against a chip that is simply not there yet.
-     */
-    Delay(50 * TICKS_PER_SECOND / 1000);   /* 50 ms */
-    return 0;
+    return brcmWaitRestart(ctx);
 }
 /* \\\ */
 
