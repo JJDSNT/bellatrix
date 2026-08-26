@@ -35,7 +35,8 @@ mesa3dgl carrying another refuses to bind at `CreatePipeScreen` -- a clean
 failure with a reason on the serial line, but a failure. Rebuild and ship both
 together, always.
 
-Patches through 0078 document how the original ARM driver evolved into this
-snapshot. New emu68 driver changes belong directly here rather than in new
-patches against `arch/arm-native`; only changes to the remaining upstream
-build/Mesa integration require an AROS patch.
+Commit `cb4e697` preserves the patch-by-patch history of how the original ARM
+driver evolved into this snapshot. Those implementation patches were removed
+from the active series after migration. New emu68 driver changes belong
+directly here; only changes to the remaining upstream build/Mesa integration
+require an AROS patch.

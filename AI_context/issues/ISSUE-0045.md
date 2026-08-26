@@ -24,7 +24,7 @@ related_files:
 
 ## Hardware VC4 reaches Mesa format conversion (2026-08-25)
 
-After patches 0068 and 0069, hardware accepts the V3D register block and the
+After the VC4 MMIO endian fix and patch 0069, hardware accepts the V3D register block and the
 GalliumCoreAPI table, with no SoftPipe fallback. `fire` then reaches Mesa's
 big-endian packed-format conversion and aborts at `formats.c:430` with
 `Invalid array format`. Mesa 20.0.8 handles only one-, two-, and four-channel
@@ -54,8 +54,8 @@ The complete boot log closes the cause of the hardware rejection:
 The real IDENT0 is `0x02443356`; the observed value is exactly byte-reversed.
 The driver used direct volatile loads and stores inherited from little-endian
 ARM, so on big-endian m68k it interpreted the top byte (`0x56`, decimal 86) as
-the version and rejected the device. Patch 0068 applies `AROS_LE2LONG` and
-`AROS_LONG2LE` to the common V3D MMIO macros. This is required for every
+the version and rejected the device. The project-owned driver applies
+`AROS_LE2LONG` and `AROS_LONG2LE` to the common V3D MMIO macros. This is required for every
 register, not just IDENT0: otherwise detection would pass while command and
 status registers remained byte-swapped. The narrow `hidd-vc4gallium` target
 builds successfully with the fix. Real hardware validation remains required;
@@ -839,12 +839,12 @@ fragment shader. Binning and rendering counters advanced for many submissions,
 but the overlay remained black; no gears were actually presented. Repeated
 `0x04000000` BO indices were eventually traced to `GEM_HANDLES`, a software
 pseudo-packet whose words are host-endian even though it is embedded in the
-hardware command-list byte stream. Patch 0076 decodes those two words in host
-order.
+hardware command-list byte stream. The project-owned driver decodes those two
+words in host order.
 
 Normalizing the remaining manually emitted `GL_INDEXED_PRIMITIVE` words made
 the real draw reach the binner, exposing a later stall: OUTOMEM is serviced,
-but CT0 remains active while the first tile list stays empty. Patch 0078 logs
+but CT0 remains active while the first tile list stays empty. The driver logs
 the first four raw and normalized indexed packets for the next hardware run.
 The emu68 driver implementation was then consolidated into the project-owned
 `aros/arch/m68k-emu68/hidd/vc4gallium` tree; patch 0079 is only the upstream
