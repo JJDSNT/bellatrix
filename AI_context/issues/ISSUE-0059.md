@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0059
 title: "A multi-channel Bluetooth mouse does not come back when its channel is selected again"
-status: open
+status: blocked
 priority: medium
 type: investigation
 owner: unassigned
@@ -15,14 +15,40 @@ tags:
   - low-energy
   - raspberry-pi-3
 blockers:
-  - "two free hardware tests — see 'What to try before writing code'"
+  - "ISSUE-0062 — the machine hangs on the return; this issue's premise is void until that is fixed"
 related_files:
   - external/aros/rom/bluetooth/bluetooth/hwtask.c
   - external/aros/rom/bluetooth/bluetooth/hwconn.c
   - external/aros/rom/bluetooth/classes/bthid/bthid.class.c
   - AI_context/issues/ISSUE-0061.md
+  - AI_context/issues/ISSUE-0062.md
   - AI_context/issues/ISSUE-0046.md
 ---
+
+# Correction, 2026-08-26: the premise of this issue is void
+
+**The mouse does come back. The machine hangs.**
+
+Measured the same day with `tests/gl/btwatch`, a detached heartbeat that writes
+to the card and to `DEBUG:` every five seconds. The full reconnection runs
+correctly — advert heard, matched to the bonded device, link encrypted with the
+stored LE key, four services enumerated, bthid attached to `input.device`,
+report notifications enabled. Then the channel is switched away, the link
+drops, and within five seconds every heartbeat stops on **both** channels at
+once. That is [ISSUE-0062](ISSUE-0062.md).
+
+Everything below was written to explain a silence that was a dead machine. It
+is kept because the reasoning about scan duty cycle, the accept-list ladder and
+the unlogged early returns is sound in itself and feeds
+[ISSUE-0061](ISSUE-0061.md) — but **none of it describes what is wrong here**,
+and no work should start from it. In particular:
+
+- the 2.3% background-scan duty cycle is not implicated: the advert was heard
+  and acted on, twice, well inside a normal window;
+- the silent `return`s in `bConnAdvertising()` are not implicated: the branch
+  that logs "is awake - reconnecting" is the one that ran;
+- the two hardware tests this issue was blocked on are answered: returning to
+  the channel hangs the board, so neither clicking nor waiting can be observed.
 
 # Summary
 
