@@ -615,6 +615,11 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     make kernel-sdio-emu68
     make kernel-bwfm-emu68
     make workbench-devs-networks-bwfm
+
+    # ENVARC:Sys/Wireless.prefs, without which C:WirelessManager exits before
+    # opening its window and the scan UI cannot be reached at all. Nothing else
+    # creates it -- Prefs/Network only writes it once a network already exists.
+    make distfiles-emu68-wifi-prefs
     if [ "${BELLATRIX_WIFI_FW:-1}" = 1 ]; then
         make distfiles-emu68-wifi-fw
     fi

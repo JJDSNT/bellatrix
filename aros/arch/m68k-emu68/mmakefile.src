@@ -166,3 +166,23 @@ distfiles-emu68-wifi-fw:
 	    wget -t 5 -T 15 -c "$(EMU68WIFIFW_URI)/$$f?raw=true" -O "$(AROSDIR)/Devs/Firmware/$${f##*/}" \
 	        || $(ECHO) "WARNING: could not fetch WiFi firmware $$f" ; \
 	done
+
+#
+# The WirelessManager configuration, which nothing else creates.
+#
+# It is not firmware and it is not fetched -- it is a file this port has to put
+# on the card, because the only writer of it is Prefs/Network and that writer
+# refuses to run before a network exists (`if (prefs.networkCount > 0)`,
+# workbench/prefs/network/prefsdata.c). Without the file C:WirelessManager
+# aborts before opening its window, so the scanner that would find the first
+# network is unreachable until someone types one in by hand. See the header of
+# soc/wifi/Wireless.prefs.
+#
+# ENVARC: and not ENV:, because ENV: is RAM:ENV and does not survive a reboot;
+# S:Startup-Sequence copies ENVARC: into it on the way up.
+#
+#MM
+distfiles-emu68-wifi-prefs:
+	@$(MKDIR) $(AROS_ENVARC)/SYS
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/Wireless.prefs \
+	    $(AROS_ENVARC)/SYS/Wireless.prefs

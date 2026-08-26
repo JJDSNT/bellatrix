@@ -1,0 +1,25 @@
+#
+# WirelessManager (wpa_supplicant) configuration.
+#
+# C:WirelessManager reads ENV:Sys/Wireless.prefs unless CONFIG says otherwise
+# (workbench/network/WirelessManager/wpa_supplicant/main_amiga.c). If the file
+# is absent it stops at "Failed to read or parse configuration" before its MUI
+# window is ever created -- so a machine that has never configured a network
+# cannot reach the scanner that would configure one. This file exists to break
+# that circle, and ships with no network blocks on purpose: a configuration
+# with nothing to associate to is a valid configuration.
+#
+# Scan and Connect in the WirelessManager window work from here. What they add
+# does not come back to this file: wpa_supplicant is built with
+# CONFIG_NO_CONFIG_WRITE=y and cannot write its own configuration at all.
+# Prefs/Network is what persists networks, into ENVARC:Sys and ENV:Sys both
+# (workbench/prefs/network/prefsdata.c, WriteWirelessPrefs).
+#
+# A network looks like this, in the form Prefs/Network writes:
+#
+#   network={
+#       ssid="my network"
+#       psk="my passphrase"
+#       key_mgmt=WPA-PSK
+#   }
+#

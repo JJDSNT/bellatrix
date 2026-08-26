@@ -84,6 +84,7 @@ CORERESIDENTS := timer_device utility_library oop_library hiddclass_hidd \
                  mouse_hidd keyboard_device gameport_device input_device \
                  console_device intuition_library expansion_library \
                  partition_library mbox_resource btuart_resource dma_resource \
+                 sdio_resource bwfm_resource \
                  sdcard_device \
                  FileSystem_resource fat_handler lddemon_resource \
                  ram_handler con_handler shell_resource \
@@ -104,6 +105,27 @@ CORERESIDENTS := timer_device utility_library oop_library hiddclass_hidd \
 # itself -- removing it ends in an "Exec Bootstrap Task" requester that never
 # reaches Wanderer -- and rom/expansion's generic ConfigChain() does nothing,
 # which is right for a machine with no Zorro bus.
+#
+# sdio_resource and bwfm_resource are here because a resource cannot arrive
+# any other way. OpenResource() is FindName() over SysBase->ResourceList and
+# nothing else (rom/exec/openresource.c:56-62), and lddemon patches only
+# OpenLibrary and OpenDevice -- there is no LDOpenResource. Both modules are
+# also installed into Devs/ by %build_module, and that copy is unreachable:
+# bwfm.device's OpenResource("bwfm.resource") returns NULL and load_firmware()
+# gives up at its `if (!BWFMBase ...)` guard, so the chip is never enumerated
+# and a scan returns an empty list forever. arch/aarch64-raspi reaches the same
+# conclusion by putting `sdio bwfm` in its PKG_RSRC, i.e. in the ROM.
+#
+# Their order relative to sdcard_device is not what sequences them -- the
+# scanner sorts by rt_Pri (rom/kernel/kernel_romtags.c:311-339) and sdio is 87,
+# bwfm 86, sdcard 4. It matters anyway that they sit ahead of dosboot_resource,
+# for the rt_EndSkip reason at the top of this file.
+#
+# That sequencing is the point, not an accident: sdio_init() parks GPIO48-53 as
+# inputs so the Arasan reaches only the WiFi pads, and the SDHOST driver takes
+# them back to ALT0 afterwards. Run the other way round -- which is what
+# loading it after DOS would mean -- it would pull those six pins out from
+# under the mounted card.
 #
 # Note the ELF does not relink on a change to this file alone -- delete it to
 # force the link.
@@ -133,8 +155,8 @@ USER_INCLUDES := -I$(SRCDIR)/rom/kernel -I$(SRCDIR)/rom/exec \
 # it compiling. vcgfx is not here at all -- it is a disk module now, pulled in
 # by software-emu68-m68k.
 #
-#MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-m68k-emu68-fbgfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-dma-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
-#MM- kernel-link-emu68-m68k-quick : kernel-kernel-kobj-quick kernel-exec-kobj-quick kernel-timer-kobj-quick kernel-utility-kobj-quick kernel-oop-kobj-quick kernel-hidd-kobj-quick kernel-bootloader-kobj-quick kernel-openfirmware-kobj-quick kernel-battclock-kobj-quick kernel-hidd-gfx-kobj-quick kernel-m68k-emu68-emu68gfx-kobj-quick kernel-m68k-emu68-fbgfx-kobj-quick kernel-graphics-kobj-quick kernel-layers-kobj-quick kernel-keymap-kobj-quick kernel-hidd-input-kobj-quick kernel-hidd-kbd-kobj-quick kernel-hidd-mouse-kobj-quick kernel-keyboard-kobj-quick kernel-gameport-kobj-quick kernel-input-kobj-quick kernel-intuition-kobj-quick kernel-expansion-kobj-quick kernel-partition-kobj-quick kernel-mbox-emu68-kobj-quick kernel-btuart-emu68-kobj-quick kernel-dma-emu68-kobj-quick kernel-sdcard-kobj-quick kernel-filesystem-kobj-quick kernel-fs-fat-kobj-quick kernel-dos-kobj-quick kernel-aros-kobj-quick kernel-debug-kobj-quick kernel-processor-kobj-quick kernel-task-kobj-quick kernel-console-kobj-quick kernel-lddemon-kobj-quick kernel-fs-ram-kobj-quick kernel-fs-con-kobj-quick kernel-shell-kobj-quick kernel-shellcommands-kobj-quick kernel-dosboot-kobj-quick
+#MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-m68k-emu68-fbgfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-dma-emu68-kobj kernel-sdio-emu68-kobj kernel-bwfm-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
+#MM- kernel-link-emu68-m68k-quick : kernel-kernel-kobj-quick kernel-exec-kobj-quick kernel-timer-kobj-quick kernel-utility-kobj-quick kernel-oop-kobj-quick kernel-hidd-kobj-quick kernel-bootloader-kobj-quick kernel-openfirmware-kobj-quick kernel-battclock-kobj-quick kernel-hidd-gfx-kobj-quick kernel-m68k-emu68-emu68gfx-kobj-quick kernel-m68k-emu68-fbgfx-kobj-quick kernel-graphics-kobj-quick kernel-layers-kobj-quick kernel-keymap-kobj-quick kernel-hidd-input-kobj-quick kernel-hidd-kbd-kobj-quick kernel-hidd-mouse-kobj-quick kernel-keyboard-kobj-quick kernel-gameport-kobj-quick kernel-input-kobj-quick kernel-intuition-kobj-quick kernel-expansion-kobj-quick kernel-partition-kobj-quick kernel-mbox-emu68-kobj-quick kernel-btuart-emu68-kobj-quick kernel-dma-emu68-kobj-quick kernel-sdio-emu68-kobj-quick kernel-bwfm-emu68-kobj-quick kernel-sdcard-kobj-quick kernel-filesystem-kobj-quick kernel-fs-fat-kobj-quick kernel-dos-kobj-quick kernel-aros-kobj-quick kernel-debug-kobj-quick kernel-processor-kobj-quick kernel-task-kobj-quick kernel-console-kobj-quick kernel-lddemon-kobj-quick kernel-fs-ram-kobj-quick kernel-fs-con-kobj-quick kernel-shell-kobj-quick kernel-shellcommands-kobj-quick kernel-dosboot-kobj-quick
 #MM kernel-link-emu68-m68k: $(BOOTELF)
 #MM kernel-link-emu68-m68k-quick: $(BOOTELF)
 kernel-link-emu68-m68k: $(BOOTELF)
