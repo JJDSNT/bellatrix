@@ -20,7 +20,6 @@
 
 #define DWC2_WAIT_LOOPS 100
 #define DWC2_HALT_WAIT_LOOPS 100000
-#define DWC2_MAX_CHANNELS 16
 
 AROS_INTH1(DWC2_FNAME(SoftIRQ), struct DWC2Unit *, unit)
 {
@@ -103,10 +102,31 @@ static void controller_irq(void *data, void *sysbase)
         ahb & ~DWC2_GAHBCFG_GLBLINTRMSK);
     if (active & DWC2_GINTSTS_HCHINT)
     {
-        ULONG channel_status = dwc2_readl(device, DWC2_HCINT(0));
+        /*
+         * HAINT names the channels that raised an interrupt, one bit each.
+         * Take each one's HCINT, acknowledge it here so the level-triggered
+         * source drops, and hand the bits to the unit task through the
+         * channel that produced them. Reading HCINT(0) unconditionally --
+         * which is what this did while there was only one channel -- both
+         * misses every other channel and attributes their state to channel 0.
+         */
+        ULONG flagged = dwc2_readl(device, DWC2_HAINT) &
+            dwc2_readl(device, DWC2_HAINTMSK);
+        UBYTE i;
 
-        unit->channel_pending |= channel_status;
-        dwc2_writel(device, DWC2_HCINT(0), channel_status);
+        for (i = 0; i < unit->host_channels; i++)
+        {
+            ULONG channel_status;
+
+            if (!(flagged & (1UL << i)))
+                continue;
+            channel_status = dwc2_readl(device, DWC2_HCINT(i));
+            if (channel_status == 0)
+                continue;
+            unit->channel[i].pending |= channel_status;
+            unit->channels_pending |= 1UL << i;
+            dwc2_writel(device, DWC2_HCINT(i), channel_status);
+        }
         dwc2_writel(device, DWC2_GINTSTS, DWC2_GINTSTS_HCHINT);
     }
     unit->irq_pending |= active;
@@ -170,6 +190,10 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
 
     unit->host_channels = DWC2_GHWCFG2_NUM_HOST_CHAN(
         dwc2_readl(device, DWC2_GHWCFG2));
+    /* The ceiling is the size of unit->channel[], not an architectural limit:
+     * a DWC2 may report up to sixteen, and indexing past the array would be
+     * worse than driving fewer channels than the core has. BCM283x reports
+     * eight, which is what DWC2_MAX_CHANNELS is sized for. */
     if (unit->host_channels > DWC2_MAX_CHANNELS)
         unit->host_channels = DWC2_MAX_CHANNELS;
     /* Synopsys specifies a two-phase shutdown. First publish CHDIS with

@@ -113,8 +113,34 @@ BYTE dwc2_root_control(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq)
             switch (value >> 8)
             {
                 case UDT_DEVICE:
-                    copy_descriptor(ioreq, &root_device, sizeof(root_device), length);
+                {
+                    /*
+                     * bcdUSB follows the port, and it decides whether
+                     * Poseidon asks for split transactions.
+                     *
+                     * The constant here was 0x0200 -- "I am a USB 2.0 hub" --
+                     * whatever the hardware had negotiated. Poseidon's rule
+                     * (poseidon.library.c, PDFF_NEEDSSPLIT) is that a USB 1.1
+                     * device behind a USB 2.0 hub needs splits, so on a root
+                     * port that came up at full speed it correctly applied
+                     * that rule to a claim that was not true, and asked for
+                     * splits against a translator the root port does not
+                     * have. The transfer engine declines those (see
+                     * split_needed), but the honest fix is not to make the
+                     * claim.
+                     *
+                     * A root port running at full speed is a USB 1.1 hub, and
+                     * saying so makes Poseidon stop asking.
+                     */
+                    struct UsbStdDevDesc descriptor = root_device;
+
+                    if ((dwc2_readl(unit->device, DWC2_HPRT) &
+                         DWC2_HPRT_SPD_MASK) != DWC2_HPRT_SPD_HIGH)
+                        descriptor.bcdUSB = DWC2_CONST_LE16(0x0110);
+                    copy_descriptor(ioreq, &descriptor, sizeof(descriptor),
+                        length);
                     return 0;
+                }
                 case UDT_CONFIGURATION:
                     copy_descriptor(ioreq, &root_config, sizeof(root_config), length);
                     return 0;

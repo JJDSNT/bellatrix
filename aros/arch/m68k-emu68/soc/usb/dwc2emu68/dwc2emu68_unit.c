@@ -29,17 +29,14 @@ static const UWORD supported_commands[] =
     UHCMD_INTXFER,
     UHCMD_BULKXFER,
     /*
-     * UHCMD_ISOXFER is deliberately absent.
+     * UHCMD_ISOXFER is listed because handle_request() now implements it.
      *
-     * They were listed here while the switch in handle_request() sent them to
-     * its default case, which answers IOERR_NOCMD -- so the device told
-     * Poseidon it supported transfers it then refused. A NSCMD_DEVICEQUERY
-     * table is a promise about what the switch does, and this one was not
-     * true.
-     *
-     * Add it back in the same change that implements it. Until then
-     * ../usb2otg is the side with full coverage.
+     * This table is a promise about what the switch does. It once listed
+     * transfers the switch answered with IOERR_NOCMD, which is a lie to
+     * Poseidon; it then listed neither, which was honest and incomplete. It
+     * lists them now because arm_iso() exists.
      */
+    UHCMD_ISOXFER,
     NSCMD_DEVICEQUERY,
     0
 };
@@ -148,6 +145,24 @@ static void process_request(struct IOUsbHWReq *ioreq)
             error = reply ? UHIOERR_HOSTERROR : 0;
             break;
 
+        /*
+         * Isochronous, and note what is NOT done here: the request is never
+         * queued and left unanswered. The inherited engine's cmdIsoXFer()
+         * adds the request to a list, returns RC_DONTREPLY, and has the call
+         * that would drain that list commented out -- so a caller waits for
+         * an answer that cannot come. Refusing would have been kinder; doing
+         * it is kinder still.
+         */
+        case UHCMD_ISOXFER:
+            if (ioreq->iouh_Flags & UHFF_LOWSPEED)
+            {
+                error = UHIOERR_BADPARAMS;
+                break;
+            }
+            reply = !dwc2_transfer_submit(unit, ioreq);
+            error = reply ? UHIOERR_HOSTERROR : 0;
+            break;
+
         case UHCMD_INTXFER:
             if (ioreq->iouh_DevAddr == unit->hub_address)
             {
@@ -208,9 +223,8 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
             unit->hub_interrupt = NULL;
             finish_request(ioreq, IOERR_ABORTED);
         }
-        if (unit->active_request != NULL &&
-            unit->active_request->iouh_DriverPrivate2 != NULL)
-            dwc2_transfer_abort_active(unit);
+        if (dwc2_transfer_pending_abort(unit))
+            dwc2_transfer_abort_all(unit);
         if (unit->irq_pending != 0)
         {
             dwc2_controller_drain_irq(unit);
@@ -228,7 +242,7 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
         {
             dwc2_controller_drain_irq(unit);
         }
-        if (unit->active_request != NULL && !unit->watchdog_active)
+        if (!dwc2_transfer_idle(unit) && !unit->watchdog_active)
             dwc2_watchdog_arm(unit);
     }
 }

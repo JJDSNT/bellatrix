@@ -56,8 +56,24 @@
 #define DWC2_HPRT_PWR                   (1UL << 12)
 #define DWC2_HPRT_CHANGE_BITS           (DWC2_HPRT_CONNDET | DWC2_HPRT_ENCHNG | DWC2_HPRT_OVRCURRCHNG)
 
+/*
+ * PRTSPD -- the speed the root port actually negotiated.
+ *
+ * This decides whether split transactions exist at all on this bus. A split
+ * is a high-speed host asking a high-speed hub's translator to run a
+ * transaction for a slower device below it. If the root port itself came up
+ * at full or low speed, everything below it is that speed, spoken directly,
+ * and there is no translator anywhere to address.
+ */
+#define DWC2_HPRT_SPD_SHIFT             17
+#define DWC2_HPRT_SPD_MASK              (3UL << DWC2_HPRT_SPD_SHIFT)
+#define DWC2_HPRT_SPD_HIGH              (0UL << DWC2_HPRT_SPD_SHIFT)
+#define DWC2_HPRT_SPD_FULL              (1UL << DWC2_HPRT_SPD_SHIFT)
+#define DWC2_HPRT_SPD_LOW               (2UL << DWC2_HPRT_SPD_SHIFT)
+
 #define DWC2_HCCHAR_EPDIR_IN            (1UL << 15)
 #define DWC2_HCCHAR_EPTYPE_CONTROL      (0UL << 18)
+#define DWC2_HCCHAR_EPTYPE_ISOC         (1UL << 18)
 #define DWC2_HCCHAR_EPTYPE_BULK         (2UL << 18)
 #define DWC2_HCCHAR_EPTYPE_INTERRUPT    (3UL << 18)
 #define DWC2_HCCHAR_DEVADDR(v)          (((ULONG)(v) & 0x7f) << 22)
@@ -86,6 +102,30 @@
 #define DWC2_HCINT_FRMOVRUN             (1UL << 9)
 #define DWC2_HCINT_DATATGLERR           (1UL << 10)
 #define DWC2_HCINT_ALL                  0x3fffUL
+
+/*
+ * HCSPLT -- split-transaction control, one per channel.
+ *
+ * A low- or full-speed device behind a high-speed hub is not addressed
+ * directly: the host asks the hub's transaction translator to run the
+ * transaction on its behalf (a start-split), then comes back to collect the
+ * result (a complete-split). Every USB port on a Raspberry Pi 3 is behind
+ * such a hub, so this register is the difference between talking to a
+ * keyboard and not.
+ *
+ * XACTPOS is only meaningful for isochronous OUT payload positioning; the
+ * databook wants ALL for control, bulk and interrupt. BEGIN was used here by
+ * other ports as a misreading of "must advance via IRQ" -- tolerated during a
+ * first enumeration, but a spec violation the core may treat as it pleases.
+ */
+#define DWC2_HCSPLT_PRTADDR(x)          ((x) & 0x7fUL)
+#define DWC2_HCSPLT_HUBADDR(x)          (((x) & 0x7fUL) << 7)
+#define DWC2_HCSPLT_XACTPOS_ALL         (3UL << 14)
+#define DWC2_HCSPLT_COMPSPLT            (1UL << 16)
+#define DWC2_HCSPLT_SPLTENA             (1UL << 31)
+
+/* A start-split carries at most one full-speed frame's worth of payload. */
+#define DWC2_SPLIT_MAX_PAYLOAD          188
 
 #define DWC2_GHWCFG2_NUM_HOST_CHAN(v)   ((((v) >> 14) & 0x0f) + 1)
 

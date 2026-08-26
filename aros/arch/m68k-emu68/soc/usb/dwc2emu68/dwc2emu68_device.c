@@ -22,6 +22,7 @@ const char devname[] = MOD_NAME_STRING;
 static int DWC2_FNAME(Init)(LIBBASETYPEPTR DWC2Base)
 {
     struct DWC2Unit *unit;
+    ULONG channel;
 
     if (!dwc2_platform_probe(DWC2Base))
         return FALSE;
@@ -37,14 +38,38 @@ static int DWC2_FNAME(Init)(LIBBASETYPEPTR DWC2Base)
     unit->device = DWC2Base;
     NewList(&unit->transfer_queue);
     NewList(&unit->periodic_queue);
+    /*
+     * One bounce buffer per channel, not one per unit.
+     *
+     * Channels run concurrently, so a shared buffer would have two transfers
+     * writing over each other -- and the cache maintenance around it would be
+     * invalidating one channel's data while another was still using it. The
+     * buffers are cache-line aligned because CacheClearE() works in lines and
+     * would otherwise touch a neighbour's bytes.
+     *
+     * host_channels is not known until the controller starts, so allocate for
+     * the architectural maximum; the array is small and the alternative is a
+     * second allocation path at a point where failing is much more awkward.
+     */
     unit->dma_length = 16384;
-    unit->dma_raw = AllocMem(unit->dma_length + 63, MEMF_PUBLIC | MEMF_CLEAR);
-    if (unit->dma_raw == NULL)
+    for (channel = 0; channel < DWC2_MAX_CHANNELS; channel++)
     {
-        FreeMem(unit, sizeof(*unit));
-        return FALSE;
+        struct DWC2Channel *chan = &unit->channel[channel];
+
+        chan->index = channel;
+        chan->buffer_size = unit->dma_length;
+        chan->buffer_raw = AllocMem(chan->buffer_size + 63,
+            MEMF_PUBLIC | MEMF_CLEAR);
+        if (chan->buffer_raw == NULL)
+        {
+            while (channel-- > 0)
+                FreeMem(unit->channel[channel].buffer_raw,
+                    unit->channel[channel].buffer_size + 63);
+            FreeMem(unit, sizeof(*unit));
+            return FALSE;
+        }
+        chan->buffer = (UBYTE *)(((IPTR)chan->buffer_raw + 63) & ~(IPTR)63);
     }
-    unit->dma_buffer = (UBYTE *)(((IPTR)unit->dma_raw + 63) & ~(IPTR)63);
     dwc2_platform_cpu0_mask(unit);
     unit->task = NewCreateTask(
         TASKTAG_NAME, "Bellatrix DWC2 unit",
