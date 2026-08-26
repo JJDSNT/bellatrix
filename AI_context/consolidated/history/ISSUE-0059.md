@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0059
 title: "A multi-channel Bluetooth mouse does not come back when its channel is selected again"
-status: blocked
+status: done
 priority: medium
 type: investigation
 owner: unassigned
@@ -15,15 +15,24 @@ tags:
   - low-energy
   - raspberry-pi-3
 blockers:
-  - "ISSUE-0062 — the machine hangs on the return; this issue's premise is void until that is fixed"
 related_files:
   - external/aros/rom/bluetooth/bluetooth/hwtask.c
   - external/aros/rom/bluetooth/bluetooth/hwconn.c
   - external/aros/rom/bluetooth/classes/bthid/bthid.class.c
   - AI_context/issues/ISSUE-0061.md
-  - AI_context/issues/ISSUE-0062.md
+  - AI_context/consolidated/history/ISSUE-0062.md
   - AI_context/issues/ISSUE-0046.md
 ---
+
+# Closed 2026-08-26: it was never a reconnection defect
+
+The mouse now leaves its channel and comes back, repeatedly, in one session,
+with the bond restored across a reboot. Nothing in the plan below was
+implemented. What fixed it was
+[ISSUE-0062](ISSUE-0062.md): `bConnUp()` drained
+`cn_WaitReqs` in place, `bConnHandleRequest()` re-queued onto the same list,
+and the machine spun there forever. Every earlier "the mouse does not come
+back, silently" was a dead board.
 
 # Correction, 2026-08-26: the premise of this issue is void
 
@@ -40,7 +49,7 @@ once. That is [ISSUE-0062](ISSUE-0062.md).
 Everything below was written to explain a silence that was a dead machine. It
 is kept because the reasoning about scan duty cycle, the accept-list ladder and
 the unlogged early returns is sound in itself and feeds
-[ISSUE-0061](ISSUE-0061.md) — but **none of it describes what is wrong here**,
+[ISSUE-0061](../../issues/ISSUE-0061.md) — but **none of it describes what is wrong here**,
 and no work should start from it. In particular:
 
 - the 2.3% background-scan duty cycle is not implicated: the advert was heard
@@ -57,9 +66,9 @@ hosts and switches with a button — does not come back when its channel is
 selected again on a Raspberry Pi 3.
 
 This issue is about **this board and this symptom**. The design gaps in the
-stack that the investigation turned up are [ISSUE-0061](ISSUE-0061.md); audio
+stack that the investigation turned up are [ISSUE-0061](../../issues/ISSUE-0061.md); audio
 support, which came up in the same conversation, is
-[ISSUE-0060](ISSUE-0060.md). What follows is what we can do here.
+[ISSUE-0060](../../issues/ISSUE-0060.md). What follows is what we can do here.
 
 # What is already known to work
 
@@ -257,8 +266,8 @@ enumerated it. Worth remembering for a classic keyboard; not what happens here.
 
 # Related
 
-- [ISSUE-0061](ISSUE-0061.md) — the stack-level design gaps this exposed.
-- [ISSUE-0060](ISSUE-0060.md) — Bluetooth audio, raised in the same session,
+- [ISSUE-0061](../../issues/ISSUE-0061.md) — the stack-level design gaps this exposed.
+- [ISSUE-0060](../../issues/ISSUE-0060.md) — Bluetooth audio, raised in the same session,
   backlog.
-- [ISSUE-0046](ISSUE-0046.md) — the Pi 3 UART controller against the native
+- [ISSUE-0046](../../issues/ISSUE-0046.md) — the Pi 3 UART controller against the native
   stack; this is downstream of it.

@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0062
 title: "The machine hangs within five seconds of a bonded LE device leaving and returning"
-status: fix-pending-verification
+status: done
 priority: critical
 type: defect
 owner: unassigned
@@ -20,7 +20,7 @@ related_files:
   - external/aros/rom/bluetooth/classes/bthid/bthid.class.c
   - patches/aros/0081-bluetooth-do-not-drain-cn-waitreqs-in-place.patch
   - tests/gl/btwatch
-  - AI_context/issues/ISSUE-0059.md
+  - AI_context/consolidated/history/ISSUE-0059.md
 ---
 
 # Summary
@@ -173,14 +173,17 @@ list before walking it, so anything re-queued lands on a now-empty
 `cn_WaitReqs` and is handled on the next event instead of re-entering the loop.
 `bConnUp()` now calls it instead of open-coding the drain.
 
-Builds clean (`make kernel-bluetooth-library`). **Not yet verified on
-hardware** — that is what this issue is waiting on. The test is the one that
-produced it: reboot so the bond is restored, connect, switch the channel away,
-switch back, and repeat several times in one session.
+Builds clean (`make kernel-bluetooth-library`).
+
+**Verified on hardware, 2026-08-26.** With the bond restored from the prefs across a
+reboot — the state that hung every previous attempt — the mouse leaves its
+channel and comes back repeatedly within one session, through the
+*"is awake - connecting"* branch that used to be fatal. The heartbeat does not
+miss a beat.
 
 # What this does to the other issues
 
 - [ISSUE-0059](ISSUE-0059.md) — premise void; blocked on this.
-- [ISSUE-0061](ISSUE-0061.md) — the four design gaps stand on their own merits,
+- [ISSUE-0061](../../issues/ISSUE-0061.md) — the four design gaps stand on their own merits,
   but gap 4's justification ("an empty log cannot distinguish ...") was written
   about this hang and has been corrected there.

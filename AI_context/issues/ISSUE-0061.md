@@ -19,8 +19,8 @@ related_files:
   - external/aros/rom/bluetooth/bluetooth/hwconn.c
   - external/aros/rom/bluetooth/bluetooth/bluetooth_intern.h
   - external/aros/rom/bluetooth/stack/core/device/device_registry.c
-  - AI_context/issues/ISSUE-0059.md
-  - AI_context/issues/ISSUE-0062.md
+  - AI_context/consolidated/history/ISSUE-0059.md
+  - AI_context/consolidated/history/ISSUE-0062.md
 ---
 
 # Summary
@@ -28,7 +28,7 @@ related_files:
 Four gaps in how the stack reconnects a bonded LE device. None of them is
 specific to the Raspberry Pi 3; they would bite any host with any radio. They
 were found while chasing a concrete failure on a Pi 3 — a multi-channel mouse
-that does not come back — which is [ISSUE-0059](ISSUE-0059.md). That issue
+that does not come back — which is [ISSUE-0059](../consolidated/history/ISSUE-0059.md). That issue
 carries the fix for *this* board; this one carries what the stack should
 eventually look like.
 
@@ -46,7 +46,7 @@ prints the classification that decides the question.
 
 **Further corrected the same day.** The concrete failure this issue was
 extracted from — a mouse that "does not come back" — is not a reconnection
-defect at all: the machine hangs, [ISSUE-0062](ISSUE-0062.md). The four gaps
+defect at all: the machine hangs, [ISSUE-0062](../consolidated/history/ISSUE-0062.md). The four gaps
 below remain real design gaps in the stack and would bite any host with any
 radio, which is why this issue survives. But none of them explains that
 board's symptom, and the plan at the end is not the route to fixing it.
@@ -277,7 +277,7 @@ normal capture.
 that a device which does not come back produces an empty log, and that the
 empty log could not distinguish "the advert never arrived" from "it arrived
 and was discarded". That was wrong about the case it cited: the log was empty
-because the machine had hung — [ISSUE-0062](ISSUE-0062.md). Hours did go into
+because the machine had hung — [ISSUE-0062](../consolidated/history/ISSUE-0062.md). Hours did go into
 the ambiguity, but the ambiguity was between a silent decision and a dead
 machine, and it was resolved by a heartbeat (`tests/gl/btwatch`), not by
 logging inside the stack.

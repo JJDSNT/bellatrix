@@ -85,7 +85,7 @@ for it.
 
 # Relation to Bluetooth
 
-Observed while investigating [ISSUE-0062](ISSUE-0062.md), and the user reported
+Observed while investigating [ISSUE-0062](../consolidated/history/ISSUE-0062.md), and the user reported
 that a USB mouse and a Bluetooth mouse interfere in practice. They do not
 interfere in the input path — both classes inject relative mouse events into
 `input.device` with `IND_WRITEEVENT` and both chain their `lowlevel.library`
