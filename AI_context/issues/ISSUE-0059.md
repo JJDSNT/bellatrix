@@ -15,7 +15,7 @@ tags:
   - low-energy
   - raspberry-pi-3
 blockers:
-  - "a BTErrorLog capture taken across a channel switch — see 'The probe'"
+  - "does the device reconnect if left for minutes, or after the user clicks it? — see 'What to try before writing code'"
 related_files:
   - external/aros/rom/bluetooth/bluetooth/hwconn.c
   - external/aros/rom/bluetooth/bluetooth/hwtask.c
@@ -36,6 +36,16 @@ the background scan are therefore all functioning. What fails is specifically
 the case where a live connection dropped and the device later returns.
 
 That difference is the whole issue, and it points somewhere narrow.
+
+**Measured 2026-08-26, second session.** Leaving the channel is clean and
+fully observed:
+
+    Disconnected from <name> (remote user terminated connection).
+    Reading input reports failed: link dropped (28).
+
+Returning to the channel produces **no log line at all** — neither
+`is awake - connecting.` nor `- reconnecting.`. That is the "1 but not 3" case
+of the table below, and it is what the rest of this issue is about.
 
 # The device
 
@@ -146,6 +156,168 @@ That fits the observed split precisely:
 (`hwconn.c:605`) does clear both it and `BD_CONN(bd, ...)` before freeing the
 connection, so nothing dangles there.
 
+# The one shot, and why there is no second
+
+The current stack gives a returning device exactly one opportunity: the passive
+background scan sees an advert, `bConnAdvertising()` acts on it. There is no
+retry, no backoff, and no recovery path. If that single opportunity is missed
+or lands on one of the silent returns, nothing ever happens again and nothing
+is logged.
+
+Two things make missing it plausible.
+
+**The scan listens 2.3% of the time.** `bBgScanUpdate()` (`hwtask.c:755`) sets:
+
+```c
+bt_buf_writer_write_u8(&w, 0x00);     /* passive */
+bt_buf_writer_write_le16(&w, 0x0800); /* interval 1.28 s */
+bt_buf_writer_write_le16(&w, 0x0030); /* window 30 ms */
+```
+
+30 ms in every 1280 ms. A device advertising fast (30 ms) is caught almost at
+once. One that has fallen back to ~1 s advertising has roughly a 2.3% chance
+per advert, so tens of seconds on average — and a device that only advertises
+for a short burst on returning to a channel can be missed entirely, silently.
+
+**The legacy tree solved the same problem with a state machine.** It ran
+BTstack over BR/EDR, so none of the code transfers, but the shape is the point
+(`~/bellatrix-legacy/src/io/bluetooth/bt_host.c:1339`):
+
+```
+PASSIVE      -> once a deadline passes, try connecting to the known pairs
+CONNECTING   -> with a timeout; on expiry fall through to DISCOVERING
+DISCOVERING  -> start an *active* 30 s discovery looking for the known device;
+                found -> back to PASSIVE, which connects
+                expired -> BACKOFF 60 s, then round again
+```
+
+Periodic retry, an active-discovery recovery path, and a backoff. The current
+stack has none of the three.
+
+The standard answer elsewhere is the controller's own filter accept list:
+`LE_Create_Connection` with the whitelist filter policy leaves the controller
+watching for the peer continuously, instead of the host sampling 2.3% of the
+time and then racing to connect. That is worth researching before choosing a
+fix.
+
+# What other stacks do (researched 2026-08-26)
+
+Linux keeps three sets of LE scan parameters, and the numbers are in
+`include/net/bluetooth/hci_core.h`:
+
+```c
+#define DISCOV_LE_SCAN_INT_FAST     0x0060 /* 60 msec */
+#define DISCOV_LE_SCAN_WIN_FAST     0x0030 /* 30 msec */
+#define DISCOV_LE_SCAN_INT_CONN     0x0060 /* 60 msec */
+#define DISCOV_LE_SCAN_WIN_CONN     0x0060 /* 60 msec */
+#define DISCOV_LE_SCAN_INT_SLOW1    0x0800 /* 1.28 sec */
+#define DISCOV_LE_SCAN_WIN_SLOW1    0x0012 /* 11.25 msec */
+```
+
+`hci_alloc_dev_priv()` assigns them:
+
+```c
+hdev->le_scan_interval        = DISCOV_LE_SCAN_INT_FAST;   /* 60 ms  */
+hdev->le_scan_window          = DISCOV_LE_SCAN_WIN_FAST;   /* 30 ms  -> 50% duty */
+hdev->le_scan_int_connect     = DISCOV_LE_SCAN_INT_CONN;   /* 60 ms  */
+hdev->le_scan_window_connect  = DISCOV_LE_SCAN_WIN_CONN;   /* 60 ms  -> 100% duty */
+hdev->le_scan_int_suspend     = DISCOV_LE_SCAN_INT_SLOW1;  /* 1.28 s */
+hdev->le_scan_window_suspend  = DISCOV_LE_SCAN_WIN_SLOW1;  /* 11.25 ms -> 0.9% duty */
+```
+
+So an awake Linux host scans **50%** of the time in the background and **100%**
+while establishing a connection. The 1.28 s interval appears in exactly one
+place: the parameters used while the machine is *suspended*.
+
+Ours is `0x0800 / 0x0030` — Linux's suspend interval with a wider window, about
+**2.3%**. That is the duty cycle of a sleeping host, running on an awake one.
+BlueZ exposes these as `ScanIntervalAutoConnect` / `ScanWindowAutoConnect` in
+`main.conf` precisely because the auto-connect case wants its own, denser
+values.
+
+The other half of what everyone else does is to stop sampling in the host at
+all:
+
+- BlueZ auto-reconnects bonded HoG devices with an active scan today, and the
+  kernel gained passive scanning plus auto-connect through the controller.
+- Zephyr's `bt_conn_le_create_auto()` runs the Link Layer's **Auto Connection
+  Establishment** procedure: the peer goes in the filter accept list and
+  `LE_Create_Connection` is issued with filter policy 0x01, so the *controller*
+  watches continuously and reports a connection when it happens. No host-side
+  window to miss.
+
+## Why the controller cannot do it for us on this board
+
+The accept list matches on the advertiser's address. A peer using a resolvable
+private address changes that address every few minutes, so the controller can
+only filter it if it can resolve it — which needs the **Resolving List**
+(`LE_Add_Device_To_Resolving_List`, `LE_Set_Address_Resolution_Enable`), part of
+LE Privacy 1.2 and therefore **Bluetooth 4.2**.
+
+This controller reports `HCI 7.0` in the bring-up line, which is Core 4.1, and
+the ready line agrees: `HCI 4.1, LMP 4.1 (Broadcom)`. A BCM43438 is a 4.1 part.
+So there is no controller-side address resolution here, the accept list cannot
+hold an RPA peer, and the Zephyr/BlueZ answer is unavailable to us.
+
+Worth confirming directly rather than by version number — read
+`LE_Read_Local_Supported_Features` and the supported-commands bitmap — but if
+it holds, then **host-side scanning is the only mechanism this board has**, and
+the duty cycle is the only lever. Our own software resolution
+(`bResolvePrivateAddr()`) is not a shortcut taken cheaply; it is the thing that
+makes reconnection possible at all on a 4.1 radio.
+
+## What that suggests
+
+1. **Raise the background duty cycle** to something like Linux's awake values
+   (`0x0060 / 0x0030`, 50%), rather than its suspend values. One line, no new
+   mechanism, and it directly addresses the "advert arrives during the 97.7% we
+   are not listening" case.
+2. **Add the retry that does not exist** — the legacy state machine's shape:
+   periodic re-attempt, an active-discovery recovery, and a backoff, so a
+   missed advert is not permanent.
+3. Consider whether power matters here at all: this is a mains-powered desktop,
+   not a phone. The 2.3% figure buys battery life the machine does not need.
+
+# A smaller defect found along the way
+
+bthid's read loop treats a dropped link as an unexpected error:
+
+```c
+/* bthid.class.c:882 */
+else if((ioerr == IOERR_ABORTED) || (ioerr == BTIOERR_NOTCONNECTED))
+{
+    /* link down: the next read waits for the device to come back
+       (BCHA_AutoConnect), do not spin meanwhile */
+    btDelayMS(1000);
+} else {
+    ... "Reading input reports failed: %s (%ld)." ...
+    btDelayMS(250);
+}
+```
+
+`BTIOERR_DISCONNECTED` (28) — "link dropped while the request was pending" — is
+missing from that condition, so a clean remote disconnect takes the else
+branch: a warning that should not be there, and a 250 ms delay where the
+comment intends 1000 ms. It is the exact message seen on the hardware.
+
+Probably not the cause: the read is re-issued either way, and the *second* read
+does not fail with 28 (with auto-connect on it waits instead), which is what
+creates the connection in `HCNS_CONNECTING` with `cn_WaitAdv` — the state
+`bConnAdvertising()` handles. Worth fixing regardless, because the misleading
+line will confuse every future capture.
+
+# What to try before writing code
+
+Both are free and they separate the hypotheses:
+
+1. **Return to the channel, then click or move the mouse.** Many peripherals
+   only advertise on user activity. If it connects then, the advertising window
+   is the problem, not our handling of it.
+2. **Return to the channel and wait two to five minutes, untouched.** If it
+   eventually connects, the scan duty cycle is the problem, and the fix is a
+   wider window or the controller's accept list. If it never connects, it is
+   the silent return or the scan is not running at all.
+
 # The probe
 
 Switch the mouse to another channel and back, then read `BTErrorLog`. The
@@ -167,12 +339,20 @@ Reading:
   `bEnsureConnection()`.
 - **3 and then nothing** — the connect is stuck at the controller.
 
-If it is the second case, the next step is one `bug()` line printing
-`cn->cn_State` and `cn_WaitAdv` at that `return`, which names the stuck state
-outright.
+The second case is what was measured. The instrumentation that would name it is
+three lines, not one, and all three need throttling — one line per state
+change, never one per advert, or the log floods and buries what it was meant to
+show:
 
-Check the prefs **Options** page in the same session: `bgc_AutoConnect` must be
-on, and it is not the per-device switch already confirmed set.
+- when the background scan turns on and off (today only `KPRINTF`, invisible in
+  a normal capture, so we cannot even tell whether it is running);
+- why an advert was discarded, at each of the three silent returns in
+  `bConnAdvertising()`, with `cn_State` and `cn_WaitAdv`;
+- `bgc_AutoConnect` and `bpc_AutoConnect` as the stack reads them, since the
+  global one on the prefs Options page has still not been confirmed set.
+
+`hwconn.c` is upstream's, so this is a numbered diagnostic patch, to be removed
+or turned into the real fix once it has answered.
 
 # Two things that invalidate earlier observations
 
@@ -188,6 +368,24 @@ the ROM placeholder `AA:AA:AA:AA:AA:AA`; with it, the real `B8:27:EB:...`. Every
 pairing made before the fix was against a host identity that no longer exists,
 on both sides. The device under test was re-paired after the fix, so the
 measurements above are sound; older ones are not.
+
+# Side effect of the Startup-Sequence reorder
+
+With `BTStackLoader` running first it restores the radio from the saved config
+and brings it up, so the `AddBTHardware` that follows finds it already there:
+
+    Adding hardware DEVS:Bluetooth/bthciuart.device, unit 0...failed!
+    5-bluetooth.library: Hardware DEVS:Bluetooth/bthciuart.device/0 is already in use.
+
+Harmless — the radio reaches `ready` either way — but the message is a lie, and
+on a card with no saved config the two swap roles. Needs cleaning up separately
+from this issue.
+
+For the record, the same capture is what confirmed the firmware fixes landed:
+the patchram now runs inline at bring-up step 2 (which is why step 2 is absent
+from the run of "ok" lines), step 3 continues normally, there is no
+re-initialisation, and the controller reports a real address —
+`B8:27:EB:34:97:7D` instead of the ROM placeholder.
 
 # Correction to an earlier note
 
