@@ -1,7 +1,8 @@
 From: Bellatrix Project <bellatrix@example.invalid>
 Subject: [PATCH] bluetooth prefs: use our own icon, not Trident's
 
-Upstream ships Trident's icon as Prefs/Bluetooth.info and says so:
+Upstream ships Trident's icon as Prefs/Bluetooth.info and says so in
+rom/bluetooth/prefs/mmakefile.src:
 
     # Placeholder icon (reuses the Trident prefs icon) so the program is
     # clickable in the Prefs drawer; a dedicated Bluetooth icon is a follow-up.
@@ -14,9 +15,61 @@ project whose stack upstream imported as rom/bluetooth/stack, licensed
 LICENSE.aros-bluzing. Upstream took the banner (prefs/bluzinglogo) and left
 the icon behind; this puts it back.
 
-A 64x64 RGBA PNG icon with an icOn chunk typing it WBTOOL, rather than a
-classic planar .info -- which is what BTScan.info always was, and it
-rendered in Wanderer on this hardware.
+Where it came from
+------------------
+
+The aros-bluzing submodule was removed from this repository in 04225bb, so
+the icon is in no working tree here any more. It is in the commit this
+repository had pinned:
+
+    https://github.com/JJDSNT/aros-bluzing
+    commit 606b14c4b9f5b6d982863689d2f9ab0b4ceb6247
+
+    ports/aros/btscan/BTScan.info          the built icon (this patch)
+    ports/aros/btscan/BTScan-banner.png    the masthead, 288x192
+    images/btscan-mascot-cutout.png        master art for the icon
+    images/btscan-mascot.png               master art, with background
+    images/btscan-banner.png               master art for the masthead
+    images/make-assets.sh                  derives both from the masters
+    images/mkicon.py                       PNG -> AROS/OS4 icon
+
+Recovering it without a clone of that repository:
+
+    git init scratch && cd scratch
+    git remote add origin https://github.com/JJDSNT/aros-bluzing.git
+    git fetch --depth 1 origin 606b14c4b9f5b6d982863689d2f9ab0b4ceb6247
+    git show FETCH_HEAD:ports/aros/btscan/BTScan.info > Bluetooth.info
+
+How to regenerate it at another size
+------------------------------------
+
+make-assets.sh does this, and the reasoning is worth keeping: the icon comes
+from the *cutout* master because an icon sits on the Workbench backdrop and
+an opaque square reads as a sticker, and it is trimmed first so the character
+fills the square rather than the master's generous margin.
+
+    convert images/btscan-mascot-cutout.png -trim +repage -resize 64x64 \
+        -background none -gravity center -extent 64x64 -strip \
+        -define png:compression-level=9 icon.png
+    python3 images/mkicon.py icon.png Bluetooth.info
+
+Needs ImageMagick and python3, on the build host only.
+
+Why a PNG is a valid .info
+--------------------------
+
+icon.library reads a .info that is a plain PNG carrying an ancillary "icOn"
+chunk -- see the parser in workbench/libs/icon/diskobjPNGio.c. Without the
+chunk the image still loads but do_Type stays 0 (invalid), which is not a
+tool Workbench will launch. The chunk is a flat sequence of big-endian
+(attribute, value) pairs; mkicon.py writes two:
+
+    0x8000100F  ICONA_Type       3      (WBTOOL)
+    0x80001009  ICONA_StackSize  16384
+
+So this file is a 64x64 RGBA PNG plus a 16-byte icOn chunk, replacing a
+classic planar .info. PNG icons do render on this hardware -- that is how
+BTScan appeared in Wanderer on the Pi 3.
 ---
 diff --git a/rom/bluetooth/prefs/Bluetooth.info b/rom/bluetooth/prefs/Bluetooth.info
 index e4d99378e643f40d19cfcfd0ff9321e949916427..bbb53f2dddcf3c84474273bbc775893540e71faa 100644
