@@ -1,0 +1,38 @@
+.KEY x
+.BRA {
+.KET }
+;
+; The loop half of S:btwatch. Never returns; it is started with Run.
+;
+; One-second cadence since 2026-08-26: the hang of ISSUE-0062 lands inside a
+; five-second gap, so five seconds of resolution names no line. Each pass
+; writes a heartbeat and then drains the Bluetooth error log.
+; The heartbeat is the point: it is the only way to tell a machine that
+; hung from a machine that is alive but no longer serving input. If the
+; last line is a heartbeat several minutes before the reboot, the machine
+; died; if heartbeats continue across the moment the keyboard froze, it
+; did not.
+;
+; The heartbeat goes to BOTH the card and DEBUG:, on purpose. The card is
+; the channel we trust -- serial output on this board stops somewhere
+; around the Wanderer takeover (2026-08-26, cause not yet known). Sending
+; the tick to DEBUG: as well turns that unknown into a measurement: the
+; last tick on the serial line is the moment serial died, and comparing it
+; against the same tick in the card log dates it exactly.
+;
+; The error-log dump stays on the card only: it is large, and if serial is
+; already gone it would be written into nothing.
+;
+; BTErrorLog flushes what it prints, so each pass holds only what is new.
+; Each redirection opens, appends and closes, so the card has the data
+; even if the next pass never happens.
+;
+Echo >>SYS:btwatch.log "==== btwatch start ===="
+Echo >DEBUG: "[btwatch] start"
+Lab loop
+Wait 1
+Echo >DEBUG: "[btwatch] tick"
+Date >DEBUG:
+Date >>SYS:btwatch.log
+BTErrorLog >>SYS:btwatch.log
+Skip loop BACK
