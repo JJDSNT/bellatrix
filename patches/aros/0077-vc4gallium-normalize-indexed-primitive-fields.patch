@@ -1,0 +1,32 @@
+From: Bellatrix Project <bellatrix@example.invalid>
+Subject: [PATCH] vc4gallium: normalize indexed primitive fields
+
+Mesa writes the count, index-buffer offset, and maximum index of its manually
+assembled GL_INDEXED_PRIMITIVE packet with cl_u32, which is host-endian.  Read
+all three safely in host order and emit them little-endian for V3D while
+relocating the buffer address.  Previously emu68 completed black frames after
+using a byte-swapped index offset and forwarding byte-swapped draw bounds.
+---
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+@@ -1548,9 +1548,15 @@ static ULONG process_bin_cl(struct exec_state *exec,
+             if (dst_off + pkt_size > dst_max) return 0;
+             CopyMem(src + src_off, dst + dst_off, pkt_size);
+ 
+-            /* Patch index buffer address: offset is at byte 6 (after cmd+mode+count) */
+-            ULONG ib_offset = get_u32_unaligned(src + src_off + 6);
++            /* Mesa emits these manual cl_u32 fields in host order. Convert
++             * all three to the little-endian representation consumed by
++             * V3D, relocating the index-buffer offset along the way. */
++            ULONG count = get_u32_native_unaligned(src + src_off + 2);
++            ULONG ib_offset = get_u32_native_unaligned(src + src_off + 6);
++            ULONG max_index = get_u32_native_unaligned(src + src_off + 10);
++            put_u32_unaligned(dst + dst_off + 2, count);
+             put_u32_unaligned(dst + dst_off + 6, exec->current_bo[0] + ib_offset);
++            put_u32_unaligned(dst + dst_off + 10, max_index);
+ 
+             dst_off += pkt_size;
+             src_off += pkt_size;
+-- 
+2.39.5

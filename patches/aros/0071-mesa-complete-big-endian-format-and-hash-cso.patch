@@ -1,0 +1,36 @@
+From: Bellatrix contributors
+Subject: [PATCH] mesa: complete big-endian format fix and hash CSO bytes
+
+Complete the final hunk whose outer patch count in 0070 stopped at the
+three-channel condition. Then select Mesa's existing byte-wise CSO hash:
+the optimized hash requires a four-byte key size, but the compact blend-state
+key is not a multiple of four on the m68k ABI.
+---
+ workbench/libs/mesa/mesa-20.0.8-aros.diff | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/workbench/libs/mesa/mesa-20.0.8-aros.diff b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+index 12933275fe..c11f169ff1 100644
+--- a/workbench/libs/mesa/mesa-20.0.8-aros.diff
++++ b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+@@ -1324 +1324,18 @@
+     if (num_channels == 4) {
++-      static const uint8_t flip[6] = { 3, 2, 1, 0, 4, 5 };
+++      static const uint8_t flip[7] = { 3, 2, 1, 0, 4, 5, 6 };
++       _mesa_array_format_set_swizzle(&format,
++                                      flip[swizzle[0]], flip[swizzle[1]],
++                                      flip[swizzle[2]], flip[swizzle[3]]);
++diff -ruN mesa-20.0.8/src/gallium/auxiliary/cso_cache/cso_cache.c mesa-20.0.8.aros/src/gallium/auxiliary/cso_cache/cso_cache.c
++--- mesa-20.0.8/src/gallium/auxiliary/cso_cache/cso_cache.c	2020-06-12 01:21:17.000000000 +0000
+++++ mesa-20.0.8.aros/src/gallium/auxiliary/cso_cache/cso_cache.c	2026-08-25 19:05:00.000000000 -0300
++@@ -44,7 +44,7 @@
++    void                 *sanitize_data;
++ };
++ 
++-#if 1
+++#if 0
++ static unsigned hash_key(const void *key, unsigned key_size)
++ {
++    unsigned *ikey = (unsigned *)key;
+-- 
+2.47.3

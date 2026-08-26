@@ -22,6 +22,55 @@ related_files:
 
 # Summary
 
+## Hardware VC4 reaches Mesa format conversion (2026-08-25)
+
+After patches 0068 and 0069, hardware accepts the V3D register block and the
+GalliumCoreAPI table, with no SoftPipe fallback. `fire` then reaches Mesa's
+big-endian packed-format conversion and aborts at `formats.c:430` with
+`Invalid array format`. Mesa 20.0.8 handles only one-, two-, and four-channel
+formats there; Mesa 20.1 fixed the three-byte case by returning it unchanged.
+Patch 0070 backports that fix and the later seven-entry swizzle-table bounds
+fix. Only `formats.o`, `libmesa.a`, and `mesa3dgl20-0.library` were rebuilt.
+
+The next hardware run linked three fixed-function fragment shaders, then hit
+`cso_cache.c:53` because the optimized CSO hash asserts that every key length
+is divisible by four. The compact blend-state key does not meet that condition
+under the m68k ABI. Patch 0071 completes the truncated final nested hunk from
+0070 and selects Mesa's existing byte-wise CSO hash, which consumes the exact
+key length without alignment or padding assumptions.
+
+## Hardware `fire` log after the AROS pin update (2026-08-25)
+
+`gl.log` shows that `glinfo` completes and that the Mesa fixed-function shader
+links successfully on the real machine. The following program is `fire`, not a
+non-GL flame effect: `Demo/GL/MesaGL/fire.c` uses GLUT, textured `GL_QUADS`,
+`glVertex3f`, depth testing, fog and `gluLookAt`. Asking Gallium for a hardware
+driver is therefore expected.
+
+The complete boot log closes the cause of the hardware rejection:
+
+    [VC4Gallium] Unexpected V3D version 86 (IDENT0=0x56334402)
+
+The real IDENT0 is `0x02443356`; the observed value is exactly byte-reversed.
+The driver used direct volatile loads and stores inherited from little-endian
+ARM, so on big-endian m68k it interpreted the top byte (`0x56`, decimal 86) as
+the version and rejected the device. Patch 0068 applies `AROS_LE2LONG` and
+`AROS_LONG2LE` to the common V3D MMIO macros. This is required for every
+register, not just IDENT0: otherwise detection would pass while command and
+status registers remained byte-swapped. The narrow `hidd-vc4gallium` target
+builds successfully with the fix. Real hardware validation remains required;
+QEMU has no V3D and is expected to continue selecting SoftPipe.
+
+The subsequent `EMU68-FRAME` diagnostics do establish a separate fault. The
+reported task stack is `1ab682a0..1ab722a0`, exactly `0xA000` bytes (40 KiB),
+while the first saved frame is at `1ab61e9c`, `0x6404` bytes below `SPLower`.
+Later frames remain below the lower bound. This is a stack overflow, and proves
+that this invocation did not run with the 100 MB stack supplied by `S:gl-run`
+(or did not inherit it). Repeat it as `Execute S:gl-run fire`; a direct launch
+cannot distinguish a Mesa/V3D defect from the already-known inadequate default
+stack. The `fd.library` open failures are POSIXC's optional descriptor-library
+fallback and are not evidence that `fire` requested a graphics driver.
+
 ## QEMU now reaches fixed-function shader linking (2026-08-25)
 
 Three independent blockers have been isolated in sequence:
@@ -782,3 +831,21 @@ an OpenGL window under QEMU. The remaining `glinfo` run did not reach its final
 is obtaining/printing `GL_EXTENSIONS`. That later delay remains to be separated
 from slow console output or extension-string construction. It is not the TLSF
 area walk recurring.
+
+# 2026-08-25: hardware VC4 completes black `gears` frames
+
+On Raspberry Pi 3, `gears` initializes VC4 and links its fixed-function
+fragment shader. Binning and rendering counters advanced for many submissions,
+but the overlay remained black; no gears were actually presented. Repeated
+`0x04000000` BO indices were eventually traced to `GEM_HANDLES`, a software
+pseudo-packet whose words are host-endian even though it is embedded in the
+hardware command-list byte stream. Patch 0076 decodes those two words in host
+order.
+
+Normalizing the remaining manually emitted `GL_INDEXED_PRIMITIVE` words made
+the real draw reach the binner, exposing a later stall: OUTOMEM is serviced,
+but CT0 remains active while the first tile list stays empty. Patch 0078 logs
+the first four raw and normalized indexed packets for the next hardware run.
+The emu68 driver implementation was then consolidated into the project-owned
+`aros/arch/m68k-emu68/hidd/vc4gallium` tree; patch 0079 is only the upstream
+build integration selecting that tree.

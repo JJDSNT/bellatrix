@@ -1,0 +1,109 @@
+From: Bellatrix Project <bellatrix@example.invalid>
+Subject: [PATCH] vc4gallium: tag BO address call sites
+
+Include the relocation source in invalid BO diagnostics so hardware logs can
+distinguish packed bin handles, shader records, VBOs, textures, and RCL
+surfaces without changing any byte-order behavior.
+---
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+@@ -513,19 +513,19 @@ static ULONG bo_bus_addr(struct vc4galliumstaticdata *sd,
+ static ULONG bo_bus_addr(struct vc4galliumstaticdata *sd,
+                          ULONG *bo_handles, ULONG bo_handle_count,
+-                         ULONG hindex)
++                         ULONG hindex, const char *source)
+ {
+     ULONG handle;
+     if (hindex >= bo_handle_count)
+     {
+-        bug("[VC4Gallium] bo_bus_addr: hindex %d >= count %d\n",
+-            hindex, bo_handle_count);
++        bug("[VC4Gallium] bo_bus_addr(%s): hindex %d >= count %d\n",
++            source, hindex, bo_handle_count);
+         return 0;
+     }
+     handle = bo_handles[hindex];
+     if (handle == 0 || handle >= VC4_MAX_BOS || sd->bo_table[handle].refcount == 0)
+     {
+-        bug("[VC4Gallium] bo_bus_addr: invalid handle %d at hindex %d\n",
+-            handle, hindex);
++        bug("[VC4Gallium] bo_bus_addr(%s): invalid handle %d at hindex %d\n",
++            source, handle, hindex);
+         return 0;
+     }
+     return sd->bo_table[handle].bus_addr;
+@@ -1459,8 +1459,10 @@ static ULONG process_bin_cl(struct exec_state *exec,
+ 
+             exec->current_bo[0] = bo_bus_addr(exec->sd, exec->bo_handles,
+-                                               exec->bo_handle_count, hindex0);
++                                               exec->bo_handle_count, hindex0,
++                                               "bin-gem0");
+             if (hindex1 != 0)
+                 exec->current_bo[1] = bo_bus_addr(exec->sd, exec->bo_handles,
+-                                                   exec->bo_handle_count, hindex1);
++                                                   exec->bo_handle_count, hindex1,
++                                                   "bin-gem1");
+ 
+             /* Don't copy GEM_HANDLES to output — it's not a real HW packet */
+@@ -1660,6 +1662,7 @@ static int relocate_shader_recs(struct exec_state *exec,
+             /* Patch shader code address */
+             ULONG src_offset = get_u32_unaligned(pkt_src + code_off);
+             ULONG code_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+-                                           exec->bo_handle_count, handles[i]);
++                                           exec->bo_handle_count, handles[i],
++                                           "shader");
+             put_u32_unaligned(pkt_dst + code_off, code_addr + src_offset);
+ 
+@@ -1745,6 +1748,6 @@ static int relocate_shader_recs(struct exec_state *exec,
+                     }
+                     ULONG tex_bus = bo_bus_addr(exec->sd, exec->bo_handles,
+                                                 exec->bo_handle_count,
+-                                                tex_hindex);
++                                                tex_hindex, "texture");
+                     if (tex_bus == 0)
+                         continue;
+@@ -1791,5 +1794,5 @@ static int relocate_shader_recs(struct exec_state *exec,
+             }
+             ULONG addr = bo_bus_addr(exec->sd, exec->bo_handles,
+-                                      exec->bo_handle_count, hindex);
++                                      exec->bo_handle_count, hindex, "vbo");
+             put_u32_unaligned(pkt_dst + o, addr + vbo_offset);
+         }
+@@ -1911,26 +1914,28 @@ static int build_rcl(struct exec_state *exec,
+     if (has_color_write)
+         color_write_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                         exec->bo_handle_count,
+-                                        args->color_write.hindex);
++                                        args->color_write.hindex, "color-write");
+     if (has_color_read)
+         color_read_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                        exec->bo_handle_count,
+-                                       args->color_read.hindex);
++                                       args->color_read.hindex, "color-read");
+     if (has_zs_read)
+         zs_read_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                     exec->bo_handle_count,
+-                                    args->zs_read.hindex);
++                                    args->zs_read.hindex, "zs-read");
+     if (has_zs_write)
+         zs_write_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                      exec->bo_handle_count,
+-                                     args->zs_write.hindex);
++                                     args->zs_write.hindex, "zs-write");
+     if (has_msaa_color)
+         msaa_color_write_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                              exec->bo_handle_count,
+-                                             args->msaa_color_write.hindex);
++                                             args->msaa_color_write.hindex,
++                                             "msaa-color-write");
+     if (has_msaa_zs)
+         msaa_zs_write_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                           exec->bo_handle_count,
+-                                          args->msaa_zs_write.hindex);
++                                          args->msaa_zs_write.hindex,
++                                          "msaa-zs-write");
+ 
+     /* Fixed RCL order */
+-- 
+2.39.5

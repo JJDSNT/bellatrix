@@ -1,0 +1,94 @@
+From: Bellatrix Project <bellatrix@example.invalid>
+Subject: [PATCH] vc4gallium: restore native relocs and tag invalid source
+
+Hardware logs show that shader-record handle 1 is stored as native-endian and
+was misread as 0x01000000 by the byte decoder.  Restore native reads for both
+relocation arrays and add focused diagnostics to distinguish invalid texture
+and VBO indices without changing their representation again.
+---
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+@@ -1644,7 +1644,7 @@ static int relocate_shader_recs(struct exec_state *exec,
+             return -1;
+         }
+ 
+-        UBYTE *handles = shader_rec_data + src_off;
++        ULONG *handles = (ULONG *)(shader_rec_data + src_off);
+         UBYTE *pkt_src = shader_rec_data + src_off + nr_relocs * 4;
+         UBYTE *pkt_dst = out_rec_data + dst_off;
+ 
+@@ -1657,23 +1657,22 @@ static int relocate_shader_recs(struct exec_state *exec,
+             ULONG uni_off  = shader_uniform_offsets[i];
+ 
+             /* Patch shader code address */
+-            ULONG hindex = get_u32_unaligned(handles + i * 4);
+             ULONG src_offset = get_u32_unaligned(pkt_src + code_off);
+             ULONG code_addr = bo_bus_addr(exec->sd, exec->bo_handles,
+-                                           exec->bo_handle_count, hindex);
++                                           exec->bo_handle_count, handles[i]);
+             put_u32_unaligned(pkt_dst + code_off, code_addr + src_offset);
+ 
+             /* Look up shader BO to get uniform metadata. Bounds-check
+-             * the same way bo_bus_addr() does — hindex is the index
++             * the same way bo_bus_addr() does — handles[i] is the hindex
+              * into bo_handles[], whose value is the bo_table[] handle. */
+-            if (hindex >= exec->bo_handle_count)
++            if (handles[i] >= exec->bo_handle_count)
+             {
+                 bug("[VC4Gallium] relocate_shader_recs: rec %d stage %d "
+                     "hindex %d >= bo_handle_count %d\n",
+-                    rec, i, hindex, exec->bo_handle_count);
++                    rec, i, handles[i], exec->bo_handle_count);
+                 return -1;
+             }
+-            ULONG shader_handle = exec->bo_handles[hindex];
++            ULONG shader_handle = exec->bo_handles[handles[i]];
+             if (shader_handle == 0 || shader_handle >= VC4_MAX_BOS ||
+                 exec->sd->bo_table[shader_handle].refcount == 0)
+             {
+@@ -1714,6 +1713,6 @@ static int relocate_shader_recs(struct exec_state *exec,
+             {
+                 /* Tex-handle indices first, then the actual uniform data */
+-                UBYTE *tex_handles_u = (UBYTE *)&uniforms_src[uni_src_idx];
++                ULONG *tex_handles_u = &uniforms_src[uni_src_idx];
+                 ULONG *uniform_data = &uniforms_src[uni_src_idx + num_tex];
+                 ULONG *uniforms_out = &uniforms_dst[uni_dst_idx];
+                 ULONG uni_start_p = exec->uniforms_bus + uni_dst_idx * 4;
+@@ -1738,10 +1737,16 @@ static int relocate_shader_recs(struct exec_state *exec,
+                         continue;
+ 
+                     /* Get texture BO bus address from handle index */
+-                    ULONG tex_hindex =
+-                        get_u32_unaligned(tex_handles_u + t * 4);
++                    ULONG tex_hindex = tex_handles_u[t];
++                    if (tex_hindex >= exec->bo_handle_count)
++                    {
++                        UBYTE *raw = (UBYTE *)&tex_handles_u[t];
++                        bug("[VC4Gallium] texture reloc: rec=%d stage=%d tex=%d "
++                            "raw=%02x%02x%02x%02x native=%d\n", rec, i, t,
++                            raw[0], raw[1], raw[2], raw[3], tex_hindex);
++                    }
+                     ULONG tex_bus = bo_bus_addr(exec->sd, exec->bo_handles,
+                                                 exec->bo_handle_count,
+                                                 tex_hindex);
+                     if (tex_bus == 0)
+                         continue;
+@@ -1789,7 +1796,14 @@ static int relocate_shader_recs(struct exec_state *exec,
+         {
+             ULONG o = 36 + i * 8;
+             ULONG vbo_offset = get_u32_unaligned(pkt_src + o);
+-            ULONG hindex = get_u32_unaligned(handles + (3 + i) * 4);
++            ULONG hindex = handles[3 + i];
++            if (hindex >= exec->bo_handle_count)
++            {
++                UBYTE *raw = (UBYTE *)&handles[3 + i];
++                bug("[VC4Gallium] VBO reloc: rec=%d attr=%d "
++                    "raw=%02x%02x%02x%02x native=%d\n", rec, i,
++                    raw[0], raw[1], raw[2], raw[3], hindex);
++            }
+             ULONG addr = bo_bus_addr(exec->sd, exec->bo_handles,
+                                       exec->bo_handle_count, hindex);
+             put_u32_unaligned(pkt_dst + o, addr + vbo_offset);
+-- 
+2.39.5

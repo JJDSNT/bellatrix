@@ -1,0 +1,43 @@
+From: Bellatrix Project <bellatrix@example.invalid>
+Subject: [PATCH] vc4gallium: decode GEM handles in host order
+
+Mesa's software-only GEM_HANDLES pseudo-packet stores its hindices using
+native uint32_t writes.  It is embedded at unaligned command-list offsets, so
+decode the bytes safely in host order instead of treating them as V3D
+little-endian packet fields.  On emu68 this fixes index 4 being read as
+0x04000000.
+---
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/vc4_drm_aros.c
+@@ -1348,6 +1348,19 @@ static inline ULONG get_u32_unaligned(const UBYTE *p)
+            ((ULONG)vp[2] << 16) | ((ULONG)vp[3] << 24);
+ }
+ 
++/* Mesa's software-only GEM_HANDLES packet stores hindices in host byte
++ * order, unlike the real V3D packet fields around it. */
++static inline ULONG get_u32_native_unaligned(const UBYTE *p)
++{
++#if AROS_BIG_ENDIAN
++    const volatile UBYTE *vp = (const volatile UBYTE *)p;
++    return ((ULONG)vp[0] << 24) | ((ULONG)vp[1] << 16) |
++           ((ULONG)vp[2] << 8) | (ULONG)vp[3];
++#else
++    return get_u32_unaligned(p);
++#endif
++}
++
+ static inline void put_u32_unaligned(UBYTE *p, ULONG val)
+ {
+     volatile UBYTE *vp = (volatile UBYTE *)p;
+@@ -1455,6 +1468,6 @@ static ULONG process_bin_cl(struct exec_state *exec,
+         {
+             /* 1 byte cmd + handle0 (4) + handle1 (4) = 9 bytes */
+-            ULONG hindex0 = get_u32_unaligned(src + src_off + 1);
+-            ULONG hindex1 = get_u32_unaligned(src + src_off + 5);
++            ULONG hindex0 = get_u32_native_unaligned(src + src_off + 1);
++            ULONG hindex1 = get_u32_native_unaligned(src + src_off + 5);
+ 
+             exec->current_bo[0] = bo_bus_addr(exec->sd, exec->bo_handles,
+-- 
+2.39.5
