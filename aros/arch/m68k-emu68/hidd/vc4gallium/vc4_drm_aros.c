@@ -155,6 +155,7 @@ static ULONG vc4_hexbyte(char *dst, UBYTE b)
 #define VC4_PACKET_CLEAR_COLORS                114
 #define VC4_PACKET_TILE_COORDINATES            115
 #define VC4_PACKET_GEM_HANDLES                 254
+#define VC4_INDEX_BUFFER_U16                   (1 << 4)
 
 /* Packet sizes (including opcode byte) */
 static const UBYTE vc4_packet_sizes[256] = {
@@ -1201,6 +1202,15 @@ static int v3d_wait_seqno(struct vc4galliumstaticdata *sd, ULONG seqno, ULONG ti
                 V3D_READ(v3d, V3D_BPOA), V3D_READ(v3d, V3D_BPOS),
                 v3d->overflow_handed, v3d->int_outomem, v3d->int_fldone,
                 v3d->int_frdone);
+            bug("[VC4Gallium]   CT0: RA0=0x%08x LC=%d PC=%d DBGE=0x%08x\n",
+                V3D_READ(v3d, V3D_CT00RA0), V3D_READ(v3d, V3D_CT0LC),
+                V3D_READ(v3d, V3D_CT0PC), V3D_READ(v3d, V3D_DBGE));
+            bug("[VC4Gallium]   FEP: O=0x%08x B=0x%08x R=0x%08x S=0x%08x "
+                "SQ=0x%08x/0x%08x/0x%08x\n",
+                V3D_READ(v3d, V3D_FDBGO), V3D_READ(v3d, V3D_FDBGB),
+                V3D_READ(v3d, V3D_FDBGR), V3D_READ(v3d, V3D_FDBGS),
+                V3D_READ(v3d, V3D_SQRSV0), V3D_READ(v3d, V3D_SQRSV1),
+                V3D_READ(v3d, V3D_SQCNTL));
             v3d_dump_last_submit();
             V3D_WRITE(v3d, V3D_CT0CS, V3D_CTCS_CTRSTA);
             V3D_WRITE(v3d, V3D_CT1CS, V3D_CTCS_CTRSTA);
@@ -1389,6 +1399,11 @@ struct exec_state {
     ULONG *bo_handles;
     ULONG bo_handle_count;
     ULONG current_bo[2];        /* Current BO bus addresses set by GEM_HANDLES */
+    ULONG current_hindex[2];    /* Current BO indices set by GEM_HANDLES */
+    UBYTE *index_scratch;       /* LE copies of BE-host U16 index ranges */
+    ULONG index_scratch_bus;
+    ULONG index_scratch_size;
+    ULONG index_scratch_used;
     /* Tile alloc BO */
     ULONG tile_alloc_bus;
     ULONG tile_state_bus;
@@ -1471,13 +1486,17 @@ static ULONG process_bin_cl(struct exec_state *exec,
             ULONG hindex0 = get_u32_native_unaligned(src + src_off + 1);
             ULONG hindex1 = get_u32_native_unaligned(src + src_off + 5);
 
+            exec->current_hindex[0] = hindex0;
             exec->current_bo[0] = bo_bus_addr(exec->sd, exec->bo_handles,
                                                exec->bo_handle_count, hindex0,
                                                "bin-gem0");
             if (hindex1 != 0)
+            {
+                exec->current_hindex[1] = hindex1;
                 exec->current_bo[1] = bo_bus_addr(exec->sd, exec->bo_handles,
                                                    exec->bo_handle_count, hindex1,
                                                    "bin-gem1");
+            }
 
             /* Don't copy GEM_HANDLES to output — it's not a real HW packet */
             src_off += pkt_size;
@@ -1540,12 +1559,74 @@ static ULONG process_bin_cl(struct exec_state *exec,
             ULONG count = get_u32_native_unaligned(src + src_off + 2);
             ULONG ib_offset = get_u32_native_unaligned(src + src_off + 6);
             ULONG max_index = get_u32_native_unaligned(src + src_off + 10);
+            ULONG ib_bus = exec->current_bo[0] + ib_offset;
+            static ULONG indexed_diag_count;
+
+#if AROS_BIG_ENDIAN
+            /* V3D consumes U16 indices as little-endian.  Mesa keeps its
+             * persistently mapped index BO in host order, so mutating that
+             * BO would make its next CPU update/use ambiguous.  Copy only
+             * the referenced range into submission-local GPU memory and
+             * swap each element there. */
+            if (src[src_off + 1] & VC4_INDEX_BUFFER_U16)
+            {
+                ULONG bytes;
+                ULONG handle;
+                struct vc4_bo_entry *bo;
+                ULONG i;
+                ULONG actual_max = 0;
+
+                if (count > (~0UL / 2))
+                    return 0;
+                bytes = count * 2;
+                if (exec->current_hindex[0] >= exec->bo_handle_count)
+                    return 0;
+                handle = exec->bo_handles[exec->current_hindex[0]];
+                if (handle == 0 || handle >= VC4_MAX_BOS ||
+                    exec->sd->bo_table[handle].refcount == 0)
+                    return 0;
+                bo = &exec->sd->bo_table[handle];
+                if (ib_offset > bo->size || bytes > bo->size - ib_offset ||
+                    bytes > exec->index_scratch_size - exec->index_scratch_used)
+                {
+                    bug("[VC4Gallium] indexed: invalid U16 range off=%lu bytes=%lu bo=%lu scratch=%lu/%lu\n",
+                        (unsigned long)ib_offset, (unsigned long)bytes,
+                        (unsigned long)bo->size,
+                        (unsigned long)exec->index_scratch_used,
+                        (unsigned long)exec->index_scratch_size);
+                    return 0;
+                }
+                for (i = 0; i < bytes; i += 2)
+                {
+                    ULONG index = ((ULONG)((UBYTE *)bo->vaddr)[ib_offset + i] << 8) |
+                                  (ULONG)((UBYTE *)bo->vaddr)[ib_offset + i + 1];
+
+                    if (index > actual_max)
+                        actual_max = index;
+                    exec->index_scratch[exec->index_scratch_used + i] =
+                        ((UBYTE *)bo->vaddr)[ib_offset + i + 1];
+                    exec->index_scratch[exec->index_scratch_used + i + 1] =
+                        ((UBYTE *)bo->vaddr)[ib_offset + i];
+                }
+                ib_bus = exec->index_scratch_bus + exec->index_scratch_used;
+                max_index = actual_max;
+                if (indexed_diag_count < 4 && bytes >= 8)
+                {
+                    UBYTE *in = (UBYTE *)bo->vaddr + ib_offset;
+                    UBYTE *out = exec->index_scratch + exec->index_scratch_used;
+                    bug("[VC4Gallium] index data: max=%lu src=%02x%02x %02x%02x %02x%02x %02x%02x le=%02x%02x %02x%02x %02x%02x %02x%02x\n",
+                        (unsigned long)actual_max,
+                        in[0], in[1], in[2], in[3], in[4], in[5], in[6], in[7],
+                        out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7]);
+                }
+                exec->index_scratch_used = ROUNDUP(exec->index_scratch_used + bytes, 4);
+            }
+#endif
             put_u32_unaligned(dst + dst_off + 2, count);
-            put_u32_unaligned(dst + dst_off + 6, exec->current_bo[0] + ib_offset);
+            put_u32_unaligned(dst + dst_off + 6, ib_bus);
             put_u32_unaligned(dst + dst_off + 10, max_index);
 
             {
-                static ULONG indexed_diag_count;
                 if (indexed_diag_count++ < 4)
                 {
                     UBYTE *in = src + src_off;
@@ -1554,7 +1635,7 @@ static ULONG process_bin_cl(struct exec_state *exec,
                         "max=%d ib=%08x raw=%02x%02x%02x%02x/%02x%02x%02x%02x/%02x%02x%02x%02x "
                         "out=%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
                         in[1], count, ib_offset, max_index,
-                        exec->current_bo[0] + ib_offset,
+                        ib_bus,
                         in[2], in[3], in[4], in[5],
                         in[6], in[7], in[8], in[9],
                         in[10], in[11], in[12], in[13],
@@ -2204,7 +2285,8 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
     ULONG exec_size, bin_cl_max;
     APTR exec_vaddr;
     ULONG exec_bus;
-    ULONG bin_cl_offset, shader_rec_offset, uniforms_offset;
+    ULONG bin_cl_offset, shader_rec_offset, uniforms_offset, index_scratch_offset;
+    ULONG index_scratch_size = 0;
     ULONG bin_cl_out_size;
     ULONG rcl_max_size, rcl_size;
     APTR rcl_vaddr;
@@ -2253,6 +2335,20 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
                 if (src[off + 14] > bin_tiles_y)
                     bin_tiles_y = src[off + 14];
             }
+#if AROS_BIG_ENDIAN
+            else if (cmd == VC4_PACKET_GL_INDEXED_PRIMITIVE &&
+                     (src[off + 1] & VC4_INDEX_BUFFER_U16))
+            {
+                ULONG count = get_u32_native_unaligned(src + off + 2);
+
+                if (count > ((~0UL - index_scratch_size - 3) / 2))
+                {
+                    bug("[VC4Gallium] submit_cl: U16 index scratch overflow\n");
+                    return -1;
+                }
+                index_scratch_size += ROUNDUP(count * 2, 4);
+            }
+#endif
             off += pkt_size;
         }
 
@@ -2310,7 +2406,8 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
      * to hold all three sections after alignment padding. */
     exec_size = ROUNDUP(bin_cl_max, 16) +
                 ROUNDUP(args->shader_rec_size, 16) +
-                args->uniforms_size +
+                ROUNDUP(args->uniforms_size, 16) +
+                index_scratch_size +
                 32; /* extra slack for trailing alignment */
     exec_size = ROUNDUP(exec_size, 4096);
 
@@ -2331,6 +2428,7 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
     bin_cl_offset = 0;
     shader_rec_offset = ROUNDUP(bin_cl_max, 16);
     uniforms_offset = ROUNDUP(shader_rec_offset + args->shader_rec_size, 16);
+    index_scratch_offset = ROUNDUP(uniforms_offset + args->uniforms_size, 16);
 
     /* ---- Step 3: Set up exec state and process bin CL ---- */
     exec.sd = sd;
@@ -2338,6 +2436,12 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
     exec.bo_handle_count = args->bo_handle_count;
     exec.current_bo[0] = 0;
     exec.current_bo[1] = 0;
+    exec.current_hindex[0] = 0;
+    exec.current_hindex[1] = 0;
+    exec.index_scratch = (UBYTE *)exec_vaddr + index_scratch_offset;
+    exec.index_scratch_bus = exec_bus + index_scratch_offset;
+    exec.index_scratch_size = index_scratch_size;
+    exec.index_scratch_used = 0;
     exec.tile_alloc_bus = sd->pool[pi].tile.bus_addr + tile_alloc_offset;
     exec.tile_state_bus = sd->pool[pi].tile.bus_addr;
     exec.tile_alloc_offset = tile_alloc_offset;
