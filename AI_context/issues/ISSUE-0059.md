@@ -12,129 +12,197 @@ tags:
   - bthid
   - hid
   - reconnection
+  - low-energy
   - raspberry-pi-3
 blockers:
-  - "a capture from the hardware: which device, which bearer, and whether it fails only after a reboot"
+  - "a BTErrorLog capture taken across a channel switch — see 'The probe'"
 related_files:
   - external/aros/rom/bluetooth/bluetooth/hwconn.c
-  - external/aros/rom/bluetooth/bluetooth/config.c
+  - external/aros/rom/bluetooth/bluetooth/hwtask.c
   - external/aros/rom/bluetooth/classes/bthid/bthid.class.c
-  - external/aros/rom/bluetooth/stack/protocols/l2cap/channel_manager.c
   - AI_context/issues/ISSUE-0046.md
   - AI_context/issues/ISSUE-0058.md
 ---
 
 # Summary
 
-Reported from the Pi 3: a Bluetooth HID device with several host channels — the
-kind of keyboard or mouse that remembers three hosts and switches between them
-with a button — does not come back when its channel is selected again. It was
-paired and working on that channel before.
+A Bluetooth mouse with several host channels — the kind that remembers three
+hosts and switches with a button — does not come back when its channel is
+selected again.
 
-Nothing here is confirmed as a defect in our code yet. This issue exists to
-record what the reconnection machinery actually is, which parts are already
-written for exactly this case, and the one gap that reading it turned up, so
-that the investigation starts from evidence rather than from a re-read.
+**Reconnection itself works.** Measured on a Pi 3 on 2026-08-26: after a reboot
+the device reconnects on its own. Persistence, private-address resolution and
+the background scan are therefore all functioning. What fails is specifically
+the case where a live connection dropped and the device later returns.
 
-**Not yet known, and the first thing to establish:** whether it fails only
-after a reboot, or also within a single session.
+That difference is the whole issue, and it points somewhere narrow.
 
-# The three things that have to happen, and where they live
+# The device
 
-Reconnection is not a boot-time-only path, which is easy to assume from the
-commit message of `e1e89712f7` ("restore registered devices ... at boot"). Two
-paths are live at all times, and which one applies depends on the bearer:
+From the Bluetooth prefs device window:
 
-- **LE** — a background scan reconnects a bonded device when it advertises;
-  `bBgScanSchedule()` at `hwconn.c:520`. The stack waits for the advert rather
-  than paging.
-- **BR/EDR** — page scan stays on. `bgc_Connectable` defaults to `TRUE`
-  (`bluetooth.library.c:142`), `btEnumerateHardware()` applies the default scan
-  modes at `objects.c:207`, and `BTPRI_SETSCANMODE` (`hwtask.c:1721`) turns that
-  into `Write_Scan_Enable` with bit 1 set. The device pages us.
+- **Low Energy only.** Stored keys are `LE key (legacy)` and `IRK`; there is no
+  `BR/EDR link key`. The string comes from `prefs/DevWinClass.c:89-91`.
+- state: `registered bonded`
+- per-device **auto-reconnect: on** (`bpc_AutoConnect`)
+- per-device **trusted: off** (`bpc_Trusted`)
 
-Then, on the incoming connection:
+# Who initiates, and why Trusted is a red herring
 
-1. `HC_EVT_CONN_REQUEST` (`hwconn.c:2262`) accepts only if the device is
-   `BDFF_REGISTERED`, or `bpc_Trusted`, or the radio is discoverable. Anything
-   else is rejected with `0x0f` (unacceptable BD_ADDR). **Bonded is not the
-   same as registered here**, and that distinction is worth checking first.
-2. On connection-complete, `hwconn.c:533-547` walks `bd->bd_Services` and
-   registers an L2CAP listener for every endpoint's PSM, "so the device can
-   open channels to us". This is direction-agnostic.
-3. The device opens the HID PSMs (0x11 control, 0x13 interrupt) and bthid picks
-   them up through `btFindEndpoint(..., BEA_PSM, ...)`
-   (`bthid.class.c:777`, `:1075`).
+An earlier revision of this issue listed `Trusted` as the first thing to check.
+That was wrong, and it is worth writing down why so nobody spends an evening on
+it.
 
-# What is already written for this exact case
+In BLE a peripheral cannot initiate a connection. The mouse advertises; **we**
+are the central and we issue `LE_Create_Connection`. So "the device connects
+back to us" is never literally true on this bearer — the reconnection is always
+our scan seeing an advert and acting on it.
 
-The design anticipates the channel switch, in both the old and the new bthid,
-with the same words:
+`bpc_Trusted` is read in exactly one place in the whole stack that decides
+anything:
 
 ```c
-case BCM_DeviceDisconnected:
-    /* the binding stays; its read channels fail and are re-issued when
-       the device reconnects (BCHA_AutoConnect) */
+/* hwconn.c:2262, inside case HC_EVT_CONN_REQUEST: */
+if((bd->bd_Flags & BDFF_REGISTERED) || bd->bd_PoPoCfg.bpc_Trusted || (bth->bth_Flags & BTHF_DISCOVERABLE))
+    accept = TRUE;
 ```
 
-(`bthid.class.c:496` at pin `fbea2d8`, `:276` at `1986301`.)
+Every other hit (`bluetooth.library.c:1312`, `objects.c:250`, `DevWinClass.c`)
+is storage, packing or the checkbox. And `HC_EVT_CONN_REQUEST` is the BR/EDR
+Connection Request event — the lines above it reject anything that is not
+`LINKTYPE_ACL`, and an LE link never raises it at all.
 
-The binding surviving the disconnect is what keeps the service alive:
-`bConnCleanup()` (`hwconn.c:1187`) frees the services on the bearer **except**
-those with a binding — "keep bound services (their binding owns channels)". So
-within one session the service list is still populated when the device returns,
-step 2 above finds the endpoints, and the listeners go back on.
+So Trusted is inert here twice over: this device never takes that path, and if
+it did, the condition is an `||` whose first term (`BDFF_REGISTERED`) is
+already true. Leaving it off is correct; turning it on would only widen what we
+accept over BR/EDR.
 
-So within a session this should work. If it does not, it is a defect, and the
-place to instrument is the sequence 1 → 2 → 3 above.
+# What has to happen for the mouse to come back
 
-# The gap that reading it turned up
+1. **The background scan must be running.** `bBgScanNeeded()` (`hwtask.c:722`)
+   requires *all* of:
+   - `bth_State == BHS_READY` and `BTHF_LE`;
+   - **`bgc_AutoConnect`** — the global "reconnect registered devices" on the
+     prefs Options page. This is a *second* switch, separate from the
+     per-device one, and either alone is not enough;
+   - a device with `BDFF_LE | BDFF_REGISTERED | BDFF_BONDED` all set, not
+     currently connected;
+   - `bpc_AutoConnect` on that device, or a connection already waiting on an
+     advert (`cn_WaitAdv`).
 
-**Services and endpoints are never persisted — only device registrations and
-bond keys are.** `config.c` writes radio (`BHWD`) and class (`BCLS`) entries and
-the device records; it touches `bd_Services` in exactly one place
-(`config.c:754`) and that is for class bindings, not to save the service list.
-Services come from SDP/GATT discovery, which happens after connecting.
+   `bBgScanUpdate()` (`hwtask.c:755`) then vetoes it while discovering,
+   while another LE scan is active, while `hc_Connecting` is set, or when
+   `!hc_BringupDone || hc_BringupFailed`.
 
-Consequences after a reboot, for a device restored from `ENVARC:`:
+2. **The advert must resolve to the device.** A bonded LE peer that gave us its
+   IRK advertises from a resolvable private address that changes every few
+   minutes — which is exactly what a multi-channel mouse does on returning.
+   `bResolvePrivateAddr()` (`hwtask.c:176`) checks `ah(IRK, prand)` against
+   every stored IRK and records the current address in `bd_CurAddr`. Read it
+   line by line on 2026-08-26: the padding, the prand byte order, the IRK
+   LSB→MSB reversal and the three hash bytes compared are all correct. This is
+   not where it fails.
 
-- the device pages us and the ACL is accepted (it is registered), but
-- `hwconn.c:535` walks an empty `bd_Services`, so no listener is registered, and
-- the device's L2CAP connect on PSM 0x11/0x13 lands on
-  `channel_manager.c:252`: `/* nobody listening (or no slot): refuse */`.
+3. **`bConnAdvertising()` must decide to connect** (`hwconn.c:854`), reached
+   from `hwtask.c:383` for any registered LE device seen advertising.
 
-The symptom that produces is *connects, no input at all* — which is not the
-same failure as never connecting, and telling the two apart on the hardware is
-most of the diagnosis.
+# Leading hypothesis: the silent return in bConnAdvertising()
 
-This does not explain a failure within a single session. It is a real gap
-either way.
+```c
+if(hc->hc_Connecting || (bth->bth_Flags & BTHF_DISCOVERING)) {
+    return;                       /* one connect at a time */
+}
+if(cn) {
+    if((cn->cn_State == HCNS_CONNECTING) && cn->cn_WaitAdv) {
+        cn->cn_WaitAdv = FALSE;
+        "... is awake - connecting."
+        bStartNextConnect(hc);
+    }
+    return;                       /* any other state: advert dropped, no log */
+}
+if(!(bd->bd_Flags & BDFF_BONDED) || !bd->bd_PoPoCfg.bpc_AutoConnect ||
+   !BluetoothBase->bt_GlobalCfg->bgc_AutoConnect) {
+    return;
+}
+"... is awake - reconnecting."
+bEnsureConnection(hc, bd, BDLT_LE, CONN_NOW, &pending, &err);
+```
 
-# What to capture
+If a connection object exists in **any** state other than *CONNECTING with
+`cn_WaitAdv` set*, every future advert is discarded without a single line of
+log, indefinitely.
 
-1. **Does it fail only after a reboot, or also on a channel switch within one
-   session?** This separates the persistence gap from everything else.
-2. **Which bearer — LE or BR/EDR?** Entirely different paths (advert vs page).
-   A multi-channel keyboard is often Classic on one channel and LE on another,
-   which would also explain "works on one channel, not the other".
-3. **Is the device `registered`, or only `bonded`?** `BTDevLister` and the
-   device window in Prefs/Bluetooth both show it. Only the first is accepted by
-   `hwconn.c:2262` when the radio is not discoverable.
-4. Whether the ACL comes up at all, or whether it is the HID channels that are
-   refused afterwards.
+That fits the observed split precisely:
 
-# Which side of the pin the observation came from
+- **after a reboot** there is no `cn` at all, so the code falls through to the
+  auto-reconnect branch — and reconnection works, as measured;
+- **after a channel switch** there is one, because bthid keeps its binding
+  alive on purpose (`bthid.class.c:496`: *"the binding stays; its read channels
+  fail and are re-issued when the device reconnects (BCHA_AutoConnect)"*) and
+  re-issues its reads, which creates a connection object that can end up in a
+  state this branch does not handle.
 
-The card this was seen on is at pin `1986301`, i.e. the **old** bthid — the
-602-line class that received `bt_aros_input_event` from btcore and emitted only
-`IECLASS_RAWKEY` and `IECLASS_RAWMOUSE`.
+`hc_Connecting` is a second candidate for the same shape, though `bConnDown()`
+(`hwconn.c:605`) does clear both it and `BD_CONN(bd, ...)` before freeing the
+connection, so nothing dangles there.
 
-At `fbea2d8` (ISSUE-0058) the class was replaced by a port of Poseidon's
-`hid.class`, which parses report descriptors itself and no longer links btcore.
-The reconnection machinery above is in `bluetooth.library` and btcore and is
-unchanged by that swap, but **any measurement has to say which bthid it came
-from**, because the code that turns a report into an input event is not the
-same on the two sides.
+# The probe
+
+Switch the mouse to another channel and back, then read `BTErrorLog`. The
+stack emits these, in this order, when it works:
+
+| # | line | proves |
+|---|---|---|
+| 1 | `Disconnected from <name> (<reason>).` | our side saw the link drop |
+| 2 | *(silence — the background scan logs nothing)* | — |
+| 3 | `<name> is awake - connecting.` or `- reconnecting.` | advert arrived, IRK resolved, decided to connect |
+| 4 | `Connection to <name> failed (<reason>).` | it tried and failed |
+
+Reading:
+
+- **neither 1 nor 3** — we never saw the disconnect; a different problem.
+- **1 but not 3** — the silent `return` above, or the scan never re-armed.
+  This is the expected outcome if the hypothesis is right.
+- **3 then 4** — the advert arrives and the connect itself fails; look at
+  `bEnsureConnection()`.
+- **3 and then nothing** — the connect is stuck at the controller.
+
+If it is the second case, the next step is one `bug()` line printing
+`cn->cn_State` and `cn_WaitAdv` at that `return`, which names the stuck state
+outright.
+
+Check the prefs **Options** page in the same session: `bgc_AutoConnect` must be
+on, and it is not the per-device switch already confirmed set.
+
+# Two things that invalidate earlier observations
+
+**Every card before 2026-08-26 could not do LE reconnection at all.** The
+Broadcom firmware loader never registered (see the `brcmfw.fwl` naming defect
+fixed that day), so the controller's bring-up ended in `hc_BringupFailed` once
+the loader *did* start registering — and `bBgScanUpdate()` vetoes the
+background scan on exactly that flag. Any behaviour recorded before that boot
+says nothing about this issue.
+
+**The controller's address changed.** Without the patchram a BCM43430A1 reports
+the ROM placeholder `AA:AA:AA:AA:AA:AA`; with it, the real `B8:27:EB:...`. Every
+pairing made before the fix was against a host identity that no longer exists,
+on both sides. The device under test was re-paired after the fix, so the
+measurements above are sound; older ones are not.
+
+# Correction to an earlier note
+
+A previous revision claimed that services and endpoints are never persisted, so
+after a reboot an inbound reconnect would get the ACL accepted and then the HID
+channels refused at `channel_manager.c:252`.
+
+The persistence part is true — `config.c` stores registrations and bond keys,
+not services. The consequence is not, for this bearer: `bConnUp()` re-enumerates
+on every fresh connection (`cn_EnumState = ENUM_GATT_CONNECT` for LE,
+`ENUM_SDP_CONNECT` otherwise), and an LE HID device carries its reports over
+GATT notifications rather than L2CAP channels opened *to* us. The empty-service
+window only matters for a BR/EDR peer that pages us and opens PSM 0x11/0x13
+before anything has enumerated it. Worth keeping in mind for a classic
+keyboard; not what is happening here.
 
 # Related
 
