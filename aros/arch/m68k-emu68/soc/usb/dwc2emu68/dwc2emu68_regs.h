@@ -33,6 +33,13 @@
 #define DWC2_GAHBCFG_DMAEN              (1UL << 5)
 #define DWC2_GAHBCFG_NPTXFEMPLVL        (1UL << 7)
 
+/*
+ * The PHY strap decides the clock rate, and HFIR.FRINT is a count of those
+ * clocks. Read to compute the frame interval; never written.
+ */
+#define DWC2_GUSBCFG_PHYIF16            (1UL << 3)
+#define DWC2_GUSBCFG_PHYSEL_FS          (1UL << 6)
+#define DWC2_GUSBCFG_PHYLPCS            (1UL << 15)
 #define DWC2_GUSBCFG_FORCEHOSTMODE      (1UL << 29)
 #define DWC2_GUSBCFG_FORCEDEVMODE       (1UL << 30)
 
@@ -71,7 +78,19 @@
 #define DWC2_HPRT_SPD_FULL              (1UL << DWC2_HPRT_SPD_SHIFT)
 #define DWC2_HPRT_SPD_LOW               (2UL << DWC2_HPRT_SPD_SHIFT)
 
+#define DWC2_HFIR_FRINT_MASK            0xffffUL
+
 #define DWC2_HCCHAR_EPDIR_IN            (1UL << 15)
+/*
+ * LSPDDEV -- the device on the far end speaks low speed.
+ *
+ * This is about the device, not the bus the host is on, so it is set for a
+ * low-speed device whether it hangs off a full-speed bus directly or sits
+ * behind a translator. Leave it clear and the core signals at full speed to
+ * something that only understands low speed, which produces no answer at all
+ * and, through a translator, comes back as a transaction error.
+ */
+#define DWC2_HCCHAR_LSPDDEV             (1UL << 17)
 #define DWC2_HCCHAR_EPTYPE_CONTROL      (0UL << 18)
 #define DWC2_HCCHAR_EPTYPE_ISOC         (1UL << 18)
 #define DWC2_HCCHAR_EPTYPE_BULK         (2UL << 18)
@@ -86,6 +105,7 @@
 
 #define DWC2_HCTSIZ_XFERSIZE(v)         ((ULONG)(v) & 0x7ffff)
 #define DWC2_HCTSIZ_PKTCNT(v)           (((ULONG)(v) & 0x3ff) << 19)
+#define DWC2_HCTSIZ_PID_MASK            (3UL << 29)
 #define DWC2_HCTSIZ_PID_DATA0           (0UL << 29)
 #define DWC2_HCTSIZ_PID_DATA1           (2UL << 29)
 #define DWC2_HCTSIZ_PID_SETUP           (3UL << 29)

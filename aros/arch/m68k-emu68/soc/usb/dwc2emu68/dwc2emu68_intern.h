@@ -75,6 +75,20 @@ struct DWC2Device;
  * enumeration and setup only. Bulk is re-armed immediately: it has no
  * deadline to miss and the throughput matters.
  */
+/*
+ * Microframes to wait before going back for a split's result.
+ *
+ * An interrupt endpoint's split runs on a microframe pipeline -- start-split
+ * in one, complete-split in the next -- so it waits exactly one. Bulk re-arms
+ * immediately. Control waits a full inter-transaction pace.
+ *
+ * The sixteen is not arrived at from the specification, and it is kept
+ * because it has already been ruled out rather than because it is understood:
+ * ../usb2otg carries the same value and records that a tester's low-speed
+ * keyboard stormed identically at eight and at sixteen, which is what
+ * disproved pacing as the cause there. Diverging from a number that has been
+ * tested on this hardware needs a better reason than symmetry with bulk.
+ */
 #define DWC2_SPLIT_PACE_INT     1
 #define DWC2_SPLIT_PACE_CTRL    16
 
@@ -87,6 +101,7 @@ struct DWC2Channel
     UBYTE                   split_retries;  /* complete-splits spent waiting */
     UBYTE                   split_delay;    /* microframes before the CSPLIT */
     UBYTE                   retries;
+    UBYTE                   xact_errors;    /* attempts spent on bus errors */
     ULONG                   armed_length;   /* bytes programmed this transaction */
     UBYTE                  *buffer;         /* bounce buffer, cache-line aligned */
     APTR                    buffer_raw;     /* what to free */
@@ -126,8 +141,24 @@ struct DWC2Unit
     UBYTE                   interrupt_log_count[128];
     UBYTE                   periodic_log_count;
     UBYTE                   sof_log_count;
+    /*
+     * Trace budget, one per device address rather than one for the unit.
+     *
+     * A single counter is spent by whatever talks first, which on this board
+     * is the root hub and then the hub behind it -- so the device that
+     * actually fails is the one whose transfers were never printed. That has
+     * now happened twice, at 32 lines and again at 160. A budget per address
+     * cannot be exhausted on somebody else's behalf: a device enumerating
+     * late arrives with its own.
+     */
+    UBYTE                   transfer_log[128];
     UBYTE                   transfer_log_count;
     UBYTE                   watchdog_log_count;
+    /* Channels waiting out a paced complete-split. Written by the unit
+     * task, read by the interrupt top half to decide whether the SOF tick is
+     * needed this frame. */
+    volatile ULONG          split_pacing;
+    ULONG                   split_starts;
     ULONG                   watchdog_recoveries; /* uncapped: see the watchdog */
     ULONG                   watchdog_reported;
     BOOL                    opened;
@@ -158,9 +189,14 @@ struct DWC2NSQueryResult
 void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit);
 AROS_INTP(DWC2_FNAME(SoftIRQ));
 BOOL dwc2_platform_probe(struct DWC2Device *device);
+/* Brings up the VideoCore-owned USB power domain. FALSE only when the
+ * firmware answered and the answer was bad; silence is reported and allowed. */
+BOOL dwc2_platform_power_on(struct DWC2Device *device);
 void dwc2_platform_cpu0_mask(struct DWC2Unit *unit);
 void dwc2_platform_log_clocks(struct DWC2Device *device);
 BOOL dwc2_controller_start(struct DWC2Unit *unit);
+/* Publishes the frame interval for the speed the root port has negotiated. */
+void dwc2_controller_speed(struct DWC2Unit *unit);
 void dwc2_controller_drain_irq(struct DWC2Unit *unit);
 BOOL dwc2_delay_us(struct DWC2Unit *unit, ULONG microseconds);
 BYTE dwc2_root_control(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq);
@@ -169,6 +205,11 @@ void dwc2_root_poll(struct DWC2Unit *unit);
 BOOL dwc2_transfer_submit(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq);
 void dwc2_transfer_irq(struct DWC2Unit *unit);
 void dwc2_transfer_sof(struct DWC2Unit *unit);
+/* Both run in the interrupt top half, where the translator's deadline can
+ * still be met. dwc2_transfer_split_irq() returns TRUE when it has taken the
+ * channel's interrupt entirely and the unit task needs no part of it. */
+BOOL dwc2_transfer_split_irq(struct DWC2Unit *unit, UBYTE index, ULONG status);
+void dwc2_transfer_split_sof(struct DWC2Unit *unit);
 void dwc2_transfer_service(struct DWC2Unit *unit);
 void dwc2_transfer_watchdog(struct DWC2Unit *unit);
 void dwc2_transfer_abort_all(struct DWC2Unit *unit);

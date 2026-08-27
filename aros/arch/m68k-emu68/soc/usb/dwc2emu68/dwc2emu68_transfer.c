@@ -35,12 +35,28 @@
 #define DWC2_FRAME_MASK 0x07ffUL
 #define DWC2_CONTROL_GATE_LOOPS 8000000UL
 #define DWC2_RETRY_LIMIT 100
+/*
+ * Three attempts at a transaction before its error is believed -- the number
+ * USB itself specifies. It is deliberately not the NAK budget above: a NAK is
+ * the device asking to be asked again and costs nothing to honour, while a
+ * transaction error is a bus event that must not be retried forever.
+ */
+#define DWC2_XACT_ERROR_LIMIT 3
+/*
+ * How many arm/completion lines the serial line is allowed to carry. It used
+ * to be 32, which covered the root hub and the hub behind it and ran out
+ * exactly at the first device -- so three rounds of hardware testing produced
+ * a failure whose transfers were never shown. A diagnostic budget that stops
+ * before the interesting part is worse than none: it looks like data.
+ */
+#define DWC2_TRANSFER_LOG_LIMIT 40
+
+/* The address whose budget a channel's line is drawn from. */
+#define DWC2_LOG_ADDR(c)   ((c)->request->iouh_DevAddr & 0x7f)
 
 static void start_next(struct DWC2Unit *unit);
 static BOOL split_needed(struct DWC2Unit *unit,
     const struct IOUsbHWReq *ioreq);
-static void split_complete_arm(struct DWC2Unit *unit,
-    struct DWC2Channel *chan);
 static BOOL submit_on(struct DWC2Unit *unit, struct DWC2Channel *chan,
     struct IOUsbHWReq *ioreq);
 static BOOL arm_setup(struct DWC2Unit *unit, struct DWC2Channel *chan);
@@ -236,9 +252,24 @@ static void channel_release(struct DWC2Unit *unit, struct DWC2Channel *chan)
 {
     struct DWC2Device *device = unit->device;
 
+    /* Order matters: the interrupt half reads chan->request while a paced
+     * complete-split is outstanding, so withdraw it from that set first. */
+    unit->split_pacing &= ~(1UL << chan->index);
+    /*
+     * A split sequence that ends any way other than by completing leaves the
+     * channel's split engine mid-sequence, and every later start-split on
+     * that channel is descheduled in its arming microframe with a bare
+     * CHHLTD. STALL is the ending that makes this bite in practice, because
+     * STALL is not a driver failure at all -- it is the device declining a
+     * request, which every device does for the string indices it has not
+     * implemented, several times per enumeration.
+     */
+    if (chan->split != DWC2_SPLIT_NONE)
+        reset_halted_channel(unit, chan);
     chan->request = NULL;
     chan->stage = 0;
     chan->retries = 0;
+    chan->xact_errors = 0;
     chan->armed_length = 0;
     chan->watchdog_ticks = 0;
     chan->split = DWC2_SPLIT_NONE;
@@ -447,8 +478,9 @@ static BOOL arm(struct DWC2Unit *unit, struct DWC2Channel *chan, BOOL input,
      * A start-split hands the hub one full-speed frame's worth of work at
      * most, so a split transaction is armed in pieces of at most 188 bytes.
      * Asking for more makes the translator return data the core was not told
-     * to expect. Bulk already advances through iouh_Actual; the other command
-     * types never exceed a packet here.
+     * to expect. Bulk and the control data stage both advance through
+     * iouh_Actual, so a clamped arming is a chunk and not a truncation.
+     * Anything without a continuation must not be clamped.
      */
     if (split && length > DWC2_SPLIT_MAX_PAYLOAD)
     {
@@ -481,6 +513,8 @@ static BOOL arm(struct DWC2Unit *unit, struct DWC2Channel *chan, BOOL input,
         DWC2_HCCHAR_MPS(mps) | DWC2_HCCHAR_MULTICNT_ONE | endpoint_type;
     if (input)
         hcchar |= DWC2_HCCHAR_EPDIR_IN;
+    if (ioreq->iouh_Flags & UHFF_LOWSPEED)
+        hcchar |= DWC2_HCCHAR_LSPDDEV;
     if (endpoint_type == DWC2_HCCHAR_EPTYPE_INTERRUPT &&
         !(dwc2_readl(device, DWC2_HFNUM) & 1))
         hcchar |= DWC2_HCCHAR_ODDFRM;
@@ -534,12 +568,12 @@ static BOOL arm(struct DWC2Unit *unit, struct DWC2Channel *chan, BOOL input,
         dwc2_readl(device, DWC2_GINTMSK) | DWC2_GINTSTS_HCHINT);
     if (endpoint_type == DWC2_HCCHAR_EPTYPE_CONTROL)
         wait_control_window(device);
-    if (unit->transfer_log_count < 32)
+    if (unit->transfer_log[DWC2_LOG_ADDR(chan)] < DWC2_TRANSFER_LOG_LIMIT)
         bug("[DWC2/Emu68:XFER] arm chan=%u stage=%u CHAR=%08lx TSIZ=%08lx "
-            "DMA=%08lx NPTX=%08lx HFNUM=%08lx\n", chan->index, chan->stage,
+            "SPLT=%08lx NPTX=%08lx HFNUM=%08lx\n", chan->index, chan->stage,
             dwc2_readl(device, DWC2_HCCHAR(chan->index)),
             dwc2_readl(device, DWC2_HCTSIZ(chan->index)),
-            dwc2_readl(device, DWC2_HCDMA(chan->index)),
+            dwc2_readl(device, DWC2_HCSPLT(chan->index)),
             dwc2_readl(device, DWC2_GNPTXSTS),
             dwc2_readl(device, DWC2_HFNUM));
     hcchar = dwc2_readl(device, DWC2_HCCHAR(chan->index));
@@ -581,12 +615,30 @@ static BOOL arm_control_data(struct DWC2Unit *unit, struct DWC2Channel *chan)
 {
     struct IOUsbHWReq *ioreq = chan->request;
     BOOL input = (ioreq->iouh_SetupData.bmRequestType & URTF_IN) != 0;
+    ULONG remaining = ioreq->iouh_Length - ioreq->iouh_Actual;
+    ULONG pid = DWC2_HCTSIZ_PID_DATA1;
 
-    if (!input && ioreq->iouh_Length != 0)
-        CopyMem(ioreq->iouh_Data, chan->buffer, ioreq->iouh_Length);
+    if (remaining > chan->buffer_size)
+        remaining = chan->buffer_size;
+    /*
+     * This is not always the first chunk of the data stage. A split clamps
+     * what one arming can carry, so a long read comes back in pieces, and a
+     * continuation has to carry the toggle on rather than restart it. The
+     * first chunk is DATA1 by definition; after that the core has left the
+     * PID it expects next in HCTSIZ, which is the authority.
+     *
+     * The endpoint toggle map is deliberately not consulted. A control
+     * transfer's toggle restarts at every SETUP and belongs to the transfer,
+     * not to the endpoint, which is the opposite of how bulk works.
+     */
+    if (ioreq->iouh_Actual != 0)
+        pid = dwc2_readl(unit->device, DWC2_HCTSIZ(chan->index)) &
+            DWC2_HCTSIZ_PID_MASK;
+    if (!input && remaining != 0)
+        CopyMem((UBYTE *)ioreq->iouh_Data + ioreq->iouh_Actual,
+            chan->buffer, remaining);
     chan->stage = STAGE_DATA;
-    return arm(unit, chan, input, DWC2_HCCHAR_EPTYPE_CONTROL,
-        DWC2_HCTSIZ_PID_DATA1, ioreq->iouh_Length);
+    return arm(unit, chan, input, DWC2_HCCHAR_EPTYPE_CONTROL, pid, remaining);
 }
 
 static BOOL arm_status(struct DWC2Unit *unit, struct DWC2Channel *chan)
@@ -714,8 +766,11 @@ static BOOL submit_on(struct DWC2Unit *unit, struct DWC2Channel *chan,
         return FALSE;
     chan->request = ioreq;
     chan->retries = 0;
-    if (unit->transfer_log_count < 32)
+    chan->xact_errors = 0;
+    if (unit->transfer_log[ioreq->iouh_DevAddr & 0x7f] <
+        DWC2_TRANSFER_LOG_LIMIT)
     {
+        unit->transfer_log[ioreq->iouh_DevAddr & 0x7f]++;
         unit->transfer_log_count++;
         bug("[DWC2/Emu68:XFER] submit #%u chan=%u cmd=%u addr=%u ep=%u "
             "len=%lu interval=%u\n", unit->transfer_log_count, chan->index,
@@ -785,18 +840,6 @@ void dwc2_transfer_sof(struct DWC2Unit *unit)
 {
     struct Node *node;
     ULONG now;
-    UBYTE i;
-
-    /* Paced complete-splits: one microframe per SOF. */
-    for (i = 0; i < unit->host_channels; i++)
-    {
-        struct DWC2Channel *chan = &unit->channel[i];
-
-        if (chan->request == NULL || chan->split_delay == 0)
-            continue;
-        if (--chan->split_delay == 0)
-            split_complete_arm(unit, chan);
-    }
 
     dwc2_transfer_service(unit);
 
@@ -832,14 +875,8 @@ void dwc2_transfer_sof(struct DWC2Unit *unit)
     update_sof_irq(unit);
 }
 
-static void retry(struct DWC2Unit *unit, struct DWC2Channel *chan)
+static void rearm_stage(struct DWC2Unit *unit, struct DWC2Channel *chan)
 {
-    if (++chan->retries > DWC2_RETRY_LIMIT)
-    {
-        finish(unit, chan, UHIOERR_TIMEOUT);
-        return;
-    }
-    dwc2_delay_us(unit, chan->stage == STAGE_INT_IN ? 10000 : 1000);
     if (chan->stage == STAGE_SETUP)
         arm_setup(unit, chan);
     else if (chan->stage == STAGE_DATA)
@@ -852,6 +889,17 @@ static void retry(struct DWC2Unit *unit, struct DWC2Channel *chan)
         finish(unit, chan, 0);      /* isochronous is never retried */
     else
         arm_interrupt(unit, chan);
+}
+
+static void retry(struct DWC2Unit *unit, struct DWC2Channel *chan)
+{
+    if (++chan->retries > DWC2_RETRY_LIMIT)
+    {
+        finish(unit, chan, UHIOERR_TIMEOUT);
+        return;
+    }
+    dwc2_delay_us(unit, chan->stage == STAGE_INT_IN ? 10000 : 1000);
+    rearm_stage(unit, chan);
 }
 
 /*
@@ -889,40 +937,36 @@ static void park_periodic(struct DWC2Unit *unit, struct DWC2Channel *chan)
 }
 
 /*
- * Advance a split transaction from its start-split to its complete-split.
+ * Split sequencing, and why the timed half lives in the interrupt.
  *
- * The hub has accepted the work; now the channel is re-enabled with COMPSPLT
- * set to go and collect the result. Nothing else about the channel changes --
- * same endpoint context, same buffer, same PID -- which is why this reprograms
- * only HCSPLT and re-arms, rather than going back through arm().
+ * A transaction translator holds the result of a start-split for a window
+ * measured in microframes. Everything else in this driver is deferred -- the
+ * top half records what happened and the unit task does the work -- and that
+ * is the right shape for a transfer that completes in one step. A split does
+ * not: accepting the start-split and going back for the result are two steps
+ * with a deadline between them, and they are taken here so that the pace
+ * below means microframes rather than however long a task takes to run.
+ *
+ * Nothing here allocates, queues or prints. Only outcomes reach the task.
  */
-static void split_complete_arm(struct DWC2Unit *unit,
-    struct DWC2Channel *chan)
+static void split_arm_complete(struct DWC2Unit *unit, UBYTE index)
 {
     struct DWC2Device *device = unit->device;
     ULONG hcchar;
 
-    chan->split = DWC2_SPLIT_COMPLETE;
-    chan->watchdog_ticks = 0;
-    dwc2_writel(device, DWC2_HCSPLT(chan->index),
-        dwc2_readl(device, DWC2_HCSPLT(chan->index)) |
-        DWC2_HCSPLT_COMPSPLT);
-    dwc2_writel(device, DWC2_HCINT(chan->index), DWC2_HCINT_ALL);
-    hcchar = dwc2_readl(device, DWC2_HCCHAR(chan->index));
+    unit->channel[index].split = DWC2_SPLIT_COMPLETE;
+    unit->channel[index].watchdog_ticks = 0;
+    dwc2_writel(device, DWC2_HCSPLT(index),
+        dwc2_readl(device, DWC2_HCSPLT(index)) | DWC2_HCSPLT_COMPSPLT);
+    dwc2_writel(device, DWC2_HCINT(index), DWC2_HCINT_ALL);
+    hcchar = dwc2_readl(device, DWC2_HCCHAR(index));
     hcchar &= ~DWC2_HCCHAR_CHDIS;
-    dwc2_writel(device, DWC2_HCCHAR(chan->index),
-        hcchar | DWC2_HCCHAR_CHENA);
+    dwc2_writel(device, DWC2_HCCHAR(index), hcchar | DWC2_HCCHAR_CHENA);
 }
 
-/*
- * Schedule the complete-split, pacing it by transfer type.
- *
- * The channel stays owned by this request throughout: a paced complete-split
- * is not a released channel, it is a channel waiting for its microframe. The
- * SOF handler counts it down.
- */
-static void split_complete(struct DWC2Unit *unit, struct DWC2Channel *chan)
+static void split_schedule_complete(struct DWC2Unit *unit, UBYTE index)
 {
+    struct DWC2Channel *chan = &unit->channel[index];
     UBYTE pace;
 
     switch (chan->request->iouh_Req.io_Command)
@@ -931,14 +975,75 @@ static void split_complete(struct DWC2Unit *unit, struct DWC2Channel *chan)
         case UHCMD_INTXFER:     pace = DWC2_SPLIT_PACE_INT;  break;
         default:                pace = 0;                    break;
     }
+    chan->split_delay = pace;
     if (pace == 0)
     {
-        split_complete_arm(unit, chan);
+        unit->split_pacing &= ~(1UL << index);
+        split_arm_complete(unit, index);
         return;
     }
     chan->split = DWC2_SPLIT_COMPLETE;
-    chan->split_delay = pace;
     chan->watchdog_ticks = 0;
+    unit->split_pacing |= 1UL << index;
+}
+
+BOOL dwc2_transfer_split_irq(struct DWC2Unit *unit, UBYTE index, ULONG status)
+{
+    struct DWC2Channel *chan = &unit->channel[index];
+
+    if (chan->request == NULL || chan->split == DWC2_SPLIT_NONE)
+        return FALSE;
+
+    /*
+     * Start-split accepted. The signal is ACK and only ACK: XFERCOMP here
+     * means the transaction finished outright, which is what a controller
+     * with no real translator reports, and treating that as acceptance sends
+     * a complete-split to a device that was never behind one.
+     */
+    if (chan->split == DWC2_SPLIT_START)
+    {
+        if (!(status & DWC2_HCINT_ACK) || (status & DWC2_HCINT_XFERCOMP))
+            return FALSE;
+        chan->split_retries = 0;
+        unit->split_starts++;
+        split_schedule_complete(unit, index);
+        return TRUE;
+    }
+
+    /* NYET: the translator has not finished. Ask again from here, while the
+     * window is still open. When the budget runs out the window has closed,
+     * which is an outcome and belongs to the task. */
+    if ((status & DWC2_HCINT_NYET) && !(status & DWC2_HCINT_XFERCOMP))
+    {
+        if (++chan->split_retries > DWC2_SPLIT_NYET_LIMIT)
+            return FALSE;
+        split_schedule_complete(unit, index);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+void dwc2_transfer_split_sof(struct DWC2Unit *unit)
+{
+    UBYTE i;
+
+    for (i = 0; i < unit->host_channels; i++)
+    {
+        struct DWC2Channel *chan = &unit->channel[i];
+
+        if (!(unit->split_pacing & (1UL << i)))
+            continue;
+        if (chan->request == NULL || chan->split_delay == 0)
+        {
+            unit->split_pacing &= ~(1UL << i);
+            continue;
+        }
+        if (--chan->split_delay == 0)
+        {
+            unit->split_pacing &= ~(1UL << i);
+            split_arm_complete(unit, i);
+        }
+    }
 }
 
 /*
@@ -977,41 +1082,31 @@ static BOOL split_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
 {
     if (chan->split == DWC2_SPLIT_NONE)
         return FALSE;
+    /* The start-split handshake belongs to the interrupt half; anything still
+     * in DWC2_SPLIT_START here was not an acceptance. */
+    if (chan->split == DWC2_SPLIT_START)
+        return FALSE;
 
     /*
-     * Start-split accepted: the translator has taken the transaction, and the
-     * complete-split goes and collects it.
+     * A NYET that reaches this far has spent the whole budget in the
+     * interrupt half, and that is not a failure. Eight complete-splits is
+     * one full-speed frame, which is how long a translator's result window
+     * lasts; past it the result is simply gone.
      *
-     * The signal is ACK and only ACK. XFERCOMP here does not mean "the split
-     * was accepted", it means the transaction finished outright -- which is
-     * what a controller that does not really implement a transaction
-     * translator reports, QEMU included. Treating XFERCOMP as acceptance
-     * turns a finished control SETUP into a complete-split against a device
-     * that was never behind a translator, and the device stalls: the stage
-     * never advances, and enumeration restarts forever.
+     * What must not happen is calling the transfer failed. For a periodic
+     * endpoint the answer is the next interval. For everything else it is the
+     * start-split of the *same* transaction, in place -- restarting the
+     * transfer from its SETUP would abandon a transaction the translator has
+     * already accepted, and abandoning one that way is what actually wedges
+     * the channel's split engine.
      */
-    if (chan->split == DWC2_SPLIT_START)
+    if ((status & DWC2_HCINT_NYET) && !(status & DWC2_HCINT_XFERCOMP))
     {
-        if ((status & DWC2_HCINT_ACK) && !(status & DWC2_HCINT_XFERCOMP))
-        {
-            split_complete(unit, chan);
-            return TRUE;
-        }
-        return FALSE;   /* completed, NAKed or failed: the normal path */
-    }
-
-    /* Complete-split: NYET means the translator has not finished. */
-    if (status & DWC2_HCINT_NYET)
-    {
-        if (++chan->split_retries > DWC2_SPLIT_NYET_LIMIT)
-        {
-            bug("[DWC2/Emu68:SPLIT] chan=%u hub=%u.%u translator wedged\n",
-                chan->index, chan->request->iouh_SplitHubAddr,
-                chan->request->iouh_SplitHubPort);
-            finish(unit, chan, UHIOERR_TIMEOUT);
-            return TRUE;
-        }
-        split_complete(unit, chan);
+        chan->split_retries = 0;
+        if (chan->stage == STAGE_INT_IN)
+            park_periodic(unit, chan);
+        else
+            split_restart(unit, chan);
         return TRUE;
     }
 
@@ -1027,6 +1122,31 @@ static BOOL split_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
     return FALSE;
 }
 
+/*
+ * Did the device end this transfer, or did the transaction just run out?
+ *
+ * USB answers with a short packet: one carrying fewer bytes than the
+ * endpoint's maximum is the device saying there is no more. The test is
+ * against MaxPktSize and deliberately not against however much this arming
+ * asked for, because those are different questions and behind a translator
+ * they give different answers.
+ *
+ * A split moves one packet per transaction. An eighteen-byte descriptor read
+ * from a low-speed device therefore comes back eight bytes at a time, three
+ * times, each one reported as XFERCOMP with packets still outstanding in
+ * HCTSIZ. Reading the first eight as "that is all there was" truncates every
+ * descriptor such a device owns -- which is why a full-speed mouse enumerated
+ * and a low-speed one did not.
+ */
+static BOOL device_ended_transfer(const struct IOUsbHWReq *ioreq, ULONG moved)
+{
+    ULONG mps = ioreq->iouh_MaxPktSize;
+
+    if (mps == 0)
+        return TRUE;
+    return moved == 0 || (moved % mps) != 0;
+}
+
 /* One channel's completion. `status` is the HCINT the ISR took, or read here
  * if the wake came from the watchdog. */
 static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
@@ -1039,8 +1159,10 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
 
     if (ioreq == NULL)
         return;
-    if (unit->transfer_log_count < 32)
+    if (unit->transfer_log[ioreq->iouh_DevAddr & 0x7f] <
+        DWC2_TRANSFER_LOG_LIMIT)
     {
+        unit->transfer_log[ioreq->iouh_DevAddr & 0x7f]++;
         unit->transfer_log_count++;
         bug("[DWC2/Emu68:XFER] irq #%u chan=%u stage=%u HCINT=%08lx "
             "HCTSIZ=%08lx HCCHAR=%08lx HFNUM=%08lx\n",
@@ -1061,12 +1183,40 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
         finish(unit, chan, 0);
         return;
     }
+    /*
+     * A transaction error is an event on the wire, not an answer from the
+     * device. CRC failures, bit-stuff errors, false EOPs and response
+     * timeouts all arrive as XACTERR, and USB treats none of them as final:
+     * the host makes three attempts before it may call a transfer failed.
+     * Believing the first one turns any single glitch into a failed
+     * enumeration -- and a bus that glitches once while a hub's descriptors
+     * are being read is an ordinary bus, not a broken one.
+     *
+     * The error arrives with the channel already halted, so it needs the same
+     * scrub as any other halt before it can be reprogrammed.
+     */
+    if ((status & DWC2_HCINT_XACTERR) &&
+        ++chan->xact_errors < DWC2_XACT_ERROR_LIMIT &&
+        reset_halted_channel(unit, chan))
+    {
+        bug("[DWC2/Emu68:XFER] xacterr chan=%u stage=%u attempt %u of %u\n",
+            chan->index, chan->stage, chan->xact_errors + 1,
+            DWC2_XACT_ERROR_LIMIT);
+        rearm_stage(unit, chan);
+        return;
+    }
     if (status & (DWC2_HCINT_STALL | DWC2_HCINT_AHBERR |
                   DWC2_HCINT_XACTERR | DWC2_HCINT_BBLERR |
                   DWC2_HCINT_DATATGLERR))
     {
-        bug("[DWC2/Emu68:XFER] error chan=%u stage=%u HCINT=%08lx\n",
-            chan->index, chan->stage, status);
+        /* Say which transfer died. "chan=0 stage=3" names neither the device
+         * nor the request, and the arm/irq trace it would have to be read
+         * against is capped well before a failure this late in a boot. */
+        bug("[DWC2/Emu68:XFER] error chan=%u stage=%u HCINT=%08lx cmd=%u "
+            "addr=%u ep=%u len=%lu HPRT=%08lx GINT=%08lx\n",
+            chan->index, chan->stage, status, ioreq->iouh_Req.io_Command,
+            ioreq->iouh_DevAddr, ioreq->iouh_Endpoint, ioreq->iouh_Length,
+            dwc2_readl(device, DWC2_HPRT), dwc2_readl(device, DWC2_GINTSTS));
         finish(unit, chan, (status & DWC2_HCINT_STALL) ? UHIOERR_STALL
                                                        : UHIOERR_HOSTERROR);
         return;
@@ -1098,6 +1248,7 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
         return;
 
     chan->retries = 0;
+    chan->xact_errors = 0;
     remaining = dwc2_readl(device, DWC2_HCTSIZ(chan->index)) & 0x7ffff;
     moved = chan->armed_length >= remaining ? chan->armed_length - remaining
                                             : 0;
@@ -1117,10 +1268,32 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
         if (ioreq->iouh_SetupData.bmRequestType & URTF_IN)
         {
             CacheClearE(chan->buffer, moved, CACRF_InvalidateD);
-            CopyMem(chan->buffer, ioreq->iouh_Data, moved);
+            CopyMem(chan->buffer,
+                (UBYTE *)ioreq->iouh_Data + ioreq->iouh_Actual, moved);
         }
-        ioreq->iouh_Actual = moved;
-        if (!arm_status(unit, chan))
+        ioreq->iouh_Actual += moved;
+        /*
+         * A stage that ran out of transaction is not a finished stage.
+         *
+         * This used to assign iouh_Actual and go straight to the status
+         * stage, on the assumption that a control data stage always fits one
+         * arming. Behind a translator it does not: a split carries at most
+         * 188 bytes, so a 256-byte string descriptor came back as 184 and was
+         * reported complete. Poseidon cannot parse a truncated string and
+         * falls back to naming a device by its vendor and product id, which
+         * is what this defect looks like from the desktop.
+         *
+         * Carry on while the caller's buffer is unsatisfied and the device
+         * has not ended the transfer itself -- a packet shorter than the one
+         * asked for is how it says there was no more.
+         */
+        if (ioreq->iouh_Actual < ioreq->iouh_Length &&
+            !device_ended_transfer(ioreq, moved))
+        {
+            if (!arm_control_data(unit, chan))
+                finish(unit, chan, UHIOERR_HOSTERROR);
+        }
+        else if (!arm_status(unit, chan))
             finish(unit, chan, UHIOERR_HOSTERROR);
     }
     else if (chan->stage == STAGE_STATUS)
@@ -1159,12 +1332,13 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
         toggle_flip(unit, ioreq, input);
 
         /*
-         * A chunk shorter than armed is a short packet, and a short packet
-         * ends a bulk transfer whatever is left of iouh_Length -- that is how
-         * a device says "this is all there was". Otherwise keep going until
-         * the request is satisfied.
+         * A short packet ends a bulk transfer whatever is left of
+         * iouh_Length -- that is how a device says "this is all there was".
+         * Otherwise keep going until the request is satisfied. What counts as
+         * short is a question about MaxPktSize, not about this arming; see
+         * device_ended_transfer().
          */
-        if (moved < chan->armed_length ||
+        if (device_ended_transfer(ioreq, moved) ||
             ioreq->iouh_Actual >= ioreq->iouh_Length)
             finish(unit, chan, 0);
         else if (!arm_bulk(unit, chan))

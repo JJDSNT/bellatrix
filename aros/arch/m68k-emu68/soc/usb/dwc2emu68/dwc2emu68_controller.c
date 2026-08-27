@@ -88,6 +88,23 @@ static void controller_irq(void *data, void *sysbase)
         ULONG due = unit->periodic_due & 0x07ffUL;
 
         dwc2_writel(device, DWC2_GINTSTS, DWC2_GINTSTS_SOF);
+        /*
+         * SOF is suppressed unless something is actually waiting on this
+         * frame, because delivering every one of them is a storm nobody
+         * reads. Two things wait on it, and only one used to be counted: a
+         * periodic transfer that has come due, and a split transaction
+         * pacing its complete-split.
+         *
+         * Missing the second is silent and total. The start-split is
+         * accepted, the sequencer schedules the complete-split for a few
+         * microframes later, and the countdown that would issue it lives in
+         * the SOF handler -- which never runs, because no periodic transfer
+         * happens to be queued. Every device behind a hub then dies in the
+         * watchdog with its channel still armed, and enumeration cannot get
+         * past the first one.
+         */
+        if (unit->split_pacing != 0)
+            dwc2_transfer_split_sof(unit);
         if (!unit->periodic_waiting ||
             ((now - due) & 0x07ffUL) >= 0x0400UL)
             active &= ~DWC2_GINTSTS_SOF;
@@ -123,14 +140,56 @@ static void controller_irq(void *data, void *sysbase)
             channel_status = dwc2_readl(device, DWC2_HCINT(i));
             if (channel_status == 0)
                 continue;
+            dwc2_writel(device, DWC2_HCINT(i), channel_status);
+            /* A split's next step has a deadline the unit task cannot meet,
+             * so it is taken here. When this claims the interrupt there is
+             * nothing left for the task to be woken for. */
+            if (dwc2_transfer_split_irq(unit, i, channel_status))
+                continue;
             unit->channel[i].pending |= channel_status;
             unit->channels_pending |= 1UL << i;
-            dwc2_writel(device, DWC2_HCINT(i), channel_status);
         }
         dwc2_writel(device, DWC2_GINTSTS, DWC2_GINTSTS_HCHINT);
     }
     unit->irq_pending |= active;
     Cause(&unit->soft_irq);
+}
+
+/*
+ * Set the frame interval from the speed the root port negotiated.
+ *
+ * HFIR.FRINT counts PHY clocks per (micro)frame: a millisecond of them at
+ * full and low speed, an eighth of that at high speed. The rate itself comes
+ * from how the core is strapped -- a UTMI+ at eight bits wide runs at 60 MHz
+ * and at sixteen bits at half that for the same throughput, a core wired to
+ * the USB 1.1 serial transceiver runs at 48 MHz, and PHYLPCS raises a
+ * sixteen-bit interface back to 48 MHz.
+ *
+ * Getting this wrong is not merely inaccurate. The core decides whether a
+ * transaction still fits in the time left in the frame before it starts one,
+ * so a frame interval eight times too long tells it there is eight times more
+ * room than there is. Most transactions still land; the ones that start near
+ * a real boundary are cut short and come back as transaction errors. That is
+ * an intermittent fault with no obvious cause, which is the expensive kind.
+ */
+void dwc2_controller_speed(struct DWC2Unit *unit)
+{
+    struct DWC2Device *device = unit->device;
+    ULONG gusbcfg = dwc2_readl(device, DWC2_GUSBCFG);
+    ULONG clock_khz;
+    ULONG frint;
+
+    if (gusbcfg & DWC2_GUSBCFG_PHYSEL_FS)
+        clock_khz = 48000;
+    else if (gusbcfg & DWC2_GUSBCFG_PHYIF16)
+        clock_khz = (gusbcfg & DWC2_GUSBCFG_PHYLPCS) ? 48000 : 30000;
+    else
+        clock_khz = 60000;
+
+    frint = ((dwc2_readl(device, DWC2_HPRT) & DWC2_HPRT_SPD_MASK) ==
+        DWC2_HPRT_SPD_HIGH) ? clock_khz / 8 : clock_khz;
+    dwc2_writel(device, DWC2_HFIR,
+        (dwc2_readl(device, DWC2_HFIR) & ~DWC2_HFIR_FRINT_MASK) | frint);
 }
 
 BOOL dwc2_controller_start(struct DWC2Unit *unit)
@@ -173,8 +232,10 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
 
     value = dwc2_readl(device, DWC2_HCFG) & ~3UL;
     dwc2_writel(device, DWC2_HCFG, value);
-    dwc2_writel(device, DWC2_HFIR,
-        (dwc2_readl(device, DWC2_HFIR) & ~0xffffUL) | 60000);
+    /* HFIR is left at the core's reset default here on purpose: the frame
+     * interval depends on the speed the port negotiates, and nothing has
+     * negotiated yet. dwc2_controller_speed() sets it once there is an
+     * answer, which is before anything is armed against the port. */
 
     dwc2_writel(device, DWC2_GRXFSIZ, 774);
     dwc2_writel(device, DWC2_GNPTXFSIZ, (256UL << 16) | 774);

@@ -74,8 +74,12 @@ static BYTE port_reset(struct DWC2Unit *unit)
     dwc2_writel(device, DWC2_HPRT, hprt_clean(value) & ~DWC2_HPRT_RST);
     if (!dwc2_delay_us(unit, 20000))
         return UHIOERR_TIMEOUT;
-    bug("[DWC2/Emu68:RH] port reset complete HPRT=%08lx\n",
-        dwc2_readl(device, DWC2_HPRT));
+    /* Reset is where the speed is decided, so this is both the first moment
+     * the frame interval can be given a real value and the last before
+     * anything is armed against the port. */
+    dwc2_controller_speed(unit);
+    bug("[DWC2/Emu68:RH] port reset complete HPRT=%08lx HFIR=%08lx\n",
+        dwc2_readl(device, DWC2_HPRT), dwc2_readl(device, DWC2_HFIR));
     unit->port_changed = TRUE;
     return 0;
 }
@@ -195,6 +199,33 @@ BYTE dwc2_root_control(struct DWC2Unit *unit, struct IOUsbHWReq *ioreq)
         if (hprt & DWC2_HPRT_ENA) status[0] |= AROS_WORD2LE(UPSF_PORT_ENABLE);
         if (hprt & DWC2_HPRT_PWR) status[0] |= AROS_WORD2LE(UPSF_PORT_POWER);
         if (hprt & DWC2_HPRT_RST) status[0] |= AROS_WORD2LE(UPSF_PORT_RESET);
+        /*
+         * The speed the port negotiated -- the most consequential thing this
+         * descriptor carries, and it was missing from it.
+         *
+         * Poseidon does not read HPRT. The port status is the only place it
+         * can learn how fast the device below is running, and from that bit
+         * it marks the device high-speed. The hub class then marks everything
+         * below *that* device as needing split transactions, because a full
+         * or low-speed device hanging off a 2.0 hub can only be reached
+         * through the hub's translator.
+         *
+         * Leave the bit out and the chain never starts: no device is
+         * high-speed, so nothing below one needs a split, so a mouse behind
+         * the hub is addressed directly from a high-speed host and nothing
+         * answers. It surfaces as a transaction error on the device's first
+         * descriptor read -- pointing at the bus, several layers away from
+         * the hub descriptor that caused it. The same omission keeps
+         * UHFF_LOWSPEED from ever being set, so HCCHAR.LSPDDEV could not have
+         * fired either.
+         *
+         * Full speed is the absence of both bits. That is how a hub reports
+         * it, not an omission.
+         */
+        if ((hprt & DWC2_HPRT_SPD_MASK) == DWC2_HPRT_SPD_HIGH)
+            status[0] |= AROS_WORD2LE(UPSF_PORT_HIGH_SPEED);
+        else if ((hprt & DWC2_HPRT_SPD_MASK) == DWC2_HPRT_SPD_LOW)
+            status[0] |= AROS_WORD2LE(UPSF_PORT_LOW_SPEED);
         if (hprt & DWC2_HPRT_CONNDET) status[1] |= AROS_WORD2LE(UPSF_PORT_CONNECTION);
         if (hprt & DWC2_HPRT_ENCHNG) status[1] |= AROS_WORD2LE(UPSF_PORT_ENABLE);
         ioreq->iouh_Actual = sizeof(struct UsbPortStatus);
