@@ -10,7 +10,11 @@
  */
 
 #include "machine/machine.h"
+#include "machine/memory.h"
 #include "machine/region.h"
+#if CONFIG_RIGEL
+#include "amiga/bus.h"
+#endif
 
 #include <stdint.h>
 
@@ -54,17 +58,80 @@
 #define VECTOR_PAGE_SIZE        0x00001000UL
 #define VECTOR_PAGE_HOST_PHYS   0x00000000UL
 
+#if CONFIG_RIGEL
+#define CIA_BASE                0x00BFD000UL
+#define CIA_SIZE                0x00002000UL
+#define RTC_BASE                0x00DC0000UL
+#define RTC_SIZE                0x00010000UL
+#define CUSTOM_BASE             0x00DFF000UL
+#define CUSTOM_SIZE             0x00001000UL
+#endif
+
 static const MachineRegion machine_map[] =
 {
     {
+#if CONFIG_RIGEL
+        .base      = BELLATRIX_CHIP_RAM_BASE,
+        .size      = BELLATRIX_CHIP_RAM_SIZE,
+        .kind      = MACHINE_REGION_DIRECT,
+        .name      = "Chip RAM",
+        .host_phys = BELLATRIX_CHIP_RAM_BASE,
+#else
         .base      = VECTOR_PAGE_BASE,
         .size      = VECTOR_PAGE_SIZE,
         .kind      = MACHINE_REGION_DIRECT,
         .name      = "vectors + AbsExecBase",
         .host_phys = VECTOR_PAGE_HOST_PHYS,
+#endif
         .attr      = MMU_ATTR_CACHED,
     },
     {
+#if CONFIG_RIGEL
+        .base = BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_RAM_SIZE,
+        .size = CIA_BASE - (BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_RAM_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain before CIA",
+    },
+    {
+        .base = CIA_BASE,
+        .size = CIA_SIZE,
+        .kind = MACHINE_REGION_EXTERNAL,
+        .name = "Rigel CIA aperture",
+        .ops = &amiga_bus_ops,
+    },
+    {
+        .base = CIA_BASE + CIA_SIZE,
+        .size = RTC_BASE - (CIA_BASE + CIA_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain between CIA and RTC",
+    },
+    {
+        .base = RTC_BASE,
+        .size = RTC_SIZE,
+        .kind = MACHINE_REGION_EXTERNAL,
+        .name = "Rigel RTC aperture",
+        .ops = &amiga_bus_ops,
+    },
+    {
+        .base = RTC_BASE + RTC_SIZE,
+        .size = CUSTOM_BASE - (RTC_BASE + RTC_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain between RTC and custom chips",
+    },
+    {
+        .base = CUSTOM_BASE,
+        .size = CUSTOM_SIZE,
+        .kind = MACHINE_REGION_EXTERNAL,
+        .name = "Rigel custom-chip aperture",
+        .ops = &amiga_bus_ops,
+    },
+    {
+        .base = CUSTOM_BASE + CUSTOM_SIZE,
+        .size = (CLASSIC_DOMAIN_BASE + CLASSIC_DOMAIN_SIZE) -
+                (CUSTOM_BASE + CUSTOM_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain after custom chips",
+#else
         /*
          * Everything else in the classic domain. Not a statement that this is
          * one thing -- it is the absence of statements about it. As accesses
@@ -75,6 +142,7 @@ static const MachineRegion machine_map[] =
         .size = CLASSIC_DOMAIN_SIZE - VECTOR_PAGE_SIZE,
         .kind = MACHINE_REGION_UNMAPPED,
         .name = "classic domain, unclassified",
+#endif
     },
 };
 
@@ -90,6 +158,9 @@ static void machine_setup_memory(void)
 
 void machine_init(void)
 {
+#if CONFIG_RIGEL
+    amiga_bus_init();
+#endif
     machine_setup_memory();
     machine_region_report();
 }

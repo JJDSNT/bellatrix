@@ -252,7 +252,8 @@ ELF_NAME="$(sed -n 's/^initramfs \([^ ]*\).*$/\1/p' <<<"$CFG" | tr -d '\r')"
 [ -n "$KERNEL_NAME" ] && [ -n "$ELF_NAME" ] \
     || die "config.txt in the archive names no kernel or no initramfs"
 
-cp "$FIRMWARE/Emu68.img.gz"    "$RELEASE/$KERNEL_NAME"
+BUILT_KERNEL="$(cat "$ROOT/out/images/Emu68.kernel-name" 2>/dev/null || echo Emu68.img)"
+cp "$FIRMWARE/$BUILT_KERNEL.gz" "$RELEASE/$KERNEL_NAME"
 cp "$DIST/aros-emu68-m68k.elf" "$RELEASE/$ELF_NAME"
 
 # The QEMU bundle.
@@ -273,8 +274,12 @@ rm -rf "$QEMU_STAGE"; mkdir -p "$QEMU_STAGE"
 # make-sdcard.sh reaches this bundle too -- the card and the bundle cannot end
 # up calling the same file different things.
 QEMU_KERNEL="${KERNEL_NAME%.gz}"
+QEMU_BOOTARGS="nocomposition"
+if [ "$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)" = 1 ]; then
+    QEMU_BOOTARGS="$QEMU_BOOTARGS bellatrix.rigel=1"
+fi
 
-cp "$ROOT/out/images/Emu68.img"     "$QEMU_STAGE/$QEMU_KERNEL"
+cp "$ROOT/out/images/$BUILT_KERNEL" "$QEMU_STAGE/$QEMU_KERNEL"
 cp "$FIRMWARE/bcm2710-rpi-3-b.dtb"  "$QEMU_STAGE/"
 cp "$DIST/$ELF_NAME"                "$QEMU_STAGE/"
 
@@ -294,7 +299,7 @@ exec qemu-system-aarch64 \
     -dtb "$here/bcm2710-rpi-3-b.dtb" \
     -initrd "$here/@ELF@" \
     -drive "file=$here/sd.img,if=sd,format=raw" \
-    -append nocomposition \
+    -append "@BOOTARGS@" \
     -serial mon:stdio -display gtk -device usb-tablet -no-reboot "$@"
 LAUNCHER
 chmod +x "$QEMU_STAGE/run.sh"
@@ -328,7 +333,7 @@ qemu-system-aarch64 ^
     -dtb "%HERE%bcm2710-rpi-3-b.dtb" ^
     -initrd "%HERE%@ELF@" ^
     -drive "file=%HERE%sd.img,if=sd,format=raw" ^
-    -append nocomposition ^
+    -append "@BOOTARGS@" ^
     -serial mon:stdio -device usb-tablet -no-reboot %*
 WINLAUNCHER
 
@@ -359,7 +364,7 @@ A wired USB tablet is attached for the pointer. QEMU's relative usb-mouse
 path reverses both axes here.
 QREADME
 
-sed -i "s|@KERNEL@|$QEMU_KERNEL|g; s|@ELF@|$ELF_NAME|g" \
+sed -i "s|@KERNEL@|$QEMU_KERNEL|g; s|@ELF@|$ELF_NAME|g; s|@BOOTARGS@|$QEMU_BOOTARGS|g" \
     "$QEMU_STAGE/run.sh" "$QEMU_STAGE/run.bat" "$QEMU_STAGE/README.txt"
 
 tar -C "$QEMU_STAGE" -cf - . | xz -T0 -9 > "$RELEASE/bellatrix-$TAG-qemu.tar.xz"
@@ -384,7 +389,7 @@ if [ -n "$PREV_TAG" ] && command -v gh >/dev/null && gh release view "$PREV_TAG"
     PREV_SYSTEM="$(gh release view "$PREV_TAG" --json body -q .body 2>/dev/null |
                    awk '/^d-system/ {print $2; exit}' || true)"
     if [ -n "$PREV_SYSTEM" ] && [ "$PREV_SYSTEM" = "$D_SYSTEM" ]; then
-        UPDATE_NOTE="The system volume is unchanged since $PREV_TAG: copying \`Emu68.img.gz\` and \`aros-emu68-m68k.elf\` onto a $PREV_TAG card is enough."
+        UPDATE_NOTE="The system volume is unchanged since $PREV_TAG: copying \`$KERNEL_NAME\` and \`aros-emu68-m68k.elf\` onto a $PREV_TAG card is enough."
     elif [ -n "$PREV_SYSTEM" ]; then
         UPDATE_NOTE="The system volume changed since $PREV_TAG, so the two loose files are not enough on their own — unpack the archive over the card, or onto a fresh one."
     fi

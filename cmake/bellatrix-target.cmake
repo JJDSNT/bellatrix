@@ -14,3 +14,11 @@ if(BELLATRIX_INCLUDE_DIRS)
 endif()
 
 target_compile_definitions(Emu68.elf PRIVATE BELLATRIX_EMU68=1)
+
+if(CONFIG_RIGEL)
+    # Emu68 defines this target with the plain target_link_libraries signature.
+    target_link_libraries(Emu68.elf rigel)
+    target_compile_definitions(Emu68.elf PRIVATE CONFIG_RIGEL=1)
+else()
+    target_compile_definitions(Emu68.elf PRIVATE CONFIG_RIGEL=0)
+endif()

@@ -21,6 +21,7 @@
 #include "kernel_romtags.h"
 #include "m68k_exception.h"
 #include "platform.h"
+#include <bellatrix/memory_map.h>
 
 #define FDT_MAGIC       0xd00dfeedUL
 #define FDT_BEGIN_NODE  1
@@ -459,10 +460,40 @@ static void add_boot_tag(uint32_t *index, uint32_t tag, uint32_t data)
     (*index)++;
 }
 
+static int bootarg_present(const struct Emu68BootContext *ctx,
+                           const char *wanted)
+{
+    uint32_t i;
+    uint32_t wanted_len = 0;
+
+    while (wanted[wanted_len])
+        wanted_len++;
+
+    if (!(ctx->flags & EMU68_BOOT_BOOTARGS_VALID) || !ctx->bootargs)
+        return 0;
+
+    for (i = 0; i + wanted_len <= ctx->bootargs_size; i++)
+    {
+        uint32_t j;
+
+        if (i != 0 && ctx->bootargs[i - 1] != ' ')
+            continue;
+        for (j = 0; j < wanted_len && ctx->bootargs[i + j] == wanted[j]; j++)
+            ;
+        if (j == wanted_len &&
+            (i + j == ctx->bootargs_size || ctx->bootargs[i + j] == ' ' ||
+             ctx->bootargs[i + j] == '\0'))
+            return 1;
+    }
+
+    return 0;
+}
+
 static void start_aros(struct Emu68BootContext *ctx)
 {
     UWORD *ranges[3];
     struct MemHeader *memory;
+    struct MemHeader *chip_memory = 0;
     struct ExecBase *sys_base;
     void *user_stack;
     uint32_t lower;
@@ -576,9 +607,23 @@ static void start_aros(struct Emu68BootContext *ctx)
 
     BootMsg = emu68_boot_tags;
     memory = (struct MemHeader *)lower;
-    krnCreateTLSFMemHeader("System Memory", 0, memory, upper - lower,
-                           MEMF_CHIP | MEMF_FAST | MEMF_PUBLIC |
-                           MEMF_KICK | MEMF_LOCAL);
+    if (bootarg_present(ctx, "bellatrix.rigel=1"))
+    {
+        krnCreateTLSFMemHeader("Fast Memory", 0, memory, upper - lower,
+                               MEMF_FAST | MEMF_PUBLIC | MEMF_KICK |
+                               MEMF_LOCAL);
+        chip_memory = (struct MemHeader *)BELLATRIX_CHIP_RAM_ALLOC_BASE;
+        krnCreateMemHeader("Chip Memory", -10, chip_memory,
+                           BELLATRIX_CHIP_RAM_ALLOC_SIZE,
+                           MEMF_CHIP | MEMF_PUBLIC | MEMF_KICK | MEMF_LOCAL |
+                           MEMF_24BITDMA);
+    }
+    else
+    {
+        krnCreateTLSFMemHeader("System Memory", 0, memory, upper - lower,
+                               MEMF_CHIP | MEMF_FAST | MEMF_PUBLIC |
+                               MEMF_KICK | MEMF_LOCAL);
+    }
 
     ranges[0] = (UWORD *)__aros_resident_start;
     ranges[1] = (UWORD *)__aros_resident_end;
@@ -587,6 +632,12 @@ static void start_aros(struct Emu68BootContext *ctx)
     sys_base = krnPrepareExecBase(ranges, memory, BootMsg);
     if (sys_base)
     {
+        if (chip_memory)
+        {
+            Enqueue(&sys_base->MemList, &chip_memory->mh_Node);
+            sys_base->MaxLocMem = BELLATRIX_CHIP_RAM_SIZE;
+        }
+
         /*
          * Tell exec what Emu68 actually emulates.
          *

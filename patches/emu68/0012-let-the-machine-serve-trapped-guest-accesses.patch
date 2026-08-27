@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 27 Aug 2026 16:00:00 -0300
+Subject: [PATCH] Let the machine serve trapped guest accesses
+
+The Bellatrix hook was deliberately observation-only while the address map
+was being discovered.  Give the same narrow boundary a handled result now so
+an optional external provider can answer a transaction without Emu68 falling
+through to host memory.
+
+Emu68 still knows no guest address ranges or device semantics.  The machine
+receives the reconstructed transaction and either handles it or returns zero,
+in which case the existing Emu68 path remains unchanged.
+---
+ src/aarch64/vectors.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -794,7 +794,8 @@ int SYSWriteValToAddr(uint64_t value, uint64_t value2, int size, uint64_t far)
+     D(kprintf("[JIT:SYS] SYSWriteValToAddr(0x%x, %d, %p)\n", value, size, far));
+     
+ #ifdef BELLATRIX_EMU68
+-    machine_bus_access((uint32_t)far, size, 1);
++    if (machine_bus_write((uint32_t)far, size, value))
++        return 1;
+ #endif
+ 
+     if (far == 0xdeadbeef && size == 1) {
+@@ -825,7 +826,8 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
+     D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
+ 
+ #ifdef BELLATRIX_EMU68
+-    machine_bus_access((uint32_t)far, size, 0);
++    if (machine_bus_read((uint32_t)far, size, value))
++        return 1;
+ #endif
+ 
+     switch(size)
+-- 
+2.43.0

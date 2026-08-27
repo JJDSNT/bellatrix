@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 27 Aug 2026 16:15:00 -0300
+Subject: [PATCH] Initialize the secondary machine read value
+
+The page-fault decoder always carries two result slots because 128-bit loads
+need both.  A machine-handled narrow read returns before the ordinary load
+switch initializes the second one, so initialize it at the machine boundary.
+---
+ src/aarch64/vectors.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -825,6 +825,7 @@ int SYSReadValFromAddr(uint64_t *value, uint64_t *value2, int size, uint64_t far)
+     D(kprintf("[JIT:SYS] SYSReadValFromAddr(%d, %p)\n", size, far));
+ 
+ #ifdef BELLATRIX_EMU68
++    *value2 = 0;
+     if (machine_bus_read((uint32_t)far, size, value))
+         return 1;
+ #endif
+-- 
+2.43.0

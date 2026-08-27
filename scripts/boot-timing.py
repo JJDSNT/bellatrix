@@ -345,7 +345,13 @@ def one_run(args, workdir):
     else:
         record["sd"] = "reused"
 
-    for name, path in (("emu68", "out/images/Emu68.img"),
+    kernel_name_path = os.path.join(ROOT, "out/images/Emu68.kernel-name")
+    kernel_name = "Emu68.img"
+    if os.path.exists(kernel_name_path):
+        with open(kernel_name_path, encoding="utf-8") as kernel_name_file:
+            kernel_name = kernel_name_file.read().strip()
+
+    for name, path in (("emu68", "out/images/" + kernel_name),
                        ("aros", "out/aros/aros-emu68-m68k.elf"),
                        ("sd", "out/aros/sd.img")):
         full = os.path.join(ROOT, path)

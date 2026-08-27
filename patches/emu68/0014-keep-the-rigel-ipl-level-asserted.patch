@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 27 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Keep the Rigel IPL level asserted
+
+INTF.IPL now belongs to the Rigel-backed Amiga interrupt domain.  It is a
+publication of the level Rigel derives from INTREQ and INTENA, not a one-shot
+host-interrupt latch.
+
+Do not clear that publication when the CPU accepts an exception.  The source
+remains asserted until classic hardware semantics change it, at which point
+Bellatrix publishes the newly resolved level.
+---
+ src/ExecutionLoop.c | 22 ----------------------
+ 1 file changed, 22 deletions(-)
+
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+index 5caefed..cd1d54c 100644
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -443,28 +443,6 @@ void MainLoop()
+                 /* Set SR */
+                 setSR(SR);
+ 
+-#if !defined(PISTORM_ANY_MODEL)
+-                /*
+-                 * The level has been consumed, so drop it.
+-                 *
+-                 * On PiStorm INTF.IPL mirrors a physical line that Paula holds
+-                 * until the guest acknowledges, so clearing it here would be
+-                 * wrong -- hence the guard. Standalone there is no line and no
+-                 * Paula: the field is written by Emu68's own core-0 IRQ path,
+-                 * once per host interrupt, and nothing else would ever lower
+-                 * it. Leaving it set would re-fire the moment the guest's RTE
+-                 * drops the SR mask, forever.
+-                 *
+-                 * Only when the level being taken is the one IPL asked for --
+-                 * a higher-priority source (ARM_err at 7) must not swallow a
+-                 * pending IPL.
+-                 */
+-                if (ctx->INTF.IPL && level == ctx->INTF.IPL)
+-                {
+-                    ctx->INTF.IPL = 0;
+-                }
+-#endif
+-
+                 /* Get VBR */
+                 vbr = ctx->VBR;
+ 
+-- 
+2.43.0

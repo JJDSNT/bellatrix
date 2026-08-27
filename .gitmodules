@@ -17,3 +17,7 @@
 	path = external/wifipi
 	url = https://github.com/michalsc/WiFiPi.device.git
 	ignore = dirty
+[submodule "external/rigel"]
+	path = external/rigel
+	url = https://github.com/JJDSNT/rigel.git
+	ignore = dirty

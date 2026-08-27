@@ -1,0 +1,73 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Thu, 27 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Use the PiStorm-shaped IPL gate for Rigel
+
+The PiStorm Classic path already separates interrupt notification from level
+resolution: INTF.IPL opens arbitration and the current level is then pulled
+from the hardware.  Use that same shape for Bellatrix with Rigel, without
+pretending the machine is a PiStorm.
+
+The Bellatrix Amiga boundary supplies the current Rigel level.  Also use the
+existing PiStorm event-wait loop for STOP, so a level publication plus SEV can
+wake the CPU and the pending aggregate is checked before sleeping.
+---
+ src/ExecutionLoop.c | 21 +++++++++++++++++++++
+ src/M68k_LINE4.c    |  2 +-
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+index cd1d54c..3d58f2e 100644
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -15,6 +15,10 @@
+ #include "pistorm/ps_protocol.h"
+ #endif
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++extern unsigned int amiga_irq_get_ipl(void);
++#endif
++
+ register uint32_t PC __asm__("w18");
+ register void (*ARMCode)() __asm__("x12");
+ extern uint32_t EPOCH;
+@@ -349,7 +353,23 @@ void MainLoop()
+                 }
+ 
+                 /* Now, if Higher-level interrupt was coming from Paula, report it */
+-#if defined(PISTORM) || !defined(PISTORM_ANY_MODEL)
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++                /*
++                 * Keep the existing PiStorm Classic split between a cheap
++                 * pending gate and an authoritative level read.  Rigel owns
++                 * INTREQ, INTENA and priority resolution; Bellatrix only asks
++                 * its Amiga boundary for the currently asserted level.
++                 */
++                if (ctx->INTF.IPL)
++                {
++                    int ipl_level = (int)amiga_irq_get_ipl();
++
++                    if (ipl_level > level)
++                    {
++                        level = ipl_level;
++                    }
++                }
++#elif defined(PISTORM) || !defined(PISTORM_ANY_MODEL)
+                 /*
+                  * On PiStorm32 IPL level is obtained by second CPU core from the GPIO directly.
+                  *
+diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
+index cb0b5d6..eb3f0da 100644
+--- a/src/M68k_LINE4.c
++++ b/src/M68k_LINE4.c
+@@ -1606,7 +1606,7 @@ static uint32_t EMIT_STOP(struct TranslatorContext *ctx, uint16_t opcode)
+         msr_imm(3, 6, 7)  // Mask interrupts
+     );
+ 
+-#ifndef PISTORM_ANY_MODEL
++#if !defined(PISTORM_ANY_MODEL) && !(defined(BELLATRIX_EMU68) && CONFIG_RIGEL)
+     /* Non pistorm machines wait for interrupt only */
+     EMIT(ctx, wfi());
+ #else
+-- 
+2.43.0

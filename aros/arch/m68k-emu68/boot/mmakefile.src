@@ -138,6 +138,7 @@ CORELIBS  := -L$(AROS_LIB) -larossupport -lautoinit -llibinit -lamiga \
 USER_CPPFLAGS := -D__EMU68__ -DADATE="\"$(shell date "+%d.%m.%Y")\""
 USER_CFLAGS   := $(CFLAGS_NO_BUILTIN) -fno-common
 USER_INCLUDES := -I$(SRCDIR)/rom/kernel -I$(SRCDIR)/rom/exec \
+    -I$(SRCDIR)/arch/m68k-emu68/include \
     -I$(SRCDIR)/arch/m68k-emu68/platform \
     -I$(SRCDIR)/arch/m68k-all/kernel
 

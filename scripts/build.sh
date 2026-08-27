@@ -9,8 +9,8 @@
 # Everything lands under out/ at the project root:
 #
 #   out/build/emu68/   cmake build tree
-#   out/firmware/      SD-card payload: Emu68.img.gz, DTBs, start.elf, config.txt
-#   out/images/        Emu68.img, uncompressed, for QEMU and for flashing
+#   out/firmware/      SD-card payload: selected kernel, DTBs and Pi firmware
+#   out/images/        Bellatrix.img with Rigel, Emu68.img without it
 
 set -euo pipefail
 
@@ -28,6 +28,12 @@ TARGET="${BELLATRIX_TARGET:-raspi64}"
 # BELLATRIX_VARIANT=none still builds stock Emu68, which is what an A/B against
 # the unmodified upstream behaviour needs.
 VARIANT="${BELLATRIX_VARIANT:-bellatrix}"
+RIGEL="${CONFIG_RIGEL:-0}"
+
+case "$RIGEL" in
+    0|1) ;;
+    *) echo "ERROR: CONFIG_RIGEL must be 0 or 1" >&2; exit 2 ;;
+esac
 
 if [ "${1:-}" = "clean" ]; then
     echo "[build] wiping $BUILD"
@@ -52,12 +58,13 @@ fi
 
 "$ROOT/scripts/setup.sh" --verify >/dev/null 2>&1 || "$ROOT/scripts/setup.sh"
 
-echo "[build] configuring (TARGET=$TARGET VARIANT=$VARIANT)"
+echo "[build] configuring (TARGET=$TARGET VARIANT=$VARIANT CONFIG_RIGEL=$RIGEL)"
 cmake -S "$ROOT/external/emu68" -B "$BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/aarch64-linux-gnu.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
     -DTARGET="$TARGET" \
     -DVARIANT="$VARIANT" \
+    -DCONFIG_RIGEL="$RIGEL" \
     -DCMAKE_INSTALL_PREFIX="$FIRMWARE" \
     >/dev/null
 
@@ -70,6 +77,14 @@ cmake --install "$BUILD" >/dev/null
 # The build only emits the gzipped image; QEMU's -kernel and the SD card both
 # want it plain.
 mkdir -p "$IMAGES"
-gunzip -c "$FIRMWARE/Emu68.img.gz" > "$IMAGES/Emu68.img"
+if [ "$RIGEL" = 1 ]; then
+    IMAGE_NAME="Bellatrix.img"
+else
+    IMAGE_NAME="Emu68.img"
+fi
+gunzip -c "$FIRMWARE/Emu68.img.gz" > "$IMAGES/$IMAGE_NAME"
+cp "$FIRMWARE/Emu68.img.gz" "$FIRMWARE/$IMAGE_NAME.gz"
+printf '%s\n' "$RIGEL" > "$IMAGES/Emu68.config-rigel"
+printf '%s\n' "$IMAGE_NAME" > "$IMAGES/Emu68.kernel-name"
 
-echo "[build] out/images/Emu68.img  ($(stat -c%s "$IMAGES/Emu68.img") bytes)"
+echo "[build] out/images/$IMAGE_NAME  ($(stat -c%s "$IMAGES/$IMAGE_NAME") bytes)"

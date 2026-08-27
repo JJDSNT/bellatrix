@@ -21,7 +21,7 @@
 # in play, Emu68 loads its m68k ELF from -initrd. Ctrl-A X quits.
 #
 # Pieces, and what builds them:
-#   out/images/Emu68.img          scripts/build.sh      (--build, or run it)
+#   out/images/{Bellatrix,Emu68}.img scripts/build.sh   (--build, or run it)
 #   out/firmware/bcm2710-*.dtb    scripts/build.sh
 #   out/aros/aros-emu68-m68k.elf  scripts/build-aros.sh (never built here — it
 #                                 also builds a cross toolchain)
@@ -30,10 +30,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KERNEL="$ROOT/out/images/Emu68.img"
+KERNEL_NAME="$(cat "$ROOT/out/images/Emu68.kernel-name" 2>/dev/null || echo Emu68.img)"
+KERNEL="$ROOT/out/images/$KERNEL_NAME"
 DTB="$ROOT/out/firmware/bcm2710-rpi-3-b.dtb"
 INITRD="$ROOT/out/aros/aros-emu68-m68k.elf"
 SD="$ROOT/out/aros/sd.img"
+RIGEL_STAMP="$ROOT/out/images/Emu68.config-rigel"
 MONITOR="${BELLATRIX_QEMU_MONITOR:-/tmp/emu68-monitor.sock}"
 
 # Off by default. Booting and building are different intentions, and a run
@@ -121,6 +123,9 @@ if [ "$AROS" = 1 ]; then
     # muimaster.library and its Zune icon classes, and the screen stays on the
     # Emu68 logo.
     BOOTARGS="${BOOTARGS:-nocomposition}"
+    if [ "$(cat "$RIGEL_STAMP" 2>/dev/null || echo 0)" = 1 ]; then
+        BOOTARGS="$BOOTARGS bellatrix.rigel=1"
+    fi
     QEMU+=(-initrd "$INITRD")
     if [ "$USE_SD" = 1 ]; then
         [ -f "$SD" ] || { echo "ERROR: missing $SD — run scripts/make-sdcard.sh" >&2; exit 1; }

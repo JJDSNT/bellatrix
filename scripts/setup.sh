@@ -194,6 +194,9 @@ failed=0
 # fresh clone does not end up with an empty directory that only fails later —
 # the selected official contrib sources as dangling injected symlinks.
 PLAIN=(aros-contrib)
+if [ "${CONFIG_RIGEL:-0}" = 1 ]; then
+    PLAIN+=(rigel)
+fi
 
 for name in "${PLAIN[@]}"; do
     repo="$ROOT/external/$name"

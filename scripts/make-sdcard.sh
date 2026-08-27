@@ -189,15 +189,15 @@ done < <(cd "$DIST" && ls -A)
 # bootcode.bin is the stage the Pi 3 loads out of the card by itself; start.elf
 # and fixup.dat are the GPU firmware it then runs; the DTB is picked by the
 # firmware from the board model, so every Pi 3 variant's tree is written and the
-# board chooses. Emu68 goes in gzipped exactly as the build produced it, renamed
-# to Bellatrix.img.gz on the card -- the firmware decompresses a kernel image by
-# its content, so the name is config.txt's to choose.
+# board chooses. The kernel keeps the composition name recorded by build.sh;
+# the firmware decompresses it by content, so config.txt may select either.
 #
 # The AROS ELF is taken from the distribution tree rather than out/aros so the
 # kernel and the modules on the card always come from one build.
 if [ "$PI" = 1 ]; then
+    KERNEL_IMAGE="$(cat "$ROOT/out/images/Emu68.kernel-name" 2>/dev/null || echo Emu68.img)"
     BOOT_FILES=("$FIRMWARE/bootcode.bin" "$FIRMWARE/start.elf" "$FIRMWARE/fixup.dat"
-                "$FIRMWARE/Emu68.img.gz" "$DIST/$ELF")
+                "$FIRMWARE/$KERNEL_IMAGE.gz" "$DIST/$ELF")
     for f in "$FIRMWARE"/bcm2710-*.dtb; do
         [ -e "$f" ] && BOOT_FILES+=("$f")
     done
@@ -426,17 +426,10 @@ if [ -n "${BELLATRIX_BOOT_TEST:-}" ]; then
 fi
 
 if [ "$PI" = 1 ]; then
-    # Emu68's own build installs it as Emu68.img.gz, and on the card it is ours:
-    # the kernel a Bellatrix card boots. The firmware picks a kernel by the name
-    # config.txt gives and decompresses it by content, so the name is free, and
-    # a card whose files say what they are beats one that borrows a name from
-    # upstream. Nothing else renames -- Emu68 the project keeps its name
-    # everywhere it belongs to Emu68.
+    # Keep the composition name chosen by build.sh. A Rigel image is Bellatrix;
+    # a build without that integration remains Emu68.
     for f in "${BOOT_FILES[@]}"; do
-        case "$(basename "$f")" in
-            Emu68.img.gz) cp -al "$f" "$STAGE/Bellatrix.img.gz" ;;
-            *)            cp -al "$f" "$STAGE/$(basename "$f")" ;;
-        esac
+        cp -al "$f" "$STAGE/$(basename "$f")"
     done
 
     # config.txt and cmdline.txt are written here rather than kept as files in
@@ -445,7 +438,7 @@ if [ "$PI" = 1 ]; then
     cat > "$STAGE/config.txt" <<'EOF'
 # Bellatrix on a Raspberry Pi 3. Written by scripts/make-sdcard.sh --pi.
 
-kernel=Bellatrix.img.gz
+kernel=KERNEL_IMAGE_PLACEHOLDER
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 
@@ -494,6 +487,7 @@ enable_uart=1
 core_freq=400
 core_freq_min=400
 EOF
+    sed -i "s/KERNEL_IMAGE_PLACEHOLDER/$KERNEL_IMAGE.gz/" "$STAGE/config.txt"
 
     # One line, no trailing newline: the firmware hands this to Emu68 as the
     # boot arguments, and nocomposition is what puts AROS on the screen.
@@ -516,8 +510,13 @@ EOF
     # logo; with fbgfx and vcgfx in its place that premise wants re-testing,
     # and a card that cannot be built without the flag cannot test it.
     #
-    printf '%s%s' \
+    RIGEL_BOOTARG=""
+    if [ "$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)" = 1 ]; then
+        RIGEL_BOOTARG=" bellatrix.rigel=1"
+    fi
+    printf '%s%s%s' \
         "${BELLATRIX_CMDLINE-nocomposition}" \
+        "$RIGEL_BOOTARG" \
         "${BELLATRIX_CMDLINE_EXTRA:+ $BELLATRIX_CMDLINE_EXTRA}" \
         > "$STAGE/cmdline.txt"
 fi

@@ -49,6 +49,28 @@ cd bellatrix
 ./run.sh                    # boot the lot under QEMU
 ```
 
+Rigel is an optional compatibility layer and is disabled by default. Enable
+its build explicitly when working on the integration:
+
+```bash
+CONFIG_RIGEL=1 ./scripts/build.sh
+```
+
+The gated build names the resulting composition explicitly: a Rigel-enabled
+build produces `out/images/Bellatrix.img`, while the default build produces
+`out/images/Emu68.img`. The run, SD-card, timing, and release scripts select
+the name recorded by the last successful build.
+
+With `CONFIG_RIGEL=0` (the default), Rigel is neither initialized by setup nor
+included in the Emu68 build. Switching the option in the same incremental build
+directory is supported.
+
+With Rigel enabled, `src/machine/` remains the memory-policy control plane: it
+marks the coarse CIA, RTC, and custom-chip apertures as external in the same
+table that programs the Emu68 MMU. `src/amiga/bus.c` is the thin provider, and
+Rigel itself decodes the complete M68K-visible address and owns all classic
+hardware semantics.
+
 Set aside a few hours for the first `./scripts/build-aros.sh`: it builds an
 m68k cross toolchain from source before it can build AROS itself, and that
 takes longer than everything else combined. Later runs reuse it.
@@ -83,7 +105,7 @@ starts is handed to it as the `initramfs` — the slot where an Emu68 user names
 a Kickstart ROM:
 
 ```ini
-kernel=Bellatrix.img.gz
+kernel=Bellatrix.img.gz   # Rigel build; Emu68.img.gz without Rigel
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 ```
@@ -160,6 +182,7 @@ some devices are not usable yet.
 external/emu68      submodule → michalsc/Emu68            (pinned 9b4379a)
 external/aros       submodule → aros-development-team/AROS (pinned 9757529)
 external/aros-contrib submodule → aros-development-team/contrib
+external/rigel      submodule → JJDSNT/Rigel (optional)
 
 aros/arch/m68k-emu68  the AROS port — our source, symlinked into the AROS tree
 aros/contrib/Demo/GL selected MesaGL examples → external/aros-contrib
