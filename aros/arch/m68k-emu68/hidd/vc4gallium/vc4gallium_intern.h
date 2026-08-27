@@ -184,6 +184,7 @@ struct vc4galliumstaticdata
     struct {
         struct vc4_frame_bo tile;
         struct vc4_frame_bo exec;
+        struct vc4_frame_bo attr;          /* LE copies of CPU-native vertex data */
         struct vc4_frame_bo rcl;
         struct vc4_frame_bo binoverflow;    /* Binner overspill pool (BPOA/BPOS) */
         ULONG               seqno;  /* Seqno of last job using this set (0 = idle) */

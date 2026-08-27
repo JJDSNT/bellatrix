@@ -6,7 +6,7 @@ priority: high
 type: bug
 owner: unassigned
 created_at: 2026-08-21
-updated_at: 2026-08-23
+updated_at: 2026-08-27
 tags:
   - vc4
   - gallium
@@ -21,6 +21,47 @@ related_files:
 ---
 
 # Summary
+
+## Keep the complete Mesa/VC4 debug path enabled during hardware bring-up (2026-08-27)
+
+The first indexed `gears` submission now reaches the V3D binner, but it remains
+stalled in the first `GL_INDEXED_PRIMITIVE`. Selective diagnostics established
+that the m68k-native U16 index stream is copied correctly to submission-local
+little-endian storage and that replacing Mesa's generic `max_index=65535` with
+the observed maxima (81, 161, 243 and 323) does not release the binner.
+
+Do not continue this investigation with only newly invented one-line probes.
+Hardware test packs must keep the existing debug facilities enabled until the
+first animated frame is demonstrated:
+
+- `DEBUG=1` in the project-owned submission, V3D-control and Gallium HIDD
+  sources (`vc4_drm_aros.c`, `vc4_v3d.c`, `vc4_galliumclass.c`);
+- `MESA_DEBUG=1` and `VC4_DEBUG=cl,surf,perf,always_sync` in `S:gl-run`;
+- full BCL, validated shader-record, uniform, referenced-BO and V3D front-end
+  register dumps on a timeout.
+
+Mesa is already built with assertions enabled: `MESA_DEBUG` is empty rather
+than `-DNDEBUG`. Do not globally add `-DDEBUG` merely to get runtime tracing;
+that changes Mesa's debug-refcount ABI and requires every participating core
+library to be rebuilt consistently. The local `NDEBUG` in `aros_drm_vc4.c` is
+intentional GalliumCoreAPI isolation and is not evidence that Mesa assertions
+are globally disabled.
+
+## QPU shader BOs also cross an endian boundary (2026-08-27)
+
+Static audit after enabling the complete debug path found a blocker before the
+next hardware run: `CREATE_SHADER_BO` used `CopyMem()` to put Mesa's native
+64-bit QPU instructions into GPU memory. That is valid on ARM little-endian,
+but on m68k it gives VideoCore the bytes in reverse order. The local QPU
+metadata scanner still appeared to work because it read the copied bytes back
+as native `UQUAD`; consequently its success did not validate the representation
+seen by the GPU.
+
+The HIDD now scans the native representation first and then reverses each
+eight-byte QPU instruction into little-endian form before cache flush. This is
+a direct explanation for the observed stop: command-list processing reaches
+the first indexed primitive, and that is precisely when the binner launches
+the coordinate shader. Hardware validation is still required.
 
 ## Hardware VC4 reaches Mesa format conversion (2026-08-25)
 
@@ -849,3 +890,40 @@ the first four raw and normalized indexed packets for the next hardware run.
 The emu68 driver implementation was then consolidated into the project-owned
 `aros/arch/m68k-emu68/hidd/vc4gallium` tree; patch 0079 is only the upstream
 build integration selecting that tree.
+
+# 2026-08-27: QPU instruction order fixed; frame execution completes
+
+The hardware log after serializing each Mesa shader BO as little-endian QPU
+instructions changes the failure qualitatively. Submissions 3 through 8 all
+reach both `FLDONE` and `FRDONE`, their BFC/RFC counters match the submitted
+sequence numbers, and the driver rotates the overlay BOs. This validates the
+QPU instruction-endian diagnosis and retires the original first-frame binner
+hang.
+
+Mesa's debug decoder still prints `Unknown packet 0x70`; this is a decoder
+limitation rather than the hardware error, because 0x70 is the valid
+`TILE_BINNING_MODE_CONFIG` packet and the same list completes on V3D.
+
+The full dumps identify the next endian boundary. Uniform words and mapped
+vertex attributes remain in m68k byte order (`3f 80 00 00` for float 1.0),
+while V3D consumes little-endian data. Several V3D 2.1 packet generators also
+use native `memcpy` for 32-bit fields (flat-shade flags, point/line sizes and
+the floating-point clipping/scaling packets). The driver now serializes the
+uniform stream and those packet fields as little-endian. Integer fields packed
+byte-by-byte by Mesa are intentionally left untouched. Persistently mapped
+vertex BOs still require submission-local little-endian attribute copies; do
+not mutate them in place because Mesa may update and reuse them from the CPU.
+
+The following hardware run validates the uniform and packet conversion: the
+uniform dump now contains `00 00 80 3f`, the POINT_SIZE/LINE_WIDTH packets
+contain the same little-endian representation, and successive jobs continue
+to complete both binning and rendering. The original VBO dump remains native
+(`3f 80 00 00`), isolating the last observed geometry-data boundary.
+
+The emu68 HIDD now allocates a submission-pool attribute scratch BO. For each
+shader record it uses the validated maximum vertex index, attribute size and
+stride to copy only the referenced VBO range, reverses each complete 32-bit
+attribute word, and redirects that shader record to the scratch copy. Original
+persistently mapped VBOs are never modified. The scratch belongs to the same
+rotating pool and therefore cannot be reused before the associated seqno has
+completed.

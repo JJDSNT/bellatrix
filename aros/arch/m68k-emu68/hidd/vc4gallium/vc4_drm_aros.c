@@ -42,7 +42,7 @@
     - V3D job submission (binning + rendering)
 */
 
-#define DEBUG 0
+#define DEBUG 1
 #include <aros/debug.h>
 
 #include <proto/exec.h>
@@ -486,17 +486,18 @@ static void gpu_mem_reclaim(struct vc4galliumstaticdata *sd)
         struct vc4_frame_bo *pools[] = {
             &sd->pool[i].tile,
             &sd->pool[i].exec,
+            &sd->pool[i].attr,
             &sd->pool[i].rcl,
             &sd->pool[i].binoverflow
         };
         int p;
-        for (p = 0; p < 4; p++)
+        for (p = 0; p < 5; p++)
         {
             if (pools[p]->vaddr)
             {
                 D(bug("[VC4Gallium] gpu_mem_reclaim: freeing pool[%d].%s (%d bytes)\n",
                     i, (p == 0) ? "tile" : (p == 1) ? "exec" :
-                       (p == 2) ? "rcl" : "binoverflow",
+                       (p == 2) ? "attr" : (p == 3) ? "rcl" : "binoverflow",
                     pools[p]->size));
                 gpu_mem_free(sd, pools[p]->gpu_handle, pools[p]->size);
                 pools[p]->vaddr = NULL;
@@ -888,12 +889,6 @@ static int ioctl_create_shader_bo(struct vc4galliumstaticdata *sd, struct drm_vc
 
     CopyMem((APTR)(IPTR)args->data, vaddr, args->size);
 
-    /* Flush CPU-written QPU instructions to RAM. V3D fetches shader code
-     * through the uncached 0xC0000000 alias and would otherwise miss dirty
-     * ARM L1 lines, stalling the render thread on FS code fetch. */
-    CacheClearE(vaddr, args->size, CACRF_ClearD);
-    __sync_synchronize();
-
     sd->bo_table[handle].vaddr = vaddr;
     sd->bo_table[handle].bus_addr = GPU_BUS_ADDR(vaddr);
     sd->bo_table[handle].gpu_handle = gpu_handle;
@@ -904,7 +899,43 @@ static int ioctl_create_shader_bo(struct vc4galliumstaticdata *sd, struct drm_vc
     sd->bo_table[handle].cpu_mapped = FALSE;
     sd->bo_table[handle].tiling_modifier = 0; /* DRM_FORMAT_MOD_LINEAR */
 
+    /* Mesa emits each QPU instruction as a native UQUAD. Scan that native
+     * representation first, then serialize every 64-bit instruction in the
+     * little-endian byte order consumed by VideoCore. A direct CopyMem is
+     * correct on ARM but leaves the two 32-bit halves and all bytes reversed
+     * on m68k; the binner then reaches the first primitive, launches a
+     * nonsensical coordinate shader and never completes the primitive. */
     scan_shader_qpu(vaddr, args->size, &sd->bo_table[handle]);
+#if AROS_BIG_ENDIAN
+    {
+        UBYTE *code = (UBYTE *)vaddr;
+        ULONG off;
+
+        if (args->size & 7)
+        {
+            bug("[VC4Gallium] create_shader_bo: size %lu is not a whole number of QPU instructions\n",
+                (unsigned long)args->size);
+            gpu_mem_free(sd, gpu_handle, args->size);
+            memset(&sd->bo_table[handle], 0, sizeof(sd->bo_table[handle]));
+            ReleaseSemaphore(&sd->bo_lock);
+            return -1;
+        }
+        for (off = 0; off < args->size; off += 8)
+        {
+            UBYTE t;
+            t = code[off + 0]; code[off + 0] = code[off + 7]; code[off + 7] = t;
+            t = code[off + 1]; code[off + 1] = code[off + 6]; code[off + 6] = t;
+            t = code[off + 2]; code[off + 2] = code[off + 5]; code[off + 5] = t;
+            t = code[off + 3]; code[off + 3] = code[off + 4]; code[off + 4] = t;
+        }
+    }
+#endif
+
+    /* Flush CPU-written QPU instructions to RAM. V3D fetches shader code
+     * through the uncached 0xC0000000 alias and would otherwise miss dirty
+     * ARM L1 lines, stalling the render thread on FS code fetch. */
+    CacheClearE(vaddr, args->size, CACRF_ClearD);
+    __sync_synchronize();
 
     ReleaseSemaphore(&sd->bo_lock);
 
@@ -1417,10 +1448,15 @@ struct exec_state {
     ULONG *shader_state_addrs;      /* Low bits from GL_SHADER_STATE */
     ULONG shader_state_max;         /* Capacity of shader_state_addrs */
     ULONG shader_state_count;
+    ULONG *shader_state_max_index;
     /* Shader rec validated bus address base */
     ULONG shader_rec_bus;
     /* Validated uniforms bus address base */
     ULONG uniforms_bus;
+    UBYTE *attr_scratch;
+    ULONG attr_scratch_bus;
+    ULONG attr_scratch_size;
+    ULONG attr_scratch_used;
 };
 
 static ULONG process_bin_cl(struct exec_state *exec,
@@ -1526,6 +1562,7 @@ static ULONG process_bin_cl(struct exec_state *exec,
                 return 0;
             }
             exec->shader_state_addrs[exec->shader_state_count++] = low_bits;
+            exec->shader_state_max_index[exec->shader_state_count - 1] = 0;
 
             /* Compute shader record packet size for advancing shader_rec_p */
             ULONG nr_attr = low_bits & 0x7;
@@ -1625,6 +1662,9 @@ static ULONG process_bin_cl(struct exec_state *exec,
             put_u32_unaligned(dst + dst_off + 2, count);
             put_u32_unaligned(dst + dst_off + 6, ib_bus);
             put_u32_unaligned(dst + dst_off + 10, max_index);
+            if (exec->shader_state_count != 0 &&
+                max_index > exec->shader_state_max_index[exec->shader_state_count - 1])
+                exec->shader_state_max_index[exec->shader_state_count - 1] = max_index;
 
             {
                 if (indexed_diag_count++ < 4)
@@ -1649,6 +1689,49 @@ static ULONG process_bin_cl(struct exec_state *exec,
             src_off += pkt_size;
             continue;
         }
+
+        case VC4_PACKET_GL_ARRAY_PRIMITIVE:
+        {
+            ULONG count = get_u32_native_unaligned(src + src_off + 2);
+            ULONG first = get_u32_native_unaligned(src + src_off + 6);
+            ULONG max_index = count ? first + count - 1 : first;
+
+            if (dst_off + pkt_size > dst_max) return 0;
+            dst[dst_off] = cmd;
+            dst[dst_off + 1] = src[src_off + 1];
+            put_u32_unaligned(dst + dst_off + 2, count);
+            put_u32_unaligned(dst + dst_off + 6, first);
+            if (exec->shader_state_count != 0 &&
+                max_index > exec->shader_state_max_index[exec->shader_state_count - 1])
+                exec->shader_state_max_index[exec->shader_state_count - 1] = max_index;
+            dst_off += pkt_size;
+            src_off += pkt_size;
+            continue;
+        }
+
+        case VC4_PACKET_FLAT_SHADE_FLAGS:
+        case VC4_PACKET_POINT_SIZE:
+        case VC4_PACKET_LINE_WIDTH:
+            if (dst_off + pkt_size > dst_max) return 0;
+            dst[dst_off] = cmd;
+            put_u32_unaligned(dst + dst_off + 1,
+                              get_u32_native_unaligned(src + src_off + 1));
+            dst_off += pkt_size;
+            src_off += pkt_size;
+            continue;
+
+        case VC4_PACKET_Z_CLIPPING:
+        case VC4_PACKET_CLIPPER_XY_SCALING:
+        case VC4_PACKET_CLIPPER_Z_SCALING:
+            if (dst_off + pkt_size > dst_max) return 0;
+            dst[dst_off] = cmd;
+            put_u32_unaligned(dst + dst_off + 1,
+                              get_u32_native_unaligned(src + src_off + 1));
+            put_u32_unaligned(dst + dst_off + 5,
+                              get_u32_native_unaligned(src + src_off + 5));
+            dst_off += pkt_size;
+            src_off += pkt_size;
+            continue;
 
         case VC4_PACKET_TILE_BINNING_MODE_CONFIG:
         {
@@ -1838,8 +1921,13 @@ static int relocate_shader_recs(struct exec_state *exec,
                 ULONG uni_start_p = exec->uniforms_bus + uni_dst_idx * 4;
                 ULONG d, t, u;
 
+                /* Mesa constructs uniform words in native CPU order.  The
+                 * QPU consumes the stream as little-endian 32-bit words, so
+                 * serialize every word instead of copying ULONGs verbatim
+                 * on m68k. */
                 for (d = 0; d < num_uniforms; d++)
-                    uniforms_out[d] = uniform_data[d];
+                    put_u32_unaligned((UBYTE *)&uniforms_out[d],
+                                      uniform_data[d]);
 
                 /* Texture P0 relocation: for each texture sample, patch
                  * the P0 word in the output uniforms with the texture
@@ -1879,11 +1967,12 @@ static int relocate_shader_recs(struct exec_state *exec,
                      * bits off forced type=RGBA8888 on every texture,
                      * which scrambled all 8-bit and 565 sampling. The
                      * same formula covers is_direct (P0 = plain address). */
-                    ULONG p0_val = uniforms_out[p0_word_idx];
-                    uniforms_out[p0_word_idx] = tex_bus + p0_val;
+                    ULONG p0_val = uniform_data[p0_word_idx];
+                    put_u32_unaligned((UBYTE *)&uniforms_out[p0_word_idx],
+                                      tex_bus + p0_val);
 
                     D(bug("[VC4Gallium]   tex[%d]: p0_idx=%d p0=0x%08x -> 0x%08x\n",
-                        t, p0_word_idx, p0_val, uniforms_out[p0_word_idx]));
+                        t, p0_word_idx, p0_val, tex_bus + p0_val));
                 }
 
                 /* Fill in UNIFORMS_ADDRESS slots: the kernel uses
@@ -1893,7 +1982,8 @@ static int relocate_shader_recs(struct exec_state *exec,
                 {
                     ULONG o = shader_bo->uniform_addr_offsets[u];
                     if (o < num_uniforms)
-                        uniforms_out[o] = uni_start_p;
+                        put_u32_unaligned((UBYTE *)&uniforms_out[o],
+                                          uni_start_p);
                 }
             }
 
@@ -1916,7 +2006,60 @@ static int relocate_shader_recs(struct exec_state *exec,
             }
             ULONG addr = bo_bus_addr(exec->sd, exec->bo_handles,
                                       exec->bo_handle_count, hindex, "vbo");
+#if AROS_BIG_ENDIAN
+            if (hindex < exec->bo_handle_count)
+            {
+                ULONG handle = exec->bo_handles[hindex];
+                ULONG attr_size = (ULONG)pkt_src[o + 4] + 1;
+                ULONG stride = pkt_src[o + 5];
+                ULONG vertex_count = exec->shader_state_max_index[rec] + 1;
+                ULONG copy_size;
+                struct vc4_bo_entry *bo;
+                ULONG v, word;
+
+                if (stride == 0)
+                    stride = attr_size;
+                if (handle == 0 || handle >= VC4_MAX_BOS ||
+                    exec->sd->bo_table[handle].refcount == 0 ||
+                    vertex_count > (~0UL / stride))
+                    return -1;
+                bo = &exec->sd->bo_table[handle];
+                copy_size = vertex_count * stride;
+                if (vbo_offset > bo->size || copy_size > bo->size - vbo_offset ||
+                    copy_size > exec->attr_scratch_size - exec->attr_scratch_used)
+                {
+                    bug("[VC4Gallium] VBO scratch overflow: rec=%lu attr=%lu off=%lu size=%lu bo=%lu scratch=%lu/%lu\n",
+                        (unsigned long)rec, (unsigned long)i,
+                        (unsigned long)vbo_offset, (unsigned long)copy_size,
+                        (unsigned long)bo->size,
+                        (unsigned long)exec->attr_scratch_used,
+                        (unsigned long)exec->attr_scratch_size);
+                    return -1;
+                }
+                CopyMem((UBYTE *)bo->vaddr + vbo_offset,
+                        exec->attr_scratch + exec->attr_scratch_used,
+                        copy_size);
+                for (v = 0; v < vertex_count; v++)
+                {
+                    UBYTE *vertex = exec->attr_scratch +
+                                    exec->attr_scratch_used + v * stride;
+                    for (word = 0; word + 4 <= attr_size; word += 4)
+                    {
+                        UBYTE t;
+                        t = vertex[word]; vertex[word] = vertex[word + 3]; vertex[word + 3] = t;
+                        t = vertex[word + 1]; vertex[word + 1] = vertex[word + 2]; vertex[word + 2] = t;
+                    }
+                }
+                addr = exec->attr_scratch_bus + exec->attr_scratch_used;
+                exec->attr_scratch_used = ROUNDUP(exec->attr_scratch_used + copy_size, 16);
+            }
+#endif
             put_u32_unaligned(pkt_dst + o, addr + vbo_offset);
+#if AROS_BIG_ENDIAN
+            if (addr >= exec->attr_scratch_bus &&
+                addr < exec->attr_scratch_bus + exec->attr_scratch_size)
+                put_u32_unaligned(pkt_dst + o, addr);
+#endif
         }
 
         src_off += nr_relocs * 4 + packet_size;
@@ -2287,6 +2430,7 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
     ULONG exec_bus;
     ULONG bin_cl_offset, shader_rec_offset, uniforms_offset, index_scratch_offset;
     ULONG index_scratch_size = 0;
+    ULONG attr_scratch_size = 0;
     ULONG bin_cl_out_size;
     ULONG rcl_max_size, rcl_size;
     APTR rcl_vaddr;
@@ -2463,7 +2607,7 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
         {
             if (sd->shader_state_scratch)
                 FreeVec(sd->shader_state_scratch);
-            sd->shader_state_scratch = AllocVec(need * sizeof(ULONG), MEMF_ANY);
+            sd->shader_state_scratch = AllocVec(need * 2 * sizeof(ULONG), MEMF_ANY);
             sd->shader_state_scratch_max =
                 sd->shader_state_scratch ? need : 0;
         }
@@ -2474,6 +2618,7 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
             return -1;
         }
         exec.shader_state_addrs = sd->shader_state_scratch;
+        exec.shader_state_max_index = sd->shader_state_scratch + need;
         exec.shader_state_max = sd->shader_state_scratch_max;
     }
 
@@ -2488,6 +2633,75 @@ static int do_submit_cl(struct vc4galliumstaticdata *sd, struct drm_vc4_submit_c
 
     D(bug("[VC4Gallium] submit_cl: bin CL %d -> %d bytes, %d shader recs\n",
         args->bin_cl_size, bin_cl_out_size, exec.shader_state_count));
+
+#if AROS_BIG_ENDIAN
+    /* Size a per-pool vertex scratch from the validated draw maxima and
+     * shader-record strides. Each attribute gets its own compact copy so
+     * interleaved VBOs remain untouched and reusable by Mesa. */
+    {
+        UBYTE *rec_data = (UBYTE *)(IPTR)args->shader_rec;
+        ULONG src_off = 0;
+        ULONG rec;
+
+        for (rec = 0; rec < exec.shader_state_count; rec++)
+        {
+            ULONG low_bits = exec.shader_state_addrs[rec];
+            ULONG nr_attr = low_bits & 7;
+            ULONG nr_relocs, packet_size, i;
+            UBYTE *pkt;
+
+            if (nr_attr == 0)
+                nr_attr = 8;
+            nr_relocs = 3 + nr_attr;
+            packet_size = (low_bits & 8) ? (100 + nr_attr * 4) :
+                                           (36 + nr_attr * 8);
+            if (src_off + nr_relocs * 4 + packet_size > args->shader_rec_size)
+                return -1;
+            pkt = rec_data + src_off + nr_relocs * 4;
+            for (i = 0; i < nr_attr; i++)
+            {
+                ULONG o = 36 + i * 8;
+                ULONG attr_size = (ULONG)pkt[o + 4] + 1;
+                ULONG stride = pkt[o + 5];
+                ULONG vertices = exec.shader_state_max_index[rec] + 1;
+                ULONG bytes;
+
+                if (stride == 0)
+                    stride = attr_size;
+                if (vertices > (~0UL / stride))
+                    return -1;
+                bytes = vertices * stride;
+                if (bytes > ~0UL - attr_scratch_size - 15)
+                    return -1;
+                attr_scratch_size += ROUNDUP(bytes, 16);
+            }
+            src_off += nr_relocs * 4 + packet_size;
+        }
+    }
+    if (attr_scratch_size != 0)
+    {
+        APTR attr_vaddr = pool_bo_get(sd, &sd->pool[pi].attr,
+                                      attr_scratch_size, 4096,
+                                      VCMEM_L1NONALLOCATING | VCMEM_ZERO);
+        if (!attr_vaddr)
+        {
+            bug("[VC4Gallium] submit_cl: failed to alloc attribute scratch (%lu bytes)\n",
+                (unsigned long)attr_scratch_size);
+            return -1;
+        }
+        exec.attr_scratch = (UBYTE *)attr_vaddr;
+        exec.attr_scratch_bus = sd->pool[pi].attr.bus_addr;
+        exec.attr_scratch_size = attr_scratch_size;
+        exec.attr_scratch_used = 0;
+    }
+    else
+#endif
+    {
+        exec.attr_scratch = NULL;
+        exec.attr_scratch_bus = 0;
+        exec.attr_scratch_size = 0;
+        exec.attr_scratch_used = 0;
+    }
 
     ULONG _t_after_bin = VC4G_NOW_US();
 

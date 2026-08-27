@@ -4,7 +4,7 @@
     VC4 Gallium 3D HIDD - V3D hardware initialization and control
 */
 
-#define DEBUG 0
+#define DEBUG 1
 #include <aros/debug.h>
 
 #include <proto/exec.h>

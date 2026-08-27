@@ -9,7 +9,7 @@
     frames to the AROS display.
 */
 
-#define DEBUG 0
+#define DEBUG 1
 #include <aros/debug.h>
 
 #include <proto/oop.h>

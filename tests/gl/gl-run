@@ -15,4 +15,6 @@
 ; GL_RENDERER "VC4 V3D 2.1" and Mesa 20.0.8, and enters its render loop.
 ;
 Stack 100000000
+SetEnv MESA_DEBUG 1
+SetEnv VC4_DEBUG cl,surf,perf,always_sync
 SYS:Extras/Demos/GL/{demo}
