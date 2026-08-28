@@ -1455,9 +1455,16 @@ void dwc2_transfer_watchdog(struct DWC2Unit *unit)
                 unit->watchdog_reported == 0)
             {
                 unit->watchdog_reported = unit->watchdog_recoveries;
-                bug("[DWC2/Emu68:WD] %lu recoveries so far (chan=%u stage=%u "
-                    "HCINT=%08lx)\n", unit->watchdog_recoveries, chan->index,
-                    chan->stage, status);
+                bug("[DWC2/Emu68:WD] %lu recoveries chan=%u stage=%u "
+                    "AHB=%08lx GINT=%08lx/%08lx HAINT=%08lx/%08lx "
+                    "HCINT=%08lx/%08lx\n",
+                    unit->watchdog_recoveries, chan->index, chan->stage,
+                    dwc2_readl(device, DWC2_GAHBCFG),
+                    dwc2_readl(device, DWC2_GINTSTS),
+                    dwc2_readl(device, DWC2_GINTMSK),
+                    dwc2_readl(device, DWC2_HAINT),
+                    dwc2_readl(device, DWC2_HAINTMSK), status,
+                    dwc2_readl(device, DWC2_HCINTMSK(chan->index)));
             }
             dwc2_writel(device, DWC2_HCINT(chan->index), status);
             channel_irq(unit, chan, status);

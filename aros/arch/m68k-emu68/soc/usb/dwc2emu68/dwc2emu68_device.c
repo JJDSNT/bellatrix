@@ -73,7 +73,7 @@ static int DWC2_FNAME(Init)(LIBBASETYPEPTR DWC2Base)
     dwc2_platform_cpu0_mask(unit);
     unit->task = NewCreateTask(
         TASKTAG_NAME, "Bellatrix DWC2 unit",
-        TASKTAG_PRI, -5,
+        TASKTAG_PRI, 0,
         TASKTAG_AFFINITY, &unit->affinity,
         TASKTAG_PC, DWC2_FNAME(UnitTask),
         TASKTAG_TASKMSGPORT, &unit->port,

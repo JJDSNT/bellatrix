@@ -210,6 +210,10 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
         struct IOUsbHWReq *ioreq;
 
         ULONG signals = Wait(port_signal | timer_signal);
+        /* Prefer already-published channel completions to an expired
+         * watchdog when their signals coalesce. */
+        if (unit->irq_pending != 0)
+            dwc2_controller_drain_irq(unit);
         if ((signals & timer_signal) && unit->watchdog_active)
         {
             WaitIO((struct IORequest *)unit->timer_request);
@@ -225,10 +229,6 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
         }
         if (dwc2_transfer_pending_abort(unit))
             dwc2_transfer_abort_all(unit);
-        if (unit->irq_pending != 0)
-        {
-            dwc2_controller_drain_irq(unit);
-        }
         while ((ioreq = (struct IOUsbHWReq *)GetMsg(unit->port)) != NULL)
         {
             process_request(ioreq);
