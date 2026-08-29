@@ -874,3 +874,55 @@ and a working presenter.
 Note that the spike installed `amigavideo.hidd` into the distribution tree. It
 is inert without a `Devs/Monitors` descriptor, but a `build-aros.sh full` will
 now carry it.
+
+
+# 2026-08-29: phase 1 done -- Denise renders
+
+Both halves are in `src/amiga/bus.c`.
+
+**The census** runs on `RIGEL_EVENT_FRAME_READY`: it takes `rigel_get_frame()`,
+reads the top-left visible pixel as the background reference, and reports a
+stride-sampled count of pixels that differ from it, plus a checksum, the
+geometry and the frame flags. Six reports, then it stops, so it can be left in
+a normal build. Without a display -- and on QEMU there is no HVS to build one on
+-- this is the only thing that can distinguish a chipset that is rendering from
+one that is merely running.
+
+**The producer** is a display selftest under `CONFIG_RIGEL_SELFTEST`, run before
+AROS is loaded so chip RAM is ours: one bitplane of vertical stripes at
+`0x00010000`, COLOR00 black and COLOR01 white, `BPLCON0` for one bitplane, the
+standard PAL window, and DMACON with DMAEN | BPLEN | COPEN.
+
+## Result
+
+```text
+[BELLATRIX:RIGEL:DISPLAY] programming one bitplane
+[BELLATRIX:RIGEL:CENSUS] frame=1 352x256 pitch=4096 bg=00000000 non-bg=704/1887 sum=eca14000 flags=08
+[BELLATRIX:RIGEL:CENSUS] frame=2 352x256 pitch=4096 bg=00000000 non-bg=704/1887 sum=eca14000 flags=08
+[BELLATRIX:RIGEL:CENSUS] frame=3 ... identical
+[BELLATRIX:RIGEL:CENSUS] frame=6 ... identical
+```
+
+Six consecutive frames, byte-identical by checksum, 704 of 1887 sampled pixels
+carrying the foreground colour, `flags=08` = `RIGEL_FRAME_COPPER_ACTIVE`. The
+chipset turns register writes into a stable image, and the copper is running.
+
+## What the census caught on the first attempt
+
+The first version had no copper list, and reported:
+
+```text
+frame=1  non-bg=704/1887  sum=eca14000
+frame=2  non-bg=132/1887  sum=0989bc00
+frame=3  non-bg=0/1887    sum=00000000   (and every frame after)
+```
+
+Correct, then partial, then blank. **`BPL1PT` is not reloaded between frames**:
+Agnus advances it as it fetches and leaves it past the end of the data, and on
+real hardware it is the copper that rewrites it every vertical blank -- which is
+why every Amiga display has a copper list. So the defect was in the producer,
+and Rigel was right.
+
+That is exactly what phase 1 exists for. A blank screen in phase 2 would have
+had three possible causes; now it has one fewer, and the failure was legible
+because the producer's output was known in advance.

@@ -24,6 +24,7 @@ static uint64_t pending_cck;
 static uint8_t cpu_cycle_remainder;
 static uint8_t clock_reported;
 static uint8_t stopped_reported;
+static uint8_t census_reports;
 static uint32_t vblank_count;
 static uint8_t vblank_reports;
 static uint8_t chipset_observed;
@@ -32,7 +33,77 @@ enum { AMIGA_MAX_STEP_CCK = 512 };
 
 #if defined(CONFIG_RIGEL_SELFTEST) && CONFIG_RIGEL_SELFTEST
 static void amiga_bus_selftest(void);
+static void amiga_bus_display_selftest(void);
 #endif
+
+/*
+ * What did Denise actually produce?
+ *
+ * There is no display yet, and on QEMU there is no HVS to build one on, so
+ * this is the only way to tell a chipset that is rendering from one that is
+ * merely running. It answers three separate questions that a blank screen
+ * cannot: whether a frame was composed at all, whether anything in it is not
+ * the background colour, and whether it changes.
+ *
+ * Deliberately cheap and bounded: a stride-sampled census, a handful of times,
+ * so it can be left in a normal build.
+ */
+static void amiga_frame_census(void)
+{
+    enum { AMIGA_CENSUS_REPORTS = 6, AMIGA_CENSUS_STRIDE = 7 };
+    rigel_frame_t frame;
+    const uint32_t *row;
+    uint32_t background;
+    uint32_t non_background = 0;
+    uint32_t checksum = 0;
+    uint32_t sampled = 0;
+    uint32_t x, y;
+
+    if (census_reports >= AMIGA_CENSUS_REPORTS)
+        return;
+    if (!rigel_get_frame(rigel, &frame))
+        return;
+    if (frame.pixels == 0 || frame.width == 0 || frame.height == 0)
+        return;
+    if (frame.format != RIGEL_PIXEL_RGBA8888)
+    {
+        census_reports = AMIGA_CENSUS_REPORTS;
+        kprintf("[BELLATRIX:RIGEL:CENSUS] unexpected pixel format %d\n",
+            (int)frame.format);
+        return;
+    }
+
+    /*
+     * The top-left visible pixel is the background: every Amiga display has
+     * COLOR00 there unless the copper has been told otherwise, so it is the
+     * cheapest reference for "this frame is not empty" that needs no knowledge
+     * of what was programmed.
+     */
+    background = *(const uint32_t *)frame.pixels;
+
+    for (y = 0; y < frame.height; y += AMIGA_CENSUS_STRIDE)
+    {
+        row = (const uint32_t *)((const uint8_t *)frame.pixels +
+                                 (size_t)y * frame.pitch);
+        for (x = 0; x < frame.width; x += AMIGA_CENSUS_STRIDE)
+        {
+            uint32_t pixel = row[x];
+
+            sampled++;
+            checksum = (checksum * 31u) + pixel;
+            if (pixel != background)
+                non_background++;
+        }
+    }
+
+    census_reports++;
+    kprintf("[BELLATRIX:RIGEL:CENSUS] frame=%llu %ux%u pitch=%u bg=%08x "
+            "non-bg=%u/%u sum=%08x flags=%02x\n",
+        (unsigned long long)frame.frame_count,
+        (unsigned)frame.width, (unsigned)frame.height, (unsigned)frame.pitch,
+        (unsigned)background, (unsigned)non_background, (unsigned)sampled,
+        (unsigned)checksum, (unsigned)frame.flags);
+}
 
 static void amiga_clock_step(rigel_cycle_t cycles)
 {
@@ -68,6 +139,8 @@ static void amiga_clock_step(rigel_cycle_t cycles)
                 (unsigned)vblank_count, (unsigned long long)result.time);
         }
     }
+    if ((result.events & RIGEL_EVENT_FRAME_READY) != 0)
+        amiga_frame_census();
     amiga_irq_sync();
 }
 
@@ -226,6 +299,7 @@ void amiga_bus_init(void)
         kprintf("[BELLATRIX:RIGEL] enabled; address decode owned by Rigel\n");
 #if defined(CONFIG_RIGEL_SELFTEST) && CONFIG_RIGEL_SELFTEST
         amiga_bus_selftest();
+        amiga_bus_display_selftest();
 #endif
     }
 }
@@ -337,5 +411,111 @@ static void amiga_bus_selftest(void)
         rigel_get_intreq(rigel), amiga_irq_get_ipl());
     rigel_reset(rigel);
     amiga_irq_init(rigel);
+}
+#endif
+
+#if defined(CONFIG_RIGEL_SELFTEST) && CONFIG_RIGEL_SELFTEST
+/*
+ * A known producer for the display path.
+ *
+ * Phase 1 of the bring-up in AI_context/issues/ISSUE-0068.md. Nothing on this
+ * machine programs Denise, so a census of a running chipset reports an empty
+ * frame forever and there is no way to tell that from a broken one. This
+ * programs the smallest complete display -- one bitplane, two colours, a
+ * pattern whose result is known in advance -- so that the census has something
+ * to be right or wrong about.
+ *
+ * It runs before AROS is loaded, so chip RAM is ours.
+ */
+static void amiga_bus_display_selftest(void)
+{
+    enum
+    {
+        CUSTOM_DIWSTRT  = 0x00dff08eu,
+        CUSTOM_DIWSTOP  = 0x00dff090u,
+        CUSTOM_DDFSTRT  = 0x00dff092u,
+        CUSTOM_DDFSTOP  = 0x00dff094u,
+        CUSTOM_DMACON   = 0x00dff096u,
+        CUSTOM_COP1LCH  = 0x00dff080u,
+        CUSTOM_COP1LCL  = 0x00dff082u,
+        CUSTOM_COPJMP1  = 0x00dff088u,
+        CUSTOM_BPL1PTH  = 0x00dff0e0u,
+        CUSTOM_BPL1PTL  = 0x00dff0e2u,
+        CUSTOM_BPLCON0  = 0x00dff100u,
+        CUSTOM_BPLCON1  = 0x00dff102u,
+        CUSTOM_BPL1MOD  = 0x00dff108u,
+        CUSTOM_COLOR00  = 0x00dff180u,
+        CUSTOM_COLOR01  = 0x00dff182u,
+
+        BITPLANE_BASE   = 0x00010000u,  /* clear of the vectors, AROS not loaded */
+        COPPERLIST_BASE = 0x00020000u,
+        BITPLANE_WIDTH  = 320u,
+        BITPLANE_HEIGHT = 256u,
+        BITPLANE_STRIDE = BITPLANE_WIDTH / 8u,
+
+        /* SET | DMAEN | BPLEN | COPEN */
+        DMACON_ENABLE   = 0x8380u,
+        /* one bitplane, colour burst on */
+        BPLCON0_1BPL    = 0x1200u,
+        /* the standard PAL full-screen window */
+        DIWSTRT_STD     = 0x2c81u,
+        DIWSTOP_STD     = 0x2cc1u,
+        DDFSTRT_LORES   = 0x0038u,
+        DDFSTOP_LORES   = 0x00d0u
+    };
+    uint32_t y, x;
+
+    kprintf("[BELLATRIX:RIGEL:DISPLAY] programming one bitplane\n");
+
+    /* Vertical stripes: every other word set, so half the pixels are COLOR01. */
+    for (y = 0; y < BITPLANE_HEIGHT; ++y)
+    {
+        uint32_t row = BITPLANE_BASE + y * BITPLANE_STRIDE;
+
+        for (x = 0; x < BITPLANE_STRIDE; x += 2u)
+            machine_chip_ram_write16(row + x, (x & 2u) ? 0x0000u : 0xffffu);
+    }
+
+    amiga_bus_write(0, CUSTOM_COLOR00, 2, 0x0000u);   /* black   */
+    amiga_bus_write(0, CUSTOM_COLOR01, 2, 0x0fffu);   /* white   */
+    amiga_bus_write(0, CUSTOM_BPLCON0, 2, BPLCON0_1BPL);
+    amiga_bus_write(0, CUSTOM_BPLCON1, 2, 0x0000u);
+    amiga_bus_write(0, CUSTOM_BPL1MOD, 2, 0x0000u);
+    amiga_bus_write(0, CUSTOM_DIWSTRT, 2, DIWSTRT_STD);
+    amiga_bus_write(0, CUSTOM_DIWSTOP, 2, DIWSTOP_STD);
+    amiga_bus_write(0, CUSTOM_DDFSTRT, 2, DDFSTRT_LORES);
+    amiga_bus_write(0, CUSTOM_DDFSTOP, 2, DDFSTOP_LORES);
+    amiga_bus_write(0, CUSTOM_BPL1PTH, 2, (BITPLANE_BASE >> 16) & 0xffffu);
+    amiga_bus_write(0, CUSTOM_BPL1PTL, 2, BITPLANE_BASE & 0xffffu);
+
+    /*
+     * A copper list, because BPL1PT is not reloaded between frames.
+     *
+     * Agnus advances the bitplane pointer as it fetches and leaves it past the
+     * end of the data; on real hardware it is the copper that rewrites it every
+     * vertical blank, which is why every Amiga display has one. Without this
+     * the first frame is correct, the second is partial and the rest are blank
+     * -- which is exactly what the census reported before this was added.
+     */
+    machine_chip_ram_write16(COPPERLIST_BASE + 0u,  0x00e0u);  /* BPL1PTH */
+    machine_chip_ram_write16(COPPERLIST_BASE + 2u,  (BITPLANE_BASE >> 16) & 0xffffu);
+    machine_chip_ram_write16(COPPERLIST_BASE + 4u,  0x00e2u);  /* BPL1PTL */
+    machine_chip_ram_write16(COPPERLIST_BASE + 6u,  BITPLANE_BASE & 0xffffu);
+    machine_chip_ram_write16(COPPERLIST_BASE + 8u,  0xffffu);  /* end */
+    machine_chip_ram_write16(COPPERLIST_BASE + 10u, 0xfffeu);
+
+    amiga_bus_write(0, CUSTOM_COP1LCH, 2, (COPPERLIST_BASE >> 16) & 0xffffu);
+    amiga_bus_write(0, CUSTOM_COP1LCL, 2, COPPERLIST_BASE & 0xffffu);
+    amiga_bus_write(0, CUSTOM_DMACON,  2, DMACON_ENABLE);
+    amiga_bus_write(0, CUSTOM_COPJMP1, 2, 0x0000u);
+
+    /*
+     * Two frames' worth of colour clocks, so a whole frame is composed with
+     * the display already programmed rather than half-way through it.
+     */
+    bellatrix_emu68_publish_cpu_progress(last_cpu_cycles + 300000u);
+
+    kprintf("[BELLATRIX:RIGEL:DISPLAY] %llu CCK stepped; census above\n",
+        (unsigned long long)rigel_get_time(rigel));
 }
 #endif
