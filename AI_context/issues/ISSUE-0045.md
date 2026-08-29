@@ -927,3 +927,58 @@ attribute word, and redirects that shader record to the scratch copy. Original
 persistently mapped VBOs are never modified. The scratch belongs to the same
 rotating pool and therefore cannot be reused before the associated seqno has
 completed.
+
+# 2026-08-27: hardware rendering works; performance follow-up
+
+The first hardware run with submission-local little-endian vertex attributes
+renders `gears` correctly. Correctness is therefore established for the tested
+fixed-function, untextured path, but rendering is visibly slow. Preserve the
+current implementation as the correctness baseline and optimize in measured,
+separable steps.
+
+The highest-priority performance test is a non-diagnostic build. The bring-up
+configuration currently has `DEBUG=1` in three HIDD sources, emits complete
+BCL, RCL, shader-record, uniform and BO dumps, enables Mesa `VC4_DEBUG` with
+`cl,surf,perf,always_sync`, and performs a blocking seqno wait for each frame.
+Serial output alone is large enough to dominate frame time, while
+`always_sync` prevents CPU/GPU overlap. Add a normal runtime profile that keeps
+errors, timeout diagnostics and concise counters but disables full successful
+submission dumps and `always_sync`. Do this before changing data conversion so
+the cost of the endian path is not confused with debug I/O.
+
+After obtaining that baseline, investigate these optimizations in order:
+
+1. Add per-submit timing/counters for BCL normalization, uniform conversion,
+   attribute conversion, bin wait, render wait and overlay presentation. Log a
+   compact aggregate periodically rather than once per draw or packet.
+2. Deduplicate attribute scratch copies. The current correctness path copies
+   an interleaved VBO range independently for every shader-record attribute and
+   repeated shader state. Cache converted `(handle, offset, stride, attribute
+   layout, vertex range)` entries within a submission and reuse their bus
+   addresses when the key matches.
+3. Convert an interleaved vertex range in one pass when several attributes use
+   the same VBO and stride. This reduces repeated reads/writes and permits one
+   scratch allocation for the complete vertex layout. Maintain byte-accurate
+   handling for non-32-bit components instead of blindly swapping the entire
+   stride.
+4. Reuse scratch capacity by high-water mark across the existing rotating
+   pools and avoid clearing bytes that will be completely overwritten. Pool
+   ownership must continue to be protected by the associated completed seqno.
+5. Consider tracking VBO CPU-write generations so an unchanged converted range
+   can survive across submissions. This is more invasive because persistently
+   mapped Mesa buffers do not automatically notify this HIDD about every CPU
+   write; do not cache across submissions without a reliable invalidation
+   mechanism.
+6. Profile Mesa's repeated `PIPE_PRIM_QUADS` and `PIPE_PRIM_QUAD_STRIP`
+   fallback conversions. Optimize or cache them only after the driver-side
+   timings show that they are significant; their presence in the log is not by
+   itself evidence that they dominate runtime.
+7. Evaluate interrupt-driven V3D completion after the endian work is stable.
+   The current poll-only mode is useful for bring-up, but it can waste CPU and
+   increase latency. Keep polling as a fallback until IRQ acknowledgement and
+   lost-interrupt recovery are validated on hardware.
+
+For every optimization, compare frame rate and the compact stage timings with
+the correctness baseline, verify that BFC/RFC continue to follow submitted
+seqnos, and visually check the animated output. Re-enable the full debug profile
+only when a regression or timeout needs packet-level diagnosis.
