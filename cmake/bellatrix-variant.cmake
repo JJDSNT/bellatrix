@@ -19,6 +19,7 @@ endif()
 set(BELLATRIX_ROOT ${CMAKE_SOURCE_DIR}/../..)
 
 option(CONFIG_RIGEL "Build Bellatrix with the optional Rigel compatibility layer" OFF)
+option(CONFIG_RIGEL_SELFTEST "Run the destructive Rigel clock acceptance test at boot" OFF)
 
 set(BELLATRIX_INCLUDE_DIRS
     ${BELLATRIX_ROOT}/src
@@ -43,6 +44,8 @@ if(CONFIG_RIGEL)
 
     set(RIGEL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(RIGEL_BUILD_HARNESS OFF CACHE BOOL "" FORCE)
+    # Bare metal has no stderr. Bellatrix installs Rigel log callbacks that
+    # write through Emu68's serial kprintf instead.
     set(RIGEL_ENABLE_STDIO_LOG OFF CACHE BOOL "" FORCE)
     set(RIGEL_ENABLE_STDLIB_ENV OFF CACHE BOOL "" FORCE)
     set(RIGEL_ENABLE_STDLIB_ALLOC OFF CACHE BOOL "" FORCE)

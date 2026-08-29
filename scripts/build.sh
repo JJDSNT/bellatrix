@@ -29,11 +29,20 @@ TARGET="${BELLATRIX_TARGET:-raspi64}"
 # the unmodified upstream behaviour needs.
 VARIANT="${BELLATRIX_VARIANT:-bellatrix}"
 RIGEL="${CONFIG_RIGEL:-0}"
+RIGEL_SELFTEST="${CONFIG_RIGEL_SELFTEST:-0}"
 
 case "$RIGEL" in
     0|1) ;;
     *) echo "ERROR: CONFIG_RIGEL must be 0 or 1" >&2; exit 2 ;;
 esac
+case "$RIGEL_SELFTEST" in
+    0|1) ;;
+    *) echo "ERROR: CONFIG_RIGEL_SELFTEST must be 0 or 1" >&2; exit 2 ;;
+esac
+if [ "$RIGEL_SELFTEST" = 1 ] && [ "$RIGEL" != 1 ]; then
+    echo "ERROR: CONFIG_RIGEL_SELFTEST=1 requires CONFIG_RIGEL=1" >&2
+    exit 2
+fi
 
 if [ "${1:-}" = "clean" ]; then
     echo "[build] wiping $BUILD"
@@ -58,13 +67,14 @@ fi
 
 "$ROOT/scripts/setup.sh" --verify >/dev/null 2>&1 || "$ROOT/scripts/setup.sh"
 
-echo "[build] configuring (TARGET=$TARGET VARIANT=$VARIANT CONFIG_RIGEL=$RIGEL)"
+echo "[build] configuring (TARGET=$TARGET VARIANT=$VARIANT CONFIG_RIGEL=$RIGEL CONFIG_RIGEL_SELFTEST=$RIGEL_SELFTEST)"
 cmake -S "$ROOT/external/emu68" -B "$BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/aarch64-linux-gnu.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
     -DTARGET="$TARGET" \
     -DVARIANT="$VARIANT" \
     -DCONFIG_RIGEL="$RIGEL" \
+    -DCONFIG_RIGEL_SELFTEST="$RIGEL_SELFTEST" \
     -DCMAKE_INSTALL_PREFIX="$FIRMWARE" \
     >/dev/null
 

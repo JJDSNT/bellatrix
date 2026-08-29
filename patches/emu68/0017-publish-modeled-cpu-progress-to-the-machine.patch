@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 29 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Publish modeled CPU progress to the machine
+
+Rigel needs CPU progress even while the guest touches only directly mapped
+RAM. Accumulate approximate 68000 costs in the translated stream and publish
+the absolute counter from MainLoop. Spill the pinned guest context around the
+ordinary-ABI machine callback.
+---
+ include/M68k.h        |  3 +++
+ src/ExecutionLoop.c   | 26 ++++++++++++++++++++++++++
+ src/M68k_Translator.c | 68 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 97 insertions(+)
+
+diff --git a/include/M68k.h b/include/M68k.h
+--- a/include/M68k.h
++++ b/include/M68k.h
+@@ -172,4 +172,7 @@ struct M68KState
+     } __attribute__((aligned(8)));
+     uint64_t INSN_COUNT;
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++    uint64_t CYCLE_COUNT;
++#endif
+ 
+     uint32_t JIT_CACHE_MISS;
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -19,5 +19,6 @@
+ #if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
+ extern unsigned int amiga_irq_get_ipl(void);
++extern void bellatrix_emu68_publish_cpu_progress(uint64_t cycles);
+ #endif
+ 
+ register uint32_t PC __asm__("w18");
+@@ -315,5 +316,30 @@ void MainLoop()
+         LastPC = getLastPC();
+         ctx = getCTX();
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++        {
++            enum { BELLATRIX_PROGRESS_INSTRUCTIONS = 64 };
++            static uint64_t previous_instructions;
++            uint64_t instructions;
++
++            __asm__ volatile("mov %0, " CTX_INSN_COUNT_ASM
++                             : "=r"(instructions));
++            if (instructions - previous_instructions >=
++                BELLATRIX_PROGRESS_INSTRUCTIONS)
++            {
++                uint64_t saved_arm_code;
++
++                previous_instructions = instructions;
++                __asm__ volatile("mov %0, x12" : "=r"(saved_arm_code));
++                M68K_SaveContext(ctx);
++                bellatrix_emu68_publish_cpu_progress(ctx->CYCLE_COUNT);
++                M68K_LoadContext(getCTX());
++                __asm__ volatile("mov x12, %0" :: "r"(saved_arm_code));
++                /* Translated code assumes v28 remains its zero register. */
++                __asm__ volatile("mov v28.d[0], xzr");
++            }
++        }
++#endif
++
+ #ifndef PISTORM_ANY_MODEL
+         if (unlikely(PC == 0)) {
+diff --git a/src/M68k_Translator.c b/src/M68k_Translator.c
+--- a/src/M68k_Translator.c
++++ b/src/M68k_Translator.c
+@@ -135,6 +135,51 @@ static uint32_t * (*line_array[16])(struct TranslatorContext *ctx) = {
+     EMIT_lineF
+ };
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++static uint16_t M68K_OpcodeCycles(uint16_t opcode)
++{
++    static const uint8_t ea_cycles[8] = { 0u, 0u, 4u, 4u, 6u, 8u, 10u, 8u };
++    uint8_t group = (uint8_t)(opcode >> 12);
++    uint8_t mode = (uint8_t)((opcode >> 3) & 7u);
++    uint16_t ea = ea_cycles[mode];
++
++    if (mode == 7u) {
++        switch (opcode & 7u) {
++        case 0u: ea = 8u; break;
++        case 1u: ea = 12u; break;
++        case 2u: ea = 8u; break;
++        case 3u: ea = 10u; break;
++        case 4u: ea = 4u; break;
++        default: ea = 0u; break;
++        }
++    }
++
++    switch (group) {
++    case 0x0u: return (uint16_t)(8u + ea);
++    case 0x1u: case 0x2u: case 0x3u: return (uint16_t)(4u + ea);
++    case 0x4u:
++        if (opcode == 0x4e70u) return 132u;
++        if (opcode == 0x4e71u || opcode == 0x4e72u) return 4u;
++        if (opcode == 0x4e73u) return 20u;
++        if (opcode == 0x4e75u) return 16u;
++        if ((opcode & 0xffc0u) == 0x4e80u) return (uint16_t)(16u + ea);
++        if ((opcode & 0xffc0u) == 0x4ec0u) return (uint16_t)(8u + ea);
++        if ((opcode & 0xfff0u) == 0x4e40u) return 34u;
++        return (uint16_t)(4u + ea);
++    case 0x5u: return (opcode & 0x00f8u) == 0x00c8u ? 10u : (uint16_t)(4u + ea);
++    case 0x6u: return (opcode & 0x0f00u) == 0x0100u ? 18u : 10u;
++    case 0x7u: return 4u;
++    case 0x8u: return (opcode & 0x01c0u) == 0x00c0u ? (uint16_t)(140u + ea) : (uint16_t)(4u + ea);
++    case 0x9u: case 0xbu: return (uint16_t)(4u + ea);
++    case 0xcu: return (opcode & 0x01c0u) == 0x00c0u ? (uint16_t)(70u + ea) : (uint16_t)(4u + ea);
++    case 0xdu: return (uint16_t)(4u + ea);
++    case 0xeu: return (uint16_t)(((opcode & 0x00c0u) == 0x00c0u ? 8u : 6u) + ea);
++    case 0xfu: return 20u;
++    default: return 4u;
++    }
++}
++#endif
++
+ extern struct M68KState *__m68k_state;
+ 
+ static inline uint32_t EmitINSN(struct TranslatorContext *ctx)
+@@ -145,5 +190,20 @@ static inline uint32_t EmitINSN(struct TranslatorContext *ctx)
+     uint16_t opcode = cache_read_16(ICACHE, (uint32_t)(uintptr_t)ctx->tc_M68kCodePtr);
+     uint8_t group = opcode >> 12;
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++    {
++        uint8_t context = RA_GetCTX(ctx);
++        uint8_t cycles = RA_AllocARMRegister(ctx);
++        EMIT(ctx,
++            ldr64_offset(context, cycles,
++                __builtin_offsetof(struct M68KState, CYCLE_COUNT)),
++            add64_immed(cycles, cycles, M68K_OpcodeCycles(opcode)),
++            str64_offset(context, cycles,
++                __builtin_offsetof(struct M68KState, CYCLE_COUNT))
++        );
++        RA_FreeARMRegister(ctx, cycles);
++    }
++#endif
++
+     host_flags = 0;
+     if (debug > 2)
+     {

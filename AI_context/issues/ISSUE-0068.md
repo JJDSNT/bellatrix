@@ -227,11 +227,77 @@ not modified. The upstream record is Rigel `AI_context/issues/ISSUE-0005.md`.
   is that Rigel is still stepped to its own event deadlines regardless of how
   approximate the CPU estimate is.
 
+# 2026-08-29: clock slice implemented, idle policy validated
+
+The first clock slice is now implemented in the working tree:
+
+- Emu68 patch `0017-publish-modeled-cpu-progress-to-the-machine.patch`
+  accumulates the legacy approximate 68000 opcode costs and periodically
+  publishes the absolute count from `MainLoop`. The callback preserves the
+  pinned m68k context, `x12`, and the JIT zero vector across the ordinary ABI.
+- `src/amiga/bus.c` converts two modelled CPU cycles to one CCK, advances Rigel
+  in bounded quanta no larger than the next observable deadline, synchronises
+  IPL after each step, and flushes pending time before every Rigel MMIO.
+- Clock activation is lazy. Before the first CIA, RTC, or custom-register MMIO,
+  CPU time is measured but `rigel_step()` is never called. The first MMIO
+  establishes the chipset time-domain epoch and discards the unobservable boot
+  backlog; subsequent CPU progress keeps the chipset running asynchronously.
+  This avoids both continuous chipset cost for an AROS workload that never uses
+  it and an arbitrarily large catch-up pause on a first late access.
+
+Validation:
+
+```text
+./scripts/setup.sh --verify
+    emu68: already applied (17 patches)
+CONFIG_RIGEL=1 ./scripts/build.sh
+    Built target Emu68.elf
+    out/images/Bellatrix.img
+timeout 60 ./run.sh --headless
+    [BootUI] [00:06.682] retargeted to RGB32 framebuffer
+    [BootUI] STARTING SERVICES...
+```
+
+That boot emitted neither `clock armed by first MMIO` nor `clock active`, while
+AROS reached services. This is direct evidence that no `rigel_step()` occurred
+in the no-chipset-call path. An earlier eager-stepping build remained inside
+Rigel's Denise framebuffer/beam work and did not reach the AROS bootstrap in 60
+seconds, which is why idle activation is a correctness/performance requirement
+for this integration rather than a later optimisation.
+
+The compile-time modelled-cycle instrumentation still adds a small fixed JIT
+cost even before activation. The expensive chipset simulation is absent; a
+block-level cycle accumulator can remove most of the remaining accounting cost
+later without changing the lazy-clock contract.
+
+## Opt-in end-to-end acceptance
+
+`CONFIG_RIGEL_SELFTEST=1` adds a destructive early-boot diagnostic that is
+compiled out by default. It performs CPU-visible MMIO through Bellatrix's bus,
+starts CIA-A Timer A, enables master plus vertical-blank interrupts, publishes
+2000 modelled CPU cycles (1000 CCK), and then checks the live beam, timer,
+Rigel interrupt request, and the IPL exposed by Bellatrix's IRQ boundary.
+
+```text
+CONFIG_RIGEL=1 CONFIG_RIGEL_SELFTEST=1 ./scripts/build.sh
+timeout 12 ./run.sh --headless
+
+[BELLATRIX:RIGEL:SELFTEST] PASS time=1000 beam=0000->042e \
+    cia_ta=37 intreq=0020 ipl=3
+[BELLATRIX:RIGEL] first VBLANK at 59474 CCK
+```
+
+This closes the clock slice's original observable acceptance criteria. VHPOSR
+is used for the short beam test because VPOSR exposes only the high vertical
+position bit and therefore legitimately remains unchanged across the first
+four scanlines.
+
 # What is left
 
-- decide whether the clock slice is in scope under the 2026-08-17 freeze
-  (it is functionality, not diagnosis)
-- publish the validated DF1 fix in Rigel and update Bellatrix's pin
+- measure and, if warranted, move modelled-cycle accounting from every opcode
+  to translated-block exits
+- define STOP/idle publication: a stopped CPU must still allow an already
+  activated chipset event to wake it
 - extend the Demo Reel 3 oracle with a per-frame register/DMA trace if a
   stable visual baseline is needed
 - `harness_test_blitter_timing` stays red on the pin; it is the opt-in
