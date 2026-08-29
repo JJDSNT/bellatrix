@@ -798,3 +798,79 @@ These are real work, and sequencing them into the line above would be a mistake:
   not gated on performance either.
 - **The HVS overlay** (ISSUE-0072). A hardware-only optimisation of phase 2's
   presenter, not a separate design.
+
+
+# 2026-08-29: the amigavideo spike
+
+Phase 3's question was "does ~6000 lines of upstream m68k-amiga code build for
+this target, and what does it assume about a real Amiga". Answered.
+
+## It compiles unchanged
+
+```text
+make -C out/build/aros kernel-amiga-m68k-amigavideo
+    Building Module  AROS/Devs/Drivers/amigavideo.hidd ...
+    exit=0
+```
+
+0 errors, 26 warnings, all of them upstream's own (`OOP_GetAttr` called with a
+`struct BitMap **`, `CloseLibrary` with an `IntuitionBase *`). Output is a
+61.4 KB `amigavideo.hidd` in our `emu68-m68k` distribution tree. **No patching
+of upstream was needed and the build takes minutes.**
+
+Its includes are all standard AROS plus `hardware/custom.h`, `hardware/cia.h`,
+`hardware/intbits.h` and `proto/cia.h` -- nothing that assumes a machine we do
+not have.
+
+## The cost is not the driver
+
+Three things the spike turned up, and none of them is in `amigavideo/` itself:
+
+**1. It is a resident HIDD upstream, not a disk driver.**
+`arch/m68k-amiga/boot/mmakefile.src` lists it in `KHIDDS`, linked into the ROM.
+Our target loads `vcgfx` from `Devs/Drivers` with a `Devs/Monitors/VideoCore`
+descriptor beside it, and builds `fbgfx` resident in the kernel ELF. So this
+needs a monitor descriptor and a decision on which of the two shapes to use.
+
+**2. `graphics.library` on m68k-amiga is chipset-flavoured.**
+`arch/m68k-amiga/graphics/` overrides `vbeampos`, `waitblit`, `setchiprev` and
+`bltclear`, all of which have generic counterparts in `rom/graphics/` that our
+target uses today. `coppersupport.c` is Amiga-only but is internal to that
+directory -- `amigavideo` does not include it, and nothing outside it does.
+
+**3. Generic `WaitBlit()` is an empty stub.** In `rom/graphics/waitblit.c`:
+
+```c
+/*    aros_print_not_implemented ("WaitBlit"); */
+/* TODO: Write graphics/WaitBlit() */
+```
+
+So a program that drives the blitter through `graphics.library` and then waits
+would not wait. That is the concrete piece that has to be adopted alongside the
+driver, and it is the reason item 2 is not optional.
+
+## The one unknown left
+
+`amigavideo_chipset.c:1768`:
+
+```c
+AddICRVector(GfxBase->cia, 2, &GfxBase->timsrv);
+```
+
+One call, needing `cia.resource` (`kernel-cia`, from `arch/m68k-amiga/cia/`)
+and `GfxBase->cia` to have been set -- which is `graphics.library`'s job on
+amiga-m68k. Whether our graphics sets it is unverified; if it is NULL, this is
+a runtime hazard rather than a build failure, which is exactly the kind of
+thing phases 1 and 2 exist to make legible.
+
+## What this does to the plan
+
+Phase 3 is **smaller than estimated and better understood**, but its risk moved
+from build time to run time. The files to adopt are identified and few; the
+failure mode left is a driver that builds, loads, and then misbehaves against a
+chipset -- which is why it stays after the phases that give us a known producer
+and a working presenter.
+
+Note that the spike installed `amigavideo.hidd` into the distribution tree. It
+is inert without a `Devs/Monitors` descriptor, but a `build-aros.sh full` will
+now carry it.
