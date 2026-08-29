@@ -1,0 +1,204 @@
+From: Bellatrix contributors
+Subject: [PATCH] WirelessManager: wake the event loop from the GUI process
+
+Pressing Scan in the WirelessManager window did nothing: no scan was
+requested, no S2_GETNETWORKS reached the SANA-II driver, and no error was
+reported anywhere.
+
+The GUI runs in its own process (main_amiga.c start_gui() spawns
+"WirelessManager GUI") while wpa_supplicant_run() -> eloop_run() blocks in
+the main task. ScanFunc() calls wpa_supplicant_req_scan(), which registers an
+eloop timeout from the GUI process -- and nothing wakes the task that would
+run it.
+
+eloop_run() builds its signal mask once per iteration, before Wait(), from
+the timeouts and read sockets that exist at that moment. With no networks
+configured there is neither: the mask is zero, and Wait(0) can never return,
+because no signal satisfies an empty mask. The loop is parked for ever and
+the timeout the GUI just queued is never seen. Even with sockets registered
+the mask is a snapshot, so a timeout added afterwards waits for an unrelated
+wakeup.
+
+Give the loop a signal of its own, always in the mask, and signal it from
+eloop_register_timeout() when the caller is another task. Re-arm the timer
+request when the newly registered timeout is nearer than the one already in
+flight, which is the case that matters here -- the Scan button asks for a
+scan at zero seconds. The list splice now runs under Forbid(), since it has
+two writers.
+
+Note eloop.wake_sig cannot rely on the memset: 0 is a valid signal number, so
+it is assigned for real and set to -1 when none is free (in which case the
+old behaviour returns rather than a wrong signal being used).
+
+---
+--- a/workbench/network/WirelessManager/src/utils/eloop_amiga.c
++++ b/workbench/network/WirelessManager/src/utils/eloop_amiga.c
+@@ -68,10 +68,25 @@
+ 
+ 	struct MsgPort *timer_port;
+ 	struct timerequest *timer_request;
++
++	/*
++	 * The task running eloop_run(), and a signal for waking it.
++	 *
++	 * Timeouts are registered from other tasks: the MUI GUI runs in its own
++	 * process ("WirelessManager GUI"), and its Scan button calls
++	 * wpa_supplicant_req_scan() there. Without a way to wake this task, that
++	 * registration is invisible until something else happens to wake it --
++	 * and with no networks configured and no read sockets, nothing ever
++	 * does, because sig_mask below is then zero and Wait(0) never returns.
++	 */
++	struct Task *task;
++	BYTE wake_sig;
+ };
+ 
+ static struct eloop_data eloop;
+ 
++static void eloop_wake(void);
++
+ 
+ int eloop_init(void)
+ {
+@@ -79,6 +94,12 @@
+ 
+ 	memset(&eloop, 0, sizeof(eloop));
+ 
++	eloop.task = FindTask(NULL);
++	eloop.wake_sig = AllocSignal(-1);       /* memset made this 0, a valid
++	                                         * signal number - set it for
++	                                         * real, or to -1 if there is
++	                                         * none to spare */
++
+ 	/* Open timer device */
+ 	if (err == 0) {
+ 		eloop.timer_port = CreateMsgPort();
+@@ -183,27 +204,34 @@
+ 	timeout->handler = handler;
+ 	timeout->next = NULL;
+ 
++	/* The splice runs under Forbid() because this is called from the GUI
++	 * process as well as from eloop_run()'s own task. */
++	Forbid();
++
+ 	if (eloop.timeout == NULL) {
+ 		eloop.timeout = timeout;
+-		return 0;
+-	}
++	} else {
++		prev = NULL;
++		tmp = eloop.timeout;
++		while (tmp != NULL) {
++			if (os_time_before(&timeout->time, &tmp->time))
++				break;
++			prev = tmp;
++			tmp = tmp->next;
++		}
+ 
+-	prev = NULL;
+-	tmp = eloop.timeout;
+-	while (tmp != NULL) {
+-		if (os_time_before(&timeout->time, &tmp->time))
+-			break;
+-		prev = tmp;
+-		tmp = tmp->next;
++		if (prev == NULL) {
++			timeout->next = eloop.timeout;
++			eloop.timeout = timeout;
++		} else {
++			timeout->next = prev->next;
++			prev->next = timeout;
++		}
+ 	}
+ 
+-	if (prev == NULL) {
+-		timeout->next = eloop.timeout;
+-		eloop.timeout = timeout;
+-	} else {
+-		timeout->next = prev->next;
+-		prev->next = timeout;
+-	}
++	Permit();
++
++	eloop_wake();
+ 
+ 	return 0;
+ }
+@@ -340,16 +368,44 @@
+ }
+ 
+ 
++/*
++ * Wake eloop_run() from another task. A no-op when called by the eloop task
++ * itself (it is about to re-evaluate anyway) or when no signal was available.
++ */
++static void eloop_wake(void)
++{
++	if (eloop.task != NULL && eloop.wake_sig >= 0
++		&& eloop.task != FindTask(NULL))
++		Signal(eloop.task, 1UL << eloop.wake_sig);
++}
++
++
+ void eloop_run(void)
+ {
+ 	int i;
+-	struct os_time tv, now;
++	struct os_time tv, now, armed;
+ 	u32 sig_mask, sigs;
+ 	struct timerequest *cur_timer_req = NULL;
+ 
++	armed.sec = armed.usec = 0;
++
+ 	while (!eloop.terminate) {
+ 		sig_mask = 0;
+ 
++		/*
++		 * A timeout registered from another task may be nearer than the
++		 * one already in flight - the Scan button asks for one at zero
++		 * seconds. Drop the outstanding request and re-arm, otherwise
++		 * the scan waits for whatever was armed first.
++		 */
++		if (cur_timer_req != NULL && eloop.timeout != NULL
++			&& os_time_before(&eloop.timeout->time, &armed)) {
++			AbortIO((APTR) cur_timer_req);
++			WaitIO((APTR) cur_timer_req);
++			SetSignal(0, 1UL << eloop.timer_port->mp_SigBit);
++			cur_timer_req = NULL;
++		}
++
+ 		if (eloop.timeout && cur_timer_req == NULL) {
+ 			/* Send a timer request for the next timeout
+ 			 * (even if it's already occurred) */
+@@ -364,6 +420,7 @@
+ 				tv.sec;
+ 			eloop.timer_request->tr_time.tv_micro =
+ 				tv.usec;
++			armed = eloop.timeout->time;
+ 			SendIO((APTR) eloop.timer_request);
+ 			cur_timer_req = eloop.timer_request;
+ 		}
+@@ -371,6 +428,12 @@
+ 			sig_mask |= 1 << eloop.timer_port->mp_SigBit;
+ 		}
+ 
++		/* Always waitable, so a timeout registered by another task
++		 * reaches this loop - and so Wait() is never handed a mask of
++		 * zero, which blocks for ever. */
++		if (eloop.wake_sig >= 0)
++			sig_mask |= 1UL << eloop.wake_sig;
++
+ 
+ 		/* Add registered signals to signal mask */
+ 		for (i = 0; i < eloop.signal_count; i++)
+@@ -412,6 +475,11 @@
+ {
+ 	struct eloop_timeout *timeout, *prev;
+ 
++	if (eloop.wake_sig >= 0) {
++		FreeSignal(eloop.wake_sig);
++		eloop.wake_sig = -1;
++	}
++
+ 	timeout = eloop.timeout;
+ 	while (timeout != NULL) {
+ 		prev = timeout;
