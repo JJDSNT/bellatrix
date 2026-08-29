@@ -1,0 +1,54 @@
+From: Bellatrix contributors
+Subject: [PATCH] bwfm: say whether an EAPOL frame found a reader
+
+A WPA association that loops - associate, wait, give up, re-scan, associate -
+has three possible causes below wpa_supplicant, and they are indistinguishable
+from outside the device: the EAPOL frames of the four-way handshake arrive and
+are delivered, they arrive and nobody is reading that packet type, or they
+never arrive at all.
+
+rx_deliver() already computes the answer and already has the line. It was
+behind D() with DEBUG 0, so it produced nothing in any of the three cases.
+
+Make it unconditional and bound it to 32 frames, in the style of the other
+bring-up milestones. IP, ARP and IPv6 stay excluded: they flood, and they have
+a reader by definition.
+
+---
+--- a/workbench/devs/networks/bwfm/bwfm_dev.c
++++ b/workbench/devs/networks/bwfm/bwfm_dev.c
+@@ -375,12 +375,29 @@
+     }
+     ReleaseSemaphore(&unit->lock);
+ 
+-    /* IP/ARP flood the log and have a reader by definition; anything else is
+-     * worth a line, because a frame nobody reads (EAPOL, say) is silently lost. */
++    /*
++     * IP/ARP flood the log and have a reader by definition; anything else is
++     * worth a line, because a frame nobody reads (EAPOL, say) is silently lost.
++     *
++     * Unconditional with DEBUG 0, and bounded, because this is the only line
++     * that can tell three states apart when a WPA association loops forever:
++     * EAPOL arriving and delivered, EAPOL arriving with nobody reading it, and
++     * EAPOL never arriving at all. The first is a working handshake path, the
++     * second a defect here, the third a defect below us. Silence looks the
++     * same for all three.
++     */
+     if (packet_type != 0x0800 && packet_type != 0x0806 && packet_type != 0x86dd)
+-        D(bug("[bwfm.device] type 0x%04x len %u -> %s\n",
+-              (unsigned)packet_type, (unsigned)len,
+-              delivered ? "opener" : "NO READER (dropped)"));
++    {
++        static ULONG shown = 0;
++
++        if (shown < 32)
++        {
++            bug("[WIFI:DEV] rx type 0x%04x len %u -> %s\n",
++                (unsigned)packet_type, (unsigned)len,
++                delivered ? "opener" : "NO READER (dropped)");
++            shown++;
++        }
++    }
+ }
+ 
+ /*
