@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 29 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Map VC4 memory normal non-cacheable
+
+The VC4 Gallium driver uses firmware allocations as identity-mapped CPU
+pointers while V3D accesses the same physical storage. A write-through CPU
+mapping does not make GPU writes coherent with cache lines already held by the
+CPU. Use the existing Normal Non-Cacheable MAIR entry for the single canonical
+mapping, matching the current AROS aarch64 V3D arena policy and the driver's
+existing no-cache-maintenance contract.
+---
+ src/aarch64/start.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -1381,7 +1381,13 @@ void init_platform(void)
+             };
+             dt_add_property(dt_find_node("/emu68"), "vc4-mem", reg, 8);
+ 
+-            mmu_map(vid_base, vid_base, vid_memory * 1024*1024, MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_WRITETHROUGH, 0);
++            /*
++             * VC4 and the CPU share this identity-mapped firmware pool.
++             * Keep one canonical Normal Non-Cacheable view: write-through
++             * alone cannot make GPU writes visible over stale CPU lines.
++             */
++            mmu_map(vid_base, vid_base, vid_memory * 1024*1024,
++                    MMU_ACCESS | MMU_ISHARE | MMU_ALLOW_EL0 | MMU_ATTR_UNCACHED, 0);
+         }
+ 
+         if (unicam_base) {
