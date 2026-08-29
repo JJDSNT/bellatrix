@@ -14,6 +14,7 @@
 #include "machine/region.h"
 #if CONFIG_RIGEL
 #include "amiga/bus.h"
+#include "amiga/frame.h"
 #endif
 
 #include <stdint.h>
@@ -162,5 +163,12 @@ void machine_init(void)
     amiga_bus_init();
 #endif
     machine_setup_memory();
+#if CONFIG_RIGEL
+    /*
+     * After the static map, because it installs regions of its own and the
+     * table refuses an overlap -- which is the point of the table.
+     */
+    amiga_frame_init();
+#endif
     machine_region_report();
 }

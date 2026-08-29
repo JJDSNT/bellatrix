@@ -926,3 +926,45 @@ and Rigel was right.
 That is exactly what phase 1 exists for. A blank screen in phase 2 would have
 had three possible causes; now it has one fewer, and the failure was legible
 because the producer's output was known in advance.
+
+
+# 2026-08-29: phase 2a done -- the frame reaches the guest
+
+`src/amiga/frame.{c,h}`. Two regions, installed above the classic 24-bit
+domain, because `$01000000` is exactly where the machine stops being an Amiga
+and starts being ours:
+
+```text
+[BELLATRIX] machine map, 10 regions:
+...
+[BELLATRIX]   $01000000-$011fffff DIRECT   Denise frame aperture (host $00de7000)
+[BELLATRIX]   $01200000-$01200fff EXTERNAL Denise frame descriptor
+[BELLATRIX:RIGEL:FRAME] publishing 352x256 pitch=4096 at $01000000, descriptor at $01200000
+```
+
+The aperture is a 2 MiB buffer Bellatrix allocates and hands to
+`machine_region_install()` as a DIRECT region, so the m68k reads it as ordinary
+memory with no fault per access. The descriptor is an EXTERNAL page serving
+magic, version, base, pitch, width, height, flags and a frame counter, at any
+access width, so a consumer needs to agree on nothing but the byte offset.
+
+## Why a copy, and why that is not a compromise
+
+Rigel renders into a buffer of its own, in Emu68's heap, valid only until the
+next `rigel_step` and deliberately outside the guest's address range (patch
+`emu68/0007`). A consumer needs the opposite of all three: a stable address, a
+stable lifetime, reachability from the m68k. One copy per finished frame buys
+all of them, and it removes the coherency question for whoever reads it. There
+is also nothing to be zero-copy about yet: Rigel offers no way to say where it
+should render, which is part of what its ISSUE-0008 is about.
+
+The publisher copies what fits and reports what it copied rather than refusing
+a frame whose geometry grew -- a consumer reading `height` from the descriptor
+draws a short image, where one that assumed a size would draw someone else's
+memory.
+
+## Still to do in phase 2
+
+The presenter: an AROS display driver modelled on
+`aros/arch/m68k-emu68/hidd/fbgfx/`, reading the descriptor at `$01200000` and
+the frame at `$01000000`. Everything below it is now in place and verified.

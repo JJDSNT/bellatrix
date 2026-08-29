@@ -6,6 +6,7 @@
  */
 
 #include "amiga/bus.h"
+#include "amiga/frame.h"
 #include "amiga/irq.h"
 #include "machine/memory.h"
 
@@ -140,7 +141,10 @@ static void amiga_clock_step(rigel_cycle_t cycles)
         }
     }
     if ((result.events & RIGEL_EVENT_FRAME_READY) != 0)
+    {
+        amiga_frame_publish(rigel);
         amiga_frame_census();
+    }
     amiga_irq_sync();
 }
 

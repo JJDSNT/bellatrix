@@ -55,9 +55,11 @@ if(CONFIG_RIGEL)
         ${CMAKE_BINARY_DIR}/rigel EXCLUDE_FROM_ALL)
     list(APPEND BELLATRIX_SOURCES
         ${BELLATRIX_ROOT}/src/amiga/bus.c
+        ${BELLATRIX_ROOT}/src/amiga/frame.c
         ${BELLATRIX_ROOT}/src/amiga/irq.c)
     list(APPEND BASE_FILES
         ${BELLATRIX_ROOT}/src/amiga/bus.c
+        ${BELLATRIX_ROOT}/src/amiga/frame.c
         ${BELLATRIX_ROOT}/src/amiga/irq.c)
 endif()
 
