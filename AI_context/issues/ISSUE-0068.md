@@ -660,8 +660,11 @@ Two costs to take deliberately:
   320 KB, 16 MB/s at 50 Hz, and it removes the coherency question entirely.
   Zero-copy is an optimisation for later, and it needs Rigel to be told where
   to put its framebuffer.
-- **QEMU has no HVS**, so none of this lights up except on hardware. That is
-  the argument for doing the serial census first.
+- **QEMU has no HVS.** It does have a framebuffer -- AROS shows a picture under
+  it -- so this constrains the *overlay*, not the display work as a whole. See
+  the correction in ISSUE-0073: the ARM side can blit into Emu68's own
+  framebuffer before `vcgfx` retargets, which makes the first visual test
+  QEMU-testable with `screendump`.
 
 ## The display work has its own pair of issues
 
@@ -684,10 +687,11 @@ a pair with the same split as the audio one, for the same reason:
    and a cheap non-black pixel census to the serial line. The analogue of the
    clock selftest: it works under QEMU, it is small, and it tells us whether the
    input side is real before any display work starts.
-2. **The HVS overlay.** Bellatrix publishes the descriptor of a non-cacheable
-   copy of the finished frame; a small AROS-side piece sets it on the on-screen
-   bitmap. Hardware only. At this point anything that pokes `$dff000` is
-   visible, with the desktop intact.
+2. **A picture, under QEMU.** Not the HVS -- see the correction in ISSUE-0073.
+   The ARM side can blit into Emu68's own framebuffer before `vcgfx` retargets,
+   and after that an AROS display driver modelled on our `fbgfx` presents the
+   frame from guest-visible RAM. The HVS overlay is then the same driver
+   presenting through a plane instead of a copy, on hardware.
 3. **Build `amigavideo` for this target**, so `graphics.library` -- and
    therefore a well-behaved application -- draws through the chipset rather
    than through `vcgfx`.

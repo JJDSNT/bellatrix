@@ -156,18 +156,96 @@ measured.
 
 C is Rigel's own performance work, ISSUE-0006, and needs nothing from us.
 
+# Correction: QEMU is missing the HVS, not a framebuffer
+
+An earlier version of this issue, and of ISSUE-0068, said the display work
+lights up only on hardware. That is true of the HVS overlay and false of
+everything else -- AROS shows a picture under QEMU, so a linear framebuffer
+plainly exists. There are three routes, and only the last needs the HVS:
+
+**1. The ARM side writes into Emu68's framebuffer.** `start_rpi64.c:239` does
+`init_display(sz, (void**)&framebuffer, &pitch)` and keeps globals our code can
+already use:
+
+```c
+extern uint16_t *framebuffer;
+extern uint32_t pitch, fb_width, fb_height;
+```
+
+No AROS, no HVS, no guest-visible copy, and `run.sh`'s `screendump` captures
+it. The catch is ownership: `bootui.c` calls `bootui_retarget()` when `vcgfx`
+takes the display -- the `[BootUI] retargeted to RGB32 framebuffer` line in
+every boot log -- and from then on AROS is scanning a different buffer while
+Emu68's RGB16 pointer is stale. So this route serves a test *before* the
+desktop, which is what a first bring-up wants.
+
+**2. An AROS display driver, modelled on our own `fbgfx`.** This port already
+has two display drivers and a handover between them, and the first one is
+exactly the template:
+
+```c
+/* aros/arch/m68k-emu68/hidd/fbgfx/ -- "VideoCore framebuffer graphics HIDD",
+ * twelve files: bitmap class, display class, refresh. It gets its surface
+ * from the kernel, which got it from Emu68: */
+data->width  = KrnGetSystemAttr(KATTR_FrameBufferWidth);
+data->height = KrnGetSystemAttr(KATTR_FrameBufferHeight);
+/* "5:6:5 in a halfword. Emu68 hands this over on the Raspberry Pi" */
+```
+
+So the Emu68-to-AROS surface handover already exists (`start.c:2280` puts
+`fb_width` in D1 and the pointer in A0), `fbgfx` starts the machine, and
+`vcgfx` takes the display later through `bootui_retarget()`. A third driver
+whose surface is Rigel's frame is the smallest new AROS code possible, it is
+QEMU-testable because no HVS is involved, and **the source switch comes free**:
+AROS's monitor machinery already performs the `fbgfx` to `vcgfx` handover, so a
+third monitor is that mechanism rather than a new one.
+
+An earlier draft of this section proposed a plain program blitting into a
+window instead. That is more artisanal and less reusable; the driver is the
+step that is not thrown away.
+
+**3. The HVS overlay.** Hardware only, but zero-copy, hardware-scaled and
+composited above the desktop. From route 2 this is not a different design --
+it is the same driver presenting through a plane instead of a copy.
+
+Routes 2 and 3 are the same bridge: a descriptor plus a buffer. Only where the
+buffer lives changes (guest-visible RAM against non-cacheable ARM memory).
+
+## The semantic wrinkle in route 2, and what it implies
+
+`fbgfx` composes into each bitmap and copies to the framebuffer -- data flows
+from AROS to the screen. For Denise it flows the other way, from Rigel to the
+screen. A display driver whose content arrives from outside is a screen AROS
+believes it may draw into and must not. That is fine for a diagnostic and wrong
+as a final design.
+
+The final design is the other one, and this issue should not lose sight of it:
+**`amigavideo` plus a presenter.** With the native chipset display driver built
+(ISSUE-0068 step 3), AROS draws *through* the chipset -- bitmaps in chip RAM,
+Denise renders them -- and presentation stops being a display driver at all. It
+becomes just the component that puts Denise's output on the panel.
+
+The two do not compete. The presenter in the final design is exactly what a
+`fbgfx`-shaped Denise driver has to do anyway, so building route 2 builds it.
+
 # Order
 
-1. **The serial census** -- `rigel_get_frame()` on `RIGEL_EVENT_FRAME_READY`,
-   report the descriptor and a non-black pixel count. Works under QEMU, which
-   nothing else here does. (ISSUE-0068 step 1.)
-2. **Boundary A through the overlay**: one non-cacheable copy, one HVS plane.
-   Hardware only. At this point anything writing `$dff000` is visible with the
-   desktop intact.
-3. **Boundary B**: use the `dirty` flags to copy only changed lines; measure
+1. **A picture, under QEMU, through route 1.** `rigel_get_frame()` on
+   `RIGEL_EVENT_FRAME_READY`, blitted into Emu68's framebuffer before the
+   desktop takes it, captured with `screendump`. A non-black pixel census on
+   the serial line alongside it, since a census is what a headless CI can
+   assert on.
+2. **Route 2**: copy into guest-visible RAM, publish the descriptor, and
+   present it from an AROS display driver modelled on `fbgfx`. Still
+   QEMU-testable, it survives the desktop, and it is the component the final
+   design needs anyway.
+3. **Boundary A through the overlay**: the same descriptor pointing at
+   non-cacheable memory, one HVS plane. Hardware only. At this point anything
+   writing `$dff000` is visible with the desktop intact.
+4. **Boundary B**: use the `dirty` flags to copy only changed lines; measure
    whether it matters.
-4. **Measure** where the time actually goes with a real workload before
+5. **Measure** where the time actually goes with a real workload before
    choosing between C and D. C is free to us and helps every host; D is ours to
    build and helps only this one.
-5. **D, if the measurement justifies it**, with the exact path kept as the
+6. **D, if the measurement justifies it**, with the exact path kept as the
    automatic fallback.

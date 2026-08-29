@@ -37,6 +37,18 @@ The governing principle is the same one:
 
 # What is actually in the tree
 
+**This port already has two display drivers.** `aros/arch/m68k-emu68/hidd/fbgfx/`
+is ours -- a "VideoCore framebuffer graphics HIDD" over a linear surface it gets
+from `KrnGetSystemAttr(KATTR_FrameBufferWidth/Height)`, which Emu68 handed to
+the kernel at boot. It starts the machine; `vcgfx` takes the display later
+through `bootui_retarget()`, which is the `[BootUI] retargeted to RGB32
+framebuffer` line in every boot log.
+
+That matters here for two reasons: the handover between display drivers is an
+existing, working mechanism rather than something to invent, and `fbgfx` is a
+worked example of the minimum an AROS display driver over a linear buffer has
+to be. ISSUE-0073 uses both facts.
+
 `vcgfx` does not use the firmware's framebuffer. It takes ownership of the HDMI
 channel and authors its own HVS display list (`vc4_hvs_takeover()`), then
 composites: an fb plane, an optional overlay plane, a cursor plane.
