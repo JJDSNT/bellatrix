@@ -48,6 +48,14 @@
 #include "bwfm_scan.h"
 #include "bwfm_private.h"
 
+/*
+ * -1 until BWFMLoadCLM() is called at all, which is the case that matters: the
+ * device only calls it when DEVS:Firmware/brcmfmac<id>-sdio.clm_blob exists, so
+ * "never called" and "called and failed" are different diagnoses and neither is
+ * visible from the scan result alone.
+ */
+static int bwfm_clm_bytes = -1;
+
 APTR SDIOBase __attribute__((used)) = NULL;     /* sdio.resource (proto/sdio.h base) */
 APTR KernelBase __attribute__((used)) = NULL;
 
@@ -2003,6 +2011,7 @@ AROS_LH2(int, BWFMScan,
     struct bwfm_timer tmr;
     UBYTE evmask[BWFM_EVENT_MASK_LEN];
     int count = 0, done = 0, tries, i;
+    ULONG events = 0;
 
     if (!BWFMBase->bwfm_attached || out == NULL || max <= 0)
         return 0;
@@ -2059,7 +2068,8 @@ AROS_LH2(int, BWFMScan,
         bwfm_set_int(BWFMBase, BWFM_C_SET_INFRA, 1);
         bwfm_set_int(BWFMBase, BWFM_C_SET_AP, 0);
         bwfm_udelay(BWFMBase, 50000);
-        D(bug("[bwfm] pre-scan: interface up (C_UP err %d)\n", e));
+        bug("[WIFI:BWFM] scan begin: C_UP err %d, CLM %d bytes\n",
+            e, bwfm_clm_bytes);
     }
 
     /* Broadcast passive escan, all channels */
@@ -2090,7 +2100,8 @@ AROS_LH2(int, BWFMScan,
         ReleaseSemaphore(&BWFMBase->bwfm_Sem);
         if (err)
         {
-            D(bug("[bwfm] escan trigger failed (err %d, size %u)\n", err, psize));
+            bug("[WIFI:BWFM] escan trigger failed: err %d, %u bytes\n",
+                err, psize);
             bwfm_event_listen(BWFMBase, 0);
             return 0;
         }
@@ -2117,6 +2128,7 @@ AROS_LH2(int, BWFMScan,
             if (AROS_BE2LONG(e->msg.event_type) != BWFM_E_ESCAN_RESULT)
                 continue;
 
+            events++;
             status = AROS_BE2LONG(e->msg.status);
             if (status == BWFM_E_STATUS_SUCCESS)
             {
@@ -2232,7 +2244,8 @@ AROS_LH2(int, BWFMScan,
     bwfm_timer_close(&tmr);
     bwfm_event_listen(BWFMBase, 0);
 
-    D(bug("[bwfm] scan done: %d result(s)\n", count));
+    bug("[WIFI:BWFM] scan %s: %d network(s), %u escan event(s), %u ms\n",
+        done ? "complete" : "TIMED OUT", count, events, tries * 50);
     return count;
 
     AROS_LIBFUNC_EXIT
@@ -2248,6 +2261,7 @@ AROS_LH2(int, BWFMScan,
  * A NULL/empty blob is a no-op (firmware falls back to its built-in regulatory).
  */
 #define BWFM_CLM_CHUNK  256
+
 
 AROS_LH2(int, BWFMLoadCLM,
                 AROS_LHA(void *, clm, A0),
@@ -2294,8 +2308,8 @@ AROS_LH2(int, BWFMLoadCLM,
         remain -= len;
     }
 
-    if (!err)
-        D(bug("[bwfm] CLM loaded (%u bytes)\n", clmlen));
+    bwfm_clm_bytes = err ? 0 : (int)clmlen;
+    bug("[WIFI:BWFM] CLM %s: %u bytes\n", err ? "load FAILED" : "loaded", clmlen);
 
     ReleaseSemaphore(&BWFMBase->bwfm_Sem);
     return err;
@@ -2564,6 +2578,8 @@ AROS_LH6(int, BWFMJoin,
     ULONG psize;
     int i, tries, attempt, result = -1;
     int e_sup = 0, e_wsec = 0, e_auth = 0, e_pmk = 0;
+    int evshown = 0;
+    char sbuf[BWFM_MAX_SSID_LEN + 1];
 
     if (!BWFMBase->bwfm_attached || ssid == NULL || ssidlen == 0 ||
         ssidlen > BWFM_MAX_SSID_LEN)
@@ -2685,6 +2701,17 @@ AROS_LH6(int, BWFMJoin,
 
     bwfm_timer_open(&tmr);
 
+    /* The SSID is a counted string, not a C one - terminate a copy to log. */
+    CopyMem(ssid, sbuf, ssidlen);
+    sbuf[ssidlen] = '\0';
+
+    bug("[WIFI:BWFM] join begin: \"%s\" %s (ie %u, pass %u;"
+        " sup %d wsec %d auth %d pmk %d)\n",
+        sbuf,
+        ielen ? "WPA, host handshake"
+              : (passlen ? "WPA2-PSK, firmware supplicant" : "open"),
+        (unsigned)ielen, (unsigned)passlen, e_sup, e_wsec, e_auth, e_pmk);
+
     /*
      * Issue the join and wait for the link. The first association attempt
      * often returns E_AUTH timeout (status 2) on this firmware, so retry a
@@ -2711,10 +2738,11 @@ AROS_LH6(int, BWFMJoin,
                     jpp.assoc.bssid[i] = 0xff;
                 serr = bwfm_dcmd(BWFMBase, BWFM_C_SET_SSID, 1, &jpp,
                                  sizeof(jpp) - sizeof(jpp.assoc.chanspec_list));
-                D(bug("[bwfm] join iovar err %d, SET_SSID fallback err %d\n", jerr, serr));
+                bug("[WIFI:BWFM] join attempt %d: iovar err %d,"
+                    " SET_SSID fallback err %d\n", attempt + 1, jerr, serr);
             }
             else
-                D(bug("[bwfm] join iovar accepted\n"));
+                bug("[WIFI:BWFM] join attempt %d: iovar accepted\n", attempt + 1);
         }
         ReleaseSemaphore(&BWFMBase->bwfm_Sem);
 
@@ -2738,8 +2766,14 @@ AROS_LH6(int, BWFMJoin,
                 etype = AROS_BE2LONG(e->msg.event_type);
                 status = AROS_BE2LONG(e->msg.status);
                 flags = AROS_BE2WORD(e->msg.flags);
-                D(bug("[bwfm] join event type %u status %u flags 0x%x\n",
-                      etype, status, flags));
+                /* Bounded: an association produces a handful of events, but a
+                 * flapping link could produce them for ever. */
+                if (evshown < 16)
+                {
+                    bug("[WIFI:BWFM] join event %u status %u flags 0x%04x\n",
+                        (unsigned)etype, (unsigned)status, (unsigned)flags);
+                    evshown++;
+                }
 
                 if (etype == BWFM_E_LINK)
                     result = (flags & BWFM_EVENT_FLAG_LINK_UP) ? 0 : -2;
@@ -2777,12 +2811,25 @@ AROS_LH6(int, BWFMJoin,
                 bwfm_timer_wait(BWFMBase, &tmr, 50000);
         }
 
-        D(bug("[bwfm] join attempt %d %s (result %d)\n", attempt + 1,
-              result == 0 ? "OK" : "FAILED", result));
+        bug("[WIFI:BWFM] join attempt %d %s (result %d)\n", attempt + 1,
+            result == 0 ? "OK" : "FAILED", result);
     }
 
     bwfm_timer_close(&tmr);
     bwfm_event_listen(BWFMBase, 0);
+
+    /*
+     * Say what the result number means. These are the failures that look
+     * identical from outside the driver and have completely different causes.
+     */
+    bug("[WIFI:BWFM] join \"%s\": %s\n", sbuf,
+        result == 0  ? "CONNECTED" :
+        result == -2 ? "FAILED - link came up down (E_LINK, no association)" :
+        result == -3 ? "FAILED - association rejected by the AP (E_SET_SSID)" :
+        result == -4 ? "FAILED - deauthenticated/disassociated"
+                       " (wrong passphrase is the usual cause)" :
+                       "FAILED - no link event within the wait window");
+
     return result;
 
     AROS_LIBFUNC_EXIT
