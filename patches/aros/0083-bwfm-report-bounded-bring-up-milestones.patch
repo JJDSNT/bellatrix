@@ -1,0 +1,114 @@
+From: Bellatrix contributors
+Subject: [PATCH] bwfm: report bounded bring-up milestones
+
+Keep DEBUG disabled, but make the one-time device open, chip attach and
+firmware stages visible on a serial-only machine. This distinguishes a dead
+SDIO bus from a missing blob and a firmware-ready timeout without flooding
+the timing-sensitive boot with per-command traces.
+
+---
+ workbench/devs/networks/bwfm/bwfm_dev.c | 31 ++++++++++++++++++++++----
+ 1 file changed, 27 insertions(+), 4 deletions(-)
+
+diff --git a/workbench/devs/networks/bwfm/bwfm_dev.c b/workbench/devs/networks/bwfm/bwfm_dev.c
+index a92293fba6..eca2ae7fbd 100644
+--- a/workbench/devs/networks/bwfm/bwfm_dev.c
++++ b/workbench/devs/networks/bwfm/bwfm_dev.c
+@@ -107,9 +107,9 @@ static int GM_UNIQUENAME(init)(LIBBASETYPEPTR LIBBASE)
+ 
+     BWFMBase = OpenResource("bwfm.resource");
+     if (BWFMBase)
+-        D(bug("[bwfm.device] bwfm.resource present (chip brought up on first open)\n"));
++        bug("[WIFI:DEV] init OK: bwfm.resource present, attach deferred\n");
+     else
+-        D(bug("[bwfm.device] bwfm.resource not available\n"));
++        bug("[WIFI:DEV] init warning: bwfm.resource unavailable\n");
+ 
+     DOSBase = (struct DosLibrary *)OpenLibrary("dos.library", 0);
+ 
+@@ -661,6 +661,8 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
+     if (!BWFMBase || !DOSBase)
+         return FALSE;
+ 
++    bug("[WIFI:DEV] firmware bring-up begin\n");
++
+     /* Lazy chip bring-up: power the WiFi chip + enumerate it now (first open).
+      * No-op if a prior open already attached. */
+     if (!BWFMAttach())
+@@ -668,4 +670,5 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
+         D(bug("[bwfm.device] chip attach failed (no WiFi chip?)\n"));
++        bug("[WIFI:DEV] firmware bring-up failed: chip attach\n");
+         return FALSE;
+     }
+ 
+@@ -682,10 +685,12 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
+         return FALSE;
+     }
+ 
++    bug("[WIFI:DEV] reading firmware '%s'\n", name);
+     fw = read_file(name, &fwlen);
+     if (!fw)
+     {
+-        D(bug("[bwfm.device] cannot read firmware '%s'\n", name));
++        bug("[WIFI:DEV] firmware open failed: '%s', IoErr %ld\n",
++            name, IoErr());
+         goto out;
+     }
+ 
+@@ -701,13 +706,16 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
+             nvbin = nvram_convert(nvtxt, nvtxtlen, &nvbinlen);
+         D(else bug("[bwfm.device] no nvram for board '%s'\n",
+                    board ? board : "(unknown)"));
++        bug("[WIFI:DEV] blobs ready: firmware %u, nvram text %u, binary %u bytes\n",
++            fwlen, nvtxtlen, nvbinlen);
+     }
+ 
+     D(bug("[bwfm.device] starting firmware (%u bytes, nvram %u bytes)\n",
+           fwlen, nvbinlen));
+ 
+     if (BWFMStartFirmware(fw, fwlen, nvbin, nvbinlen) == 0)
+     {
++        bug("[WIFI:DEV] firmware start OK\n");
+         LIBBASE->fw_loaded = TRUE;
+         ok = TRUE;
+ 
+@@ -748,5 +756,7 @@ static int load_firmware(LIBBASETYPEPTR LIBBASE)
+         /* Start the async RX pump now that the chip can deliver frames. */
+         start_pump(LIBBASE);
+     }
++    else
++        bug("[WIFI:DEV] firmware start failed\n");
+ 
+ out:
+@@ -916,6 +928,9 @@ static int GM_UNIQUENAME(open)(LIBBASETYPEPTR LIBBASE, struct IOSana2Req *req,
+     BYTE error = 0;
+     int i;
+ 
++    bug("[WIFI:DEV] open begin: unit %u, flags 0x%08x\n",
++        (unsigned)unitnum, (unsigned)flags);
++
+     req->ios2_Req.io_Unit = NULL;
+ 
+     tags = req->ios2_BufferManagement;
+@@ -972,7 +987,9 @@ static int GM_UNIQUENAME(open)(LIBBASETYPEPTR LIBBASE, struct IOSana2Req *req,
+          * does not fail the open yet - query commands still work; the
+          * datapath is stubbed until firmware + SDPCM are in place. */
+         if (!load_firmware(LIBBASE))
+-            D(bug("[bwfm.device] firmware not loaded (chip offline)\n"));
++            bug("[WIFI:DEV] open warning: firmware offline\n");
++        else
++            bug("[WIFI:DEV] open: firmware online\n");
+     }
+ 
+     if (error == 0)
+@@ -989,5 +1006,8 @@ static int GM_UNIQUENAME(open)(LIBBASETYPEPTR LIBBASE, struct IOSana2Req *req,
+         FreeVec(opener);
+ 
+     req->ios2_Req.io_Error = error;
++    bug("[WIFI:DEV] open %s: unit %u, error %d\n",
++        error ? "failed" : "OK", (unsigned)unitnum, (int)error);
++
+     return (error == 0) ? TRUE : FALSE;
+ }
+-- 
+2.39.5

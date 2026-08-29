@@ -189,3 +189,46 @@ distfiles-emu68-wifi-prefs:
 	@$(MKDIR) $(AROS_ENVARC)/SYS
 	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/Wireless.prefs \
 	    $(AROS_ENVARC)/SYS/Wireless.prefs
+
+#
+# Persistent first-boot network configuration for the onboard WiFi.
+#
+# Wireless.prefs lets WirelessManager parse a configuration, but does not
+# cause AROSTCP's Package-Startup to run it.  Prefs/Network normally creates
+# these variables and database files when the user saves an interface.  Seed
+# the same state in ENVARC so a release image starts bwfm.device unit 0 and
+# displays WirelessManager's AppIcon before any preferences have been saved.
+#
+# Keep AROSTCP's static databases upstream-owned.  The five files copied below
+# are the same ones CopyDefaultConfiguration() installs in Prefs/Network; the
+# emu68 port owns only the generated first-boot values.
+#
+EMU68_AROSTCP_DEFAULT_FILES := inet.access netdb networks protocols services
+
+#MM
+distfiles-emu68-wifi-network-prefs:
+	@$(MKDIR) $(AROS_ENVARC)/AROSTCP/db
+	@for f in $(EMU68_AROSTCP_DEFAULT_FILES) ; do \
+	    $(CP) $(AROSDIR)/System/Network/AROSTCP/db/$$f \
+	        $(AROS_ENVARC)/AROSTCP/db/$$f ; \
+	done
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/AutoRun \
+	    $(AROS_ENVARC)/AROSTCP/AutoRun
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/WirelessAutoRun \
+	    $(AROS_ENVARC)/AROSTCP/WirelessAutoRun
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/WirelessDevice \
+	    $(AROS_ENVARC)/AROSTCP/WirelessDevice
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/Config \
+	    $(AROS_ENVARC)/AROSTCP/Config
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/MobileAutorun \
+	    $(AROS_ENVARC)/AROSTCP/MobileAutorun
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/general.config \
+	    $(AROS_ENVARC)/AROSTCP/db/general.config
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/interfaces \
+	    $(AROS_ENVARC)/AROSTCP/db/interfaces
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/hosts \
+	    $(AROS_ENVARC)/AROSTCP/db/hosts
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/netdb-myhost \
+	    $(AROS_ENVARC)/AROSTCP/db/netdb-myhost
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/static-routes \
+	    $(AROS_ENVARC)/AROSTCP/db/static-routes

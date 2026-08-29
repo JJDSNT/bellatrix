@@ -613,10 +613,21 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     make kernel-bwfm-emu68
     make workbench-devs-networks-bwfm
 
+    # fd.library owns the process-wide descriptor namespace shared by PosixC
+    # and bsdsocket.library. Their headers are dependency-built, but the lean
+    # kernel-link target does not install the library itself; without this,
+    # both sides repeatedly fall back after OpenLibrary("fd.library") fails.
+    make workbench-libs-fd
+
     # ENVARC:Sys/Wireless.prefs, without which C:WirelessManager exits before
     # opening its window and the scan UI cannot be reached at all. Nothing else
     # creates it -- Prefs/Network only writes it once a network already exists.
     make distfiles-emu68-wifi-prefs
+
+    # First-boot AROSTCP state for bwfm.device. Wireless.prefs alone does not
+    # start WirelessManager: Package-Startup also needs AutoRun,
+    # WirelessAutoRun, WirelessDevice and a usable interface database.
+    make distfiles-emu68-wifi-network-prefs
     if [ "${BELLATRIX_WIFI_FW:-1}" = 1 ]; then
         make distfiles-emu68-wifi-fw
     fi
