@@ -28,7 +28,9 @@ TARGET="${BELLATRIX_TARGET:-raspi64}"
 # BELLATRIX_VARIANT=none still builds stock Emu68, which is what an A/B against
 # the unmodified upstream behaviour needs.
 VARIANT="${BELLATRIX_VARIANT:-bellatrix}"
-RIGEL="${CONFIG_RIGEL:-0}"
+# Rigel is part of the machine now, not an experiment bolted onto it.
+# CONFIG_RIGEL=0 still builds the chipset-less Emu68.img.
+RIGEL="${CONFIG_RIGEL:-1}"
 RIGEL_SELFTEST="${CONFIG_RIGEL_SELFTEST:-0}"
 
 case "$RIGEL" in
@@ -93,7 +95,12 @@ else
     IMAGE_NAME="Emu68.img"
 fi
 gunzip -c "$FIRMWARE/Emu68.img.gz" > "$IMAGES/$IMAGE_NAME"
-cp "$FIRMWARE/Emu68.img.gz" "$FIRMWARE/$IMAGE_NAME.gz"
+# Without the chipset the composition is already called Emu68, so the copy
+# would have the same source and destination -- which cp refuses, and set -e
+# turns into a failed build.
+if [ "$IMAGE_NAME.gz" != "Emu68.img.gz" ]; then
+    cp "$FIRMWARE/Emu68.img.gz" "$FIRMWARE/$IMAGE_NAME.gz"
+fi
 printf '%s\n' "$RIGEL" > "$IMAGES/Emu68.config-rigel"
 printf '%s\n' "$IMAGE_NAME" > "$IMAGES/Emu68.kernel-name"
 

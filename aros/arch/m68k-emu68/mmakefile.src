@@ -30,27 +30,30 @@ include $(SRCDIR)/config/aros.cfg
 # kernel-usb-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU).  Binding that generic name
 # to Poseidon's disk-based, non-PCI stack and Bellatrix's native DWC2 host
 # driver is what puts USB on the card; without the alias a distribution
-# silently contains neither side, which is what is wanted right now.
+# silently contains neither side.
 #
-# USB IS DISABLED ON PURPOSE (2026-08-22).
+# USB IS ENABLED (2026-08-29).
 #
-# Two DWC2 drivers currently live side by side -- the inherited engine and the
-# Bellatrix one replacing it file by file (ISSUE-0047) -- and the machine has
-# open defects in the heap (ISSUE-0037) and in the first GL workload
-# (ISSUE-0045). A host controller that owns interrupts and DMA is a large
-# variable to leave in the picture while those are being chased, and none of
-# them needs it.
+# It was commented out on 2026-08-22 so that a host controller owning
+# interrupts and DMA was not in the picture while the heap (ISSUE-0037) and the
+# first GL workload (ISSUE-0045) were being chased. That is over, and the cost
+# of leaving it off is a distribution with no keyboard and no mouse -- which is
+# not a state anyone asks for on purpose, and which nothing in the build says
+# out loud.
 #
-# Re-enabling is uncommenting the line. It cannot be a make variable: mmake
-# reads #MM lines as text when it scans the mmakefiles, so a $(USB_BACKEND)
-# here would be a metatarget with that literal name, which does not exist and
-# which mmake drops without a word.
+# The driver named here is dwc2emu68, the Bellatrix rewrite (ISSUE-0047), not
+# the inherited arm-native engine it replaces. Both are still built; this line
+# is what decides which one a distribution contains.
 #
-# The Startup-Sequence needs no change. Its USB block is guarded on
-# DEVS:USBHardware/dwc2emu68.device existing, and with this line commented out
-# nothing installs it.
+# Disabling is commenting the line out again. It cannot be a make variable:
+# mmake reads #MM lines as text when it scans the mmakefiles, so a
+# $(USB_BACKEND) here would be a metatarget with that literal name, which does
+# not exist and which mmake drops without a word.
 #
-# MM- kernel-usb-m68k-emu68 : kernel-usb-nopci kernel-usb-dwc2emu68
+# The Startup-Sequence needs no change either way. Its USB block is guarded on
+# DEVS:USBHardware/dwc2emu68.device existing.
+#
+#MM- kernel-usb-m68k-emu68 : kernel-usb-nopci kernel-usb-dwc2emu68
 
 # rom/ and workbench/ select the Bluetooth stack the same way, through
 # kernel-bluetooth-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU), and this target

@@ -13,7 +13,10 @@ INTREQ/INTENA semantics, RTC policy, or chipset timing into the wrong owner.
 
 # Solution adopted
 
-`CONFIG_RIGEL=0` remains the default. `CONFIG_RIGEL=1` initializes and links
+`CONFIG_RIGEL=0` remains the default.
+<!-- Correction, 2026-08-29: no longer true. CONFIG_RIGEL defaults to ON;
+     CONFIG_RIGEL=0 still builds the chipset-less composition. See
+     AI_context/issues/ISSUE-0068.md. --> `CONFIG_RIGEL=1` initializes and links
 `external/rigel`, whose canonical repository is owned by this project.
 
 Bellatrix `machine/` remains the memory-policy control plane. It programs the

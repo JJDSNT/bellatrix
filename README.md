@@ -49,21 +49,18 @@ cd bellatrix
 ./run.sh                    # boot the lot under QEMU
 ```
 
-Rigel is an optional compatibility layer and is disabled by default. Enable
-its build explicitly when working on the integration:
+Rigel, the classic Amiga chipset, is built in by default:
 
 ```bash
-CONFIG_RIGEL=1 ./scripts/build.sh
+./scripts/build.sh              # with the chipset  → out/images/Bellatrix.img
+CONFIG_RIGEL=0 ./scripts/build.sh  # without it     → out/images/Emu68.img
 ```
 
-The gated build names the resulting composition explicitly: a Rigel-enabled
-build produces `out/images/Bellatrix.img`, while the default build produces
-`out/images/Emu68.img`. The run, SD-card, timing, and release scripts select
-the name recorded by the last successful build.
-
-With `CONFIG_RIGEL=0` (the default), Rigel is neither initialized by setup nor
-included in the Emu68 build. Switching the option in the same incremental build
-directory is supported.
+The build names the resulting composition explicitly, and the run, SD-card,
+timing, and release scripts select the name recorded by the last successful
+build. With `CONFIG_RIGEL=0` Rigel is neither initialised by setup nor included
+in the Emu68 build; that composition is still supported, and switching the
+option in the same incremental build directory works.
 
 With Rigel enabled, `src/machine/` remains the memory-policy control plane: it
 marks the coarse CIA, RTC, and custom-chip apertures as external in the same

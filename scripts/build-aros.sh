@@ -574,9 +574,6 @@ make "$METATARGET"
 if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     echo "[aros] building the disk-installed drivers"
     make kernel-m68k-emu68-vcgfx
-    # The USB host controller is disabled for now -- see the comment on the
-    # kernel-usb alias in arch/m68k-emu68/mmakefile.src. Still built, because
-    # code that stops being compiled stops being code; just not installed.
     make kernel-bthciuart
 
     # S:Startup-Sequence, because a patch to it otherwise never reaches a card.
@@ -642,20 +639,15 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     make kernel-dos64
 
     #
-    # The USB host controller: compiled, then uninstalled.
+    # The USB host controller: built here, and since 2026-08-29 kept.
     #
-    # USB is disabled (see the kernel-usb alias in
-    # arch/m68k-emu68/mmakefile.src) and the two halves of that have to be
-    # said separately, because doing only one is what let it keep booting.
-    # Commenting out the alias stops the *distribution* target rebuilding it;
-    # it does nothing about a copy already in the tree, and %build_module
-    # installs straight into Devs/USBHardware, so building it here to keep it
-    # compiling put it back on every card.
-    #
-    # Both properties are wanted: code that stops being compiled stops being
-    # code, and a machine with fewer variables is easier to debug. So build it
-    # and then remove what it installed. Re-enabling is uncommenting the alias
-    # and deleting this block.
+    # Turning USB off takes two separate steps, and doing only one is what let
+    # it keep booting when it was supposed to be gone. The kernel-usb alias in
+    # arch/m68k-emu68/mmakefile.src decides what the *distribution* target
+    # rebuilds; it does nothing about a copy already in the tree, and
+    # %build_module installs straight into Devs/USBHardware, so building the
+    # driver here to keep it compiling put it back on every card regardless.
+    # That is what the BELLATRIX_USB=0 branch below still has to undo by hand.
     #
     # The SFS handler, for the FAT-versus-SFS comparison sdcard.md asks for.
     #
@@ -676,15 +668,19 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     make kernel-usb-arosotg
     make kernel-usb-dwc2emu68
 
-    # BELLATRIX_USB=1 puts it on the card instead of removing it.
+    # USB ships by default, with our own controller on the card.
     #
-    # USB is off by default (see the alias comment in
-    # arch/m68k-emu68/mmakefile.src) and that is still the baseline. But the
-    # only way to find out whether either driver enumerates anything is to let
-    # one boot, and rebuilding the tree by hand each time to do that is how a
-    # test stops being run. BELLATRIX_USB_DRIVER picks which one goes on the
-    # card; both are always built.
-    if [ "${BELLATRIX_USB:-0}" = 1 ]; then
+    # It used to be off, on the grounds that a machine with no host controller
+    # cannot fault in one. That was a measurement baseline, and a pack built
+    # from it has no keyboard and no mouse -- silently, which is how it caught
+    # people out. BELLATRIX_USB=0 still builds that pack, deliberately, for
+    # measuring against.
+    #
+    # BELLATRIX_USB_DRIVER picks which controller goes on the card and both are
+    # always built: kernel-usb-dwc2emu68 is the Bellatrix rewrite (ISSUE-0047)
+    # and the default; kernel-usb-arosotg is the arm-native engine it replaces,
+    # kept buildable so the comparison stays possible.
+    if [ "${BELLATRIX_USB:-1}" = 1 ]; then
         make kernel-usb-nopci
         keep="${BELLATRIX_USB_DRIVER:-dwc2emu68}"
         for d in "$BUILD/bin/$TARGET/AROS/Devs/USBHardware/"*.device; do

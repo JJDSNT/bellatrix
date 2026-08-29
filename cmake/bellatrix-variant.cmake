@@ -18,7 +18,7 @@ endif()
 
 set(BELLATRIX_ROOT ${CMAKE_SOURCE_DIR}/../..)
 
-option(CONFIG_RIGEL "Build Bellatrix with the optional Rigel compatibility layer" OFF)
+option(CONFIG_RIGEL "Build Bellatrix with the Rigel classic chipset" ON)
 option(CONFIG_RIGEL_SELFTEST "Run the destructive Rigel clock acceptance test at boot" OFF)
 
 set(BELLATRIX_INCLUDE_DIRS
