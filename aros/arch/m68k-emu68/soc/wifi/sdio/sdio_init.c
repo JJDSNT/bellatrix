@@ -84,7 +84,17 @@ APTR MBoxBase __attribute__((used)) = NULL;
 #define SDIO_CMD_SELECT_CARD            MMC_CMD_SELECT_CARD             /* CMD7, R1b */
 
 #define SDIO_IDENT_CLOCK                400000          /* 400 kHz identification clock */
-#define SDIO_FULL_CLOCK                 25000000        /* post-init bus clock target */
+/*
+ * Post-init bus clock target. The divisor below is a power of two, so this is
+ * a ceiling rather than a rate: on a 250 MHz base it selects N=4 and the bus
+ * runs at 31.25 MHz. The former 25 MHz target selected N=8 and therefore ran
+ * at 15.6 MHz -- half the speed for no reason anyone had measured.
+ *
+ * 41.6 MHz is WiFiPi.device's target on this same controller and chip, and its
+ * divider rounds to the same N=4. High speed (the CCCR EHS bit and the Arasan
+ * HISPD bit) stays off; see sdio_set_bus_speed().
+ */
+#define SDIO_FULL_CLOCK                 41600000
 
 /* ----------------------------------------------------------------------- */
 /* Timing                                                                  */
@@ -126,9 +136,14 @@ static ULONG sdio_rl(struct SDIOBase *SDIOBase, ULONG reg)
 static void sdio_wl(struct SDIOBase *SDIOBase, ULONG reg, ULONG val)
 {
     /* BCM2835 Arasan erratum: two SD-clock cycles must elapse between
-     * successive controller writes. At the 400 kHz identification clock
-     * that is 5 us; use 6 us to match the proven sdcard_bcm2708bus.c. */
-    while ((sdio_now(SDIOBase) - SDIOBase->sdio_LastWrite) < 6)
+     * successive controller writes. That is a duration in *SD clocks*, so
+     * sdio_setclock() recomputes it whenever the bus rate changes: 5 us at the
+     * 400 kHz identification clock, under a microsecond once the bus is up.
+     * The flat 6 us this used to spend (inherited from sdcard_bcm2708bus.c,
+     * which never leaves the identification clock behind for long) was charged
+     * to every register write for the life of the bus - several per command,
+     * on a driver whose datapath is nothing but commands. */
+    while ((sdio_now(SDIOBase) - SDIOBase->sdio_LastWrite) < SDIOBase->sdio_WriteGap)
         ;
 
     *(volatile ULONG *)(SDIOBase->sdio_iobase + reg) = AROS_LONG2LE(val);
@@ -158,15 +173,32 @@ static void sdio_ww(struct SDIOBase *SDIOBase, ULONG reg, UWORD val)
  * erratum delay in sdio_wl applies to *control* registers only; the data
  * FIFO must be filled/drained at full speed (the reference driver polls
  * with no per-word delay), so these bypass it.
+ *
+ * These are deliberately NOT byte-swapped, unlike every other accessor here.
+ * SDHCI_BUFFER is not a number: it is a window onto the wire, and the byte at
+ * the register's lowest address is the byte transferred first. A big-endian
+ * 32-bit load therefore already delivers the four wire bytes in stream order
+ * (first byte in the MSB), which is exactly what CopyMem() then lays down in
+ * the caller's buffer - and the same in reverse on the write side.
+ *
+ * Adding AROS_LE2LONG() here would turn the word into the little-endian
+ * *value* the four bytes spell, which reverses the stream. That is invisible
+ * to a 32-bit register access through this path (the caller reverses it a
+ * second time when it reads the destination word back as big-endian, so chip
+ * IDs and core registers come out right) but it corrupts every byte stream:
+ * the firmware image reaches chip RAM in 4-byte-reversed groups, and reading
+ * it back reverses it again, so the readback verification agrees with the
+ * source while the CPU core executes garbage. Callers that want a
+ * little-endian register value convert it themselves (see bwfm_read_4()).
  */
 static inline ULONG sdio_fifo_r(struct SDIOBase *SDIOBase)
 {
-    return AROS_LE2LONG(*(volatile ULONG *)(SDIOBase->sdio_iobase + SDHCI_BUFFER));
+    return *(volatile ULONG *)(SDIOBase->sdio_iobase + SDHCI_BUFFER);
 }
 
 static inline void sdio_fifo_w(struct SDIOBase *SDIOBase, ULONG val)
 {
-    *(volatile ULONG *)(SDIOBase->sdio_iobase + SDHCI_BUFFER) = AROS_LONG2LE(val);
+    *(volatile ULONG *)(SDIOBase->sdio_iobase + SDHCI_BUFFER) = val;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -225,6 +257,19 @@ static void sdio_setclock(struct SDIOBase *SDIOBase, ULONG speed)
 
     ctrl = sdio_rw(SDIOBase, SDHCI_CLOCK_CONTROL) | SDHCI_CLOCK_CARD_EN;
     sdio_ww(SDIOBase, SDHCI_CLOCK_CONTROL, ctrl);
+
+    /* Two SD clocks, rounded up, and never less than the 1 us the system timer
+     * can resolve. Set last: the writes above still had to honour the gap that
+     * belonged to the clock they were changing. */
+    {
+        ULONG actual = SDIOBase->sdio_ClockMax / (2 * n);
+
+        SDIOBase->sdio_WriteGap = actual ? ((2000000 + actual - 1) / actual) : 6;
+        if (SDIOBase->sdio_WriteGap < 1)
+            SDIOBase->sdio_WriteGap = 1;
+        D(bug("[SDIO] bus %u Hz, inter-write gap %u us\n",
+              actual, SDIOBase->sdio_WriteGap));
+    }
 }
 
 static void sdio_setpower(struct SDIOBase *SDIOBase)
@@ -691,8 +736,6 @@ static int sdio_command(struct SDIOBase *SDIOBase, UWORD cmd, ULONG arg,
         /* One buffer-ready handshake + PIO transfer per block. */
         for (blk = 0; blk < nblk; blk++)
         {
-            ULONG words = (bsize + 3) >> 2, w;
-
             timeout = 100000;
             while (!(sdio_rl(SDIOBase, SDHCI_INT_STATUS) & (intmask | SDIO_CMD_ERR)))
             {
@@ -716,21 +759,101 @@ static int sdio_command(struct SDIOBase *SDIOBase, UWORD cmd, ULONG arg,
             }
             sdio_wl(SDIOBase, SDHCI_INT_STATUS, intmask);
 
-            for (w = 0; w < words; w++)
+            /*
+             * One FIFO access per word, and nothing else. This used to call
+             * CopyMem() -- an ExecBase LVO jump -- once per four bytes, which
+             * on a 400 KB firmware upload is a hundred thousand library calls
+             * to move a word each. WiFiPi.device unrolls the same loop for the
+             * same reason.
+             *
+             * The FIFO word is raw (see sdio_fifo_r), so on this big-endian
+             * host the first wire byte is the most significant one: a plain
+             * word store lands the four bytes in stream order, and the
+             * unaligned and tail paths shift to match.
+             */
             {
-                ULONG n = bsize - (w << 2);
-                if (n > 4)
-                    n = 4;
-                if (dataread)
+                UBYTE *p = (UBYTE *)data + off2;
+                ULONG full = bsize >> 2;        /* whole 32-bit words */
+                ULONG tail = bsize & 3;         /* trailing 1..3 bytes */
+
+                if ((((IPTR)p) & 3) == 0)
                 {
-                    ULONG v = sdio_fifo_r(SDIOBase);
-                    CopyMem(&v, (UBYTE *)data + off2 + (w << 2), n);
+                    ULONG *q = (ULONG *)p;
+
+                    if (dataread)
+                    {
+                        while (full >= 4)
+                        {
+                            q[0] = sdio_fifo_r(SDIOBase);
+                            q[1] = sdio_fifo_r(SDIOBase);
+                            q[2] = sdio_fifo_r(SDIOBase);
+                            q[3] = sdio_fifo_r(SDIOBase);
+                            q += 4;
+                            full -= 4;
+                        }
+                        while (full--)
+                            *q++ = sdio_fifo_r(SDIOBase);
+                    }
+                    else
+                    {
+                        while (full >= 4)
+                        {
+                            sdio_fifo_w(SDIOBase, q[0]);
+                            sdio_fifo_w(SDIOBase, q[1]);
+                            sdio_fifo_w(SDIOBase, q[2]);
+                            sdio_fifo_w(SDIOBase, q[3]);
+                            q += 4;
+                            full -= 4;
+                        }
+                        while (full--)
+                            sdio_fifo_w(SDIOBase, *q++);
+                    }
+                    p = (UBYTE *)q;
                 }
                 else
                 {
-                    ULONG v = 0;
-                    CopyMem((UBYTE *)data + off2 + (w << 2), &v, n);
-                    sdio_fifo_w(SDIOBase, v);
+                    /* An unaligned caller buffer takes no word stores, so
+                     * assemble by hand - still one FIFO access per word. */
+                    while (full--)
+                    {
+                        if (dataread)
+                        {
+                            ULONG v = sdio_fifo_r(SDIOBase);
+
+                            p[0] = (UBYTE)(v >> 24); p[1] = (UBYTE)(v >> 16);
+                            p[2] = (UBYTE)(v >> 8);  p[3] = (UBYTE)v;
+                        }
+                        else
+                        {
+                            sdio_fifo_w(SDIOBase,
+                                        ((ULONG)p[0] << 24) | ((ULONG)p[1] << 16) |
+                                        ((ULONG)p[2] << 8)  | (ULONG)p[3]);
+                        }
+                        p += 4;
+                    }
+                }
+
+                if (tail)
+                {
+                    /* A block length that is not a multiple of four still
+                     * moves a whole word through the FIFO. */
+                    ULONG i;
+
+                    if (dataread)
+                    {
+                        ULONG v = sdio_fifo_r(SDIOBase);
+
+                        for (i = 0; i < tail; i++)
+                            p[i] = (UBYTE)(v >> (24 - 8 * i));
+                    }
+                    else
+                    {
+                        ULONG v = 0;
+
+                        for (i = 0; i < tail; i++)
+                            v |= (ULONG)p[i] << (24 - 8 * i);
+                        sdio_fifo_w(SDIOBase, v);
+                    }
                 }
             }
             off2 += bsize;
@@ -814,6 +937,13 @@ static int sdio_rw_extended(struct SDIOBase *SDIOBase, int write, uint32_t func,
         ULONG arg, resp = 0, chunk;
         int useblock, err;
 
+        /*
+         * Block mode wherever a whole block fits. The 64-byte byte-mode
+         * restriction that used to sit here was added while hunting an upload
+         * corruption that turned out to be a byte-order defect in the PIO path
+         * (see sdio_fifo_r), not a transfer-mode one; it cost 6250 commands
+         * per firmware image where ~13 will do, and it bought nothing.
+         */
         if (blksz > 0 && len >= blksz)
         {
             ULONG nblk = len / blksz;
@@ -907,7 +1037,12 @@ static int sdio_do_probe(struct SDIOBase *SDIOBase)
      * longer answers the init-phase CMD5 - so report the cached result. bwfm
      * calls SDIOProbe() before using the card; it must not re-initialise it. */
     if (SDIOBase->sdio_Present)
+    {
+        bug("[WIFI:SDIO] probe cached: present\n");
         return TRUE;
+    }
+
+    bug("[WIFI:SDIO] probe begin: power, 32 kHz clock, CMD0/5/3/7\n");
 
     SDIOBase->sdio_Present = FALSE;
 
@@ -940,7 +1075,10 @@ static int sdio_do_probe(struct SDIOBase *SDIOBase)
 
     /* CMD5 with arg 0: read the I/O OCR */
     if (sdio_command(SDIOBase, SDIO_CMD_IO_SEND_OP_COND, 0, MMC_RSP_R4, &ocr, NULL, 0, 0, 0))
+    {
+        bug("[WIFI:SDIO] probe failed: initial CMD5\n");
         return FALSE;
+    }
 
     SDIOBase->sdio_NumFunc = (ocr & SDIO_OCR_NUM_FUNC_MASK) >> SDIO_OCR_NUM_FUNC_SHIFT;
 
@@ -949,25 +1087,37 @@ static int sdio_do_probe(struct SDIOBase *SDIOBase)
     {
         if (sdio_command(SDIOBase, SDIO_CMD_IO_SEND_OP_COND,
                          ocr & SDIO_OCR_VOLTAGE_MASK, MMC_RSP_R4, &resp, NULL, 0, 0, 0))
+        {
+            bug("[WIFI:SDIO] probe failed: CMD5 negotiation\n");
             return FALSE;
+        }
         if (resp & SDIO_OCR_IOREADY)
             break;
         sdio_udelay(SDIOBase, 1000);
     }
     if (!(resp & SDIO_OCR_IOREADY))
+    {
+        bug("[WIFI:SDIO] probe failed: card not ready, OCR 0x%08x\n", resp);
         return FALSE;
+    }
 
     SDIOBase->sdio_OCR = resp;
 
     /* CMD3: ask the card to publish its relative address */
     if (sdio_command(SDIOBase, SDIO_CMD_SEND_RELATIVE_ADDR, 0, MMC_RSP_R6, &resp, NULL, 0, 0, 0))
+    {
+        bug("[WIFI:SDIO] probe failed: CMD3\n");
         return FALSE;
+    }
     SDIOBase->sdio_RCA = (resp >> 16) & 0xffff;
 
     /* CMD7: select the card (move to command state) */
     if (sdio_command(SDIOBase, SDIO_CMD_SELECT_CARD,
                      SDIOBase->sdio_RCA << 16, MMC_RSP_R1b, &resp, NULL, 0, 0, 0))
+    {
+        bug("[WIFI:SDIO] probe failed: CMD7, RCA 0x%04x\n", SDIOBase->sdio_RCA);
         return FALSE;
+    }
 
     /* Card selected: leave identification mode for 4-bit + full clock. */
     sdio_set_bus_speed(SDIOBase);
@@ -975,8 +1125,8 @@ static int sdio_do_probe(struct SDIOBase *SDIOBase)
     SDIOBase->sdio_Present = TRUE;
     sdio_trace = 0;
 
-    D(bug("[SDIO] SDIO device present: OCR 0x%08x, %u function(s), RCA 0x%04x\n",
-          SDIOBase->sdio_OCR, SDIOBase->sdio_NumFunc, SDIOBase->sdio_RCA));
+    bug("[WIFI:SDIO] probe OK: OCR 0x%08x, %u function(s), RCA 0x%04x\n",
+        SDIOBase->sdio_OCR, SDIOBase->sdio_NumFunc, SDIOBase->sdio_RCA);
 
     /* Install the card-interrupt handler now that a device answered (stays
      * masked out of INT_ENABLE until a consumer arms it via SDIOSetInterrupt).
@@ -1040,12 +1190,19 @@ static int sdio_init(struct SDIOBase *SDIOBase)
     KernelBase = OpenResource("kernel.resource");
     MBoxBase = OpenResource("mbox.resource");
     if (!KernelBase || !MBoxBase)
+    {
+        bug("[WIFI:SDIO] init failed: kernel=%p mbox=%p\n", KernelBase, MBoxBase);
         return FALSE;
+    }
 
     if ((SDIOBase->sdio_periiobase = KrnGetSystemAttr(KATTR_PeripheralBase)) == 0)
+    {
+        bug("[WIFI:SDIO] init failed: no peripheral base\n");
         return FALSE;
+    }
 
     InitSemaphore(&SDIOBase->sdio_Sem);
+    SDIOBase->sdio_WriteGap = 6;        /* until sdio_setclock() knows the rate */
     if (SDIOBase->sdio_periiobase == BCM2712_PERIIOBASE)
         SDIOBase->sdio_iobase = SDIOBase->sdio_periiobase + 0x100000;
     else
@@ -1054,7 +1211,7 @@ static int sdio_init(struct SDIOBase *SDIOBase)
 
     if (!sdio_mbox_setup(SDIOBase))
     {
-        D(bug("[SDIO] mailbox power/clock query failed\n"));
+        bug("[WIFI:SDIO] init failed: mailbox power/clock query\n");
         return FALSE;
     }
     D(bug("[SDIO] Arasan base clock %u Hz\n", SDIOBase->sdio_ClockMax));
@@ -1119,7 +1276,8 @@ static int sdio_init(struct SDIOBase *SDIOBase)
     sdio_wl(SDIOBase, SDHCI_INT_ENABLE, SDIO_INTEN_BASE);
     sdio_wl(SDIOBase, SDHCI_SIGNAL_ENABLE, 0);
 
-    D(bug("[SDIO] controller initialised (chip power + probe deferred to first open)\n"));
+    bug("[WIFI:SDIO] init OK: controller 0x%08x, base clock %u Hz; probe deferred\n",
+        SDIOBase->sdio_iobase, SDIOBase->sdio_ClockMax);
 
     return TRUE;
 }
@@ -1226,7 +1384,7 @@ AROS_LH1(int, SDIOEnableFunction,
 {
     AROS_LIBFUNC_INIT
 
-    uint8_t reg = 0;
+    uint8_t reg = 0, rdy = 0;
     int retries, err;
 
     ObtainSemaphore(&SDIOBase->sdio_Sem);
@@ -1240,7 +1398,6 @@ AROS_LH1(int, SDIOEnableFunction,
 
     for (retries = 50; !err && retries > 0; retries--)
     {
-        uint8_t rdy = 0;
         if (sdio_rw_direct(SDIOBase, 0, 0, SDIO_CCCR_IO_READY, 0, &rdy))
         {
             err = -1;
@@ -1248,8 +1405,17 @@ AROS_LH1(int, SDIOEnableFunction,
         }
         if (rdy & (1 << func))
             break;
-        sdio_udelay(SDIOBase, 1000);
+        /* WiFiPi gives the dongle 50 x 10 ms to start function 2.  BCM43430
+         * firmware can take longer than the former 50 x 1 ms window after
+         * CM3 is released, especially on the first cold boot. */
+        sdio_udelay(SDIOBase, 10000);
     }
+
+    if (!err && retries == 0)
+        err = -1;
+
+    bug("[WIFI:SDIO] function %u %s: IOEN=0x%02x IORDY=0x%02x\n",
+        func, err ? "timeout" : "ready", reg, rdy);
 
     ReleaseSemaphore(&SDIOBase->sdio_Sem);
     return err;

@@ -51,13 +51,18 @@
 APTR SDIOBase __attribute__((used)) = NULL;     /* sdio.resource (proto/sdio.h base) */
 APTR KernelBase __attribute__((used)) = NULL;
 
-/* Busy-wait microseconds off the BCM2835 1 MHz system timer (CLO). */
+/* The BCM2835 1 MHz free-running system timer (CLO). */
+static ULONG bwfm_now(struct BWFMBase *BWFMBase)
+{
+    return AROS_LE2LONG(*(volatile ULONG *)(BWFMBase->bwfm_periiobase + 0x3004));
+}
+
+/* Busy-wait microseconds off that timer. */
 static void bwfm_udelay(struct BWFMBase *BWFMBase, ULONG us)
 {
-    volatile ULONG *clo = (volatile ULONG *)(BWFMBase->bwfm_periiobase + 0x3004);
-    ULONG start = AROS_LE2LONG(*clo);
+    ULONG start = bwfm_now(BWFMBase);
 
-    while ((AROS_LE2LONG(*clo) - start) < us)
+    while ((bwfm_now(BWFMBase) - start) < us)
         ;
 }
 
@@ -110,6 +115,12 @@ static void bwfm_backplane(struct BWFMBase *BWFMBase, uint32_t bar0)
     BWFMBase->bwfm_bar0 = bar0;
 }
 
+/*
+ * 32-bit backplane register access. sdio.resource moves bytes in wire order,
+ * so the four bytes of a backplane register land in memory little-endian
+ * (first byte first) and have to be converted here - this is a numeric
+ * register, not a byte stream.
+ */
 static uint32_t bwfm_read_4(struct BWFMBase *BWFMBase, uint32_t addr)
 {
     uint32_t bar0 = addr & ~BWFM_SDIO_SB_OFT_ADDR_MASK;
@@ -122,19 +133,20 @@ static uint32_t bwfm_read_4(struct BWFMBase *BWFMBase, uint32_t addr)
 
     if (SDIOReadExt(bwfm_func(addr), addr, &val, 4, 1))
         return 0xffffffff;
-    return val;
+    return AROS_LE2LONG(val);
 }
 
 static void bwfm_write_4(struct BWFMBase *BWFMBase, uint32_t addr, uint32_t val)
 {
     uint32_t bar0 = addr & ~BWFM_SDIO_SB_OFT_ADDR_MASK;
+    uint32_t le = AROS_LONG2LE(val);
 
     bwfm_backplane(BWFMBase, bar0);
 
     addr &= BWFM_SDIO_SB_OFT_ADDR_MASK;
     addr |= BWFM_SDIO_SB_ACCESS_2_4B_FLAG;
 
-    SDIOWriteExt(bwfm_func(addr), addr, &val, 4, 1);
+    SDIOWriteExt(bwfm_func(addr), addr, &le, 4, 1);
 }
 
 /*
@@ -246,12 +258,16 @@ static void bwfm_ai_disable(struct BWFMBase *BWFMBase, struct bwfm_core *core,
                      BWFM_AGENT_RESET_CTL_RESET);
         bwfm_udelay(BWFMBase, 20);
 
+        /* Match WiFiPi's reset-settle interval.  Its DisableCore path keeps
+         * polling while RESET_CTL remains asserted, for up to 300 x 100 us,
+         * before programming the in-reset IOCTL state. */
         for (i = 300; i > 0; i--)
-            if (bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_RESET_CTL) ==
-                BWFM_AGENT_RESET_CTL_RESET)
+        {
+            if (bwfm_read_4(BWFMBase, core->co_wrapbase +
+                            BWFM_AGENT_RESET_CTL) != BWFM_AGENT_RESET_CTL_RESET)
                 break;
-        if (i == 0)
-            D(bug("[bwfm] timeout on core disable\n"));
+            bwfm_udelay(BWFMBase, 100);
+        }
     }
 
     bwfm_write_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_IOCTL,
@@ -426,10 +442,17 @@ static void bwfm_set_passive(struct BWFMBase *BWFMBase)
         core = bwfm_get_core(BWFMBase, BWFM_AGENT_INTERNAL_MEM);
         bwfm_ai_reset(BWFMBase, core, 0, 0, 0);
 
+        /* BCM43430 boots CM3 from SOCRAM and requires bank 3's remap disabled
+         * before the firmware image is executed.  This is the active sequence
+         * in brcmfmac/OpenBSD.  An earlier experiment removed it to mirror a
+         * WiFiPi #if 0 block, but that preceded the corrected upload/F2/clock
+         * ordering and therefore did not test the complete working sequence. */
         if (BWFMBase->bwfm_chip == BRCM_CC_43430_CHIP_ID)
         {
             bwfm_write_4(BWFMBase, core->co_base + BWFM_SOCRAM_BANKIDX, 3);
             bwfm_write_4(BWFMBase, core->co_base + BWFM_SOCRAM_BANKPDA, 0);
+            bug("[WIFI:BWFM] BCM43430 SOCRAM bank 3 remap disabled: PDA=0x%08x\n",
+                bwfm_read_4(BWFMBase, core->co_base + BWFM_SOCRAM_BANKPDA));
         }
         return;
     }
@@ -526,15 +549,20 @@ static int bwfm_do_attach(struct BWFMBase *BWFMBase)
     BWFMBase->bwfm_attached = FALSE;
     BWFMBase->bwfm_bar0 = ~0u;          /* force first backplane write */
 
+    bug("[WIFI:BWFM] attach begin\n");
+
     if (!SDIOBase)
+    {
+        bug("[WIFI:BWFM] attach failed: sdio.resource unavailable\n");
         return FALSE;
+    }
 
     /* Drive the lazy SDIO bring-up: the first SDIOProbe() powers the WiFi chip
      * and runs CMD5/CMD3/CMD7; later calls return the cached result (it is
      * idempotent on sdio_Present), so this is safe to call on every attach. */
     if (!SDIOProbe())
     {
-        D(bug("[bwfm] no SDIO device present\n"));
+        bug("[WIFI:BWFM] attach failed: SDIO probe\n");
         return FALSE;
     }
 
@@ -543,17 +571,23 @@ static int bwfm_do_attach(struct BWFMBase *BWFMBase)
     SDIOSetBlockSize(2, 512);
     if (SDIOEnableFunction(1))
     {
-        D(bug("[bwfm] cannot enable function 1\n"));
+        bug("[WIFI:BWFM] attach failed: cannot enable SDIO function 1\n");
         return FALSE;
     }
 
     if (bwfm_buscore_prepare(BWFMBase))
+    {
+        bug("[WIFI:BWFM] attach failed: ALP/buscore preparation\n");
         return FALSE;
+    }
 
     val = bwfm_read_4(BWFMBase, BWFM_CHIP_BASE + BWFM_CHIP_REG_CHIPID);
     BWFMBase->bwfm_chip = BWFM_CHIP_CHIPID_ID(val);
     BWFMBase->bwfm_chiprev = BWFM_CHIP_CHIPID_REV(val);
     type = BWFM_CHIP_CHIPID_TYPE(val);
+
+    bug("[WIFI:BWFM] chip ID 0x%08x: id %u rev %u type %u\n",
+        val, BWFMBase->bwfm_chip, BWFMBase->bwfm_chiprev, type);
 
     /* Print like OpenBSD: decimal for "43xxx" parts, hex for "0x4xxx" parts */
     if (BWFMBase->bwfm_chip > 0xa000 || BWFMBase->bwfm_chip < 0x4000)
@@ -694,19 +728,30 @@ static int bwfm_do_attach(struct BWFMBase *BWFMBase)
     }
 
     BWFMBase->bwfm_attached = TRUE;
+    bug("[WIFI:BWFM] attach OK: %u cores, RAM 0x%06x/%u KB\n",
+        BWFMBase->bwfm_ncores, BWFMBase->bwfm_rambase,
+        BWFMBase->bwfm_ramsize / 1024);
     return TRUE;
 }
 
 /* ----------------------------------------------------------------------- */
 /* Firmware download (ported from if_bwfm_sdio.c bwfm_sdio_load_microcode)  */
 
-/* Write a buffer into chip RAM through the backplane, paging at 32 KB
- * windows and chunking each window into <=512-byte CMD53 byte-mode writes
- * (sdio.resource's extended transfer limit). Lengths are rounded up to 4. */
+/*
+ * Write a buffer into chip RAM through the backplane, paging at the 32 KB
+ * backplane window.
+ *
+ * One SDIOWriteExt() per window: sdio.resource splits that into as many
+ * block-mode CMD53s as the 511-block count allows and finishes the remainder
+ * in byte mode, so the paging done here is the only paging this needs. The
+ * previous 64-byte chunking issued 6250 commands for a 400 KB image; it was
+ * introduced while hunting an upload corruption that turned out to be a
+ * byte-order defect in the PIO path, and it never had anything to do with it.
+ */
 static int bwfm_ram_write(struct BWFMBase *BWFMBase, uint32_t ramaddr,
                           const UBYTE *data, ULONG len)
 {
-    UBYTE bounce[512];
+    UBYTE bounce[4];
     ULONG off = 0;
 
     while (len > 0)
@@ -715,34 +760,91 @@ static int bwfm_ram_write(struct BWFMBase *BWFMBase, uint32_t ramaddr,
         uint32_t sdoff = sbaddr & BWFM_SDIO_SB_OFT_ADDR_MASK;
         ULONG winleft = BWFM_SDIO_SB_OFT_ADDR_PAGE - sdoff;
         ULONG n = (len < winleft) ? len : winleft;
-        ULONG done = 0;
+        ULONG whole = n & ~3UL;
 
         bwfm_backplane(BWFMBase, sbaddr & ~BWFM_SDIO_SB_OFT_ADDR_MASK);
 
-        while (done < n)
+        if (whole &&
+            SDIOWriteExt(1, sdoff | BWFM_SDIO_SB_ACCESS_2_4B_FLAG,
+                         (APTR)(data + off), whole, 1))
+            return -1;
+
+        if (n != whole)
         {
-            ULONG chunk = (n - done < 512) ? (n - done) : 512;
-            /* Round up to the func1 block size (64) so sdio.resource uses
-             * block-mode CMD53 (a large byte-mode access returns OUT_OF_RANGE).
-             * The few pad bytes land in chip RAM beyond the image - harmless. */
-            ULONG wlen = (chunk + 63) & ~63UL;
-            const UBYTE *src = data + off + done;
+            /* Only the last window of a blob can end mid-word, and the bus
+             * moves whole words: pad with zeroes past the end of the image. */
+            ULONG rest = n - whole;
 
-            if (wlen != chunk)
-            {
-                CopyMem((APTR)src, bounce, chunk);
-                bwfm_zero(bounce + chunk, wlen - chunk);
-                src = bounce;
-            }
-
-            if (SDIOWriteExt(1, (sdoff + done) | BWFM_SDIO_SB_ACCESS_2_4B_FLAG,
-                             (APTR)src, wlen, 1))
+            CopyMem((APTR)(data + off + whole), bounce, rest);
+            bwfm_zero(bounce + rest, 4 - rest);
+            if (SDIOWriteExt(1, (sdoff + whole) | BWFM_SDIO_SB_ACCESS_2_4B_FLAG,
+                             bounce, 4, 1))
                 return -1;
-            done += chunk;
         }
 
         off += n;
         len -= n;
+    }
+    return 0;
+}
+
+/*
+ * Confirm that what is in chip RAM is what was handed to bwfm_ram_write().
+ *
+ * Two different questions, because one check cannot answer both:
+ *
+ *  - CMD52 reads the first eight bytes one command at a time. Single bytes
+ *    have no group to reverse, so this is the only check that can see a
+ *    transport which swaps each 4-byte group -- word-granular verification
+ *    reverses a bad write a second time on the way back and compares equal.
+ *  - The 4-byte window then samples words across the whole blob, which is
+ *    where a short, misaddressed or partially-failed upload shows up.
+ *
+ * Cheap enough to run on every firmware start (nine commands), and it turns a
+ * silent FWREADY timeout into a statement about the upload.
+ */
+static int bwfm_verify_upload(struct BWFMBase *BWFMBase, uint32_t base,
+                              const UBYTE *img, ULONG len)
+{
+    UBYTE probe[8];
+    int i, bad = 0;
+
+    bwfm_backplane(BWFMBase, base & ~BWFM_SDIO_SB_OFT_ADDR_MASK);
+    for (i = 0; i < 8; i++)
+    {
+        UBYTE got = SDIOReadByte(1, (base & BWFM_SDIO_SB_OFT_ADDR_MASK) + i);
+
+        if (got != img[i])
+            bad = 1;
+        probe[i] = got;
+    }
+    bug("[WIFI:BWFM] RAM bytes %02x %02x %02x %02x %02x %02x %02x %02x\n",
+        probe[0], probe[1], probe[2], probe[3],
+        probe[4], probe[5], probe[6], probe[7]);
+    if (bad)
+    {
+        bug("[WIFI:BWFM] image bytes %02x %02x %02x %02x %02x %02x %02x %02x"
+            " - MISMATCH\n",
+            img[0], img[1], img[2], img[3], img[4], img[5], img[6], img[7]);
+        return -1;
+    }
+
+    /* Eight words spread over the blob, last one on its final whole word. */
+    for (i = 0; i < 8; i++)
+    {
+        ULONG off = ((len / 8) * (ULONG)i) & ~3UL;
+        uint32_t want, got;
+
+        if (i == 7)
+            off = (len - 4) & ~3UL;
+        want = AROS_LE2LONG(*(const uint32_t *)(img + off));
+        got = bwfm_read_4(BWFMBase, base + off);
+        if (got != want)
+        {
+            bug("[WIFI:BWFM] upload mismatch at +0x%06x: RAM %08x, image %08x\n",
+                off, got, want);
+            return -1;
+        }
     }
     return 0;
 }
@@ -769,6 +871,44 @@ static int bwfm_alpclk_on(struct BWFMBase *BWFMBase)
     }
     D(bug("[bwfm] ALP clock timeout (csr 0x%02x)\n", clk));
     return -1;
+}
+
+/*
+ * Ask for the operational backplane clock before the function-2 handshake,
+ * the way brcmf_sdio_bus_init() does: a chip that boots its CPU out of SOCRAM
+ * (BCM43430's CM3) gets the HT *request* bit ORed onto whatever the download
+ * left behind; a TCM chip is forced to HT outright.
+ *
+ * It deliberately does not block on HT_AVAIL. On a SOCRAM part the PMU only
+ * grants HT once the firmware has programmed it, and the firmware only gets
+ * that far once function 2 is up - so waiting here deadlocks exactly the chip
+ * this port has. The short observation window below is for the log, not a
+ * precondition: knowing whether HT arrived is what separates a clock failure
+ * from a firmware failure in the capture that follows.
+ */
+static void bwfm_htclk_request(struct BWFMBase *BWFMBase)
+{
+    uint8_t save = bwfm_read_1(BWFM_SDIO_FUNC1_CHIPCLKCSR);
+    uint8_t req = bwfm_get_core(BWFMBase, BWFM_AGENT_INTERNAL_MEM)
+                  ? BWFM_SDIO_FUNC1_CHIPCLKCSR_HT_AVAIL_REQ
+                  : BWFM_SDIO_FUNC1_CHIPCLKCSR_FORCE_HT;
+    uint8_t clk = 0;
+    int i;
+
+    bwfm_write_1(BWFM_SDIO_FUNC1_CHIPCLKCSR, save | req);
+
+    for (i = 0; i < 100; i++)
+    {
+        clk = bwfm_read_1(BWFM_SDIO_FUNC1_CHIPCLKCSR);
+        if (clk & BWFM_SDIO_FUNC1_CHIPCLKCSR_HT_AVAIL)
+            break;
+        bwfm_udelay(BWFMBase, 1000);
+    }
+
+    bug("[WIFI:BWFM] clock 0x%02x | 0x%02x -> CHIPCLKCSR=0x%02x (HT %s)\n",
+        save, req, clk,
+        (clk & BWFM_SDIO_FUNC1_CHIPCLKCSR_HT_AVAIL) ? "available"
+                                                    : "not yet granted");
 }
 
 /* SDPCM (SDIO_DEV core) register access */
@@ -812,7 +952,17 @@ static int bwfm_set_active(struct BWFMBase *BWFMBase, uint32_t rstvec)
         if (!bwfm_ai_isup(BWFMBase, mem))
             return -1;
         bwfm_buscore_activate(BWFMBase, 0);
+        bug("[WIFI:BWFM] CM3 before release: ioctl=0x%08x reset=0x%08x\n",
+            bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_IOCTL),
+            bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_RESET_CTL));
         bwfm_ai_reset(BWFMBase, core, 0, 0, 0);
+        bug("[WIFI:BWFM] CM3 released: ioctl=0x%08x reset=0x%08x\n",
+            bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_IOCTL),
+            bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_RESET_CTL));
+        bwfm_udelay(BWFMBase, 1000);
+        bug("[WIFI:BWFM] CM3 after 1 ms: ioctl=0x%08x reset=0x%08x\n",
+            bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_IOCTL),
+            bwfm_read_4(BWFMBase, core->co_wrapbase + BWFM_AGENT_RESET_CTL));
         return 0;
     }
 
@@ -1481,7 +1631,9 @@ static int bwfm_init(struct BWFMBase *BWFMBase)
 
     SDIOBase = OpenResource("sdio.resource");
     if (!SDIOBase)
-        D(bug("[bwfm] sdio.resource not available\n"));
+        bug("[WIFI:BWFM] resource init: sdio.resource unavailable\n");
+    else
+        bug("[WIFI:BWFM] resource init OK: attach deferred\n");
 
     /* Chip bring-up (power + enumeration) is deferred to the first BWFMAttach(),
      * which bwfm.device calls when it is opened - so the WiFi chip stays
@@ -1552,6 +1704,7 @@ AROS_LH4(int, BWFMStartFirmware,
 
     int err = -1, i;
     uint32_t rstvec;
+    ULONG t0, upload_us;
 
     ObtainSemaphore(&BWFMBase->bwfm_Sem);
 
@@ -1571,12 +1724,25 @@ AROS_LH4(int, BWFMStartFirmware,
     if (bwfm_alpclk_on(BWFMBase))   /* upload on ALP; HT forced after FWREADY */
         goto done;
 
-    rstvec = *(uint32_t *)fw;       /* reset vector = first firmware word */
+    /* The image is little-endian; bwfm_write_4() converts on the way out, so
+     * hold the reset vector as a value, not as the four raw bytes. */
+    rstvec = AROS_LE2LONG(*(uint32_t *)fw);
 
     D(bug("[bwfm] uploading firmware (%u bytes) to RAM 0x%06x\n",
           fwlen, BWFMBase->bwfm_rambase));
+    t0 = bwfm_now(BWFMBase);
     if (bwfm_ram_write(BWFMBase, BWFMBase->bwfm_rambase, fw, fwlen))
         goto done;
+    upload_us = bwfm_now(BWFMBase) - t0;
+
+    if (bwfm_verify_upload(BWFMBase, BWFMBase->bwfm_rambase, (const UBYTE *)fw, fwlen))
+    {
+        bug("[WIFI:BWFM] firmware upload did not verify - not starting the CPU\n");
+        goto done;
+    }
+
+    bug("[WIFI:BWFM] firmware %u bytes uploaded and verified in %u ms\n",
+        fwlen, (upload_us + 500) / 1000);
 
     if (nvram && nvlen)
     {
@@ -1600,6 +1766,43 @@ AROS_LH4(int, BWFMStartFirmware,
         goto done;
     }
 
+    /* Match the working WiFiPi/brcmfmac bus-start order.  The dongle must see
+     * the SDPCM protocol advertisement and function 2 must become ready before
+     * the host waits for FWREADY.  Waiting first deadlocks BCM43430: firmware
+     * is resident and CM3 is running, but its mailbox remains zero because the
+     * data function through which the bus handshake completes is still off. */
+    {
+        bwfm_htclk_request(BWFMBase);
+        bwfm_dev_write(BWFMBase, SDPCMD_TOSBMAILBOXDATA,
+                       SDPCM_PROT_VERSION << SDPCM_PROT_VERSION_SHIFT);
+        if (SDIOEnableFunction(2))
+        {
+            uint32_t mid = (fwlen / 2) & ~3u;
+            uint32_t tail = (fwlen - 4) & ~3u;
+
+            bug("[WIFI:BWFM] bus start failed: SDIO function 2 timeout\n");
+            bug("[WIFI:BWFM] image check: mid[%u]=%08x/%08x tail[%u]=%08x/%08x\n",
+                mid, bwfm_read_4(BWFMBase, BWFMBase->bwfm_rambase + mid),
+                AROS_LE2LONG(((uint32_t *)fw)[mid / 4]), tail,
+                bwfm_read_4(BWFMBase, BWFMBase->bwfm_rambase + tail),
+                AROS_LE2LONG(((uint32_t *)fw)[tail / 4]));
+            if (nvram && nvlen >= 4)
+            {
+                uint32_t nvaddr = BWFMBase->bwfm_rambase +
+                                  BWFMBase->bwfm_ramsize - nvlen;
+                bug("[WIFI:BWFM] nvram check: 0x%06x=%08x/%08x\n",
+                    nvaddr, bwfm_read_4(BWFMBase, nvaddr),
+                    AROS_LE2LONG(((uint32_t *)nvram)[0]));
+            }
+            goto done;
+        }
+        bwfm_dev_write(BWFMBase, SDPCMD_HOSTINTMASK,
+                       SDPCMD_INTSTATUS_HMB_SW_MASK | SDPCMD_INTSTATUS_CHIPACTIVE);
+        bwfm_write_1(BWFM_SDIO_WATERMARK, 8);
+        bug("[WIFI:BWFM] bus start OK: SDPCM %u, function 2 ready\n",
+            SDPCM_PROT_VERSION);
+    }
+
     for (i = 0; i < 2000; i++)
     {
         uint32_t mb = bwfm_dev_read(BWFMBase, SDPCMD_TOHOSTMAILBOXDATA);
@@ -1612,15 +1815,17 @@ AROS_LH4(int, BWFMStartFirmware,
         bwfm_udelay(BWFMBase, 1000);
     }
 
-    D(bug("[bwfm] firmware %s\n", err ? "ready timeout" : "ready"));
+    bug("[WIFI:BWFM] firmware %s\n", err ? "ready timeout" : "ready");
 
-#if DEBUG
     /* A timeout leaves no clue on its own: the chip either never got its clocks,
      * never came out of reset, or is running code that never landed in RAM.
-     * Dump the three, so one capture tells them apart. */
+     * Dump the three, so one capture tells them apart. This is bounded to the
+     * one-time failure path and is intentionally available with DEBUG=0. */
     if (err)
     {
         struct bwfm_core *cr4 = bwfm_get_core(BWFMBase, BWFM_AGENT_CORE_ARM_CR4);
+        struct bwfm_core *cm3 = bwfm_get_core(BWFMBase, BWFM_AGENT_CORE_ARM_CM3);
+        struct bwfm_core *socram = bwfm_get_core(BWFMBase, BWFM_AGENT_INTERNAL_MEM);
 
         bug("[bwfm] timeout state: CHIPCLKCSR=0x%02x mbox=0x%08x INTSTATUS=0x%08x\n",
             bwfm_read_1(BWFM_SDIO_FUNC1_CHIPCLKCSR),
@@ -1631,30 +1836,28 @@ AROS_LH4(int, BWFMStartFirmware,
                 bwfm_read_4(BWFMBase, cr4->co_wrapbase + BWFM_AGENT_IOCTL),
                 bwfm_read_4(BWFMBase, cr4->co_wrapbase + BWFM_AGENT_RESET_CTL),
                 bwfm_ai_isup(BWFMBase, cr4));
+        if (cm3)
+            bug("[bwfm] timeout state: CM3 ioctl=0x%08x resetctl=0x%08x (isup %d)\n",
+                bwfm_read_4(BWFMBase, cm3->co_wrapbase + BWFM_AGENT_IOCTL),
+                bwfm_read_4(BWFMBase, cm3->co_wrapbase + BWFM_AGENT_RESET_CTL),
+                bwfm_ai_isup(BWFMBase, cm3));
+        if (socram)
+            bug("[bwfm] timeout state: SOCRAM ioctl=0x%08x resetctl=0x%08x (isup %d)\n",
+                bwfm_read_4(BWFMBase, socram->co_wrapbase + BWFM_AGENT_IOCTL),
+                bwfm_read_4(BWFMBase, socram->co_wrapbase + BWFM_AGENT_RESET_CTL),
+                bwfm_ai_isup(BWFMBase, socram));
         /* Read the first firmware words back through the 4-byte window (block
          * mode is what is unreliable here) and hold them against the image. */
         bug("[bwfm] timeout state: RAM 0x%06x = %08x %08x, image = %08x %08x\n",
             BWFMBase->bwfm_rambase,
             bwfm_read_4(BWFMBase, BWFMBase->bwfm_rambase),
             bwfm_read_4(BWFMBase, BWFMBase->bwfm_rambase + 4),
-            ((uint32_t *)fw)[0], ((uint32_t *)fw)[1]);
+            AROS_LE2LONG(((uint32_t *)fw)[0]),
+            AROS_LE2LONG(((uint32_t *)fw)[1]));
     }
-#endif
 
     if (!err)
     {
-        /* Post-firmware bus bring-up: force HT, advertise the SDPCM
-         * protocol version, enable the data function and set up the
-         * host interrupt mask + FIFO watermark. */
-        uint8_t clk = bwfm_read_1(BWFM_SDIO_FUNC1_CHIPCLKCSR);
-        bwfm_write_1(BWFM_SDIO_FUNC1_CHIPCLKCSR,
-                     clk | BWFM_SDIO_FUNC1_CHIPCLKCSR_FORCE_HT);
-        bwfm_dev_write(BWFMBase, SDPCMD_TOSBMAILBOXDATA,
-                       SDPCM_PROT_VERSION << SDPCM_PROT_VERSION_SHIFT);
-        SDIOEnableFunction(2);
-        bwfm_dev_write(BWFMBase, SDPCMD_HOSTINTMASK,
-                       SDPCMD_INTSTATUS_HMB_SW_MASK | SDPCMD_INTSTATUS_CHIPACTIVE);
-        bwfm_write_1(BWFM_SDIO_WATERMARK, 8);
         BWFMBase->bwfm_txseq = 0xff;     /* matches OpenBSD; firmware grants */
         BWFMBase->bwfm_txmax = 1;        /* credit from RX maxseqnr; seed 1 */
         BWFMBase->bwfm_reqid = 0;

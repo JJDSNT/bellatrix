@@ -28,6 +28,7 @@ struct SDIOBase
     uint8_t                 sdio_NumFunc;   /* I/O function count from CMD5 */
     int                     sdio_Present;   /* An SDIO device answered CMD5 */
     unsigned int            sdio_LastWrite; /* SYSTIMER stamp of last MMIO write */
+    unsigned int            sdio_WriteGap;  /* us to leave between MMIO writes (see sdio_wl) */
     uint16_t                sdio_BlkSize[8];/* per-function block size (CMD53 block mode) */
 
     /* SDIO card-interrupt (DAT1) routing to a consumer task (the RX pump) */
