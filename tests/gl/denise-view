@@ -1,0 +1,19 @@
+;
+; Can the guest read what the chipset drew?
+;
+; Bellatrix publishes each finished Denise frame at $01000000 with a
+; descriptor at $01200000 (src/amiga/frame.h). Everything up to that point is
+; verified on the Bellatrix side, by the census in src/amiga/bus.c. This is the
+; other half, and it is the half that matters: the m68k reading the same frame
+; back through the machine map.
+;
+; The two censuses are meant to be compared. Same background, same non-black
+; count, same checksum means the frame the chipset composed is the frame the
+; guest can see. Different means the bridge, not the chipset.
+;
+; NOWINDOW because this runs from the Startup-Sequence with nothing to display
+; on yet, and because the claim being tested is readability, not presentation.
+;
+Echo >DEBUG: "[denise-view] --- reading the frame aperture"
+DeniseView >DEBUG: NOWINDOW
+Echo >DEBUG: "[denise-view] --- done"

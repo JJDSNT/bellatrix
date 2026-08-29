@@ -159,16 +159,21 @@ static void machine_setup_memory(void)
 
 void machine_init(void)
 {
-#if CONFIG_RIGEL
-    amiga_bus_init();
-#endif
     machine_setup_memory();
 #if CONFIG_RIGEL
     /*
-     * After the static map, because it installs regions of its own and the
-     * table refuses an overlap -- which is the point of the table.
+     * Order matters, and it is not the obvious one.
+     *
+     * The frame aperture is installed after the static map, because it adds
+     * regions of its own and the table refuses an overlap -- which is the
+     * point of the table. But it is installed *before* the chipset, because
+     * amiga_bus_init() may run a selftest that programs a display, and a frame
+     * composed before there is an aperture to publish it into is a frame the
+     * guest never sees. That is not hypothetical: it is what the first run of
+     * the DeniseView probe reported.
      */
     amiga_frame_init();
+    amiga_bus_init();
 #endif
     machine_region_report();
 }

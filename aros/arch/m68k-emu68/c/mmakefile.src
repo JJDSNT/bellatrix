@@ -15,4 +15,10 @@ USER_CFLAGS := -noposixc
     progname=SerialSay files=SerialSay targetdir=$(AROS_C) \
     coverageinstr=no
 
+#MM- workbench-c-emu68-deniseview : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-deniseview \
+    progname=DeniseView files=DeniseView targetdir=$(AROS_C) \
+    uselibs="amiga" coverageinstr=no
+
 %common

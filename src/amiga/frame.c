@@ -18,6 +18,7 @@
 #include "machine/region.h"
 
 #include "A64.h"
+#include "mmu.h"
 #include "tlsf.h"
 
 extern void *tlsf;
@@ -101,7 +102,14 @@ void amiga_frame_init(void)
     region.size      = AMIGA_FRAME_SIZE;
     region.kind      = MACHINE_REGION_DIRECT;
     region.name      = "Denise frame aperture";
-    region.host_phys = (uintptr_t)frame_buffer;
+    /*
+     * host_phys is physical, and tlsf hands out virtual addresses. The two
+     * happen to be equal on this platform, which is exactly the reason the
+     * region header says they must not be treated as interchangeable: a
+     * mapping built from the wrong one reads as zeroes, with the descriptor
+     * still crossing correctly because it is served by a fault instead.
+     */
+    region.host_phys = mmu_virt2phys((uintptr_t)frame_buffer);
     region.attr      = MMU_ATTR_CACHED;
     region.ops       = 0;
     region.owner     = 0;

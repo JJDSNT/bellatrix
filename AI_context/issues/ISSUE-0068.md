@@ -968,3 +968,59 @@ memory.
 The presenter: an AROS display driver modelled on
 `aros/arch/m68k-emu68/hidd/fbgfx/`, reading the descriptor at `$01200000` and
 the frame at `$01000000`. Everything below it is now in place and verified.
+
+
+# 2026-08-29: phase 2 done -- the guest reads what the chipset drew
+
+`C:DeniseView` (`aros/arch/m68k-emu68/c/DeniseView.c`) reads the descriptor at
+`$01200000` and the frame at `$01000000`, prints what it found, and takes the
+same census Bellatrix takes on its own side. Run from the Startup-Sequence with
+`BELLATRIX_BOOT_TEST=denise-view`:
+
+```text
+[BELLATRIX:RIGEL:FRAME] publishing 352x256 pitch=4096 at $01000000, descriptor at $01200000
+[BELLATRIX:RIGEL:CENSUS] frame=1 352x256 pitch=4096 bg=00000000 non-bg=704/1887 sum=eca14000 flags=08
+...
+DeniseView: v1 352x256 pitch=4096 at $01000000, frame 2
+DeniseView: bg=00000000 non-bg=704/1887 sum=ECA14000
+```
+
+**The two censuses match exactly.** Same background, same count, same checksum,
+taken on opposite sides of the machine map. That is the claim phase 2 exists to
+prove, and neither census could have proved it alone.
+
+`DeniseView` without `NOWINDOW` opens a window and blits the aperture into it
+with `WritePixelArray(..., RECTFMT_RGBA)`. It is a viewer, not a display
+driver: when AROS draws through the chipset for real, the display driver is
+`amigavideo` and what puts Denise on the panel is a plane on the video scaler.
+
+## Two bugs the probe caught, both in the bridge
+
+**Order.** The first run printed a valid magic and zeroes for everything else.
+`amiga_bus_init()` runs the display selftest, and it ran *before*
+`amiga_frame_init()` had installed the aperture -- so the frames it composed
+had nowhere to be published. Invisible while the chipset kept running, because
+a later frame published fine; it only appeared once the selftest started
+parking the clock. `machine_init()` now installs the aperture before the
+chipset, with the reason written next to it.
+
+**Virtual against physical.** The second run had the descriptor crossing
+correctly and every pixel reading zero. `MachineRegion.host_phys` is a physical
+address and `tlsf` hands out virtual ones, and on this platform they are not
+equal: the buffer was virtual `$00de7000` and physical `$35237000`. The fix is
+`mmu_virt2phys()`.
+
+That is exactly the confusion `region.h` warns about in the comment on the
+field -- guest physical and host memory addresses "MUST NOT be treated as
+interchangeable simply because an implementation can sometimes map between them
+cheaply". Worth noting how it presented: **the descriptor still worked**,
+because an EXTERNAL region is served by a fault handler and never consults
+`host_phys`, so only the DIRECT half was wrong. A bridge that is half correct
+looks like a chipset that is half working.
+
+## Where the clock parks
+
+The display selftest now stops the clock after composing its frames, keeping
+the published frame. Stepping Rigel costs enough under QEMU that a boot which
+keeps doing it never reaches a Shell -- and a Shell is where anything can read
+the aperture back. The next MMIO re-arms the clock as usual.

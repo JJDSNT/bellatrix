@@ -521,5 +521,21 @@ static void amiga_bus_display_selftest(void)
 
     kprintf("[BELLATRIX:RIGEL:DISPLAY] %llu CCK stepped; census above\n",
         (unsigned long long)rigel_get_time(rigel));
+
+    /*
+     * Park the clock, keeping the frame.
+     *
+     * The point of this selftest is a known frame in the aperture, not a
+     * chipset that keeps running: stepping Rigel costs enough under QEMU that
+     * a boot which keeps doing it never reaches a Shell, and a Shell is where
+     * anything can read the aperture back. The published frame stays where it
+     * is; the next MMIO re-arms the clock as usual.
+     */
+    pending_cck = 0;
+    cpu_cycle_remainder = 0;
+    chipset_observed = 0;
+    if (__m68k_state != 0)
+        __m68k_state->CHIPSET_ACTIVE = 0;
+    kprintf("[BELLATRIX:RIGEL:DISPLAY] clock parked; frame kept for the guest\n");
 }
 #endif
