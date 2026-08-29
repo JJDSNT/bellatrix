@@ -1411,6 +1411,28 @@ void dwc2_transfer_watchdog(struct DWC2Unit *unit)
     struct DWC2Device *device = unit->device;
     UBYTE i;
 
+    /* The watchdog is normally called every 10 ms while at least one channel
+     * owns a request. Keep this deliberately sparse: the serial line can then
+     * prove whether the unit task is still making progress without becoming
+     * part of the scheduling problem under investigation. */
+    if (++unit->watchdog_heartbeat_ticks >= 500)
+    {
+        unit->watchdog_heartbeat_ticks = 0;
+        unit->watchdog_heartbeats++;
+        bug("[DWC2/Emu68:HB] %lu AHB=%08lx irq=%08lx channels=%08lx "
+            "recoveries=%lu\n", unit->watchdog_heartbeats,
+            dwc2_readl(device, DWC2_GAHBCFG), unit->irq_pending,
+            unit->channels_pending, unit->watchdog_recoveries);
+    }
+
+    /* A clear global mask means the ISR has already claimed an event and the
+     * unit task has not consumed that snapshot yet. Treating HCINT as missed
+     * in this state races the normal deferred path and creates an unbounded
+     * recovery loop. The task drains before rearming this timer. */
+    if (!(dwc2_readl(device, DWC2_GAHBCFG) &
+        DWC2_GAHBCFG_GLBLINTRMSK))
+        return;
+
     for (i = 0; i < unit->host_channels; i++)
     {
         struct DWC2Channel *chan = &unit->channel[i];

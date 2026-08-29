@@ -218,6 +218,12 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
         {
             WaitIO((struct IORequest *)unit->timer_request);
             unit->watchdog_active = FALSE;
+            /* WaitIO() is another scheduling point. An IRQ may have closed
+             * the controller after the drain above but before the timer
+             * request was collected, so consume that snapshot before the
+             * watchdog decides that its terminal HCINT was missed. */
+            if (unit->irq_pending != 0)
+                dwc2_controller_drain_irq(unit);
             dwc2_transfer_watchdog(unit);
         }
         if (unit->hub_interrupt != NULL &&

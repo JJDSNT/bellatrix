@@ -161,6 +161,8 @@ struct DWC2Unit
     ULONG                   split_starts;
     ULONG                   watchdog_recoveries; /* uncapped: see the watchdog */
     ULONG                   watchdog_reported;
+    ULONG                   watchdog_heartbeat_ticks;
+    ULONG                   watchdog_heartbeats;
     BOOL                    opened;
 };
 

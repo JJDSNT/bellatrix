@@ -193,6 +193,34 @@ must start from that controlled baseline and isolate the periodic scheduling
 interaction before changing the gate again. Instrumentation must remain until
 the watchdog count is actually fixed on the Pi.
 
+## Late-IRQ watchdog race on the retained gate
+
+The working priority-0 build was later left running long enough to reach 2048
+stage-4 recoveries. Every recovery still reported `GAHBCFG=0xa2`. This is not
+harmless diagnostic noise: repeatedly feeding a terminal periodic result
+through the watchdog can keep the unit task busy indefinitely and plausibly
+accounts for the reported whole-machine freeze after some uptime.
+
+The earlier drain-before-watchdog change missed a concrete scheduling point.
+The task drains immediately after `Wait()`, then calls `WaitIO()` to collect the
+expired timer request. A hardware IRQ may run during that `WaitIO()`, close the
+global gate and publish a new snapshot. The watchdog then runs with the gate
+closed and races the normal deferred path exactly as before.
+
+The narrow follow-up keeps the proven gate design but drains once more after
+`WaitIO()`. The watchdog also refuses to recover while
+`GAHBCFG.GLBLINTRMSK` is clear: that state means the ISR owns a snapshot which
+must be consumed normally, not that a channel interrupt was lost. The timer is
+rearmed by the normal unit loop after the pending IRQ has been drained.
+
+A sparse `[DWC2/Emu68:HB]` line is emitted every 500 watchdog passes, nominally
+about five seconds while a periodic request keeps the controller active. It
+includes `GAHBCFG`, `irq_pending`, `channels_pending` and the recovery total.
+If normal serial output continues but HB stops, the unit task stopped making
+progress; if HB continues with fixed pending state, the task is alive in a
+USB-side loop. This diagnostic remains intentionally independent of whether
+the watchdog skips recovery because the global gate is closed.
+
 # Acceptance
 
 - Move the pointer continuously while the Mesa demo runs: no stall.
