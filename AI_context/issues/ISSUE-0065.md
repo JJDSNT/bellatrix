@@ -17,6 +17,7 @@ tags:
 blockers:
   - needs controlled A/B boots on real hardware
 related_files:
+  - patches/aros/0087-wirelessmanager-wake-the-event-loop-from-the-gui.patch
   - aros/arch/m68k-emu68/soc/wifi/sdio
   - aros/arch/m68k-emu68/soc/wifi/bwfm
   - aros/arch/m68k-emu68/soc/usb/dwc2emu68
@@ -355,3 +356,130 @@ Association was not exercised: the test machine had no USB input attached.
 The bring-up defect is closed. What remains under this issue's title -- whether
 first-boot WiFi and `dwc2emu68` interact -- is now testable for the first time,
 because WiFi reaches an online device instead of failing early.
+
+## Hardware results, 2026-08-29 (later): scan and join both work
+
+Three defects were found in sequence, each hidden behind the previous one.
+
+### 1. The scan was never requested
+
+With bounded milestones on `BWFMScan()`, the log showed no `scan begin` at all:
+nothing ever called it. Every diagnostic on that path had been behind `D()`
+with `DEBUG 0`, so "nothing in the log" had been read as "the scan failed"
+when it meant "the scan never ran" -- the trap CLAUDE.md records.
+
+### 2. The Scan button could not reach the event loop
+
+Root cause, fixed by `patches/aros/0087`: WirelessManager runs its MUI window
+in a separate process (`main_amiga.c` `start_gui()` spawns "WirelessManager
+GUI") while `wpa_supplicant_run()` -> `eloop_run()` blocks in the main task.
+`ScanFunc()` calls `wpa_supplicant_req_scan()`, which registers an eloop
+timeout from the GUI process -- and nothing woke the task that would run it.
+
+`eloop_run()` builds its signal mask once per iteration, before `Wait()`, from
+the timeouts and read sockets existing at that moment. With no networks
+configured there is neither: the mask is zero, and `Wait(0)` can never return.
+The loop was parked for ever.
+
+The patch gives the loop its own signal, always in the mask, signals it from
+`eloop_register_timeout()` when the caller is another task, re-arms the timer
+request when the new timeout is nearer than the one in flight, and puts the
+list splice under `Forbid()` since it has two writers.
+
+### 3. Results
+
+```text
+[WIFI:BWFM] scan begin: C_UP err 0, CLM -1 bytes
+[WIFI:BWFM] scan complete: 21 network(s), 34 escan event(s), 1200 ms
+[WIFI:BWFM] join begin: "Megamaster" WPA, host handshake (ie 22, pass 0; ...)
+[WIFI:BWFM] join event 3 status 0 flags 0x0000     E_AUTH
+[WIFI:BWFM] join event 7 status 0 flags 0x0000     E_ASSOC
+[WIFI:BWFM] join event 16 status 0 flags 0x0001    E_LINK up
+[WIFI:BWFM] join event 25 status 0 flags 0x0000    E_EAPOL_MSG
+[WIFI:BWFM] join attempt 1 OK (result 0)
+[WIFI:BWFM] join "Megamaster": CONNECTED
+```
+
+Scans return 14-21 networks in 1.2-1.4 s. The join authenticates, associates,
+brings the link up, and an EAPOL frame arrives -- so the four-way handshake at
+least starts.
+
+`CLM -1` means no `.clm_blob` is on the card. **The CLM is no longer a
+suspect**: a radio returning twenty-one networks has valid channels. The
+Cypress-pair experiment proposed earlier is not needed.
+
+### What CONNECTED does and does not say
+
+It is a link-layer statement: authenticated (open), associated, link up. A WPA
+network accepts anyone's association and only then demands the four-way
+handshake, so this milestone cannot distinguish "connected" from "associated,
+handshake pending" from "about to be deauthenticated". The wording is
+deliberately link-layer, and ISSUE-0066 records that the UI must not repeat it
+as a user-facing claim.
+
+`pass 0` beside `ie 22` is correct, not a defect: with an RSN IE the driver is
+on the host-handshake path, where `wpa_supplicant` performs the four-way with
+its own PSK and the driver never needs the passphrase.
+
+## The real symptom, 2026-08-29: an association loop
+
+A longer capture shows the join is not a one-off success. It repeats, roughly
+every few seconds, for as long as the machine is up:
+
+```text
+scan complete: 19 network(s) -> join "Megamaster" -> CONNECTED
+scan complete: 13 network(s) -> join "Megamaster" -> CONNECTED
+scan complete: 17 network(s) -> join "Megamaster" -> CONNECTED
+scan complete: 21 network(s) -> join "Megamaster" -> CONNECTED
+scan complete: 15 network(s) -> join "Megamaster" -> ...
+[WIFI:BWFM] join event 3 status 5 flags 0x0000      E_AUTH, status 5
+[WIFI:BWFM] join event 19 status 1 flags 0x0000     E_ROAM, status 1 (FAIL)
+```
+
+The `dwc2emu68` heartbeat runs 35, 36, 37, 38, 39, 40 through all of it, so the
+machine is alive and this is a loop, not a hang.
+
+This is the signature of a four-way handshake that never completes:
+`wpa_supplicant` associates, waits for the handshake, gives up, disconnects,
+re-scans and associates again. The last attempt in the capture degrades
+further -- `E_AUTH` status 5 is NO_ACK and `E_ROAM` status 1 is FAIL, which is
+what an AP does to a client that keeps failing authentication.
+
+So the driver's link layer is doing its job and the WPA authentication above it
+is not. Two candidates, and they are cheap to tell apart:
+
+1. **No usable PSK.** `ConnectFunc()` derives one from whatever is in the
+   window's passphrase field, including the empty string, without prompting or
+   validating (ISSUE-0066). The user reports the window never asked for a
+   password.
+2. **EAPOL not reaching the supplicant.** `driver_sana2.c` does not use
+   `l2_packet` at all; it queues its own SANA-II read with
+   `ios2_PacketType = ETH_P_EAPOL` (line 1019) and feeds `drv_event_eapol_rx()`.
+   If our datapath does not deliver 0x888E frames to that reader, the handshake
+   cannot complete however correct the PSK is. Note `rx_deliver()` in
+   `bwfm_dev.c` already carries a fix for exactly this class of bug -- its
+   `packet_type` is a `UWORD` because 0x888E sign-extended as a `WORD` and
+   matched no reader.
+
+`E_EAPOL_MSG` (event 25) in every successful join says the *firmware* saw an
+EAPOL frame. It says nothing about whether the frame reached `wpa_supplicant`.
+
+### Discriminating test, no rebuild
+
+A `network={}` block with a known-good `psk=` in
+`Prefs/Env-Archive/SYS/Wireless.prefs` removes candidate 1 entirely. If the
+loop continues with a correct PSK configured, the defect is candidate 2 and
+belongs in the driver's EAPOL delivery. If it stops, the defect is the window.
+
+# Still open under this issue's original title
+
+Whether first-boot WiFi and `dwc2emu68` interact was never answered -- WiFi
+was failing too early to ask. It is now testable.
+
+Two new threads split off:
+
+- the four-way handshake. `wpa_supplicant`'s output goes to `NIL:` under
+  Package-Startup, so a failed handshake is invisible. The test that needs no
+  code is a `network={}` block in `Prefs/Env-Archive/SYS/Wireless.prefs`, which
+  removes the GUI's passphrase field from the question entirely (ISSUE-0066).
+- `ifconfig -a` failing with `ENOBUFS` (ISSUE-0067). Not a WiFi defect.
