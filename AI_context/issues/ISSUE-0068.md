@@ -714,3 +714,87 @@ a pair with the same split as the audio one, for the same reason:
    `audio.device` in `arch/m68k-amiga/devs/audio/`, which writes the AUDx
    registers and therefore reaches Rigel; it is the audio twin of `amigavideo`
    and comes from the same classic-arch package.
+
+
+# 2026-08-29: the plan, in priority order
+
+The goal this serves: **Demo Reel 3 running on Bellatrix through the chipset,
+with no Kickstart and no ADF.** Everything below is ordered by what unblocks
+what, not by what is interesting.
+
+The direct ARM-side blit into Emu68's framebuffer is **dropped**. It would show
+a picture within hours but nothing built for it survives into the next step,
+and the steps below are all reusable.
+
+## Phase 1 -- a known producer, and a census
+
+A small program run from the AROS Shell that writes `$dff000` directly: bitplane
+DMA on in DMACON, one bitplane pointer into chip RAM, a filled pattern,
+COLOR00/COLOR01. Plus a report on `RIGEL_EVENT_FRAME_READY` giving the frame
+counter, the dimensions from `rigel_denise_get_video_desc()`, a non-black pixel
+count and a cheap checksum.
+
+**Why first.** It is the first time anything drives Denise at all, it exercises
+MMIO to clock to Denise end to end, and above all it is the only way to tell a
+working presenter from a broken one in phase 2. Without a producer whose output
+is *known*, a blank screen has three possible causes and no way to choose.
+
+**Done when** the census reports a stable non-black count matching the pattern,
+under QEMU.
+
+**Size:** small. No new driver, no display.
+
+## Phase 2 -- the bridge and the presenter
+
+Bellatrix copies each finished frame into guest-visible RAM and publishes a
+descriptor -- physical address, pitch, width, height, active -- through the
+machine's trapped-access register block (patch `emu68/0012`). An AROS display
+driver modelled on `aros/arch/m68k-emu68/hidd/fbgfx/` presents it.
+
+**Why here.** The descriptor is the same one the HVS overlay needs later, so it
+gets designed once; and the driver is the presenter the final design needs
+anyway (see the display plan in ISSUE-0073).
+
+**Done when** phase 1's pattern is on screen under QEMU, captured with
+`screendump`, with the desktop still usable.
+
+**Size:** medium, and well-bounded -- `fbgfx` is the worked template.
+
+## Phase 3 -- amigavideo
+
+`external/aros/arch/m68k-amiga/hidd/amigavideo/`, so that `graphics.library`
+draws through the chipset instead of through `vcgfx`. **Spike first**: try
+building it for `m68k-emu68` and find out what it assumes about a real Amiga
+before committing to the phase. Time-box the spike.
+
+**Why here and not earlier.** It is the only step with unbounded depth, and
+phases 1 and 2 make its failures legible: with a presenter already working, a
+broken `amigavideo` shows a wrong picture instead of no picture.
+
+**Done when** an AROS screen opens on the Amiga monitor and appears through the
+phase-2 presenter.
+
+**Size:** large, and the least predictable thing here. ~6000 lines of upstream
+code that has never been built for this target.
+
+## Phase 4 -- Demo Reel 3
+
+Both ADFs extracted to the boot volume, the `DemoReel3:` and `DemoReelData:`
+assigns, `Slish` run from the Shell. No Kickstart and no ADF at run time, as
+asked.
+
+**Done when** it runs and its visuals come through Denise.
+
+# Not on the critical path
+
+These are real work, and sequencing them into the line above would be a mistake:
+
+- **Rigel performance** (Rigel's ISSUE-0006). It decides whether Demo Reel 3 is
+  *watchable* -- ~13 fps against 50 on a Pi 3 -- not whether any of the above
+  works. It is upstream work in another repository and can run in parallel from
+  the first day.
+- **The audio pair** (ISSUE-0070, ISSUE-0071). ISSUE-0070 needs no Rigel at all
+  and can start whenever someone wants; ISSUE-0071's boundary D means audio is
+  not gated on performance either.
+- **The HVS overlay** (ISSUE-0072). A hardware-only optimisation of phase 2's
+  presenter, not a separate design.
