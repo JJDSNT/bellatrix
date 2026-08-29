@@ -225,7 +225,13 @@ int FNAME_SUPPORT(InitMem)(void *memstart, int memlength, struct VideoCoreGfxBas
     xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_Node.ln_Type = NT_MEMORY;
     xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_Node.ln_Name = "VideoCore GPU Memory";
     xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_Node.ln_Pri = -128;
-    xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_Attributes = MEMF_CHIP | MEMF_MANAGED | MEMF_PUBLIC;
+    /*
+     * This is a VideoCore-managed heap, not memory visible to the Amiga
+     * chipset.  Advertising it as MEMF_CHIP makes classic allocations escape
+     * the chipset's 2 MiB address window and inflates Avail CHIP by the GPU
+     * memory split.
+     */
+    xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_Attributes = MEMF_MANAGED | MEMF_PUBLIC;
 //    xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_First = mc;
     xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_First = NULL;
     xsd->vcsd_GPUMemManage.mhe_MemHeader.mh_Lower = (APTR)memstart;
