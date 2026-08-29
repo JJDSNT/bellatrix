@@ -10,10 +10,12 @@
 #include "machine/memory.h"
 
 #include "A64.h"
+#include "M68k.h"
 #include "rigel/rigel.h"
 #include "tlsf.h"
 
 extern void *tlsf;
+extern struct M68KState *__m68k_state;
 
 static RigelContext *rigel;
 static uint8_t unsupported_reported;
@@ -21,7 +23,9 @@ static uint64_t last_cpu_cycles;
 static uint64_t pending_cck;
 static uint8_t cpu_cycle_remainder;
 static uint8_t clock_reported;
-static uint8_t vblank_reported;
+static uint8_t stopped_reported;
+static uint32_t vblank_count;
+static uint8_t vblank_reports;
 static uint8_t chipset_observed;
 
 enum { AMIGA_MAX_STEP_CCK = 512 };
@@ -44,11 +48,25 @@ static void amiga_clock_step(rigel_cycle_t cycles)
             (unsigned long long)result.time);
         clock_reported = 1;
     }
-    if (!vblank_reported && (result.events & RIGEL_EVENT_VBLANK) != 0)
+    if ((result.events & RIGEL_EVENT_VBLANK) != 0)
     {
-        kprintf("[BELLATRIX:RIGEL] first VBLANK at %llu CCK\n",
-            (unsigned long long)result.time);
-        vblank_reported = 1;
+        /*
+         * Report the first frame and then every 128th, a handful of times.
+         * A machine whose CPU has gone idle keeps producing these only if
+         * idle time reaches the chipset -- which is the whole point of the
+         * STOP path in EMIT_STOP, and is otherwise invisible.
+         */
+        enum { AMIGA_VBLANK_REPORT_EVERY = 512, AMIGA_VBLANK_REPORTS = 8 };
+
+        vblank_count++;
+        if (vblank_reports < AMIGA_VBLANK_REPORTS &&
+            (vblank_count == 1 ||
+             vblank_count % AMIGA_VBLANK_REPORT_EVERY == 0))
+        {
+            vblank_reports++;
+            kprintf("[BELLATRIX:RIGEL] VBLANK %u at %llu CCK\n",
+                (unsigned)vblank_count, (unsigned long long)result.time);
+        }
     }
     amiga_irq_sync();
 }
@@ -95,6 +113,18 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
     scaled = delta + cpu_cycle_remainder;
     pending_cck += scaled / 2u;
     cpu_cycle_remainder = (uint8_t)(scaled & 1u);
+    if (!stopped_reported && __m68k_state != 0 && __m68k_state->STOPPED)
+    {
+        /*
+         * The CPU is parked on a STOP and is still handing us time. That only
+         * happens through the EMIT_STOP yield path, so this line is the direct
+         * evidence that idle time reaches the chipset -- and its absence, on a
+         * machine with an armed chipset that has idled, is the direct evidence
+         * that it does not.
+         */
+        stopped_reported = 1;
+        kprintf("[BELLATRIX:RIGEL] chipset advancing from a stopped CPU\n");
+    }
     if (chipset_observed)
         amiga_clock_consume(0);
 }
@@ -116,6 +146,15 @@ static void amiga_clock_observe(void)
         pending_cck = 0;
         cpu_cycle_remainder = 0;
         chipset_observed = 1;
+        /*
+         * Tell the CPU that idling now has a cost. A stopped m68k retires no
+         * cycles, so with a chipset running it must not sleep: EMIT_STOP reads
+         * this field and yields to MainLoop instead, which advances Rigel.
+         * Until it is set the guest can only be woken by a platform interrupt,
+         * and parking the core is the right thing to do.
+         */
+        if (__m68k_state != 0)
+            __m68k_state->CHIPSET_ACTIVE = 1;
         kprintf("[BELLATRIX:RIGEL] clock armed by first MMIO\n");
     }
     amiga_clock_flush();

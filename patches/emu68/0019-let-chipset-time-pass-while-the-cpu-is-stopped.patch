@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 29 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Let chipset time pass while the CPU is stopped
+
+Chipset time is derived from modelled CPU cycles published between translation
+units, and a stopped CPU retires none. Sleeping in STOP therefore stalls the
+chipset event the guest stopped to wait for, and nothing is left that could
+wake it.
+
+While a chipset is running, EMIT_STOP now ends the unit with PC still on the
+STOP and credits an idle slice of cycles, so MainLoop advances Rigel and
+re-dispatches the unit. With no chipset running nothing needs time to pass and
+the core still parks on WFE.
+
+Leaving PC on the STOP means the interrupt path may stack the address of the
+STOP itself, which would make RTE return to it forever; STOPPED records the
+retirement still owed and ExecutionLoop pays it before building the frame.
+
+The progress gate moves from retired instructions to modelled cycles for the
+same reason: a stopped CPU retires no instructions.
+---
+ include/M68k.h      |  4 ++
+ src/ExecutionLoop.c | 34 ++++++++++++---
+ src/M68k_LINE4.c    | 92 +++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 121 insertions(+), 9 deletions(-)
+
+diff --git a/include/M68k.h b/include/M68k.h
+--- a/include/M68k.h
++++ b/include/M68k.h
+@@ -174,6 +174,10 @@
+     uint64_t INSN_COUNT;
+ #if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
+     uint64_t CYCLE_COUNT;
++    /* PC still names a STOP instruction the interrupt path has to retire. */
++    uint32_t STOPPED;
++    /* Non-zero once the machine has a chipset that needs time to pass. */
++    uint32_t CHIPSET_ACTIVE;
+ #endif
+ 
+     uint32_t JIT_CACHE_MISS;
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -321,21 +321,25 @@
+ 
+ #if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
+         {
+-            enum { BELLATRIX_PROGRESS_INSTRUCTIONS = 64 };
+-            static uint64_t previous_instructions;
+-            uint64_t instructions;
+-
+-            __asm__ volatile("mov %0, " CTX_INSN_COUNT_ASM
+-                             : "=r"(instructions));
+-            if (instructions - previous_instructions >=
+-                BELLATRIX_PROGRESS_INSTRUCTIONS)
++            /*
++             * Gate on modelled cycles rather than on retired instructions.
++             * A stopped CPU retires nothing while EMIT_STOP credits it idle
++             * cycles, and that is precisely the case where chipset time has
++             * to keep flowing. CYCLE_COUNT is written to the context by
++             * translated code, so it can be read here without saving first.
++             */
++            enum { BELLATRIX_PROGRESS_CYCLES = 512 };
++            static uint64_t previous_cycles;
++            uint64_t cycles = ctx->CYCLE_COUNT;
++
++            if (cycles - previous_cycles >= BELLATRIX_PROGRESS_CYCLES)
+             {
+                 uint64_t saved_arm_code;
+ 
+-                previous_instructions = instructions;
++                previous_cycles = cycles;
+                 __asm__ volatile("mov %0, x12" : "=r"(saved_arm_code));
+                 M68K_SaveContext(ctx);
+-                bellatrix_emu68_publish_cpu_progress(ctx->CYCLE_COUNT);
++                bellatrix_emu68_publish_cpu_progress(cycles);
+                 M68K_LoadContext(getCTX());
+                 __asm__ volatile("mov x12, %0" :: "r"(saved_arm_code));
+                 /* Translated code assumes v28 remains its zero register. */
+@@ -449,6 +453,24 @@
+             {
+                 register uint64_t sp __asm__("r29");
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++                /*
++                 * A stopped CPU left PC on its STOP so the unit would be
++                 * re-dispatched while the chipset caught up. This interrupt
++                 * ends the stop, so retire the instruction now: the frame
++                 * built below is what RTE returns to, and stacking the STOP
++                 * itself would return the guest to it forever.
++                 *
++                 * Only here, never on the masked path -- a masked interrupt
++                 * does not end a stop.
++                 */
++                if (ctx->STOPPED)
++                {
++                    PC += 4;
++                    ctx->STOPPED = 0;
++                }
++#endif
++
+                 if (likely((SR & SR_S) == 0))
+                 {
+                     /* If we are not yet in supervisor mode, the USP needs to be updated */
+diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
+--- a/src/M68k_LINE4.c
++++ b/src/M68k_LINE4.c
+@@ -1538,6 +1538,16 @@
+     return 1;
+ }
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++/*
++ * Modelled 68000 cycles credited per pass through a stopped CPU. Two of them
++ * are one colour clock, so this is one 256 CCK slice of chipset time per
++ * re-dispatch of the STOP unit -- enough for idle to pass at a useful rate,
++ * small enough that an interrupt is still seen promptly.
++ */
++#define BELLATRIX_STOP_IDLE_CYCLES 512
++#endif
++
+ static uint32_t EMIT_STOP(struct TranslatorContext *ctx, uint16_t opcode)
+ {
+     (void)opcode;
+@@ -1606,7 +1616,87 @@
+         msr_imm(3, 6, 7)  // Mask interrupts
+     );
+ 
+-#if !defined(PISTORM_ANY_MODEL) && !(defined(BELLATRIX_EMU68) && CONFIG_RIGEL)
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++    /*
++     * Bellatrix drives chipset time from modelled CPU cycles, published from
++     * MainLoop between translation units. A stopped CPU retires nothing, so
++     * sleeping here would stall the very chipset event the guest stopped to
++     * wait for -- no VBLANK, no CIA, no IPL, and nothing left that could wake
++     * the sleep. So do not sleep while a chipset is running: end the unit
++     * without retiring the STOP, credit an idle slice of modelled cycles, and
++     * let MainLoop advance the chipset and re-dispatch this same unit.
++     *
++     * The credit is what keeps idle time moving. Crediting the true zero
++     * cycles is what a stopped CPU really retires, and it freezes the machine
++     * just as thoroughly as sleeping would.
++     *
++     * With no chipset running there is nothing to advance and the only thing
++     * that can wake the guest is a platform interrupt, which arrives with an
++     * SEV: park the core, exactly as the unpatched loop did. Spinning there
++     * instead would cost a whole core to an idle desktop.
++     *
++     * Leaving PC on the STOP has one consequence, and it is not optional to
++     * handle: MainLoop may accept the interrupt before re-dispatching this
++     * unit, and it would then stack the address of the STOP itself, so RTE
++     * would return to STOP forever. STOPPED says the retirement is still
++     * owed; ExecutionLoop pays it before building the frame.
++     */
++    {
++        uint8_t tmpreg = RA_AllocARMRegister(ctx);
++        uint8_t cycles = RA_AllocARMRegister(ctx);
++        uint8_t ctxReg = RA_GetCTX(ctx);
++        uint32_t *pending, *active, *done, *start, *end;
++
++        /* Interrupt already pending? Retire the STOP and go. */
++        EMIT(ctx,
++            ldr64_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, INT64))
++        );
++        pending = ctx->tc_CodePtr++;
++
++        /* A running chipset needs time to pass; yield instead of sleeping. */
++        EMIT(ctx,
++            ldr_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, CHIPSET_ACTIVE))
++        );
++        active = ctx->tc_CodePtr++;
++
++        /* No chipset: wait for event and check INT, as PiStorm does. */
++        start = ctx->tc_CodePtr;
++        EMIT(ctx,
++            wfe(),
++            ldr64_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, INT64))
++        );
++        end = ctx->tc_CodePtr;
++        EMIT(ctx, cbz_64(tmpreg, start - end));
++
++        /* Retire the STOP: PC is already past it, so nothing is owed. */
++        *pending = cbnz_64(tmpreg, ctx->tc_CodePtr - pending);
++        EMIT(ctx,
++            mov_immed_u16(tmpreg, 0, 0),
++            str_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, STOPPED))
++        );
++        done = ctx->tc_CodePtr++;
++
++        /*
++         * Still stopped: put PC back on the STOP so MainLoop re-dispatches
++         * this unit, record that its retirement is owed, and credit the idle
++         * slice that keeps chipset time moving.
++         */
++        *active = cbnz(tmpreg, ctx->tc_CodePtr - active);
++        EMIT(ctx,
++            sub_immed(REG_PC, REG_PC, 4),
++            mov_immed_u16(tmpreg, 1, 0),
++            str_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, STOPPED)),
++            ldr64_offset(ctxReg, cycles, __builtin_offsetof(struct M68KState, CYCLE_COUNT)),
++            add64_immed(cycles, cycles, BELLATRIX_STOP_IDLE_CYCLES),
++            str64_offset(ctxReg, cycles, __builtin_offsetof(struct M68KState, CYCLE_COUNT))
++        );
++
++        *done = b(ctx->tc_CodePtr - done);
++
++        RA_FreeARMRegister(ctx, cycles);
++        RA_FreeARMRegister(ctx, tmpreg);
++    }
++#elif !defined(PISTORM_ANY_MODEL)
+     /* Non pistorm machines wait for interrupt only */
+     EMIT(ctx, wfi());
+ #else

@@ -292,13 +292,421 @@ is used for the short beam test because VPOSR exposes only the high vertical
 position bit and therefore legitimately remains unchanged across the first
 four scanlines.
 
+# 2026-08-29: idle time reaches the chipset, and Rigel is the default build
+
+The clock slice had a hole in it that the selftest could not see, because the
+selftest never stops the CPU. Chipset time is derived from modelled CPU cycles
+and a stopped CPU retires none, so a guest that executed `STOP` and waited for
+a chipset interrupt would wait forever: the chipset that had to raise it was
+not running, and nothing was left that could wake the sleep. `docs/
+legacy-emu68-patches.md` records this as a hard deadlock, and the legacy branch
+had already met it -- its `0020-emu68-stop-liveness.patch` is where the shape of
+the fix comes from.
+
+Patch `0019-let-chipset-time-pass-while-the-cpu-is-stopped.patch`:
+
+- While a chipset is running, `EMIT_STOP` no longer sleeps. It ends the
+  translation unit with PC back on the `STOP`, credits 512 modelled cycles
+  (256 CCK) as the idle slice, and lets `MainLoop` advance Rigel and
+  re-dispatch the unit. Crediting the true zero cycles a stopped CPU retires
+  freezes the machine exactly as thoroughly as sleeping.
+- With no chipset running the core still parks on `WFE`, woken by the SEV a
+  platform interrupt carries. Nothing needs time to pass, and spinning would
+  cost a whole core to an idle desktop. `CHIPSET_ACTIVE` in `M68KState` is what
+  the emitted code reads to tell the two apart; `amiga_clock_observe()` sets it
+  when the first MMIO arms the clock.
+- Leaving PC on the `STOP` has a consequence that is not optional to handle:
+  `MainLoop` can accept the interrupt before re-dispatching the unit, and would
+  then stack the address of the `STOP` itself, so `RTE` would return to it
+  forever. `STOPPED` records the retirement still owed and `ExecutionLoop` pays
+  it before building the frame -- on the taken path only, since a masked
+  interrupt does not end a stop.
+- The progress gate moved from retired instructions to modelled cycles, for the
+  same reason: a stopped CPU retires no instructions, so the old gate would
+  never have fired during the case it exists for.
+
+The route not taken was calling a C helper from the wait loop. It preserves
+upstream's `STOP` semantics exactly and needs no `STOPPED` flag, but Emu68's
+translated code does not keep the C ABI: it would need the whole general
+register file and the caller-saved vector registers spilled around every turn
+of an idle loop, and `FP0-FP7` live permanently in `v8-v15`. Ending the unit
+costs none of that.
+
+Validation:
+
+```text
+CONFIG_RIGEL=1 CONFIG_RIGEL_SELFTEST=1 ./scripts/build.sh
+    [BELLATRIX:RIGEL:SELFTEST] PASS time=1000 beam=0000->042e \
+        cia_ta=37 intreq=0020 ipl=3
+    [BELLATRIX:RIGEL] VBLANK 1 at 59474 CCK
+    [BELLATRIX:RIGEL] VBLANK 512 at 30450688 CCK
+```
+
+The idle path needed a separate experiment, because a boot with the chipset
+armed never reaches an idle moment: stepping Rigel is expensive enough under
+QEMU that 110 seconds of wall clock got no further than `intuition.library`.
+So a diagnostic build set `CHIPSET_ACTIVE` at init without arming the stepping
+-- the `STOP` path yields, the chipset costs nothing -- and the machine reached
+services at its usual speed and then said:
+
+```text
+[BootUI] STARTING SERVICES...
+[BELLATRIX:RIGEL] chipset advancing from a stopped CPU
+```
+
+That line is emitted from `bellatrix_emu68_publish_cpu_progress()` when
+`STOPPED` is set, so it can only be reached through the yield path. It is now
+a permanent one-shot report, alongside a bounded VBLANK census: on a machine
+with an armed chipset that has idled, its absence is the direct evidence that
+idle time is not reaching the chipset.
+
+## Rigel is built by default
+
+`CONFIG_RIGEL` now defaults to `ON` in `cmake/bellatrix-variant.cmake`,
+`scripts/build.sh` and `scripts/setup.sh`. `./scripts/build.sh` produces
+`out/images/Bellatrix.img`; `CONFIG_RIGEL=0 ./scripts/build.sh` still produces
+`out/images/Emu68.img` and remains a first-class composition.
+
+That path had been broken since the image was given its own name: with the
+chipset off, `IMAGE_NAME` is `Emu68.img` and the copy into the firmware
+directory had the same source and destination, which `cp` refuses and `set -e`
+turned into a failed build. Nobody had hit it because nobody built the default
+twice. Fixed in the same change.
+
 # What is left
 
 - measure and, if warranted, move modelled-cycle accounting from every opcode
   to translated-block exits
-- define STOP/idle publication: a stopped CPU must still allow an already
-  activated chipset event to wake it
+- **the armed chipset is too slow, and it is not QEMU's fault** -- measured
+  below. This is what stops the integration being tested by booting a machine
+  with the chipset live
 - extend the Demo Reel 3 oracle with a per-frame register/DMA trace if a
   stable visual baseline is needed
 - `harness_test_blitter_timing` stays red on the pin; it is the opt-in
   cycle-cost work, not a regression
+
+
+# 2026-08-29: why the armed machine crawls
+
+An armed boot got as far as `intuition.library` in 110 seconds, where a
+chipset-less boot reaches services in under seven. The first guess was that
+QEMU's TCG multiplies Rigel's cost. It does, but it is not the answer.
+
+## The floor is 140 ns per colour clock, with nothing programmed
+
+A native x86 bench (`rigel_create`, then step a second of NTSC frames with the
+chipset in reset, no DMA, no display, nothing on screen):
+
+```text
+deadline-bounded    3568440 CCK ->  7.13 M CCK/s  (201% of realtime, 140 ns/CCK)
+quantum 512         3568640 CCK ->  7.16 M CCK/s  (202% of realtime, 140 ns/CCK)
+quantum 1           3568440 CCK ->  3.02 M CCK/s  ( 85% of realtime, 331 ns/CCK)
+one big step        3568440 CCK ->  7.20 M CCK/s  (203% of realtime, 139 ns/CCK)
+```
+
+Realtime is 282 ns/CCK. So an idle Rigel is only 2x faster than realtime on a
+modern x86 desktop. Put the same code on the target and there is no headroom
+left:
+
+| host | ns/CCK | share of realtime |
+|---|---|---|
+| this x86 desktop, native | 140 | 200% |
+| Raspberry Pi 3, measured earlier | ~1080 | ~26% |
+| QEMU on this desktop, measured from the armed boot (91352064 CCK in ~120 s) | ~1310 | ~21% |
+
+**QEMU is only about as slow as the real Pi here**, so the crawl reproduces on
+hardware. It is a Rigel cost, not an emulation artefact.
+
+## Every colour clock polls every domain
+
+`gprof`, same idle workload, per-CCK call counts confirmed against the total:
+
+```text
+ 14.5%  agnus_slot_scheduler_step                1 per CCK
+ 13.2%  rigel_denise_framebuffer_sync_from_beam  1 per CCK
+ 10.5%  beam_step                                1 per CCK
+  7.9%  blitter_is_busy                       2.25 per CCK
+  6.6%  refresh_dma_owns_slot                    1 per CCK
+  5.3%  rigel_copper_domain_step                 1 per CCK
+  5.3%  rigel_denise_compositor_tick             1 per CCK
+  2.6%  rigel_dma_domain_read_dmacon             1 per CCK
+```
+
+There is no event skipping. `rigel_get_next_observable_deadline()` exists at the
+API and Bellatrix already steps to it, but inside the step the loop still walks
+every colour clock and asks every domain the same question. About a quarter of
+the time goes to Denise framebuffer sync, compositor ticks and repeated
+`blitter_is_busy()` calls for a screen with nothing on it and a blitter that
+never runs.
+
+## The per-call cost is real too, and it is ours to trip over
+
+`rigel_step()` reads eight pieces of state before the work and compares them
+after, including two IPL priority resolutions and a blitter poll. That is ~190
+ns of fixed cost per call, which is why `quantum 1` costs 331 ns/CCK against
+140. It does not bite while the chipset is idle -- the deadline-bounded run
+matches the big-step run, so deadlines are far apart -- but Bellatrix steps
+once per observable deadline, and a programmed copper or a running blitter is
+exactly what brings those deadlines down to a handful of colour clocks. The
+cost of the integration's stepping policy is therefore workload-dependent in a
+way the idle measurement does not show.
+
+## What this means for the integration
+
+Nothing here is a defect in the Bellatrix side of the clock. The slice does
+what it was built to do; the chipset it drives is roughly 4x too slow on the
+target for the machine to run at speed. Making it faster is Rigel work --
+event skipping first, and the standing rule that no Rigel optimisation may
+regress cycle-exactness by default still applies, so it has to arrive as an
+opt-in mode.
+
+## Under a real workload the floor still dominates
+
+Demo Reel 3 in the harness, KS13, 512K slow RAM, headless, 600 frames --
+Kickstart booting and the demo running, with Musashi emulating the CPU on top
+of the chipset:
+
+```text
+rigel-harness: 600 frames, 84988804 CPU cycles     wall 6.92 s
+```
+
+84988804 / 600 = 141648 CPU cycles per frame, which is a full-speed PAL frame,
+so this is a genuine run and not a stalled one. 600 PAL frames is 42.6 M CCK:
+
+- 86.7 fps, **1.73x realtime**, 162 ns/CCK
+- against an idle floor of 140 ns/CCK, **a real workload costs only 16% more**
+
+That is the number that decides what to do next. The chipset's cost is almost
+entirely fixed per colour clock and almost independent of what is programmed,
+so the idle profile above is a fair map of where a loaded machine spends its
+time. Scaling by the Pi 3 figure gives ~13 fps PAL where 50 is needed: the gap
+is **~3.8x**, which is a tuning target with a finish line, not a rewrite.
+
+Caveat: the Pi figure is the ~1080 ns/CCK recorded from earlier work, not a
+fresh measurement. It should be re-taken on hardware before the 3.8x is treated
+as a contract.
+
+# 2026-08-29: what Demo Reel 3 actually is, and why that changes the vehicle
+
+The goal was restated as: run Demo Reel 3 on Bellatrix **without a Kickstart
+and without an ADF** -- AROS is the Kickstart. So the demo has to arrive as
+files on the boot volume and run as an ordinary program. That is worth checking
+against what the disks contain, and the answer changes the plan.
+
+- Disk 1's bootblock is the **stock AmigaDOS bootblock** (`DOS\0`, open
+  `dos.library`, return its `dosinit`), not a demo bootblock. Both disks are
+  plain OFS filesystems.
+- The startup-sequence is `FastMemFirst / assign T: RAM: / execute ToRAM /
+  LoadWB / EndCLI`. `ToRAM` assigns `DemoReel3:` and `DemoReelData:`, checks for
+  1 MB, and copies the tune and library files to `RAM:`.
+- The demo player is `DemoReelData:Slish`, 41560 bytes, a standard hunk
+  executable (`0x000003f3`, three hunks). It opens `dos.library`,
+  `graphics.library`, `intuition.library`, `icon.library`, `audio.device` and
+  `timer.device`.
+
+So the whole thing is an ordinary AmigaOS 1.3 application. **Nothing about it
+needs a Kickstart image or a floppy** -- it needs an AmigaOS, which is what AROS
+is here, and its files on a volume.
+
+## But it straddles two machines
+
+`Slish` also writes the custom chips directly, in four places:
+
+```text
+0x003994  lea $dff000,a0 ; move.w d0,$a8(a0) ; move.w d0,$b8(a0)   AUD0PER, AUD1PER
+0x009440  movea.l #$dff000,a5 ; move.w #$002a,$96(a5)              DMACON
+          move.w $dff01e,d0                                        INTREQR
+0x0097ee  lea $dff000,a5 ; move.l ...,$80(a5)                      COP1LC
+```
+
+Paula periods, DMACON, INTREQR, and its own copper list. On Bellatrix those
+writes land in Rigel, because `src/machine/` marks the custom aperture external
+and `src/amiga/bus.c` forwards it. But the demo's *display* is set up through
+`graphics.library`, and AROS renders that to the VC4 framebuffer. The program
+would therefore run half in one machine and half in the other: a copper list
+and audio DMA programmed into a chipset nobody is looking at, and bitplanes
+drawn by a display that never sees them.
+
+## Consequences for the plan
+
+1. **Nothing reads Rigel's frame.** `rigel_get_frame()` returns RGBA pixels;
+   `grep` over `src/` and `aros/` finds no caller. Whatever Rigel draws is
+   invisible today. This slice is required before any visual test means
+   anything, and it is required for every vehicle, not just this one.
+2. **Being well-behaved is the point, and the straddle is a missing driver, not
+   a property of the demo.** On an Amiga it is `graphics.library` that programs
+   the chipset -- bitplane pointers, copper list, DMACON all come from it
+   building a View. A well-behaved application therefore drives the chipset
+   *through the OS*, which is the realistic case and a controlled one: its
+   demands are modest and well defined, so "the chipset met them" is a
+   checkable statement. What is missing is the AROS side of that: this target
+   has no native chipset display driver, so `graphics.library` renders to VC4
+   through `vcgfx` and Rigel's Denise is never given anything to draw.
+
+The corrected conclusion: **Demo Reel 3 is a good vehicle**, and making it work
+means supplying the producer as well as the consumer.
+
+# 2026-08-29: how to give Rigel a screen
+
+Both ends already exist. Only the bridge does not.
+
+## The producer exists upstream: `amigavideo`
+
+`external/aros/arch/m68k-amiga/hidd/amigavideo/` is AROS's native Amiga display
+HIDD -- ~6000 lines, with its own bitmap class, blitter and compositor, working
+on real Amigas. It programs bitplanes, the copper and DMACON exactly as the
+hardware expects, which on this machine means it programs Rigel: the custom
+aperture is already marked external and `src/amiga/bus.c` already forwards it.
+
+Build it for `m68k-emu68` and `graphics.library` output goes through the
+chipset. That is what turns a well-behaved application into a chipset test.
+`arch/m68k-amiga/` also carries `cia/`, `graphics/` and the rest of the classic
+arch, and `workbench/devs/AHI/Drivers/Paula/` is the matching audio driver.
+
+## The consumer exists in our own tree: the HVS overlay
+
+`aros/arch/m68k-emu68/hidd/vcgfx/vcgfx_hvs.c` already programs the Pi's
+Hardware Video Scaler directly, and already has what is needed:
+
+```c
+/* Zero-copy overlay plane (windowed GL): composited above the fb
+ * plane, below the cursor. Dest != src size = HVS-scaled (upscale only). */
+BOOL vc4_hvs_overlay(struct VideoCoreGfx_staticdata *xsd,
+                     const struct vc4gfx_overlay *ovl);
+```
+
+It takes a physical address, a pitch, a source size and an on-screen size;
+updates to a live overlay are patched in place and latch at vblank. A 320x256
+Denise frame scaled to the desktop by the same hardware that already composites
+everything else, with no copy and no fight over the AROS framebuffer, is
+exactly what this is.
+
+## The bridge is the only new thing
+
+Rigel's frame buffer lives in ARM memory, inside the Rigel context on Emu68's
+heap. The HVS needs its physical address. AROS owns the HVS display list. So
+Bellatrix has to publish a descriptor -- physical address, pitch, width,
+height, active -- that the AROS side reads and hands to `vc4_hvs_overlay()`.
+The mechanism for that already exists too: patch `emu68/0012` lets the machine
+serve trapped guest accesses, so a small Bellatrix-owned register block is the
+natural carrier.
+
+## Four things that will bite
+
+- **Coherency.** The HVS reads the plane by DMA, so Rigel's frame buffer has to
+  be non-cacheable or explicitly flushed. This is the problem already open in
+  `AI_context/consolidated/vc4_memory_coherency_upstream.md` and patch
+  `emu68/0018-map-vc4-memory-normal-non-cacheable.patch`.
+- **QEMU has no HVS.** `vcgfx_hvs.c:1180` reports `no HVS found (ID=...) - QEMU
+  or unmapped, skipping`. The overlay half can only be tested on hardware.
+- **Two display drivers.** `amigavideo` and `vcgfx` would both be display
+  drivers in one AROS. On a real Amiga with a graphics card that is the normal
+  arrangement and AROS's monitor handling covers it, but it decides which
+  screen is on the display and needs to be got right rather than assumed.
+- **Speed.** A well-behaved application driving the chipset at PAL rate needs
+  the chipset at realtime, and it is ~3.8x short on a Pi 3 (ISSUE-0006 in
+  Rigel).
+
+## Overlay or source switch: both, in that order
+
+The `legacy` branch had the other answer, and it is worth knowing before
+choosing. `machine_present_frame_from_rigel()` there is one presenter with two
+sources and no compositing:
+
+```c
+use_rtg = bellatrix_rtg_get_frame(&rtg_frame) != 0;
+if (use_rtg) { PAL_Video_PresentRGBARegions(rtg_frame.pixels, ...); return; }
+/* falls through to presenting Denise via rigel_get_frame() */
+```
+
+The switch is `RTG_REG_ENABLE` (offset 0x10) on a **virtual** Zorro III board
+that Bellatrix implemented, written by the guest. RTG wins when enabled, Denise
+is the default. It does not transplant: there is no virtual board here, `vcgfx`
+talks to the real VC4, and AROS owns the display outright. What transplants is
+the policy -- one source at a time, chosen by the guest -- and here that policy
+belongs to AROS's monitor handling between `amigavideo` and `vcgfx`, not to us.
+
+**The two are stages, not alternatives.** The switch is how the finished
+machine behaves. The overlay is how it gets built, and it should come first:
+
+- **It decouples the two halves.** The overlay shows whatever Denise is
+  producing, whoever programmed it. A picture can reach the screen before
+  `amigavideo` exists and before the monitor question is settled -- a test
+  program poking `$dff000` from the Shell would appear immediately.
+- **It keeps the desktop alive.** Under a full takeover a wrong bitplane
+  pointer is a black screen with no way left to see anything. With an overlay
+  the Shell is still there and the serial log still flows. For bring-up that is
+  worth more than correctness of the final arrangement.
+- **The AROS side is small, not a driver.** The plane is driven by an ordinary
+  HIDD attribute on the on-screen bitmap, already used by `vc4gallium`:
+
+  ```c
+  struct vc4gfx_overlay {
+      ULONG ovl_Phys;                 /* ARM phys of the pixel data */
+      ULONG ovl_Pitch;
+      ULONG ovl_Width, ovl_Height;    /* source pixels */
+      LONG  ovl_X, ovl_Y;             /* position in fb coordinates */
+      ULONG ovl_DestW, ovl_DestH;     /* larger than source = HVS upscale */
+  };
+  /* OOP_SetAttrs(bitmap, aHidd_VideoCoreGfxBitMap_Overlay -> &desc) */
+  ```
+
+Two costs to take deliberately:
+
+- **Do not start zero-copy.** `ovl_Phys` is scanned by the HVS through DMA, and
+  Rigel's frame buffer comes from `amiga_bus_alloc()` -- Emu68's cached TLSF
+  heap -- with no way to tell which allocation is the framebuffer. Copy each
+  finished frame into one dedicated non-cacheable buffer instead: 320x256x4 is
+  320 KB, 16 MB/s at 50 Hz, and it removes the coherency question entirely.
+  Zero-copy is an optimisation for later, and it needs Rigel to be told where
+  to put its framebuffer.
+- **QEMU has no HVS**, so none of this lights up except on hardware. That is
+  the argument for doing the serial census first.
+
+## The display work has its own pair of issues
+
+The plan below stays as the shape of the bring-up, but the detail has moved into
+a pair with the same split as the audio one, for the same reason:
+
+- **ISSUE-0072** -- what the HVS can actually scan out and what feeding a plane
+  costs. Host side, no Rigel, workable now.
+- **ISSUE-0073** -- how Denise connects to it. Carries the boundaries and the
+  finding that matters: the audio design's parameter hand-off does **not**
+  transfer cleanly, because the HVS has no indexed pixel format and so cannot do
+  planar bitplanes, palette lookup, HAM or dual-playfield priority. Planar to
+  chunky is software either way. What does transfer is that the renderer is a
+  policy, not an architecture, with an automatic fallback on Rigel's own state.
+
+## Suggested order
+
+1. **Prove Denise produces pixels, with no display at all.** On
+   `RIGEL_EVENT_FRAME_READY`, call `rigel_get_frame()` and report the descriptor
+   and a cheap non-black pixel census to the serial line. The analogue of the
+   clock selftest: it works under QEMU, it is small, and it tells us whether the
+   input side is real before any display work starts.
+2. **The HVS overlay.** Bellatrix publishes the descriptor of a non-cacheable
+   copy of the finished frame; a small AROS-side piece sets it on the on-screen
+   bitmap. Hardware only. At this point anything that pokes `$dff000` is
+   visible, with the desktop intact.
+3. **Build `amigavideo` for this target**, so `graphics.library` -- and
+   therefore a well-behaved application -- draws through the chipset rather
+   than through `vcgfx`.
+4. **The source switch**, once there are two real display drivers: AROS's
+   monitor handling decides which one is on the panel, and the overlay becomes
+   the debugging view rather than the display.
+5. **Sound**, once the picture is confirmed. It is not the same shape as the
+   picture and it has its own two issues: **ISSUE-0070** makes the Bellatrix
+   AHI backend correct with no Rigel involved, and **ISSUE-0071** decides how
+   Paula connects to it -- preserving AUD0..AUD3 as four independent sources
+   until the AHI mixer, rather than the pre-mixed stereo pair this issue first
+   assumed. The split is deliberate: 0070 can be worked now, and keeping them
+   apart stops decisions taken for Paula from degrading the HDMI/PWM drivers.
+
+   **Mind the direction.** Paula is a *source* and AHI is the output stack: the
+   guest programs Paula, Rigel synthesises, and the bridge plays the result
+   into AHI as an ordinary client. AROS's `workbench/devs/AHI/Drivers/Paula/`
+   is the opposite -- an AHIsub that sends AHI's output *to* Paula hardware --
+   and has no place here at all. The producer on the guest side is the classic
+   `audio.device` in `arch/m68k-amiga/devs/audio/`, which writes the AUDx
+   registers and therefore reaches Rigel; it is the audio twin of `amigavideo`
+   and comes from the same classic-arch package.

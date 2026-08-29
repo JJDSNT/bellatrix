@@ -103,6 +103,14 @@ from the build and the boot hung silently after `"[JIT] Let it go..."`.
 `AI_context/consolidated/emu68_routing_vs_synchronization.md` on that branch is
 the full account.
 
+Our `0017` is that progress driver, and our `0019` is the half of the lesson
+the sentence above names but `0003` does not fix: `MainLoop` covers a RAM-only
+loop, because a RAM-only loop still ends translation units, but it does not
+cover `STOP`. A stopped CPU never leaves its unit and retires nothing, so
+`EMIT_STOP` had to stop sleeping while a chipset is running -- see
+`AI_context/issues/ISSUE-0068.md`. Legacy's own answer to that is its
+`0020-emu68-stop-liveness.patch`, which is where the shape of ours comes from.
+
 The patch also documents the register discipline the call needs, which is where
 its second lesson is — see the register section below.
 
