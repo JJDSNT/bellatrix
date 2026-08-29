@@ -21,7 +21,7 @@
 #include "kernel_romtags.h"
 #include "m68k_exception.h"
 #include "platform.h"
-#include <bellatrix/memory_map.h>
+#include <amiga/memory_map.h>
 
 #define FDT_MAGIC       0xd00dfeedUL
 #define FDT_BEGIN_NODE  1
@@ -612,9 +612,9 @@ static void start_aros(struct Emu68BootContext *ctx)
         krnCreateTLSFMemHeader("Fast Memory", 0, memory, upper - lower,
                                MEMF_FAST | MEMF_PUBLIC | MEMF_KICK |
                                MEMF_LOCAL);
-        chip_memory = (struct MemHeader *)BELLATRIX_CHIP_RAM_ALLOC_BASE;
+        chip_memory = (struct MemHeader *)AMIGA_CHIP_RAM_ALLOC_BASE;
         krnCreateMemHeader("Chip Memory", -10, chip_memory,
-                           BELLATRIX_CHIP_RAM_ALLOC_SIZE,
+                           AMIGA_CHIP_RAM_ALLOC_SIZE,
                            MEMF_CHIP | MEMF_PUBLIC | MEMF_KICK | MEMF_LOCAL |
                            MEMF_24BITDMA);
     }
@@ -635,7 +635,7 @@ static void start_aros(struct Emu68BootContext *ctx)
         if (chip_memory)
         {
             Enqueue(&sys_base->MemList, &chip_memory->mh_Node);
-            sys_base->MaxLocMem = BELLATRIX_CHIP_RAM_SIZE;
+            sys_base->MaxLocMem = AMIGA_CHIP_RAM_SIZE;
         }
 
         /*

@@ -71,11 +71,11 @@ static const MachineRegion machine_map[] =
 {
     {
 #if CONFIG_RIGEL
-        .base      = BELLATRIX_CHIP_RAM_BASE,
-        .size      = BELLATRIX_CHIP_RAM_SIZE,
+        .base      = AMIGA_CHIP_RAM_BASE,
+        .size      = AMIGA_CHIP_RAM_SIZE,
         .kind      = MACHINE_REGION_DIRECT,
         .name      = "Chip RAM",
-        .host_phys = BELLATRIX_CHIP_RAM_BASE,
+        .host_phys = AMIGA_CHIP_RAM_BASE,
 #else
         .base      = VECTOR_PAGE_BASE,
         .size      = VECTOR_PAGE_SIZE,
@@ -87,8 +87,8 @@ static const MachineRegion machine_map[] =
     },
     {
 #if CONFIG_RIGEL
-        .base = BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_RAM_SIZE,
-        .size = CIA_BASE - (BELLATRIX_CHIP_RAM_BASE + BELLATRIX_CHIP_RAM_SIZE),
+        .base = AMIGA_CHIP_RAM_BASE + AMIGA_CHIP_RAM_SIZE,
+        .size = CIA_BASE - (AMIGA_CHIP_RAM_BASE + AMIGA_CHIP_RAM_SIZE),
         .kind = MACHINE_REGION_UNMAPPED,
         .name = "classic domain before CIA",
     },
