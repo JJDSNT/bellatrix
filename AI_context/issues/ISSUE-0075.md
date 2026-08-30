@@ -99,3 +99,51 @@ The same two numbers, on the same hardware:
 - the boot should stop taking thirteen minutes, because the CPU is no longer
   waiting for it. The SD card's `12 KB/s` -- 97.5% of it spent outside the
   driver -- is the specific thing that should move.
+
+
+# 2026-08-30: implemented, and the arithmetic that decides how far it goes
+
+`src/amiga/bus.c` now takes chipset time from `CNTPCT_EL0` deltas when
+`clock_wall_driven` is set, which it is by default. The existing machinery is
+unchanged -- the arming rule, the bounded quantum, the flush before MMIO -- and
+only the source of `pending_cck` moved. The catch-up is capped at about one
+frame, so a pause drops chipset time rather than replaying it in a burst. The
+STOP path needed nothing: it yields to `MainLoop`, which calls the publish
+hook, and a stopped CPU does not stop real time.
+
+## What it can and cannot buy, on one core
+
+The Pi measurement decides this before any test does:
+
+```text
+chipset:  250 ns per colour clock  (measured)
+realtime: 282 ns per colour clock
+
+running the chipset at realtime costs 88.7% of a core
+leaving 11.3% for the CPU
+```
+
+**Decoupling does not create CPU time. It stops the CPU being the pacer.** The
+chipset still costs what it costs, and on one core whatever it does not spend
+is all the CPU can have.
+
+So the honest expectation for this mode on a Pi 3:
+
+- the chipset keeps **true realtime**, which the coupled mode never did -- a
+  VBLANK every 20 ms of real time, sound at the right pitch;
+- the CPU gets about **an ninth of a core**, running the JIT, against the
+  8 MHz-equivalent the coupled mode gave it. Better, and not by the order of
+  magnitude the JIT is capable of.
+
+## What that means for the choice
+
+This is the argument for ISSUE-0074 arriving sooner than "second". A fast CPU
+*and* a realtime chipset needs two cores' worth of time, because one core does
+not have it. Nothing about that is a defect in Rigel -- 250 ns per colour clock
+on an A53 is 7.1x a modern x86 and entirely reasonable -- it is arithmetic.
+
+Worth testing on hardware anyway, and cheaply, for two reasons. The chipset
+running at true realtime is correctness rather than speed, and it is worth
+having on its own. And the arithmetic above predicts a ratio, not a boot time:
+whether an ninth of a Pi 3 core running Emu68's JIT is a usable machine is a
+question a measurement answers better than a division does.

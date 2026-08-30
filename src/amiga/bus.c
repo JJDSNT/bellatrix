@@ -249,6 +249,77 @@ static void amiga_clock_consume(int flush)
     }
 }
 
+/*
+ * Where chipset time comes from.
+ *
+ * Two sources, and the choice decides what kind of machine this is.
+ *
+ * CPU-driven is a stock Amiga: two modelled 68000 cycles per colour clock, so
+ * the chipset and the CPU share one timebase and software can count one against
+ * the other exactly as it could in 1989. It is also what caps the machine --
+ * measured on a Pi 3, a chipset sustaining 112% of realtime holds the guest to
+ * 7.99 MHz-equivalent, and AROS takes thirteen minutes to boot (ISSUE-0068).
+ *
+ * Wall-clock is an accelerated Amiga: the chipset advances by real elapsed
+ * nanoseconds and the CPU never waits for it. A guest gets its VBLANK every
+ * 20 ms of real time, which is more correct in real terms than the coupled
+ * mode gives it, and the CPU runs at JIT speed. What it gives up is the ratio
+ * between the two -- the defining property of every accelerator ever sold for
+ * this machine, rather than something wrong with this one.
+ *
+ * Not deferred CPU cycles. That reading sounds like the same idea and is not:
+ * the same total work happens in bursts and the machine stays throttled.
+ *
+ * The STOP path needs nothing extra here. It yields to MainLoop, which calls
+ * this, and under wall-clock time a stopped CPU does not stop real time -- so
+ * sampling the counter is the whole of the idle accounting.
+ *
+ * ISSUE-0075.
+ */
+static uint8_t clock_wall_driven = 1;
+static uint64_t wall_last;
+static uint64_t wall_remainder;
+
+/* Colour clocks per second, PAL. NTSC differs by 0.1% and nothing here cares. */
+#define AMIGA_CCK_PER_SECOND 3546895ull
+
+/*
+ * How far behind the chipset may fall before the rest is forgiven.
+ *
+ * A long JIT translation, a serial write or a scheduler gap leaves real time
+ * running while nothing steps the chipset. Replaying all of it in one burst
+ * would reintroduce exactly the stall this mode removes -- the legacy notes
+ * call it an expensive catch-up burst -- so cap it at about one frame and let
+ * the machine slip rather than freeze. A guest cannot tell a dropped frame from
+ * a slow one; it can very much tell a machine that stops.
+ */
+#define AMIGA_CCK_MAX_CATCHUP 80000ull
+
+static void amiga_clock_advance_wall(void)
+{
+    uint64_t now, freq, elapsed, scaled;
+
+    __asm__ volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq));
+    if (freq == 0)
+        return;
+    now = amiga_perf_now();
+    if (wall_last == 0)
+    {
+        wall_last = now;
+        return;
+    }
+    elapsed = now - wall_last;
+    wall_last = now;
+
+    /* ticks * CCK/s / Hz, with the remainder carried so it does not drift. */
+    scaled = elapsed * AMIGA_CCK_PER_SECOND + wall_remainder;
+    pending_cck += scaled / freq;
+    wall_remainder = scaled % freq;
+
+    if (pending_cck > AMIGA_CCK_MAX_CATCHUP)
+        pending_cck = AMIGA_CCK_MAX_CATCHUP;
+}
+
 void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
 {
     uint64_t delta;
@@ -260,6 +331,20 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
         last_cpu_cycles = cycles;
     delta = cycles - last_cpu_cycles;
     last_cpu_cycles = cycles;
+
+    if (clock_wall_driven)
+    {
+        /*
+         * The CPU still says it is running -- that is what keeps the chipset
+         * advancing between MMIO transactions -- but it no longer says how far.
+         * Real time does.
+         */
+        amiga_clock_advance_wall();
+        if (chipset_observed)
+            amiga_clock_consume(0);
+        return;
+    }
+
     scaled = delta + cpu_cycle_remainder;
     pending_cck += scaled / 2u;
     cpu_cycle_remainder = (uint8_t)(scaled & 1u);
@@ -281,6 +366,8 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
 
 static void amiga_clock_flush(void)
 {
+    if (clock_wall_driven)
+        amiga_clock_advance_wall();
     amiga_clock_consume(1);
 }
 
@@ -338,6 +425,8 @@ static void amiga_clock_observe(uint32_t address, int write)
          */
         pending_cck = 0;
         cpu_cycle_remainder = 0;
+        wall_last = amiga_perf_now();
+        wall_remainder = 0;
         chipset_observed = 1;
         /*
          * Tell the CPU that idling now has a cost. A stopped m68k retires no
