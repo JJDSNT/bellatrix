@@ -116,14 +116,24 @@ Version >DEBUG: graphics.library
 Version >DEBUG: timer.device
 Version >DEBUG: audio.device
 
-Echo >DEBUG: "[dr3] --- Slish, in the foreground"
-DemoReelData:Slish >DEBUG:
-If ERROR
-    Echo >DEBUG: "[dr3] Slish returned ERROR"
-Else
-    If WARN
-        Echo >DEBUG: "[dr3] Slish returned WARN"
-    Else
-        Echo >DEBUG: "[dr3] Slish returned OK -- it thinks it succeeded"
-    EndIf
-EndIf
+
+;
+; Slish is NOT run here any more, and that is the finding.
+;
+; It returns OK having drawn nothing -- the census stays at bg=00000000,
+; non-bg=0 across it -- and the desktop that comes up after it has no working
+; pointer, while the same pointer worked in the boot UI moments earlier. The
+; two boots that ran Slish from here both ended that way, and so did the one
+; where the demo was started from its icon.
+;
+; So it is doing something after all: not drawing, but touching something the
+; input path needs and not putting it back. A 1989 program that opens
+; intuition.library, takes what it wants and exits is exactly the shape of
+; that.
+;
+; Leaving it out of the boot makes the desktop usable and turns the claim into
+; something a person can check in one gesture: click the icon, and watch the
+; pointer die at that moment rather than before ever having one.
+;
+Echo >DEBUG: "[dr3] --- Slish NOT run from here (it leaves input broken)"
+Echo >DEBUG: "[dr3] --- everything it needs is in place; click the icon"
