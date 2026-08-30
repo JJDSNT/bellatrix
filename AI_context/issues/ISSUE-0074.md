@@ -731,3 +731,44 @@ was always there. The console only stopped hiding it.
 through, which discriminates: mouse working without the sink and not with it
 confirms the timing, and the fix then belongs in the USB driver -- honouring
 the interval after a NAK -- not in making the console slow again.
+
+
+# 2026-08-30: where this stands
+
+**The architecture works on hardware.** Wanderer, with the chipset live on a
+core of its own at 254 ns/CCK and 110% of realtime for the whole boot. The
+clock, the MMIO boundary, the IPL publication, the dedicated core and the
+console sink are all in it.
+
+**The mouse is a separate defect, now localised.** Filed as ISSUE-0076: the
+USB driver retries a control transfer too soon after a NAK, and it only shows
+because the console sink stopped accidentally rate-limiting it. The probe that
+proved it -- `CONFIG_RIGEL_CONSOLE_SINK=0` -- is a probe and not a fix; the
+shipping configuration keeps the sink and the repair belongs in `dwc2emu68`.
+
+**QEMU can no longer boot this configuration.** Measured rather than assumed:
+900 seconds of wall clock reached 173 lines and 44 million colour clocks, at
+17% of realtime. A chipset that costs five times realtime under TCG makes a
+full boot longer than any usable timeout. What QEMU still serves is the render
+path -- the census, `DeniseView`, the aperture -- and code correctness. **A
+full boot with the chipset live is now a hardware-only test.**
+
+That is a real loss and it should be said plainly: the fast iteration loop is
+gone for anything that needs a booted machine, and every such question now
+costs a card write and a hardware run.
+
+**Demo Reel 3 has not been seen to run.** Its `ToRAM` does -- the hardware log
+shows Wanderer notifying on each file copied to `RAM:` -- so the AmigaDOS half
+works. What happens to `Slish` after that is unknown.
+
+And the expected outcome is worth writing down before it is mistaken for a
+failure: `Slish` draws through `graphics.library`, and **nothing opens a screen
+on the AmigaVideo monitor**. `AddDisplayDriver()` registers the driver; it does
+not make anything use it. So the demo should render through `vcgfx` onto the
+VC4 framebuffer and never touch Denise -- which proves a 1989 AmigaOS
+application runs on AROS/m68k, and proves nothing about the chipset.
+
+`DeniseView` distinguishes the two: a census of `non-bg=0` after running the
+demo means it drew on VC4, as predicted, and the missing piece is opening a
+screen on the right monitor -- phase 3 of the plan in ISSUE-0068, which was
+never finished.

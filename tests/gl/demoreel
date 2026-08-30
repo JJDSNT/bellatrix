@@ -1,0 +1,26 @@
+;
+; Demo Reel 3, from the Startup-Sequence.
+;
+; The demo assigns DemoReel3: and DemoReelData: itself -- both disks are
+; merged into one drawer precisely so its own ToRAM can, when it finds
+; Monument. So this only has to be in the right directory.
+;
+; DoWeHaveMem wants 1 MB; chip RAM here is 2 MB, so it should pass. ToRAM
+; copies the tunes to RAM: and takes a while.
+;
+; Everything to DEBUG: so a machine that stops still says where.
+;
+Echo >DEBUG: "[demoreel] --- what is on the volume"
+List >DEBUG: DemoReel3/Slish DemoReel3/toram DemoReel3/Monument
+
+Echo >DEBUG: "[demoreel] --- ToRAM (assigns, 1 MB check, tunes to RAM:)"
+CD DemoReel3
+Execute toram
+Echo >DEBUG: "[demoreel] --- ToRAM returned"
+
+Echo >DEBUG: "[demoreel] --- assigns now"
+Assign >DEBUG:
+
+Echo >DEBUG: "[demoreel] --- Slish"
+Slish >DEBUG:
+Echo >DEBUG: "[demoreel] --- Slish returned"
