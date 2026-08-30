@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0076
-title: "dwc2emu68 retries a control transfer too soon after a NAK"
+title: "A USB mouse enumerates and is never asked for its interrupt pipe"
 status: open
 priority: high
 type: defect
@@ -73,3 +73,60 @@ is wrong; it exposed a bug that had been there since the driver was written.
 Expect more of these: **every subsystem that was developed while the console
 was writing through has been running with a millisecond-scale delay sprinkled
 through its logging paths.**
+
+
+# 2026-08-30: the NAK is fixed, and it was not the reason the mouse is dead
+
+`40b80e8` stops the channel before re-arming it. A NAK arrives as
+`HCINT=0x10` **without** CHHLTD, so the channel is still enabled and the
+re-arm was writing CHENA on a channel the core had not released; the BCM2837
+answered XACTERR. Confirmed on hardware: `irq #69 HCINT=00000010` is now
+followed by `irq #70 HCINT=00000023`, zero transaction errors, and address 3
+finishes its enumeration.
+
+The mouse still does not work, and the next reading of the log was wrong in
+the same way twice: "after transfer #74 nothing further is submitted to
+address 3". It is not. `DWC2_TRANSFER_LOG_LIMIT` is 40 lines **per device
+address**, and enumeration spends all forty on endpoint 0 -- so the trace goes
+silent exactly where it starts to matter. `4b4f580` gives endpoint 0 and the
+data endpoints separate accounts.
+
+What does establish something are the three counters that were never
+per-address, and all three are at zero in every log recorded so far:
+
+| counter | what its absence rules out |
+|---|---|
+| `[DWC2/Emu68:SCHED] SOF #n` (`sof_log_count < 8`) | the periodic queue was never non-empty, so `update_sof_irq()` never enabled the SOF interrupt |
+| `[DWC2/Emu68:SCHED] NAK #n` (`periodic_log_count < 8`) | no periodic IN was ever parked, which is what an idle mouse's pipe does continuously |
+| `[DWC2/Emu68] interrupt data #n` (`interrupt_log_count[addr] < 16`) | no interrupt transfer ever completed with data |
+
+**No interrupt IN transfer has ever reached the driver.** The failure is not
+in the host controller; it is above it, in whatever should be binding a class
+to the device and opening its pipe.
+
+# Where that points
+
+`kernel-usb-nopci` -- the metatarget this port uses -- does **not** include
+`kernel-usb-usbromstartup`, so the two ROM residents that upstream relies on
+never run here. `hub.class` and `hid.class` are not registered at coldstart;
+every class comes from `AddUSBClasses` scanning `SYS:Classes/USB`, started
+from the Startup-Sequence as
+
+```
+Run <NIL: >NIL: QUIET AddUSBClasses
+```
+
+asynchronously, silently, and with its output on `NIL:`. `psdAddClass()` does
+not rescan: a class registered after the last `psdClassScan()` binds to
+nothing already present. The only scans are the one at the end of
+`AddUSBClasses`, the one in `AddUSBHardware`, and the one `hub.class` runs
+per newly configured device. With the console sink the Startup-Sequence races
+ahead of a background command that has to load about a megabyte of class files
+from the card, and the ordering between those two is no longer what it was
+when the console cost nine milliseconds a line.
+
+That is a hypothesis, not a finding. `S:usb-report` (`9c7932a`) settles it in
+one boot: it prints the registered classes, `PsdDevLister`'s topology with its
+bindings, and Poseidon's own error log -- `hub.class` writes "New device '%s'
+at port %ld" through `psdAddErrorMsg()` for every device it configures, and
+every failure on the way there writes a line too.
