@@ -1391,12 +1391,26 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
         CacheClearE(chan->buffer, moved, CACRF_InvalidateD);
         CopyMem(chan->buffer, ioreq->iouh_Data, moved);
         ioreq->iouh_Actual = moved;
-        if (unit->interrupt_log_count[address] < 16)
+        /*
+         * The first sixteen, and then one in every 512.
+         *
+         * A counter that stops for good cannot tell a pipe that went quiet
+         * from a log that filled up, and this is the line that says whether
+         * the mouse is still reporting. It stopped at sixteen while a
+         * watchdog recovery was being investigated, and the investigation had
+         * to say "absence proves nothing" -- for the second time today. A
+         * heartbeat costs one line every five seconds on a 10 ms endpoint and
+         * makes the absence mean something.
+         */
+        unit->interrupt_log_seen[address]++;
+        if (unit->interrupt_log_count[address] < 16 ||
+            unit->interrupt_log_seen[address] % 512 == 0)
         {
-            unit->interrupt_log_count[address]++;
-            bug("[DWC2/Emu68] interrupt data #%u chan=%u addr=%lu ep=%u "
+            if (unit->interrupt_log_count[address] < 255)
+                unit->interrupt_log_count[address]++;
+            bug("[DWC2/Emu68] interrupt data #%lu chan=%u addr=%lu ep=%u "
                 "bytes=%lu interval=%u data=%02x %02x %02x %02x %02x %02x\n",
-                unit->interrupt_log_count[address], chan->index,
+                unit->interrupt_log_seen[address], chan->index,
                 address, ioreq->iouh_Endpoint, moved, ioreq->iouh_Interval,
                 moved > 0 ? chan->buffer[0] : 0,
                 moved > 1 ? chan->buffer[1] : 0,

@@ -139,6 +139,10 @@ struct DWC2Unit
     ULONG                   dma_length;         /* bounce buffer size per channel */
     ULONG                   data_toggle[128];
     UBYTE                   interrupt_log_count[128];
+    /* Every interrupt-IN completion, not just the logged ones: the heartbeat
+     * above counts from this, so a silent pipe is distinguishable from a
+     * budget that ran out. */
+    ULONG                   interrupt_log_seen[128];
     UBYTE                   periodic_log_count;
     UBYTE                   sof_log_count;
     /*
