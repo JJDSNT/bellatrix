@@ -514,6 +514,39 @@ BOOL MNAME_DISPLAY(SetCursorPos)(OOP_Class *cl, OOP_Object *o, struct pHidd_Disp
 {
     struct VideoCoreGfx_staticdata *xsd = XSD(cl);
 
+    /*
+     * Does intuition still move the pointer?
+     *
+     * The pointer works while the boot UI owns the display and stops the
+     * moment the HVS takes it over -- and the USB driver keeps delivering
+     * movement the whole time, so the reports are arriving and something
+     * above them stops. Two candidates, and they need different fixes: the
+     * events stop reaching intuition, or intuition keeps moving a pointer
+     * this driver stops drawing.
+     *
+     * This line separates them. If it keeps counting after the takeover,
+     * intuition is still asking and the drawing is ours to fix; if it stops,
+     * the input path broke and the display had nothing to do with it.
+     *
+     * First eight, then one in every 256, for the same reason the USB
+     * interrupt log has a heartbeat: a counter that stops for good cannot
+     * tell a pointer that stopped from a log that filled up.
+     */
+    {
+        static ULONG seen;
+        static ULONG shown;
+
+        seen++;
+        if (shown < 8 || seen % 256 == 0)
+        {
+            shown++;
+            bug("[VCGFX:CUR] pos #%lu %ld,%ld visible=%d hvs=%d buf=%d\n",
+                seen, (LONG)msg->x, (LONG)msg->y,
+                (int)xsd->vcsd_CurVisible, (int)xsd->vcsd_HVS.hvs_Active,
+                xsd->vcsd_CurBuf ? 1 : 0);
+        }
+    }
+
     if (!xsd->vcsd_CurBuf)
         return FALSE;
 
