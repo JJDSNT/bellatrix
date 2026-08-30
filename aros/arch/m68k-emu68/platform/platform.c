@@ -314,6 +314,63 @@ static inline void platform_host_irq_ack(void)
         : : "r" (ctrl) : "d0", "memory");
 }
 
+/*
+ * Paula's own interrupts, which this port had no way to deliver.
+ *
+ * Every m68k autovector here goes to one trampoline that asks the ARM
+ * interrupt controller what is pending. That is right for a platform
+ * interrupt and blind to a chipset one: Rigel raises INTREQ, the arbitration
+ * hands the CPU a level, the trampoline finds nothing on the ARM side and
+ * returns. Anything that installed an Amiga interrupt server was never
+ * called.
+ *
+ * It is not academic. arch/m68k-amiga's audio.device -- linked into this ROM
+ * on 2026-08-30 -- installs SetIntVector(INTB_AUD0 + ch) for its four
+ * channels and refills each buffer from there. Without this, Paula plays
+ * whatever was armed and never advances: one sample, for ever. Demo Reel 3
+ * programmed all four channels' periods through Rigel and then had nothing
+ * to chain them (ISSUE-0079).
+ *
+ * The shape is arch/m68k-amiga/kernel/amiga_irq.c's, with its seven
+ * per-level handlers merged into one pass, because this trampoline is shared
+ * across all seven levels and does not know which it was entered for. That
+ * costs nothing in correctness: the SR mask is what orders these, and it has
+ * already done its work by the time we are here.
+ *
+ * Acknowledge before dispatching, exactly as upstream does, and for the same
+ * reason: a bit with no server installed is then simply cleared instead of
+ * re-asserting for ever. SOFTINT is the one exception -- its handler clears
+ * it, because it may Cause() again from inside itself.
+ */
+static void platform_paula_dispatch(void)
+{
+    volatile UWORD *const intenar = (volatile UWORD *)0x00dff01cUL;
+    volatile UWORD *const intreqr = (volatile UWORD *)0x00dff01eUL;
+    volatile UWORD *const intreq  = (volatile UWORD *)0x00dff09cUL;
+    UWORD ena, mask;
+    int bit;
+
+    /*
+     * One read before anything else. A machine whose chipset is idle -- which
+     * is most of a boot -- pays a single register read per interrupt and
+     * leaves, and that read is an MMIO fault to Rigel, so it is not free.
+     */
+    ena = *intenar;
+    if (!(ena & INTF_INTEN))
+        return;
+
+    mask = ena & *intreqr;
+    if (mask == 0)
+        return;
+
+    *intreq = (UWORD)(mask & ~INTF_SOFTINT);
+
+    /* Highest first, the order the seven vectors would have given us. */
+    for (bit = INTB_EXTER; bit >= 0; bit--)
+        if (mask & (1 << bit))
+            core_Cause((unsigned char)bit, mask);
+}
+
 BOOL Platform_Autovector(void)
 {
     /* Bounded: did level 6 ever reach us at all, independently of whether
@@ -336,6 +393,8 @@ BOOL Platform_Autovector(void)
 
     if (g_intc_ops)
         g_intc_ops->Dispatch(KernelBase);
+
+    platform_paula_dispatch();
 
     return TRUE;
 }
