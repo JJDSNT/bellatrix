@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Dump the guest stack when translated code stops
+
+A guest that ends with PC = 0 and A6 = 0 has jumped through a library or
+device base that was never filled in -- the classic unchecked
+OpenLibrary/OpenDevice. The register dump says that much and no more.
+The return address the JSR pushed says which code did it, and it is
+sitting at A7.
+
+Demo Reel 3 dies exactly that way on this machine, twice with identical
+registers, and there was no way to name the caller from outside.
+
+Guest addresses are directly dereferenceable here and both sides are
+big-endian, so a plain load reads the m68k value. Guarded, because a
+crashed guest's A7 is not to be trusted.
+---
+ src/aarch64/start.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -2445,8 +2445,40 @@
+ 
+     kprintf("[JIT]\n");
+     M68K_PrintContext(&__m68k);
+ 
++    /*
++     * The stack, because the registers alone do not say who called.
++     *
++     * A guest that ends here with PC = 0 and A6 = 0 has jumped through a
++     * library or device base that was never filled in -- the classic
++     * unchecked OpenLibrary/OpenDevice. The registers say that much and no
++     * more; the return address the JSR pushed says which code did it, and it
++     * is sitting at A7.
++     *
++     * Guest addresses are directly dereferenceable here and both sides are
++     * big-endian, so a plain load reads the m68k value. Guarded because a
++     * crashed guest's A7 is not to be trusted: word-aligned, above the
++     * vector table, below the top of anything this machine maps.
++     */
++    {
++        uint32_t sp = __m68k.A[7].u32;
++
++        if (sp >= 0x1000 && sp < 0x40000000 && (sp & 1) == 0)
++        {
++            const uint32_t *stack = (const uint32_t *)(uintptr_t)sp;
++            int i;
++
++            kprintf("[JIT] Stack at A7 = 0x%08x:\n", sp);
++            for (i = 0; i < 8; i++)
++                kprintf("[JIT]     +%02x: 0x%08x\n", i * 4, stack[i]);
++        }
++        else
++        {
++            kprintf("[JIT] Stack at A7 = 0x%08x not readable\n", sp);
++        }
++    }
++
+     M68K_DumpStats();
+ 
+     kprintf("[JIT] Number of m68k instructions executed (rough): %lld\n", __m68k.INSN_COUNT);
+     kprintf("[JIT] Number of ARM cpu cycles consumed: %lld\n", cnt2 - cnt1);
