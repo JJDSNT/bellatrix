@@ -537,13 +537,28 @@ BOOL MNAME_DISPLAY(SetCursorPos)(OOP_Class *cl, OOP_Object *o, struct pHidd_Disp
         static ULONG shown;
 
         seen++;
-        if (shown < 8 || seen % 256 == 0)
+        if (shown < 8 || seen % 64 == 0)
         {
             shown++;
-            bug("[VCGFX:CUR] pos #%lu %ld,%ld visible=%d hvs=%d buf=%d\n",
+            /*
+             * One in 64, not one in 256. A moving mouse produces about a
+             * hundred of these a second, so 64 is a line every two thirds of
+             * a second and the answer arrives while the pointer is still
+             * being pushed; 256 put the last line before the takeover and
+             * the next one after the log had ended, which answered nothing.
+             *
+             * The list state comes with it. The cursor is patched in place at
+             * hvs_ListBase + hvs_CurOff, and if those go stale the calls keep
+             * arriving and land somewhere harmless -- a frozen pointer with a
+             * healthy event stream, which is exactly what is being chased.
+             */
+            bug("[VCGFX:CUR] pos #%lu %ld,%ld visible=%d hvs=%d buf=%d "
+                "base=%lu curoff=%lu\n",
                 seen, (LONG)msg->x, (LONG)msg->y,
                 (int)xsd->vcsd_CurVisible, (int)xsd->vcsd_HVS.hvs_Active,
-                xsd->vcsd_CurBuf ? 1 : 0);
+                xsd->vcsd_CurBuf ? 1 : 0,
+                (ULONG)xsd->vcsd_HVS.hvs_ListBase,
+                (ULONG)xsd->vcsd_HVS.hvs_CurOff);
         }
     }
 
