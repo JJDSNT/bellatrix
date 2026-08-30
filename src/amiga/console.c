@@ -90,6 +90,17 @@ static void console_putc(char chr)
 void amiga_console_init(void)
 {
     console_ready = 1;
+    /*
+     * Wake the drainer. Without this it stays in the WFE below and nothing
+     * empties the rings, so every line after this call is written into memory
+     * and never reaches the wire -- the machine runs and the log stops dead.
+     *
+     * It went unnoticed because another core's enable happened to send an
+     * event just afterwards, so the drainer woke by accident; the build with
+     * the chipset core disabled has no such accident and the log ended at the
+     * last line printed before this function.
+     */
+    __asm__ volatile("dsb ishst\n\tsev" ::: "memory");
     kprintf_set_putc_override(console_putc);
 }
 
@@ -147,8 +158,15 @@ void amiga_console_run_on_core(void)
     __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(id));
     id &= 3;
 
+    /*
+     * Spin rather than sleep. This core has nothing else to do, and a missed
+     * event here costs the whole log -- which is precisely what happened. WFE
+     * is also a no-op under QEMU, so a lost wakeup is invisible until
+     * hardware, and that is not a class of bug worth keeping for the sake of
+     * a parked core's power.
+     */
     while (!console_ready)
-        __asm__ volatile("wfe" ::: "memory");
+        __asm__ volatile("yield" ::: "memory");
 
     kprintf("[BELLATRIX:CONSOLE] core %u drains the console\n", (unsigned)id);
 
