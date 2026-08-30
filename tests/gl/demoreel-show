@@ -1,39 +1,56 @@
 ;
 ; Demo Reel 3 through the chipset, with the chipset on screen -- no keyboard.
 ;
-; There is no input device on this machine yet (ISSUE-0076), so nothing can be
-; typed at a Shell. Nothing here needs to be: the boot-test mechanism runs this
-; from the Startup-Sequence, and the pieces it drives are all non-interactive.
+; Runs from the Startup-Sequence, so nothing here may need input.
 ;
-; Order matters.
+; The USB check comes first and is not decoration. The mouse enumerates
+; correctly -- descriptors of 18, 9 and 39 bytes, which is HID -- and then
+; never reports anything. The driver's own counters say where the gap is:
+; three of them are not per-address, and all three are at zero in every boot
+; so far -- no SOF service tick, no parked periodic NAK, no interrupt data --
+; so no interrupt IN transfer has ever reached the driver. Nothing below is
+; failing; nothing above is asking.
 ;
-; The census first, because it is the cheap claim and it fails informatively:
-; same background, same count, same checksum on both sides means the frame the
-; chipset composed is the frame the guest can read. If that disagrees, nothing
-; after it is worth reading.
+; The Startup-Sequence starts the classes like this:
 ;
-; Then the overlay, in the background. DeniseView SHOW hands the HVS a plane
-; pointing at the frame aperture and waits; the scaler re-reads that memory
-; every frame, so the plane is live rather than a snapshot, and it keeps
-; showing whatever Denise composes from here on. Run, because it does not
-; return -- and with no keyboard there is no Ctrl-C to give it.
+;     Run <NIL: >NIL: QUIET AddUSBClasses
 ;
-; Then the demo, which is the point.
+; asynchronous, quiet, and with its output on NIL:. If that fails it fails
+; without telling anyone. So run it here in the foreground with somewhere to
+; speak, and print what the stack looks like on either side of it.
 ;
+Echo >DEBUG: "[demoreel-show] --- USB stack before"
+Version >DEBUG: poseidon.library
+List >DEBUG: USBCLASSES: LFORMAT "%N"
+
+Echo >DEBUG: "[demoreel-show] --- AddUSBClasses, in the foreground"
+AddUSBClasses >DEBUG: *>DEBUG:
+Echo >DEBUG: "[demoreel-show] --- AddUSBClasses returned"
+
 Echo >DEBUG: "[demoreel-show] --- can the guest read what Denise drew?"
 DeniseView >DEBUG: NOWINDOW
 
+;
+; The overlay covers the whole screen, so a working pointer would be hidden
+; under it. It goes up after the USB question has already been answered in
+; the log, not before.
+;
 Echo >DEBUG: "[demoreel-show] --- putting the aperture on the display"
 Run >NIL: <NIL: DeniseView SHOW
 
-Echo >DEBUG: "[demoreel-show] --- what is on the volume"
-List >DEBUG: DemoReel3/Slish DemoReel3/toram DemoReel3/Monument
-
+;
+; toram is a script and Slish is a program; last time both returned at once
+; with nothing to show for it, because their output went to the boot console
+; and not here. Redirect Execute itself, which carries the commands inside it.
+;
 Echo >DEBUG: "[demoreel-show] --- ToRAM (assigns, 1 MB check, tunes to RAM:)"
 CD DemoReel3
-Execute toram
+Execute >DEBUG: *>DEBUG: toram
 Echo >DEBUG: "[demoreel-show] --- ToRAM returned"
 
+Echo >DEBUG: "[demoreel-show] --- assigns now"
+Assign >DEBUG:
+
 Echo >DEBUG: "[demoreel-show] --- Slish"
-Slish >DEBUG:
+Slish >DEBUG: *>DEBUG:
 Echo >DEBUG: "[demoreel-show] --- Slish returned"

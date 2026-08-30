@@ -1,0 +1,52 @@
+;
+; What Poseidon thinks it has, and what it did about it.
+;
+; The HCD trace says the mouse enumerates and is then never spoken to again.
+; That reading was wrong twice, so state what the driver's own counters
+; actually establish: three of them are not per-address and all three are at
+; zero across every boot so far -- no SOF service tick, no parked periodic
+; NAK, no interrupt data. An interrupt IN transfer has therefore never
+; reached the driver at all. The question is not what the DWC2 did with the
+; mouse; it is why nothing above ever asked it for the mouse's pipe.
+;
+; So ask the stack. Run it late, with a finished system, and put every answer
+; on DEBUG: where the serial log can carry it.
+;
+Echo >DEBUG: "[usb-report] --- poseidon.library"
+Version >DEBUG: poseidon.library
+
+Echo >DEBUG: "[usb-report] --- classes present on the card"
+List >DEBUG: USBCLASSES: LFORMAT "%N"
+
+Echo >DEBUG: "[usb-report] --- what AddUSBHardware said at boot"
+If EXISTS "SDCARD0P0:usb-hardware.log"
+    Type >DEBUG: "SDCARD0P0:usb-hardware.log"
+Else
+    Echo >DEBUG: "[usb-report] no usb-hardware.log -- the block never ran"
+EndIf
+
+;
+; The Startup-Sequence runs this as `Run <NIL: >NIL: QUIET AddUSBClasses`:
+; asynchronous, silent, and with its output on NIL:, so a failure there is
+; invisible. Run it again in the foreground with somewhere to speak. It
+; prints "Skipping class X" for every class already registered, which is the
+; direct answer to whether the first run finished -- and it ends in
+; psdClassScan(), so if the first run lost a race with AddUSBHardware this
+; second scan is also the cure.
+;
+Echo >DEBUG: "[usb-report] --- AddUSBClasses again, in the foreground"
+AddUSBClasses >DEBUG: *>DEBUG:
+Echo >DEBUG: "[usb-report] --- AddUSBClasses returned"
+
+Echo >DEBUG: "[usb-report] --- the device tree and its bindings"
+PsdDevLister >DEBUG: *>DEBUG: SHOWROOT TOPOLOGY
+
+;
+; Poseidon narrates itself through psdAddErrorMsg: hub.class writes "New
+; device '%s' at port %ld" for every device it configures, and every failure
+; on the way there writes a line too. NOFLUSH keeps the log for anything that
+; reads it later.
+;
+Echo >DEBUG: "[usb-report] --- poseidon's own error log"
+PsdErrorlog >DEBUG: *>DEBUG: NOFLUSH
+Echo >DEBUG: "[usb-report] --- end"
