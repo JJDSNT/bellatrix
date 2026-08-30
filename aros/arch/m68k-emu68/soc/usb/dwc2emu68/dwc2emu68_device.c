@@ -71,9 +71,24 @@ static int DWC2_FNAME(Init)(LIBBASETYPEPTR DWC2Base)
         chan->buffer = (UBYTE *)(((IPTR)chan->buffer_raw + 63) & ~(IPTR)63);
     }
     dwc2_platform_cpu0_mask(unit);
+    /*
+     * Above the stack it serves, below the one that consumes it.
+     *
+     * The periodic schedule is kept here: the SOF top half only says a
+     * transfer has come due, and this task is what re-arms it. At priority 0
+     * that happens whenever Wanderer and the shell let it, and the measured
+     * result on a 10 ms mouse endpoint was 0 to 37 ms late -- a pointer that
+     * moves in jumps rather than one that lags. Poseidon runs its own
+     * subtasks, hub.class and hid.class among them, at pgc_SubTaskPri = 5, so
+     * a host controller left at 0 is scheduled below its own clients.
+     *
+     * 10 is where AmigaOS puts a device task that has a deadline: above the
+     * stack, and still below input.device at 20, which must stay the most
+     * responsive thing on the machine.
+     */
     unit->task = NewCreateTask(
         TASKTAG_NAME, "Bellatrix DWC2 unit",
-        TASKTAG_PRI, 0,
+        TASKTAG_PRI, 10,
         TASKTAG_AFFINITY, &unit->affinity,
         TASKTAG_PC, DWC2_FNAME(UnitTask),
         TASKTAG_TASKMSGPORT, &unit->port,
