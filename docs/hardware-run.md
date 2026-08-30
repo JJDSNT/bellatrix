@@ -137,3 +137,27 @@ Raising the Rigel event log past its 64-line bound. It is bounded because an
 unbounded one emitted 170274 lines through the serial port and made a working
 machine look hung. If you need to see what `amigavideo` programs, filter by
 event type rather than lift the bound.
+
+
+# 2026-08-30: ship the kernel, not the card
+
+Several rounds of this were shipped as full 47 MB packs when only
+`Bellatrix.img` had changed -- 4 MB -- and each one cost a card rewrite. The
+AROS side has been unchanged since `amigavideo`, `cia.resource` and
+`DeniseView` went onto it.
+
+`docs/release.md` already says this and it was ignored:
+
+> `Bellatrix.img.gz` the aarch64 kernel, to update in place
+> ... The two loose files keep the exact names `config.txt` declares, because
+> updating a card has to be a copy and never a rename.
+
+So: `out/kernels/` holds the loose kernels, and updating is
+
+```bash
+cp Bellatrix-<variant>.img /media/you/BOOT/Bellatrix.img
+```
+
+A full pack is for a first installation, or when the AROS side changes -- and
+when it does, that is worth saying out loud rather than leaving the recipient
+to guess which of the two files matters.
