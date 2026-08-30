@@ -206,3 +206,68 @@ has to be written against. **The chipset has not moved yet.** Next, in order:
    merely less blocked;
 3. the seqlock beam snapshot, before any guest polls VHPOSR across cores;
 4. posted writes, if the rendezvous cost shows up where legacy says it will.
+
+
+# 2026-08-30: the chipset runs there
+
+Steps 1 and 2 of the list above.
+
+**The lock** is legacy's, including the part that is not obvious:
+
+```c
+void amiga_core_lock_release(void)
+{
+    atomic_flag_clear_explicit(&chipset_lock, memory_order_release);
+    if (atomic_load_explicit(&chipset_lock_waiters, memory_order_relaxed) != 0u)
+        __asm__ volatile("dmb ishst\n\tsev" ::: "memory");
+}
+```
+
+Almost every release is the chipset core finishing an uncontended step, and an
+unconditional broadcast wakes every PE to no purpose.
+
+**The loop** is `amiga_clock_run_on_core()` in `src/amiga/bus.c`: acquire,
+advance against `CNTPCT_EL0`, drain, release, forever. It spins rather than
+sleeping, because this core exists to keep realtime and nothing could
+usefully wake it that is not the passage of time. Before the chipset is armed
+it idles, which is the same laziness the single-core path has.
+
+## Three things got simpler, not harder
+
+- **The flush before MMIO is gone.** It existed so a register read would not
+  see a chipset frozen since the CPU last happened to step it. A chipset that
+  is always current does not need flushing, and the CPU no longer steps it at
+  all.
+- **`publish_cpu_progress` returns immediately.** The CPU stopped being the
+  chipset's clock.
+- **`CHIPSET_ACTIVE` stays clear**, so `EMIT_STOP` parks the CPU in WFE again
+  rather than yielding to `MainLoop` to keep chipset time. The chipset core
+  raises the IPL and sends the event, which is what wakes it -- and is what a
+  real machine does.
+
+## What QEMU can and cannot say
+
+```text
+[BELLATRIX:RIGEL:CORE] core 2 is the chipset's
+[BELLATRIX:RIGEL] clock armed by a write to $00bfed01
+[BELLATRIX:RIGEL:CORE] chipset running here now
+[BELLATRIX:RIGEL:PERF] 76003913 CCK in 94040 ms ... 22% of realtime, 226 CCK/call
+```
+
+Verified: the core is ours, the chipset runs there, the lock does not deadlock
+across a boot, and the boot reaches further in the same wall time than either
+single-core mode did -- 181 lines against 141.
+
+**Not verified, and QEMU cannot**: whether the CPU is now free. QEMU emulates
+four cores onto host threads that compete for the same machine, so a second
+core costs rather than pays. The number this was built for is a hardware
+number.
+
+## Still to do
+
+3. the seqlock beam snapshot, before any guest polls VHPOSR across cores --
+   legacy's `caught_up` went 11k to 783k without it;
+4. posted writes, if the rendezvous cost shows up where legacy says it will.
+
+Both are optimisations of a path that now works. Neither should be written
+before a hardware measurement says the path is worth optimising.

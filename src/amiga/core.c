@@ -15,13 +15,51 @@
  */
 
 #include "amiga/core.h"
+#include "amiga/bus.h"
 
 #include "A64.h"
 
+#include <stdatomic.h>
 #include <stdint.h>
 
 static volatile uint32_t core_arrived;
 static volatile uint32_t core_wanted;
+
+static atomic_flag chipset_lock = ATOMIC_FLAG_INIT;
+static _Atomic uint32_t chipset_lock_waiters;
+
+int amiga_core_owns_chipset(void)
+{
+    return core_arrived != 0;
+}
+
+void amiga_core_lock_acquire(void)
+{
+    if (!atomic_flag_test_and_set_explicit(&chipset_lock, memory_order_acquire))
+        return;
+
+    atomic_fetch_add_explicit(&chipset_lock_waiters, 1u, memory_order_relaxed);
+    while (atomic_flag_test_and_set_explicit(&chipset_lock, memory_order_acquire))
+        __asm__ volatile("wfe" ::: "memory");
+    atomic_fetch_sub_explicit(&chipset_lock_waiters, 1u, memory_order_relaxed);
+}
+
+void amiga_core_lock_release(void)
+{
+    atomic_flag_clear_explicit(&chipset_lock, memory_order_release);
+
+    /*
+     * Only signal when a waiter actually parked.
+     *
+     * Almost every release is the chipset core finishing an uncontended step,
+     * and the legacy implementation's unconditional broadcast woke every PE
+     * and turned work completions into empty loop iterations on cores that had
+     * nothing to do. The release store is the lock's ordering contract; the
+     * event is only needed by someone in WFE.
+     */
+    if (atomic_load_explicit(&chipset_lock_waiters, memory_order_relaxed) != 0u)
+        __asm__ volatile("dmb ishst\n\tsev" ::: "memory");
+}
 
 void amiga_core_enable(void)
 {
@@ -61,10 +99,6 @@ void bellatrix_chipset_core_entry(void)
 
     kprintf("[BELLATRIX:RIGEL:CORE] core %u is the chipset's\n", (unsigned)id);
 
-    /*
-     * Returning parks the core in Emu68's WFE, which is where it was going
-     * anyway. The step that follows is to run the chipset here instead, paced
-     * by CNTPCT_EL0 rather than by published CPU cycles -- which is what makes
-     * the CPU core free rather than merely less blocked.
-     */
+    /* Does not return: this core is the chipset from here on. */
+    amiga_clock_run_on_core();
 }

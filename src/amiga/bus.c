@@ -22,14 +22,14 @@ extern struct M68KState *__m68k_state;
 static RigelContext *rigel;
 static uint8_t unsupported_reported;
 static uint64_t last_cpu_cycles;
-static uint64_t pending_cck;
+static volatile uint64_t pending_cck;
 static uint8_t cpu_cycle_remainder;
 static uint8_t clock_reported;
 static uint8_t stopped_reported;
 static uint8_t census_reports;
 static uint32_t vblank_count;
 static uint8_t vblank_reports;
-static uint8_t chipset_observed;
+static volatile uint8_t chipset_observed;
 
 enum { AMIGA_MAX_STEP_CCK = 512 };
 
@@ -333,6 +333,9 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
     delta = cycles - last_cpu_cycles;
     last_cpu_cycles = cycles;
 
+    if (amiga_core_owns_chipset())
+        return;
+
     if (clock_wall_driven)
     {
         /*
@@ -367,6 +370,14 @@ void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
 
 static void amiga_clock_flush(void)
 {
+    /*
+     * Nothing to flush when the chipset has a core of its own: it is already
+     * current, continuously, which is better than the flush ever was. The
+     * whole point of the flush was that a register read must not see a
+     * chipset frozen since the last time the CPU happened to step it.
+     */
+    if (amiga_core_owns_chipset())
+        return;
     if (clock_wall_driven)
         amiga_clock_advance_wall();
     amiga_clock_consume(1);
@@ -436,7 +447,14 @@ static void amiga_clock_observe(uint32_t address, int write)
          * Until it is set the guest can only be woken by a platform interrupt,
          * and parking the core is the right thing to do.
          */
-        if (__m68k_state != 0)
+        /*
+         * Only when the CPU is the one that has to keep chipset time. With a
+         * core of its own the chipset raises the IPL and sends the event, so a
+         * stopped CPU should park in WFE and be woken -- which is what
+         * EMIT_STOP does when this stays clear, and is what a real machine
+         * does.
+         */
+        if (__m68k_state != 0 && !amiga_core_owns_chipset())
             __m68k_state->CHIPSET_ACTIVE = 1;
         kprintf("[BELLATRIX:RIGEL] clock armed by %s $%08x\n",
             write ? "a write to" : "a read of", (unsigned)address);
@@ -559,7 +577,9 @@ static uint32_t amiga_bus_read(const MachineRegion *region, uint32_t address,
         return value;
 
     amiga_clock_observe(address, 0);
+    amiga_core_lock_acquire();
     result = rigel_mmio_read(rigel, address, (rigel_u8)size, &value);
+    amiga_core_lock_release();
     amiga_irq_sync();
 
     if (result == RIGEL_MMIO_UNSUPPORTED)
@@ -586,7 +606,9 @@ static void amiga_bus_write(const MachineRegion *region, uint32_t address,
         return;
 
     amiga_clock_observe(address, 1);
+    amiga_core_lock_acquire();
     result = rigel_mmio_write(rigel, address, (rigel_u8)size, value);
+    amiga_core_lock_release();
     amiga_irq_sync();
     if (result == RIGEL_MMIO_UNSUPPORTED && !unsupported_reported)
     {
@@ -769,3 +791,41 @@ static void amiga_bus_display_selftest(void)
     kprintf("[BELLATRIX:RIGEL:DISPLAY] clock parked; frame kept for the guest\n");
 }
 #endif
+
+
+/*
+ * The chipset's own core.
+ *
+ * Runs Rigel against real time, forever, holding the lock only while stepping
+ * so the CPU core can get in between quanta. It spins rather than sleeping:
+ * this core exists to keep a realtime chipset, and there is nothing that could
+ * usefully wake it that is not simply the passage of time.
+ *
+ * Before the chipset is armed there is nothing to run and the loop is idle --
+ * that is the same laziness the single-core path has, and it is what keeps a
+ * machine that never touches the chipset from paying for one.
+ */
+void amiga_clock_run_on_core(void)
+{
+    uint32_t reported = 0;
+
+    for (;;)
+    {
+        if (rigel == 0 || !chipset_observed)
+        {
+            __asm__ volatile("yield" ::: "memory");
+            continue;
+        }
+
+        if (!reported)
+        {
+            reported = 1;
+            kprintf("[BELLATRIX:RIGEL:CORE] chipset running here now\n");
+        }
+
+        amiga_core_lock_acquire();
+        amiga_clock_advance_wall();
+        amiga_clock_consume(1);
+        amiga_core_lock_release();
+    }
+}

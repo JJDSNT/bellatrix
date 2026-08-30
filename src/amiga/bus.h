@@ -10,4 +10,7 @@ void amiga_bus_init(void);
 extern const MachineRegionOps amiga_bus_ops;
 void bellatrix_emu68_publish_cpu_progress(uint64_t cycles);
 
+/* The chipset's own core runs this and never returns. */
+void amiga_clock_run_on_core(void);
+
 #endif /* BELLATRIX_AMIGA_BUS_H */
