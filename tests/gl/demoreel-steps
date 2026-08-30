@@ -92,6 +92,38 @@ List >DEBUG: RAM: LFORMAT "%N %L"
 ; with its output thrown away, so a crash here is silent by construction.
 ; Run it in the foreground, talking, with the setup it actually expects.
 ;
+
+;
+; What Slish opens, before asking it to run.
+;
+; Its own strings name five: intuition.library ("1.2 or higher"),
+; dos.library, graphics.library, timer.device and audio.device. Four of
+; those are here. audio.device is not -- not on the card, not in the kernel
+; ELF -- because this target builds neither implementation: AROS's AHI-backed
+; one is excluded for m68k on purpose ("do not override ROM Paula
+; audio.device") and the real Paula one lives under arch/m68k-amiga, which is
+; a different target.
+;
+; That is a fact. Whether it is why Slish quits is not: every failure Slish
+; has a string for prints something, and it printed nothing at all. So ask
+; each one by name and let the log say which is missing, rather than
+; assuming the interesting one is the answer.
+;
+Echo >DEBUG: "[dr3] --- what Slish opens"
+Version >DEBUG: intuition.library
+Version >DEBUG: dos.library
+Version >DEBUG: graphics.library
+Version >DEBUG: timer.device
+Version >DEBUG: audio.device
+
 Echo >DEBUG: "[dr3] --- Slish, in the foreground"
 DemoReelData:Slish >DEBUG:
-Echo >DEBUG: "[dr3] --- Slish returned"
+If ERROR
+    Echo >DEBUG: "[dr3] Slish returned ERROR"
+Else
+    If WARN
+        Echo >DEBUG: "[dr3] Slish returned WARN"
+    Else
+        Echo >DEBUG: "[dr3] Slish returned OK -- it thinks it succeeded"
+    EndIf
+EndIf
