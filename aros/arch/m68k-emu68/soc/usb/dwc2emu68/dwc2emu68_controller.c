@@ -318,11 +318,29 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
         goto failed;
     bug("[DWC2/Emu68] IRQ registered\n");
 
-    /* No source is enabled until the unit task has a consumer for it. In
-     * particular QEMU starts with HPRT.CONNDET asserted; enabling PRTINT here
-     * would create a guest interrupt storm before the root hub is online. */
+    /*
+     * No source is enabled until the unit task has a consumer for it.
+     *
+     * The line below used to say that and then unmask SOF anyway, which is
+     * the one source with no consumer at this point and the one that never
+     * stops: 8 kHz, from here to the end of the machine's life. On a Pi that
+     * is an ARM handler; here it is an m68k level-6 exception through the
+     * JIT, and the CPU cannot get out from under it -- it spins in
+     * supervisor mode at IPL 6, no task is ever scheduled again, and the boot
+     * clock stops at the second this line runs while every other core carries
+     * on logging.
+     *
+     * Masking it in set_sof_irq() was not enough because this write does not
+     * go through set_sof_irq(). arm() enables HCHINT when it needs it, and
+     * update_sof_irq() asks for SOF for the one frame a periodic transfer is
+     * due in. Nothing needs anything before that.
+     *
+     * QEMU is the other half of the same rule: it starts with HPRT.CONNDET
+     * asserted, so enabling PRTINT here would storm before the root hub is
+     * online.
+     */
     dwc2_writel(device, DWC2_GINTSTS, 0xffffffffUL);
-    dwc2_writel(device, DWC2_GINTMSK, DWC2_GINTSTS_SOF);
+    dwc2_writel(device, DWC2_GINTMSK, 0);
     value = dwc2_readl(device, DWC2_GAHBCFG);
     value |= DWC2_GAHBCFG_DMAEN | DWC2_GAHBCFG_HBSTLEN_INCR |
         DWC2_GAHBCFG_NPTXFEMPLVL | DWC2_GAHBCFG_GLBLINTRMSK;
@@ -339,7 +357,7 @@ BOOL dwc2_controller_start(struct DWC2Unit *unit)
     dwc2_platform_log_clocks(device);
 
     unit->hardware_ok = TRUE;
-    bug("[DWC2/Emu68] host initialized with %lu channels, SOF enabled\n",
+    bug("[DWC2/Emu68] host initialized with %lu channels, no source unmasked\n",
         (ULONG)unit->host_channels);
     return TRUE;
 
