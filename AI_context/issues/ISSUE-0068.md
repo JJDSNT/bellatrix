@@ -1024,3 +1024,109 @@ The display selftest now stops the clock after composing its frames, keeping
 the published frame. Stepping Rigel costs enough under QEMU that a boot which
 keeps doing it never reaches a Shell -- and a Shell is where anything can read
 the aperture back. The next MMIO re-arms the clock as usual.
+
+
+# 2026-08-29: phase 3 -- the driver runs, and the performance wall arrives early
+
+## What was built
+
+`aros/arch/m68k-emu68/hidd/amigavideo/` builds upstream's sources under a
+metatarget of ours plus a `DEVS:Monitors` loader, and `build-aros.sh` installs
+both. The driver registers itself from its own `InitLib` with
+`DDRV_KeepBootMode` and monitor ID 0, so it is added beside the VideoCore
+rather than replacing it. **Rigel's output is therefore a screen, not a
+window**: a screen on the AmigaVideo monitor is drawn by Denise, one on the
+VideoCore monitor by `vcgfx`, and AROS's monitor handling is the display source
+switch. The window in `DeniseView` is the diagnostic, not the design.
+
+## The crash the spike predicted, exactly where it predicted it
+
+First boot with the driver installed:
+
+```text
+[InitResident] amigavideo.hidd: MakeLibrary 0 ms, calling init @ 0x04246602
+[BELLATRIX:RIGEL] clock armed by first MMIO
+[rigel] event=compose ...
+[AROS/Emu68] CPU exception vector 0x0000002c at PC 0xfffffffa
+```
+
+`PC 0xfffffffa` is `-6`: a library call through a null base. From
+`amigavideo_chipset.c`:
+
+```c
+GfxBase->cia = OpenResource("ciab.resource");   /* NULL here */
+AddICRVector(GfxBase->cia, 2, &GfxBase->timsrv);
+```
+
+Fixed by linking `cia_resource` -- and **naming it in the `#MM-` dependency
+line was not enough**. That builds the object and links nothing; a resource can
+arrive no other way than the resident list, because `OpenResource()` is
+`FindName()` over `SysBase->ResourceList` and `lddemon` patches only
+`OpenLibrary` and `OpenDevice`. It went into `CORERESIDENTS` beside
+`sdio_resource` and `bwfm_resource`, which are there for the same reason.
+
+## Two defects of ours the boot then exposed
+
+**The Rigel event log had no bound.** One boot emitted 170274
+`[rigel] event=compose` lines through `kprintf`. The serial line is the boot's
+bottleneck under QEMU, so the machine looked hung and was not. Now bounded at
+64 events with a line saying it went quiet.
+
+**Arming on the first MMIO was too eager, and it costs about 4x.** AROS's
+ordinary boot reads the classic domain without wanting anything of it --
+`dosboot` samples CIAA.PRA and POTINP for the classic boot buttons, `battclock`
+probes the RTC -- and any one of those started the chipset for the rest of the
+boot. The cost is not subtle: `gfx.hidd`'s init went from milliseconds to
+**10964 ms**. `amiga_access_needs_time()` now arms on what genuinely needs time
+to pass: any write to the custom chips or a CIA, and a read of the beam
+position. A read of a button, a port or a clock is answered from state Rigel
+already holds.
+
+## Where this stops, and why it is not a workaround away
+
+With the eager arming fixed, the boot arms here instead:
+
+```text
+[WIFI:BWFM] resource init OK: attach deferred
+[BELLATRIX:RIGEL] clock armed by a write to $00bfed01
+[InitResident] battclock.resource: ...
+```
+
+`$00bfed01` is CIAA CRB, and the write is `cia.resource`'s own init -- the
+resource `amigavideo` requires. So the chain is causal and has no slack in it:
+
+```text
+chipset display driver -> needs cia.resource -> whose init starts a CIA
+    -> which legitimately needs chipset time -> which costs ~4x
+    -> which under QEMU means the boot does not finish in a testable window
+```
+
+The classification of that write is not wrong. A running CIA timer does need
+time to pass. **There is no arming rule that avoids this**, because the machine
+genuinely is using the chipset from that point on -- which is the whole point of
+phase 3.
+
+## What this does to the plan
+
+Rigel's performance work was recorded here as *not* on the critical path, on
+the grounds that it decides whether Demo Reel 3 is watchable rather than
+whether any of this works. **That is now wrong, and this is the correction.**
+
+From phase 3 onward the chipset is running for the whole boot, so Rigel's
+ISSUE-0006 stops being a quality question and becomes the thing that blocks
+verification. Phases 1 and 2 were verifiable because the chipset could be armed
+briefly and parked; phase 3 cannot park it.
+
+Two ways forward, and they are not equivalent:
+
+1. **Rigel's ISSUE-0006** -- event skipping in the per-colour-clock loop. It is
+   the real fix, it helps every host, and the measurement that sizes it is
+   already written up there.
+2. **Verify phase 3 on hardware instead of QEMU.** The Pi 3 is only ~30%
+   faster per colour clock than QEMU is, so this narrows the gap rather than
+   closing it -- but a boot that takes four times too long is still a boot,
+   where one that never finishes inside a test timeout is not.
+
+Nothing below phase 3 is blocked: the aperture, the descriptor, the census and
+`DeniseView` all work, and phase 1's producer still demonstrates the whole
+render path in seconds.

@@ -1,19 +1,28 @@
 ;
-; Can the guest read what the chipset drew?
+; Does the classic chipset display driver come up, and can the guest read what
+; Denise drew?
 ;
-; Bellatrix publishes each finished Denise frame at $01000000 with a
-; descriptor at $01200000 (src/amiga/frame.h). Everything up to that point is
-; verified on the Bellatrix side, by the census in src/amiga/bus.c. This is the
-; other half, and it is the half that matters: the m68k reading the same frame
-; back through the machine map.
+; Two independent claims, and they fail differently.
 ;
-; The two censuses are meant to be compared. Same background, same non-black
-; count, same checksum means the frame the chipset composed is the frame the
-; guest can see. Different means the bridge, not the chipset.
+; AmigaVideo in DEVS:Monitors is run by AROSMonDrvs before this point; if it
+; registered, graphics.library has a second display driver and a second
+; monitor. Version reports whether the library is there at all.
+;
+; DeniseView reads the frame aperture Bellatrix publishes at $01000000. Its
+; census is meant to be compared with the one Bellatrix prints on its own side:
+; same background, same count, same checksum means the frame the chipset
+; composed is the frame the guest can see.
 ;
 ; NOWINDOW because this runs from the Startup-Sequence with nothing to display
 ; on yet, and because the claim being tested is readability, not presentation.
 ;
+Echo >DEBUG: "[denise-view] --- display drivers on the card"
+List >DEBUG: DEVS:Drivers/amigavideo.hidd DEVS:Drivers/vcgfx.hidd
+List >DEBUG: DEVS:Monitors/AmigaVideo DEVS:Monitors/VideoCore
+
+Echo >DEBUG: "[denise-view] --- did amigavideo.hidd load?"
+Version >DEBUG: amigavideo.hidd
+
 Echo >DEBUG: "[denise-view] --- reading the frame aperture"
 DeniseView >DEBUG: NOWINDOW
 Echo >DEBUG: "[denise-view] --- done"

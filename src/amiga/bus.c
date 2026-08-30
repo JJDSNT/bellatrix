@@ -211,14 +211,57 @@ static void amiga_clock_flush(void)
     amiga_clock_consume(1);
 }
 
-static void amiga_clock_observe(void)
+/*
+ * Does this access mean the chipset has to be running?
+ *
+ * Not every transaction does, and the difference is worth about 4x. AROS's
+ * ordinary boot reads the classic domain twice without wanting anything of
+ * it -- dosboot samples CIAA.PRA and POTINP for the classic boot buttons,
+ * battclock probes the RTC -- and arming on the first access of any kind
+ * turned both into a machine that runs the chipset for the rest of the boot.
+ * The cost is not subtle: gfx.hidd's init went from milliseconds to 10964 ms.
+ *
+ * So arm on what actually needs time to pass:
+ *
+ *   - any write to the custom chips, which is how DMA, the copper, the
+ *     blitter and audio are started, and
+ *   - any write to a CIA, which is how its timers are started, and
+ *   - a read of the beam position, which is meaningless if it never moves.
+ *
+ * A read of a button, a port or a clock is answered from state Rigel already
+ * holds and needs no time at all.
+ */
+static int amiga_access_needs_time(uint32_t address, int write)
+{
+    enum
+    {
+        CUSTOM_BASE = 0x00dff000u,
+        CUSTOM_END  = 0x00e00000u,
+        CIA_BASE    = 0x00bfd000u,
+        CIA_END     = 0x00bff000u,
+        CUSTOM_VPOSR  = 0x00dff004u,
+        CUSTOM_VHPOSR = 0x00dff006u
+    };
+
+    if (write)
+        return (address >= CUSTOM_BASE && address < CUSTOM_END) ||
+               (address >= CIA_BASE && address < CIA_END);
+
+    return (address & ~1u) == CUSTOM_VPOSR ||
+           (address & ~1u) == CUSTOM_VHPOSR;
+}
+
+static void amiga_clock_observe(uint32_t address, int write)
 {
     if (!chipset_observed)
     {
+        if (!amiga_access_needs_time(address, write))
+            return;
+
         /*
-         * Before the first MMIO transaction the chipset has no observer and
-         * no programmed asynchronous work. Start its time domain here rather
-         * than replaying the whole CPU boot as an expensive catch-up burst.
+         * Before this the chipset has no observer and no programmed
+         * asynchronous work. Start its time domain here rather than replaying
+         * the whole CPU boot as an expensive catch-up burst.
          */
         pending_cck = 0;
         cpu_cycle_remainder = 0;
@@ -232,7 +275,8 @@ static void amiga_clock_observe(void)
          */
         if (__m68k_state != 0)
             __m68k_state->CHIPSET_ACTIVE = 1;
-        kprintf("[BELLATRIX:RIGEL] clock armed by first MMIO\n");
+        kprintf("[BELLATRIX:RIGEL] clock armed by %s $%08x\n",
+            write ? "a write to" : "a read of", (unsigned)address);
     }
     amiga_clock_flush();
 }
@@ -245,11 +289,28 @@ static void amiga_rigel_log(const char *message, void *opaque)
 
 static void amiga_rigel_log_event(const rigel_log_event_t *event, void *opaque)
 {
+    /*
+     * Bounded, because the serial line is the boot's bottleneck under QEMU and
+     * this is per chipset event. A running display produces them by the
+     * hundred thousand -- one boot with the chipset display driver installed
+     * emitted 170274 compose events and never reached a Shell, which reads
+     * exactly like a hang and is not one.
+     */
+    enum { AMIGA_LOG_EVENT_LIMIT = 64 };
+    static uint32_t logged;
     rigel_u8 i;
 
     (void)opaque;
     if (event == 0)
         return;
+    if (logged >= AMIGA_LOG_EVENT_LIMIT)
+        return;
+    if (++logged == AMIGA_LOG_EVENT_LIMIT)
+    {
+        kprintf("[rigel] event log silenced after %u events\n",
+            (unsigned)AMIGA_LOG_EVENT_LIMIT);
+        return;
+    }
 
     kprintf("[rigel] event=%s", event->name ? event->name : "unknown");
     for (i = 0; i < event->field_count && i < 4; ++i)
@@ -328,7 +389,7 @@ static uint32_t amiga_bus_read(const MachineRegion *region, uint32_t address,
     if (rigel == 0)
         return value;
 
-    amiga_clock_observe();
+    amiga_clock_observe(address, 0);
     result = rigel_mmio_read(rigel, address, (rigel_u8)size, &value);
     amiga_irq_sync();
 
@@ -355,7 +416,7 @@ static void amiga_bus_write(const MachineRegion *region, uint32_t address,
     if (rigel == 0)
         return;
 
-    amiga_clock_observe();
+    amiga_clock_observe(address, 1);
     result = rigel_mmio_write(rigel, address, (rigel_u8)size, value);
     amiga_irq_sync();
     if (result == RIGEL_MMIO_UNSUPPORTED && !unsupported_reported)

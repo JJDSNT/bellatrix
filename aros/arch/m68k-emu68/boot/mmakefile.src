@@ -84,12 +84,33 @@ CORERESIDENTS := timer_device utility_library oop_library hiddclass_hidd \
                  mouse_hidd keyboard_device gameport_device input_device \
                  console_device intuition_library expansion_library \
                  partition_library mbox_resource btuart_resource dma_resource \
+                 cia_resource \
                  sdio_resource bwfm_resource \
                  sdcard_device \
                  FileSystem_resource fat_handler lddemon_resource \
                  ram_handler con_handler shell_resource \
                  shellcommands_resource dos_library dosboot_resource
 
+#
+# cia_resource is a resource, so it can arrive no other way -- the same reason
+# sdio and bwfm are in this list, and it is the whole reason it is here rather
+# than only in the dependency line: OpenResource() is FindName() over
+# SysBase->ResourceList and nothing else, and lddemon patches only OpenLibrary
+# and OpenDevice.
+#
+# It is what AddICRVector()/AbleICR() are, and the classic chipset display
+# driver calls both while installing its beam-sync interrupt:
+#
+#     GfxBase->cia = OpenResource("ciab.resource");
+#     AddICRVector(GfxBase->cia, 2, &GfxBase->timsrv);
+#
+# Without it OpenResource returns NULL and the call goes through a null library
+# base, landing at PC 0xfffffffa -- base zero plus the first vector offset.
+# Naming it in the #MM- dependency line alone builds the object and links
+# nothing, which is a boot that fails in exactly the same way as before.
+#
+# It drives the CIA registers at $bfd000 directly, which on this machine is
+# Rigel's CIA aperture, so it needs nothing else from an Amiga.
 #
 # soc/mbox and soc/sdcard drive the same Arasan controller and VideoCore
 # mailbox as Emu68's brcm-sdhc.device and mailbox.resource. Exactly one side
@@ -156,7 +177,25 @@ USER_INCLUDES := -I$(SRCDIR)/rom/kernel -I$(SRCDIR)/rom/exec \
 # it compiling. vcgfx is not here at all -- it is a disk module now, pulled in
 # by software-emu68-m68k.
 #
-#MM- kernel-link-emu68-m68k : kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-m68k-emu68-fbgfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-dma-emu68-kobj kernel-sdio-emu68-kobj kernel-bwfm-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
+#
+# kernel-cia-kobj is first in the list below, and it is the only entry that
+# comes from arch/m68k-amiga rather than from this port or from rom/.
+#
+# ciab.resource is what AddICRVector()/AbleICR() are, and the classic chipset
+# display driver calls both while it installs its beam-sync interrupt:
+#
+#     GfxBase->cia = OpenResource("ciab.resource");
+#     AddICRVector(GfxBase->cia, 2, &GfxBase->timsrv);
+#
+# Without the resource that OpenResource returns NULL and the call goes through
+# a null library base, which on m68k lands at PC 0xfffffffa -- base zero plus
+# the first vector offset. That is exactly what a boot with amigavideo.hidd
+# installed reported before this line existed (ISSUE-0068 phase 3).
+#
+# The resource drives the CIA registers at $bfd000 directly, which on this
+# machine is Rigel's CIA aperture, so it needs nothing else from an Amiga.
+#
+#MM- kernel-link-emu68-m68k : kernel-cia-kobj kernel-kernel-kobj kernel-exec-kobj kernel-timer-kobj kernel-utility-kobj kernel-oop-kobj kernel-hidd-kobj kernel-bootloader-kobj kernel-openfirmware-kobj kernel-battclock-kobj kernel-hidd-gfx-kobj kernel-m68k-emu68-emu68gfx-kobj kernel-m68k-emu68-fbgfx-kobj kernel-graphics-kobj kernel-layers-kobj kernel-keymap-kobj kernel-hidd-input-kobj kernel-hidd-kbd-kobj kernel-hidd-mouse-kobj kernel-keyboard-kobj kernel-gameport-kobj kernel-input-kobj kernel-intuition-kobj kernel-expansion-kobj kernel-partition-kobj kernel-mbox-emu68-kobj kernel-btuart-emu68-kobj kernel-dma-emu68-kobj kernel-sdio-emu68-kobj kernel-bwfm-emu68-kobj kernel-sdcard-kobj kernel-filesystem-kobj kernel-fs-fat-kobj kernel-dos-kobj kernel-aros-kobj kernel-debug-kobj kernel-processor-kobj kernel-task-kobj kernel-console-kobj kernel-lddemon-kobj kernel-fs-ram-kobj kernel-fs-con-kobj kernel-shell-kobj kernel-shellcommands-kobj kernel-dosboot-kobj
 #MM- kernel-link-emu68-m68k-quick : kernel-kernel-kobj-quick kernel-exec-kobj-quick kernel-timer-kobj-quick kernel-utility-kobj-quick kernel-oop-kobj-quick kernel-hidd-kobj-quick kernel-bootloader-kobj-quick kernel-openfirmware-kobj-quick kernel-battclock-kobj-quick kernel-hidd-gfx-kobj-quick kernel-m68k-emu68-emu68gfx-kobj-quick kernel-m68k-emu68-fbgfx-kobj-quick kernel-graphics-kobj-quick kernel-layers-kobj-quick kernel-keymap-kobj-quick kernel-hidd-input-kobj-quick kernel-hidd-kbd-kobj-quick kernel-hidd-mouse-kobj-quick kernel-keyboard-kobj-quick kernel-gameport-kobj-quick kernel-input-kobj-quick kernel-intuition-kobj-quick kernel-expansion-kobj-quick kernel-partition-kobj-quick kernel-mbox-emu68-kobj-quick kernel-btuart-emu68-kobj-quick kernel-dma-emu68-kobj-quick kernel-sdio-emu68-kobj-quick kernel-bwfm-emu68-kobj-quick kernel-sdcard-kobj-quick kernel-filesystem-kobj-quick kernel-fs-fat-kobj-quick kernel-dos-kobj-quick kernel-aros-kobj-quick kernel-debug-kobj-quick kernel-processor-kobj-quick kernel-task-kobj-quick kernel-console-kobj-quick kernel-lddemon-kobj-quick kernel-fs-ram-kobj-quick kernel-fs-con-kobj-quick kernel-shell-kobj-quick kernel-shellcommands-kobj-quick kernel-dosboot-kobj-quick
 #MM kernel-link-emu68-m68k: $(BOOTELF)
 #MM kernel-link-emu68-m68k-quick: $(BOOTELF)
