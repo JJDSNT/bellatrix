@@ -1218,3 +1218,39 @@ that external timing could not:
 4. **The number to bring back is the `PERF` line.** ns/CCK on a Pi 3 is what
    the withdrawn "~3.8x short" claim needs replacing with, and it is now
    measured by the machine itself rather than derived.
+
+
+# 2026-08-30: why the clock is not disarmed
+
+The rule that arms the clock has an obvious mirror -- disarm when nothing needs
+time any more -- and it was worth an hour to find out that it does not pay.
+
+**What arms the machine is a CIA timer, and it keeps running.** The measured
+boot arms on a write to `$00bfed01`, CIAA CRB, which is `cia.resource` starting
+its timer. Disarming requires proving nothing needs time; a timer that is
+counting does. So the disarm would not touch the case we actually measured.
+
+**And the machine could not prove it anyway.** Rigel's public API exposes
+`rigel_get_intena`, `rigel_get_intreq`, `rigel_get_ipl`, the deadlines and the
+frame -- no DMACON, no CIA timer state. The condition would have to be built
+from a shadow of the register writes we intercept, which is a second source of
+truth for something whose failure mode is a guest that waits forever for an
+interrupt that stopped being generated. That is the STOP deadlock again, in a
+place with no probe to catch it.
+
+**What the investigation did produce** is the sharpest statement of the real
+problem, now written up as Rigel's ISSUE-0006: a CIA timer costs nothing per
+colour clock, because `rigel_chipset_step()` accumulates the remainder and
+calls `cia_step()` once per call in bulk. So this boot pays the full
+per-colour-clock Agnus and Denise loop -- 1365 ns/CCK -- for a domain that is
+already O(1) and a display with nothing on it.
+
+Three other facts went to the same issue, and together they close off the
+outside: our call granularity is already maximal at a measured 226 CCK per
+call; `d.beam_line_end` is unconditional in `rigel_get_deadline()`, so no host
+can ever be told it may skip more than a scanline; and
+`agnus_slot_scheduler_step_until()` is a plain loop, so a longer quantum would
+not skip work even if we were given one.
+
+**The host cannot fix this from outside.** That is the conclusion, and it is
+worth more than the code that was not written.
