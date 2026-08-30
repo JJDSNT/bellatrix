@@ -26,39 +26,42 @@ static volatile uint32_t core_arrived;
 static volatile uint32_t core_wanted;
 
 static atomic_flag chipset_lock = ATOMIC_FLAG_INIT;
-static _Atomic uint32_t chipset_lock_waiters;
 
 int amiga_core_owns_chipset(void)
 {
     return core_arrived != 0;
 }
 
+/*
+ * Spin, do not sleep.
+ *
+ * This was WFE with a waiter count, and a release that only sent the event
+ * when the count was non-zero -- which is what the legacy tree did, and saves
+ * waking every core for an uncontended release. It also has a lost wakeup in
+ * it: the release's relaxed load of the count may be ordered before its own
+ * clear, so a holder can read zero, skip the event, and leave a waiter parked
+ * in WFE on a lock that is already free.
+ *
+ * That is the third time tonight a WFE without a guaranteed event has stopped
+ * this machine, and the first two were mine as well. The console drainer waited
+ * for an event nobody sent; the chipset core waited for a flag with no event
+ * behind it. All three were invisible under QEMU, where WFE returns
+ * immediately and the whole class of bug does not exist.
+ *
+ * Spinning is affordable here in a way it was not for the original: the
+ * critical section is bounded at about a millisecond of chipset work by the
+ * budget in amiga_clock_run_on_core(). A waiter burns a core for at most that,
+ * and it cannot be lost.
+ */
 void amiga_core_lock_acquire(void)
 {
-    if (!atomic_flag_test_and_set_explicit(&chipset_lock, memory_order_acquire))
-        return;
-
-    atomic_fetch_add_explicit(&chipset_lock_waiters, 1u, memory_order_relaxed);
     while (atomic_flag_test_and_set_explicit(&chipset_lock, memory_order_acquire))
-        __asm__ volatile("wfe" ::: "memory");
-    atomic_fetch_sub_explicit(&chipset_lock_waiters, 1u, memory_order_relaxed);
+        __asm__ volatile("yield" ::: "memory");
 }
 
 void amiga_core_lock_release(void)
 {
     atomic_flag_clear_explicit(&chipset_lock, memory_order_release);
-
-    /*
-     * Only signal when a waiter actually parked.
-     *
-     * Almost every release is the chipset core finishing an uncontended step,
-     * and the legacy implementation's unconditional broadcast woke every PE
-     * and turned work completions into empty loop iterations on cores that had
-     * nothing to do. The release store is the lock's ordering contract; the
-     * event is only needed by someone in WFE.
-     */
-    if (atomic_load_explicit(&chipset_lock_waiters, memory_order_relaxed) != 0u)
-        __asm__ volatile("dmb ishst\n\tsev" ::: "memory");
 }
 
 void amiga_core_enable(void)

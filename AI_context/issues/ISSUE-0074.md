@@ -620,3 +620,69 @@ Worth listing, because every failure this session has been in one of them:
 **QEMU can prove a multicore change wrong and cannot prove it right.** It is
 still worth running: it caught the interleaving and it priced the lock budget
 at 181 lines against 350.
+
+
+# 2026-08-30: the experiment answered, and it was the lock
+
+The pair ran on hardware and the result is unambiguous.
+
+**Pack I -- wall clock, chipset on the CPU core -- boots.** All the way:
+
+```text
+[BELLATRIX:RIGEL:PERF] 76003686 CCK in 19015 ms ... 250 ns/CCK, 112% of realtime, 226 CCK/call
+[InitResident] amigavideo.hidd: init returned after 10909 ms
+[InitResident] vcgfx.hidd: init returned after 50130 ms
+[InitResident] gadtools.library: MakeLibrary 94 ms ...
+```
+
+**Pack H -- the same, plus the chipset on core 2 -- stops** inside
+`amigavideo`'s init.
+
+So **wall-clock time is not the problem**; ISSUE-0075 works, on hardware, at
+112% of realtime throughout. The problem is concurrency, in the cross-core path.
+
+And the interrupt instrumentation narrowed it further by reporting **nothing at
+all** -- zero `BELLATRIX:IRQ` lines in either boot. No interrupt is ever raised,
+in the boot that works or the one that stops, so the IPL boundary is not where
+the machine is stopping. That leaves the other thing every MMIO now crosses:
+the lock.
+
+## The lock had a lost wakeup, and it is the third of the same shape
+
+```c
+atomic_fetch_add(&waiters, 1);
+while (test_and_set(&lock)) wfe();
+...
+clear(&lock);
+if (load(&waiters) != 0) sev();
+```
+
+The release's relaxed load may be ordered before its own clear, so a holder can
+read zero, skip the event, and leave a waiter parked in WFE on a lock that is
+already free. It is legacy's design and it saves waking every core for an
+uncontended release, which is a real cost -- but it is a lost wakeup.
+
+**That is the third time tonight a WFE without a guaranteed event stopped this
+machine**, and all three were mine:
+
+| where | the event that never came |
+| --- | --- |
+| the console drainer | `console_ready` set with no `sev` |
+| the chipset core | woken only by another core's incidental `sev` |
+| the chipset lock | release skipped the `sev` after reading a stale count |
+
+All three were invisible under QEMU, where WFE returns immediately and the
+class of bug does not exist. That is now four for four: every hardware-only
+failure this session has been WFE, cache visibility, real time, or the real
+UART.
+
+## The fix, and why spinning is affordable here
+
+The lock spins with `yield`. The original could not afford that -- it had no
+bound on how long a holder kept it. This one does: `amiga_clock_run_on_core()`
+takes the lock for about a millisecond of chipset work and gives it back, so a
+waiter burns a core for at most that, and cannot be lost.
+
+**A wakeup that can be lost is worse than a core that spins for a millisecond**,
+and on this machine the second is measurable while the first is a boot that
+stops.
