@@ -23,16 +23,32 @@ chipset lands near realtime and the wall that stops phase 3 under QEMU is an
 emulator artefact. If it does not, Rigel's `ISSUE-0006` becomes the critical
 path with a real target. **Nothing else about the plan can be decided first.**
 
-## Two images, and take both
+## The packs are built
 
-Build them one at a time; each overwrites `out/images/`.
+Two card images in `out/packs/`, with `LEIA-ME.txt` beside them saying what to
+pull out of each log. Write either with `dd`; both carry Demo Reel 3 already,
+and both need `nocomposition` on the kernel command line.
+
+| pack | chipset display driver | boots at |
+|---|---|---|
+| `pack-A-render-path.img` | left off the card | normal speed |
+| `pack-B-chipset-live.img` | on the card | unknown -- that is the question |
+
+The difference is one file: `DEVS:Monitors/AmigaVideo`. `amigavideo.hidd` is
+inert on its own; the monitor is what `AROSMonDrvs` runs at boot, and from that
+point `cia.resource`'s init starts a CIA timer and the chipset runs for the
+rest of the boot. `BELLATRIX_CHIPSET_DISPLAY=0` is what leaves it off.
+
+## Rebuilding them
+
+Each overwrites `out/images/`, so one at a time.
 
 **1. The cheap one: does the render path work on real silicon?**
 
 ```bash
 CONFIG_RIGEL=1 CONFIG_RIGEL_SELFTEST=1 ./scripts/build.sh
-./scripts/build-aros.sh
-./scripts/make-sdcard.sh
+BELLATRIX_CHIPSET_DISPLAY=0 BELLATRIX_DEMOREEL=out/demoreel3 ./scripts/make-sdcard.sh
+cp out/aros/sd.img out/packs/pack-A-render-path.img
 ```
 
 This composes a known frame -- one bitplane of vertical stripes, two colours,
@@ -43,8 +59,8 @@ It proves phases 1 and 2 on hardware and costs nothing.
 
 ```bash
 CONFIG_RIGEL=1 ./scripts/build.sh
-./scripts/build-aros.sh
 BELLATRIX_DEMOREEL=out/demoreel3 ./scripts/make-sdcard.sh
+cp out/aros/sd.img out/packs/pack-B-chipset-live.img
 ```
 
 `amigavideo.hidd` and `DEVS:Monitors/AmigaVideo` are on the card, so

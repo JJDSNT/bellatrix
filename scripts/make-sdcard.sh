@@ -331,6 +331,19 @@ for entry in "${ENTRIES[@]}"; do
     cp -al "$DIST/$entry" "$STAGE/$entry"
 done
 
+# BELLATRIX_CHIPSET_DISPLAY=0 leaves the classic display driver off the card.
+#
+# Not the same as not building it. amigavideo.hidd is inert on its own; what
+# starts it is DEVS:Monitors/AmigaVideo, which AROSMonDrvs runs at boot, and
+# from that point cia.resource's init starts a CIA timer and the chipset runs
+# for the rest of the boot at about 4x the cost. A card meant to prove the
+# render path cheaply -- compose a known frame, park the clock, boot at normal
+# speed -- must not carry the monitor. ISSUE-0068.
+if [ "${BELLATRIX_CHIPSET_DISPLAY:-1}" = 0 ]; then
+    rm -f "$STAGE/Devs/Monitors/AmigaVideo"
+    echo "[sdcard] classic chipset display driver left off the card"
+fi
+
 # BELLATRIX_DEMOREEL puts a drawer of extracted Demo Reel 3 files on the card.
 #
 # Not on every card, and not in the repository: the demo is commercial software
