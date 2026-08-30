@@ -1130,3 +1130,48 @@ Two ways forward, and they are not equivalent:
 Nothing below phase 3 is blocked: the aperture, the descriptor, the census and
 `DeniseView` all work, and phase 1's producer still demonstrates the whole
 render path in seconds.
+
+
+# 2026-08-29: correction -- the performance numbers were measured at -O0
+
+Everything this issue says about Rigel's speed came from a bench linked against
+`out/rigel-harness`, whose `CMAKE_BUILD_TYPE` and `CMAKE_C_FLAGS` were both
+empty. **It was an unoptimised build, and the numbers are wrong by about 4x.**
+
+| | published here | correct (Release) |
+|---|---|---|
+| idle chipset | 140 ns/CCK, 2x realtime | **35 ns/CCK, 8x realtime** |
+| Demo Reel 3, 600 frames | 6.92 s, 86.7 fps | **2.61 s, 229.9 fps, 4.6x realtime** |
+
+Withdrawn with them: **"~3.8x short on a Pi 3"**. That rested on an earlier
+~1080 ns/CCK figure for the Pi, which against 35 ns/CCK native would make an
+A53 31x slower than a modern x86 -- implausible, so the Pi figure is suspect
+too and has to be re-measured before any target is set from it.
+
+## What this does and does not change
+
+**Does not change**: everything measured on the Bellatrix side, because
+`scripts/build.sh` builds Release. The ~1.31 us/CCK seen under QEMU is a real
+number for optimised code under TCG, and so is the boot that reaches
+`intuition.library` in 110 seconds with the chipset armed. Phase 3 is still
+blocked under QEMU for exactly the reason recorded above.
+
+**Does change**: the explanation. That slowness is now much more plausibly a
+TCG artefact -- 1310 against 35 ns/CCK is a 37x emulation penalty, which is an
+ordinary figure for interpreted AArch64 -- rather than evidence that Rigel is
+intrinsically too slow for the target. Which reopens the question the phase 3
+note closed: **hardware may simply be fast enough**, and that is now the
+cheapest thing to find out.
+
+So the two ways forward swap places. Verifying phase 3 on a Pi moves ahead of
+Rigel's event-skipping work, because it is a measurement rather than a project,
+and because the number that would justify the project no longer exists.
+
+## The lesson worth keeping
+
+A performance gate in another repository was opened with a measurement whose
+build flags were never checked, and the shape of the finding -- a fixed
+per-colour-clock cost that barely responds to what is programmed -- was
+convincing enough that nothing about it looked wrong. The `gprof` ranking was
+sound because it came from a different build; the absolutes were not, and
+nothing in the recipe said which build to link against.
