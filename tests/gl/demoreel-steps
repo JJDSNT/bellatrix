@@ -64,18 +64,33 @@ Else
     Echo >DEBUG: "[dr3] DoWeHaveMem was happy"
 EndIf
 
-Echo >DEBUG: "[dr3] --- one copy, to see whether RAM: takes it"
-Copy >DEBUG: DemoReel3:dr3 TO RAM:
-If EXISTS "RAM:dr3"
-    Echo >DEBUG: "[dr3] RAM:dr3 is there"
-Else
-    Echo >DEBUG: "[dr3] the copy did not arrive"
-EndIf
+Echo >DEBUG: "[dr3] --- the twelve files ToRAM puts in RAM:"
+;
+; All twelve, not one. The first version of this script copied dr3 alone and
+; then ran Slish, which returned at once -- and that told us nothing, because
+; Slish was looking for eleven files that were not there. A probe that skips
+; the setup and then reports on the thing that needed it is worse than no
+; probe: it produces an answer.
+;
+Copy >DEBUG: DemoReel3:centisec TO RAM:
+Copy >DEBUG: DemoReel3:mt1 TO RAM:
+Copy >DEBUG: DemoReel3:mt2 TO RAM:
+Copy >DEBUG: DemoReel3:mt3 TO RAM:
+Copy >DEBUG: DemoReel3:mt4 TO RAM:
+Copy >DEBUG: DemoReel3:mt5 TO RAM:
+Copy >DEBUG: DemoReel3:mt6 TO RAM:
+Copy >DEBUG: DemoReel3:mt7 TO RAM:
+Copy >DEBUG: DemoReel3:crash TO RAM:
+Copy >DEBUG: DemoReelData:slide TO RAM:
+Copy >DEBUG: DemoReelData:wall.cu TO RAM:
+Copy >DEBUG: DemoReelData:dr3 TO RAM:
+Echo >DEBUG: "[dr3] --- what RAM: holds now"
+List >DEBUG: RAM: LFORMAT "%N %L"
 
 ;
 ; The demo runs this as `C:run >NIL: DemoReelData:Slish` -- asynchronous and
 ; with its output thrown away, so a crash here is silent by construction.
-; Run it in the foreground, talking.
+; Run it in the foreground, talking, with the setup it actually expects.
 ;
 Echo >DEBUG: "[dr3] --- Slish, in the foreground"
 DemoReelData:Slish >DEBUG:
