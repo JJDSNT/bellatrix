@@ -884,6 +884,39 @@ void amiga_clock_run_on_core(void)
 
     for (;;)
     {
+        /*
+         * The only observer that survives an m68k that has stopped.
+         *
+         * A boot whose clock freezes while the serial log keeps flowing is a
+         * CPU that stopped taking interrupts, and nothing on the CPU's own
+         * side can report that -- it is the thing that is not running. This
+         * core is, so it says what the CPU's interrupt state looks like from
+         * outside, once a second, for free.
+         *
+         * INTF.ARM is the platform latch: 1 with the machine dead means the
+         * interrupt was delivered and never taken. INTF.IPL is the chipset
+         * level. SR carries the guest's own mask, and a stopped machine
+         * holding IPL 7 is a Disable() that never ended rather than a lost
+         * wakeup. The three together separate every candidate we have.
+         */
+        {
+            static uint64_t live_last;
+            static uint32_t live_reports;
+            uint64_t freq, now;
+
+            __asm__ volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq));
+            now = amiga_perf_now();
+            if (freq != 0 && (live_last == 0 || now - live_last >= freq))
+            {
+                live_last = now;
+                if (__m68k_state != 0 && ++live_reports > 8)
+                    kprintf("[BELLATRIX:LIVE] arm=%u ipl=%u sr=%04x\n",
+                        (unsigned)__m68k_state->INTF.ARM,
+                        (unsigned)__m68k_state->INTF.IPL,
+                        (unsigned)__m68k_state->SR);
+            }
+        }
+
         if (rigel == 0 || !chipset_observed)
         {
             __asm__ volatile("yield" ::: "memory");
