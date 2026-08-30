@@ -1254,3 +1254,83 @@ not skip work even if we were given one.
 
 **The host cannot fix this from outside.** That is the conclusion, and it is
 worth more than the code that was not written.
+
+
+# 2026-08-30: the hardware answer, and it is not the one anyone was looking for
+
+Pack B on a Raspberry Pi 3 Model B, chipset live for the whole boot:
+
+```text
+[BELLATRIX:RIGEL:PERF] 76003913 CCK in 19021 ms over 334821 calls -> 250 ns/CCK, 3995629 CCK/s (112% of realtime), 226 CCK/call
+```
+
+Flat at 250 ns/CCK across 76 million colour clocks. **The chipset runs at 112%
+of realtime on hardware.**
+
+## Rigel is not the bottleneck, and never was
+
+| | ns/CCK | vs native x86 |
+|---|---|---|
+| native x86, Release, idle | 35 | 1x |
+| **Raspberry Pi 3** | **250** | **7.1x** |
+| QEMU on that x86 | 1365 | 39x |
+
+7.1x for an A53 against a modern x86 is ordinary. The earlier ~1080 ns/CCK
+figure for the Pi was wrong by 4.3x, and the QEMU wall was a TCG artefact, at
+5.5x the Pi's cost. **Rigel's ISSUE-0006 comes off the critical path**: a
+chipset with 12% headroom does not need event skipping to make this work.
+
+## What is actually slow, and why it is not a defect
+
+The boot takes over thirteen minutes, and the SD card reports:
+
+```text
+[SDHost00] 1024 cmds, 8020 KB, 4096 KB in 339968 ms = 12 KB/s  [wait 4540 ms, cache 47 ms, copy 2 ms]
+[SDHost00]   command total 8486 ms of which transfer 4540 ms
+```
+
+4 MB in 340 seconds, of which the driver spent 8.5 seconds in commands.
+**97.5% of that wall time was spent outside the driver.** The card is not slow;
+the CPU is.
+
+And it is slow by construction. Bellatrix drives chipset time from modelled
+68000 cycles at two cycles per colour clock, so a chipset running at 3995629
+CCK/s caps the guest at **7.99 MHz-equivalent -- 112% of a real 7.09 MHz
+68000**. The same number, from the other end.
+
+## The finding
+
+**A cycle-exact chipset driven by modelled CPU cycles throttles the machine to
+the speed of the machine it is emulating.**
+
+With the chipset live, this is an Amiga. Exactly as fast as one, to within 12%.
+That is precisely right for compatibility -- a demo written for a 7 MHz 68000
+will run at the speed it was written for -- and it throws away the reason Emu68
+exists, which is that the JIT runs m68k code far faster than the hardware ever
+did. AROS is a system that expects the fast CPU, and on an Amiga it boots in
+thirteen minutes.
+
+Nothing here is broken. The clock slice, the STOP path, the aperture, the
+census, `amigavideo` and `cia.resource` all do what they were built to do. The
+architecture simply has a consequence nobody had priced, because until this
+measurement the chipset's cost was believed to be the problem.
+
+## The question this opens
+
+It is no longer "how do we make the chipset fast enough". It is **what the
+relationship between CPU time and chipset time should be**, and there are at
+least three answers with different characters:
+
+1. **Chipset on its own core.** The CPU free-runs on one core while the chipset
+   keeps realtime on another. That is an accelerated Amiga -- the PiStorm
+   shape -- and the `legacy` branch already built it: `src/runtime/core_chipset.c`,
+   with Core 2 running the chipset. It was left behind as multicore scaffolding;
+   this measurement is the argument for it.
+2. **Decouple, and synchronise only at observation.** The CPU runs free and the
+   chipset catches up when something looks at it. Cheap, and it changes what the
+   guest observes about time, which is the thing Rigel exists to get right.
+3. **Accept Amiga speed while the chipset is in use.** Correct, simple, and it
+   means the desktop cannot be one of the things using it.
+
+The choice is not obvious and it is not mine to make alone. What is now settled
+is that it is a scheduling question rather than a performance one.
