@@ -1387,3 +1387,17 @@ presentation: the frame is in the aperture at `$01000000`, published every
 frame, and nothing puts it on the panel. On hardware that is the HVS plane
 (ISSUE-0072, ISSUE-0073), and until it exists every success here looks like a
 freeze.
+
+
+# 2026-08-30: the demo reaches the chipset's audio
+
+Phase 2's presenter exists (`DeniseView SHOW`, ISSUE-0073) and phase 3 has a
+first real producer that is not a selftest: Demo Reel 3's player programs all
+four of Paula's channels through Rigel, once `audio.device` was linked into
+the ROM. The guest then dies on a library call through a null base.
+**ISSUE-0079** carries it, including the structural gap it exposes -- this
+port has no Paula interrupt dispatch, so `SetIntVector(INTB_AUD0 + ch)`
+installs handlers nothing will ever call.
+
+Getting there needed the machine to boot reliably, which took the whole day
+and a different USB driver: **ISSUE-0078**.
