@@ -138,7 +138,32 @@ static void scan_bank(struct KernelBase *KernelBase, ULONG pending, ULONG base,
     for (bit = 0; bit < bits; bit++)
     {
         if (pending & (1UL << bit))
-            krnRunIRQHandlers(KernelBase, base + bit);
+        {
+            /*
+             * Count what is dispatched, and say so on the powers of two.
+             *
+             * The m68k PC, sampled from the chipset core, put this machine
+             * inside emu68_DispatchFrame, scan_bank and intc_read while it
+             * looked frozen -- an interrupt storm. But the bound in
+             * intc_dispatch() never reported, because every entry does find
+             * its source, run the handler and come back to a quiet read. The
+             * source asserts, is served, and asserts again, thousands of
+             * times a second.
+             *
+             * Which one is the whole question, and swapping the USB driver
+             * answered half of it: with usb2otg the machine is fine. Powers
+             * of two keep a healthy boot to a dozen lines and make a storm
+             * unmistakable -- and they name the IRQ. 9 is the USB host
+             * controller, 62 the SD card, 57 the PL011.
+             */
+            static ULONG counts[96];
+            ULONG irq = base + bit;
+
+            if (irq < 96 && ((++counts[irq] & (counts[irq] - 1)) == 0) &&
+                counts[irq] >= 4096)
+                bug("[intc] irq %lu dispatched %lu times\n", irq, counts[irq]);
+            krnRunIRQHandlers(KernelBase, irq);
+        }
     }
 }
 
