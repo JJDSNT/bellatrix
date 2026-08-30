@@ -408,3 +408,39 @@ that turned out not to be compiled into the bare-metal build at all. This
 session made the same class of mistake twice: a performance gate opened on an
 unoptimised build, and a hardware measurement quoted from a figure whose
 provenance was never checked.
+
+
+# 2026-08-30: the log stopped the machine, which is the wrong way round
+
+The line buffer made hardware stop *earlier* -- at
+`[BELLATRIX:RIGEL] enabled; address decode owned by Rigel`, which is the line
+before the second core's first word. The only new thing was the lock.
+
+Two defects, and the second is the one worth keeping.
+
+**The flag was read twice.** `console_emit()` tested `console_multicore` to
+decide whether to acquire and again to decide whether to release, and the
+second core sets it between those two reads -- so a core that skipped the
+acquire went on to clear a lock it never held. Read once into a local.
+
+**An unbounded wait had no business being in the diagnostic path.** That is the
+real mistake. A log is the instrument the machine is debugged with, and it must
+never be able to stop the machine. The lock now spins a bounded number of times
+and then writes anyway: the worst case is a garbled line, which is what we had
+before and can live with, and a machine that stops is not.
+
+QEMU after: 20 `PERF` reports, 215 CCK per call, **zero interleaved lines**.
+QEMU before the buffer: several. QEMU could never reproduce any of the three
+hangs, which is the standing condition of this work rather than a surprise.
+
+## The pattern in all four hangs
+
+Every one has been a thing the CPU core and the chipset core share that was not
+thought of as shared: Rigel's IPL read, the wall-clock accumulator, the lock
+hold time, and now a flag in the console. **None of them appeared under QEMU**,
+because TCG makes every core's write instantly visible to every other and
+serialises nothing that hardware serialises.
+
+That is worth stating as a rule for the rest of this work: **QEMU can prove a
+multicore change is wrong and can never prove it is right.** The pack goes to
+hardware, and what comes back is the only evidence.

@@ -16,12 +16,10 @@ Garbled output is not cosmetic: it is the loss of the instrument you are
 debugging with.
 ---
  src/raspi/support_rpi.c | 90 +++++++++++++++++++++++++++++++++++++++++++++----
- 1 file changed, 84 insertions(+), 6 deletions(-)
-
 diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 --- a/src/raspi/support_rpi.c
 +++ b/src/raspi/support_rpi.c
-@@ -120,22 +120,99 @@
+@@ -120,22 +120,130 @@
      }
  }
  
@@ -29,25 +27,17 @@ diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 +static inline void putRawByte(void *io_base, char chr)
  {
 -    if (serial_up)
--    {
--        waitSerOUT(io_base);
 +    waitSerOUT(io_base);
- 
--        if (chr == '\n')
--        {
--            wr32le(CONSOLE_UART_DR, '\r');
--            waitSerOUT(io_base);
--        }
--        wr32le(CONSOLE_UART_DR, (uint8_t)chr);
++
 +    if (chr == '\n')
-+    {
+     {
 +        wr32le(CONSOLE_UART_DR, '\r');
          waitSerOUT(io_base);
-     }
++    }
 +    wr32le(CONSOLE_UART_DR, (uint8_t)chr);
 +    waitSerOUT(io_base);
- }
- 
++}
++
 +#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
 +/*
 + * A line buffer per core.
@@ -69,7 +59,8 @@ diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 + * of boot where the MMU may not be up.
 + */
 +#define CONSOLE_LINE_MAX 200
-+
+ 
+-        if (chr == '\n')
 +static char console_line[4][CONSOLE_LINE_MAX];
 +static unsigned console_line_len[4];
 +volatile int console_multicore = 0;
@@ -84,21 +75,56 @@ diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 +
 +static inline void console_emit(void *io_base, unsigned core)
 +{
++    /*
++     * Bounded, and read once.
++     *
++     * Two defects here on the first attempt, and the second is the one worth
++     * remembering. The flag was read twice -- once to acquire and once to
++     * release -- and the second core sets it between those two reads, so a
++     * core that skipped the acquire went on to clear a lock it never held.
++     *
++     * The real mistake was putting an unbounded wait in the diagnostic path at
++     * all. A log is the instrument you debug the machine with, and it must
++     * never be able to stop the machine: the boot went from reaching services
++     * to stopping at the line before the second core's first word, and the
++     * only new thing was this lock.
++     *
++     * So spin a bounded number of times and then write anyway. The worst case
++     * is a garbled line, which is what we had before and can live with; a
++     * machine that stops is not.
++     */
++    enum { CONSOLE_LOCK_SPINS = 100000 };
++    int locked = 0;
 +    unsigned i;
 +
 +    if (console_multicore)
-+        while (__atomic_test_and_set(&console_lock, __ATOMIC_ACQUIRE))
++    {
++        unsigned spins = CONSOLE_LOCK_SPINS;
++
++        while (spins-- != 0)
+         {
+-            wr32le(CONSOLE_UART_DR, '\r');
+-            waitSerOUT(io_base);
++            if (!__atomic_test_and_set(&console_lock, __ATOMIC_ACQUIRE))
++            {
++                locked = 1;
++                break;
++            }
 +            __asm__ volatile("yield" ::: "memory");
+         }
+-        wr32le(CONSOLE_UART_DR, (uint8_t)chr);
+-        waitSerOUT(io_base);
+     }
 +
 +    for (i = 0; i < console_line_len[core]; i++)
 +        putRawByte(io_base, console_line[core][i]);
 +
-+    if (console_multicore)
++    if (locked)
 +        __atomic_clear(&console_lock, __ATOMIC_RELEASE);
 +
 +    console_line_len[core] = 0;
-+}
-+
+ }
+ 
 +static inline void putByte(void *io_base, char chr)
 +{
 +    unsigned core;
