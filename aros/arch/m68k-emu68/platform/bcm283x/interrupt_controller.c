@@ -16,6 +16,7 @@
  * bank 1 = GPUIRQ_PEND1/ENBL1/DIBL1, bank 2 = the small ARM-side set in
  * ARMIRQ_PEND/ENBL/DIBL.
  */
+#include <aros/debug.h>
 #include "../platform.h"
 
 #include <aros/kernel.h>
@@ -191,6 +192,43 @@ static void intc_dispatch(struct KernelBase *KernelBase)
             scan_bank(KernelBase, pending0, 0 << 5, 32);
         if (pending1)
             scan_bank(KernelBase, pending1, 1 << 5, 32);
+    }
+
+    /*
+     * Name what would not go quiet.
+     *
+     * Bounding the loop above stops it spinning here, and by itself that
+     * changes nothing the machine can feel: the interrupt is a level, so
+     * whatever is still asserted re-enters through the exception instead,
+     * and the CPU is just as unable to run a task. A bound turns an
+     * unbreakable inner loop into an unbreakable outer one unless the source
+     * is dealt with -- and dealing with it starts by knowing which one it is.
+     *
+     * So say so, once per source and a handful of times. A number here is an
+     * IRQ number: 9 is the USB host controller, 62 the SD card, 57 the PL011.
+     * A bit with no handler registered is the other possibility and looks the
+     * same from in here, which is why the raw masks are printed rather than a
+     * conclusion.
+     */
+    if (round == INTC_DRAIN_ROUNDS)
+    {
+        static ULONG shouted;
+        static ULONG last_arm, last0, last1;
+
+        if (pending_arm != last_arm || pending0 != last0 || pending1 != last1)
+        {
+            last_arm = pending_arm;
+            last0 = pending0;
+            last1 = pending1;
+            shouted = 0;
+        }
+        if (shouted < 4)
+        {
+            shouted++;
+            bug("[intc] still pending after %u rounds: arm=%08lx gpu0=%08lx "
+                "gpu1=%08lx\n", (unsigned)INTC_DRAIN_ROUNDS,
+                pending_arm, pending0, pending1);
+        }
     }
 }
 
