@@ -24,7 +24,7 @@ Version >DEBUG: poseidon.library
 List >DEBUG: USBCLASSES: LFORMAT "%N"
 
 Echo >DEBUG: "[demoreel-show] --- AddUSBClasses, in the foreground"
-AddUSBClasses >DEBUG: *>DEBUG:
+AddUSBClasses >DEBUG:
 Echo >DEBUG: "[demoreel-show] --- AddUSBClasses returned"
 
 Echo >DEBUG: "[demoreel-show] --- can the guest read what Denise drew?"
@@ -45,12 +45,12 @@ Run >NIL: <NIL: DeniseView SHOW
 ;
 Echo >DEBUG: "[demoreel-show] --- ToRAM (assigns, 1 MB check, tunes to RAM:)"
 CD DemoReel3
-Execute >DEBUG: *>DEBUG: toram
+Execute >DEBUG: toram
 Echo >DEBUG: "[demoreel-show] --- ToRAM returned"
 
 Echo >DEBUG: "[demoreel-show] --- assigns now"
 Assign >DEBUG:
 
 Echo >DEBUG: "[demoreel-show] --- Slish"
-Slish >DEBUG: *>DEBUG:
+Slish >DEBUG:
 Echo >DEBUG: "[demoreel-show] --- Slish returned"

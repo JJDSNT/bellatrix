@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] S: register the USB classes before the host controller
+
+`Run AddUSBClasses` is asynchronous, and this Startup-Sequence adds the host
+controller by hand ninety lines later (patch 0014). Those two race, and the
+loser is a machine with no mouse.
+
+psdAddClass() does not rescan. A class registered after the last
+psdClassScan() binds to nothing that is already there, and the only scans are
+the one at the end of AddUSBClasses, the one in AddUSBHardware, and the one
+hub.class runs per newly configured device. So when AddUSBHardware gets there
+first, the devices behind the root hub are enumerated and offered to whatever
+subset of the classes had managed to load -- and hid.class, 191 KB of the
+megabyte AddUSBClasses has to read off the card, is not usually in it.
+
+Upstream can afford `Run` because upstream does not add hardware here at all:
+a USB dongle enumerates long after the stack is up, by which time the classes
+have loaded whenever they liked. This port has the controller on the board and
+names it explicitly, so the ordering has to be stated rather than assumed.
+
+It costs about a second of boot, and it is the difference between a pointer
+and no pointer.
+---
+ workbench/s/Startup-Sequence | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -35,9 +35,9 @@
+ EndIf
+ 
+ If EXISTS "SYS:Classes/USB"
+     Assign "USBCLASSES:" "SYS:Classes/USB"
+-    Run <NIL: >NIL: QUIET AddUSBClasses
++    AddUSBClasses >NIL: QUIET
+ EndIf
+ 
+ If EXISTS "SYS:Classes/Bluetooth"
+     Assign "BTCLASSES:" "SYS:Classes/Bluetooth"
