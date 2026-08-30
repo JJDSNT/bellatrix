@@ -18,6 +18,7 @@
 #include "machine/region.h"
 
 #include "A64.h"
+#include "support.h"
 #include "mmu.h"
 #include "tlsf.h"
 
@@ -30,6 +31,7 @@ static uint32_t frame_height;
 static uint32_t frame_flags;
 static uint32_t frame_count;
 static uint8_t  publish_reported;
+static uint32_t frame_phys;
 
 static uint32_t amiga_frame_reg(uint32_t offset)
 {
@@ -43,6 +45,14 @@ static uint32_t amiga_frame_reg(uint32_t offset)
         case AMIGA_FRAME_REG_HEIGHT:  return frame_height;
         case AMIGA_FRAME_REG_FLAGS:   return frame_flags;
         case AMIGA_FRAME_REG_COUNT:   return frame_count;
+        /*
+         * The physical address, for a consumer that scans the frame by DMA
+         * rather than reading it. The guest address at REG_BASE is what the
+         * m68k dereferences; the video scaler needs the other one, and the
+         * two are not interchangeable -- see the note on host_phys in
+         * machine/region.h.
+         */
+        case AMIGA_FRAME_REG_PHYS:    return frame_phys;
         default:                      return 0;
     }
 }
@@ -110,6 +120,7 @@ void amiga_frame_init(void)
      * still crossing correctly because it is served by a fault instead.
      */
     region.host_phys = mmu_virt2phys((uintptr_t)frame_buffer);
+    frame_phys = (uint32_t)region.host_phys;
     region.attr      = MMU_ATTR_CACHED;
     region.ops       = 0;
     region.owner     = 0;
@@ -164,6 +175,16 @@ void amiga_frame_publish(RigelContext *ctx)
             dst += 4; src += 4; n -= 4u;
         }
     }
+
+    /*
+     * Clean the copy out of the cache.
+     *
+     * Bellatrix writes the aperture through a cached mapping and the video
+     * scaler reads it by DMA, so without this the plane scans whatever was in
+     * memory before -- the classic form of a display that shows stale or torn
+     * content while every value in the machine is correct.
+     */
+    arm_flush_cache((uintptr_t)frame_buffer, rows * frame.pitch);
 
     frame_pitch  = frame.pitch;
     frame_width  = frame.width;

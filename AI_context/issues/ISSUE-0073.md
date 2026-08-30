@@ -249,3 +249,46 @@ The two do not compete. The presenter in the final design is exactly what a
    build and helps only this one.
 6. **D, if the measurement justifies it**, with the exact path kept as the
    automatic fallback.
+
+
+# 2026-08-30: the plane, at last
+
+Everything below the last hop had been working for a while: the frame is in the
+aperture at `$01000000`, published every frame, and both sides agree on what is
+in it. What was missing was putting it on the panel -- and the consequence was
+a machine that renders correctly and looks frozen, which is an expensive way to
+be right. Two boots were read as hangs because of it.
+
+`DeniseView SHOW` installs the plane:
+
+```c
+struct vc4gfx_overlay desc = { phys, pitch, width, height, 0, 0, destw, desth };
+tags[0].ti_Tag = OOP_ObtainAttrBase("hidd.bitmap.bcmvc4") + aoHidd_VC4BM_Overlay;
+tags[0].ti_Data = (IPTR)&desc;
+OOP_SetAttrs(HIDD_BM_OBJ(screen->RastPort.BitMap), tags);
+```
+
+It holds the plane while it runs and takes it down on Ctrl-C, so the chipset's
+output sits **above** the desktop rather than instead of it -- which is what
+makes it usable for looking at something while the machine still works.
+
+## Two things the Bellatrix side had to add
+
+**The physical address.** The descriptor published the guest address, which is
+what the m68k dereferences; the scaler reads by DMA and needs the other one.
+`REG_PHYS` at offset `0x20`, version bumped to 2. The two are not
+interchangeable, which `machine/region.h` says at length and this session
+already paid for once.
+
+**A cache clean after the copy.** Bellatrix writes the aperture through a
+cached mapping and the scaler reads it by DMA, so without `arm_flush_cache()`
+the plane scans whatever was in that memory before -- a display showing stale
+or torn content while every value in the machine is correct. One megabyte per
+frame at 50 Hz is 50 MB/s of cache maintenance, which is worth measuring later;
+correct first.
+
+## What it should show
+
+Grey. `0x00aaaaaa`, the Workbench grey `amigavideo` programmed into COLOR00 --
+which is the whole content of the chipset's frame today, and the first time
+anything this chipset produced will have been seen rather than counted.
