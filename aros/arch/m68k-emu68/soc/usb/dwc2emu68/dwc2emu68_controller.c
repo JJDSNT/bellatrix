@@ -79,6 +79,35 @@ static void controller_irq(void *data, void *sysbase)
     ULONG ahb;
 
     (void)sysbase;
+
+    /*
+     * Clear every latched core interrupt this driver does not dispatch on.
+     *
+     * GINTSTS is write-one-to-clear, and this handler only ever acknowledged
+     * the bits it handles. Anything else the core latches stays latched for
+     * the life of the machine -- and a latched bit that is also unmasked
+     * re-asserts the line the instant the task re-enables it, which is a
+     * storm the dispatch loop cannot tell from work: every entry finds a
+     * source, runs a handler and returns to a quiet read, thousands of times
+     * a second, and no task is ever scheduled again.
+     *
+     * ../usb2otg, which does not have this failure, does exactly this and
+     * says why: "GINTSTS is W1C -- leaving IncompPeriodicXfer/FetchSusp
+     * latched starves non-periodic arbitration". Swapping that driver in is
+     * what showed the difference was in this one.
+     *
+     * The three left alone are the ones with an owner: SOF self-clears above,
+     * HCHINT follows the per-channel HCINT registers, and PRTINT follows the
+     * HPRT change bits the unit task writes back.
+     */
+    {
+        ULONG latched = dwc2_readl(device, DWC2_GINTSTS) &
+            ~(DWC2_GINTSTS_SOF | DWC2_GINTSTS_HCHINT | DWC2_GINTSTS_PRTINT);
+
+        if (latched != 0)
+            dwc2_writel(device, DWC2_GINTSTS, latched);
+    }
+
     if (active == 0)
         return;
 
