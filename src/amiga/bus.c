@@ -6,6 +6,7 @@
  */
 
 #include "amiga/bus.h"
+#include "amiga/core.h"
 #include "amiga/frame.h"
 #include "amiga/irq.h"
 #include "machine/memory.h"
@@ -523,6 +524,12 @@ void amiga_bus_init(void)
     else
     {
         amiga_irq_init(rigel);
+        /*
+         * Ask for the chipset's core now. The secondary core reaches its entry
+         * point during Emu68's boot, and one that finds the flag clear parks
+         * for good -- so this cannot wait until something arms the clock.
+         */
+        amiga_core_enable();
         kprintf("[BELLATRIX:RIGEL] enabled; address decode owned by Rigel\n");
 #if defined(CONFIG_RIGEL_SELFTEST) && CONFIG_RIGEL_SELFTEST
         amiga_bus_selftest();

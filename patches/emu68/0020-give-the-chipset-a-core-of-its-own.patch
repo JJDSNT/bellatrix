@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Give the chipset a core of its own
+
+Every secondary core reaches the WFE at the end of secondary_boot() and
+stays there for the life of the machine: PISTORM_ANY_MODEL is not defined
+on this build, so three quarters of a Pi 3 is switched off.
+
+That matters because a chipset costing 250 ns per colour clock, against
+the 282 ns realtime wants, takes 88.7% of whatever core it shares. On one
+core a fast CPU and a realtime chipset cannot both exist. On two they can.
+
+Core 2, which is where upstream puts its own housekeeper on PiStorm
+builds. The entry point returns if Bellatrix does not want the core, and
+then this falls through to the same WFE as before.
+---
+ src/aarch64/start.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -488,6 +488,32 @@
+     (void)async_log;
+ #endif
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++    /*
++     * The chipset gets a core of its own.
++     *
++     * Without this every secondary core reaches the WFE below and stays there
++     * for the life of the machine: PISTORM_ANY_MODEL is not defined on this
++     * build, so three quarters of a Pi 3 is switched off. Meanwhile a chipset
++     * that costs 250 ns per colour clock, against the 282 ns realtime wants,
++     * takes 88.7% of whatever core it shares -- so on one core a fast CPU and
++     * a realtime chipset cannot both exist. On two they can, and the second
++     * one is already sitting here doing nothing.
++     *
++     * Core 2, which is where upstream puts its own housekeeper on PiStorm
++     * builds, so the placement is not a new claim about what is free.
++     *
++     * The entry point returns if Bellatrix does not want the core -- the
++     * chipset may not be enabled at run time -- and then this falls through to
++     * the same WFE as before. AI_context/issues/ISSUE-0074.md.
++     */
++    if (cpu_id == 2)
++    {
++        extern void bellatrix_chipset_core_entry(void);
++        bellatrix_chipset_core_entry();
++    }
++#endif
++
+     while(1) { __asm__ volatile("wfe"); }
+ }
+ uintptr_t vid_base;

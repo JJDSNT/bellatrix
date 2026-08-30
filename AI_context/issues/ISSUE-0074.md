@@ -160,3 +160,49 @@ Emu68's secondary cores park in `secondary_boot()`. Before any of the above can
 be written, one of them has to run our code at all -- a patch giving core 2 a
 Bellatrix entry point under `CONFIG_RIGEL`, and a serial line from it proving
 it arrived. Everything else builds on a core that is demonstrably ours.
+
+
+# 2026-08-30: the core is ours
+
+Patch `emu68/0020` hands core 2 to Bellatrix from `secondary_boot()`, and
+`src/amiga/core.c` receives it:
+
+```text
+[BOOT] Started CPU2
+[BELLATRIX:RIGEL] enabled; address decode owned by Rigel
+[BELLATRIX:RIGEL:CORE] core 2 is the chipset's
+```
+
+Core 2 because that is where upstream puts its own housekeeper on PiStorm
+builds, so the placement is not a new claim about which core is free.
+
+## The ordering trap, met immediately
+
+The first version tested the flag on arrival and returned if it was clear. It
+never fired, and the log says why: `Started CPU2` is the thirty-third line of
+the boot and `amiga_bus_init()` runs twenty-five lines later. **The secondary
+core reaches its entry point during Emu68's boot, before Bellatrix exists.**
+
+So the core waits to be wanted instead:
+
+```c
+while (!core_wanted)
+    __asm__ volatile("wfe" ::: "memory");
+```
+
+which is the same parking Emu68 would have done, so a machine that never wants
+the core is no worse off -- it simply never gets the SEV. Worth writing down
+because the comment warning about exactly this was already in the file when the
+bug was written.
+
+## What this is and is not
+
+It is a core that has been shown to arrive, which is what everything above it
+has to be written against. **The chipset has not moved yet.** Next, in order:
+
+1. the lock, with the conditional release legacy learned the hard way;
+2. the chipset loop itself on this core, paced by `CNTPCT_EL0` rather than by
+   published CPU cycles -- that is what makes the CPU core free rather than
+   merely less blocked;
+3. the seqlock beam snapshot, before any guest polls VHPOSR across cores;
+4. posted writes, if the rendezvous cost shows up where legacy says it will.
