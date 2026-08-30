@@ -686,3 +686,48 @@ waiter burns a core for at most that, and cannot be lost.
 **A wakeup that can be lost is worse than a core that spins for a millisecond**,
 and on this machine the second is measurable while the first is a boot that
 stops.
+
+
+# 2026-08-30: Wanderer, and a mouse the console broke
+
+```text
+[BootUI] [00:36.417] display takeover
+[BELLATRIX:RIGEL:PERF] 76002324 CCK in 19358 ms -> 254 ns/CCK, 110% of realtime
+```
+
+**The desktop, with the chipset live on a core of its own at realtime.** That
+is the architecture working end to end on hardware.
+
+The mouse does not. The log shows USB enumeration completing -- address 3
+assigned, descriptors read at len=9 and len=39, which is a HID sequence -- and
+then failing the status stage of a zero-length control transfer:
+
+```text
+irq #69 chan=0 stage=3 HCINT=00000010     NAK
+irq #70 chan=0 stage=3 HCINT=00000082     XACTERR
+irq #71 chan=0 stage=3 HCINT=00000082     XACTERR
+```
+
+The device NAKs, we re-arm, and the retry gets a transaction error.
+
+## It is the console sink, not the chipset
+
+The first instinct was to A/B against a chipset-less build. That is a wasted
+boot: **USB worked before the chipset existed**, so the baseline is already
+known and the change is ours. Asking hardware a question whose answer is
+already in hand is the same mistake as the earlier guesses, one step later.
+
+The mechanism is the sink. `[DWC2/Emu68:XFER]` prints several lines per
+transaction, and before the sink each `kprintf` blocked on the UART for about
+nine milliseconds -- **which rate-limited the USB driver without anyone asking
+it to**. With the sink, `kprintf` returns in microseconds, the driver runs
+orders of magnitude faster, and its post-NAK retry lost the accidental delay
+that was making it work.
+
+An accidental delay that a driver depends on is a defect in the driver, and it
+was always there. The console only stopped hiding it.
+
+`CONFIG_RIGEL_CONSOLE_SINK=0` keeps the chipset core and writes the console
+through, which discriminates: mouse working without the sink and not with it
+confirms the timing, and the fix then belongs in the USB driver -- honouring
+the interval after a NAK -- not in making the console slow again.

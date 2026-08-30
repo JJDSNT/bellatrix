@@ -21,6 +21,7 @@ set(BELLATRIX_ROOT ${CMAKE_SOURCE_DIR}/../..)
 option(CONFIG_RIGEL "Build Bellatrix with the Rigel classic chipset" ON)
 option(CONFIG_RIGEL_SELFTEST "Run the destructive Rigel clock acceptance test at boot" OFF)
 option(CONFIG_RIGEL_CHIPSET_CORE "Run the chipset on a core of its own" ON)
+option(CONFIG_RIGEL_CONSOLE_SINK "Buffer the console instead of writing through" ON)
 
 set(BELLATRIX_INCLUDE_DIRS
     ${BELLATRIX_ROOT}/src
