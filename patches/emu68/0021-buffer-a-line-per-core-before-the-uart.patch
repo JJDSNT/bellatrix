@@ -19,7 +19,21 @@ debugging with.
 diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 --- a/src/raspi/support_rpi.c
 +++ b/src/raspi/support_rpi.c
-@@ -120,22 +120,130 @@
+@@ -114,28 +114,158 @@
+ 
+ static inline void waitSerOUT(void *io_base)
+ {
+-    while(1)
++    /*
++     * Bounded. An unbounded wait on a peripheral means a wedged UART stops the
++     * machine, and a console that can stop the machine is worse than no
++     * console. The legacy tree bounds the same loop for the same reason.
++     */
++    unsigned spins = 1000000;
++
++    while (spins-- != 0)
+     {
+        if (CONSOLE_UART_CAN_WRITE(rd32le(CONSOLE_UART_FR))) break;
      }
  }
  
@@ -59,8 +73,7 @@ diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 + * of boot where the MMU may not be up.
 + */
 +#define CONSOLE_LINE_MAX 200
- 
--        if (chr == '\n')
++
 +static char console_line[4][CONSOLE_LINE_MAX];
 +static unsigned console_line_len[4];
 +volatile int console_multicore = 0;
@@ -72,7 +85,8 @@ diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 +    __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(mpidr));
 +    return (unsigned)(mpidr & 3);
 +}
-+
+ 
+-        if (chr == '\n')
 +static inline void console_emit(void *io_base, unsigned core)
 +{
 +    /*
@@ -133,16 +147,31 @@ diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
 +        return;
 +
 +    core = console_this_core();
++
++    /*
++     * The boot core is never buffered.
++     *
++     * Buffering hides a hang: a line only appears when it ends, so a core that
++     * stops mid-print leaves its last partial line invisible. That cost was
++     * written into this file's first version and then paid immediately -- a
++     * hardware boot appeared to stop one line earlier than it did, and the
++     * evidence of where it really stopped was sitting in a buffer.
++     *
++     * The legacy tree's answer was a direct mode for early boot, on the
++     * grounds that only one core runs then. Ours is stronger and simpler: the
++     * boot core is *always* direct, so where it stopped is always on the wire.
++     * Only the secondary cores buffer, and they are the rare printers, so the
++     * interleaving this exists to prevent is prevented anyway.
++     */
++    if (core == 0)
++    {
++        putRawByte(io_base, chr);
++        return;
++    }
++
 +    if (console_line_len[core] < CONSOLE_LINE_MAX)
 +        console_line[core][console_line_len[core]++] = chr;
 +
-+    /*
-+     * Flush on the newline, or when the buffer is full so an over-long line
-+     * still comes out rather than being silently truncated. A line that never
-+     * ends -- which is what a hang mid-print looks like -- stays buffered and
-+     * invisible; that is the cost, and it is why the buffer is flushed on
-+     * length as well.
-+     */
 +    if (chr == '\n' || console_line_len[core] == CONSOLE_LINE_MAX)
 +        console_emit(io_base, core);
 +}
