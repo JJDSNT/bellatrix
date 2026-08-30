@@ -331,6 +331,27 @@ for entry in "${ENTRIES[@]}"; do
     cp -al "$DIST/$entry" "$STAGE/$entry"
 done
 
+# BELLATRIX_DEMOREEL puts a drawer of extracted Demo Reel 3 files on the card.
+#
+# Not on every card, and not in the repository: the demo is commercial software
+# from 1989 and is not ours to redistribute. tools/demoreel/install.sh extracts
+# it from your own ADFs into out/, which is git-ignored, and this copies what is
+# there if you point at it.
+#
+# It goes in one drawer on purpose. The demo's own ToRAM assigns DemoReel3: and
+# DemoReelData: to the current directory when it finds Monument, so both disks
+# merged and run from that drawer need no assigns from us. ISSUE-0068 phase 4.
+if [ -n "${BELLATRIX_DEMOREEL:-}" ]; then
+    if [ ! -d "$BELLATRIX_DEMOREEL" ]; then
+        echo "ERROR: BELLATRIX_DEMOREEL=$BELLATRIX_DEMOREEL is not a directory" >&2
+        echo "       Run tools/demoreel/install.sh first." >&2
+        exit 1
+    fi
+    mkdir -p "$STAGE/DemoReel3"
+    cp -al "$BELLATRIX_DEMOREEL/." "$STAGE/DemoReel3/" 2>/dev/null ||         cp -a "$BELLATRIX_DEMOREEL/." "$STAGE/DemoReel3/"
+    echo "[sdcard] Demo Reel 3 on the card: $(find "$STAGE/DemoReel3" -type f | wc -l) files"
+fi
+
 # tests/ram-stress/ goes on every card, and nothing runs it.
 #
 # They are diagnostic scripts for ISSUE-0037, where the trigger happens four
