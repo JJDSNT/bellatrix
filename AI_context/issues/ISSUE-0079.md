@@ -170,3 +170,51 @@ Two ways to hand the guest that resolved mask without a bus cycle:
 
 The acknowledge still has to reach Rigel -- one write to `INTREQ` per
 dispatch -- and that is unavoidable and correct.
+
+
+## 2026-08-30, later: the crash is deterministic, and two hypotheses are out
+
+With Paula's interrupts delivered and gated, the machine boots to Wanderer
+(`[BootUI] [00:32.827] display takeover`) and the demo still dies in exactly
+the same place. Two runs, register for register:
+
+```text
+D0 = 0x00000061   A0 = 0x000060ca   A3 = A4 = 0x0203b81c
+A6 = 0x00000000   A7 = 0x02020608   PC = 0x00000000
+```
+
+Only the heap-dependent values move between runs (`A1`, `A5`, `D3`). `A6 = 0`
+with `PC = 0` is a call through a library or device base that is null.
+
+**Ruled out: no chip memory.** `boot.c` creates a second `MemHeader`, "Chip
+Memory" at `AMIGA_CHIP_RAM_ALLOC_BASE` with `MEMF_CHIP | MEMF_24BITDMA`, and
+enqueues it on `SysBase->MemList` whenever `bellatrix.rigel=1`. The machine map
+confirms the region: `$00000000-$001fffff DIRECT Chip RAM`.
+`AllocMem(MEMF_CHIP)` works, so `AudioBase->zerosample` is not the null.
+
+**Ruled out: the Paula interrupts were the missing chain.** They are delivered
+now and the crash is unchanged, so it is not a player waiting on a channel
+interrupt that never came.
+
+**Standing hypothesis.** `Slish` calls `OpenDevice("audio.device", ...)`, does
+not check the result, and then calls through `io_Device`. That fits `A6 = 0`
+exactly, and it fits the timing: the crash is the first thing after the
+device's own init and the period writes. `A0 = 0x000060ca` is a chip-RAM
+pointer, which is what an audio open's key array or sample would be.
+
+## The next step, and only this one
+
+Find the caller. `A7 = 0x02020608` and the `JSR` pushed a return address
+there, so the top few longwords of the stack name the code that made the call
+-- and with the ELF's load base at `0x30600000` that address resolves to a
+symbol the same way the liveness PC does.
+
+The dump belongs where the crash is already reported: Emu68 prints the whole
+context at `[JIT] Back from translated code` and has the mapping in hand.
+Reading guest memory from the chipset core instead is the wrong place --
+`host_phys` is physical and the guest's is virtual, and that trap has been
+paid for once already.
+
+Do not add another probe before this one. Today four investigations ended in
+the wrong place because an instrument was built in a hurry and its silence was
+read as evidence.
