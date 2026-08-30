@@ -53,7 +53,23 @@ static void amiga_bus_display_selftest(void);
  */
 static void amiga_frame_census(void)
 {
-    enum { AMIGA_CENSUS_REPORTS = 6, AMIGA_CENSUS_STRIDE = 7 };
+    /*
+     * Report when the picture *changes*, not for the first few frames.
+     *
+     * The old rule -- six reports and then silence -- says whether Denise is
+     * drawing during Emu68's boot, which is the one moment nothing is. By the
+     * time a guest opens a screen the census has been quiet for minutes, so a
+     * machine that starts rendering says nothing at all.
+     *
+     * The interesting event is the transition: a frame that was empty stops
+     * being empty, or stops again. That is "something started drawing" and
+     * "something stopped", and it is the whole question when the goal is to
+     * find out whether an application's output reached the chipset. A slow
+     * heartbeat underneath catches the case where it was already drawing.
+     */
+    enum { AMIGA_CENSUS_HEARTBEAT = 1000, AMIGA_CENSUS_STRIDE = 7 };
+    static uint32_t census_frames;
+    static uint8_t  census_was_drawing;
     rigel_frame_t frame;
     const uint32_t *row;
     uint32_t background;
@@ -62,17 +78,15 @@ static void amiga_frame_census(void)
     uint32_t sampled = 0;
     uint32_t x, y;
 
-    if (census_reports >= AMIGA_CENSUS_REPORTS)
-        return;
     if (!rigel_get_frame(rigel, &frame))
         return;
     if (frame.pixels == 0 || frame.width == 0 || frame.height == 0)
         return;
     if (frame.format != RIGEL_PIXEL_RGBA8888)
     {
-        census_reports = AMIGA_CENSUS_REPORTS;
-        kprintf("[BELLATRIX:RIGEL:CENSUS] unexpected pixel format %d\n",
-            (int)frame.format);
+        if (census_reports++ == 0)
+            kprintf("[BELLATRIX:RIGEL:CENSUS] unexpected pixel format %d\n",
+                (int)frame.format);
         return;
     }
 
@@ -97,6 +111,25 @@ static void amiga_frame_census(void)
             if (pixel != background)
                 non_background++;
         }
+    }
+
+    {
+        uint8_t drawing = non_background != 0;
+        uint8_t report = 0;
+
+        census_frames++;
+        if (drawing != census_was_drawing)
+        {
+            census_was_drawing = drawing;
+            report = 1;
+            kprintf("[BELLATRIX:RIGEL:CENSUS] %s\n",
+                drawing ? "something is drawing" : "the picture went empty");
+        }
+        else if (census_frames % AMIGA_CENSUS_HEARTBEAT == 0)
+            report = 1;
+
+        if (!report)
+            return;
     }
 
     census_reports++;
