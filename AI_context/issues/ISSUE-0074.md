@@ -564,3 +564,59 @@ core:
 
 That is one experiment with three distinguishable outcomes, which is worth more
 than another guess at the code.
+
+
+# 2026-08-30: instrument the boundary instead of guessing at it
+
+The A/B pair was built to find out *which* of two changes broke the boot. That
+is the wrong question when the suspect boundary can simply be watched, and
+watching it corrected the hypothesis within one QEMU run.
+
+`src/amiga/irq.c` now reports both ends, bounded:
+
+```text
+[BELLATRIX:IRQ] pub <old> -> <new> intena=<...> intreq=<...>
+[BELLATRIX:IRQ] ask <level>
+[BELLATRIX:IRQ] stuck level <n> asked <n> times
+```
+
+`stuck` exists because **an interrupt that arrives and is never serviced looks
+identical, from outside, to one that never arrives**, and they have nothing in
+common as defects. It reports at powers of two so a level that is never cleared
+says so without becoming the log.
+
+## What it said immediately, without hardware
+
+**Zero.** No IPL transition, ever, in a QEMU boot where `amigavideo.hidd` loads
+and its init **returns after 3221 ms**. So:
+
+- QEMU does not reproduce the hardware hang -- the init completes there;
+- and the chipset raises no interrupt at all, in a boot that completes.
+
+That kills the hypothesis this was heading for. "amigavideo waits for an
+interrupt that never comes" cannot be it, because in QEMU no interrupt comes
+either and it finishes anyway. Whatever hangs on hardware is something else,
+and an afternoon of reading `initcustom()` for interrupt bugs would have been
+spent on the wrong function.
+
+The blank frames and `flags=00` in the census are consistent and not a defect:
+`AddDisplayDriver()` registers the driver, it does not open a screen on it, so
+nothing programs bitplanes or a copper list until something does.
+
+## Why QEMU keeps missing these, specifically
+
+Worth listing, because every failure this session has been in one of them:
+
+- **`WFE` is a no-op under TCG.** The console drainer waited on an event that
+  was never sent and woke anyway under QEMU. It surfaced only on hardware --
+  and only in the build without a chipset core, because the chipset core's
+  enable happened to send an event that woke the drainer by accident.
+- **Cache coherency is perfect.** Every core's write is instantly visible, so
+  races on shared state do not manifest.
+- **There is no real time.** A lock held 20 ms on hardware costs nothing here.
+- **There is no real UART.** The nine milliseconds a line takes at 115200 baud
+  -- which is what made `print_lock` catastrophic -- do not exist.
+
+**QEMU can prove a multicore change wrong and cannot prove it right.** It is
+still worth running: it caught the interleaving and it priced the lock budget
+at 181 lines against 350.
