@@ -373,17 +373,31 @@ TRACE
     fi
 fi
 
-# BELLATRIX_CHIPSET_DISPLAY=0 leaves the classic display driver off the card.
+# The classic display driver is off the card unless asked for.
 #
 # Not the same as not building it. amigavideo.hidd is inert on its own; what
-# starts it is DEVS:Monitors/AmigaVideo, which AROSMonDrvs runs at boot, and
-# from that point cia.resource's init starts a CIA timer and the chipset runs
-# for the rest of the boot at about 4x the cost. A card meant to prove the
-# render path cheaply -- compose a known frame, park the clock, boot at normal
-# speed -- must not carry the monitor. ISSUE-0068.
-if [ "${BELLATRIX_CHIPSET_DISPLAY:-1}" = 0 ]; then
+# starts it is DEVS:Monitors/AmigaVideo, which AROSMonDrvs runs at boot. From
+# that point AROS draws through Denise -- and nothing presents Denise
+# automatically. The panel holds whatever the VideoCore last scanned out, the
+# boot clock stops, and the machine runs correctly and invisibly. It has been
+# read as a hang three times now, most recently on a card this script built
+# with the default the other way round.
+#
+# The cost is not only visual. cia.resource's init starts a CIA timer and the
+# chipset then runs for the whole boot; a boot that reaches Wanderer in under
+# a minute took over two and a half with the monitor present, and the card
+# dropped from 1173 to 178 KB/s in the same run.
+#
+# So the default is off, and it stays off until something puts Denise on the
+# panel without being asked. `DeniseView SHOW` is that presenter today and it
+# is a command someone has to type. BELLATRIX_CHIPSET_DISPLAY=1 puts the
+# monitor back for the boot that is testing exactly this. ISSUE-0068,
+# ISSUE-0073.
+if [ "${BELLATRIX_CHIPSET_DISPLAY:-0}" = 0 ]; then
     rm -f "$STAGE/Devs/Monitors/AmigaVideo"
     echo "[sdcard] classic chipset display driver left off the card"
+else
+    echo "[sdcard] classic chipset display driver ON -- expect a blank panel"
 fi
 
 # BELLATRIX_DEMOREEL puts a drawer of extracted Demo Reel 3 files on the card.
