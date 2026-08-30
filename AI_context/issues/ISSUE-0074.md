@@ -271,3 +271,76 @@ number.
 
 Both are optimisations of a path that now works. Neither should be written
 before a hardware measurement says the path is worth optimising.
+
+
+# 2026-08-30: hardware said it hangs, and reading found three reasons
+
+Pack C on the Pi, three runs, identical: the chipset core arrives, the clock
+arms, **one** `PERF` line reports 250 ns/CCK at 112% of realtime -- and then
+both cores stop. One report per run, where the report fires every four million
+colour clocks, means the chipset core stopped too. A deadlock, not slowness.
+
+QEMU never reproduced it. What follows was found by reading, and the first is
+the one that mattered.
+
+## 1. The CPU core was reading Rigel without the lock
+
+`amiga_irq_sync()` calls `rigel_get_ipl()`, and it was called from the MMIO
+path on the CPU core -- outside the lock, while the chipset core was inside
+`rigel_step()`. Worse, `amiga_irq_get_ipl()` did the same and is called by
+Emu68's `ExecutionLoop` **on every interrupt arbitration**.
+
+So the fix is legacy's beam-snapshot lesson generalised: **publish, do not
+reach across.** The owner writes the resolved level into an atomic; the CPU
+core reads a word and never touches Rigel. The level is stored before the gate,
+so a core that sees the gate set finds the level already there.
+
+## 2. The CPU core was writing the chipset core's clock state
+
+`amiga_clock_observe()` runs on the CPU core and reset `wall_last`,
+`wall_remainder` and `pending_cck` when it armed the clock -- exactly the words
+the chipset core is inside `amiga_clock_advance_wall()` reading and writing.
+The visible result is not a crash but a wrong elapsed time: one huge delta,
+clamped to the catch-up cap, and a chipset core that then holds the lock for a
+frame of work. The chipset core initialises its own reference on first use, so
+there was nothing to hand it.
+
+## 3. The chipset core held the lock for a whole drain
+
+`amiga_clock_consume(1)` empties the backlog, which the cap allows to be 80000
+colour clocks -- **20 ms at the measured 250 ns each**. Every MMIO the CPU
+issued waited up to 20 ms. That is not a deadlock and is indistinguishable from
+one at a serial console. Now: one quantum per acquisition, and the CPU gets in
+between them.
+
+## What QEMU says about the fixes
+
+```text
+before: 181 lines in 115 s, never reaching STARTING SERVICES
+after:  350 lines in 110 s, STARTING SERVICES at line 229, the framebuffer
+        retargeted, MUI classes loading
+```
+
+Nearly twice as far in the same wall time, with the chipset live. QEMU could
+not reproduce the hang and can still measure the cost of holding a lock too
+long.
+
+## The log, and what legacy says about it
+
+The pack C log contains this:
+
+```text
+[ELF Loader] exec section 1 at 0x042[BELLATRIX:RIGEL:PERF] 4000421 CCK ...
+```
+
+Two cores in `putByte()`, which is a bare busy-wait on the UART with no lock.
+Corruption, not a hang -- but legacy has a hardware-confirmed note that direct
+`kprintf` during heavy bus activity corrupts the mini-UART **non
+deterministically**, and its answer was a deferred console with one drainer.
+
+Emu68 already has that mechanism: `q_push`/`q_pop` and `serial_writer()` on
+core 1, reached by the `async_log` boot argument. It is inside
+`#ifdef PISTORM_ANY_MODEL`, so our build takes the plain busy-wait `putByte`
+instead. **Bringing it into our path is the right fix and is not written yet**;
+it would also take the UART wait off both the CPU and the chipset cores, and it
+uses a core that is otherwise parked.

@@ -435,10 +435,26 @@ static void amiga_clock_observe(uint32_t address, int write)
          * asynchronous work. Start its time domain here rather than replaying
          * the whole CPU boot as an expensive catch-up burst.
          */
-        pending_cck = 0;
-        cpu_cycle_remainder = 0;
-        wall_last = amiga_perf_now();
-        wall_remainder = 0;
+        /*
+         * Only the owner touches the clock's own state.
+         *
+         * This runs on the CPU core, and when the chipset has a core of its
+         * own that core is inside amiga_clock_advance_wall() reading and
+         * writing exactly these words. Resetting wall_last from here races it,
+         * and the visible result is not a crash but a wrong elapsed time --
+         * one huge delta, clamped to the catch-up cap, and then a chipset core
+         * that holds the lock for a whole frame of work while the CPU waits.
+         *
+         * The chipset core initialises its own reference on first use, so
+         * there is nothing to hand it.
+         */
+        if (!amiga_core_owns_chipset())
+        {
+            pending_cck = 0;
+            cpu_cycle_remainder = 0;
+            wall_last = amiga_perf_now();
+            wall_remainder = 0;
+        }
         chipset_observed = 1;
         /*
          * Tell the CPU that idling now has a cost. A stopped m68k retires no
@@ -579,8 +595,10 @@ static uint32_t amiga_bus_read(const MachineRegion *region, uint32_t address,
     amiga_clock_observe(address, 0);
     amiga_core_lock_acquire();
     result = rigel_mmio_read(rigel, address, (rigel_u8)size, &value);
+    /* Only the owner may ask Rigel for the level; see src/amiga/irq.c. */
+    if (!amiga_core_owns_chipset())
+        amiga_irq_sync();
     amiga_core_lock_release();
-    amiga_irq_sync();
 
     if (result == RIGEL_MMIO_UNSUPPORTED)
     {
@@ -608,8 +626,9 @@ static void amiga_bus_write(const MachineRegion *region, uint32_t address,
     amiga_clock_observe(address, 1);
     amiga_core_lock_acquire();
     result = rigel_mmio_write(rigel, address, (rigel_u8)size, value);
+    if (!amiga_core_owns_chipset())
+        amiga_irq_sync();
     amiga_core_lock_release();
-    amiga_irq_sync();
     if (result == RIGEL_MMIO_UNSUPPORTED && !unsupported_reported)
     {
         unsupported_reported = 1;
@@ -823,9 +842,29 @@ void amiga_clock_run_on_core(void)
             kprintf("[BELLATRIX:RIGEL:CORE] chipset running here now\n");
         }
 
+        /*
+         * One quantum per acquisition, not a whole drain.
+         *
+         * amiga_clock_consume(1) empties the backlog, which the catch-up cap
+         * allows to be 80000 colour clocks -- 20 ms of work at the measured
+         * 250 ns each. Holding the lock across that makes every MMIO the CPU
+         * issues wait up to 20 ms, which is not a deadlock and is
+         * indistinguishable from one at a serial console.
+         *
+         * So take the lock for a step and give it back. The CPU gets in
+         * between quanta, which is what the quantum is for.
+         */
         amiga_core_lock_acquire();
         amiga_clock_advance_wall();
-        amiga_clock_consume(1);
+        if (pending_cck != 0)
+        {
+            rigel_cycle_t quantum = amiga_clock_quantum();
+
+            if (pending_cck < quantum)
+                quantum = (rigel_cycle_t)pending_cck;
+            amiga_clock_step(quantum);
+            pending_cck -= quantum;
+        }
         amiga_core_lock_release();
     }
 }
