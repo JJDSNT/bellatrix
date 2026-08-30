@@ -218,3 +218,25 @@ paid for once already.
 Do not add another probe before this one. Today four investigations ended in
 the wrong place because an instrument was built in a hurry and its silence was
 read as evidence.
+
+
+### The dump is in (`0cb9d4f`, `patches/emu68/0023`)
+
+`start.c` prints eight longwords from A7 beside the register dump it already
+produced. The return address the JSR pushed is among them: in the
+`0x306xxxxx` range it belongs to the AROS ELF and resolves against
+`0x30600000`; in the heap (`0x02xxxxxx`, `0x07xxxxxx`) it belongs to `Slish`
+itself or to a loaded module, and the question becomes which.
+
+### On using the Rigel harness as an oracle
+
+Worth doing, and not for this question. `Slish` is not a bootblock -- it is a
+Workbench program that opens intuition, dos and graphics -- so the harness
+would need a Kickstart and an AmigaOS above it to run at all, and having no
+Kickstart is this port's premise. The harness runs the chipset, not the
+operating system.
+
+Where it does earn its keep is the step after: once the demo runs, comparing
+frame by frame what Denise and Paula should be doing against what they do
+here. That is exactly an oracle, and it is how ISSUE-0071 already treats bus
+timing.
