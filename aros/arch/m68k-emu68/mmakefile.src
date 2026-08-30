@@ -53,7 +53,27 @@ include $(SRCDIR)/config/aros.cfg
 # The Startup-Sequence needs no change either way. Its USB block is guarded on
 # DEVS:USBHardware/dwc2emu68.device existing.
 #
-#MM- kernel-usb-m68k-emu68 : kernel-usb-nopci kernel-usb-dwc2emu68
+# THE DRIVER ON THE CARD IS usb2otg, AND THAT CHANGED ON 2026-08-30.
+#
+# dwc2emu68 is the Bellatrix rewrite (ISSUE-0047) and it was the default all
+# day. It is not, today, good enough to be the machine's only USB: with it the
+# boot stops about eight seconds in and the desktop is never reached. Two
+# defects were found and fixed in it during that day -- a NAK retry that
+# re-armed a channel the core had not released, and a handler that never
+# cleared the core interrupts it does not dispatch, which storms the m68k
+# until no task is ever scheduled again -- and a third is still open: a
+# control SETUP to a device behind the hub completes and its data stage is
+# never armed.
+#
+# usb2otg is the AROS engine this port inherited. Swapping it in was the
+# experiment that separated "the machine is broken" from "our driver is
+# broken", and with it the machine boots and the mouse works. It answers a
+# question ours cannot yet: what correct looks like on this silicon.
+#
+# So it takes the card while ours is finished. Both still build -- that is the
+# whole reason two exist -- and switching back is this line.
+#
+#MM- kernel-usb-m68k-emu68 : kernel-usb-nopci kernel-usb-arosotg
 
 # rom/ and workbench/ select the Bluetooth stack the same way, through
 # kernel-bluetooth-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU), and this target
