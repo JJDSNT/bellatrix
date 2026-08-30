@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0076
 title: "A USB mouse enumerates and is never asked for its interrupt pipe"
-status: open
+status: resolved
 priority: high
 type: defect
 owner: unassigned
@@ -130,3 +130,44 @@ one boot: it prints the registered classes, `PsdDevLister`'s topology with its
 bindings, and Poseidon's own error log -- `hub.class` writes "New device '%s'
 at port %ld" through `psdAddErrorMsg()` for every device it configures, and
 every failure on the way there writes a line too.
+
+# Resolved 2026-08-30
+
+Three defects, in the order they were found.
+
+**`40b80e8` -- the channel was not stopped before a NAK retry.** A NAK
+arrives as `HCINT=0x10` without CHHLTD, so the channel is still enabled and
+the re-arm wrote CHENA on a channel the core had not released; the BCM2837
+answered XACTERR. Confirmed: `irq #69 HCINT=00000010` is now followed by
+`irq #70 HCINT=00000023`.
+
+**`fa66c1b` -- the classes raced the host controller.** `Run AddUSBClasses`
+is asynchronous and this Startup-Sequence adds the controller by hand ninety
+lines later. `psdAddClass()` does not rescan, so whichever won decided
+whether hid.class existed when the mouse was enumerated -- which is why the
+mouse worked on one boot and not the next. `patches/aros/0089` makes the
+registration synchronous. Confirmed: 28 `Skipping class` lines and, from
+Poseidon itself, `hid.class: HID the road, '2.4G Wireless Receiver'!`.
+
+**`1492196` -- the unit task ran at priority 0.** The periodic schedule is
+re-armed in the task, and at priority 0 it sat level with Wanderer while
+Poseidon's own subtasks ran at 5. A 10 ms endpoint was serviced 0 to 37 ms
+late; the pointer jumped. At 10 the re-arm lands on the due frame:
+
+```text
+NAK #1 frame=234 due=236   SOF #1 frame=236
+NAK #7 frame=275 due=277   SOF #7 frame=277
+```
+
+**`4b4f580` was not a fix, it was the reason two of these took so long.**
+The trace budget was 40 lines per device address and enumeration spent all
+of them on endpoint 0, so the log went silent exactly where the device
+started being used. That silence was read as evidence twice.
+
+# Left open elsewhere
+
+The console sink drops every second byte when two producers write at once
+(`src/amiga/console.c`). It corrupts diagnostics, not behaviour --
+`PsdDevLister` came back as `" oednDvD  Hb d=00PD00-..."`, which is
+`"  Poseidon DevID  : 'Hub: Vdr=0424/PID=9514-..."` with the even-indexed
+characters gone.
