@@ -124,16 +124,32 @@ static BOOL frame_due(ULONG now, ULONG due)
     return ((now - due) & DWC2_FRAME_MASK) < 0x0400UL;
 }
 
+/*
+ * Start-of-frame, only while something is waiting for it.
+ *
+ * This ignored its argument and left SOF unmasked for the life of the
+ * machine -- bring-up scaffolding, kept because the established BCM2708
+ * driver runs that way. On a Pi that is an ARM handler at 8 kHz. Here every
+ * one of them is an m68k level-6 exception through the JIT, and once the
+ * mouse's interrupt pipe started running the CPU could no longer get out from
+ * under them: it spun in supervisor mode at IPL 6, no task was ever
+ * scheduled again, the boot clock stopped, and every other core carried on
+ * logging. That is the hang that cost this afternoon, and bounding the
+ * dispatch loop did not touch it -- the loop was finishing every time; there
+ * were simply too many entries.
+ *
+ * So honour the argument. With nothing periodic queued the mask goes away
+ * entirely, which is most of a boot.
+ */
 static void set_sof_irq(struct DWC2Unit *unit, BOOL enabled)
 {
     struct DWC2Device *device = unit->device;
     ULONG mask = dwc2_readl(device, DWC2_GINTMSK);
 
-    (void)enabled;
-    /* Keep SOF running while hardware bring-up is being validated.  The
-     * established BCM2708 driver operates this way, and correctness on the
-     * OT2.80a core takes precedence over deadline-driven IRQ masking here. */
-    mask |= DWC2_GINTSTS_SOF;
+    if (enabled)
+        mask |= DWC2_GINTSTS_SOF;
+    else
+        mask &= ~DWC2_GINTSTS_SOF;
     dwc2_writel(device, DWC2_GINTMSK, mask);
 }
 
@@ -162,7 +178,19 @@ static void update_sof_irq(struct DWC2Unit *unit)
     }
     unit->periodic_due = best_due;
     unit->periodic_waiting = best_delta <= DWC2_FRAME_MASK;
-    set_sof_irq(unit, unit->periodic_waiting);
+    /*
+     * Not "something is queued" -- "something is due now or next frame".
+     *
+     * A 10 ms endpoint parked ten frames out does not need to be told about
+     * the nine frames in between, and asking costs 8000 exceptions a second.
+     * The watchdog runs every 10 ms and calls back through here, so the last
+     * frame is picked up there and SOF is armed for the one frame that
+     * matters.
+     *
+     * A split in flight is the exception: its complete-split is paced in
+     * microframes and only the SOF handler can issue it.
+     */
+    set_sof_irq(unit, unit->split_pacing != 0 || best_delta <= 1);
 }
 
 /*

@@ -248,7 +248,15 @@ void DWC2_FNAME(UnitTask)(struct DWC2Unit *unit)
         {
             dwc2_controller_drain_irq(unit);
         }
-        if (!dwc2_transfer_idle(unit) && !unit->watchdog_active)
+        /*
+         * A parked periodic owns no channel, so "idle" is true while the
+         * mouse is between polls -- and with SOF now masked until the due
+         * frame, the watchdog is the only thing that comes back to look.
+         * Arm it while anything is queued, not only while a channel is busy.
+         */
+        if ((!dwc2_transfer_idle(unit) ||
+             unit->periodic_queue.lh_Head->ln_Succ != NULL) &&
+            !unit->watchdog_active)
             dwc2_watchdog_arm(unit);
     }
 }
