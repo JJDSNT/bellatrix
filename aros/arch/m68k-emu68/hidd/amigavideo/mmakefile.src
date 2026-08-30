@@ -1,0 +1,57 @@
+include $(SRCDIR)/config/aros.cfg
+
+#
+# The classic chipset display driver, built for this target.
+#
+# The sources are upstream's, in arch/m68k-amiga/hidd/amigavideo, and are not
+# copied or patched: this file only builds them under a metatarget of ours and
+# adds the DEVS:Monitors loader they need here. Upstream links the driver into
+# the ROM (the KHIDDS list in arch/m68k-amiga/boot/mmakefile.src) because on a
+# real Amiga it is the display; on this machine it is one display driver among
+# two, so it is installed from disk the way vcgfx is.
+#
+# Why it exists here at all: without a native chipset display driver,
+# graphics.library draws through vcgfx into a VideoCore framebuffer and Denise
+# is never given anything to render. A well-behaved AmigaOS application then
+# runs entirely past the chipset -- which is the gap ISSUE-0068 is about.
+#
+# Note what is *not* here yet: arch/m68k-amiga/graphics/ also overrides
+# vbeampos, waitblit, setchiprev and bltclear, and this target uses the generic
+# rom/graphics/ versions. The generic WaitBlit() is an empty stub, so a program
+# driving the blitter through graphics.library will not wait for it. That has
+# to be adopted alongside; see the spike in AI_context/issues/ISSUE-0068.md.
+#
+
+AVDIR := $(SRCDIR)/arch/m68k-amiga/hidd/amigavideo
+
+FILES := \
+    $(AVDIR)/startup \
+    $(AVDIR)/amigavideo_chipset \
+    $(AVDIR)/amigavideo_blitter \
+    $(AVDIR)/amigavideo_hiddclass \
+    $(AVDIR)/amigavideo_compositorclass \
+    $(AVDIR)/amigavideo_bitmapclass
+
+USER_INCLUDES := -I$(AVDIR) -I$(AVDIR)/include
+
+USER_CPPFLAGS += \
+               -D__OOP_NOATTRBASES__ \
+               -D__OOP_NOMETHODBASES__ \
+               -D__OOP_NOLIBBASE__ \
+               -D__GRAPHICS_NOLIBBASE__ \
+               -D__UTILITY_NOLIBBASE__ \
+               -D__GRAPHICS_NOHIDDBASE__
+
+MONITORDIR := $(AROSDIR)/Devs/Monitors
+
+%build_module mmake=kernel-m68k-emu68-amigavideo \
+  modname=amigavideo modtype=hidd \
+  conffile=$(AVDIR)/amigavideo.conf \
+  files="$(FILES)" \
+  uselibs="hiddstubs"
+
+%build_prog mmake=kernel-m68k-emu68-amigavideo-monitor \
+  progname=AmigaVideo targetdir=$(MONITORDIR) \
+  files=disk_startup
+
+%common

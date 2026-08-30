@@ -574,6 +574,21 @@ make "$METATARGET"
 if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     echo "[aros] building the disk-installed drivers"
     make kernel-m68k-emu68-vcgfx
+
+    # The classic chipset display driver, so graphics.library can draw through
+    # Denise instead of through the VideoCore framebuffer. Upstream's sources,
+    # built under a metatarget of ours -- see
+    # arch/m68k-emu68/hidd/amigavideo/mmakefile.src. It registers with
+    # DDRV_KeepBootMode, so it is added beside the VideoCore rather than
+    # replacing it: two display drivers, which is what makes a display source
+    # switch possible (ISSUE-0068).
+    make kernel-m68k-emu68-amigavideo
+    make kernel-m68k-emu68-amigavideo-monitor
+
+    # The viewer for what the chipset drew. Reads the frame aperture Bellatrix
+    # publishes at $01000000; the census it prints is meant to be compared with
+    # the one Bellatrix prints on its own side.
+    make workbench-c-emu68-deniseview
     make kernel-bthciuart
 
     # S:Startup-Sequence, because a patch to it otherwise never reaches a card.
