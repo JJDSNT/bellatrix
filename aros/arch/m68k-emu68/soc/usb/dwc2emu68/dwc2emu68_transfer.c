@@ -50,6 +50,19 @@
  * before the interesting part is worse than none: it looks like data.
  */
 #define DWC2_TRANSFER_LOG_LIMIT 40
+/*
+ * ...and then one line in every 256, for ever.
+ *
+ * A budget that stops for good cannot tell a device that went quiet from a
+ * log that filled up, and this one has produced a false silence four times in
+ * one day -- each time read as evidence that a transfer had stopped, twice
+ * after it had already been half-fixed. Raising the cap only moves the lie.
+ * A heartbeat removes it: the trace thins out instead of ending, and an
+ * absence means something again.
+ */
+#define DWC2_TRANSFER_LOG_EVERY 256
+#define DWC2_TRANSFER_LOG_WANTED(n) \
+    ((n) < DWC2_TRANSFER_LOG_LIMIT || (n) % DWC2_TRANSFER_LOG_EVERY == 0)
 
 /* The account a line is drawn from: endpoint 0 and the data endpoints keep
  * separate budgets, so enumeration cannot spend what the interrupt endpoint
@@ -601,7 +614,7 @@ static BOOL arm(struct DWC2Unit *unit, struct DWC2Channel *chan, BOOL input,
         dwc2_readl(device, DWC2_GINTMSK) | DWC2_GINTSTS_HCHINT);
     if (endpoint_type == DWC2_HCCHAR_EPTYPE_CONTROL)
         wait_control_window(device);
-    if (*DWC2_LOG_BUDGET(unit, chan->request) < DWC2_TRANSFER_LOG_LIMIT)
+    if (DWC2_TRANSFER_LOG_WANTED(*DWC2_LOG_BUDGET(unit, chan->request)))
         bug("[DWC2/Emu68:XFER] arm chan=%u stage=%u CHAR=%08lx TSIZ=%08lx "
             "SPLT=%08lx NPTX=%08lx HFNUM=%08lx\n", chan->index, chan->stage,
             dwc2_readl(device, DWC2_HCCHAR(chan->index)),
@@ -802,9 +815,9 @@ static BOOL submit_on(struct DWC2Unit *unit, struct DWC2Channel *chan,
          * hardware layer and leave no trace at all, and a transfer that was
          * never printed is indistinguishable from one that was never made.
          */
-        if (*DWC2_LOG_BUDGET(unit, ioreq) < DWC2_TRANSFER_LOG_LIMIT)
+        (*DWC2_LOG_BUDGET(unit, ioreq))++;
+        if (DWC2_TRANSFER_LOG_WANTED(*DWC2_LOG_BUDGET(unit, ioreq)))
         {
-            (*DWC2_LOG_BUDGET(unit, ioreq))++;
             bug("[DWC2/Emu68:XFER] refused cmd=%u addr=%u ep=%u len=%lu "
                 "exceeds the %lu byte channel buffer\n",
                 ioreq->iouh_Req.io_Command, ioreq->iouh_DevAddr,
@@ -816,9 +829,9 @@ static BOOL submit_on(struct DWC2Unit *unit, struct DWC2Channel *chan,
     chan->request = ioreq;
     chan->retries = 0;
     chan->xact_errors = 0;
-    if (*DWC2_LOG_BUDGET(unit, ioreq) < DWC2_TRANSFER_LOG_LIMIT)
+    (*DWC2_LOG_BUDGET(unit, ioreq))++;
+    if (DWC2_TRANSFER_LOG_WANTED(*DWC2_LOG_BUDGET(unit, ioreq)))
     {
-        (*DWC2_LOG_BUDGET(unit, ioreq))++;
         unit->transfer_log_count++;
         bug("[DWC2/Emu68:XFER] submit #%u chan=%u cmd=%u addr=%u ep=%u "
             "len=%lu interval=%u\n", unit->transfer_log_count, chan->index,
@@ -1228,9 +1241,9 @@ static void channel_irq(struct DWC2Unit *unit, struct DWC2Channel *chan,
 
     if (ioreq == NULL)
         return;
-    if (*DWC2_LOG_BUDGET(unit, ioreq) < DWC2_TRANSFER_LOG_LIMIT)
+    (*DWC2_LOG_BUDGET(unit, ioreq))++;
+    if (DWC2_TRANSFER_LOG_WANTED(*DWC2_LOG_BUDGET(unit, ioreq)))
     {
-        (*DWC2_LOG_BUDGET(unit, ioreq))++;
         unit->transfer_log_count++;
         bug("[DWC2/Emu68:XFER] irq #%u chan=%u stage=%u HCINT=%08lx "
             "HCTSIZ=%08lx HCCHAR=%08lx HFNUM=%08lx\n",

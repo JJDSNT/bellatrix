@@ -155,7 +155,7 @@ struct DWC2Unit
      * cannot be exhausted on somebody else's behalf: a device enumerating
      * late arrives with its own.
      */
-    UBYTE                   transfer_log[128];
+    ULONG                   transfer_log[128];
     /*
      * ...and one account per address for everything that is not endpoint 0.
      *
@@ -166,7 +166,7 @@ struct DWC2Unit
      * that way twice. Endpoint 0 can no longer spend what the data endpoints
      * need.
      */
-    UBYTE                   transfer_log_ep[128];
+    ULONG                   transfer_log_ep[128];
     UBYTE                   transfer_log_count;
     UBYTE                   watchdog_log_count;
     /* Channels waiting out a paced complete-split. Written by the unit
