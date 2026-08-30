@@ -229,6 +229,14 @@ not modified. The upstream record is Rigel `AI_context/issues/ISSUE-0005.md`.
 
 # 2026-08-29: clock slice implemented, idle policy validated
 
+> **Both patches named in this section were deleted on 2026-08-30 (`50ede60`).**
+> Chipset time is wall-clock on a core of its own, so nothing wants a modelled
+> cycle count: `emu68/0017` cost three ARM instructions per translated m68k
+> instruction to keep one, and `emu68/0019` kept a stopped CPU spinning so it
+> would keep moving. `EMIT_STOP` parks in WFE again and the chipset core's IPL
+> assert sends the event. What follows is why they existed, not what is built.
+
+
 The first clock slice is now implemented in the working tree:
 
 - Emu68 patch `0017-publish-modeled-cpu-progress-to-the-machine.patch`
