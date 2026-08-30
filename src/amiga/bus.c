@@ -707,6 +707,54 @@ const MachineRegionOps amiga_bus_ops =
 };
 
 #if defined(CONFIG_RIGEL_SELFTEST) && CONFIG_RIGEL_SELFTEST
+/*
+ * Wait for the chipset to reach a point in its own time.
+ *
+ * Both selftests below used to say "publish N CPU cycles" and read the answer
+ * on the next line. That worked while chipset time was minted from CPU cycles
+ * by the very thread that published them. It is not any more: the chipset runs
+ * against the wall on a core of its own (ISSUE-0075), so publishing progress
+ * advances nothing and the read lands wherever the other core happens to be.
+ *
+ * Every FAIL these tests reported after that change was this and not the
+ * hardware -- the beam had moved, the CIA had counted, INTREQ held VERTB and
+ * the IPL was 3 in all of them; only "time >= 1000" was short, at 877 to 950.
+ * The display test was worse off, because it is silent: it composed 33112 CCK
+ * in one boot and 397440 in another, so the frame it left in the aperture was
+ * half a picture one time and six pictures the next, and the census had no way
+ * to say which.
+ *
+ * So ask for the time and wait for it. A ceiling in real time keeps a chipset
+ * that is genuinely stuck from hanging the boot instead of reporting.
+ */
+static rigel_cycle_t amiga_selftest_time(void)
+{
+    rigel_cycle_t now;
+
+    amiga_core_lock_acquire();
+    now = rigel_get_time(rigel);
+    amiga_core_lock_release();
+    return now;
+}
+
+static rigel_cycle_t amiga_selftest_wait_cck(rigel_cycle_t target,
+    uint32_t timeout_ms)
+{
+    uint64_t freq, deadline;
+    rigel_cycle_t now;
+
+    __asm__ volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq));
+    deadline = amiga_perf_now() + (freq / 1000ull) * (uint64_t)timeout_ms;
+
+    for (;;)
+    {
+        now = amiga_selftest_time();
+        if (now >= target || amiga_perf_now() >= deadline)
+            return now;
+        __asm__ volatile("yield");
+    }
+}
+
 static void amiga_bus_selftest(void)
 {
     enum
@@ -731,7 +779,7 @@ static void amiga_bus_selftest(void)
     amiga_bus_write(0, CIAA_CRA, 1, 0x11u); /* force load + start */
     beam_before = amiga_bus_read(0, CUSTOM_VHPOSR, 2);
 
-    bellatrix_emu68_publish_cpu_progress(2000u); /* 1000 CCK */
+    amiga_selftest_wait_cck(1000u, 500u);
 
     beam_after = amiga_bus_read(0, CUSTOM_VHPOSR, 2);
     timer_after = amiga_bus_read(0, CIAA_TALO, 1);
@@ -847,10 +895,26 @@ static void amiga_bus_display_selftest(void)
     amiga_bus_write(0, CUSTOM_COPJMP1, 2, 0x0000u);
 
     /*
-     * Two frames' worth of colour clocks, so a whole frame is composed with
-     * the display already programmed rather than half-way through it.
+     * Two whole PAL frames, so the aperture holds a complete picture composed
+     * with the display already programmed -- not the front of one.
+     *
+     * 227 colour clocks a line, 312 lines a frame. Counted in the chipset's
+     * own time, because that is the only clock that says whether a frame
+     * happened; two seconds is a generous ceiling for 141648 CCK at the rate
+     * this machine actually runs, about three million a second.
      */
-    bellatrix_emu68_publish_cpu_progress(last_cpu_cycles + 300000u);
+    {
+        enum { PAL_CCK_PER_FRAME = 227u * 312u };
+        rigel_cycle_t start = amiga_selftest_time();
+        rigel_cycle_t want = start + 2u * PAL_CCK_PER_FRAME;
+        rigel_cycle_t reached = amiga_selftest_wait_cck(want, 2000u);
+
+        if (reached < want)
+            kprintf("[BELLATRIX:RIGEL:DISPLAY] only %llu of %u CCK in 2 s; "
+                    "the frame below is incomplete\n",
+                (unsigned long long)(reached - start),
+                (unsigned)(2u * PAL_CCK_PER_FRAME));
+    }
 
     kprintf("[BELLATRIX:RIGEL:DISPLAY] %llu CCK stepped; census above\n",
         (unsigned long long)rigel_get_time(rigel));
