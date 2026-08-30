@@ -95,17 +95,6 @@ void bellatrix_chipset_core_entry(void)
         __asm__ volatile("wfe" ::: "memory");
 
     core_arrived = 1;
-
-    /*
-     * From here two cores may log. Tell the console sink to take its lock per
-     * line (patch emu68/0021); before this it is the only writer and pays
-     * nothing.
-     */
-    {
-        extern volatile int console_multicore;
-        console_multicore = 1;
-    }
-
     __asm__ volatile("dsb ishst\n\tsev" ::: "memory");
 
     kprintf("[BELLATRIX:RIGEL:CORE] core %u is the chipset's\n", (unsigned)id);
