@@ -843,27 +843,41 @@ void amiga_clock_run_on_core(void)
         }
 
         /*
-         * One quantum per acquisition, not a whole drain.
+         * A budget of work per acquisition, not a whole drain and not one
+         * quantum.
          *
-         * amiga_clock_consume(1) empties the backlog, which the catch-up cap
-         * allows to be 80000 colour clocks -- 20 ms of work at the measured
-         * 250 ns each. Holding the lock across that makes every MMIO the CPU
-         * issues wait up to 20 ms, which is not a deadlock and is
-         * indistinguishable from one at a serial console.
+         * Draining the whole backlog holds the lock for up to 80000 colour
+         * clocks -- 20 ms at the measured 250 ns each -- and every MMIO the
+         * CPU issues waits behind it, which at a serial console is
+         * indistinguishable from a deadlock.
          *
-         * So take the lock for a step and give it back. The CPU gets in
-         * between quanta, which is what the quantum is for.
+         * One quantum per acquisition is worse, and hardware said so. The
+         * quantum is the distance to the next observable deadline, and when
+         * that is close -- which it is whenever anything is programmed --
+         * amiga_clock_quantum() returns 1. The machine then paid a full lock
+         * round trip per colour clock and never advanced: the log reported
+         * "1 CCK/call" where it had been 227.
+         *
+         * So keep the inner loop, and bound it by work instead: about a
+         * millisecond of chipset time per acquisition, which is far below what
+         * an MMIO can wait for and far above the cost of taking the lock.
          */
+        enum { AMIGA_LOCK_BUDGET_CCK = 4096 };
+        rigel_cycle_t budget = AMIGA_LOCK_BUDGET_CCK;
+
         amiga_core_lock_acquire();
         amiga_clock_advance_wall();
-        if (pending_cck != 0)
+        while (pending_cck != 0 && budget != 0)
         {
             rigel_cycle_t quantum = amiga_clock_quantum();
 
             if (pending_cck < quantum)
                 quantum = (rigel_cycle_t)pending_cck;
+            if (budget < quantum)
+                quantum = budget;
             amiga_clock_step(quantum);
             pending_cck -= quantum;
+            budget -= quantum;
         }
         amiga_core_lock_release();
     }

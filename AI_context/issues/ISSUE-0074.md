@@ -344,3 +344,67 @@ core 1, reached by the `async_log` boot argument. It is inside
 instead. **Bringing it into our path is the right fix and is not written yet**;
 it would also take the UART wait off both the CPU and the chipset cores, and it
 uses a core that is otherwise parked.
+
+
+# 2026-08-30: what the legacy branch already knew about multicore
+
+Asked whether the legacy tree had multicore lessons, and it does -- five
+documents in its `AI_context/consolidated/` that were not read before the work
+started. Reading them after the fact is how this section exists.
+
+## The log fix, which is not cosmetic
+
+`multicore_arbiter_backlog.md`:
+
+> **Log-sink multicore-friendly** (buffer de linha por core em `console_log.c`)
+> -- feito: log garbled -> limpo, **destravou diagnóstico**
+
+And the implementation's own comment: "kprintf calls putc one char at a time,
+so when several cores log concurrently their characters interleave and garble
+the output". A line buffer per core, indexed by MPIDR, published whole.
+
+Adopted as patch `emu68/0021`: each core assembles its line in memory nobody
+else touches and enters the UART once per line rather than once per character.
+The lock is taken only once a second core is running, so it costs nothing
+before that and needs no exclusive monitor at a stage of boot where the MMU may
+not be up. Zero interleaved lines afterwards, against the
+`[ELF Loader] exec section 1 at 0x042[BELLATRIX:RIGEL:PERF]` the hardware log
+was full of.
+
+**Garbled output is the loss of the instrument you are debugging with**, which
+is the part worth carrying over.
+
+## The design here is one they had already classified as intermediate
+
+Also from the backlog, still pending when the tree was reset:
+
+> **Arbiter por deadline** -- epoch/rendezvous troca quantum fixo + lock por
+> acesso
+
+That is exactly what is written here: a fixed quantum and a lock per access.
+Legacy had it working and had already identified it as the thing to replace.
+So the lock-budget tuning in this issue is a stage rather than a destination,
+and the destination is named.
+
+Two more of theirs, both relevant:
+
+- **backpressure was needed and validated** -- "divergência ilimitada 452M ->
+  limitada ~0". Our wall-clock catch-up cap is the same idea arrived at
+  independently, for the same reason.
+- `rigel_next_event_tick()`, "chipset expõe próximo evento", was pending. That
+  is Rigel's ISSUE-0009 item 1, filed from this side without knowing it had
+  been asked for once already.
+
+## And a warning about method
+
+The logging document opens with a correction worth repeating:
+
+> Source-level `grep` is not proof of what a build actually contains -- verify
+> against the built binary (`strings`) before trusting a code-reading
+> conclusion.
+
+They had concluded a boundary was "already covered" by a log call in a file
+that turned out not to be compiled into the bare-metal build at all. This
+session made the same class of mistake twice: a performance gate opened on an
+unoptimised build, and a hardware measurement quoted from a figure whose
+provenance was never checked.

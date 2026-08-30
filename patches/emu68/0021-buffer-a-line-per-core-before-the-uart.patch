@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Buffer a line per core before the UART
+
+kprintf reaches the UART one character at a time, so two cores logging at
+once interleave mid-word and the output stops being readable. With the
+chipset on a core of its own that happens on every periodic report.
+
+Each core now assembles its own line in memory nobody else touches, and
+the UART is entered once per line. The lock is only taken when a second
+core is actually running, so this costs nothing before that and needs no
+exclusive monitor at a stage of boot where the MMU may not be up.
+
+Garbled output is not cosmetic: it is the loss of the instrument you are
+debugging with.
+---
+ src/raspi/support_rpi.c | 90 +++++++++++++++++++++++++++++++++++++++++++++----
+ 1 file changed, 84 insertions(+), 6 deletions(-)
+
+diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -120,22 +120,99 @@
+     }
+ }
+ 
+-static inline void putByte(void *io_base, char chr)
++static inline void putRawByte(void *io_base, char chr)
+ {
+-    if (serial_up)
+-    {
+-        waitSerOUT(io_base);
++    waitSerOUT(io_base);
+ 
+-        if (chr == '\n')
+-        {
+-            wr32le(CONSOLE_UART_DR, '\r');
+-            waitSerOUT(io_base);
+-        }
+-        wr32le(CONSOLE_UART_DR, (uint8_t)chr);
++    if (chr == '\n')
++    {
++        wr32le(CONSOLE_UART_DR, '\r');
+         waitSerOUT(io_base);
+     }
++    wr32le(CONSOLE_UART_DR, (uint8_t)chr);
++    waitSerOUT(io_base);
+ }
+ 
++#if defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++/*
++ * A line buffer per core.
++ *
++ * kprintf reaches the UART one character at a time, so two cores logging at
++ * once interleave mid-word and the output stops being readable -- exactly this,
++ * from a boot with the chipset on a core of its own:
++ *
++ *     [ELF Loader] exec section 1 at 0x042[BELLATRIX:RIGEL:PERF] 4000421 CCK
++ *
++ * The legacy tree met the same thing and its note is worth the whole fix:
++ * buffering each core's line "destravou diagnóstico" -- garbled output is not
++ * a cosmetic problem, it is the loss of the instrument you are debugging with.
++ *
++ * So each core assembles its own line, alone, in memory nobody else touches,
++ * and the UART is entered once per line rather than once per character. The
++ * lock is only taken when a second core is actually running: before that this
++ * costs nothing and, more to the point, needs no exclusive monitor at a stage
++ * of boot where the MMU may not be up.
++ */
++#define CONSOLE_LINE_MAX 200
++
++static char console_line[4][CONSOLE_LINE_MAX];
++static unsigned console_line_len[4];
++volatile int console_multicore = 0;
++static volatile int console_lock = 0;
++
++static inline unsigned console_this_core(void)
++{
++    uint64_t mpidr;
++    __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(mpidr));
++    return (unsigned)(mpidr & 3);
++}
++
++static inline void console_emit(void *io_base, unsigned core)
++{
++    unsigned i;
++
++    if (console_multicore)
++        while (__atomic_test_and_set(&console_lock, __ATOMIC_ACQUIRE))
++            __asm__ volatile("yield" ::: "memory");
++
++    for (i = 0; i < console_line_len[core]; i++)
++        putRawByte(io_base, console_line[core][i]);
++
++    if (console_multicore)
++        __atomic_clear(&console_lock, __ATOMIC_RELEASE);
++
++    console_line_len[core] = 0;
++}
++
++static inline void putByte(void *io_base, char chr)
++{
++    unsigned core;
++
++    if (!serial_up)
++        return;
++
++    core = console_this_core();
++    if (console_line_len[core] < CONSOLE_LINE_MAX)
++        console_line[core][console_line_len[core]++] = chr;
++
++    /*
++     * Flush on the newline, or when the buffer is full so an over-long line
++     * still comes out rather than being silently truncated. A line that never
++     * ends -- which is what a hang mid-print looks like -- stays buffered and
++     * invisible; that is the cost, and it is why the buffer is flushed on
++     * length as well.
++     */
++    if (chr == '\n' || console_line_len[core] == CONSOLE_LINE_MAX)
++        console_emit(io_base, core);
++}
++#else
++static inline void putByte(void *io_base, char chr)
++{
++    if (serial_up)
++        putRawByte(io_base, chr);
++}
++#endif
++
+ #endif
+ 
+ #undef ARM_PERIIOBASE
