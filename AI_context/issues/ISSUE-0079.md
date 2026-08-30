@@ -79,3 +79,46 @@ A5 are inside it.
 This run was made with `usb2otg` on the card (ISSUE-0078). That is unrelated
 to the crash -- it is simply the configuration in which the machine boots far
 enough to run the demo at all.
+
+
+# 2026-08-30: Paula's interrupts are delivered
+
+The gap named above is closed. `Platform_Autovector()` now dispatches Paula's
+own interrupts as well as the ARM controller's, in the shape of
+`arch/m68k-amiga/kernel/amiga_irq.c` with its seven per-level handlers merged
+into one pass -- this trampoline is shared across all seven levels and does
+not know which it was entered for, and the SR mask has already ordered them
+by the time it runs.
+
+```c
+ena  = *INTENAR;  if (!(ena & INTF_INTEN)) return;
+mask = ena & *INTREQR;  if (!mask) return;
+*INTREQ = mask & ~INTF_SOFTINT;          /* ack before dispatch */
+for (bit = INTB_EXTER; bit >= 0; bit--)
+    if (mask & (1 << bit)) core_Cause(bit, mask);
+```
+
+Two properties worth keeping:
+
+- **Acknowledge before dispatching.** A bit with no server installed is then
+  cleared rather than re-asserting for ever. This machine has already lost a
+  day to one interrupt that would not go quiet (ISSUE-0078); this ordering is
+  what keeps a missing server from becoming the next one.
+- **One register read on the idle path.** `INTENAR` is read first and the
+  function returns on `!INTF_INTEN`, because that read is an MMIO fault to
+  Rigel and most of a boot has nothing armed.
+
+`rigel_get_ipl()` already resolves the level from all of INTENA/INTREQ, so no
+change was needed on the publishing side -- the audio bits were always being
+turned into an IPL, and there was simply nothing at the other end.
+
+## What to watch on the next boot
+
+- `audio_per_write` followed by the channels actually advancing, rather than
+  the same period being reprogrammed.
+- `[BELLATRIX:IRQ] stuck level N asked M times` from `src/amiga/irq.c`. That
+  line exists for exactly this: a chipset level raised and never cleared. It
+  has never fired; if it starts, a server is not clearing its own INTREQ bit
+  and this is the first change that could cause that.
+- Whether the null-base crash above survives. It may have been the missing
+  chain all along, or it may be independent.
