@@ -898,6 +898,27 @@ static void retry(struct DWC2Unit *unit, struct DWC2Channel *chan)
         finish(unit, chan, UHIOERR_TIMEOUT);
         return;
     }
+    /*
+     * Stop the channel before waiting, and wait before re-arming.
+     *
+     * A NAK arrives without CHHLTD -- HCINT=0x10, bit 4 alone -- so the
+     * channel is still enabled when this runs, and re-arming an enabled
+     * channel is what the BCM2837 answers with XACTERR. The transaction-error
+     * path above already knew this and calls reset_halted_channel() before
+     * rearm_stage(); the NAK path went straight to the re-arm.
+     *
+     * It survived that way because kprintf used to block on the UART for
+     * about nine milliseconds a line, which gave the channel all the time it
+     * needed to wind down on its own. The console sink took that accidental
+     * delay away and the defect became a mouse that enumerates and never
+     * works (ISSUE-0076). Depending on how slow the log is, to keep the bus
+     * correct, is not a contract worth having.
+     */
+    if (!reset_halted_channel(unit, chan))
+    {
+        finish(unit, chan, UHIOERR_HOSTERROR);
+        return;
+    }
     dwc2_delay_us(unit, chan->stage == STAGE_INT_IN ? 10000 : 1000);
     rearm_stage(unit, chan);
 }

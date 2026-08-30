@@ -1,0 +1,39 @@
+;
+; Demo Reel 3 through the chipset, with the chipset on screen -- no keyboard.
+;
+; There is no input device on this machine yet (ISSUE-0076), so nothing can be
+; typed at a Shell. Nothing here needs to be: the boot-test mechanism runs this
+; from the Startup-Sequence, and the pieces it drives are all non-interactive.
+;
+; Order matters.
+;
+; The census first, because it is the cheap claim and it fails informatively:
+; same background, same count, same checksum on both sides means the frame the
+; chipset composed is the frame the guest can read. If that disagrees, nothing
+; after it is worth reading.
+;
+; Then the overlay, in the background. DeniseView SHOW hands the HVS a plane
+; pointing at the frame aperture and waits; the scaler re-reads that memory
+; every frame, so the plane is live rather than a snapshot, and it keeps
+; showing whatever Denise composes from here on. Run, because it does not
+; return -- and with no keyboard there is no Ctrl-C to give it.
+;
+; Then the demo, which is the point.
+;
+Echo >DEBUG: "[demoreel-show] --- can the guest read what Denise drew?"
+DeniseView >DEBUG: NOWINDOW
+
+Echo >DEBUG: "[demoreel-show] --- putting the aperture on the display"
+Run >NIL: <NIL: DeniseView SHOW
+
+Echo >DEBUG: "[demoreel-show] --- what is on the volume"
+List >DEBUG: DemoReel3/Slish DemoReel3/toram DemoReel3/Monument
+
+Echo >DEBUG: "[demoreel-show] --- ToRAM (assigns, 1 MB check, tunes to RAM:)"
+CD DemoReel3
+Execute toram
+Echo >DEBUG: "[demoreel-show] --- ToRAM returned"
+
+Echo >DEBUG: "[demoreel-show] --- Slish"
+Slish >DEBUG:
+Echo >DEBUG: "[demoreel-show] --- Slish returned"
