@@ -910,10 +910,25 @@ void amiga_clock_run_on_core(void)
             {
                 live_last = now;
                 if (__m68k_state != 0 && ++live_reports > 8)
-                    kprintf("[BELLATRIX:LIVE] arm=%u ipl=%u sr=%04x\n",
+                {
+                    /*
+                     * PC is the datum that ends the guessing, and it took too
+                     * long to print. sr=2610 says the CPU is in supervisor
+                     * mode at IPL 6 and says nothing about where; three
+                     * mechanisms were proposed and rejected on that alone.
+                     *
+                     * The JIT keeps PC in a register and writes it to the
+                     * context on every save, so this is the last address the
+                     * CPU left translated code at. A machine that is stuck
+                     * shows the same handful of addresses forever; a machine
+                     * that is merely busy does not.
+                     */
+                    kprintf("[BELLATRIX:LIVE] pc=%08x sr=%04x arm=%u ipl=%u\n",
+                        (unsigned)__m68k_state->PC,
+                        (unsigned)__m68k_state->SR,
                         (unsigned)__m68k_state->INTF.ARM,
-                        (unsigned)__m68k_state->INTF.IPL,
-                        (unsigned)__m68k_state->SR);
+                        (unsigned)__m68k_state->INTF.IPL);
+                }
             }
         }
 
