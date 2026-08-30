@@ -1175,3 +1175,46 @@ per-colour-clock cost that barely responds to what is programmed -- was
 convincing enough that nothing about it looked wrong. The `gprof` ranking was
 sound because it came from a different build; the absolutes were not, and
 nothing in the recipe said which build to link against.
+
+
+# 2026-08-30: instrumented before going to hardware
+
+Every performance claim in this issue was made by timing a whole run from
+outside and dividing, which averages the chipset together with a boot that is
+mostly not chipset -- and which is how a measurement at `-O0` went unnoticed.
+On hardware it would be worse: if the machine is too slow to reach a Shell, the
+only thing that can report is the serial line during boot.
+
+So `amiga_clock_step()` now measures its own exclusive cost with `CNTPCT_EL0`,
+which is a real clock on QEMU and on hardware alike, and reports periodically:
+
+```text
+[BELLATRIX:RIGEL:PERF] 4000286 CCK in 5460 ms over 17691 calls -> 1365 ns/CCK, 732593 CCK/s (20% of realtime), 226 CCK/call
+[BELLATRIX:RIGEL:PERF] 20001062 CCK in 34550 ms over 88448 calls -> 1727 ns/CCK, 578892 CCK/s (16% of realtime), 226 CCK/call
+```
+
+This is the split Rigel's own `rigel_performance_research.md` asks for before
+any chipset optimisation is chosen, and it answers two questions immediately
+that external timing could not:
+
+- **226 colour clocks per call.** Many short calls would mean our stepping
+  granularity is the problem; it is not, and that was the first hypothesis the
+  Rigel document says to exclude.
+- **The cost per colour clock grows through the boot**, 1365 to 1727 ns, as
+  more chipset is programmed. A chipset whose cost were purely fixed would not
+  do that, so "almost independent of what is programmed" is true only to a
+  first approximation.
+
+## What is left before a hardware run
+
+1. **Take two images.** `CONFIG_RIGEL_SELFTEST=1` proves phases 1 and 2 cheaply
+   -- it composes a known frame, parks the clock, and lets the boot finish at
+   normal speed. The plain `CONFIG_RIGEL=1` image is the phase 3 case, with the
+   chipset live for the whole boot.
+2. **`nocomposition`** is still required on the kernel command line to see
+   anything on the framebuffer (CLAUDE.md).
+3. **There is no `screendump` on hardware.** The census is the visual evidence,
+   and it already prints on both sides.
+4. **The number to bring back is the `PERF` line.** ns/CCK on a Pi 3 is what
+   the withdrawn "~3.8x short" claim needs replacing with, and it is now
+   measured by the machine itself rather than derived.

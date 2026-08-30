@@ -106,14 +106,87 @@ static void amiga_frame_census(void)
         (unsigned)checksum, (unsigned)frame.flags);
 }
 
+/*
+ * What the chipset costs in real time.
+ *
+ * Every performance claim about this integration so far was made by timing a
+ * whole run from outside and dividing, which averages the chipset together
+ * with a boot that is mostly not chipset. On hardware that is worse: if the
+ * machine is too slow to reach a Shell, the only thing that can report is the
+ * serial line during boot. So measure here, where the exclusive cost is.
+ *
+ * Rigel's own AI_context asks for exactly this split before any chipset
+ * optimisation is chosen: exclusive time inside the step, the number of calls,
+ * and colour clocks per call. Many short calls mean the integration's
+ * granularity is wrong; few long ones with high exclusive time mean the
+ * internal path is.
+ *
+ * Two counter reads per call, on a call that advances up to 512 colour clocks.
+ */
+static uint64_t perf_ticks;
+static uint64_t perf_cck;
+static uint64_t perf_calls;
+static uint64_t perf_next_report;
+static uint32_t perf_reports;
+
+static uint64_t amiga_perf_now(void)
+{
+    uint64_t t;
+
+    __asm__ volatile("mrs %0, CNTPCT_EL0" : "=r"(t));
+    return t;
+}
+
+static void amiga_perf_report(void)
+{
+    enum { AMIGA_PERF_EVERY_CCK = 4000000ull, AMIGA_PERF_REPORTS = 20 };
+    uint64_t freq, ns, ns_per_cck, cck_per_s;
+
+    if (perf_cck < perf_next_report)
+        return;
+    perf_next_report = perf_cck + AMIGA_PERF_EVERY_CCK;
+    if (perf_reports >= AMIGA_PERF_REPORTS)
+        return;
+    perf_reports++;
+
+    __asm__ volatile("mrs %0, CNTFRQ_EL0" : "=r"(freq));
+    if (freq == 0 || perf_cck == 0 || perf_calls == 0)
+        return;
+
+    ns = (perf_ticks * 1000000000ull) / freq;
+    ns_per_cck = ns / perf_cck;
+    cck_per_s = ns ? (perf_cck * 1000000000ull) / ns : 0;
+
+    /*
+     * 3546895 CCK/s is realtime for PAL. The percentage is the number that
+     * decides whether this machine can run a chipset at all; the colour clocks
+     * per call is the number that says whose fault it is if it cannot.
+     */
+    kprintf("[BELLATRIX:RIGEL:PERF] %llu CCK in %llu ms over %llu calls -> "
+            "%llu ns/CCK, %llu CCK/s (%llu%% of realtime), %llu CCK/call\n",
+        (unsigned long long)perf_cck,
+        (unsigned long long)(ns / 1000000ull),
+        (unsigned long long)perf_calls,
+        (unsigned long long)ns_per_cck,
+        (unsigned long long)cck_per_s,
+        (unsigned long long)((cck_per_s * 100ull) / 3546895ull),
+        (unsigned long long)(perf_cck / perf_calls));
+}
+
 static void amiga_clock_step(rigel_cycle_t cycles)
 {
     rigel_step_result_t result;
+    uint64_t started;
 
     if (rigel == 0 || cycles == 0)
         return;
 
+    started = amiga_perf_now();
     result = rigel_step(rigel, cycles);
+    perf_ticks += amiga_perf_now() - started;
+    perf_cck += cycles;
+    perf_calls++;
+    amiga_perf_report();
     if (!clock_reported)
     {
         kprintf("[BELLATRIX:RIGEL] clock active at %llu CCK\n",
