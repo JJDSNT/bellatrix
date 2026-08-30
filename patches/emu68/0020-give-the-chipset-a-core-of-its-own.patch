@@ -16,12 +16,10 @@ builds. The entry point returns if Bellatrix does not want the core, and
 then this falls through to the same WFE as before.
 ---
  src/aarch64/start.c | 27 +++++++++++++++++++++++++++
- 1 file changed, 27 insertions(+)
-
 diff --git a/src/aarch64/start.c b/src/aarch64/start.c
 --- a/src/aarch64/start.c
 +++ b/src/aarch64/start.c
-@@ -488,6 +488,32 @@
+@@ -488,6 +488,43 @@
      (void)async_log;
  #endif
  
@@ -48,6 +46,17 @@ diff --git a/src/aarch64/start.c b/src/aarch64/start.c
 +    {
 +        extern void bellatrix_chipset_core_entry(void);
 +        bellatrix_chipset_core_entry();
++    }
++
++    /*
++     * And core 3 drains the console. Every core that logs pushes a finished
++     * line into a ring of its own and returns; someone has to be the one that
++     * waits on the UART, and it must not be a core with work to do.
++     */
++    if (cpu_id == 3)
++    {
++        extern void amiga_console_run_on_core(void);
++        amiga_console_run_on_core();
 +    }
 +#endif
 +

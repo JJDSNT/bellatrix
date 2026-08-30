@@ -6,6 +6,7 @@
  */
 
 #include "amiga/bus.h"
+#include "amiga/console.h"
 #include "amiga/core.h"
 #include "amiga/frame.h"
 #include "amiga/irq.h"
@@ -557,6 +558,11 @@ void amiga_bus_init(void)
         kprintf("[BELLATRIX:RIGEL] initialization failed\n");
     else
     {
+        /*
+         * The console sink first: from the next line onward a second core may
+         * print, and it must not do that straight into the UART.
+         */
+        amiga_console_init();
         amiga_irq_init(rigel);
         /*
          * Ask for the chipset's core now. The secondary core reaches its entry

@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Let the embedder own the console
+
+print_lock is held for the whole of a kprintf, and with the default
+putByte that is the whole of a line on the UART -- about nine
+milliseconds at 115200 baud, during which no other core may print.
+Survivable while one core logs; not once a second core exists, least of
+all one keeping a realtime chipset.
+
+The fix is not to bound the lock but to remove its reason. An override
+that copies the character somewhere and returns leaves the critical
+section a few microseconds long, and kprintf_raw_putc() is the way back
+out for whoever drains the queue.
+
+This is the legacy tree's console redirect reduced to the two hooks.
+---
+ include/support.h       |  2 ++
+ src/raspi/support_rpi.c | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+)
+
+diff --git a/include/support.h b/include/support.h
+--- a/include/support.h
++++ b/include/support.h
+@@ -122,6 +122,8 @@
+ void kprintf_pc(putc_func putc_f, void *putc_data, const char * format, ...);
+ void vkprintf(const char * format, va_list args);
+ void kprintf(const char * format, ...);
++void kprintf_set_putc_override(void (*fn)(char chr));
++void kprintf_raw_putc(char chr);
+ void arm_flush_cache(uintptr_t addr, uint32_t length);
+ void arm_icache_invalidate(uintptr_t addr, uint32_t length);
+ void arm_dcache_invalidate(uintptr_t addr, uint32_t length);
+diff --git a/src/raspi/support_rpi.c b/src/raspi/support_rpi.c
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -164,6 +164,47 @@
+ 
+ volatile unsigned char print_lock = 0;
+ 
++/*
++ * Somewhere for the embedder to put a console of its own.
++ *
++ * print_lock is held for the whole of a kprintf, and with the default putByte
++ * that is the whole of a line on the UART -- about nine milliseconds at 115200
++ * baud, during which no other core may print. Survivable while one core logs;
++ * not once a second core exists, least of all one keeping a realtime chipset.
++ *
++ * The fix is not to bound the lock but to remove its reason: an override that
++ * copies the character somewhere and returns leaves the critical section a few
++ * microseconds long. kprintf_raw_putc() is the way back out for whoever drains
++ * the queue.
++ *
++ * This is the legacy tree's console redirect reduced to the two hooks it needs.
++ */
++static void (*putc_override)(char chr) = 0;
++
++void kprintf_set_putc_override(void (*fn)(char chr))
++{
++    __atomic_store_n(&putc_override, fn, __ATOMIC_RELEASE);
++}
++
++static inline void putByte(void *io_base, char chr);
++
++void kprintf_raw_putc(char chr)
++{
++    putByte((void *)ARM_PERIIOBASE, chr);
++}
++
++static void putByte_dispatch(void *io_base, char chr)
++{
++    void (*fn)(char) = __atomic_load_n(&putc_override, __ATOMIC_ACQUIRE);
++
++    if (fn)
++    {
++        fn(chr);
++        return;
++    }
++    putByte(io_base, chr);
++}
++
+ void __printf_chk(int, const char *restrict format, ...)
+ {
+     va_list v;
+@@ -172,7 +213,7 @@
+     while (__atomic_test_and_set(&print_lock, __ATOMIC_ACQUIRE))
+         __asm__ volatile("yield");
+ 
+-    vkprintf_pc(putByte, (void *)ARM_PERIIOBASE, format, v);
++    vkprintf_pc(putByte_dispatch, (void *)ARM_PERIIOBASE, format, v);
+ 
+     __atomic_clear(&print_lock, __ATOMIC_RELEASE);
+ 
+@@ -186,7 +227,7 @@
+ 
+     while(__atomic_test_and_set(&print_lock, __ATOMIC_ACQUIRE)) __asm__ volatile("yield");
+ 
+-    vkprintf_pc(putByte, (void*)ARM_PERIIOBASE, format, v);
++    vkprintf_pc(putByte_dispatch, (void*)ARM_PERIIOBASE, format, v);
+ 
+     __atomic_clear(&print_lock, __ATOMIC_RELEASE);
+ 
+@@ -197,7 +238,7 @@
+ {
+     while(__atomic_test_and_set(&print_lock, __ATOMIC_ACQUIRE)) __asm__ volatile("yield");
+ 
+-    vkprintf_pc(putByte, (void*)ARM_PERIIOBASE, format, args);
++    vkprintf_pc(putByte_dispatch, (void*)ARM_PERIIOBASE, format, args);
+ 
+     __atomic_clear(&print_lock, __ATOMIC_RELEASE);
+ }

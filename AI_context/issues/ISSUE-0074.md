@@ -444,3 +444,68 @@ serialises nothing that hardware serialises.
 That is worth stating as a rule for the rest of this work: **QEMU can prove a
 multicore change is wrong and can never prove it is right.** The pack goes to
 hardware, and what comes back is the only evidence.
+
+
+# 2026-08-30: the console sink, ported rather than reinvented
+
+Three attempts at the log before reading what the legacy tree actually did, and
+the third was worse than the first. Recorded because the mistake was method,
+not code.
+
+**What the boot core's last line means.** With the chipset on its own core the
+machine stopped, every run, on the line after the boot core's last print. The
+first two attempts read that as a deadlock in something new; it was the console
+itself. `print_lock` is held for the whole of a `kprintf`, and with the default
+`putByte` that is a whole line on the UART -- about **nine milliseconds** at
+115200 baud, during which no other core may print.
+
+**Why bounding the lock is the wrong fix, which is what legacy shows.** Legacy
+never bounded it. It changed one call:
+
+```c
+-    vkprintf_pc(putByte, (void*)ARM_PERIIOBASE, format, v);
++    vkprintf_pc(putByte_dispatch, (void*)ARM_PERIIOBASE, format, v);
+```
+
+A putc override. The sink takes the character, puts it somewhere and returns,
+so the critical section is microseconds instead of milliseconds. **The lock
+never needed bounding because its reason was removed.**
+
+**And why a line buffer alone could not work.** AROS reaches the serial one
+character per call: `krnPutC` writes a byte to `0xdeadbeef`, which Emu68 leaves
+unmapped on purpose, so every character of guest output is a fault and a
+separate `kprintf`. `print_lock` therefore protects a single character, which
+is why lines interleave however well Emu68's own printers behave.
+
+## What is now in the tree
+
+Patch `emu68/0021` adds the two hooks -- `kprintf_set_putc_override()` and
+`kprintf_raw_putc()`, the second being the way back out for whoever drains.
+`src/amiga/console.c` is the sink: a line buffer per core, published whole into
+a ring per core, drained by **core 3**.
+
+Per-core rings rather than one, because a shared head is a read-modify-write
+between producers; per core it is single-producer, single-consumer with two
+indices. Each index on its own cache line, because head and tail are written by
+different cores. A full ring drops the line and counts it, because a console
+that blocks is the thing being removed.
+
+```text
+[BELLATRIX:RIGEL:CORE] core 2 is the chipset's
+[BELLATRIX:CONSOLE] core 3 drains the console
+```
+
+231 lines, 19 `PERF` reports, **zero interleaved lines**.
+
+## The topology now
+
+```text
+core 0  CPU, and the physical IRQ ingress
+core 1  parked
+core 2  the chipset
+core 3  the console
+```
+
+which is legacy's `topology.h` with the host reactor's job narrowed to what we
+actually have. It named core 2 for the chipset and core 3 for the reactor
+before any of this was rewritten.
