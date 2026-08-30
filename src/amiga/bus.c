@@ -22,11 +22,8 @@ extern struct M68KState *__m68k_state;
 
 static RigelContext *rigel;
 static uint8_t unsupported_reported;
-static uint64_t last_cpu_cycles;
 static volatile uint64_t pending_cck;
-static uint8_t cpu_cycle_remainder;
 static uint8_t clock_reported;
-static uint8_t stopped_reported;
 static uint8_t census_reports;
 static uint32_t vblank_count;
 static uint8_t vblank_reports;
@@ -290,14 +287,12 @@ static rigel_cycle_t amiga_clock_quantum(void)
     return quantum;
 }
 
-static void amiga_clock_consume(int flush)
+static void amiga_clock_consume(void)
 {
     while (pending_cck != 0)
     {
         rigel_cycle_t quantum = amiga_clock_quantum();
 
-        if (!flush && pending_cck < quantum)
-            break;
         if (pending_cck < quantum)
             quantum = (rigel_cycle_t)pending_cck;
         amiga_clock_step(quantum);
@@ -306,33 +301,34 @@ static void amiga_clock_consume(int flush)
 }
 
 /*
- * Where chipset time comes from.
+ * Where chipset time comes from: real time, and nothing else.
  *
- * Two sources, and the choice decides what kind of machine this is.
+ * This used to be a choice. CPU-driven time -- two modelled 68000 cycles per
+ * colour clock -- gave a stock Amiga's exact ratio between the chipset and the
+ * processor, and it is what capped the machine: a chipset sustaining 112% of
+ * realtime held the guest to 7.99 MHz-equivalent and AROS took thirteen
+ * minutes to boot (ISSUE-0068). Paying for that ratio meant carrying an
+ * instruction-cost model in the JIT, a cycle counter written by every
+ * translated instruction, and a STOP that yielded instead of sleeping so the
+ * count would keep moving. All of it existed to hand the chipset a number the
+ * chipset no longer wants.
  *
- * CPU-driven is a stock Amiga: two modelled 68000 cycles per colour clock, so
- * the chipset and the CPU share one timebase and software can count one against
- * the other exactly as it could in 1989. It is also what caps the machine --
- * measured on a Pi 3, a chipset sustaining 112% of realtime holds the guest to
- * 7.99 MHz-equivalent, and AROS takes thirteen minutes to boot (ISSUE-0068).
- *
- * Wall-clock is an accelerated Amiga: the chipset advances by real elapsed
- * nanoseconds and the CPU never waits for it. A guest gets its VBLANK every
- * 20 ms of real time, which is more correct in real terms than the coupled
- * mode gives it, and the CPU runs at JIT speed. What it gives up is the ratio
- * between the two -- the defining property of every accelerator ever sold for
- * this machine, rather than something wrong with this one.
+ * What is left is an accelerated Amiga: the chipset advances by real elapsed
+ * nanoseconds on a core of its own, and the CPU never waits for it. A guest
+ * gets its VBLANK every 20 ms of real time, which is more correct in real
+ * terms than the coupled mode ever gave it. What it gives up is the ratio --
+ * the defining property of every accelerator ever sold for this machine,
+ * rather than something wrong with this one.
  *
  * Not deferred CPU cycles. That reading sounds like the same idea and is not:
  * the same total work happens in bursts and the machine stays throttled.
  *
- * The STOP path needs nothing extra here. It yields to MainLoop, which calls
- * this, and under wall-clock time a stopped CPU does not stop real time -- so
- * sampling the counter is the whole of the idle accounting.
+ * A stopped CPU needs nothing from this. Real time does not stop with it, and
+ * the chipset core raises the IPL and sends the event that ends the STOP, so
+ * the guest parks in WFE exactly as it would on a real machine.
  *
  * ISSUE-0075.
  */
-static uint8_t clock_wall_driven = 1;
 static uint64_t wall_last;
 static uint64_t wall_remainder;
 
@@ -376,53 +372,6 @@ static void amiga_clock_advance_wall(void)
         pending_cck = AMIGA_CCK_MAX_CATCHUP;
 }
 
-void bellatrix_emu68_publish_cpu_progress(uint64_t cycles)
-{
-    uint64_t delta;
-    uint64_t scaled;
-
-    if (rigel == 0)
-        return;
-    if (cycles < last_cpu_cycles)
-        last_cpu_cycles = cycles;
-    delta = cycles - last_cpu_cycles;
-    last_cpu_cycles = cycles;
-
-    if (amiga_core_owns_chipset())
-        return;
-
-    if (clock_wall_driven)
-    {
-        /*
-         * The CPU still says it is running -- that is what keeps the chipset
-         * advancing between MMIO transactions -- but it no longer says how far.
-         * Real time does.
-         */
-        amiga_clock_advance_wall();
-        if (chipset_observed)
-            amiga_clock_consume(0);
-        return;
-    }
-
-    scaled = delta + cpu_cycle_remainder;
-    pending_cck += scaled / 2u;
-    cpu_cycle_remainder = (uint8_t)(scaled & 1u);
-    if (!stopped_reported && __m68k_state != 0 && __m68k_state->STOPPED)
-    {
-        /*
-         * The CPU is parked on a STOP and is still handing us time. That only
-         * happens through the EMIT_STOP yield path, so this line is the direct
-         * evidence that idle time reaches the chipset -- and its absence, on a
-         * machine with an armed chipset that has idled, is the direct evidence
-         * that it does not.
-         */
-        stopped_reported = 1;
-        kprintf("[BELLATRIX:RIGEL] chipset advancing from a stopped CPU\n");
-    }
-    if (chipset_observed)
-        amiga_clock_consume(0);
-}
-
 static void amiga_clock_flush(void)
 {
     /*
@@ -433,9 +382,8 @@ static void amiga_clock_flush(void)
      */
     if (amiga_core_owns_chipset())
         return;
-    if (clock_wall_driven)
-        amiga_clock_advance_wall();
-    amiga_clock_consume(1);
+    amiga_clock_advance_wall();
+    amiga_clock_consume();
 }
 
 /*
@@ -506,27 +454,10 @@ static void amiga_clock_observe(uint32_t address, int write)
         if (!amiga_core_owns_chipset())
         {
             pending_cck = 0;
-            cpu_cycle_remainder = 0;
             wall_last = amiga_perf_now();
             wall_remainder = 0;
         }
         chipset_observed = 1;
-        /*
-         * Tell the CPU that idling now has a cost. A stopped m68k retires no
-         * cycles, so with a chipset running it must not sleep: EMIT_STOP reads
-         * this field and yields to MainLoop instead, which advances Rigel.
-         * Until it is set the guest can only be woken by a platform interrupt,
-         * and parking the core is the right thing to do.
-         */
-        /*
-         * Only when the CPU is the one that has to keep chipset time. With a
-         * core of its own the chipset raises the IPL and sends the event, so a
-         * stopped CPU should park in WFE and be woken -- which is what
-         * EMIT_STOP does when this stays clear, and is what a real machine
-         * does.
-         */
-        if (__m68k_state != 0 && !amiga_core_owns_chipset())
-            __m68k_state->CHIPSET_ACTIVE = 1;
         kprintf("[BELLATRIX:RIGEL] clock armed by %s $%08x\n",
             write ? "a write to" : "a read of", (unsigned)address);
     }
@@ -929,10 +860,7 @@ static void amiga_bus_display_selftest(void)
      * is; the next MMIO re-arms the clock as usual.
      */
     pending_cck = 0;
-    cpu_cycle_remainder = 0;
     chipset_observed = 0;
-    if (__m68k_state != 0)
-        __m68k_state->CHIPSET_ACTIVE = 0;
     kprintf("[BELLATRIX:RIGEL:DISPLAY] clock parked; frame kept for the guest\n");
 }
 #endif
