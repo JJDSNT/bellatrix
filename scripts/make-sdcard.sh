@@ -331,6 +331,48 @@ for entry in "${ENTRIES[@]}"; do
     cp -al "$DIST/$entry" "$STAGE/$entry"
 done
 
+# BELLATRIX_TRACE_STARTUP=1 makes the Startup-Sequence say where it is.
+#
+# A boot that stops somewhere in the sequence leaves no trace of which line it
+# stopped on, and the candidates are not few: AddUSBClasses and AddBTClasses
+# are asynchronous, Automount and Mount touch every DOSDriver, `Dir PIPE:`
+# needs a handler, and the ENVARC: copy walks the whole tree. Guessing between
+# them costs a card write per guess.
+#
+# So echo each line to DEBUG: before running it. The last line in the log is
+# the one that did not return -- which is the whole question.
+#
+# Not on by default: it is noisy, and the serial line is the slowest thing on
+# the machine.
+if [ "${BELLATRIX_TRACE_STARTUP:-0}" = 1 ]; then
+    seq="$STAGE/S/Startup-Sequence"
+    if [ -f "$seq" ]; then
+        python3 - "$seq" <<'TRACE'
+import os, sys
+p = sys.argv[1]
+raw = open(p, "rb").read().decode("latin-1")
+out = []
+for line in raw.split("\n"):
+    stripped = line.strip()
+    # Leave structure alone: echoing inside an If/EndIf pair or before a label
+    # changes what the shell parses, and a trace that alters the thing it
+    # measures is worse than none.
+    if (stripped and not stripped.startswith(";")
+            and not stripped.upper().startswith(("IF ", "ELSE", "ENDIF", "LAB ",
+                                                 "SKIP ", ".", "FAILAT"))):
+        out.append('Echo >DEBUG: "[startup] %s"' % stripped.replace('"', "'")[:70])
+    out.append(line)
+# The stage is hard-linked from the distribution tree (cp -al), so an
+# in-place rewrite edits the build tree itself and every later card
+# inherits it. Write beside the file and move over it, which is what
+# the boot-test insertion below already does.
+open(p + ".new", "wb").write("\n".join(out).encode("latin-1"))
+os.replace(p + ".new", p)
+print("[sdcard] Startup-Sequence traced to DEBUG:")
+TRACE
+    fi
+fi
+
 # BELLATRIX_CHIPSET_DISPLAY=0 leaves the classic display driver off the card.
 #
 # Not the same as not building it. amigavideo.hidd is inert on its own; what
