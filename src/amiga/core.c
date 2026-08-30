@@ -63,8 +63,22 @@ void amiga_core_lock_release(void)
 
 void amiga_core_enable(void)
 {
+#if defined(CONFIG_RIGEL_CHIPSET_CORE) && CONFIG_RIGEL_CHIPSET_CORE == 0
+    /*
+     * Built without the chipset core, deliberately.
+     *
+     * Two things changed at once when the chipset moved: its clock became a
+     * function of real time, and it moved to a core of its own. A boot that
+     * stops cannot say which, and this switch is what splits them: the same
+     * wall-clock chipset, on the CPU core, so a failure that survives is not
+     * about concurrency and one that disappears is.
+     */
+    kprintf("[BELLATRIX:RIGEL:CORE] chipset core disabled by build\n");
+    return;
+#else
     core_wanted = 1;
     __asm__ volatile("dsb ishst\n\tsev" ::: "memory");
+#endif
 }
 
 int amiga_core_arrived(void)

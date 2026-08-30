@@ -509,3 +509,58 @@ core 3  the console
 which is legacy's `topology.h` with the host reactor's job narrowed to what we
 actually have. It named core 2 for the chipset and core 3 for the reactor
 before any of this was rewritten.
+
+
+# 2026-08-30: with a clean log, the stop is inside amigavideo's init
+
+The console sink made the hardware log readable, and the first thing it said is
+that the stop is not where it looked. The log ends after `iffparse.library`,
+but the working single-core boot shows those inits are **nested**:
+
+```text
+[InitResident] iffparse.library: MakeLibrary 2 ms, calling init @ ...
+[InitResident] locale.library: init returned after 1916 ms
+[InitResident] stdc.library: init returned after 3931 ms
+[BootUI] display owned by a native driver
+[InitResident] amigavideo.hidd: init returned after 14015 ms
+```
+
+`amigavideo.hidd`'s init was entered long before and returns fourteen seconds
+later; locale, stdc and iffparse are dependencies it drags in. **The stop is
+inside `amigavideo`'s init**, and what that init does is install interrupts:
+
+```c
+AddIntServer(INTB_VERTB, &csd->inter);
+SetIntVector(INTB_BLIT, &GfxBase->bltsrv);
+custom->intena = INTF_BLIT;
+AddICRVector(GfxBase->cia, 2, &GfxBase->timsrv);
+```
+
+Which is exactly the boundary that changed owner.
+
+## One caveat the sink introduces
+
+The log no longer preserves order *between* cores. Rings are drained
+round-robin, so `chipset running here now` can appear before `clock armed`
+even though it happened after. Order within a core is exact; order across
+cores is not evidence.
+
+## Two changes, one symptom, so split them
+
+Chipset time became a function of real time **and** the chipset moved to a core
+of its own, at the same time. A boot that stops cannot say which. So
+`CONFIG_RIGEL_CHIPSET_CORE=0` builds the same wall-clock chipset on the CPU
+core:
+
+| pack | wall clock | own core |
+|---|---|---|
+| I | yes | no |
+| H | yes | yes |
+
+- **I boots, H stops** -- concurrency, and it is in the cross-core IPL delivery.
+- **I stops too** -- not concurrency. `amigavideo` is waiting for an interrupt
+  that wall-clock time does not deliver when it should.
+- **Both boot** -- intermittent, and it goes back to measurement.
+
+That is one experiment with three distinguishable outcomes, which is worth more
+than another guess at the code.
