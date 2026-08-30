@@ -122,3 +122,51 @@ turned into an IPL, and there was simply nothing at the other end.
   and this is the first change that could cause that.
 - Whether the null-base crash above survives. It may have been the missing
   chain all along, or it may be independent.
+
+
+## The cost of asking the chipset, and the cheaper way
+
+Delivering Paula's interrupts put an `INTENAR` read on every entry to the
+autovector trampoline, and on this machine that read is an MMIO fault into
+Rigel. The platform path is not slow by accident -- `usb2otg` keeps
+start-of-frame unmasked, 8000 entries a second -- so the machine stopped
+keeping up and IRQ 9 backed up into a storm:
+
+```text
+[intc] irq 9 dispatched 65536 times
+[intc] still pending after 4 rounds: arm=00000000 gpu0=00000200 gpu1=00000000
+[BELLATRIX:LIVE] pc=3061f950   ->  Platform_Autovector +0x42
+```
+
+The gate is `JITCTRL2` bit 29, which is `INTF.ARM` on the read (Emu68's
+`M68k_LINE4.c`, `bfi(reg, tmp, 29, 1)`) and the same bit the acknowledge
+writes. A MOVEC, no bus cycle. A platform interrupt no longer asks the
+chipset anything; if the chipset's level is also up it re-enters, because it
+is a level and re-entering is what the autovector is for.
+
+**Note for whoever reads that code:** the comment there said "bit 0 is what
+that register exposes", which is about the value stored being 1 rather than a
+level -- not about the bit position. Written as `& 1` the gate never fires and
+the regression stays. The read path is the authority.
+
+### If the remaining fault ever matters
+
+It should not: with the gate, `INTENAR` is read only on chipset interrupts --
+VERTB at 50 Hz plus one per audio buffer -- rather than 8000 times a second.
+But the fault can be removed entirely, and this machine can do better than a
+real Amiga here, because the answer is already known on the ARM side:
+`rigel_get_ipl()` resolves the level from `INTENA & INTREQ` before the CPU
+ever sees it.
+
+Two ways to hand the guest that resolved mask without a bus cycle:
+
+1. **Extend JITCTRL2.** The read already assembles INTF bits into the value;
+   putting the 16-bit pending mask in the upper half costs the guest nothing
+   it is not already paying (one MOVEC). Needs an Emu68 patch.
+2. **A word in the descriptor page.** Bellatrix already publishes a page the
+   guest reads with plain loads (`src/amiga/frame.h`, the Denise descriptor at
+   `$01200000`); an interrupt word there is a version bump and no new
+   mechanism.
+
+The acknowledge still has to reach Rigel -- one write to `INTREQ` per
+dispatch -- and that is unavoidable and correct.
