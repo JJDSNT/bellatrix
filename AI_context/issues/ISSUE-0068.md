@@ -1334,3 +1334,48 @@ least three answers with different characters:
 
 The choice is not obvious and it is not mine to make alone. What is now settled
 is that it is a scheduling question rather than a performance one.
+
+
+# 2026-08-30: the chipset received a screen
+
+From a hardware boot, in a line that nearly went unread:
+
+```text
+[BELLATRIX:RIGEL:CENSUS] frame=1000 256x256 pitch=4096 bg=00aaaaaa non-bg=0/1369 sum=54a363aa flags=00
+```
+
+**`bg=00aaaaaa` is the Workbench grey.** It had been `00000000` in every
+previous boot. Something programmed Denise's COLOR00 to Amiga grey, which
+means `graphics.library` reached the chipset -- the thing phases 1 to 3 were
+built to make possible, seen for the first time.
+
+## And it explains the frozen clock
+
+The report that came with it was that the BootUI clock had stopped while the
+serial log kept flowing. That is not a hang: **`amigavideo` took the display.**
+From that moment AROS draws through Denise, whose output nothing presents, so
+the panel holds whatever the VideoCore last scanned out. The machine is running
+and invisible.
+
+Which is the expected consequence of finishing phase 3 without phase 2's
+presenter, stated in this issue before either was built -- and still surprising
+when it arrived, because it arrives looking exactly like a crash.
+
+## The census was hiding it
+
+The count is of pixels differing from the top-left one, so a screen filled with
+a single colour reads as `non-bg=0` however loudly it says something happened.
+A frame that went from black to grey is a display being set up, and the metric
+threw it away.
+
+Now the background colour is reported when it changes. **A signal that only
+appears as a changed constant is still a signal**, and a census that counts
+variation cannot see it by construction.
+
+## What this makes the next step
+
+Not "make the demo draw through Denise" -- something already does. It is
+presentation: the frame is in the aperture at `$01000000`, published every
+frame, and nothing puts it on the panel. On hardware that is the HVS plane
+(ISSUE-0072, ISSUE-0073), and until it exists every success here looks like a
+freeze.

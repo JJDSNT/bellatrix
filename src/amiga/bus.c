@@ -70,6 +70,7 @@ static void amiga_frame_census(void)
     enum { AMIGA_CENSUS_HEARTBEAT = 1000, AMIGA_CENSUS_STRIDE = 7 };
     static uint32_t census_frames;
     static uint8_t  census_was_drawing;
+    static uint32_t census_last_background;
     rigel_frame_t frame;
     const uint32_t *row;
     uint32_t background;
@@ -118,6 +119,26 @@ static void amiga_frame_census(void)
         uint8_t report = 0;
 
         census_frames++;
+
+        /*
+         * The background colour is a signal in its own right, and missing it
+         * cost a boot's worth of confusion.
+         *
+         * This counts pixels that differ from the top-left one, so a screen
+         * filled with a single colour reads as empty however loudly it says
+         * something happened. A frame that went from black to 0x00aaaaaa is
+         * the Workbench grey: somebody programmed COLOR00, which means an
+         * application's display reached the chipset. That is the event the
+         * whole exercise is waiting for, and the count alone throws it away.
+         */
+        if (background != census_last_background)
+        {
+            census_last_background = background;
+            report = 1;
+            kprintf("[BELLATRIX:RIGEL:CENSUS] background is now %08x\n",
+                (unsigned)background);
+        }
+
         if (drawing != census_was_drawing)
         {
             census_was_drawing = drawing;
