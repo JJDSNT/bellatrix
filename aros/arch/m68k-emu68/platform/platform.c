@@ -297,7 +297,16 @@ static BOOL discover(void)
  * Bits 29..31 are command bits and are masked out of the stored value, so
  * what comes back has them clear and cannot re-trigger anything.
  */
-static inline void platform_host_irq_ack(void)
+/*
+ * Deassert the platform latch, and say whether it was the reason we are here.
+ *
+ * JITCTRL2 bit 29 is INTF.ARM -- Emu68 places it there on the read
+ * (M68k_LINE4.c, `bfi(reg, tmp, 29, 1)`) and takes it from there on the write,
+ * which is the same bit this function sets to deassert. Reading it costs a
+ * MOVEC and no bus cycle, which matters: it is what lets the chipset pass
+ * below be skipped on an interrupt that had nothing to do with the chipset.
+ */
+static inline ULONG platform_host_irq_ack(void)
 {
     ULONG ctrl;
 
@@ -312,6 +321,8 @@ static inline void platform_host_irq_ack(void)
         "   move.l %0,%%d0          \n"
         "   .word 0x4e7b, 0x01e0    \n"     /* movec %%d0,JITCTRL2        */
         : : "r" (ctrl) : "d0", "memory");
+
+    return ctrl;
 }
 
 /*
@@ -389,12 +400,31 @@ BOOL Platform_Autovector(void)
      * clearing afterwards would discard it. Clearing first means the worst
      * case is one spurious level 6 with nothing to do, instead of a lost one.
      */
-    platform_host_irq_ack();
+    /*
+     * Two channels reach this one trampoline and they cost very different
+     * things to serve. INTF.ARM is a latch and answering it is register reads
+     * on the ARM controller; the chipset's level is answered by reading
+     * INTENAR, and on this machine that is an MMIO fault into Rigel.
+     *
+     * Doing both on every entry put that fault on the platform's path, and
+     * the platform's path is not slow by accident -- usb2otg keeps
+     * start-of-frame unmasked, which is 8000 entries a second. The machine
+     * could not keep up and IRQ 9 backed up into a storm the counters caught
+     * at 65536 dispatches, with the PC sitting in this function.
+     *
+     * So ask the latch what brought us here. Bit 29 of what the acknowledge
+     * read back is INTF.ARM, and it costs a MOVEC. If it was set, this was
+     * the platform and the chipset is not asked. If the chipset's level is
+     * also up it is a level, not an edge: it re-enters, and re-entering is
+     * what the autovector is for.
+     */
+    ULONG was_platform = platform_host_irq_ack() & (1UL << 29);
 
     if (g_intc_ops)
         g_intc_ops->Dispatch(KernelBase);
 
-    platform_paula_dispatch();
+    if (!was_platform)
+        platform_paula_dispatch();
 
     return TRUE;
 }
