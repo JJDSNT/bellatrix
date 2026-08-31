@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0082
-title: "The chipset writes over AbsExecBase at chip RAM address 4"
+title: "A word write to chip RAM address 6 destroys AbsExecBase"
 status: open
 priority: critical
 type: defect
@@ -299,16 +299,105 @@ The value is the part that matters. A copper instruction, a sprite word and a
 run of blitter output do not look alike, so the value names the unit without
 needing a per-unit probe.
 
+# CAUGHT: a word write to address 6, and the true base
+
+The watchpoint on the chipset core saw it happen:
+
+```text
+[BELLATRIX:RIGEL:ABSEXEC] $020012f0 -> $0200011d with the m68k at pc=30600c2e sr=2000
+```
+
+Three things follow, and only two of them are load-bearing.
+
+**The true AbsExecBase is `$020012f0`**, and the same value comes back under
+QEMU. The corrupted readings -- `$0200011b`, `$020000b1`, `$02000121`,
+`$0200011d` -- keep the high word and replace the low one, so this is a
+**16-bit store to address 6**, not a longword store to 4. The value written is
+different every run, which is what a pointer's low or high half looks like when
+the pointer is freshly allocated.
+
+**The PC is a bystander.** `0x30600c2e` resolves to `emu68_console_puts+0x10`
+-- the guest printing to the serial line. The watchpoint polls from another
+core, so it names when the value changed, not who changed it. That is the
+limit of a polled watchpoint and it was known going in; it is why the
+fault-driven page below exists.
+
+# CORRECTION: the heap does start at 0x02000000
+
+Written above, and shipped as a commit: the `<- heap` marker's hard-coded
+`[0x02000000, 0x30600000)` was "a guess, and a wrong one". It was a guess, and
+it was right -- AbsExecBase is `$020012f0`.
+
+The replacement was worse than wrong. Deriving the bounds from
+`SysBase->MemList` makes the marker depend on the one thing this issue
+corrupts, so in the crash it exists to read, every walk returns nothing and the
+dump comes back with no markers at all. That happened, and it cost a dump. The
+walk stays, because when SysBase is sound it is exact, but it now falls back to
+the constants when SysBase is not walkable.
+
+# The instrument that names the writer
+
+Chip RAM is `MACHINE_REGION_DIRECT`, so the CPU writes it with native stores
+that reach no hook: not `amiga_chip_ram_write16()` (which sees only chipset
+DMA, and stayed silent), and not the region ops (which a DIRECT page never
+reaches). A polled watchpoint was the only thing left -- until the legacy tree
+turned out to have solved this already:
+
+```text
+Diagnostic (opt-in): fault-drive the vector page so every access to
+0x000-0xFFF reaches bellatrix_bus_access and low-memory corruption
+writers are caught with their exact PC ([VEC-W]). ~15x boot slowdown
+under QEMU/TCG -- enable only for targeted hunts.
+```
+
+Legacy also recorded why the page is DIRECT the rest of the time, which is not
+a matter of taste: a write-trap on pages 0-1 produced store-buffer coherency
+failures between the host alias and the guest's low mapping.
+
+Ported as `src/machine/vecpage.c`, opt-in by the boot argument
+`bellatrix.vecpage`, off by default. It needs no alias of its own: Emu68 keeps
+a cached identity map of physical memory at `0xffffff9000000000` and already
+services trapped accesses through it (`vectors.c: SYSWriteValToAddr`).
+
+Validated under QEMU before shipping -- it reports `[VEC-W32] addr=000004`,
+`addr=000008` and the vector fills, each with a PC.
+
+# Candidates the trap will settle
+
+**`amigavideo`'s copper list is built from an unchecked allocation.**
+`amigavideo_chipset.c:1833`:
+
+```c
+csd->sprite_null = AllocMem((2 << 3) + (46 * (sizeof(WORD) << 1)),
+                            MEMF_CLEAR | MEMF_CHIP);
+csd->copper1 = (APTR)((IPTR)csd->sprite_null + (2 << 3));
+c = csd->copper1;
+```
+
+A NULL from `AllocMem` puts the whole copper list at address 16 and upward.
+That is a real defect, but it does not by itself explain a write to **6** --
+the COPPEROUTs would start at 16 -- so it is a candidate, not the answer.
+
+**`setspritevisible()` writes two UWORDs** through `csd->copper1_spritept`,
+which is the right *size*: `copper1_spritept[0]` and `[2]` are word stores four
+bytes apart. `copper1_spritept == 6` would put `p >> 16` exactly where the
+damage is. Where a 6 would come from is not established.
+
+Both are guesses about a mechanism. The rule this issue already records --
+resolve the mechanism in the source before drawing a shape from a dump --
+applies to them too, and the trap resolves it without another guess.
+
+# What the NTSC run adds
+
+A run that asked for an NTSC mode failed to open and did **not** crash; the PAL
+mode that followed opened and did. Every `CreateObject` in that log carries
+`modeid = 00021000`, and no NTSC modeid appears at all -- so the failed request
+created nothing. The crash needs a screen to actually be created, not merely
+requested.
+
 # Where to start
 
-Read the `[BELLATRIX:RIGEL:LOWCHIP]` lines from the next run.
-
-- **A run of consecutive addresses** -- a DMA channel with a destination
-  pointer that is zero or has wrapped. The blitter's D channel is the only one
-  moving that much data here.
-- **A single write to 4 or 6** -- a pointer register that was loaded with a
-  low value, once.
-- **Nothing at all** -- then the write does not come from the chipset, and
-  the CPU-side path (`machine_chip_ram_write16`'s other callers, and Emu68's
-  own classifier) is where to look next.
+Boot with `bellatrix.vecpage` appended to `cmdline.txt` and open the PAL
+screen. The `[VEC-W16] addr=000006 ... pc=........` line names the store, and
+the PC resolves against the kernel ELF at its load base.
 
