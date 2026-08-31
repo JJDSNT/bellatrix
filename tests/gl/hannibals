@@ -44,6 +44,32 @@ Type >DEBUG: s/text
 ;
 Echo >DEBUG: "[hannibals] --- add21k skipped (2 MB of chip; nothing to reclaim)"
 
+;
+; The plane goes up BEFORE the demo, and it has to.
+;
+; Once the demo takes the machine there is no AROS left to run anything: it
+; turns interrupts and DMA off, so no task is ever scheduled again and
+; DeniseView could not be started afterwards even by a timer. Telling someone
+; to type it first is not an answer either -- this script owns the sequence,
+; so it owns this.
+;
+; What that costs, stated rather than hidden: DeniseView reads the descriptor
+; once and installs a plane with that geometry. Right now the aperture is
+; 256x256 and empty, so that is what the plane will be built for. If the demo
+; programs a different mode the pixels behind the plane are still live -- they
+; are republished every frame -- but the window onto them keeps the old size,
+; and the picture will be cropped or stretched rather than absent.
+;
+; The census on either side of this says what the geometry actually was, so
+; the next run can be built with the right one. Presenting a frame whose size
+; changes under the plane is a real gap in the presenter, and this is the run
+; that measures it.
+;
+Echo >DEBUG: "[hannibals] --- aperture before the demo"
+DeniseView >DEBUG: NOWINDOW
+Echo >DEBUG: "[hannibals] --- plane up"
+Run >NIL: <NIL: DeniseView SHOW
+
 Echo >DEBUG: "[hannibals] --- handing the machine over"
 Hannidemo2.EXE
 Echo >DEBUG: "[hannibals] --- it gave the machine back"
