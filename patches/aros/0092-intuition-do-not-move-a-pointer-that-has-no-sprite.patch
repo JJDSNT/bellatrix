@@ -1,0 +1,40 @@
+--- a/rom/intuition/monitorclass.c
++++ b/rom/intuition/monitorclass.c
+@@ -90,12 +90,36 @@
+       bug("[Monitor] %s(%d, %d)\n", __func__, x, y);
+       bug("[Monitor] %s: pointer @ 0x%p\n", __func__, data->pointer);
+      )
+-    if (data->pointer)
++    if (data->pointer && data->pointer->sprite)
+     {
+         /* Update sprite position, just for backwards compatibility */
+         data->pointer->sprite->es_SimpleSprite.x = x;
+         data->pointer->sprite->es_SimpleSprite.y = y;
+     }
++    else if (data->pointer)
++    {
++        /*
++         * A pointer with no sprite, which on m68k is not a harmless no-op.
++         *
++         * `x` is at offset 6 of struct SimpleSprite, and es_SimpleSprite is
++         * the first member of struct ExtSprite, so a NULL `sprite` makes this
++         * a word store to absolute address 6. On AROS m68k that is the low
++         * half of AbsExecBase -- SysBase is linked as absolute address 4 -- so
++         * the store replaces half of every `moveal SysBase,%a6` in the system
++         * and the machine dies at the next library call it makes, wherever
++         * that happens to be.
++         *
++         * Observed on the first monitor switch this port has ever performed,
++         * opening a 320x256x5 Amiga screen: $020012f0 became $0200019f, and
++         * 0x019f was the mouse X. See Bellatrix ISSUE-0082.
++         *
++         * The guard is right on any architecture; the report is here because
++         * the reason a pointer reaches this function with no sprite is not
++         * established, and a silent skip would hide it.
++         */
++        bug("[Monitor] %s: pointer 0x%p has no sprite -- not writing (%d,%d)\n",
++            __func__, data->pointer, x, y);
++    }
+ 
+     DEBUG_POINTER(bug("[Monitor] %s: Physical co-ordinates %d,%d\n", __func__, x, y);)
+ 

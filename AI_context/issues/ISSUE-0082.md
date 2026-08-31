@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0082
-title: "A word write to chip RAM address 6 destroys AbsExecBase"
+title: "Intuition moves a pointer that has no sprite, over AbsExecBase"
 status: open
 priority: critical
 type: defect
@@ -15,6 +15,8 @@ tags:
   - chipset
 blockers: []
 related_files:
+  - external/aros/rom/intuition/monitorclass.c
+  - src/machine/vecpage.c
   - src/amiga/bus.c
   - aros/arch/m68k-emu68/boot/mmakefile.src
   - aros/arch/m68k-emu68/include/amiga/memory_map.h
@@ -298,6 +300,100 @@ the address and the value, and marks the one that lands on AbsExecBase.
 The value is the part that matters. A copper instruction, a sprite word and a
 run of blitter output do not look alike, so the value names the unit without
 needing a per-unit probe.
+
+# SOLVED: rom/intuition/monitorclass.c:96
+
+The fault-driven vector page named the store on the first run it was armed for:
+
+```text
+[BELLATRIX:RIGEL:ABSEXEC] $020012f0 -> $0200019f at pc=3061edaa (vecpage ON)
+[VEC-W16] addr=000006 value=0000019f pc=3069b1ac sr=0004  <- AbsExecBase
+```
+
+`0x3069b1ac` is `MonitorClass__MM_SetPointerPos`, which does one thing:
+
+```c
+data->mouseX = msg->x;
+data->mouseY = msg->y;
+SetPointerPos(data, IntuitionBase);
+```
+
+and `SetPointerPos()` at `monitorclass.c:93`:
+
+```c
+if (data->pointer)
+{
+    /* Update sprite position, just for backwards compatibility */
+    data->pointer->sprite->es_SimpleSprite.x = x;
+    data->pointer->sprite->es_SimpleSprite.y = y;
+}
+```
+
+`data->pointer->sprite` is **NULL**, and the dereference is unguarded. The
+arithmetic is exact:
+
+- `struct SimpleSprite` is `{ UWORD *posctldata; UWORD height; UWORD x, y; ... }`,
+  so `x` is at offset **6** (`compiler/include/graphics/sprite.h:18`).
+- `es_SimpleSprite` is the first member of `struct ExtSprite`, at offset 0.
+- So the store is `*(UWORD *)6 = x` -- a **word** store, which is why the high
+  word of AbsExecBase survived every time.
+- On AROS m68k `SysBase` is linked as absolute address 4
+  (`--defsym,SysBase=0x4`), so address 6 is its low half.
+- `x` was `0x019f` = 415, a mouse coordinate. `$020012f0` became `$0200019f`.
+
+Every reading in this issue falls out of that. The wild PC was always
+`corrupt_SysBase - LVO` for whichever library call came next, which is why it
+moved around and why it was always odd and always just below the base. The
+`y` store to address 8 never even ran: the machine died on the first
+`jsr -LVO(a6)` between the two.
+
+# The fix, and what it does not answer
+
+`patches/aros/0092` guards the dereference. That is correct on any
+architecture -- m68k is only where it is fatal rather than a wild store into
+low memory nobody was using.
+
+It does not explain **why a pointer reaches `SetPointerPos` with no sprite**.
+`MM_SetPointerShape` dereferences `msg->pointer->sprite` itself
+(`monitorclass.c:1937`) before assigning `data->pointer = msg->pointer`, so
+the sprite was there at that point. So either it was freed afterwards, or
+`data->pointer` on the freshly created Amiga monitor node is not what it looks
+like.
+
+The guard therefore reports rather than skipping silently, so the same run
+that stops the crash also says which pointer it was.
+
+# Why it took this long, and the instrument that ended it
+
+Three wrong shapes were drawn from memory dumps before the mechanism was
+read -- an exception loop on the supervisor stack, a corrupt vector slot, a
+corrupt SysBase global -- and each was consistent with the dump. What settled
+it was not a better reading; it was making the write itself observable.
+
+Two mistakes in that instrument are worth keeping:
+
+- **The report budget was spent on boot noise.** AROS fills the 68k vector
+  table at startup, which exhausted a flat 32-report cap long before the
+  window of interest. My own QEMU validation had shown that fill and I did not
+  draw the conclusion. AbsExecBase is now uncapped.
+- **The armed state was announced where the capture could not see it.** An
+  unarmed trap and a silent one produced identical logs. The state is now
+  restated on the line that always prints beside the crash.
+
+Both are the trap CLAUDE.md names ("a probe that prints nothing and a probe
+that never ran look identical") and ISSUE-0078 records as the most expensive
+one in the dwc2 driver. It cost two round trips here.
+
+# Where to start
+
+Confirm on hardware: DPaint, PAL, OK. Expect no crash, and expect
+
+```text
+[Monitor] SetPointerPos: pointer 0x........ has no sprite -- not writing (x,y)
+```
+
+which turns "why is it NULL" into the remaining question. If that line does not
+appear and the screen opens, the sprite was there and something else changed.
 
 # CAUGHT: a word write to address 6, and the true base
 
