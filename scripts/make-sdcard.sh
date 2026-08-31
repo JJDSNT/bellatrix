@@ -373,31 +373,43 @@ TRACE
     fi
 fi
 
-# The classic display driver is off the card unless asked for.
+# The classic display driver is on the card, and presentation is manual.
 #
-# Not the same as not building it. amigavideo.hidd is inert on its own; what
-# starts it is DEVS:Monitors/AmigaVideo, which AROSMonDrvs runs at boot. From
-# that point AROS draws through Denise -- and nothing presents Denise
-# automatically. The panel holds whatever the VideoCore last scanned out, the
-# boot clock stops, and the machine runs correctly and invisibly. It has been
-# read as a hang three times now, most recently on a card this script built
-# with the default the other way round.
+# amigavideo.hidd is inert on its own; what starts it is
+# DEVS:Monitors/AmigaVideo, which AROSMonDrvs runs at boot. From that point
+# AROS draws through Denise -- and nothing puts Denise on the panel by itself.
+# `DeniseView SHOW` is the presenter and it is a command someone types.
 #
-# The cost is not only visual. cia.resource's init starts a CIA timer and the
-# chipset then runs for the whole boot; a boot that reaches Wanderer in under
-# a minute took over two and a half with the monitor present, and the card
-# dropped from 1173 to 178 KB/s in the same run.
+# That is deliberate, and it is the decision: an automatic presenter is not
+# wanted. The consequence has to be known rather than rediscovered, because it
+# looks exactly like a hang -- the panel holds whatever the VideoCore last
+# scanned out and the boot clock stops. It has been read as a crash three
+# times. It is not one; the machine is running and drawing where nobody is
+# looking.
 #
-# So the default is off, and it stays off until something puts Denise on the
-# panel without being asked. `DeniseView SHOW` is that presenter today and it
-# is a command someone has to type. BELLATRIX_CHIPSET_DISPLAY=1 puts the
-# monitor back for the boot that is testing exactly this. ISSUE-0068,
-# ISSUE-0073.
-if [ "${BELLATRIX_CHIPSET_DISPLAY:-0}" = 0 ]; then
+# Without this driver there is no producer at all. Demo Reel 3 draws through
+# graphics.library like any well-behaved application, so with vcgfx as the
+# only display its bitplanes go to the VideoCore and Rigel's Denise is handed
+# nothing -- which is what every census on hardware has said: non-bg=0,
+# sum=00000000, for the whole of a boot. ISSUE-0068 reached the same
+# conclusion from the disassembly before any of this was measured.
+#
+# A note on its cost, because the number in this comment used to be wrong.
+# Leaving it off was justified here with "a boot that reaches Wanderer in
+# under a minute took over two and a half, and the card dropped from 1173 to
+# 178 KB/s". That was measured on a machine which was also spending its time
+# in an interrupt storm -- dwc2emu68 never cleared the latched core
+# interrupts, and SOF was unmasked from controller init. Both are fixed. What
+# this driver actually costs has not been measured since, and the old figure
+# should not be quoted as if it had.
+#
+# BELLATRIX_CHIPSET_DISPLAY=0 leaves it off, for a boot that wants the panel
+# to keep showing the desktop. ISSUE-0068, ISSUE-0073.
+if [ "${BELLATRIX_CHIPSET_DISPLAY:-1}" = 0 ]; then
     rm -f "$STAGE/Devs/Monitors/AmigaVideo"
     echo "[sdcard] classic chipset display driver left off the card"
 else
-    echo "[sdcard] classic chipset display driver ON -- expect a blank panel"
+    echo "[sdcard] classic chipset display driver ON -- the panel needs DeniseView SHOW"
 fi
 
 # BELLATRIX_DEMOREEL puts a drawer of extracted Demo Reel 3 files on the card.
