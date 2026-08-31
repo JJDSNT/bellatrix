@@ -708,6 +708,29 @@ while IFS= read -r f; do
 done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' |
          grep -iE '(^|/)(AUX|CON|PRN|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$' || true)
 
+# ...and say so for the characters FAT rejects, which mtools drops without a
+# word.
+#
+# This card is FAT32 -- that is what the Pi's firmware reads and what
+# partition.library then mounts as SDCARD0P0: -- and FAT forbids ? * : < > |
+# " and \ in a name. AmigaDOS does not. Software staged from an OFS floppy can
+# therefore lose a file on the way to the card and nothing says so.
+#
+# It has happened: "The evil Hannibals from Mars" carries its 406 KB data file
+# as `Har vi røget hash?`, the question mark went straight through this script
+# into mtools, and the demo booted, found no data and sat there. The drawer
+# looked right in every listing except the card's own.
+#
+# Not deleted -- named. Whoever staged it has to decide whether the program
+# can live with a different name.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    echo "[sd] WARNING: $f cannot be written to FAT (? * : < > | \" or \\)"
+    echo "[sd]          mtools will drop it silently; rename it or the"
+    echo "[sd]          program that wants it will not find it"
+done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' |
+         grep -E '[?*:<>|"\\]' || true)
+
 # The staging tree is the authority now, not the list that built it: --pi has
 # added the boot payload to it and version.txt is written into it, so anything
 # that reads DIST again here would write a different card than --pack packs.
