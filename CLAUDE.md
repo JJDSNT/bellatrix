@@ -227,10 +227,12 @@ that cannot deliver 3546895 colour clocks a second does not get a slower
 chipset: it gets a core saturated at 100%, four fifths of the requested colour
 clocks discarded at the catch-up cap, and a 5.9 ms lock hold in front of every
 CPU access to the classic domain. Measured, and the boot stalls in the graphics
-drivers because of it. `BELLATRIX_CHIPDIV=8 ./run.sh` scales the demand to what
-the host can supply and nothing else -- a colour clock still costs a colour
-clock. It is 1 by default, which is right on a Pi 3 and wrong nowhere else.
-ISSUE-0075 has both measurements.
+drivers because of it. `bellatrix.chipdiv=N` scales the demand to what the host
+can supply and nothing else -- a colour clock still costs a colour clock. The
+option defaults to 1, which is right on a Pi 3 and wrong nowhere else, but
+`run.sh` defaults it to 8 whenever it turns the chipset on, because that script
+is the QEMU path and never touches a card. `BELLATRIX_CHIPDIV=1` reproduces
+hardware there. ISSUE-0075 has both measurements.
 
 **A property on `/emu68` is not a channel to the guest.** `dt_add_property()`
 edits Emu68's own parsed tree; the guest receives a byte copy of the original

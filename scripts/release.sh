@@ -236,8 +236,20 @@ mkdir -p "$RELEASE"
 
 ARCHIVE="$RELEASE/bellatrix-$TAG-pi3.tar.xz"
 
+# The card ships with the chipset built in and switched off.
+#
+# Those are different questions and a release is where the difference earns its
+# keep. CONFIG_RIGEL=1 (build.sh's default) means the kernel on this card
+# *carries* Rigel, so no one has to rebuild anything to get it. Leaving `rigel`
+# off cmdline.txt means the card *boots* the chipset-less machine, which is the
+# one that is fast and the one whose behaviour is settled.
+#
+# Turning it on is then editing one line in a text file with the card in a
+# reader -- which is exactly the property the boot argument was introduced for,
+# and it does not exist if a release decides for its user.
 say "packing the card"
-BELLATRIX_VERSION="$TAG" "$ROOT/scripts/make-sdcard.sh" --pack --out "$ARCHIVE"
+BELLATRIX_RIGEL=0 BELLATRIX_VERSION="$TAG" \
+    "$ROOT/scripts/make-sdcard.sh" --pack --out "$ARCHIVE"
 
 # The two increments are copied from the same trees the archive was built from,
 # not extracted back out of it: if they ever disagree, verify_assets says so
@@ -266,7 +278,10 @@ say "packing the QEMU bundle"
 QEMU_STAGE="$RELEASE/.qemu"
 rm -rf "$QEMU_STAGE"; mkdir -p "$QEMU_STAGE"
 
-"$ROOT/scripts/make-sdcard.sh" --out "$QEMU_STAGE/sd.img" >/dev/null
+# QEMU never reads this card's cmdline.txt -- the bootargs come from -append
+# below -- but the card in the bundle should still say what the card in the
+# archive says, so nobody reading one learns something untrue about the other.
+BELLATRIX_RIGEL=0 "$ROOT/scripts/make-sdcard.sh" --out "$QEMU_STAGE/sd.img" >/dev/null
 
 # The bundle's kernel is the card's kernel without the gzip: uncompressed here
 # because the Pi firmware unpacks a gzipped kernel by content and QEMU does not.
@@ -274,10 +289,12 @@ rm -rf "$QEMU_STAGE"; mkdir -p "$QEMU_STAGE"
 # make-sdcard.sh reaches this bundle too -- the card and the bundle cannot end
 # up calling the same file different things.
 QEMU_KERNEL="${KERNEL_NAME%.gz}"
+# The bundle boots the same machine the card boots: the kernel carries Rigel and
+# the command line does not ask for it. Turning it on here is one edit, and the
+# launchers below say which -- including the part that is not obvious, that the
+# divisor is not optional under QEMU.
 QEMU_BOOTARGS="nocomposition"
-if [ "$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)" = 1 ]; then
-    QEMU_BOOTARGS="$QEMU_BOOTARGS rigel"
-fi
+QEMU_RIGEL_BOOTARGS="nocomposition rigel bellatrix.chipdiv=8"
 
 cp "$ROOT/out/images/$BUILT_KERNEL" "$QEMU_STAGE/$QEMU_KERNEL"
 cp "$FIRMWARE/bcm2710-rpi-3-b.dtb"  "$QEMU_STAGE/"
@@ -292,6 +309,10 @@ cat > "$QEMU_STAGE/run.sh" <<'LAUNCHER'
 #
 # nocomposition is not optional yet: with the compositor enabled the boot
 # finishes and the screen never changes.
+#
+# The classic chipset: change the -append line below to
+#     -append "@RIGEL_BOOTARGS@"
+# The divisor is not optional under QEMU; README.txt says why.
 here=$(cd "$(dirname "$0")" && pwd)
 exec qemu-system-aarch64 \
     -M raspi3b -accel tcg,tb-size=64 \
@@ -327,6 +348,10 @@ if errorlevel 1 (
 
 rem nocomposition is not optional yet: with the compositor enabled the boot
 rem finishes and the screen never changes.
+rem
+rem The classic chipset: change the -append line below to
+rem     -append "@RIGEL_BOOTARGS@"
+rem The divisor is not optional under QEMU; README.txt says why.
 qemu-system-aarch64 ^
     -M raspi3b -accel tcg,tb-size=64 ^
     -kernel "%HERE%@KERNEL@" ^
@@ -362,9 +387,35 @@ names them.
 
 A wired USB tablet is attached for the pointer. QEMU's relative usb-mouse
 path reverses both axes here.
+
+The classic chipset
+-------------------
+
+This kernel carries it and does not boot it, exactly as the SD card
+release does. The chipset is a boot argument rather than a build option,
+so the same files boot either machine.
+
+To boot it, change the -append line in run.sh or run.bat to:
+
+    -append "@RIGEL_BOOTARGS@"
+
+The divisor is not optional under QEMU, and it is worth knowing why.
+Chipset time is a function of real elapsed time. A Raspberry Pi 3 can
+deliver the 3546895 colour clocks a second that needs; QEMU manages about
+a fifth of them. It does not respond by running a slower chipset --
+it pins the core the chipset runs on, throws away the colour clocks it
+could not deliver, and makes every CPU access to the chipset queue behind
+it, at which point the boot stalls in the graphics drivers rather than
+reaching a desktop.
+
+bellatrix.chipdiv=8 runs the chipset clock at an eighth of real time, so
+the machine asks for what this host can actually give. Everything the
+chipset does still costs exactly what it costs; what changes is how many
+colour clocks a second of real time buys. On a Pi, leave it out.
 QREADME
 
-sed -i "s|@KERNEL@|$QEMU_KERNEL|g; s|@ELF@|$ELF_NAME|g; s|@BOOTARGS@|$QEMU_BOOTARGS|g" \
+sed -i "s|@KERNEL@|$QEMU_KERNEL|g; s|@ELF@|$ELF_NAME|g; s|@BOOTARGS@|$QEMU_BOOTARGS|g; \
+        s|@RIGEL_BOOTARGS@|$QEMU_RIGEL_BOOTARGS|g" \
     "$QEMU_STAGE/run.sh" "$QEMU_STAGE/run.bat" "$QEMU_STAGE/README.txt"
 
 tar -C "$QEMU_STAGE" -cf - . | xz -T0 -9 > "$RELEASE/bellatrix-$TAG-qemu.tar.xz"

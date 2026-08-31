@@ -21,9 +21,10 @@
 # default is whatever the last build put in the image. BOOTARGS replaces the
 # kernel command line outright.
 #
-# BELLATRIX_CHIPDIV=N runs the chipset's clock at 1/N of real time. Unset is 1,
-# which is what hardware wants; QEMU cannot deliver a fifth of the colour clocks
-# real time asks for, so 8 to 16 is the useful range here (see below).
+# BELLATRIX_CHIPDIV=N runs the chipset's clock at 1/N of real time. With the
+# chipset on, this script defaults it to 8 because QEMU cannot deliver a fifth
+# of the colour clocks real time asks for and the boot stalls without it; =1
+# restores hardware's behaviour. A card is unaffected -- see make-sdcard.sh.
 # BELLATRIX_CHIPFLOOR=1 keeps the chipset core from taking steps too short to
 # reach a deadline. Off by default; see below.
 #
@@ -140,17 +141,27 @@ if [ "$AROS" = 1 ]; then
     # one image gets booted both ways without rebuilding.
     if [ "${BELLATRIX_RIGEL:-$(cat "$RIGEL_STAMP" 2>/dev/null || echo 0)}" = 1 ]; then
         BOOTARGS="$BOOTARGS rigel"
-    fi
-    # How fast chipset time runs. Chipset time comes from the wall clock, and a
-    # host that cannot keep up does not get a slower chipset -- it gets a core
-    # pinned at 100% believing it is behind, with the colour clocks it could not
-    # deliver discarded at the catch-up cap, and every CPU access to the classic
-    # domain queueing behind the chipset lock. Measured under QEMU/TCG here:
-    # 690000 CCK/s against the 3546895 real time asks for, so four fifths of
-    # them are thrown away. BELLATRIX_CHIPDIV scales the demand to what the host
-    # can actually deliver; read the CCK/s off [BELLATRIX:RIGEL:PERF] and divide.
-    if [ -n "${BELLATRIX_CHIPDIV:-}" ]; then
-        BOOTARGS="$BOOTARGS bellatrix.chipdiv=$BELLATRIX_CHIPDIV"
+        # How fast chipset time runs, and why this script picks a default where
+        # the card does not.
+        #
+        # Chipset time comes from the wall clock. A host that cannot deliver
+        # 3546895 colour clocks a second does not get a slower chipset: it gets
+        # a core pinned at 100% believing it is behind, four fifths of the
+        # requested colour clocks discarded at the catch-up cap, and a 5.9 ms
+        # lock hold in front of every CPU access to the classic domain.
+        # Measured here at 690000 CCK/s -- and the boot then stalls in the
+        # graphics drivers rather than reaching a desktop.
+        #
+        # This script is the QEMU path and only that; a card is written by
+        # make-sdcard.sh and is not affected by anything here. So it defaults
+        # the divisor rather than leaving a chipset boot that does not work and
+        # a knob nobody knew to reach for. 8 is what was measured: it meets
+        # 99.6% of the scaled demand with nothing discarded, and the boot
+        # reaches display takeover.
+        #
+        # BELLATRIX_CHIPDIV=1 restores hardware's own behaviour for anyone who
+        # wants to reproduce it here.
+        BOOTARGS="$BOOTARGS bellatrix.chipdiv=${BELLATRIX_CHIPDIV:-8}"
     fi
     # BELLATRIX_CHIPFLOOR=1 stops the chipset core taking a step too short to
     # reach an observable deadline. Off by default: it is a performance change

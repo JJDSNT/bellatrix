@@ -96,9 +96,13 @@ and holds the lock every CPU access to the classic domain waits on.
 `bellatrix.chipdiv=N` runs that clock at 1/N of real time instead, so the
 machine asks for what the host can actually give. It changes only the rate;
 what a colour clock does, and what it costs, is unchanged. Leave it out on
-hardware. Under QEMU, `BELLATRIX_CHIPDIV=8 ./run.sh` is a reasonable start --
-divide 3546895 by the `CCK/s` the `[BELLATRIX:RIGEL:PERF]` line reports and
-round up.
+hardware. `./run.sh` is the QEMU path and nothing else, so it defaults the
+divisor to 8 with the chipset on rather than leaving a boot that does not work
+and a knob nobody knew to reach for; `BELLATRIX_CHIPDIV=1` restores hardware's
+own behaviour there. To pick a value for another host, divide 3546895 by the
+`CCK/s` the `[BELLATRIX:RIGEL:PERF]` line reports and round up. A card is
+unaffected: `make-sdcard.sh` writes what you ask it for, and a release writes
+no divisor and no `rigel` at all.
 
 Once the chipset core keeps up with its clock it starts paying a full step into
 Rigel for a handful of colour clocks at a time. `bellatrix.chipfloor`
