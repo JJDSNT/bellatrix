@@ -116,12 +116,27 @@ Neither is the icon path. **Do not read the Guru as a Rigel defect**: it is a
 demo started in a way its author did not intend, and saying otherwise would be
 exactly the mistake this project keeps paying for.
 
-## What would make this a real oracle
+## Mouse movement: implemented, and not yet working
 
-Mouse movement. `rigel_input.h` already has `JOY0DAT` -- Rigel can move a
-pointer -- and the harness exposes only `--lmb FRAME[:HOLD]`, a click wherever
-the pointer happens to be. A `--mouse FRAME:X,Y` would let a run double-click
-the demo's own icon, which is the only path the demo was built for, and would
-remove the need to patch a disk at all.
+**Correction to an earlier reading here.** The harness has full mouse support
+-- `harness_video.c` turns `SDL_MOUSEMOTION` into `rigel_input_set_joydat`,
+with a grab toggle and buttons. It is the *interactive* path that has it, and
+that is how this demo has been watched before: a person opens the window and
+double-clicks the icon. Only the headless CLI was missing it.
 
-That is a change in the `rigel` submodule, so it carries a pin bump with it.
+`--mouse FRAME:X/Y` now exists (rigel `39b5ca4`). The Amiga has no absolute
+pointer, so it homes into the top-left corner -- where the pointer clamps --
+and walks out, in steps under 128 because a larger delta reads as negative.
+
+The icon's position, measured off a Workbench screenshot rather than guessed:
+the composed frame is 672x256 with the screen origin at image (32, 35), and
+the `DemoReel3` icon's art centres on image (527, 62), so Intuition (495, 27).
+
+```
+--mouse 2600:495/27 --lmb 2700:3,2706:3
+```
+
+**It does not launch the icon yet**, and the composed PPM does not show the
+pointer sprite, so there is no way from the screenshot to tell whether the
+pointer moved at all. That is the next thing to settle, and the sprite's
+absence from the capture is worth checking on its own.
