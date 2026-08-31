@@ -579,6 +579,16 @@ void amiga_bus_init(void)
     config.chip_ram.read16 = amiga_chip_ram_read16;
     config.chip_ram.write16 = amiga_chip_ram_write16;
 
+    /*
+     * Say that this image carries the instruments, before using them.
+     *
+     * A guard that never fires and a guard that was never flashed produce the
+     * same log, and reading the first as the second is how an afternoon goes
+     * the wrong way (CLAUDE.md says the same thing about boot probes). One
+     * line at init makes the silence mean something.
+     */
+    kprintf("[BELLATRIX:RIGEL] guards armed: low-chip writes, AbsExecBase\n");
+
     rigel = rigel_create(&config);
     if (rigel == 0)
         kprintf("[BELLATRIX:RIGEL] initialization failed\n");
@@ -925,6 +935,57 @@ void amiga_clock_run_on_core(void)
 
     for (;;)
     {
+        /*
+         * A software watchpoint on AbsExecBase.
+         *
+         * AROS m68k links SysBase and AbsExecBase as absolute address 4, so
+         * the longword at chip RAM offset 4 is what every `moveal SysBase,%a6`
+         * in the kernel reads. Under ISSUE-0082 it changes, and the machine
+         * then dies at whatever library call comes next.
+         *
+         * It cannot be caught where the write happens. Chip RAM is a
+         * MACHINE_REGION_DIRECT mapping (machine.c), so the CPU writes it with
+         * native stores that reach no hook of ours -- which is also why the
+         * chipset-side guard in amiga_chip_ram_write16() stayed silent: the
+         * write is not chipset DMA.
+         *
+         * What this core can do is watch. It is already spinning, the check is
+         * a load and a compare, and it holds the one thing the crash report
+         * cannot give: the m68k PC at the moment the value changes, sampled
+         * from outside while the CPU is still running. The crash names the
+         * first library call after the write; this names the write.
+         *
+         * The latch takes the first non-zero value seen, which is exec
+         * installing itself. That value is also worth printing on its own --
+         * it is the true SysBase, and three readings of the corrupted one all
+         * kept the high word 0x0200 and changed only the low, which says the
+         * damage is a word-sized store to address 6 rather than a longword.
+         */
+        {
+            static uint32_t absexec_latch;
+            static uint32_t absexec_reports;
+            uint32_t absexec =
+                ((uint32_t)machine_chip_ram_read16(4) << 16) |
+                machine_chip_ram_read16(6);
+
+            if (absexec_latch == 0 && absexec != 0)
+            {
+                absexec_latch = absexec;
+                kprintf("[BELLATRIX:RIGEL:ABSEXEC] AbsExecBase is $%08x\n",
+                        (unsigned)absexec);
+            }
+            else if (absexec != absexec_latch && absexec_reports < 8u)
+            {
+                absexec_reports++;
+                kprintf("[BELLATRIX:RIGEL:ABSEXEC] $%08x -> $%08x"
+                        " with the m68k at pc=%08x sr=%04x\n",
+                        (unsigned)absexec_latch, (unsigned)absexec,
+                        (unsigned)(__m68k_state != 0 ? __m68k_state->PC : 0),
+                        (unsigned)(__m68k_state != 0 ? __m68k_state->SR : 0));
+                absexec_latch = absexec;
+            }
+        }
+
         /*
          * The only observer that survives an m68k that has stopped.
          *
