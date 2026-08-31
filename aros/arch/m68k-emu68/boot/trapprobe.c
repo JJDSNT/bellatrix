@@ -281,9 +281,27 @@ static int in_a_memheader(ULONG value)
     const struct ExecBase *base = SysBase;
     const struct MemHeader *mh;
 
+    /*
+     * CORRECTION, and the reason for the fallback.
+     *
+     * This walk replaced a hard-coded [0x02000000, 0x30600000) because that
+     * looked like a guess. It was a guess, but it was also right: the machine
+     * reports AbsExecBase as $020012f0, so the heap does begin at 0x02000000
+     * and the two longwords I said it had mislabelled were mislabelled for a
+     * different reason.
+     *
+     * Worse, deriving the bounds from SysBase makes the marker depend on the
+     * one thing that is broken in the crash it exists to read -- ISSUE-0082
+     * corrupts SysBase, so every walk returns nothing and the dump comes back
+     * with no markers at all. That happened, and it cost a dump.
+     *
+     * So: walk the MemHeaders when SysBase is sound, because that is exact,
+     * and fall back to the constants when it is not, because an approximate
+     * marker beats none.
+     */
     if (((ULONG)base & 1) || (ULONG)base < 0x1000 ||
         (ULONG)base >= 0x34000000)
-        return 0;
+        return value >= 0x02000000 && value < 0x30600000;
 
     for (mh = (const struct MemHeader *)base->MemList.lh_Head;
          mh->mh_Node.ln_Succ != NULL;
@@ -291,7 +309,7 @@ static int in_a_memheader(ULONG value)
     {
         if (((ULONG)mh & 1) || (ULONG)mh < 0x1000 ||
             (ULONG)mh >= 0x34000000)
-            return 0;
+            return value >= 0x02000000 && value < 0x30600000;
 
         if (value >= (ULONG)mh->mh_Lower && value < (ULONG)mh->mh_Upper)
             return 1;
