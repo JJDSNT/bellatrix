@@ -297,13 +297,26 @@ coming out on the terminal; close with `Ctrl-A` `X` in the terminal. Use
 `-display none` when only the log matters -- `screendump` on the monitor
 socket still works headless, which is how the desktop below was captured.
 
-`nocomposition` is currently **required** to see anything. Without it
-`DEVS:Monitors/Compositor` installs successfully and then nothing reaches the
-framebuffer: the boot runs to completion, `Wanderer` loads `muimaster.library`
-and its Zune icon classes, and the screen stays on the Emu68 logo. Presumably
-`emu68gfx` is missing whatever the software compositor expects of a display
-driver it has taken over. With the flag, the Workbench screen comes up with
-`RAM Disk` and the boot volume on it.
+`nocomposition` is still **required** to see anything, and it is not
+`emu68gfx`'s fault -- which is what this file used to guess. Re-measured on
+2026-08-22 with `fbgfx` as the boot driver and `vcgfx` installed from
+`DEVS:Monitors`, two runs of the same build screendumped at the same point:
+
+| boot argument      | dominant colour        |
+|--------------------|------------------------|
+| `nocomposition`    | 92.0% `999999` (Workbench grey), 4.3% white, 1.9% title-bar blue |
+| none               | 89.6% black, the rest boot-splash leftovers |
+
+So the software compositor still swallows the display with a completely
+different pair of drivers, and whatever it expects is missing from all three
+of ours rather than from the one that was suspected. With the flag, the
+Workbench screen comes up with `RAM Disk` and the boot volume on it.
+
+`nomonitors` is a different flag and must **not** be used here: it sets
+`BF_NO_DISPLAY_DRIVERS`, which stops `AROSMonDrvs` running what is in
+`DEVS:Monitors` -- and that is now where the VideoCore driver lives. A boot
+with it would fall back to the kickstart framebuffer driver and never take the
+hardware.
 
 Reaching that desktop needed two things beyond the display driver itself,
 neither of them obvious from the symptom:

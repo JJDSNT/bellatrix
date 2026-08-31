@@ -1,0 +1,57 @@
+;
+; What Poseidon thinks it has, and what it did about it.
+;
+; This settled the mouse. The HCD was never the problem: three of
+; dwc2emu68's counters are not per-address -- the SOF service tick, the
+; parked periodic NAK, the interrupt data line -- and all three read zero in
+; every boot before this one, so no interrupt IN transfer had ever reached
+; the driver. Nothing below was failing; nothing above was asking.
+;
+; What was above is a race. `Run AddUSBClasses` is asynchronous and
+; AddUSBHardware runs ninety lines later; psdAddClass() does not rescan, so a
+; class that lands after the last psdClassScan() binds to nothing already
+; there. patches/aros/0089 makes the classes register first.
+;
+; Keep this script as the check on that, not as a hunt. The second
+; AddUSBClasses below should now print "Skipping class" for every class on
+; the card -- which is the direct statement that the first run finished --
+; and PsdDevLister should show a class against the mouse.
+;
+Echo >DEBUG: "[usb-report] --- poseidon.library"
+Version >DEBUG: poseidon.library
+
+Echo >DEBUG: "[usb-report] --- classes present on the card"
+List >DEBUG: USBCLASSES: LFORMAT "%N"
+
+Echo >DEBUG: "[usb-report] --- what AddUSBHardware said at boot"
+If EXISTS "SDCARD0P0:usb-hardware.log"
+    Type >DEBUG: "SDCARD0P0:usb-hardware.log"
+Else
+    Echo >DEBUG: "[usb-report] no usb-hardware.log -- the block never ran"
+EndIf
+
+;
+; The Startup-Sequence runs this as `Run <NIL: >NIL: QUIET AddUSBClasses`:
+; asynchronous, silent, and with its output on NIL:, so a failure there is
+; invisible. Run it again in the foreground with somewhere to speak. It
+; prints "Skipping class X" for every class already registered, which is the
+; direct answer to whether the first run finished -- and it ends in
+; psdClassScan(), so if the first run lost a race with AddUSBHardware this
+; second scan is also the cure.
+;
+Echo >DEBUG: "[usb-report] --- AddUSBClasses again, in the foreground"
+AddUSBClasses >DEBUG:
+Echo >DEBUG: "[usb-report] --- AddUSBClasses returned"
+
+Echo >DEBUG: "[usb-report] --- the device tree and its bindings"
+PsdDevLister >DEBUG: SHOWROOT TOPOLOGY
+
+;
+; Poseidon narrates itself through psdAddErrorMsg: hub.class writes "New
+; device '%s' at port %ld" for every device it configures, and every failure
+; on the way there writes a line too. NOFLUSH keeps the log for anything that
+; reads it later.
+;
+Echo >DEBUG: "[usb-report] --- poseidon's own error log"
+PsdErrorlog >DEBUG: NOFLUSH
+Echo >DEBUG: "[usb-report] --- end"

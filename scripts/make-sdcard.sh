@@ -138,6 +138,22 @@ for f in "${REQUIRED_3D[@]}"; do
     [ -f "$DIST/$f" ] || missing+=("$f")
 done
 
+# The display driver proper, and the DEVS:Monitors program that loads it.
+#
+# Checked separately from the 3D stack because its absence does not look like
+# a failure. The kickstart carries a framebuffer driver registered with
+# DDRV_BootMode, so a card without these still boots to a desktop -- on the
+# surface the firmware set up, with no HVS ownership and no hardware cursor.
+# It looks like a slow machine rather than a missing driver, which is a much
+# worse thing to ship than a build error.
+REQUIRED_GFX=(
+    Devs/Drivers/vcgfx.hidd
+    Devs/Monitors/VideoCore
+)
+for f in "${REQUIRED_GFX[@]}"; do
+    [ -f "$DIST/$f" ] || missing+=("$f")
+done
+
 if [ "${#missing[@]}" -ne 0 ]; then
     echo "ERROR: $DIST is missing: ${missing[*]}" >&2
     echo "       The lean 'kernel-link-<target>' build only produces the ELF." >&2
@@ -173,15 +189,15 @@ done < <(cd "$DIST" && ls -A)
 # bootcode.bin is the stage the Pi 3 loads out of the card by itself; start.elf
 # and fixup.dat are the GPU firmware it then runs; the DTB is picked by the
 # firmware from the board model, so every Pi 3 variant's tree is written and the
-# board chooses. Emu68 goes in gzipped exactly as the build produced it, renamed
-# to Bellatrix.img.gz on the card -- the firmware decompresses a kernel image by
-# its content, so the name is config.txt's to choose.
+# board chooses. The kernel keeps the composition name recorded by build.sh;
+# the firmware decompresses it by content, so config.txt may select either.
 #
 # The AROS ELF is taken from the distribution tree rather than out/aros so the
 # kernel and the modules on the card always come from one build.
 if [ "$PI" = 1 ]; then
+    KERNEL_IMAGE="$(cat "$ROOT/out/images/Emu68.kernel-name" 2>/dev/null || echo Emu68.img)"
     BOOT_FILES=("$FIRMWARE/bootcode.bin" "$FIRMWARE/start.elf" "$FIRMWARE/fixup.dat"
-                "$FIRMWARE/Emu68.img.gz" "$DIST/$ELF")
+                "$FIRMWARE/$KERNEL_IMAGE.gz" "$DIST/$ELF")
     for f in "$FIRMWARE"/bcm2710-*.dtb; do
         [ -e "$f" ] && BOOT_FILES+=("$f")
     done
@@ -206,14 +222,87 @@ if [ "$PACK" = 0 ]; then
     echo "[sd] $SIZE image at $OUT"
     truncate -s "$SIZE" "$OUT"
 
-    sfdisk -q "$OUT" >/dev/null <<'EOF'
+    # BELLATRIX_SFS=1 adds a second partition for the FAT-versus-SFS comparison
+    # sdcard.md asks for.
+    #
+    # The Pi's firmware can only boot from FAT, so SYS: stays where it is and
+    # the SFS volume is a work partition beside it: same card, same driver,
+    # same everything except the filesystem, which is the only way the 2x2
+    # matrix means anything.
+    #
+    # NOT FINISHED, and the reason is recorded here rather than in a commit
+    # message nobody will find.
+    #
+    # Type 0x2f is what rom/partition/partition_types.c:33 maps to DOSType
+    # SFS\0, which is why it was chosen. It is not enough: booted with such a
+    # partition present, the system lists only SDCARD0P0 and no device node
+    # appears for the second one at all.
+    #
+    # The supported path is an RDB nested inside the MBR.
+    # rom/partition/partitionrdb.c:198 will only look for a RigidDiskBlock
+    # inside an MBR partition of type 0x30 or 0x76, and the Amiga-side DOSType
+    # then comes from the RDB's partition blocks rather than from the MBR type
+    # byte. Writing that RDB -- RigidDiskBlock plus PartitionBlocks, with
+    # checksums -- is what remains.
+    if [ "${BELLATRIX_SFS:-0}" = 1 ]; then
+        FATSECTORS=$(( 128 * 1024 * 1024 / 512 ))
+        SECTORS2=$(( ($(stat -c%s "$OUT") / 512) - 2048 - FATSECTORS ))
+        sfdisk -q "$OUT" >/dev/null <<EOF
+label: dos
+unit: sectors
+start=2048, size=$FATSECTORS, type=c, bootable
+start=$(( 2048 + FATSECTORS )), type=30
+EOF
+        echo "[sd] second partition: type 0x30, RDB container"
+
+        # An RDB inside it, with one partition of DOSType SFS\0.
+        #
+        # rom/partition/partitionrdb.c:198 accepts a RigidDiskBlock only inside
+        # an MBR partition of type 0x30 or 0x76, and the Amiga DOSType comes
+        # from the RDB's partition blocks rather than the MBR type byte. Type
+        # 0x2f maps to SFS\0 in partition_types.c and produces no device node
+        # at all, which is what was tried first.
+        #
+        # rdbtool comes from external/amitools. Geometry has to be given
+        # explicitly -- it cannot infer one from a bare file -- and heads=1,
+        # sectors=32 matches what the SD device reports (sdcu_Heads = 1).
+        RDBIMG="$OUT.rdb"
+        RDBCYL=$(( (SECTORS2) / 32 ))
+        rm -f "$RDBIMG"
+        # The handler goes *inside* the RDB, in FSHD/LSEG.
+        #
+        # A partition whose DOSType is SFS\0 tells AROS what the volume is, not
+        # how to serve it. The legacy tree's working SFS disk carried the
+        # driver in the RDB for exactly this reason, and rdbtool's fsadd is how
+        # it gets there. 24 RDB cylinders because the default reserves 32
+        # blocks and the handler is 135 KB.
+        SFSHANDLER="$DIST/L/sfs-handler"
+        if PYTHONPATH="$ROOT/external/amitools" python3 \
+                "$ROOT/external/amitools/bin/rdbtool" "$RDBIMG" \
+                create chs=$RDBCYL,1,32 + init rdb_cyls=24 \
+                + add size=100% fs=0x53465300 \
+                + fsadd "$SFSHANDLER" fs=0x53465300 >/dev/null 2>&1; then
+            dd if="$RDBIMG" of="$OUT" bs=512 seek=$(( 2048 + FATSECTORS )) \
+                conv=notrunc status=none
+            rm -f "$RDBIMG"
+            echo "[sd] RDB written: one partition, DOSType SFS\\0"
+        else
+            echo "[sd] WARNING: rdbtool failed; the second partition has no RDB" >&2
+        fi
+    else
+        sfdisk -q "$OUT" >/dev/null <<'EOF'
 label: dos
 unit: sectors
 start=2048, type=c, bootable
 EOF
+    fi
 
     # @@1M is the mtools offset to the partition at LBA 2048.
-    SECTORS=$(( ($(stat -c%s "$OUT") / 512) - 2048 ))
+    if [ "${BELLATRIX_SFS:-0}" = 1 ]; then
+        SECTORS=$FATSECTORS
+    else
+        SECTORS=$(( ($(stat -c%s "$OUT") / 512) - 2048 ))
+    fi
     mformat -i "$OUT@@1M" -F -v AROS -T "$SECTORS" ::
 fi
 
@@ -242,6 +331,161 @@ for entry in "${ENTRIES[@]}"; do
     cp -al "$DIST/$entry" "$STAGE/$entry"
 done
 
+# BELLATRIX_TRACE_STARTUP=1 makes the Startup-Sequence say where it is.
+#
+# A boot that stops somewhere in the sequence leaves no trace of which line it
+# stopped on, and the candidates are not few: AddUSBClasses and AddBTClasses
+# are asynchronous, Automount and Mount touch every DOSDriver, `Dir PIPE:`
+# needs a handler, and the ENVARC: copy walks the whole tree. Guessing between
+# them costs a card write per guess.
+#
+# So echo each line to DEBUG: before running it. The last line in the log is
+# the one that did not return -- which is the whole question.
+#
+# Not on by default: it is noisy, and the serial line is the slowest thing on
+# the machine.
+if [ "${BELLATRIX_TRACE_STARTUP:-0}" = 1 ]; then
+    seq="$STAGE/S/Startup-Sequence"
+    if [ -f "$seq" ]; then
+        python3 - "$seq" <<'TRACE'
+import os, sys
+p = sys.argv[1]
+raw = open(p, "rb").read().decode("latin-1")
+out = []
+for line in raw.split("\n"):
+    stripped = line.strip()
+    # Leave structure alone: echoing inside an If/EndIf pair or before a label
+    # changes what the shell parses, and a trace that alters the thing it
+    # measures is worse than none.
+    if (stripped and not stripped.startswith(";")
+            and not stripped.upper().startswith(("IF ", "ELSE", "ENDIF", "LAB ",
+                                                 "SKIP ", ".", "FAILAT"))):
+        out.append('Echo >DEBUG: "[startup] %s"' % stripped.replace('"', "'")[:70])
+    out.append(line)
+# The stage is hard-linked from the distribution tree (cp -al), so an
+# in-place rewrite edits the build tree itself and every later card
+# inherits it. Write beside the file and move over it, which is what
+# the boot-test insertion below already does.
+open(p + ".new", "wb").write("\n".join(out).encode("latin-1"))
+os.replace(p + ".new", p)
+print("[sdcard] Startup-Sequence traced to DEBUG:")
+TRACE
+    fi
+fi
+
+# The classic display driver is on the card, and presentation is manual.
+#
+# amigavideo.hidd is inert on its own; what starts it is
+# DEVS:Monitors/AmigaVideo, which AROSMonDrvs runs at boot. From that point
+# AROS draws through Denise -- and nothing puts Denise on the panel by itself.
+# `DeniseView SHOW` is the presenter and it is a command someone types.
+#
+# That is deliberate, and it is the decision: an automatic presenter is not
+# wanted. The consequence has to be known rather than rediscovered, because it
+# looks exactly like a hang -- the panel holds whatever the VideoCore last
+# scanned out and the boot clock stops. It has been read as a crash three
+# times. It is not one; the machine is running and drawing where nobody is
+# looking.
+#
+# Without this driver there is no producer at all. Demo Reel 3 draws through
+# graphics.library like any well-behaved application, so with vcgfx as the
+# only display its bitplanes go to the VideoCore and Rigel's Denise is handed
+# nothing -- which is what every census on hardware has said: non-bg=0,
+# sum=00000000, for the whole of a boot. ISSUE-0068 reached the same
+# conclusion from the disassembly before any of this was measured.
+#
+# A note on its cost, because the number in this comment used to be wrong.
+# Leaving it off was justified here with "a boot that reaches Wanderer in
+# under a minute took over two and a half, and the card dropped from 1173 to
+# 178 KB/s". That was measured on a machine which was also spending its time
+# in an interrupt storm -- dwc2emu68 never cleared the latched core
+# interrupts, and SOF was unmasked from controller init. Both are fixed. What
+# this driver actually costs has not been measured since, and the old figure
+# should not be quoted as if it had.
+#
+# BELLATRIX_CHIPSET_DISPLAY=0 leaves it off, for a boot that wants the panel
+# to keep showing the desktop. ISSUE-0068, ISSUE-0073.
+if [ "${BELLATRIX_CHIPSET_DISPLAY:-1}" = 0 ]; then
+    rm -f "$STAGE/Devs/Monitors/AmigaVideo"
+    echo "[sdcard] classic chipset display driver left off the card"
+else
+    echo "[sdcard] classic chipset display driver ON -- the panel needs DeniseView SHOW"
+fi
+
+# BELLATRIX_DPAINT puts Deluxe Paint IV on the card, in a drawer with its icon
+# so Wanderer shows it and it can be started the way anyone would start it.
+#
+# It is the counterpart to the demo workloads: an ordinary AmigaOS
+# application, well-behaved and heavily exercised, which opens a custom screen
+# through intuition and graphics.library and leans on the blitter. That is the
+# path most Amiga software actually takes, and the half of the machine a demo
+# that turns the operating system off never touches.
+#
+# What it exercises today is AROS and this machine, not the chipset: without
+# DEVS:Monitors/AmigaVideo there is no classic display driver, so
+# graphics.library renders to the VideoCore through vcgfx and Rigel's Denise
+# is handed nothing. The chipset half of this workload needs ISSUE-0081.
+if [ -n "${BELLATRIX_DPAINT:-}" ]; then
+    if [ ! -d "$BELLATRIX_DPAINT" ]; then
+        echo "ERROR: BELLATRIX_DPAINT=$BELLATRIX_DPAINT is not a directory" >&2
+        echo "       Run tools/dpaint/install.sh first." >&2
+        exit 2
+    fi
+    mkdir -p "$STAGE/DPaint"
+    cp -al "$BELLATRIX_DPAINT/." "$STAGE/DPaint/" 2>/dev/null || \
+        cp -a "$BELLATRIX_DPAINT/." "$STAGE/DPaint/"
+    # Wanderer needs an icon for the drawer itself, not only for what is in it.
+    [ -f "$STAGE/DPaint/Disk.info" ] && cp -a "$STAGE/DPaint/Disk.info" "$STAGE/DPaint.info"
+    echo "[sdcard] Deluxe Paint on the card: $(find "$STAGE/DPaint" -type f | wc -l) files"
+fi
+
+# BELLATRIX_HANNIBALS puts a drawer of "The evil Hannibals from Mars" on the
+# card, the same way and for the same reason: it is somebody else's work and
+# tools/hannibals/install.sh extracts it from your own ADF into out/, which is
+# git-ignored.
+#
+# It is here because of what it does not need. The demo opens dos.library and
+# nothing else, and takes the machine over itself -- so unlike an application
+# that draws through graphics.library, it needs no display driver on our side.
+# It programs Denise, so there is no producer to supply and no ownership to
+# arbitrate between vcgfx and amigavideo. Everything it does lands in Rigel.
+#
+# Expect AROS not to survive it. Turning the operating system off is the first
+# thing a demo does, and that is the test, not a failure. The ARM side keeps
+# running -- platform interrupts are not Paula's -- so the serial log carries
+# on and says what the chipset was asked for.
+if [ -n "${BELLATRIX_HANNIBALS:-}" ]; then
+    if [ ! -d "$BELLATRIX_HANNIBALS" ]; then
+        echo "ERROR: BELLATRIX_HANNIBALS=$BELLATRIX_HANNIBALS is not a directory" >&2
+        echo "       Run tools/hannibals/install.sh first." >&2
+        exit 2
+    fi
+    mkdir -p "$STAGE/Hannibals"
+    cp -al "$BELLATRIX_HANNIBALS/." "$STAGE/Hannibals/" 2>/dev/null ||         cp -a "$BELLATRIX_HANNIBALS/." "$STAGE/Hannibals/"
+    echo "[sdcard] Hannibals on the card: $(find "$STAGE/Hannibals" -type f | wc -l) files"
+fi
+
+# BELLATRIX_DEMOREEL puts a drawer of extracted Demo Reel 3 files on the card.
+#
+# Not on every card, and not in the repository: the demo is commercial software
+# from 1989 and is not ours to redistribute. tools/demoreel/install.sh extracts
+# it from your own ADFs into out/, which is git-ignored, and this copies what is
+# there if you point at it.
+#
+# It goes in one drawer on purpose. The demo's own ToRAM assigns DemoReel3: and
+# DemoReelData: to the current directory when it finds Monument, so both disks
+# merged and run from that drawer need no assigns from us. ISSUE-0068 phase 4.
+if [ -n "${BELLATRIX_DEMOREEL:-}" ]; then
+    if [ ! -d "$BELLATRIX_DEMOREEL" ]; then
+        echo "ERROR: BELLATRIX_DEMOREEL=$BELLATRIX_DEMOREEL is not a directory" >&2
+        echo "       Run tools/demoreel/install.sh first." >&2
+        exit 1
+    fi
+    mkdir -p "$STAGE/DemoReel3"
+    cp -al "$BELLATRIX_DEMOREEL/." "$STAGE/DemoReel3/" 2>/dev/null ||         cp -a "$BELLATRIX_DEMOREEL/." "$STAGE/DemoReel3/"
+    echo "[sdcard] Demo Reel 3 on the card: $(find "$STAGE/DemoReel3" -type f | wc -l) files"
+fi
+
 # tests/ram-stress/ goes on every card, and nothing runs it.
 #
 # They are diagnostic scripts for ISSUE-0037, where the trigger happens four
@@ -260,18 +504,87 @@ if [ -d "$ROOT/tests/ram-stress" ]; then
     done
 fi
 
+# tests/gl/ for the same reason: probes that report through DEBUG:, so that
+# what they found survives a machine that has stopped responding.
+if [ -d "$ROOT/tests/gl" ]; then
+    for s in "$ROOT/tests/gl/"*; do
+        case "$s" in *.md) continue ;; esac
+        [ -f "$s" ] && cp "$s" "$STAGE/S/$(basename "$s")"
+    done
+fi
+
+# tests/media/ is for sample files a test needs to have something to work on.
+#
+# Audio bring-up needs a real file to play, and copying one onto the card by
+# hand between builds is how a test stops being run. Anything dropped in that
+# directory lands in the card's root; nothing is required to be there.
+#
+# Not committed to the repository: these are large and are somebody's audio.
+# tests/media/ is in .gitignore for that reason.
+if [ -d "$ROOT/tests/media" ]; then
+    for m in "$ROOT/tests/media/"*; do
+        [ -f "$m" ] && cp "$m" "$STAGE/$(basename "$m")"
+    done
+fi
+
+# tests/sysinfo/ holds third-party measurement binaries -- currently xSysInfo,
+# which sdcard.md sec.11 lists as one additional data point. It goes to C: so a
+# boot test can call it by name; it takes a CLI template (DEBUG/S, BRIEF/S,
+# FULL/S, DARK/S) and FULL writes its report to the shell rather than opening
+# the GUI, which is what makes it scriptable at all.
+if [ -d "$ROOT/tests/sysinfo" ]; then
+    for b in "$ROOT/tests/sysinfo/"*; do
+        case "$b" in *.md) continue ;; esac
+        [ -f "$b" ] && cp "$b" "$STAGE/C/$(basename "$b")"
+    done
+fi
+
+# BELLATRIX_BOOT_TEST runs one of them at boot.
+#
+# As early as the assigns allow, and that is a measurement decision rather
+# than a tidiness one. Placed before Wanderer, a probe waits out the entire
+# boot -- five minutes under QEMU -- to reach the few seconds it is there to
+# observe, and every iteration of the investigation pays that. Placed after
+# LIBS:, FONTS: and the rest are in place, which is all a program needs to be
+# loaded and opened, it runs within a fraction of that.
+#
+# After the Mount, not before it, and that is not a detail.
+#
+# The anchor used to be `Assign "IMAGES:"`, which is line 30 of the sequence.
+# DEVS:DOSDrivers is mounted on line 53. So a probe ran before DEBUG: existed
+# as a device at all, and every redirection to it went nowhere -- for months,
+# across seven scripts, silently. A run that printed nothing was read as a run
+# that never got that far, which is the worst way for a diagnostic to fail.
+#
+# Moving the anchor after the Mount costs the handful of lines between them --
+# a Path, a couple of assigns -- and buys a working DEBUG:. It is still long
+# before Wanderer, which is the whole point of not using the LATE position.
+#
+# BELLATRIX_BOOT_TEST_LATE=1 restores the old position for anything that
+# genuinely needs a finished system.
+if [ -n "${BELLATRIX_BOOT_TEST:-}" ]; then
+    if [ ! -f "$STAGE/S/$BELLATRIX_BOOT_TEST" ]; then
+        echo "ERROR: no S:$BELLATRIX_BOOT_TEST to run at boot" >&2
+        exit 1
+    fi
+    if [ "${BELLATRIX_BOOT_TEST_LATE:-0}" = 1 ]; then
+        anchor='^If EXISTS "WANDERER:Wanderer"'
+    else
+        anchor='^Mount >NIL: "DEVS:DOSDrivers'
+    fi
+    awk -v script="$BELLATRIX_BOOT_TEST" -v anchor="$anchor" '
+        $0 ~ anchor && !done { print; print "Execute \"S:" script "\""; done = 1; next }
+        { print }
+    ' "$STAGE/S/Startup-Sequence" > "$STAGE/S/Startup-Sequence.new" \
+        && mv "$STAGE/S/Startup-Sequence.new" "$STAGE/S/Startup-Sequence"
+    echo "[sd] boot test: S:$BELLATRIX_BOOT_TEST"
+fi
+
 if [ "$PI" = 1 ]; then
-    # Emu68's own build installs it as Emu68.img.gz, and on the card it is ours:
-    # the kernel a Bellatrix card boots. The firmware picks a kernel by the name
-    # config.txt gives and decompresses it by content, so the name is free, and
-    # a card whose files say what they are beats one that borrows a name from
-    # upstream. Nothing else renames -- Emu68 the project keeps its name
-    # everywhere it belongs to Emu68.
+    # Keep the composition name chosen by build.sh. A Rigel image is Bellatrix;
+    # a build without that integration remains Emu68.
     for f in "${BOOT_FILES[@]}"; do
-        case "$(basename "$f")" in
-            Emu68.img.gz) cp -al "$f" "$STAGE/Bellatrix.img.gz" ;;
-            *)            cp -al "$f" "$STAGE/$(basename "$f")" ;;
-        esac
+        cp -al "$f" "$STAGE/$(basename "$f")"
     done
 
     # config.txt and cmdline.txt are written here rather than kept as files in
@@ -280,7 +593,7 @@ if [ "$PI" = 1 ]; then
     cat > "$STAGE/config.txt" <<'EOF'
 # Bellatrix on a Raspberry Pi 3. Written by scripts/make-sdcard.sh --pi.
 
-kernel=Bellatrix.img.gz
+kernel=KERNEL_IMAGE_PLACEHOLDER
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 
@@ -298,6 +611,30 @@ gpu_mem=128
 hdmi_group=2
 hdmi_mode=82
 
+# HDMI rather than DVI, which is what carries audio.
+#
+# hdmi_drive=1 is DVI: video only, no audio packets on the link at all. The
+# firmware picks DVI when nothing says otherwise, so hdmiaudio.audio can
+# initialise, program the MAI block and produce nothing audible -- the driver
+# is fine and the wire is in the wrong mode. arch/arm-raspi sets this for the
+# same reason.
+hdmi_drive=2
+
+# NOT setting dtoverlay=miniuart-bt here, deliberately.
+#
+# On a stock Pi 3 that overlay is what gives Bluetooth the PL011 and moves the
+# console to the mini-UART, which is the arrangement the comment below assumes.
+# But this image ships no overlays/ directory at all, and a dtoverlay line
+# naming a file the firmware cannot find is ignored without a word -- which
+# would read as "configured" while changing nothing.
+#
+# It may not be needed: btuart.resource reports "[BTUART] ready:
+# PL011=0xf2201000" on hardware and the transport reaches the HCI layer, so
+# something is already routing the PL011 to the radio. Whether that is Emu68's
+# device tree or the firmware default has not been established. Settle that
+# before adding the line, and ship overlays/ with it if it turns out to be
+# needed.
+
 # Serial console on GPIO 14/15. Bluetooth owns the PL011 on a Pi 3, so the
 # console comes out of the mini-UART instead, and the mini-UART's baud rate
 # follows the core clock -- pinning that clock is what keeps it readable.
@@ -305,6 +642,7 @@ enable_uart=1
 core_freq=400
 core_freq_min=400
 EOF
+    sed -i "s/KERNEL_IMAGE_PLACEHOLDER/$KERNEL_IMAGE.gz/" "$STAGE/config.txt"
 
     # One line, no trailing newline: the firmware hands this to Emu68 as the
     # boot arguments, and nocomposition is what puts AROS on the screen.
@@ -320,7 +658,20 @@ EOF
     #
     #   BELLATRIX_CMDLINE_EXTRA=mungwall ./scripts/make-sdcard.sh --pack
     #
-    printf 'nocomposition%s' \
+    #
+    # BELLATRIX_CMDLINE replaces the whole line, for asking whether a default
+    # is still earned. `nocomposition` has been on since emu68gfx was the only
+    # display driver and the software compositor left the screen on the Emu68
+    # logo; with fbgfx and vcgfx in its place that premise wants re-testing,
+    # and a card that cannot be built without the flag cannot test it.
+    #
+    RIGEL_BOOTARG=""
+    if [ "$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)" = 1 ]; then
+        RIGEL_BOOTARG=" bellatrix.rigel=1"
+    fi
+    printf '%s%s%s' \
+        "${BELLATRIX_CMDLINE-nocomposition}" \
+        "$RIGEL_BOOTARG" \
         "${BELLATRIX_CMDLINE_EXTRA:+ $BELLATRIX_CMDLINE_EXTRA}" \
         > "$STAGE/cmdline.txt"
 fi
@@ -383,6 +734,29 @@ while IFS= read -r f; do
     rm -f "$STAGE/$f"
 done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' |
          grep -iE '(^|/)(AUX|CON|PRN|NUL|COM[1-9]|LPT[1-9])(\.[^/]*)?$' || true)
+
+# ...and say so for the characters FAT rejects, which mtools drops without a
+# word.
+#
+# This card is FAT32 -- that is what the Pi's firmware reads and what
+# partition.library then mounts as SDCARD0P0: -- and FAT forbids ? * : < > |
+# " and \ in a name. AmigaDOS does not. Software staged from an OFS floppy can
+# therefore lose a file on the way to the card and nothing says so.
+#
+# It has happened: "The evil Hannibals from Mars" carries its 406 KB data file
+# as `Har vi røget hash?`, the question mark went straight through this script
+# into mtools, and the demo booted, found no data and sat there. The drawer
+# looked right in every listing except the card's own.
+#
+# Not deleted -- named. Whoever staged it has to decide whether the program
+# can live with a different name.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    echo "[sd] WARNING: $f cannot be written to FAT (? * : < > | \" or \\)"
+    echo "[sd]          mtools will drop it silently; rename it or the"
+    echo "[sd]          program that wants it will not find it"
+done < <(cd "$STAGE" && find . -type f | sed 's|^\./||' |
+         grep -E '[?*:<>|"\\]' || true)
 
 # The staging tree is the authority now, not the list that built it: --pi has
 # added the boot payload to it and version.txt is written into it, so anything

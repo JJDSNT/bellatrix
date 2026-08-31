@@ -1,0 +1,42 @@
+include $(SRCDIR)/config/aros.cfg
+
+# The Bellatrix DWC2 driver, written here rather than inherited.
+#
+# One of two. The AROS engine this is meant to replace lives beside it in
+# ../usb2otg, as our own copy to modify -- both are ours, both build, and the
+# plan (ISSUE-0047) is to finish the port, compare the two running, and only
+# then delete one. Same shape as the two SD card backends in soc/sdcard.
+#
+# This directory used to hold both, with the inherited sources renamed at
+# compile time by -Dusb2otg=dwc2emu68. That made one module out of two
+# drivers and meant only one could exist; the rename is gone.
+#
+# What it does differently: a unit task owning all request and controller
+# state, an interrupt top half that only acknowledges and signals, an
+# explicit MMIO/DMA/cache boundary for emu68, and SOF enabled by event
+# rather than a permanent 1 kHz guest interrupt.
+#
+# What it does not do yet: UHCMD_BULKXFER and UHCMD_ISOXFER. Control and
+# interrupt transfers are implemented, which is enough for HID and not
+# enough for storage. Until those land, ../usb2otg is the only side with
+# full coverage.
+#
+DWC2EMU68DIR := $(SRCDIR)/arch/m68k-emu68/soc/usb/dwc2emu68
+USER_INCLUDES := -I$(DWC2EMU68DIR) -I$(SRCDIR)/arch/m68k-emu68/include
+
+FILES := $(addprefix $(DWC2EMU68DIR)/, \
+    dwc2emu68_device \
+    dwc2emu68_controller \
+    dwc2emu68_platform \
+    dwc2emu68_root \
+    dwc2emu68_transfer \
+    dwc2emu68_unit)
+
+%build_module mmake=kernel-usb-dwc2emu68 \
+    modname=dwc2emu68 modtype=device \
+    conffile=$(DWC2EMU68DIR)/dwc2emu68.conf \
+    moduledir=Devs/USBHardware \
+    files="$(FILES)" \
+    uselibs="hiddstubs debug"
+
+%common

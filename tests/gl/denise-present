@@ -1,0 +1,25 @@
+;
+; The producer draws, and this puts what it drew on the panel.
+;
+; With DEVS:Monitors/AmigaVideo on the card, AROS renders through Denise --
+; and nothing shows Denise by itself, on purpose. The panel keeps whatever
+; the VideoCore last scanned out, so from the takeover onwards the desktop is
+; invisible and there is nothing left to click. DeniseView therefore cannot be
+; started by hand after the fact: it has to already be running.
+;
+; It holds the overlay plane for as long as it runs, above the desktop rather
+; than instead of it, so this never returns. Run detaches it and the
+; Startup-Sequence carries on.
+;
+Echo >DEBUG: "[denise-present] --- what the aperture holds now"
+DeniseView >DEBUG: NOWINDOW
+
+;
+; The plane is installed from the descriptor as it reads at this instant --
+; physical address, pitch and geometry. The pixels behind it are republished
+; every frame, so the picture is live; the geometry is not. A guest that
+; changes display mode after this needs the plane taken down and put up again,
+; which is Ctrl-C and a second run.
+;
+Echo >DEBUG: "[denise-present] --- plane up (Ctrl-C in its shell takes it down)"
+Run >NIL: <NIL: DeniseView SHOW

@@ -1,0 +1,100 @@
+s: register the Bluetooth controller with the stack, after loading the stack
+
+S:Startup-Sequence runs AddBTClasses and BTStackLoader but never
+AddBTHardware, so the stack starts with no controller registered. btParseCfg()
+then finds no hardware to configure, and BTStackLoader reports "Error loading
+bluetooth.prefs!" -- which reads as a missing preferences file when the prefs
+was never the problem.
+
+The prefs only records *which* registered controllers stay enabled. The code
+says as much: with no hardware data present it deliberately removes nothing,
+"because this could render the system useless (no USB mice or keyboards to
+configure the hardware!)". Nothing registers the controller in the first
+place.
+
+The order matters, and this patch originally had it the wrong way round.
+
+BTStackLoader is what opens DEVS:Bluetooth/FWLoaders/*.fwl. Registering the
+controller before it runs means the radio reaches BHS_READY before any
+firmware loader exists, so bluetooth.library takes the path its own comment
+describes as "a firmware loader bound after this controller was already up":
+it uploads the patchram, the controller restarts on Launch_RAM, and the
+bring-up is re-run from HCB_RESET against a chip that is still restarting.
+
+Measured on a Pi 3, that failed the same way every boot:
+
+    bthciuart.device/0 ready: AA:AA:AA:AA:AA:AA, HCI 4.1, LMP 4.1 (Broadcom)
+    brcmfw: 167 records applied; controller restarting
+    firmware loaded after bring-up - re-initialising the controller.
+    init step 0 -> timeout (0xFF).
+    initialisation failed at step 0 (timeout).
+
+The radio never returns to BHS_READY, and btEnumerateHardware() only reports
+hardware in that state -- so the Bluetooth prefs shows no radio at all. That
+presents as "scanning finds nothing" when there was no radio in the list to
+scan with. The AA:AA:AA:AA:AA:AA above is the BCM43430A1's unprogrammed ROM
+address, which is the other half of the same story: without the patchram the
+controller has no identity of its own.
+
+With BTStackLoader first the loaders are registered before the radio is
+brought up, the patchram is applied inline at the bring-up's own HCB_FIRMWARE
+step, and the controller is started once. Upstream orders it this way too:
+its Startup-Sequence runs PsdStackLoader and BTStackLoader and never adds
+hardware by hand, because a USB dongle enumerates after the stack is up. The
+late-bind path exists for that case, not as the normal one.
+
+Output goes to a file rather than NIL: because this is the call that answers
+whether the radio responds at all. AddBTHardware runs btEnumerateHardware()
+and prints "okay!" or "enumeration failed!", and a BCM43438 answers HCI_Reset
+from ROM with no patchram, so it does not depend on firmware.
+
+diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
+index b4f4c7b..a4ee7a5 100644
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -136,9 +136,45 @@ If EXISTS "DEVS:USBHardware/usb2otg.device"
+     AddUSBHardware DEVS:USBHardware/usb2otg.device >>"SDCARD0P0:usb-hardware.log"
+     Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
+ EndIf
++; Load the Bluetooth stack, then tell it about the controller that is present,
++; the same way AddUSBHardware does above. Without the second step the stack
++; starts with no hardware registered, btParseCfg() has nothing to configure,
++; and that reads as a missing prefs file when the prefs was never the problem.
++;
++; BTStackLoader goes first, and the order is the whole point. It is what opens
++; DEVS:Bluetooth/FWLoaders/*.fwl, so with AddBTHardware ahead of it the radio
++; reaches BHS_READY before any firmware loader exists. bluetooth.library then
++; takes the "firmware loader bound after this controller was already up" path:
++; it uploads the patchram, the controller restarts on Launch_RAM, and the
++; bring-up is re-run from Reset against a chip that is still restarting. That
++; timed out at step 0 on every boot, the radio never returned to BHS_READY, and
++; btEnumerateHardware() reports nothing -- which looks like a scan that finds
++; no devices when there was no radio in the list to scan with.
++;
++; With the loaders registered first, the patchram is applied inline at the
++; bring-up's own HCB_FIRMWARE step and the controller is only ever started
++; once. Upstream orders it this way too: its Startup-Sequence runs
++; PsdStackLoader and BTStackLoader and never adds hardware by hand, because a
++; USB dongle enumerates after the stack is up.
++;
++; The output goes to a file rather than NIL: because this is the call that
++; answers whether the radio responds at all: AddBTHardware runs
++; btEnumerateHardware() and prints "okay!" or "enumeration failed!". A BCM43438
++; answers HCI_Reset from ROM, with no patchram, so this does not depend on
++; firmware.
+ If EXISTS "C:BTStackLoader"
+     BTStackLoader >NIL:
+ EndIf
++If EXISTS "DEVS:Bluetooth/bthciuart.device"
++    Echo "starting AddBTHardware" >"SDCARD0P0:bt-hardware.log"
++    AddBTHardware DEVS:Bluetooth/bthciuart.device >>"SDCARD0P0:bt-hardware.log"
++    ; AddBTHardware prints "failed" and nothing else. The reason is recorded
++    ; through btAddErrorMsg(), which is what BTErrorLog reports -- without it
++    ; the log says something went wrong and never what.
++    Echo "--- BTErrorLog ---" >>"SDCARD0P0:bt-hardware.log"
++    BTErrorLog >>"SDCARD0P0:bt-hardware.log"
++    Echo "finished AddBTHardware" >>"SDCARD0P0:bt-hardware.log"
++EndIf
+ 
+ Run <NIL: >NIL: QUIET ConClip
+ 

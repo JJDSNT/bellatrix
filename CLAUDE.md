@@ -12,24 +12,27 @@ bare metal and JITs M68K to AArch64; AROS starts after Emu68 has initialised the
 hardware and loaded its m68k ELF from `-initrd`. Both are upstream projects,
 vendored as pinned submodules and never edited in place.
 
-## Where the project is right now: nothing new gets added
+## Where the project is right now: the freeze is over
 
-**Standing decision, 2026-08-17: no new functionality until the system is fast
-and stable.** Not applications, not drivers, not features on top of what boots
-today. The machine reaches a desktop, and that is the point at which adding
-more stops paying: every addition lands on a base whose speed and stability are
-not settled, and then has to be re-verified when they are.
+**The feature freeze of 2026-08-17 was lifted on 2026-08-29.** For twelve days
+nothing new was added: the rule was that every addition lands on a base whose
+speed and stability are not settled, and then has to be re-verified when they
+are. That base is settled enough now, and the first thing built on it is the
+Rigel chipset integration (`ISSUE-0068`).
 
-What is still in scope:
+Two things follow, and they are not the same thing:
 
-- making what already exists faster,
-- making what already exists stable and reproducible,
-- **diagnosing** defects in what already exists — measurement is not addition.
-
-Issues describing future functionality stay open and stay `backlog`. They are
-the record of what was decided and why; they are not a queue to be worked
-down. An issue in this repository is not permission to build the thing it
-describes.
+- **The freeze no longer blocks anything.** An issue parked as `backlog` with
+  "out of scope under the standing freeze" written in it is no longer parked
+  for that reason. Several issues still carry that sentence — `ISSUE-0038`,
+  `0040`, `0041`, `0042`, `0044`, `0045`, `0047`, `0053`, `0058`, `0060`,
+  `0066`. Those sentences are the record of a decision that has since been
+  reversed; read them as history, not as a live gate.
+- **The reasoning that produced it still stands.** Speed and stability are
+  still what the machine is short of, an addition still has to be re-verified
+  when they move, and an issue in this repository is still not permission to
+  build the thing it describes. What changed is who decides — that is a call
+  per piece of work now, not a blanket rule.
 
 ## Commands
 
@@ -212,6 +215,29 @@ framebuffer.
   (`status`, `priority`, `type`, `blockers`); closed ones move to
   `AI_context/consolidated/history/`. `AI_context/README.md` has the grep
   recipes for querying state — no tooling needed.
+
+## Probes that report from inside a boot
+
+`BELLATRIX_BOOT_TEST=<name>` makes `make-sdcard.sh` insert
+`Execute "S:<name>"` into `S:Startup-Sequence`, and `tests/gl/` holds the
+scripts. They report by redirecting to `DEBUG:`, which reaches the serial
+line and therefore the `run.sh` log.
+
+Two things had to be true for that to work, and both were false until
+2026-08-24 -- for months, silently, across seven scripts:
+
+- `DEVS:DOSDrivers/DEBUG` names `L:debug-handler`, and nothing built it. The
+  target is `workbench-fs-debug`.
+- the probe is inserted **after** `S:Startup-Sequence` mounts
+  `DEVS:DOSDrivers`, not before. It used to be anchored twenty lines earlier,
+  so it ran before `DEBUG:` existed as a device.
+
+**A probe that prints nothing and a probe that never ran look identical**, and
+reading the first as the second is how an investigation goes hours in the
+wrong direction. If a script goes quiet, check the handler and the anchor
+before concluding anything about what it was measuring.
+`BELLATRIX_BOOT_TEST_LATE=1` moves it to just before Wanderer for anything
+that needs a finished system.
 
 ## Measuring a boot
 

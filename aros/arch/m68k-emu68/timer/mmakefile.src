@@ -1,0 +1,12 @@
+
+include $(SRCDIR)/config/aros.cfg
+
+USER_INCLUDES := -I$(SRCDIR)/arch/$(CPU)-$(ARCH)/timer \
+                 -I$(SRCDIR)/rom/timer
+
+%build_archspecific \
+  mainmmake=kernel-timer maindir=rom/timer \
+  arch=emu68-m68k modname=timer \
+  files="timer_init ticks"
+
+%common

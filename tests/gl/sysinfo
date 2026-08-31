@@ -1,0 +1,19 @@
+.KEY x
+.BRA {
+.KET }
+;
+; xSysInfo's own report, as one more data point (sdcard.md sec.11).
+;
+; FULL writes to the CLI instead of opening the GUI -- src/main.c's template is
+; "DEBUG/S,BRIEF/S,FULL/S,DARK/S" -- which is the only reason this can be run
+; from a script at all.
+;
+; DEBUG: works here, but only because two things were fixed for it: L:debug-
+; handler is now built (workbench-fs-debug, which nothing was invoking), and
+; make-sdcard.sh inserts boot tests after S:Startup-Sequence mounts
+; DEVS:DOSDrivers rather than twenty lines before it. A probe placed before the
+; Mount has no DEBUG: device to write to and reports into nothing.
+;
+Echo >DEBUG: "[sysinfo] xSysInfo FULL"
+xSysInfo FULL >DEBUG:
+Echo >DEBUG: "[sysinfo] done"

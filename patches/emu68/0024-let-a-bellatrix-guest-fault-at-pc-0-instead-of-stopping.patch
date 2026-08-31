@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Let a Bellatrix guest fault at PC=0 instead of stopping
+
+PC = 0 ends MainLoop, which is right for the bare-metal test executables
+Emu68 also runs and wrong for a machine booting an operating system. A
+guest that reaches 0 there has called through a library or device base
+that was never filled in, and ending the loop turns that into a stopped
+machine with no explanation: AROS never runs its own trap handler, never
+prints its crash requester or the stack trace this port keeps frame
+pointers for, and the log shows a clean "Back from translated code".
+
+A day was spent reading one of those as a fault of the port. The same
+demo, started the same way on a real Kickstart in the Rigel harness,
+answers "Software error - task held" -- the operating system catching
+what this machine could not.
+
+Every path a fault then takes already exists and is already exercised.
+What changes is who explains the crash.
+---
+ src/ExecutionLoop.c | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
+--- a/src/ExecutionLoop.c
++++ b/src/ExecutionLoop.c
+@@ -317,9 +317,36 @@
+         /* Load m68k context and last used PC counter into temporary register */ 
+         LastPC = getLastPC();
+         ctx = getCTX();
+ 
+-#ifndef PISTORM_ANY_MODEL
++/*
++ * PC = 0 is "the program finished" only for a machine that was given a
++ * program to finish.
++ *
++ * Emu68 runs bare-metal test executables and ends the loop when they return
++ * to a null address, which is the right convention for those. Bellatrix boots
++ * an operating system, and a guest that reaches 0 there has done something
++ * else entirely: it has called through a library or device base that was
++ * never filled in -- the unchecked OpenLibrary or OpenDevice, which is one of
++ * the oldest bugs on this platform.
++ *
++ * Ending the loop turns that into a stopped machine with no explanation. AROS
++ * never gets to run its own trap handler, so it never prints the crash
++ * requester and the stack trace this port keeps frame pointers for, and the
++ * log shows a clean "Back from translated code" that reads like a normal
++ * exit. A whole day was spent reading one as a fault of the port when the
++ * same demo, started the same way on a real Kickstart in the Rigel harness,
++ * answers "Software error - task held" -- the operating system catching what
++ * this machine could not.
++ *
++ * So let it fault. A 68000 that jumps to 0 executes what is at 0 and traps
++ * shortly after, and every path that then runs -- illegal instruction, bus
++ * error, the guest's own vector table -- already exists here and is already
++ * exercised. What changes is who explains the crash: the guest, which knows
++ * which task it was and where it came from, instead of a register dump from
++ * outside.
++ */
++#if !defined(PISTORM_ANY_MODEL) && !(defined(BELLATRIX_EMU68) && CONFIG_RIGEL)
+         if (unlikely(PC == 0)) {
+             M68K_SaveContext(ctx);
+             return;
+         }

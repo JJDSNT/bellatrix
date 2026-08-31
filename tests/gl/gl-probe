@@ -1,0 +1,63 @@
+.KEY demo
+.BRA {
+.KET }
+;
+; Where the GL chain stops, and how long each link takes.
+;
+; ISSUE-0045 records a machine that does not come back from the first GL
+; program. Two explanations were open -- stuck, or crawling through a 10 MB
+; library on a JIT that has to translate every block once -- and neither can
+; be told from the other by a probe that only says "running glinfo".
+;
+; So each link is opened on its own, with the clock either side. Everything
+; goes to DEBUG: so it survives a machine that stops answering: a stop with no
+; output and a stop after a known line are different findings.
+;
+; Version <name> opens the library. That is the point: the cost is the load,
+; the relocation and the init, not the version string.
+;
+Echo >DEBUG: "[gl-probe] libraries present:"
+List >DEBUG: LIBS:gl.library LIBS:gallium.library LIBS:mesa3dgl20-0.library
+Echo >DEBUG: "[gl-probe] drivers present:"
+List >DEBUG: DEVS:Drivers/gallium.hidd DEVS:Drivers/vc4gallium.hidd DEVS:Drivers/softpipe.hidd
+
+Echo >DEBUG: "[gl-probe] --- opening gallium.library"
+Date >DEBUG:
+Version >DEBUG: gallium.library
+Date >DEBUG:
+
+Echo >DEBUG: "[gl-probe] --- opening mesa3dgl20-0.library (10 MB)"
+Date >DEBUG:
+Version >DEBUG: mesa3dgl20-0.library
+Date >DEBUG:
+
+Echo >DEBUG: "[gl-probe] --- opening gl.library"
+Date >DEBUG:
+Version >DEBUG: gl.library
+Date >DEBUG:
+
+; Control: can a shell program be heard at all, both ways?
+Echo >DEBUG: "[gl-probe] --- control: SerialSay"
+SerialSay >DEBUG:
+SerialSayP >DEBUG:
+Echo >DEBUG: "[gl-probe] --- control done"
+
+; The shell gives every command AROS_STACKSIZE, which on m68k is 0xA000 --
+; 40 KB. Mesa's startup is not a 40 KB kind of program. Raise it and say what
+; it was, so the run reports the condition it ran under.
+Echo >DEBUG: "[gl-probe] --- stack as the shell left it:"
+Stack >DEBUG:
+Stack 1048576
+Echo >DEBUG: "[gl-probe] --- stack now:"
+Stack >DEBUG:
+
+; One plain OpenLibrary, nothing else in the way.
+; Only the big one, and time it -- with no loader trace in the way. The last
+; attempt ran with DEBUG 1 in internalloadseg_elf.c, which writes thousands of
+; lines through the raw serial, and "the log stopped growing" cannot be told
+; from "the serial stopped accepting" when the serial is what is being flooded.
+Echo >DEBUG: "[gl-probe] --- OpenMesa mesa3dgl20-0.library (10 MB), quiet"
+Date >DEBUG:
+OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+Date >DEBUG:
+Echo >DEBUG: "[gl-probe] --- OpenMesa returned"

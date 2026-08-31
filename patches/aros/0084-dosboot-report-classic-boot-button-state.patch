@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 29 Aug 2026 04:55:00 -0300
+Subject: [PATCH] dosboot: report classic boot button state
+
+The first AmigaOS-volume boot enters code which needs gadtools.library before
+DOS has mounted SYS:, then calls through a NULL library base.  Establish
+whether Rigel's CIA/POT inputs are asking for the early startup menu instead
+of inferring it from the later failure.
+---
+ rom/dosboot/menu.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/rom/dosboot/menu.c b/rom/dosboot/menu.c
+index 0000000000..1111111111 100644
+--- a/rom/dosboot/menu.c
++++ b/rom/dosboot/menu.c
+@@ -889,10 +889,18 @@ static BOOL buttonsPressed(LIBBASETYPEPTR LIBBASE)
+     if (OpenResource("ciaa.resource"))
+     {
+             volatile UBYTE *cia = (UBYTE*)0xbfe001;
+             volatile UWORD *potinp = (UWORD*)0xdff016;
++            UBYTE ciaa_pra = cia[0];
++            UWORD potinp_value = potinp[0];
++            BOOL left = (ciaa_pra & 0x40) == 0;
++            BOOL right = (potinp_value & 0x0400) == 0;
++
++            bug("[DOSBoot:bootmenu] classic buttons: CIAA.PRA=%02x "
++                "POTINP=%04x left=%u right=%u\n",
++                ciaa_pra, potinp_value, left, right);
+ 
+             /* check left + right mouse button state */
+-            if ((cia[0] & 0x40) == 0 && (potinp[0] & 0x0400) == 0)
++            if (left && right)
+                 return TRUE;
+     }
+ #endif
+-- 
+2.43.0

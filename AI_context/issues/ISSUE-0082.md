@@ -1,0 +1,539 @@
+---
+id: ISSUE-0082
+title: "Intuition moves a pointer that has no sprite, over AbsExecBase"
+status: resolved
+priority: critical
+type: defect
+owner: unassigned
+created_at: 2026-08-30
+updated_at: 2026-08-31
+tags:
+  - exec
+  - emu68
+  - m68k
+  - rigel
+  - chipset
+blockers: []
+related_files:
+  - external/aros/rom/intuition/monitorclass.c
+  - src/machine/vecpage.c
+  - src/amiga/bus.c
+  - aros/arch/m68k-emu68/boot/mmakefile.src
+  - aros/arch/m68k-emu68/include/amiga/memory_map.h
+---
+
+# How it presents
+
+Deluxe Paint IV is started from its icon and asked for an Amiga mode. The
+chipset driver does its whole job:
+
+```text
+[AmigaVideo:Hidd] CreateObject: modeid = 00021000
+[AmigaVideo:Bitmap] AmigaVideoBM__Root__New: 140x39x5
+[AmigaVideo:Blitter] blit_fillrect(0x0,319x255,0,3)
+[AmigaVideo:Blitter] blit_copybox: shift=7 rev=0 sw=2 dw=2 01ff fffe
+[AmigaVideo] setspritevisible()
+```
+
+A 320x256x5 Amiga screen, filled and blitted **through Rigel**. That is the
+chipset doing real work for a real application for the first time.
+
+Then the guest dies:
+
+```text
+[JIT] opcode 7555 at 01ffffbb not implemented
+[AROS/Emu68] CPU exception vector 0x00000010 at PC 0x01ffffbd
+[SYS:JIT] RAM dump from 0x01ffffad:  5555 5555 5555 5555 ...
+```
+
+`0x01ffffbd` is below the heap (`0x02000000`) in memory filled with `0x5555`,
+and the PC is odd. That is the end of a runaway, not its cause.
+
+# CORRECTION: the supervisor stack is not the cause
+
+The first reading of this dump was wrong and is kept here because the mistake
+is instructive.
+
+The supervisor stack holds the same eight-byte frame two dozen times, and it
+was read as an exception loop. It is neither a loop nor a fault.
+
+`Supervisor()` on m68k works by deliberately faulting
+(`arch/m68k-all/exec/supervisor.S`): `or.w #0x2000, %sr` is privileged, so
+calling it from user mode raises a privilege violation, and
+`Exec_Supervisor_Trap` recognises the faulting PC and grants permission by
+**rewriting the frame's PC to `Exec_Supervisor_Exit`** before jumping to the
+user's function. The frames in the dump are exactly that, correctly formed.
+
+Emu68 enforces the privilege properly -- `M68k_LINE0.c:838` tests SRB_S and
+emits `VECTOR_PRIVILEGE_VIOLATION` -- so the mechanism is working end to end.
+
+And the dump walks *upward* from SSP, into addresses the stack has already
+released. Those frames are history, not live state.
+
+Two readings of one dump, both wrong, before reading the code that produces
+it. The rule this cost: resolve the mechanism in the source before drawing a
+shape from a memory dump.
+
+# What the stacks actually say
+
+`SSP 0x02020600` holds the same exception frame, over and over, for the whole
+dump:
+
+```text
++0x00  0x00103062      SR    = 0x0010
++0x04  0x4efc0020      PC    = 0x30624efc,  vector offset 0x0020
+   ... repeated ~24 times ...
+```
+
+`0x30624efc` resolves against the kernel ELF (base `0x30600000`) to
+**`Exec_Supervisor_Exit +0x0`**, and vector offset `0x0020` is **vector 8,
+Privilege Violation**.
+
+So `Exec_Supervisor_Exit` takes a privilege violation, the handler returns to
+it, and it faults again -- a tight exception loop that fills the supervisor
+stack until the PC walks off into unmapped fill.
+
+The user stack says what was going on above it:
+
+```text
+USP 0x0203a27c
+  +0x00  0x3067c03c   Intuition_69_LockIBase +0x18
+  +0x10  0x3068ebd8   notify_mousemove_screensandwindows +0x14
+```
+
+Intuition, notifying mouse movement across screens and windows -- which is
+exactly what a newly opened screen causes.
+
+# What it means
+
+A wild jump, and the cause is not known.
+
+`0x01ffffbd` is odd and sits just below the heap base (`0x02000000`) in memory
+filled with `0x5555`. `A6 = 0x0200011b` is odd too and the reporter says it is
+not a library base. Two accesses at `pc=0x01fffee7` reached `0x00b7a2a4`, in
+the unmapped classic domain. All of that is a runaway already in progress.
+
+What is not runaway is the user stack, and it is the only evidence of where
+this started:
+
+```text
+Intuition_69_LockIBase +0x18
+notify_mousemove_screensandwindows +0x14
+```
+
+`rom/intuition/inputhandler.c` -- the input handler chain, which runs from an
+interrupt, walking screens and windows after the pointer moves. A screen that
+has just been created on a monitor that has never had one before is the new
+thing in that walk.
+
+It is not the chipset, not amigavideo and not DPaint: all three finished their
+work, correctly, before this fires.
+
+# Why it is visible only now
+
+Nothing had opened an Amiga screen before. `amigavideo` could not register at
+all until `a5ecc0f` -- it asked for monitor 0, `vcgfx` had been given an ID
+inside the block amigavideo claims, and `AddDisplayDriver` answered
+DD_ID_EXISTS. With no classic display driver there were no Amiga modes, so no
+screen ever opened on that monitor and this path was never taken.
+
+The report itself is also new: `patches/emu68/0024` stopped `PC == 0` from
+quietly ending MainLoop, so a guest fault now reaches the trap reporter
+instead of stopping the machine with a register dump that reads like a clean
+exit.
+
+# The transfer that goes wild is named
+
+The dump of 2026-08-31 (`vector 0x0010 at PC 0x01fffe7d`) has the user stack
+deep enough to settle where control left. One longword carries the answer, and
+it is the one at the very top:
+
+```text
+USP 0x0203a27c
+  +0x00  0x3067c06c
+```
+
+Against the ELF that boot used (base `0x30600000`, so offset `0x7c06c`) that
+address is not merely "inside `LockIBase`" -- it is an exact instruction
+boundary, and the instruction before it is a call:
+
+```text
+0007c062:  2c79 <SysBase>   moveal  SysBase,%a6
+0007c068:  4eae fdcc        jsr     %a6@(-564)
+0007c06c:  2002             movel   %d2,%d0        <- the longword on the stack
+```
+
+`jsr` pushes exactly that return address and then transfers control. Finding
+it at USP+0 with the PC at `0x01fffe7d` is the signature of that transfer not
+arriving.
+
+And `-564` is not an unknown: `LVOObtainSemaphore` is 94
+(`gen/include/defines/exec_LVO.h:98`) and a vector is six bytes, so
+`-564` is **`ObtainSemaphore`**. `LockIBase` calls it, and the call lands
+nowhere.
+
+# Which leaves exactly two candidates
+
+`%a6` at that `jsr` is not a value some caller handed in. It is loaded two
+instructions earlier from the global `SysBase` -- the one symbol with **3011
+relocations** in this ELF. A corrupt `SysBase` does not produce one broken
+path; it stops the machine everywhere at once, and this machine went on
+running.
+
+So either the global is wrong anyway, or `%a6` was right and the six bytes it
+indexed are no longer a vector. On m68k a library's jump table is
+`struct JumpVec { UWORD jmp /* 0x4EF9 */; void *vec; }`
+(`arch/m68k-all/include/aros/cpu.h:60`), laid out downwards from the base, so
+entry *n* is at `base - 6n`. Nothing about a smashed entry is visible in a
+register dump: the base is right, the offset is right, and the damage is in
+memory the call passes *through*.
+
+It is visible in the table's shape, though -- an entry whose first word is not
+`0x4EF9` is not a vector any more. The trap probe now walks all of ExecBase's
+vectors and says how many fail that test, which separates a stray write that
+hit one slot from a heap block that overran the table. Exec is the right
+library to walk because every path goes through it.
+
+# CORRECTION: the wild PC is not "below the heap"
+
+Written above, twice: `0x01ffffbd` / `0x01fffe7d` "is below the heap
+(`0x02000000`)". That is wrong, and it is my instrument that said it.
+
+`boot.c:533` floors the heap's `lower` at `0x01000000` and then raises it to
+`host_mem_end` -- wherever Emu68's own pools end. On this machine that lands
+below `0x02000000`, and Rigel publishing its frame at `$01000000` is the other
+half of the same picture. So `0x01fffe7d` is *inside* fast RAM, and so is
+`0x01f9a2a4`, the other unmarked value on the stack.
+
+The `<- heap` marker in `trapprobe.c` carried `0x02000000` as a hard-coded
+lower bound. It was a guess, it was wrong, and it labelled the two most
+important longwords in the dump as debris. The bounds were never a constant to
+correct: every `MemHeader` on `SysBase->MemList` records the range it owns, so
+the probe walks them instead.
+
+# CORRECTION: this is not the input handler, it is OpenScreen
+
+`notify_mousemove_screensandwindows` lives in `inputhandler_support.c`, and
+that is why it was read above as "the input handler chain, which runs from an
+interrupt". It is not, here. The rest of the user stack names the caller:
+
+```text
+  int_openscreen +0x8c
+  ActivateMonitor +0xd6
+  notify_mousemove_screensandwindows +0x14
+  Intuition_69_LockIBase +0x18      <- top of stack
+```
+
+`rom/intuition/misc.c` ends `ActivateMonitor` with
+`SetAttrs(newmonitor, MA_PointerVisible, TRUE, TAG_DONE)` and then
+`notify_mousemove_screensandwindows(IntuitionBase)`. The last driver line in
+the log before the fault is `[AmigaVideo] setspritevisible()`, which is that
+`SetAttrs` arriving at the chipset driver.
+
+So this runs in DPaint's own task, inside `OpenScreen`, on the first monitor
+switch this machine has ever performed -- not from an interrupt.
+
+Only the top-of-stack longword is verified against the disassembly. The others
+are candidates: a kernel-range longword on a stack is not automatically a
+frame, and the probe marks them precisely so they can be checked rather than
+believed.
+
+# ANSWERED: SysBase is address 4, and it is in chip RAM
+
+The vector scan was built to decide between "A6 was wrong" and "the vector
+slot was overwritten". It reported neither:
+
+```text
+ A6 as a library base: 02000121  (not a library base)
+  SysBase 0x02000121  (not walkable)
+```
+
+`SysBase` -- the global itself, read out of memory by the reporter -- holds the
+same garbage as A6. So A6 was loaded correctly; the thing it was loaded *from*
+is what changed.
+
+And that thing is not in the kernel's data segment at all:
+
+```text
+$ m68k-aros-nm aros-emu68-m68k.elf | grep -wE 'SysBase|AbsExecBase'
+00000004 A AbsExecBase
+00000004 A SysBase
+```
+
+`arch/m68k-emu68/boot/mmakefile.src` links both as **absolute address 4**
+(`-Wl,--defsym,SysBase=0x4`). Every `moveal SysBase,%a6` in this kernel is
+`moveal 4,%a6`, and address 4 is a longword of **chip RAM** -- the region
+Rigel owns.
+
+That is why `AMIGA_CHIP_RAM_ALLOC_BASE` is `0x1000` and not `0`: the first
+page is reserved and nothing allocates there. But nothing was checking that
+nothing *writes* there either, and something does.
+
+The three A6 values across three runs are the evidence that it is data and not
+a pointer: `0x0200011b`, `0x020000b1`, `0x02000121`. Same high word, low word
+different every time -- whatever the chipset happened to be moving.
+
+# Why every earlier reading was consistent with this
+
+- The wild PC is always just below the heap and always odd. `A6 - 564` with a
+  corrupt A6 lands wherever it lands, and an odd base gives an odd target.
+- It only started when DPaint opened an Amiga screen. That is the first time
+  the blitter has moved real data through Rigel.
+- The call that dies is whichever library call comes next. `LockIBase ->
+  ObtainSemaphore` is not special; it is simply the first `jsr -LVO(A6)` after
+  the write.
+- Nothing in Intuition, amigavideo or DPaint is at fault. All three finished
+  their work.
+
+`setspritevisible()` being the last line before the fault does not make it the
+culprit either: `csd->copper1_spritept` points into the copper list, not into
+low memory, and the console on this port is deferred, so the last line printed
+is not the last thing that ran.
+
+# The guard
+
+`src/amiga/bus.c:amiga_chip_ram_write16()` is the single funnel every chipset
+DMA write to chip RAM passes through -- blitter, copper, sprites, bitplanes,
+disk, audio. It now reports any write below `AMIGA_CHIP_RAM_ALLOC_BASE`, with
+the address and the value, and marks the one that lands on AbsExecBase.
+
+The value is the part that matters. A copper instruction, a sprite word and a
+run of blitter output do not look alike, so the value names the unit without
+needing a per-unit probe.
+
+# CONFIRMED on hardware
+
+The run with `patches/aros/0092` and `bellatrix.vecpage` still on:
+
+```text
+[BELLATRIX:RIGEL:ABSEXEC] $1f0000b9 -> $020012f0 ... (vecpage ON)
+```
+
+and after that, nothing. No write to address 6, no exception, no wild PC. The
+`(vecpage ON)` on that line is what makes the silence mean something: the trap
+was armed and saw no store.
+
+The Amiga screen then opens all the way through -- copper list at `$0000158c`
+in chip RAM, `setmode: (320x256x5) bpr=40 fu=3`, `setbitmap`, the palette, and
+`Notifying DisplayChange 320x256`.
+
+# What the same run says about the sprite
+
+The guard did not report either, so `data->pointer` was **NULL** on this run --
+not "a pointer with a NULL sprite". `MM_SetPointerShape` assigns
+`data->pointer` only when `HIDD_Display_SetCursorShape` returns TRUE, so a NULL
+`data->pointer` means amigavideo refused the cursor shape. That is also exactly
+what the user sees: no mouse pointer on the Amiga screen.
+
+So the two states are different and both are real:
+
+- `data->pointer` non-NULL with `sprite` NULL -- what crashed, and what 0092
+  now guards.
+- `data->pointer` NULL -- this run, no crash by either the old code or the new,
+  and no cursor.
+
+Which of the two arises is timing-dependent, so **one clean run is not proof
+the crash is gone**; it is proof that the store named above no longer happens
+when that path is taken. The guard is correct regardless: the dereference was
+unconditional and the field is nullable.
+
+Why `SetCursorShape` fails on amigavideo is a separate thread, tracked with the
+black screen below rather than here.
+
+
+# SOLVED: rom/intuition/monitorclass.c:96
+
+The fault-driven vector page named the store on the first run it was armed for:
+
+```text
+[BELLATRIX:RIGEL:ABSEXEC] $020012f0 -> $0200019f at pc=3061edaa (vecpage ON)
+[VEC-W16] addr=000006 value=0000019f pc=3069b1ac sr=0004  <- AbsExecBase
+```
+
+`0x3069b1ac` is `MonitorClass__MM_SetPointerPos`, which does one thing:
+
+```c
+data->mouseX = msg->x;
+data->mouseY = msg->y;
+SetPointerPos(data, IntuitionBase);
+```
+
+and `SetPointerPos()` at `monitorclass.c:93`:
+
+```c
+if (data->pointer)
+{
+    /* Update sprite position, just for backwards compatibility */
+    data->pointer->sprite->es_SimpleSprite.x = x;
+    data->pointer->sprite->es_SimpleSprite.y = y;
+}
+```
+
+`data->pointer->sprite` is **NULL**, and the dereference is unguarded. The
+arithmetic is exact:
+
+- `struct SimpleSprite` is `{ UWORD *posctldata; UWORD height; UWORD x, y; ... }`,
+  so `x` is at offset **6** (`compiler/include/graphics/sprite.h:18`).
+- `es_SimpleSprite` is the first member of `struct ExtSprite`, at offset 0.
+- So the store is `*(UWORD *)6 = x` -- a **word** store, which is why the high
+  word of AbsExecBase survived every time.
+- On AROS m68k `SysBase` is linked as absolute address 4
+  (`--defsym,SysBase=0x4`), so address 6 is its low half.
+- `x` was `0x019f` = 415, a mouse coordinate. `$020012f0` became `$0200019f`.
+
+Every reading in this issue falls out of that. The wild PC was always
+`corrupt_SysBase - LVO` for whichever library call came next, which is why it
+moved around and why it was always odd and always just below the base. The
+`y` store to address 8 never even ran: the machine died on the first
+`jsr -LVO(a6)` between the two.
+
+# The fix, and what it does not answer
+
+`patches/aros/0092` guards the dereference. That is correct on any
+architecture -- m68k is only where it is fatal rather than a wild store into
+low memory nobody was using.
+
+It does not explain **why a pointer reaches `SetPointerPos` with no sprite**.
+`MM_SetPointerShape` dereferences `msg->pointer->sprite` itself
+(`monitorclass.c:1937`) before assigning `data->pointer = msg->pointer`, so
+the sprite was there at that point. So either it was freed afterwards, or
+`data->pointer` on the freshly created Amiga monitor node is not what it looks
+like.
+
+The guard therefore reports rather than skipping silently, so the same run
+that stops the crash also says which pointer it was.
+
+# Why it took this long, and the instrument that ended it
+
+Three wrong shapes were drawn from memory dumps before the mechanism was
+read -- an exception loop on the supervisor stack, a corrupt vector slot, a
+corrupt SysBase global -- and each was consistent with the dump. What settled
+it was not a better reading; it was making the write itself observable.
+
+Two mistakes in that instrument are worth keeping:
+
+- **The report budget was spent on boot noise.** AROS fills the 68k vector
+  table at startup, which exhausted a flat 32-report cap long before the
+  window of interest. My own QEMU validation had shown that fill and I did not
+  draw the conclusion. AbsExecBase is now uncapped.
+- **The armed state was announced where the capture could not see it.** An
+  unarmed trap and a silent one produced identical logs. The state is now
+  restated on the line that always prints beside the crash.
+
+Both are the trap CLAUDE.md names ("a probe that prints nothing and a probe
+that never ran look identical") and ISSUE-0078 records as the most expensive
+one in the dwc2 driver. It cost two round trips here.
+
+# Where to start
+
+Confirm on hardware: DPaint, PAL, OK. Expect no crash, and expect
+
+```text
+[Monitor] SetPointerPos: pointer 0x........ has no sprite -- not writing (x,y)
+```
+
+which turns "why is it NULL" into the remaining question. If that line does not
+appear and the screen opens, the sprite was there and something else changed.
+
+# CAUGHT: a word write to address 6, and the true base
+
+The watchpoint on the chipset core saw it happen:
+
+```text
+[BELLATRIX:RIGEL:ABSEXEC] $020012f0 -> $0200011d with the m68k at pc=30600c2e sr=2000
+```
+
+Three things follow, and only two of them are load-bearing.
+
+**The true AbsExecBase is `$020012f0`**, and the same value comes back under
+QEMU. The corrupted readings -- `$0200011b`, `$020000b1`, `$02000121`,
+`$0200011d` -- keep the high word and replace the low one, so this is a
+**16-bit store to address 6**, not a longword store to 4. The value written is
+different every run, which is what a pointer's low or high half looks like when
+the pointer is freshly allocated.
+
+**The PC is a bystander.** `0x30600c2e` resolves to `emu68_console_puts+0x10`
+-- the guest printing to the serial line. The watchpoint polls from another
+core, so it names when the value changed, not who changed it. That is the
+limit of a polled watchpoint and it was known going in; it is why the
+fault-driven page below exists.
+
+# CORRECTION: the heap does start at 0x02000000
+
+Written above, and shipped as a commit: the `<- heap` marker's hard-coded
+`[0x02000000, 0x30600000)` was "a guess, and a wrong one". It was a guess, and
+it was right -- AbsExecBase is `$020012f0`.
+
+The replacement was worse than wrong. Deriving the bounds from
+`SysBase->MemList` makes the marker depend on the one thing this issue
+corrupts, so in the crash it exists to read, every walk returns nothing and the
+dump comes back with no markers at all. That happened, and it cost a dump. The
+walk stays, because when SysBase is sound it is exact, but it now falls back to
+the constants when SysBase is not walkable.
+
+# The instrument that names the writer
+
+Chip RAM is `MACHINE_REGION_DIRECT`, so the CPU writes it with native stores
+that reach no hook: not `amiga_chip_ram_write16()` (which sees only chipset
+DMA, and stayed silent), and not the region ops (which a DIRECT page never
+reaches). A polled watchpoint was the only thing left -- until the legacy tree
+turned out to have solved this already:
+
+```text
+Diagnostic (opt-in): fault-drive the vector page so every access to
+0x000-0xFFF reaches bellatrix_bus_access and low-memory corruption
+writers are caught with their exact PC ([VEC-W]). ~15x boot slowdown
+under QEMU/TCG -- enable only for targeted hunts.
+```
+
+Legacy also recorded why the page is DIRECT the rest of the time, which is not
+a matter of taste: a write-trap on pages 0-1 produced store-buffer coherency
+failures between the host alias and the guest's low mapping.
+
+Ported as `src/machine/vecpage.c`, opt-in by the boot argument
+`bellatrix.vecpage`, off by default. It needs no alias of its own: Emu68 keeps
+a cached identity map of physical memory at `0xffffff9000000000` and already
+services trapped accesses through it (`vectors.c: SYSWriteValToAddr`).
+
+Validated under QEMU before shipping -- it reports `[VEC-W32] addr=000004`,
+`addr=000008` and the vector fills, each with a PC.
+
+# Candidates the trap will settle
+
+**`amigavideo`'s copper list is built from an unchecked allocation.**
+`amigavideo_chipset.c:1833`:
+
+```c
+csd->sprite_null = AllocMem((2 << 3) + (46 * (sizeof(WORD) << 1)),
+                            MEMF_CLEAR | MEMF_CHIP);
+csd->copper1 = (APTR)((IPTR)csd->sprite_null + (2 << 3));
+c = csd->copper1;
+```
+
+A NULL from `AllocMem` puts the whole copper list at address 16 and upward.
+That is a real defect, but it does not by itself explain a write to **6** --
+the COPPEROUTs would start at 16 -- so it is a candidate, not the answer.
+
+**`setspritevisible()` writes two UWORDs** through `csd->copper1_spritept`,
+which is the right *size*: `copper1_spritept[0]` and `[2]` are word stores four
+bytes apart. `copper1_spritept == 6` would put `p >> 16` exactly where the
+damage is. Where a 6 would come from is not established.
+
+Both are guesses about a mechanism. The rule this issue already records --
+resolve the mechanism in the source before drawing a shape from a dump --
+applies to them too, and the trap resolves it without another guess.
+
+# What the NTSC run adds
+
+A run that asked for an NTSC mode failed to open and did **not** crash; the PAL
+mode that followed opened and did. Every `CreateObject` in that log carries
+`modeid = 00021000`, and no NTSC modeid appears at all -- so the failed request
+created nothing. The crash needs a screen to actually be created, not merely
+requested.
+
+# Where to start
+
+Boot with `bellatrix.vecpage` appended to `cmdline.txt` and open the PAL
+screen. The `[VEC-W16] addr=000006 ... pc=........` line names the store, and
+the PC resolves against the kernel ELF at its load base.
+

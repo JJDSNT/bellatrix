@@ -28,6 +28,10 @@ include $(SRCDIR)/config/aros.cfg
 
 #
 # arch/arm-native's include/ is last on purpose, and which -I wins matters.
+# Its *sdcard* directory is no longer on the list at all: every local include
+# in this backend resolves either here or in rom/devs/sdcard, and leaving the
+# original's directory reachable would mean a header could still be picked up
+# from it without anyone noticing which copy was compiled.
 #
 # That directory holds a bcm2708.h, a videocore.h and an arasan.h, and this
 # port has its own with the same names -- see the note at the top of
@@ -40,7 +44,6 @@ include $(SRCDIR)/config/aros.cfg
 USER_INCLUDES := -I$(SRCDIR)/$(CURDIR) \
                  -I$(SRCDIR)/rom/devs/sdcard \
                  -I$(SRCDIR)/arch/m68k-emu68/include \
-                 -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/sdcard \
                  -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/include
 
 # -fno-common: Emu68's ELF loader rejects the whole guest image on the first
@@ -77,18 +80,40 @@ USER_CFLAGS := -fno-common
 #
 SDCARD_BACKEND := sdhost
 
-# sdhost_init.c and sdhost_bus.c in this directory are three-line files that
-# #include the arm-native source. That indirection is not decoration: see the
-# comment in sdhost_init.c for why %build_archspecific cannot name a file
-# outside its own directory, and why a relative path cannot either.
+# The SDHOST sources are ours now.
+#
+# They used to be three-line files that #included the arm-native original,
+# because %build_archspecific cannot name a file outside its own directory and
+# a relative path cannot escape a symlinked tree either. That worked, and it
+# meant every change to this driver had to be a patch against somebody else's
+# file -- for a driver this port depends on to boot, on hardware upstream does
+# not target, in a failure mode upstream has never seen.
+#
+# So they were copied here, the way vcgfx, fbgfx and the DWC2 engine were, and
+# patches/aros/0027 folded in with them. There is one copy and it is this one.
 #
 # sdcard_bcm2708time stays ours for a different reason: it is the Emu68
 # specific delay loop, and the JIT folding `nop` is why it is written the way
 # it is.
-ifeq ($(SDCARD_BACKEND),sdhost)
+#
+# emu68sd is the third choice, and it is a second driver rather than a mode of
+# the first. It implements the same eleven bus functions against the same
+# controller and answers the same questions differently: no DMA channel, no
+# bounce buffer, no cache maintenance, and the FIFO drained by the CPU in
+# bursts -- which is what Emu68's own brcm-sdhc.device does on this hardware.
+#
+# Two drivers, so sdcard.md's matrix has something to compare. One driver with
+# a switch inside it would not.
+#
+ifeq ($(SDCARD_BACKEND),emu68sd)
 BCM2708FILES = \
-    sdhost_init \
-    sdhost_bus \
+    sdcard_emu68sd_init \
+    sdcard_emu68sd_bus \
+    sdcard_bcm2708time
+else ifeq ($(SDCARD_BACKEND),sdhost)
+BCM2708FILES = \
+    sdcard_sdhost_init \
+    sdcard_sdhost_bus \
     sdcard_bcm2708time
 else
 BCM2708FILES = \

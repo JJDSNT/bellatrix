@@ -1,0 +1,41 @@
+From: Bellatrix Project <bellatrix@localhost>
+Subject: [PATCH] Workbook: isolate the icon.library call on m68k
+
+Keep the icon.library base setup out of wbIcon_Update().  GCC 6.5 otherwise
+cannot allocate an address register for the inline library call when building
+the updated Workbook for m68k with a frame pointer.
+---
+ workbench/system/Workbook/wbicon.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/workbench/system/Workbook/wbicon.c b/workbench/system/Workbook/wbicon.c
+--- a/workbench/system/Workbook/wbicon.c
++++ b/workbench/system/Workbook/wbicon.c
+@@ -38,6 +38,16 @@ const struct TagItem wbIcon_DrawTags[] = {
+     { TAG_DONE },
+ };
+ 
++static void wbIcon_GetRectangle(struct WorkbookBase *wb, struct wbIcon *my,
++    struct Rectangle *rect)
++{
++    GetIconRectangleA(&my->Screen->RastPort,
++        my->Icon,
++        (STRPTR)my->Label,
++        rect,
++        (struct TagItem *)wbIcon_DrawTags);
++}
++
+ void wbIcon_Update(Class *cl, Object *obj)
+ {
+     struct WorkbookBase *wb = (APTR)cl->cl_UserData;
+@@ -49,7 +59,7 @@ void wbIcon_Update(Class *cl, Object *obj)
+ 
+     /* Update the parent's idea of how big we are
+      */
+-    GetIconRectangleA(&my->Screen->RastPort, my->Icon, (STRPTR)my->Label, &rect, (struct TagItem *)wbIcon_DrawTags);
++    wbIcon_GetRectangle(wb, my, &rect);
+ 
+     w = (rect.MaxX - rect.MinX) + 1;
+     h = (rect.MaxY - rect.MinY) + 1;
+-- 
+2.43.0

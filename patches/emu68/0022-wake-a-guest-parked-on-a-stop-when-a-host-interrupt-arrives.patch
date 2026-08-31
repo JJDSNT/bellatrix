@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Wake a guest parked on a STOP when a host interrupt arrives
+
+EMIT_STOP ends in "wfe; load INT64; branch back if zero". The IRQ vector
+runs on the same core and can land between that load and that WFE.
+Taking an interrupt does not set the event register -- only an interrupt
+taken during a WFE wakes it -- and the vector returns with the I bit
+set, so no later interrupt can wake it either. The guest then sleeps
+forever on an interrupt it has already been handed, and the machine
+stops with every other core still running.
+
+The symptom is a boot whose clock freezes while the serial log keeps
+flowing: on this port the boot clock is ticked from inside the timer
+interrupt, so a stopped clock is a stopped interrupt, not a stopped
+task.
+
+SEV is sticky. Sent before the WFE it is consumed by it; sent during it
+it wakes it. One instruction closes the window in both directions, and
+it is the same discipline src/amiga/irq.c already keeps for the chipset
+IPL channel.
+---
+ src/aarch64/vectors.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/aarch64/vectors.c b/src/aarch64/vectors.c
+--- a/src/aarch64/vectors.c
++++ b/src/aarch64/vectors.c
+@@ -164,8 +164,23 @@
+ // stored is 1 and not the level -- bit 0 is what that register exposes.
+ "       mov x1, "CTX_POINTER_ASM"       \n" // Load CPU context
+ "       mov w0, #1                      \n" // Assert host interrupt
+ "       strb w0, [x1, #%[pint]]         \n"
++// Wake a guest parked on a STOP.
++//
++// EMIT_STOP ends in "wfe; load INT64; branch back if zero", and this
++// handler runs on the same core, between that load and that WFE if the
++// timing falls badly. Taking an interrupt does not set the event
++// register -- only an interrupt taken *during* a WFE wakes it -- and we
++// return with the I bit set, so no later interrupt can wake it either.
++// The guest then sleeps forever on an interrupt it has already been
++// given, and the machine stops with every other core still running.
++//
++// SEV is sticky: sent before the WFE it is consumed by it, sent during
++// it it wakes it. One instruction closes the window in both directions.
++// This is the same discipline the chipset side already keeps in
++// src/amiga/irq.c, applied to the other channel.
++"       sev                             \n"
+ "       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "2:     ldp x0, x1, [sp], #16           \n"
+ "       b IRQonOtherCores               \n"
+@@ -182,8 +197,9 @@
+ // Same as the IRQ path above: assert INTF.ARM, no shadow.
+ "       mov x1, "CTX_POINTER_ASM"       \n" // Load CPU context
+ "       mov w0, #1                      \n" // Assert host interrupt
+ "       strb w0, [x1, #%[pint]]         \n"
++"       sev                             \n" // Same window as the IRQ path above
+ "       ldp x0, x1, [sp], #16           \n" // Restore scratch registers
+ "       eret                            \n"
+ "                                       \n"
+ "       .balign 0x80                    \n"

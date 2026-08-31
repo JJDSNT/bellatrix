@@ -297,7 +297,16 @@ static BOOL discover(void)
  * Bits 29..31 are command bits and are masked out of the stored value, so
  * what comes back has them clear and cannot re-trigger anything.
  */
-static inline void platform_host_irq_ack(void)
+/*
+ * Deassert the platform latch, and say whether it was the reason we are here.
+ *
+ * JITCTRL2 bit 29 is INTF.ARM -- Emu68 places it there on the read
+ * (M68k_LINE4.c, `bfi(reg, tmp, 29, 1)`) and takes it from there on the write,
+ * which is the same bit this function sets to deassert. Reading it costs a
+ * MOVEC and no bus cycle, which matters: it is what lets the chipset pass
+ * below be skipped on an interrupt that had nothing to do with the chipset.
+ */
+static inline ULONG platform_host_irq_ack(void)
 {
     ULONG ctrl;
 
@@ -312,6 +321,65 @@ static inline void platform_host_irq_ack(void)
         "   move.l %0,%%d0          \n"
         "   .word 0x4e7b, 0x01e0    \n"     /* movec %%d0,JITCTRL2        */
         : : "r" (ctrl) : "d0", "memory");
+
+    return ctrl;
+}
+
+/*
+ * Paula's own interrupts, which this port had no way to deliver.
+ *
+ * Every m68k autovector here goes to one trampoline that asks the ARM
+ * interrupt controller what is pending. That is right for a platform
+ * interrupt and blind to a chipset one: Rigel raises INTREQ, the arbitration
+ * hands the CPU a level, the trampoline finds nothing on the ARM side and
+ * returns. Anything that installed an Amiga interrupt server was never
+ * called.
+ *
+ * It is not academic. arch/m68k-amiga's audio.device -- linked into this ROM
+ * on 2026-08-30 -- installs SetIntVector(INTB_AUD0 + ch) for its four
+ * channels and refills each buffer from there. Without this, Paula plays
+ * whatever was armed and never advances: one sample, for ever. Demo Reel 3
+ * programmed all four channels' periods through Rigel and then had nothing
+ * to chain them (ISSUE-0079).
+ *
+ * The shape is arch/m68k-amiga/kernel/amiga_irq.c's, with its seven
+ * per-level handlers merged into one pass, because this trampoline is shared
+ * across all seven levels and does not know which it was entered for. That
+ * costs nothing in correctness: the SR mask is what orders these, and it has
+ * already done its work by the time we are here.
+ *
+ * Acknowledge before dispatching, exactly as upstream does, and for the same
+ * reason: a bit with no server installed is then simply cleared instead of
+ * re-asserting for ever. SOFTINT is the one exception -- its handler clears
+ * it, because it may Cause() again from inside itself.
+ */
+static void platform_paula_dispatch(void)
+{
+    volatile UWORD *const intenar = (volatile UWORD *)0x00dff01cUL;
+    volatile UWORD *const intreqr = (volatile UWORD *)0x00dff01eUL;
+    volatile UWORD *const intreq  = (volatile UWORD *)0x00dff09cUL;
+    UWORD ena, mask;
+    int bit;
+
+    /*
+     * One read before anything else. A machine whose chipset is idle -- which
+     * is most of a boot -- pays a single register read per interrupt and
+     * leaves, and that read is an MMIO fault to Rigel, so it is not free.
+     */
+    ena = *intenar;
+    if (!(ena & INTF_INTEN))
+        return;
+
+    mask = ena & *intreqr;
+    if (mask == 0)
+        return;
+
+    *intreq = (UWORD)(mask & ~INTF_SOFTINT);
+
+    /* Highest first, the order the seven vectors would have given us. */
+    for (bit = INTB_EXTER; bit >= 0; bit--)
+        if (mask & (1 << bit))
+            core_Cause((unsigned char)bit, mask);
 }
 
 BOOL Platform_Autovector(void)
@@ -332,10 +400,31 @@ BOOL Platform_Autovector(void)
      * clearing afterwards would discard it. Clearing first means the worst
      * case is one spurious level 6 with nothing to do, instead of a lost one.
      */
-    platform_host_irq_ack();
+    /*
+     * Two channels reach this one trampoline and they cost very different
+     * things to serve. INTF.ARM is a latch and answering it is register reads
+     * on the ARM controller; the chipset's level is answered by reading
+     * INTENAR, and on this machine that is an MMIO fault into Rigel.
+     *
+     * Doing both on every entry put that fault on the platform's path, and
+     * the platform's path is not slow by accident -- usb2otg keeps
+     * start-of-frame unmasked, which is 8000 entries a second. The machine
+     * could not keep up and IRQ 9 backed up into a storm the counters caught
+     * at 65536 dispatches, with the PC sitting in this function.
+     *
+     * So ask the latch what brought us here. Bit 29 of what the acknowledge
+     * read back is INTF.ARM, and it costs a MOVEC. If it was set, this was
+     * the platform and the chipset is not asked. If the chipset's level is
+     * also up it is a level, not an edge: it re-enters, and re-entering is
+     * what the autovector is for.
+     */
+    ULONG was_platform = platform_host_irq_ack() & (1UL << 29);
 
     if (g_intc_ops)
         g_intc_ops->Dispatch(KernelBase);
+
+    if (!was_platform)
+        platform_paula_dispatch();
 
     return TRUE;
 }

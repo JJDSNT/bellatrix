@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 31 Aug 2026 00:00:00 -0300
+Subject: [PATCH] task: report the instruction share beside the time share
+
+iet_InsnUsage exists (see the etask.h patch) but nothing could read it,
+and a number nobody can read is not a measurement. TaskTag_InsnUsage
+answers it exactly as TaskTag_CPUUsage answers iet_CpuUsage, and reads
+zero on every target that does not fill it -- which is every target whose
+CPU is not translated.
+---
+diff --git a/rom/task/QueryTaskTagList.c b/rom/task/QueryTaskTagList.c
+index b8fadf618a..bce2f341f9 100644
+--- a/rom/task/QueryTaskTagList.c
++++ b/rom/task/QueryTaskTagList.c
+@@ -168,6 +168,14 @@
+                     *(ULONG *)(Tag->ti_Data) = 0;
+             }
+             break;
++        case(TaskTag_InsnUsage):
++            {
++                if (task_et)
++                    *(ULONG *)(Tag->ti_Data) = task_et->iet_InsnUsage;
++                else
++                    *(ULONG *)(Tag->ti_Data) = 0;
++            }
++            break;
+         case(TaskTag_StartTime):
+             {
+                 struct timeval *storeval = (struct timeval *)Tag->ti_Data;
+diff --git a/rom/task/task.h b/rom/task/task.h
+index ead2724673..216e66f363 100644
+--- a/rom/task/task.h
++++ b/rom/task/task.h
+@@ -24,6 +24,7 @@
+ #define TaskTag_CPUTime                 (TAG_USER + 0x00000003) // Amount of CPU time spent running
+ #define TaskTag_StartTime               (TAG_USER + 0x00000004) // Time the task was started
+ #define TaskTag_CPUUsage                (TAG_USER + 0x00000005) // CPU Usage of this task
++#define TaskTag_InsnUsage               (TAG_USER + 0x00000006) // Share of guest instructions, where the CPU is translated
+ #define TaskTag_REG_PC                  (TAG_USER + 0x00000020)
+ #define TaskTag_REG_SP                  (TAG_USER + 0x00000021)
+ #define TaskTag_REG_GeneralCount        (TAG_USER + 0x00000030)

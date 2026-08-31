@@ -1,0 +1,71 @@
+From ccddee0011223344556677889900aabbccddeeff Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 12:40:00 -0300
+Subject: [PATCH] mesa: resize ralloc blocks with alignment
+
+Pointers returned by os_malloc_aligned cannot be passed directly to realloc.
+Remember each ralloc payload size and resize with aligned allocate/copy/free so
+the header and payload remain aligned without handing libc an adjusted pointer.
+---
+ workbench/libs/mesa/mesa-20.0.8-aros.diff | 42 ++++++++++++++++++++++-
+ 1 file changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/workbench/libs/mesa/mesa-20.0.8-aros.diff b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+index 4db315bda1..e9f20b90c4 100644
+--- a/workbench/libs/mesa/mesa-20.0.8-aros.diff
++++ b/workbench/libs/mesa/mesa-20.0.8-aros.diff
+@@ -1201,2 +1201,2 @@
+-@@ -28,6 +28,7 @@
++@@ -28,6 +28,8 @@
+  #include <string.h>
+@@ -1209,2 +1209,10 @@
+  #ifdef __MINGW32__
++@@ -73,6 +75,7 @@
++    struct ralloc_header *next;
++ 
++    void (*destructor)(void *);
+++   size_t size;
++ };
++ 
++ typedef struct ralloc_header ralloc_header;
+ @@ -116,7 +117,8 @@
+@@ -1218,3 +1226,37 @@
+     ralloc_header *parent;
++ 
++@@ -132,6 +135,7 @@
++    info->prev = NULL;
++    info->next = NULL;
++    info->destructor = NULL;
+++   info->size = size;
++ 
++    parent = ctx != NULL ? get_header(ctx) : NULL;
++ 
++@@ -160,13 +164,18 @@
++    ralloc_header *child, *old, *info;
++ 
++    old = get_header(ptr);
++-   info = realloc(old, size + sizeof(ralloc_header));
+++   info = os_malloc_aligned(size + sizeof(ralloc_header),
+++                            __alignof__(ralloc_header));
++ 
++    if (info == NULL)
++       return NULL;
++ 
+++   memcpy(info, old, sizeof(ralloc_header) + MIN2(old->size, size));
+++   info->size = size;
+++
++    /* Update parent and sibling's links to the reallocated node. */
++    if (info != old && info->parent != NULL) {
++       if (info->parent->child == old)
++@@ -184,6 +193,8 @@
++    for (child = info->child; child != NULL; child = child->next)
++       child->parent = info;
++ 
+++   os_free_aligned(old);
+++
++    return PTR_FROM_HEADER(info);
++ }
+  
+ @@ -296,7 +298,7 @@
+-- 
+2.43.0

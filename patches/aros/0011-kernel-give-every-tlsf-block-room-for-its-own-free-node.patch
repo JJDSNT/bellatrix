@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 14 Aug 2026 10:40:00 -0300
+Subject: [PATCH 11/11] kernel: give every TLSF block room for its own free node
+
+A free block keeps its two list pointers in its *payload*: INSERT_FREE_BLOCK
+writes a free_node_t over the memory the caller was just using. A payload
+smaller than a free node therefore cannot be freed without writing past the
+block, through the following block's hdr_t.prev.
+
+Nothing in the allocator guaranteed that. The only thing rounding sizes is
+ROUNDUP(), which rounds to SIZE_ALIGN, which is AROS_WORSTALIGN -- 8 on the
+64-bit targets and on aarch64, and 4 on m68k:
+
+    arch/m68k-all/include/aros/cpu.h:26:#define AROS_WORSTALIGN 4
+
+So on this target, and only on this target, AllocMem(1) produced a four-byte
+block, and freeing it wrote eight bytes: four into itself and four into its
+neighbour's header. The neighbour was then a busy block whose header said
+something false, and the failure surfaced much later -- in whoever next merged
+or unlinked around it -- as `free-list corruption at REMOVE_HEADER` with a NULL
+head, typically three quarters of a boot after the write. That is ISSUE-0037.
+
+Two places have to respect the invariant and this patch names it once,
+MIN_PAYLOAD, so they cannot drift apart:
+
+  - the size a request is served at, which is where the four-byte blocks came
+    from;
+  - the remainder a split leaves behind, which an earlier revision of this
+    patch fixed on its own. Fixing only that half is why the defect survived:
+    it stopped the allocator manufacturing an unusable *remainder* while it
+    went on manufacturing unusable *blocks*.
+
+This is also what hid the bug from mungwall. mungwall adds its walls to the
+size before the allocator sees it, so under mungwall no four-byte block is ever
+created and the boot is clean -- a detector for header damage that could not
+see this header damage, because turning it on removed the cause.
+
+Verified in QEMU: the configuration that failed 8 boots out of 8 before the
+change passes 8 out of 8 after it.
+---
+--- a/rom/kernel/tlsf.c
++++ b/rom/kernel/tlsf.c
+@@ -47,6 +47,26 @@
+ #define ROUNDUP(x)      (((x) + SIZE_ALIGN - 1) & ~(SIZE_ALIGN - 1))
+ #define ROUNDDOWN(x)    ((x) & ~(SIZE_ALIGN - 1))
+ 
++/*
++ * The smallest payload a block may have.
++ *
++ * A free block keeps its two free-list pointers *in its payload*:
++ * INSERT_FREE_BLOCK writes a free_node_t over the memory the caller was using.
++ * So a payload smaller than a free node cannot be freed without writing past
++ * the block -- through the following block's hdr_t.prev, which is the first
++ * word after it.
++ *
++ * Nothing else guarantees this. ROUNDUP() rounds to SIZE_ALIGN, which is
++ * AROS_WORSTALIGN: 8 on the 64-bit targets and on aarch64, and 4 on m68k
++ * (arch/m68k-all/include/aros/cpu.h). On that one target, and only there,
++ * AllocMem(1) otherwise yields a four-byte block that corrupts its neighbour
++ * the moment it is freed.
++ *
++ * Two places have to respect it: the size a request is served at, and the
++ * remainder a split leaves behind. Both are below.
++ */
++#define MIN_PAYLOAD     ROUNDUP(sizeof(free_node_t))
++
+ /* Fields used in the block header length field to identify busy/free blocks */
+ #define THIS_FREE_MASK (IPTR)1
+ #define THIS_FREE   (IPTR)1
+@@ -496,6 +516,10 @@
+ 
+     if (unlikely(!size)) return NULL;
+ 
++    /* Every block must be able to hold its own free node -- see MIN_PAYLOAD. */
++    if (unlikely(size < MIN_PAYLOAD))
++        size = MIN_PAYLOAD;
++
+     D(nbug("[Kernel:TLSF] %s(%p, %ld)\n", __PRETTY_FUNCTION__, tlsf, size));
+ 
+     if (((ULONG)(IPTR)mhe->mhe_MemHeader.mh_First) & MEMF_SEM_PROTECTED)
+@@ -560,7 +584,7 @@
+     REMOVE_HEADER(mhe, tlsf, b, fl, sl);
+ 
+     /* Is this block larger then requested? Try to split it then */
+-    if (likely(GET_SIZE(b) > (size + ROUNDUP(sizeof(hdr_t)))))
++    if (likely(GET_SIZE(b) >= (size + ROUNDUP(sizeof(hdr_t)) + MIN_PAYLOAD)))
+     {
+         /* New split block */
+         bhdr_t *sb = GET_NEXT_BHDR(b, size);

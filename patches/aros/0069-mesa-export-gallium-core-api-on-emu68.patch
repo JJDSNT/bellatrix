@@ -1,0 +1,45 @@
+From: Bellatrix contributors
+Subject: [PATCH] mesa: export GalliumCoreAPI on Emu68
+
+The VC4 HIDD is also built for AROS_TARGET_ARCH=emu68. Restricting the
+GalliumCoreAPI provider to raspi leaves mesa3dgl without the table and makes
+hardware context creation fail after the HIDD has initialized V3D.
+
+Enable the generated provider link library and its source-side declaration
+for the Emu68 target as well.
+---
+diff --git a/workbench/libs/mesa/mesa.cfg b/workbench/libs/mesa/mesa.cfg
+index 24831bb29f..3088c5d86a 100644
+--- a/workbench/libs/mesa/mesa.cfg
++++ b/workbench/libs/mesa/mesa.cfg
+@@ -184,6 +184,6 @@ MESA3DGL_GALLIUMCORE :=
+ # table. Built by the vc4gallium hidd's mmakefile, which only builds for
+ # AROS_TARGET_CPU=arm - AROS_TARGET_ARCH alone is "raspi" for the aarch64
+ # target too, and the generated trampolines are 32-bit ARM.
+-ifeq ($(AROS_TARGET_ARCH),raspi)
++ifneq ($(filter raspi emu68,$(AROS_TARGET_ARCH)),)
+ MESA3DGL_GALLIUMCORE += galliumcoreapi
+ endif
+diff --git a/workbench/libs/mesa/mmakefile.src b/workbench/libs/mesa/mmakefile.src
+index 14cb2019c7..6e1d919bc3 100644
+--- a/workbench/libs/mesa/mmakefile.src
++++ b/workbench/libs/mesa/mmakefile.src
+@@ -36,6 +36,7 @@ include $(SRCDIR)/$(CURDIR)/mesa.cfg
+ # linklib before mesa3dgl-library consumes it.
+ #MM- mesa3dgl-library : mesa3dgl-galliumcore-$(AROS_TARGET_ARCH)
+ #MM- mesa3dgl-galliumcore-raspi : linklibs-galliumcoreapi
++#MM- mesa3dgl-galliumcore-emu68 : linklibs-galliumcoreapi
+ 
+ SHARED_LIB_SOURCES = \
+             emul_arosc \
+@@ -51,7 +52,7 @@ SHARED_LIB_SOURCES = \
+ # target too, where the vc4 hidd (and with it the core table this file
+ # anchors) is not built. Excluded elsewhere so libc symbols stay
+ # untouched.
+-ifeq ($(AROS_TARGET_ARCH),raspi)
++ifneq ($(filter raspi emu68,$(AROS_TARGET_ARCH)),)
+ SHARED_LIB_SOURCES += aros_drm_shim
+ # Bridge ABI header (shared with the hidd), needed by aros_drm_shim.c.
+ USER_INCLUDES += -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium
+-- 
+2.47.3

@@ -253,6 +253,41 @@ m68k ELF from `-initrd`. Four pieces have to line up:
 does not produce them, so `make-sdcard.sh` takes `--dist DIR` to point at a
 tree that has them.
 
+### QEMU SD-card profile
+
+The full distribution is also used for Raspberry Pi hardware, so it may carry
+the onboard Bluetooth transport and both experimental DWC2 host-controller
+drivers. QEMU's `raspi3b` machine does not emulate the BCM43438 attached to the
+PL011. If `bthciuart.device` is present, `AddBTHardware` waits for an HCI reply
+that can never arrive and the boot remains at `STARTING SERVICES`. The message
+`USB2OTG Init: No device connected on port!` is benign: it only says that the
+emulated USB port is empty.
+
+Until the build has a first-class QEMU packaging option, make an isolated copy
+of the distribution under `out/`, remove the hardware-only Bluetooth transport,
+and retain the `usb2otg` backend that is known to complete the emulated boot:
+
+```bash
+./scripts/build-aros.sh full
+
+rm -rf out/qemu-dist-AROS
+cp -a out/build/aros/bin/emu68-m68k/AROS out/qemu-dist-AROS
+rm out/qemu-dist-AROS/Devs/Bluetooth/bthciuart.device
+rm out/qemu-dist-AROS/Devs/USBHardware/dwc2emu68.device
+
+./scripts/make-sdcard.sh \
+    --dist "$PWD/out/qemu-dist-AROS" \
+    --out "$PWD/out/aros/sd-qemu.img"
+./run.sh --sd out/aros/sd-qemu.img
+```
+
+Keep the staged tree below `out/`: `make-sdcard.sh` uses hardlinks while
+collecting the card contents, so a distribution copied to `/tmp` on another
+filesystem fails with `Invalid cross-device link`. Use `--headless` to validate
+through the serial console. A successful boot passes `STARTING SERVICES`, emits
+`STARTING WANDERER`, and eventually reports the display takeover; the validated
+2026-08-31 run reached that point in about 81 seconds.
+
 Three constraints are encoded in the scripts rather than left to be
 rediscovered:
 

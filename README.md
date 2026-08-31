@@ -44,10 +44,35 @@ cd bellatrix
 
 ./scripts/setup.sh          # check out the submodules, apply the patch series
 ./scripts/build.sh          # Emu68        → out/images/Emu68.img
-./scripts/build-aros.sh     # AROS m68k    → out/aros/aros-emu68-m68k.elf
+./scripts/build-aros.sh full # AROS m68k + distribution tree
 ./scripts/make-sdcard.sh    # boot media   → out/aros/sd.img
 ./run.sh                    # boot the lot under QEMU
 ```
+
+The Pi-oriented distribution can contain onboard devices that QEMU does not
+emulate.  In particular, loading `bthciuart.device` blocks the startup while it
+waits for the Pi's BCM43438 Bluetooth controller.  See the [QEMU SD-card
+recipe](docs/aros.md#qemu-sd-card-profile) for the currently validated staging
+step and the exact boot command.
+
+Rigel, the classic Amiga chipset, is built in by default:
+
+```bash
+./scripts/build.sh              # with the chipset  → out/images/Bellatrix.img
+CONFIG_RIGEL=0 ./scripts/build.sh  # without it     → out/images/Emu68.img
+```
+
+The build names the resulting composition explicitly, and the run, SD-card,
+timing, and release scripts select the name recorded by the last successful
+build. With `CONFIG_RIGEL=0` Rigel is neither initialised by setup nor included
+in the Emu68 build; that composition is still supported, and switching the
+option in the same incremental build directory works.
+
+With Rigel enabled, `src/machine/` remains the memory-policy control plane: it
+marks the coarse CIA, RTC, and custom-chip apertures as external in the same
+table that programs the Emu68 MMU. `src/amiga/bus.c` is the thin provider, and
+Rigel itself decodes the complete M68K-visible address and owns all classic
+hardware semantics.
 
 Set aside a few hours for the first `./scripts/build-aros.sh`: it builds an
 m68k cross toolchain from source before it can build AROS itself, and that
@@ -83,7 +108,7 @@ starts is handed to it as the `initramfs` — the slot where an Emu68 user names
 a Kickstart ROM:
 
 ```ini
-kernel=Bellatrix.img.gz
+kernel=Bellatrix.img.gz   # Rigel build; Emu68.img.gz without Rigel
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 ```
@@ -158,16 +183,15 @@ some devices are not usable yet.
 
 ```
 external/emu68      submodule → michalsc/Emu68            (pinned 9b4379a)
-external/aros       submodule → aros-development-team/AROS (pinned 8570536)
-external/aros-bluzing submodule → JJDSNT/aros-bluzing
+external/aros       submodule → aros-development-team/AROS (pinned 9757529)
 external/aros-contrib submodule → aros-development-team/contrib
+external/rigel      submodule → JJDSNT/Rigel (optional)
 
 aros/arch/m68k-emu68  the AROS port — our source, symlinked into the AROS tree
-aros/contrib/aros-bluzing Bluetooth stack injection → external/aros-bluzing
 aros/contrib/Demo/GL selected MesaGL examples → external/aros-contrib
 aros/contrib/gfx/libs/glut GLUT link library → external/aros-contrib
-patches/emu68/        7 patches on Emu68
-patches/aros/        22 patches on AROS
+patches/emu68/       10 patches on Emu68
+patches/aros/        34 patches on AROS
 
 scripts/            setup, build, build-aros, make-sdcard
 run.sh              boot under QEMU (Emu68, or Emu68 + AROS + SD card)

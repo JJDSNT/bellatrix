@@ -1,12 +1,19 @@
 /*
- * Minimal early-boot UI for the Emu68 linear RGB16_LE framebuffer.
+ * Minimal boot presentation over a linear framebuffer.
+ *
+ * Knows nothing about the machine it runs on. The surface, the log channel and
+ * the boot arguments all arrive through bootui_platform.h, so this file works
+ * anywhere something can answer those three questions -- which is the point:
+ * a splash that names its bootloader is that bootloader's splash, not the
+ * system's.
  *
  * This deliberately has no Exec, graphics.library or font dependencies: it
  * is first called before SysBase exists.  All pixels are stored bytewise so
  * the little-endian framebuffer format is correct on the big-endian 68k.
  */
 
-#include "boot.h"
+#include "bootui_platform.h"
+#include "bootui_api.h"
 
 #include <aros/bootui.h>
 #include <exec/nodes.h>
@@ -59,7 +66,7 @@ static struct BootUIState bootui;
  * with the bitmap as the back buffer and costs nothing extra.
  *
  * The release is deliberately split in two. The deadline is noticed in
- * emu68_bootui_clock_tick(), which runs from the system timer *interrupt*
+ * bootui_clock_tick(), which runs from the system timer *interrupt*
  * (platform/bcm283x/systimer_heartbeat), and nothing there may take a
  * semaphore or call into OOP -- the first version did and Wanderer collected
  * two "called in supervisor mode" alerts for it. So the tick only stops the
@@ -116,15 +123,26 @@ static int bootui_hold_armed;
  * than a splash, and must not be covered by one.
  */
 static int bootui_wanderer_started;
-static int bootui_direct_scanout;
+/*
+ * Whether a presentation has already been seen. The first one is the desktop
+ * handoff candidate and starts the hold; every later one ends it. Kept apart
+ * from bootui_hold_active because the hold can end on its own deadline, and a
+ * presentation arriving after that must not start a second one.
+ */
+static int bootui_holding_seen;
 /*
  * Called to put the finished desktop up. Registered by the display driver and
- * invoked ONLY from emu68_bootui_set_stage(), which runs in the task that
+ * invoked ONLY from bootui_set_stage(), which runs in the task that
  * sends the signal -- Wanderer's. It takes a semaphore and walks OOP objects,
  * neither of which is legal from the timer interrupt, and an earlier version
  * that called it from there earned two "called in supervisor mode" alerts.
  */
 static void (*bootui_release_hook)(void);
+/*
+ * Whether that hook publishes what is being drawn rather than a copy of it.
+ * See BOOTUI_RELEASE_INSTANT in <aros/bootui.h>.
+ */
+static int bootui_release_instant;
 static void bootui_release(void);
 
 /*
@@ -160,10 +178,10 @@ static void bootui_event(const char *what)
     stamp[11] = ' ';
     stamp[12] = 0;
 
-    emu68_console_puts("[AROS/Emu68] BootUI ");
-    emu68_console_puts(stamp);
-    emu68_console_puts(what);
-    emu68_console_puts("\n");
+    bootui_platform_log("[BootUI] ");
+    bootui_platform_log(stamp);
+    bootui_platform_log(what);
+    bootui_platform_log("\n");
 }
 static struct BootUIResource bootui_resource;
 
@@ -372,31 +390,31 @@ static const char *stage_status(uint32_t stage, uint32_t *progress)
 {
     switch (stage)
     {
-    case EMU68_STAGE_ENTRY:
+    case BOOTUI_STAGE_ENTRY:
         *progress = 2;
         return "STARTING BELLATRIX...";
-    case EMU68_STAGE_EXEC_READY:
+    case BOOTUI_STAGE_EXEC:
         *progress = 6;
         return "STARTING EXEC...";
-    case EMU68_STAGE_SINGLETASK:
+    case BOOTUI_STAGE_SYSTEM:
         *progress = 9;
         return "INITIALIZING SYSTEM...";
-    case EMU68_STAGE_KERNEL_READY:
+    case BOOTUI_STAGE_KERNEL:
         *progress = 12;
         return "STARTING KERNEL...";
-    case EMU68_STAGE_COLDSTART:
+    case BOOTUI_STAGE_COLDSTART:
         *progress = 15;
         return "LOADING SYSTEM...";
-    case EMU68_STAGE_GRAPHICS_READY:
+    case BOOTUI_STAGE_GRAPHICS:
         *progress = 20;
         return "STARTING GRAPHICS...";
-    case EMU68_STAGE_DOS_READY:
+    case BOOTUI_STAGE_DOS_READY:
         *progress = 28;
         return "STARTING DOS...";
-    case EMU68_STAGE_STARTUP:
+    case BOOTUI_STAGE_STARTUP:
         *progress = 50;
         return "STARTING SERVICES...";
-    case EMU68_STAGE_DESKTOP:
+    case BOOTUI_STAGE_DESKTOP:
         *progress = 90;
         return "STARTING WANDERER...";
     default:
@@ -453,9 +471,12 @@ static void draw_clock(void)
     draw_text(text, bootui.height - 15 * scale, scale, RGB565(116, 83, 234));
 }
 
-void emu68_bootui_init(void)
+static int bootui_disabled(void);
+
+void bootui_init(void)
 {
-    struct Emu68BootContext *ctx = &emu68_boot_context;
+    void *framebuffer = NULL;
+    uint32_t pitch = 0, width = 0, height = 0, depth = 0;
     /*
      * The same black the artwork and the progress band use.
      *
@@ -471,17 +492,21 @@ void emu68_bootui_init(void)
     uint16_t background = RGB565(0, 0, 0);
 
     bootui.active = 0;
-    if (!(ctx->flags & EMU68_BOOT_FRAMEBUFFER) ||
-        !ctx->framebuffer || !ctx->framebuffer_pitch ||
-        !ctx->framebuffer_width || !ctx->framebuffer_height ||
-        ctx->framebuffer_pitch < ctx->framebuffer_width * 2)
+    if (bootui_disabled())
+    {
+        bootui_platform_log("[BootUI] disabled by nobootui\n");
+        return;
+    }
+    if (!bootui_platform_surface(&framebuffer, &pitch, &width, &height, &depth))
+        return;
+    if (!framebuffer || !pitch || !width || !height || pitch < width * 2)
         return;
 
-    bootui.framebuffer = ctx->framebuffer;
-    bootui.pitch = ctx->framebuffer_pitch;
-    bootui.width = ctx->framebuffer_width;
-    bootui.height = ctx->framebuffer_height;
-    bootui.depth = 16;
+    bootui.framebuffer = framebuffer;
+    bootui.pitch = pitch;
+    bootui.width = width;
+    bootui.height = height;
+    bootui.depth = depth ? depth : 16;
 
     {
         uint32_t by_width = bootui.width / BOOT_IMAGE_WIDTH;
@@ -508,18 +533,18 @@ void emu68_bootui_init(void)
      */
     fill_rect(0, 0, bootui.width, bootui.height, background);
     if (!draw_boot_image())
-        emu68_console_puts("[AROS/Emu68] BootUI: framebuffer too small for "
+        bootui_platform_log("[BootUI] framebuffer too small for "
                            "the boot image\n");
 }
 
-void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
+void bootui_retarget(void *framebuffer, uint32_t pitch,
                            uint32_t width, uint32_t height, uint32_t depth)
 {
     uint32_t bytes_per_pixel;
 
     if (!bootui.active)
     {
-        emu68_console_puts("[AROS/Emu68] BootUI: retarget ignored (inactive)\n");
+        bootui_platform_log("[BootUI] retarget ignored (inactive)\n");
         return;
     }
     if (!framebuffer || !width || !height)
@@ -545,7 +570,6 @@ void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
     bootui.width = width;
     bootui.height = height;
     bootui.depth = depth;
-    bootui_direct_scanout = 1;
 
     {
         uint32_t by_width = width / BOOT_IMAGE_WIDTH;
@@ -558,14 +582,25 @@ void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
             bootui.scale = 3;
     }
 
-    /* The mode change that opens Wanderer's screen is the hand-off point for
-     * a direct-scanout driver. Unlike fbgfx, vc4gfx has no private desktop
-     * buffer to build behind the splash: keeping the BootUI active here would
-     * make its timer repaint the clock over the live Workbench framebuffer. */
-    if (bootui_wanderer_started)
+    /*
+     * The mode change that opens Wanderer's screen.
+     *
+     * If nobody can put the finished desktop up, this is the hand-off point:
+     * a driver that renders straight into the scanned-out surface has no
+     * private buffer to build behind the presentation, and keeping it active
+     * would repaint the clock over a live Workbench that nothing would then
+     * repair.
+     *
+     * If a driver *has* said it can finish -- by registering a release hook,
+     * which for this port's VideoCore driver means it is assembling on the
+     * page that is not being scanned out -- then this is the opposite: the
+     * moment the presentation is most needed, because what is behind it is a
+     * desktop mid-assembly. Stay, and end on the icons.
+     */
+    if (bootui_wanderer_started && !bootui_release_hook)
     {
         fill_rect(0, 0, width, height, RGB565(0, 0, 0));
-        bootui_event("display takeover: vc4 mode");
+        bootui_event("display takeover: mode change, nothing can finish it");
         bootui.active = 0;
         return;
     }
@@ -596,24 +631,64 @@ void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
  */
 static int bootui_heapscan = -1;
 
-static int heapscan_wanted(void)
+/* No strstr() here: this file runs before any library is open. */
+static int bootui_arg(const char *want)
 {
-    const char *args = emu68_boot_context.bootargs;
-    uint32_t len = emu68_boot_context.bootargs_size;
-    uint32_t i;
+    uint32_t len = 0;
+    const char *args = bootui_platform_args(&len);
+    uint32_t wlen = 0, i, j;
 
-    if (!args || len < 8)
+    while (want[wlen])
+        wlen++;
+
+    if (!args || len < wlen)
         return 0;
 
-    for (i = 0; i + 8 <= len; i++)
+    for (i = 0; i + wlen <= len; i++)
     {
-        if (args[i] == 'h' && args[i + 1] == 'e' && args[i + 2] == 'a'
-            && args[i + 3] == 'p' && args[i + 4] == 's' && args[i + 5] == 'c'
-            && args[i + 6] == 'a' && args[i + 7] == 'n')
+        for (j = 0; j < wlen && args[i + j] == want[j]; j++)
+            ;
+        if (j == wlen)
             return 1;
     }
 
     return 0;
+}
+
+static int heapscan_wanted(void)
+{
+    return bootui_arg("heapscan");
+}
+
+/*
+ * `nobootui` takes the presentation out of the boot entirely -- no surface is
+ * claimed, nothing is drawn, no hold is taken. It exists because a boot
+ * presentation writes to a framebuffer for the whole length of the boot, and
+ * that is exactly the shape of thing one has to be able to subtract before
+ * blaming anything else for memory damage. Answering "is it us?" should not
+ * require rebuilding without the file.
+ */
+static int bootui_disabled(void)
+{
+    static int cached = -1;
+    uint32_t len = 0;
+
+    /*
+     * bootui_init() runs before the boot context carries the arguments, so a
+     * "no" answered then is an answer about the arguments not being there
+     * yet, not about what they say. Only cache an answer once there is a
+     * command line to read; until then keep asking. bootui_set_stage() asks
+     * again at the first stage, which is late enough.
+     */
+    if (cached >= 0)
+        return cached;
+
+    if (!bootui_platform_args(&len) || !len)
+        return 0;
+
+    cached = bootui_arg("nobootui");
+
+    return cached;
 }
 
 /* kernel.resource's TLSF walker; kernel_resource.o keeps public symbols. */
@@ -635,10 +710,21 @@ static void bootui_heap_check(const char *where)
     }
 }
 
-void emu68_bootui_set_stage(uint32_t stage)
+void bootui_set_stage(uint32_t stage)
 {
     const char *status;
     uint32_t progress;
+
+    /*
+     * The arguments were not readable yet when bootui_init() claimed the
+     * surface, so this is the first point at which `nobootui` can be honoured.
+     * Give the surface back and stay out of the rest of the boot.
+     */
+    if (bootui.active && bootui_disabled())
+    {
+        bootui.active = 0;
+        bootui_platform_log("[BootUI] disabled by nobootui\n");
+    }
 
     /* Before anything else, and before any early return: the whole value of
      * a checkpoint is that it happens at every one of them. */
@@ -650,12 +736,98 @@ void emu68_bootui_set_stage(uint32_t stage)
 
     if (stage == BOOTUI_STAGE_REPAINT)
     {
-        emu68_bootui_repaint();
+        bootui_repaint();
         return;
     }
 
     if (stage == BOOTUI_STAGE_DESKTOP)
         bootui_wanderer_started = 1;
+
+    if (stage == BOOTUI_STAGE_HANDOVER)
+    {
+        /*
+         * Let go of the framebuffer, for good.
+         *
+         * A native display driver now owns the hardware, and the first thing
+         * such a driver does is program its own mode -- on this machine that
+         * moves the surface and changes it from 16bpp to 32bpp. Everything
+         * drawn here after that lands at the old geometry, which is not
+         * "stale pixels" but active corruption: the clock tick alone was
+         * enough to paint the splash twice across a framebuffer of the new
+         * width.
+         *
+         * There is nothing to follow it to. Asking where the new surface is
+         * would mean asking the driver, and a driver that answers questions
+         * about a splash is the arrangement this is built to avoid. Once the
+         * display has an owner, the boot presentation's raw-surface era is
+         * over.
+         */
+        /*
+         * Noted, and that is all.
+         *
+         * Letting go here was wrong: the handover says who owns the hardware,
+         * not that the desktop is worth looking at. Between the two lies the
+         * whole reason a boot presentation exists -- the screen opens, and
+         * then Wanderer spends seconds filling it in. Ending the splash at
+         * the handover puts that assembly on screen, which is exactly what
+         * BOOTUI_STAGE_ICONS is for.
+         *
+         * The surface moving is handled without stopping anything: a driver
+         * publishes where the scanout went and the tick follows it. So the
+         * splash survives the mode change and ends where it should, on the
+         * icons or on its own deadline.
+         */
+        if (bootui.active)
+            bootui_event("display owned by a native driver");
+        return;
+    }
+
+    if (stage == BOOTUI_STAGE_PRESENTED)
+    {
+        /*
+         * AROS put something on the display. graphics.library says only that;
+         * what it means for the splash is decided here, which is the whole
+         * point of the boundary living above the drivers.
+         *
+         * The first one is the desktop handoff candidate: at boot it is
+         * Wanderer's screen, and covering the gap between that screen
+         * appearing and its icons being drawn is what the hold is for. Any
+         * later one is something else asking for the display -- an alert, a
+         * requester, an application that started before Wanderer finished --
+         * and whatever it is has a better claim than a splash. So it ends the
+         * hold rather than being held behind it, which is the rule that keeps
+         * errors from being hidden.
+         *
+         * Task context: LoadView() runs on whoever opened the screen, so
+         * releasing from here is legal in a way that releasing from the timer
+         * is not.
+         */
+        if (!bootui.active)
+            return;
+
+        if (!bootui_holding_seen)
+        {
+            bootui_holding_seen = 1;
+            bootui_hold();
+            return;
+        }
+
+        /*
+         * A later presentation is only "something else wants the display"
+         * until Wanderer is on its way. Before that, anything reaching the
+         * display is an alert or a requester, has a better claim than a
+         * splash, and must not be covered by one. After it, the presentations
+         * are the desktop being assembled -- a mode change, a second screen --
+         * and ending the hold on them would put a half-drawn Workbench up,
+         * which is the whole thing the hold exists to prevent.
+         *
+         * From there the hold ends where it always did: on the icons, or on
+         * its own deadline.
+         */
+        if (!bootui_wanderer_started && bootui_holding())
+            bootui_release_now("hold released: another presentation");
+        return;
+    }
 
     if (stage == BOOTUI_STAGE_ICONS)
     {
@@ -672,6 +844,24 @@ void emu68_bootui_set_stage(uint32_t stage)
          */
         if (bootui_hold_active && !bootui_hold_armed)
         {
+            /*
+             * A driver that publishes by pointing has nothing to wait for: the
+             * page it makes visible is the one being drawn, so a title bar
+             * that finishes a moment later finishes on screen. Ending here is
+             * both correct and the earliest honest moment.
+             *
+             * This also runs on Wanderer's task, which the settle path does
+             * not -- that one is noticed by the timer and has to be collected
+             * by somebody in a task. fbgfx collects it in its refresh; a
+             * driver that renders straight into the scanout has no refresh to
+             * collect it in, so for those the hold would never end at all.
+             */
+            if (bootui_release_instant)
+            {
+                bootui_release_now("hold released: icons");
+                return;
+            }
+
             bootui_hold_armed = 1;
             bootui_event("hold armed: icons");
         }
@@ -685,31 +875,73 @@ void emu68_bootui_set_stage(uint32_t stage)
         return;
     bootui.progress = progress;
     bootui.status = status;
-    emu68_console_puts("[AROS/Emu68] BootUI: ");
-    emu68_console_puts(status);
-    emu68_console_puts("\n");
+    bootui_platform_log("[BootUI] ");
+    bootui_platform_log(status);
+    bootui_platform_log("\n");
     draw_progress(progress, status);
     draw_clock();
-    if (stage == BOOTUI_STAGE_DESKTOP && bootui_direct_scanout)
+    /*
+     * Wanderer is starting. Whether the presentation can stay for it is not a
+     * property of this moment, it is whether anybody can put the finished
+     * desktop up afterwards -- so ask that, and ask it of the driver rather
+     * than inferring it.
+     *
+     * This used to end the presentation whenever a retarget had happened,
+     * which was two mistakes at once: a retarget says the surface moved, not
+     * that the driver renders into it; and it was set by *any* driver, so the
+     * icons the hold exists for were unreachable on every one of them. What is
+     * left is a driver that genuinely cannot assemble out of sight, and there
+     * ending here is right -- holding would cover a desktop nothing can
+     * repaint.
+     */
+    if (stage == BOOTUI_STAGE_DESKTOP && !bootui_release_hook)
     {
-        bootui_event("display takeover: direct scanout");
+        bootui_event("display takeover: no driver can finish the desktop");
         bootui.active = 0;
     }
 }
 
-void emu68_bootui_clock_start(uint32_t now_us)
+void bootui_clock_start(uint32_t now_us)
 {
+    /*
+     * First origin wins. Emu68 hands over the instant the first m68k
+     * instruction ran, which is the honest start of this boot; the system
+     * timer driver also offers one when it comes up, tens of stages later, and
+     * taking that would silently discard everything measured so far. The
+     * driver's call is the fallback for an Emu68 that does not stamp.
+     */
+    if (bootui.clock_started)
+        return;
+
     bootui.clock_start_us = now_us;
     bootui.elapsed_seconds = 0;
     bootui.clock_started = 1;
 }
 
-void emu68_bootui_clock_tick(uint32_t now_us)
+void bootui_clock_tick(uint32_t now_us)
 {
     uint32_t elapsed;
 
     if (!bootui.active || !bootui.clock_started)
         return;
+
+    /*
+     * Follow the scanout if a driver has moved it.
+     *
+     * A display driver that programs a mode publishes where the surface went;
+     * until this notices, everything drawn here lands at the old geometry and
+     * the picture appears as copies of itself. The check is a pointer
+     * comparison against what was last seen, so the ordinary tick pays
+     * nothing, and the redraw happens once per change.
+     */
+    {
+        void *fb;
+        uint32_t pitch, width, height, depth;
+
+        if (bootui_platform_scanout_changed(&fb, &pitch, &width, &height,
+                                            &depth))
+            bootui_retarget(fb, pitch, width, height, depth);
+    }
     bootui_last_tick_us = now_us;
 
     if (bootui_hold_active)
@@ -750,12 +982,25 @@ void emu68_bootui_clock_tick(uint32_t now_us)
     draw_clock();
 }
 
-void emu68_bootui_add_resource(void)
+static BOOL bootui_resource_active(void)
+{
+    return bootui.active ? TRUE : FALSE;
+}
+
+static void bootui_resource_set_release_hook(void (*hook)(void), ULONG flags)
+{
+    bootui_release_instant = (flags & BOOTUI_RELEASE_INSTANT) ? 1 : 0;
+    bootui_set_release_hook(hook);
+}
+
+void bootui_add_resource(void)
 {
     bootui_resource.node.ln_Name = BOOTUI_RESOURCE_NAME;
     bootui_resource.node.ln_Pri = 0;
     bootui_resource.node.ln_Type = NT_RESOURCE;
-    bootui_resource.set_stage = emu68_bootui_set_stage;
+    bootui_resource.set_stage = bootui_set_stage;
+    bootui_resource.active = bootui_resource_active;
+    bootui_resource.set_release_hook = bootui_resource_set_release_hook;
     AddResource(&bootui_resource.node);
 }
 
@@ -763,10 +1008,10 @@ void emu68_bootui_add_resource(void)
  * Decides to let go; does not let go.
  *
  * Safe from an interrupt: two flag writes and a raw serial write. In
- * particular it does NOT call emu68_bootui_takeover() -- that would stop the
+ * particular it does NOT call bootui_takeover() -- that would stop the
  * splash being drawn while it is still the only thing on the screen, because
  * the repaint that replaces it cannot happen until a task calls
- * emu68_bootui_take_release(). Doing both here left the display showing a
+ * bootui_take_release(). Doing both here left the display showing a
  * frozen splash with a dead clock for the whole gap between the two, which is
  * exactly what a hold is supposed to prevent.
  */
@@ -787,7 +1032,7 @@ static void bootui_release(void)
  * arrives on Wanderer's task, and the display driver's Show(), which runs on
  * whichever task opened a screen.
  */
-void emu68_bootui_release_now(const char *why)
+void bootui_release_now(const char *why)
 {
     void (*hook)(void) = bootui_release_hook;
 
@@ -797,7 +1042,7 @@ void emu68_bootui_release_now(const char *why)
     bootui_event(why);
     bootui_hold_active = 0;
     bootui_release_pending = 0;
-    emu68_bootui_takeover();
+    bootui_takeover();
     if (hook)
         hook();
 }
@@ -813,18 +1058,18 @@ void emu68_bootui_release_now(const char *why)
  *
  * Task context only, same as the hook itself.
  */
-void emu68_bootui_repaint(void)
+void bootui_repaint(void)
 {
     if (bootui_release_hook)
         bootui_release_hook();
 }
 
-void emu68_bootui_set_release_hook(void (*hook)(void))
+void bootui_set_release_hook(void (*hook)(void))
 {
     bootui_release_hook = hook;
 }
 
-void emu68_bootui_hold(void)
+void bootui_hold(void)
 {
     if (!bootui.active || bootui_hold_active)
         return;
@@ -836,7 +1081,7 @@ void emu68_bootui_hold(void)
      */
     if (!bootui_wanderer_started)
     {
-        emu68_bootui_takeover();
+        bootui_takeover();
         return;
     }
 
@@ -848,7 +1093,7 @@ void emu68_bootui_hold(void)
     bootui_event("holding the display");
 }
 
-int emu68_bootui_holding(void)
+int bootui_holding(void)
 {
     if (bootui_hold_active)
         bootui_hold_drawing = 1;
@@ -860,7 +1105,7 @@ int emu68_bootui_holding(void)
  * has reached the framebuffer yet, so the caller owes one full-screen repaint.
  * Asked only from the driver's refresh path, which is task context.
  */
-int emu68_bootui_take_release(void)
+int bootui_take_release(void)
 {
     int pending = bootui_release_pending;
 
@@ -873,14 +1118,26 @@ int emu68_bootui_take_release(void)
          * gone and visually still there.
          */
         bootui_release_pending = 0;
-        emu68_bootui_takeover();
+        bootui_takeover();
     }
     return pending;
 }
 
-void emu68_bootui_takeover(void)
+void bootui_takeover(void)
 {
     if (bootui.active)
         bootui_event("display takeover");
     bootui.active = 0;
+
+    /*
+     * A driver that was assembling out of sight has a finished screen nobody
+     * can see. Whatever stopped the presentation -- the icons, the deadline,
+     * an alert with a better claim -- that screen has to go up, or the display
+     * keeps showing a splash that is no longer being drawn.
+     *
+     * The hook is required to be idempotent for exactly this: bootui_release_now()
+     * calls it after this, and bootui_repaint() calls it again later.
+     */
+    if (bootui_release_hook)
+        bootui_release_hook();
 }

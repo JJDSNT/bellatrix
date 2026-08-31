@@ -1,0 +1,20 @@
+.KEY x
+.BRA {
+.KET }
+;
+; The stack, at the size it actually needs.
+;
+; 1 MB was tried and reported as "not the stack". On hardware the same program
+; works with `stack 100000000` -- a hundred megabytes, two orders of magnitude
+; more than was tested. Mesa's init is that deep.
+;
+Echo >DEBUG: "[stack] default:"
+Stack >DEBUG:
+Stack 100000000
+Echo >DEBUG: "[stack] now:"
+Stack >DEBUG:
+Echo >DEBUG: "[stack] opening mesa3dgl with 100 MB of stack"
+Date >DEBUG:
+OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+Date >DEBUG:
+Echo >DEBUG: "[stack] OpenMesa returned"

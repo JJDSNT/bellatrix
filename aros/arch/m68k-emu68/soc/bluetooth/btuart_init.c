@@ -391,6 +391,34 @@ AROS_LH3(long, BTUARTConfigure,
     mmio_write(BTUARTBase->uart_base, PL011_IMSC, 0);
     mmio_write(BTUARTBase->uart_base, PL011_ICR, 0x7ff);
 
+    /*
+     * Start from an empty receive path, not from whatever the line held.
+     *
+     * Clearing the interrupt status says nothing about the FIFO's contents.
+     * Powering the controller through BT_REG_EN and reprogramming the baud
+     * divisor both put transitions on the wire, and whatever the receiver made
+     * of those sits in the FIFO waiting to be read as if it were HCI. On
+     * hardware that shows up as "rx status 0x8 OVERRUN" before a single
+     * command has been sent, followed by the H4 framer reporting unknown
+     * packet types -- it is not desynchronised by a lost reply, it never had
+     * synchronisation to begin with.
+     *
+     * Drain the FIFO and reset the ring so the first byte the framer sees is
+     * the first byte the controller actually sent.
+     */
+    {
+        ULONG guard = BTUART_RX_RING;
+
+        while (guard-- &&
+               !(mmio_read(BTUARTBase->uart_base, PL011_FR) & PL011_FR_RXFE))
+            (void)mmio_read(BTUARTBase->uart_base, PL011_DR);
+
+        BTUARTBase->rx_head = 0;
+        BTUARTBase->rx_tail = 0;
+        BTUARTBase->rx_dropped = 0;
+        mmio_write(BTUARTBase->uart_base, PL011_ICR, 0x7ff);
+    }
+
     divisor = (BTUARTBase->uart_clock_hz * 4UL + baud / 2UL) / baud;
     integer = divisor >> 6;
     fraction = divisor & 0x3f;

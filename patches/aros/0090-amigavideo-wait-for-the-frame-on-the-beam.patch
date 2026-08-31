@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] amigavideo: wait for the frame on the beam, not only on the
+ interrupt
+
+waitvblank() spun on csd->framecounter, which is moved by exactly one
+thing: gfx_vblank, the server this driver installs with
+AddIntServer(INTB_VERTB) in initcustom(). Nothing else can end the loop.
+
+resetmode() is its only caller, and both of resetmode's callers mean
+"there is nothing visible, blank the display" -- which is true before the
+driver has finished starting up, and therefore before that server
+exists. The loop then spins on a counter nothing can move,
+initialisation never returns, and OpenLibrary("amigavideo.hidd") hands
+the AmigaVideo task a NULL. On Bellatrix that is a machine frozen at one
+address for the rest of the boot, with the display already handed over
+so nothing is visible either.
+
+The beam is the other witness and the better one: a register read, so it
+needs no interrupt, no server and no enabled interrupt level, and it is
+what the hardware offers for exactly this. Both are kept -- where the
+interrupt works it still ends the wait first -- and a counter guards the
+case where neither moves, so an unprogrammed chipset costs a wrong frame
+instead of the machine.
+---
+ .../hidd/amigavideo/amigavideo_chipset.c      | 45 ++++++++++++++++--
+ 1 file changed, 42 insertions(+), 3 deletions(-)
+
+diff --git a/arch/m68k-amiga/hidd/amigavideo/amigavideo_chipset.c b/arch/m68k-amiga/hidd/amigavideo/amigavideo_chipset.c
+--- a/arch/m68k-amiga/hidd/amigavideo/amigavideo_chipset.c
++++ b/arch/m68k-amiga/hidd/amigavideo/amigavideo_chipset.c
+@@ -69,13 +69,54 @@
+     custom->vposw = 0x8000;
+     custom->color[0] = DEFAULT_BORDER_GRAY;
+ }
+ 
++/*
++ * Wait one frame -- on the beam as well as on the interrupt.
++ *
++ * This was "// ugly busy loop for now.." spinning on csd->framecounter alone,
++ * and the counter is moved by exactly one thing: gfx_vblank, the server this
++ * driver installs with AddIntServer(INTB_VERTB) in initcustom(). Nothing else
++ * can end the loop.
++ *
++ * That is a dependency the loop cannot check and must not have. resetmode()
++ * is its only caller and both of its callers mean "there is nothing visible,
++ * blank the display" -- which is true before the driver has finished starting
++ * up, and therefore before that server exists. The loop then spins on a
++ * counter nothing can move, initialisation never returns, and
++ * OpenLibrary("amigavideo.hidd") hands the AmigaVideo task a NULL. On
++ * Bellatrix that was a machine frozen at one address for the rest of the
++ * boot.
++ *
++ * The beam is the other witness, and the better one: it is a register read,
++ * so it needs no interrupt, no server, and no enabled interrupt level, and it
++ * is what the hardware itself offers for exactly this. VPOSR bit 0 and the
++ * top byte of VHPOSR are the line counter; it only ever decreases when a new
++ * frame starts, so one decrease is one frame.
++ *
++ * Both witnesses are kept. Where the interrupt works it still ends the wait
++ * first, so nothing that relied on it changes; where it cannot, the beam
++ * does. The counter guards the case where neither moves -- an unprogrammed or
++ * stopped chipset -- so the worst outcome is a wrong frame instead of a dead
++ * machine.
++ */
+ static VOID waitvblank(struct amigavideo_staticdata *csd)
+ {
+-    // ugly busy loop for now..
++    volatile struct Custom *custom = (struct Custom*)0xdff000;
+     UWORD fc = csd->framecounter;
+-    while (fc == csd->framecounter);
++    UWORD line = (UWORD)(((custom->vposr & 1) << 8) | (custom->vhposr >> 8));
++    ULONG guard = 0;
++
++    while (fc == csd->framecounter) {
++        UWORD now = (UWORD)(((custom->vposr & 1) << 8) | (custom->vhposr >> 8));
++
++        if (now < line)
++            break;              /* the beam wrapped: a frame has passed */
++        line = now;
++
++        if (++guard > 4000000)
++            break;              /* neither witness moves; do not hang here */
++    }
+ }
+  
+ static VOID setnullsprite(struct amigavideo_staticdata *csd)
+ {

@@ -138,7 +138,7 @@ anybody.
       kernel and the modules on the card come from the same tree. 6/6 on
       2026-08-14, median 44.0 s.
 - [x] A durable guard, so a future version bump does not reintroduce it. —
-      **not done here**; carried to [`ISSUE-0025`](ISSUE-0025.md) rather than
+      **not done here**; carried to [`ISSUE-0025`](../../issues/ISSUE-0025.md) rather than
       holding this one open. See below.
 - [x] Offered upstream, if option 2 holds up. — same, `ISSUE-0025`.
 

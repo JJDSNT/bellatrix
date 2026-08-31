@@ -1,0 +1,29 @@
+From 05f6a0d974d8941c67c6701181ea79d5ab2a0060 Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 11:00:00 -0300
+Subject: [PATCH] stdc: identify exit without startup
+
+Include the exit kind, return code, immediate caller, and caller's caller in
+the existing diagnostic.  A shared-library user has no startup jump buffer,
+and the old message discarded the information needed to identify which module
+attempted to terminate the process.
+---
+ compiler/crt/stdc/__stdc_startup.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/compiler/crt/stdc/__stdc_startup.c b/compiler/crt/stdc/__stdc_startup.c
+index 52b732583c..3a38805627 100644
+--- a/compiler/crt/stdc/__stdc_startup.c
++++ b/compiler/crt/stdc/__stdc_startup.c
+@@ -269,6 +269,8 @@
+     if (StdCBase->startup_errorptr == NULL)
+     {
+-        kprintf("[%s] %s: Trying to exit without proper initialization\n", STDCNAME, __func__);
++        kprintf("[%s] %s: exit without startup: normal=%ld code=%ld caller=%p origin=%p\n",
++            STDCNAME, __func__, normal, retcode, __builtin_return_address(0),
++            __builtin_return_address(1));
+         Alert(AT_DeadEnd | AG_BadParm);
+     }
+ 
+-- 
+2.43.0

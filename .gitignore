@@ -7,3 +7,7 @@
 # Claude Code: the skills are shared, the local settings and scratch notes are not
 .claude/settings.local.json
 .claude/RESUME.md
+
+# Sample media for audio bring-up: large, and not ours to redistribute.
+tests/media/
+*.mp4

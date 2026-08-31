@@ -1,0 +1,28 @@
+;
+; Does the classic chipset display driver come up, and can the guest read what
+; Denise drew?
+;
+; Two independent claims, and they fail differently.
+;
+; AmigaVideo in DEVS:Monitors is run by AROSMonDrvs before this point; if it
+; registered, graphics.library has a second display driver and a second
+; monitor. Version reports whether the library is there at all.
+;
+; DeniseView reads the frame aperture Bellatrix publishes at $01000000. Its
+; census is meant to be compared with the one Bellatrix prints on its own side:
+; same background, same count, same checksum means the frame the chipset
+; composed is the frame the guest can see.
+;
+; NOWINDOW because this runs from the Startup-Sequence with nothing to display
+; on yet, and because the claim being tested is readability, not presentation.
+;
+Echo >DEBUG: "[denise-view] --- display drivers on the card"
+List >DEBUG: DEVS:Drivers/amigavideo.hidd DEVS:Drivers/vcgfx.hidd
+List >DEBUG: DEVS:Monitors/AmigaVideo DEVS:Monitors/VideoCore
+
+Echo >DEBUG: "[denise-view] --- did amigavideo.hidd load?"
+Version >DEBUG: amigavideo.hidd
+
+Echo >DEBUG: "[denise-view] --- reading the frame aperture"
+DeniseView >DEBUG: NOWINDOW
+Echo >DEBUG: "[denise-view] --- done"

@@ -80,7 +80,7 @@ diff --git a/rom/devs/sdcard/sdcard_bus.c b/rom/devs/sdcard/sdcard_bus.c
  /* How long a single block may keep the PIO transfer waiting */
  #define SDHCI_DATA_TIMEOUT_US   1000000
  
-@@ -1056,6 +1089,9 @@
+@@ -1108,6 +1141,9 @@
      ULONG               waitStart = 0;
      BOOL                waiting = FALSE;
      ULONG               retVal = 0;
@@ -90,7 +90,7 @@ diff --git a/rom/devs/sdcard/sdcard_bus.c b/rom/devs/sdcard/sdcard_bus.c
  
      DFUNCS(bug("[SDBus%02u] %s()\n", bus->sdcb_BusNum, __PRETTY_FUNCTION__));
  
-@@ -1126,6 +1162,9 @@
+@@ -1178,6 +1214,9 @@
                  volatile ULONG *dataPtr = (volatile ULONG *)sdData;
  
                  DTRANS(bug("[SDBus%02u] %s: Attempting to %s %dbytes\n", bus->sdcb_BusNum, __PRETTY_FUNCTION__, ((sdDataMode == MMC_DATA_READ) ? "read" : "write"), tranlen));
@@ -99,8 +99,8 @@ diff --git a/rom/devs/sdcard/sdcard_bus.c b/rom/devs/sdcard/sdcard_bus.c
 +#endif
                  if (sdDataMode == MMC_DATA_READ)
                  {
-                     for (currword = 0; currword < tranwords; currword++)
-@@ -1140,6 +1179,19 @@
+                     /*
+@@ -1205,6 +1244,19 @@
                          bus->sdcb_IOWriteLong(SDHCI_BUFFER, dataPtr[currword], bus);
                      }
                  }

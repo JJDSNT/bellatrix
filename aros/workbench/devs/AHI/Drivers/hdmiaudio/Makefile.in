@@ -1,0 +1,23 @@
+#
+#  Makefile.in for the Bellatrix HDMI AHI audio driver
+#
+#  Copied from AHI's RPiHDMI, which is built for arm and aarch64 only, and
+#  ported to m68k-emu68.
+#
+#  Every SoC table is kept, including the Pi 4 and Pi 5 ones this machine
+#  will not use. They cost nothing to carry, a second board is a stated
+#  direction for this port, and deleting them would widen the gap
+#  with the upstream driver for no gain -- fixes from there would then have
+#  to be re-derived rather than applied.
+#
+
+VPATH		= @srcdir@
+
+srcdir		= @srcdir@
+
+DRIVER		= hdmiaudio.audio
+MODEFILE	= HDMIAUDIO
+
+OBJECTS		= rpihdmi-init.o rpihdmi-main.o rpihdmi-playslave.o rpihdmi-accel.o rpihdmi-hwaccess.o rpihdmi-iec958.o rpihdmi-dma.o rpihdmi-bcm283x.o rpihdmi-bcm2711.o rpihdmi-bcm2712.o
+
+include ../Common/Makefile.common

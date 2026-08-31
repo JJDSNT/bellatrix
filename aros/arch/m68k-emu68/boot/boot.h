@@ -73,6 +73,14 @@ struct Emu68BootContext
 
     uint32_t timer_soak_seconds;
 
+    /*
+     * The SoC microsecond counter as it read when the first m68k instruction
+     * ran, handed over by a Bellatrix-patched Emu68. Zero if the running Emu68
+     * does not stamp it, in which case nothing here knows when the boot began
+     * and the clock falls back to starting when the system timer comes up.
+     */
+    uint32_t boot_time_us;
+
     void *exec_base;
     uint32_t stage;
 };
@@ -80,32 +88,22 @@ struct Emu68BootContext
 extern struct Emu68BootContext emu68_boot_context;
 
 void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
-                     uint32_t width, uint32_t height)
+                     uint32_t width, uint32_t height,
+                     uint32_t boot_us, uint32_t boot_stamp)
     __attribute__((noreturn));
+
+/* Emu68 says "this register really is a timestamp", not a leftover. */
+#define EMU68_BOOT_STAMP 0xB0071115UL
 
 void emu68_console_init(void *framebuffer, uint32_t pitch,
                         uint32_t width, uint32_t height);
 int emu68_console_putc(int chr);
 void emu68_console_puts(const char *text);
 void emu68_set_stage(uint32_t stage);
-void emu68_bootui_init(void);
-void emu68_bootui_add_resource(void);
-void emu68_bootui_set_stage(uint32_t stage);
-void emu68_bootui_clock_start(uint32_t now_us);
-void emu68_bootui_clock_tick(uint32_t now_us);
-void emu68_bootui_retarget(void *framebuffer, uint32_t pitch,
-                           uint32_t width, uint32_t height, uint32_t depth);
-void emu68_bootui_takeover(void);
 /*
  * Keep the splash on the framebuffer past the point where the display driver
  * would normally take it, and call `release` when the hold ends so the driver
  * can put the finished desktop up in one go. See bootui.c.
  */
-void emu68_bootui_hold(void);
-void emu68_bootui_set_release_hook(void (*hook)(void));
-void emu68_bootui_release_now(const char *why);
-void emu68_bootui_repaint(void);
-int  emu68_bootui_holding(void);
-int  emu68_bootui_take_release(void);
 
 #endif

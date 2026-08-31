@@ -1,0 +1,14 @@
+.KEY x
+.BRA {
+.KET }
+;
+; Does the RDB nested in the MBR give us a volume? (sdcard.md, rows B and D.)
+;
+; The Pi boots from FAT and stays there. The second MBR partition is type 0x30,
+; which rom/partition/partitionrdb.c:198 accepts as an RDB container, and the
+; RDB inside declares one partition DH0 with DOSType SFS\0. L:sfs-handler is on
+; the card. Whether all that adds up to a mounted volume is the question.
+;
+Echo >DEBUG: "[sfs] what the system sees:"
+Info >DEBUG:
+Echo >DEBUG: "[sfs] done"

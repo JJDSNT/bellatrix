@@ -26,6 +26,97 @@ include $(SRCDIR)/config/aros.cfg
 #MM- AROS-emu68-m68k : kernel-link-emu68-m68k software-emu68-m68k
 #MM- AROS-emu68-m68k-quick : kernel-link-emu68-m68k-quick
 
+# workbench-complete selects the platform USB stack through
+# kernel-usb-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU).  Binding that generic name
+# to Poseidon's disk-based, non-PCI stack and Bellatrix's native DWC2 host
+# driver is what puts USB on the card; without the alias a distribution
+# silently contains neither side.
+#
+# USB IS ENABLED (2026-08-29).
+#
+# It was commented out on 2026-08-22 so that a host controller owning
+# interrupts and DMA was not in the picture while the heap (ISSUE-0037) and the
+# first GL workload (ISSUE-0045) were being chased. That is over, and the cost
+# of leaving it off is a distribution with no keyboard and no mouse -- which is
+# not a state anyone asks for on purpose, and which nothing in the build says
+# out loud.
+#
+# The driver named here is dwc2emu68, the Bellatrix rewrite (ISSUE-0047), not
+# the inherited arm-native engine it replaces. Both are still built; this line
+# is what decides which one a distribution contains.
+#
+# Disabling is commenting the line out again. It cannot be a make variable:
+# mmake reads #MM lines as text when it scans the mmakefiles, so a
+# $(USB_BACKEND) here would be a metatarget with that literal name, which does
+# not exist and which mmake drops without a word.
+#
+# The Startup-Sequence needs no change either way. Its USB block is guarded on
+# DEVS:USBHardware/dwc2emu68.device existing.
+#
+# THE DRIVER ON THE CARD IS usb2otg, AND THAT CHANGED ON 2026-08-30.
+#
+# dwc2emu68 is the Bellatrix rewrite (ISSUE-0047) and it was the default all
+# day. It is not, today, good enough to be the machine's only USB: with it the
+# boot stops about eight seconds in and the desktop is never reached. Two
+# defects were found and fixed in it during that day -- a NAK retry that
+# re-armed a channel the core had not released, and a handler that never
+# cleared the core interrupts it does not dispatch, which storms the m68k
+# until no task is ever scheduled again -- and a third is still open: a
+# control SETUP to a device behind the hub completes and its data stage is
+# never armed.
+#
+# usb2otg is the AROS engine this port inherited. Swapping it in was the
+# experiment that separated "the machine is broken" from "our driver is
+# broken", and with it the machine boots and the mouse works. It answers a
+# question ours cannot yet: what correct looks like on this silicon.
+#
+# So it takes the card while ours is finished. Both still build -- that is the
+# whole reason two exist -- and switching back is this line.
+#
+#MM- kernel-usb-m68k-emu68 : kernel-usb-nopci kernel-usb-arosotg
+
+# rom/ and workbench/ select the Bluetooth stack the same way, through
+# kernel-bluetooth-$(AROS_TARGET_ARCH)-$(AROS_TARGET_CPU), and this target
+# defined no such alias -- so AROS's Bluetooth has never been built here at
+# all. That is what makes the bluzing submodule look necessary: the card
+# carries a bluetooth.library from Extras/aros-bluzing because nothing was
+# putting AROS's own there.
+#
+# AROS HEAD now ships the stack itself (rom/bluetooth, licensed
+# LICENSE.aros-bluzing -- it is the same code, imported), so the alias is what
+# turns it on. What is still missing afterwards is the transport: the stack
+# talks to HCI devices in DEVS:Bluetooth, and the only one upstream is vbthci,
+# a virtual one. The Pi's onboard controller hangs off the PL011 that
+# soc/bluetooth/btuart.resource already owns, and nothing yet bridges the two.
+# See ISSUE-0046.
+# The components of kernel-bluetooth, minus the firmware loaders.
+#
+# kernel-bluetooth pulls kernel-bluetooth-firmware, and rom/bluetooth/firmware
+# holds exactly two loaders, both Realtek. This board's radio is a Broadcom
+# BCM43438 on the PL011, and BTStackLoader calls bLoadFirmwareLoaders()
+# unconditionally -- so every card carried two modules that can never match the
+# hardware, and on a real Pi they surface in the stack as Realtek parts that
+# are not there.
+#
+# The chip does not need them: a BCM43438 runs from ROM, answers HCI_Reset and
+# reports its BD_ADDR with no patchram at all. Firmware adds fixes and
+# features; it is not a precondition for the controller working.
+#
+# Listing the parts rather than the aggregate keeps this out of upstream's
+# mmakefile, where an ifeq would not work anyway -- mmake reads #MM lines as
+# text when it scans, so a conditional around them is not seen. When a
+# Broadcom loader exists, kernel-bluetooth-firmware goes back on this line.
+# See ISSUE-0053.
+#MM- kernel-bluetooth-m68k-emu68 : \
+#MM      kernel-bluetooth-library \
+#MM      kernel-bluetooth-classes \
+#MM      bluetooth-shellcommands \
+#MM      kernel-bluetooth-hardware \
+#MM      kernel-bluetooth-prefs \
+#MM      kernel-bthciuart \
+#MM      kernel-brcmfw
+
+
 #
 # `contrib` is on the list because nothing else puts it there. Upstream expects
 # the AROS contrib repository to be checked out into contrib/ and reached by an
@@ -39,8 +130,125 @@ include $(SRCDIR)/config/aros.cfg
 #MM- software-emu68-m68k : general-setup boot workbench-emu68-m68k \
 #MM                         workbench-c-emu68-bootprogress \
 #MM                         compiler-posixc compiler-stdcio external-openurl-lib \
-#MM                         contrib
+#MM                         kernel-m68k-emu68-vcgfx hidd-vc4gallium contrib contrib-bellatrix
 #MM- workbench-emu68-m68k : workbench-complete workbench
 
 #MM- distfiles-emu68-m68k : AROS-emu68-m68k
 #MM- distfiles-emu68-m68k-quick : AROS-emu68-m68k-quick
+
+#
+# WiFi firmware for bwfm.device, fetched the way arch/arm-raspi already does.
+#
+# The chip has no firmware of its own: bwfm.device loads
+# DEVS:Firmware/brcmfmac<id>-sdio.bin and its .txt NVRAM at runtime, and
+# without them the driver attaches and associates with nothing. This target
+# is a copy of arm-raspi's distfiles-raspi-wifi-fw, narrowed to the one chip
+# this board has -- the BCM43430 on a Pi 3 -- rather than every Pi's.
+#
+# The branch matters and is not a version preference: "buster" keeps real
+# files under brcm/, while newer branches symlink them to cypress/ and
+# GitHub's ?raw= would hand back the link text instead of the blob. That is
+# arm-raspi's finding, kept here with it.
+#
+# Fetched rather than vendored: the blobs are ~400 KB and redistributable
+# under LICENCE.broadcom_bcm43xx, which comes along for that reason.
+#
+EMU68WIFIFW_BRANCH := buster
+EMU68WIFIFW_URI    := https://github.com/RPi-Distro/firmware-nonfree/blob/$(EMU68WIFIFW_BRANCH)
+EMU68WIFIFW_FILES  := brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt \
+                     LICENCE.broadcom_bcm43xx
+
+#
+# Bluetooth patchram for the onboard controller.
+#
+# A BCM43438 runs from ROM until it is sent a patchram image: it answers
+# HCI_Reset and reports its version without one, but with a placeholder
+# BD_ADDR of AA:AA:AA:AA:AA:AA, and pairing needs a real address.
+#
+# soc/bluetooth/brcmfw reads this at runtime from DEVS:Firmware/brcm/. The
+# legacy tree fetched the same file and converted it to a C source at build
+# time (BTstack's convert_hcd.py) to link it in; keeping it a file means
+# changing controllers is changing a file.
+#
+# Same source the legacy build used. BCM43430A1 is the Pi 3 and Zero W part.
+#
+EMU68BTFW_DEVICE := BCM43430A1
+EMU68BTFW_URI    := https://github.com/OpenELEC/misc-firmware/raw/master/firmware/brcm
+
+#MM
+distfiles-emu68-bt-fw:
+	@$(MKDIR) $(AROSDIR)/Devs/Firmware/brcm
+	@wget -t 5 -T 15 -c "$(EMU68BTFW_URI)/$(EMU68BTFW_DEVICE).hcd" \
+	    -O "$(AROSDIR)/Devs/Firmware/brcm/$(EMU68BTFW_DEVICE).hcd" \
+	    || $(ECHO) "WARNING: could not fetch Bluetooth firmware $(EMU68BTFW_DEVICE).hcd"
+
+#MM
+distfiles-emu68-wifi-fw:
+	@$(MKDIR) $(AROSDIR)/Devs/Firmware
+	@for f in $(EMU68WIFIFW_FILES) ; do \
+	    wget -t 5 -T 15 -c "$(EMU68WIFIFW_URI)/$$f?raw=true" -O "$(AROSDIR)/Devs/Firmware/$${f##*/}" \
+	        || $(ECHO) "WARNING: could not fetch WiFi firmware $$f" ; \
+	done
+
+#
+# The WirelessManager configuration, which nothing else creates.
+#
+# It is not firmware and it is not fetched -- it is a file this port has to put
+# on the card, because the only writer of it is Prefs/Network and that writer
+# refuses to run before a network exists (`if (prefs.networkCount > 0)`,
+# workbench/prefs/network/prefsdata.c). Without the file C:WirelessManager
+# aborts before opening its window, so the scanner that would find the first
+# network is unreachable until someone types one in by hand. See the header of
+# soc/wifi/Wireless.prefs.
+#
+# ENVARC: and not ENV:, because ENV: is RAM:ENV and does not survive a reboot;
+# S:Startup-Sequence copies ENVARC: into it on the way up.
+#
+#MM
+distfiles-emu68-wifi-prefs:
+	@$(MKDIR) $(AROS_ENVARC)/SYS
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/Wireless.prefs \
+	    $(AROS_ENVARC)/SYS/Wireless.prefs
+
+#
+# Persistent first-boot network configuration for the onboard WiFi.
+#
+# Wireless.prefs lets WirelessManager parse a configuration, but does not
+# cause AROSTCP's Package-Startup to run it.  Prefs/Network normally creates
+# these variables and database files when the user saves an interface.  Seed
+# the same state in ENVARC so a release image starts bwfm.device unit 0 and
+# displays WirelessManager's AppIcon before any preferences have been saved.
+#
+# Keep AROSTCP's static databases upstream-owned.  The five files copied below
+# are the same ones CopyDefaultConfiguration() installs in Prefs/Network; the
+# emu68 port owns only the generated first-boot values.
+#
+EMU68_AROSTCP_DEFAULT_FILES := inet.access netdb networks protocols services
+
+#MM
+distfiles-emu68-wifi-network-prefs:
+	@$(MKDIR) $(AROS_ENVARC)/AROSTCP/db
+	@for f in $(EMU68_AROSTCP_DEFAULT_FILES) ; do \
+	    $(CP) $(AROSDIR)/System/Network/AROSTCP/db/$$f \
+	        $(AROS_ENVARC)/AROSTCP/db/$$f ; \
+	done
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/AutoRun \
+	    $(AROS_ENVARC)/AROSTCP/AutoRun
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/WirelessAutoRun \
+	    $(AROS_ENVARC)/AROSTCP/WirelessAutoRun
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/WirelessDevice \
+	    $(AROS_ENVARC)/AROSTCP/WirelessDevice
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/Config \
+	    $(AROS_ENVARC)/AROSTCP/Config
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/MobileAutorun \
+	    $(AROS_ENVARC)/AROSTCP/MobileAutorun
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/general.config \
+	    $(AROS_ENVARC)/AROSTCP/db/general.config
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/interfaces \
+	    $(AROS_ENVARC)/AROSTCP/db/interfaces
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/hosts \
+	    $(AROS_ENVARC)/AROSTCP/db/hosts
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/netdb-myhost \
+	    $(AROS_ENVARC)/AROSTCP/db/netdb-myhost
+	@$(CP) $(SRCDIR)/arch/m68k-emu68/soc/wifi/arostcp/db/static-routes \
+	    $(AROS_ENVARC)/AROSTCP/db/static-routes

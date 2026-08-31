@@ -1,0 +1,30 @@
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -597,11 +597,27 @@
+ uint8_t slot_set = 0;
+ 
+ void force_pistorm_model(uint8_t model);
++#ifdef BELLATRIX_EMU68
++void bellatrix_parse_cmdline(const char *cmdline);
++#endif
+ 
+ void parse_cmdline(const char *cmdline)
+ {
+     const char *tok;
+ 
++#ifdef BELLATRIX_EMU68
++    /*
++     * The embedder gets the command line before anything is decided from it.
++     *
++     * Bellatrix owns its own machine map and its own diagnostics, and both are
++     * selected here rather than at compile time -- a card in someone else's
++     * hands cannot be rebuilt to answer a question. Same reasoning as the
++     * console hand-off in patch 0021: Emu68 keeps the mechanism, the embedder
++     * keeps the policy.
++     */
++    bellatrix_parse_cmdline(cmdline);
++#endif
++
+     debug_not_implemented = !!find_token(cmdline, "debug_not_implemented");
+     ppc_enable = !!find_token(cmdline, "ppc_enable");
+     enable_cache = !!find_token(cmdline, "enable_cache");

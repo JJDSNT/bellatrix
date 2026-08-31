@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Fri, 21 Aug 2026 06:40:00 -0300
+Subject: [PATCH] s: use the Bellatrix DWC2 host driver
+
+The Emu68 port now owns a dedicated DWC2 driver.  Select it for Poseidon while
+leaving the earlier usb2otg integration patch intact until the replacement has
+completed its distribution-level validation.
+---
+ workbench/s/Startup-Sequence | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/workbench/s/Startup-Sequence b/workbench/s/Startup-Sequence
+index 8a2aef5f81..92a57ad863 100644
+--- a/workbench/s/Startup-Sequence
++++ b/workbench/s/Startup-Sequence
+@@ -120,8 +120,19 @@
+ ; starts the stack and restores saved preferences, but a machine that has never
+ ; had Poseidon configured has no hardware in them. Tell it about the controller
+ ; that is actually present, if one is.
++; Either host controller, whichever the build put here.
++;
++; There are two, both ours: dwc2emu68 is the Bellatrix driver and usb2otg is
++; the adopted AROS engine (ISSUE-0047). Naming only one meant the other could
++; never be booted, so it could never be compared -- and comparing them is the
++; whole point of keeping both. build-aros.sh leaves exactly one on the card.
++If EXISTS "DEVS:USBHardware/dwc2emu68.device"
++    Echo "starting AddUSBHardware dwc2emu68" >"SDCARD0P0:usb-hardware.log"
++    AddUSBHardware DEVS:USBHardware/dwc2emu68.device >>"SDCARD0P0:usb-hardware.log"
++    Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
++EndIf
+ If EXISTS "DEVS:USBHardware/usb2otg.device"
+-    Echo "starting AddUSBHardware" >"SDCARD0P0:usb-hardware.log"
++    Echo "starting AddUSBHardware usb2otg" >"SDCARD0P0:usb-hardware.log"
+     AddUSBHardware DEVS:USBHardware/usb2otg.device >>"SDCARD0P0:usb-hardware.log"
+     Echo "finished AddUSBHardware" >>"SDCARD0P0:usb-hardware.log"
+ EndIf

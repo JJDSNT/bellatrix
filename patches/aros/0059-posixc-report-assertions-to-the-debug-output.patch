@@ -1,0 +1,36 @@
+From 68db81d8a0af0ee7dd4dd667333ee9683d0c0059 Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 10:45:00 -0300
+Subject: [PATCH] posixc: report assertions to the debug output
+
+stderr may be redirected, unavailable, or attached to a graphical console
+whose output cannot be inspected after a fatal assertion.  Mirror the message
+to the system debug stream before invoking the existing stdio and exit path.
+---
+ compiler/crt/posixc/__assert.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/compiler/crt/posixc/__assert.c b/compiler/crt/posixc/__assert.c
+index cfc05684a7..2c44261fe3 100644
+--- a/compiler/crt/posixc/__assert.c
++++ b/compiler/crt/posixc/__assert.c
+@@ -6,6 +6,8 @@
+ #include <assert.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <aros/debug.h>
++
+ 
+ /*****************************************************************************
+ 
+@@ -47,6 +49,7 @@
+ 
+ ******************************************************************************/
+ {
++    bug("Assertion (%s) failed in %s:%u\n", expr, file, line);
+     fprintf (stderr, "Assertion (%s) failed in %s:%u\n", expr, file, line);
+     exit (10);
+ } /* assert */
+-- 
+2.43.0
+

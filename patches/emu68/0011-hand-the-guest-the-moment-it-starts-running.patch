@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 23 Aug 2026 18:00:00 -0300
+Subject: [PATCH 11/11] hand the guest the moment it starts running
+
+A guest that measures its own boot has no way to know when it began. It
+can read the SoC's free-running microsecond counter as soon as it has
+found the peripheral base, but everything before that -- firmware, Emu68's
+own bring-up, loading and relocating the ELF, and the guest's own early
+init -- is already spent. Measured on a Pi 3 under QEMU, the counter reads
+about 1.9 seconds by the time AROS initialises its system timer, and none
+of it is counted.
+
+Worse, an origin taken when the guest gets round to it is not a property
+of the boot at all: it moves with how fast the JIT got there, so the same
+boot reports different lengths on different builds. That makes it useless
+for the one thing a boot clock is for.
+
+So state it. D3 carries the counter as it reads at the instant the first
+m68k instruction runs -- the same counter the guest reads, so the guest
+subtracts two readings of one clock and neither side has to keep count or
+agree on a rate.
+
+D4 carries a magic. A stock Emu68 leaves these registers holding whatever
+was in them, and a guest cannot tell an origin from a leftover; without
+the magic it would show a confidently wrong time instead of falling back
+to the one it can take itself.
+
+Nothing else changes: a guest that ignores D3/D4 boots exactly as before.
+---
+--- a/include/support_rpi.h
++++ b/include/support_rpi.h
+@@ -14,6 +14,8 @@
+ #include "support.h"
+ 
+ #define PL011_0_BASE              (ARM_PERIIOBASE + 0x201000)
++
++uint32_t bellatrix_boot_timestamp_us(void);
+ #define PRIMECELLID_PL011       0x011
+ 
+ #define PL011_DR                 (0x00)
+--- a/src/raspi/support_rpi.c
++++ b/src/raspi/support_rpi.c
+@@ -141,6 +141,27 @@
+ #undef ARM_PERIIOBASE
+ #define ARM_PERIIOBASE 0xf2000000
+ 
++/*
++ * The BCM283x system timer's low word, in microseconds.
++ *
++ * A free-running 1MHz counter in the SoC: it does not stop, does not depend on
++ * the CPU, and is the same counter the guest reads at ARM_PERIIOBASE + 0x3004.
++ * That is the whole point of handing this across -- a guest measuring its own
++ * boot from the moment its first instruction ran needs an origin taken from a
++ * clock neither side can influence, not one taken whenever the guest got round
++ * to initialising a timer.
++ */
++uint32_t bellatrix_boot_timestamp_us(void)
++{
++    /*
++     * Emu68 is built big-endian (elf64-bigaarch64) and the peripheral is
++     * little-endian, so the load has to be swapped. Read raw and it comes back
++     * as 0xe1e60300 for a machine 255ms old -- a number that looks like an
++     * address, which is exactly how it was first noticed.
++     */
++    return __builtin_bswap32(*(volatile uint32_t *)(ARM_PERIIOBASE + 0x3004));
++}
++
+ volatile unsigned char print_lock = 0;
+ 
+ void __printf_chk(int, const char *restrict format, ...)
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -2325,6 +2325,23 @@
+         }       
+     }
+ 
++    /*
++     * Hand the guest the moment it starts running.
++     *
++     * A boot presentation that measures from whenever the guest initialised
++     * its own timer is measuring the guest's start-up speed, not the boot:
++     * the origin moves with how fast the JIT got there. This is the instant
++     * the first m68k instruction runs, read from the SoC's free-running
++     * microsecond counter -- the same one the guest reads -- so both sides
++     * measure against a clock neither of them can influence.
++     *
++     * D4 carries a magic because a stock Emu68 leaves these registers with
++     * whatever was in them: without it a guest cannot tell an origin from a
++     * leftover, and would show a confidently wrong time rather than none.
++     */
++    __m68k.D[3].u32 = BE32(bellatrix_boot_timestamp_us());
++    __m68k.D[4].u32 = BE32(0xB0071115);
++
+     kprintf("[JIT]\n");
+     M68K_PrintContext(&__m68k);
+ 

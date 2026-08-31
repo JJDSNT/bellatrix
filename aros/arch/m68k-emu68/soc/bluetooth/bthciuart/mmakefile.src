@@ -1,0 +1,37 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM kernel-bthciuart : kernel-bluetooth-library-includes kernel-btuart-emu68-includes
+
+#
+# The HCI transport for the Pi's onboard controller.
+#
+# AROS's Bluetooth stack talks to HCI devices in DEVS:Bluetooth. Upstream ships
+# exactly one, vbthci, and it is virtual -- so on real hardware the stack has
+# nothing to talk to. This is the other half: H4 framing over the PL011 that
+# soc/bluetooth's btuart.resource owns.
+#
+# It deliberately knows nothing about the board. Pin muxing, the LPO on GPCLK2,
+# BT_REG_EN, the baud rate and flow control all belong to that resource, and
+# what is here would work over any transport that can move bytes.
+#
+# Firmware upload is not here either. A BCM43438 runs from ROM until somebody
+# sends it a patchram image, and the Broadcom vendor protocol for that is
+# outside this driver as it is outside the resource.
+#
+BTHCIUARTDIR := $(SRCDIR)/$(CURDIR)
+
+FILES := \
+    $(BTHCIUARTDIR)/bthciuart_device \
+    $(BTHCIUARTDIR)/bthciuart_unit
+
+USER_INCLUDES := -I$(BTHCIUARTDIR) \
+    -I$(SRCDIR)/rom/bluetooth/stack/include \
+    -I$(SRCDIR)/arch/m68k-emu68/include
+
+%build_module mmake=kernel-bthciuart \
+    modname=bthciuart modtype=device \
+    conffile=$(BTHCIUARTDIR)/bthciuart.conf \
+    moduledir=Devs/Bluetooth \
+    files="$(FILES)"
+
+%common

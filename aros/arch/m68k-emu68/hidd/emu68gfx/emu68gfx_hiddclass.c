@@ -196,17 +196,19 @@ OOP_Object *Emu68Display__Hidd_Display__CreateObject(
 }
 
 /*
- * Keep the early boot UI alive after graphics.library and Intuition exist.
- * The physical display changes ownership only when the generic Display class
- * is asked to install an actual bitmap.  Stop direct framebuffer writes just
- * before forwarding that first Show(), so the new screen replaces the loader
- * without the two producers ever racing each other.
+ * Show the bitmap. Nothing else.
+ *
+ * This used to stop the boot presentation before forwarding the first Show(),
+ * on the reasoning that the display changes hands there. The reasoning was
+ * right and the place was wrong: a display driver that knows a splash exists
+ * is a driver that has to be revisited every time the splash changes, and
+ * this one is not even the driver that will be running -- vcgfx is, and it
+ * does not override Show() at all. Whoever owns the boot presentation is told
+ * about the handover by graphics.library, above every driver, and decides for
+ * itself.
  */
 OOP_Object *Emu68Display__Hidd_Display__Show(
     OOP_Class *cl, OOP_Object *o, struct pHidd_Display_Show *msg)
 {
-    if (msg->bitMap)
-        emu68_bootui_takeover();
-
     return (OOP_Object *)OOP_DoSuperMethod(cl, o, (OOP_Msg)msg);
 }

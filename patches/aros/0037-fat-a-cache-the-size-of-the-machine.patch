@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 24 Aug 2026 01:00:00 -0300
+Subject: [PATCH 37/37] fat: a cache the size of the machine, not of 1996
+
+64 blocks of 512 bytes is 32 KB. That is the whole data cache the FAT
+handler gets, on a machine with 840 MB of RAM.
+
+Measured under ISSUE-0045: opening a 10 MB library makes 6844 scattered
+reads, most of them a few dozen bytes, because the file carries thousands of
+ELF sections. Every one of them misses a 32 KB cache, and every miss costs a
+full multi-block transfer -- the card driver's own counters report 8 KB moved
+per command and 20 MB read for a 10 MB file, still climbing when the run was
+cut. The card is not slow and the driver is not stuck: the same data is being
+fetched over and over because nothing holds it.
+
+2048 blocks is 1 MB, with the hash grown to match so a lookup stays four
+blocks deep.
+
+This is a size, not a policy. A working set larger than the cache still
+thrashes; what changes is that an ordinary file stops being larger than it.
+---
+--- a/rom/filesys/fat/volume.c
++++ b/rom/filesys/fat/volume.c
+@@ -185,7 +185,26 @@
+         return ERROR_UNKNOWN;
+     }
+ 
+-    sb->cache = Cache_CreateCache(glob, 64, 64, sb->sectorsize, SysBase,
++    /*
++     * 64 blocks of 512 bytes is 32 KB, and that is not a cache for this
++     * machine's working set.
++     *
++     * Measured under ISSUE-0045: opening a 10 MB library makes 6844 scattered
++     * reads, most of them a few dozen bytes, because the file has thousands of
++     * ELF sections. With a 32 KB cache every one of them misses, and each miss
++     * costs a full multi-block transfer -- the card driver reported 8 KB moved
++     * per command and 20 MB read for a 10 MB file, still climbing. The card is
++     * not slow and the driver is not stuck; the same data is being fetched
++     * over and over because nothing holds it.
++     *
++     * 2048 blocks is 1 MB, on a machine with 840 MB. The hash grows with it so
++     * a lookup stays short: 512 buckets, four blocks each.
++     *
++     * This is a size, not a policy. If the working set is larger than the
++     * cache the thrashing returns; what changes is that an ordinary file stops
++     * being larger than it.
++     */
++    sb->cache = Cache_CreateCache(glob, 512, 2048, sb->sectorsize, SysBase,
+         DOSBase);
+     if (sb->cache == NULL)
+     {

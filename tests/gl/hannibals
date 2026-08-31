@@ -1,0 +1,75 @@
+;
+; "The evil Hannibals from Mars", which is a demo and behaves like one.
+;
+; Its own disk starts it with three lines and no icon:
+;
+;     type s:text
+;     add21k
+;     hannidemo2.EXE
+;
+; The same three, from the drawer the card carries. `s:` there means the
+; demo's own s/, not ours, so the paths are spelled out.
+;
+; Why this one. It opens dos.library and nothing else -- the only absolute
+; chipset references in the binary are INTENA and DMACON, which is how a
+; program says "the operating system is off now, I have the hardware". So it
+; needs no display driver from us: it programs Denise itself. Nothing to
+; supply, nothing to arbitrate.
+;
+; AROS is not expected to survive this, and that is the point rather than a
+; fault. What the serial line keeps saying afterwards is Bellatrix's own --
+; the chipset core, the census, the interrupt counters -- because platform
+; interrupts are not Paula's and the ARM side is untouched by a guest turning
+; the Amiga off.
+;
+CD SYS:Hannibals
+Echo >DEBUG: "[hannibals] --- what the demo says for itself"
+Type >DEBUG: s/text
+
+;
+; add21k is NOT run, and it is the reason the first attempt got nowhere.
+;
+; It is a 280-byte helper from the 512 KB era: on an A500 the operating system
+; keeps the top of chip RAM to itself and this hands it back, which is where
+; the name comes from. On this machine it computed an address that exists
+; nowhere and asked Exec to free a megabyte at it:
+;
+;     [MM] Attempt to free 1000064 bytes at 0x3061eea4
+;     [MM] The block does not belong to any MemHeader
+;     Recoverable Alert! Task: add21k -- Error: 0x0100000F
+;
+; A recoverable alert holds the task, so the script never reached the demo at
+; all. And the machine has two megabytes of chip RAM: there is no top of
+; memory to reclaim and nothing this could add.
+;
+Echo >DEBUG: "[hannibals] --- add21k skipped (2 MB of chip; nothing to reclaim)"
+
+;
+; The plane goes up BEFORE the demo, and it has to.
+;
+; Once the demo takes the machine there is no AROS left to run anything: it
+; turns interrupts and DMA off, so no task is ever scheduled again and
+; DeniseView could not be started afterwards even by a timer. Telling someone
+; to type it first is not an answer either -- this script owns the sequence,
+; so it owns this.
+;
+; What that costs, stated rather than hidden: DeniseView reads the descriptor
+; once and installs a plane with that geometry. Right now the aperture is
+; 256x256 and empty, so that is what the plane will be built for. If the demo
+; programs a different mode the pixels behind the plane are still live -- they
+; are republished every frame -- but the window onto them keeps the old size,
+; and the picture will be cropped or stretched rather than absent.
+;
+; The census on either side of this says what the geometry actually was, so
+; the next run can be built with the right one. Presenting a frame whose size
+; changes under the plane is a real gap in the presenter, and this is the run
+; that measures it.
+;
+Echo >DEBUG: "[hannibals] --- aperture before the demo"
+DeniseView >DEBUG: NOWINDOW
+Echo >DEBUG: "[hannibals] --- plane up"
+Run >NIL: <NIL: DeniseView SHOW
+
+Echo >DEBUG: "[hannibals] --- handing the machine over"
+Hannidemo2.EXE
+Echo >DEBUG: "[hannibals] --- it gave the machine back"

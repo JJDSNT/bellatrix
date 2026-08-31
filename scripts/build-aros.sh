@@ -58,6 +58,18 @@ ELF="bin/$TARGET/AROS/aros-$TARGET.elf"
 export BELLATRIX_FRAME_POINTERS="${BELLATRIX_FRAME_POINTERS:-1}"
 FP_STAMP="$BUILD/.bellatrix-frame-pointers"
 
+# What configure looked like when this tree was configured. The mtime shortcut
+# further down cannot tell "checked out again, byte for byte the same" from
+# "the pin moved and configure genuinely changed", and guessing wrong the
+# second way is silent: the build proceeds with a stale config/make.cfg and
+# dies much later on an unsubstituted @variable@ from a substitution the old
+# configure never knew about.
+CONFIGURE_STAMP="$BUILD/.bellatrix-configure-digest"
+
+configure_digest() {
+    md5sum "$SRC/configure" 2>/dev/null | cut -d' ' -f1
+}
+
 fp_state() {
     local want="$BELLATRIX_FRAME_POINTERS"
     local have
@@ -130,25 +142,44 @@ host_tools_dir() {
     return 1
 }
 
-# What the toolchain is made of, and nothing else: the two version files and
-# the crosstools sources, all inside the AROS pin, plus any patch of ours that
-# reaches them. This describes the gcc toolchain, which is what m68k uses; a
-# target built with LLVM instead would have to bring config/llvm_def in here. It deliberately does not move when the port sources or the rest
-# of the patch series change -- the most expensive thing to build is the thing
-# that changes least, and a digest that moved every day would be worthless.
+# What the m68k GNU toolchain is made of, and nothing else: the two selected
+# versions, their exact upstream patches and the GNU crosstools recipe, plus
+# any patch of ours that reaches them. Hashing all of tools/crosstools is too
+# broad: the 2026-08-21 AROS update changed only GCC 16 and LLVM 23 files and
+# incorrectly invalidated the published GCC 6.5/binutils 2.32 toolchain.
+# A target built with LLVM would need its own key.
 # Both halves end in `|| true` deliberately: no patch of ours reaching the
 # toolchain is the normal case, and grep answers "no match" with status 1. Under
 # `set -e` and `pipefail` that status propagates out of the group, out of the
 # pipeline, and kills the caller -- which is how the first version of this
 # managed to abort the build immediately after writing the stamp.
 toolchain_digest() {
-    {
-        git -C "$SRC" rev-parse HEAD:config/gcc_def HEAD:config/binutils_def \
-                                HEAD:tools/crosstools 2>/dev/null || true
+    local gcc_version binutils_version digest
+    gcc_version="$(git -C "$SRC" show HEAD:config/gcc_def)"
+    binutils_version="$(git -C "$SRC" show HEAD:config/binutils_def)"
+
+    digest="$({
+        git -C "$SRC" rev-parse \
+            HEAD:config/gcc_def \
+            HEAD:config/binutils_def \
+            HEAD:tools/crosstools/gnu/mmakefile.src \
+            HEAD:tools/crosstools/gnu/gcc-"$gcc_version"-aros.diff \
+            HEAD:tools/crosstools/gnu/binutils-"$binutils_version"-aros.diff \
+            2>/dev/null || true
         grep -l -E 'tools/crosstools|config/(gcc|binutils)_def' \
             "$ROOT"/patches/aros/[0-9]*.patch 2>/dev/null | sort |
             xargs -r sha256sum || true
-    } | sha256sum | cut -c1-16
+    } | sha256sum | cut -c1-16)"
+
+    # Compatibility with the already-published toolchain release. The old
+    # algorithm produced this key while the five effective inputs above had
+    # exactly the 57f9... digest. Keeping the public key avoids a pointless
+    # 175 MB re-upload and, more importantly, a multi-hour rebuild for users.
+    if [ "$digest" = 57f9e2fe4ed626c1 ]; then
+        echo a88db85e62ede04f
+    else
+        echo "$digest"
+    fi
 }
 
 toolchain_stamp() {
@@ -480,6 +511,18 @@ if [ -f "$BUILD/mmake.config" ] && \
     rm -f "$BUILD/mmake.config"
 fi
 
+# A pin bump can change configure itself -- it grows a substitution, and every
+# config/*.in that uses it is expanded by config.status. Nothing downstream
+# notices: make.cfg keeps the old expansion and the literal @name@ reaches the
+# compiler as a filename. An unstamped tree is one configured before this
+# check existed, so say nothing and adopt the digest at the next configure.
+if [ -f "$BUILD/mmake.config" ] && [ -f "$CONFIGURE_STAMP" ] && \
+   [ "$(cat "$CONFIGURE_STAMP")" != "$(configure_digest)" ]; then
+    echo "[aros] configure changed with the submodule pin —"
+    echo "[aros] reconfiguring, which rebuilds the tree (the toolchain is kept)"
+    rm -f "$BUILD/mmake.config"
+fi
+
 # configure is only re-run when there is nothing to build with. It regenerates
 # the whole bin/<target>/gen tree, so running it needlessly is not free.
 if [ ! -f "$BUILD/mmake.config" ]; then
@@ -498,6 +541,7 @@ if [ ! -f "$BUILD/mmake.config" ]; then
     fi
     "$SRC/configure" "${CONFIGURE_ARGS[@]}"
     echo "$BELLATRIX_FRAME_POINTERS" > "$FP_STAMP"
+    configure_digest > "$CONFIGURE_STAMP"
 else
     echo "[aros] already configured"
 
@@ -513,9 +557,12 @@ else
     # config/aros.cfg which includes make.cfg, and the whole tree goes out of
     # date. That is why builds here were rebuilding everything after a reset.
     #
-    # So bump the generated files past it in the same breath. Sound because the
-    # trigger is an mtime with identical content, which is the only kind of
-    # change a submodule checkout can produce.
+    # So bump the generated files past it in the same breath. Sound only
+    # because a real change to configure has already been caught above by its
+    # digest and turned into a reconfigure -- reaching here means the content
+    # is identical and the mtime is the whole of the difference. It is not
+    # true that a submodule checkout can only produce that: a pin bump changes
+    # configure for real, and this shortcut used to hide it.
     if [ -f "$BUILD/config.status" ] && \
        [ "$SRC/configure" -nt "$BUILD/config.status" ]; then
         echo "[aros] configure is newer only by mtime — keeping the build tree"
@@ -540,6 +587,191 @@ fi
 # explicit dependency, not with -j.
 echo "[aros] building $METATARGET (serial — see comment in this script)"
 make "$METATARGET"
+
+# The display driver is not in the ELF any more.
+#
+# vcgfx installs the way AROS installs display drivers -- DEVS:Drivers plus a
+# DEVS:Monitors loader -- so it hangs off the distribution target, not off the
+# link. A lean build would then leave whatever .hidd happened to be in the tree
+# on the card, and a boot would run a driver older than the source, silently.
+# That already happened once here, and it is the same trap CLAUDE.md records
+# for the other modules: if a change is not in the kernel ELF, check where the
+# module on the card came from.
+#
+# Building it after the link costs seconds and removes the question.
+if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
+    echo "[aros] building the disk-installed drivers"
+    make kernel-m68k-emu68-vcgfx
+
+    # The classic chipset display driver, so graphics.library can draw through
+    # Denise instead of through the VideoCore framebuffer. Upstream's sources,
+    # built under a metatarget of ours -- see
+    # arch/m68k-emu68/hidd/amigavideo/mmakefile.src. It registers with
+    # DDRV_KeepBootMode, so it is added beside the VideoCore rather than
+    # replacing it: two display drivers, which is what makes a display source
+    # switch possible (ISSUE-0068).
+    make kernel-m68k-emu68-amigavideo
+    make kernel-m68k-emu68-amigavideo-monitor
+
+    # The viewer for what the chipset drew. Reads the frame aperture Bellatrix
+    # publishes at $01000000; the census it prints is meant to be compared with
+    # the one Bellatrix prints on its own side.
+    make workbench-c-emu68-deniseview
+    make kernel-bthciuart
+
+    # S:Startup-Sequence, because a patch to it otherwise never reaches a card.
+    #
+    # make-sdcard.sh copies the sequence out of the distribution tree, and the
+    # lean target does not rebuild it -- so patches/aros/0053 could be applied,
+    # verified and still absent from the image. That happened: an image was
+    # built whose Startup-Sequence named a host controller that was not on it,
+    # which would have meant no USB at all on real hardware. Same trap
+    # CLAUDE.md records for modules: if a change is not in the kernel ELF,
+    # check where the copy on the card came from.
+    make workbench-s
+
+    # debug-handler, without which DEBUG: silently swallows everything.
+    #
+    # Devs/DOSDrivers/DEBUG is on the card and says "Handler = debug-handler",
+    # but L:debug-handler was never built, so the mount fails quietly and every
+    # redirection to DEBUG: writes to nothing. Seven scripts under tests/gl/
+    # report that way and had been reporting nothing at all -- which is how a
+    # run with no output got read as a run with no problem.
+    make workbench-fs-debug
+
+    # WiFi: the SDIO transport, the chip resource, the SANA-II device, and the
+    # firmware without which the driver associates with nothing.
+    #
+    # Three modules and a download, none of which the distribution target
+    # pulls in on its own. Built here for the same reason the USB drivers are:
+    # a module that stops being compiled stops being code.
+    #
+    # This is only possible because the card is on SDHOST (SDCARD_BACKEND in
+    # soc/sdcard). The BCM43438 is on the Arasan controller and the card can
+    # be too; they cannot share it, so a card on Arasan means no WiFi at all.
+    #
+    # BELLATRIX_WIFI_FW=0 skips the fetch for an offline build -- the modules
+    # still build, they just have nothing to load.
+    make kernel-sdio-emu68
+    make kernel-bwfm-emu68
+    make workbench-devs-networks-bwfm
+
+    # fd.library owns the process-wide descriptor namespace shared by PosixC
+    # and bsdsocket.library. Their headers are dependency-built, but the lean
+    # kernel-link target does not install the library itself; without this,
+    # both sides repeatedly fall back after OpenLibrary("fd.library") fails.
+    make workbench-libs-fd
+
+    # ENVARC:Sys/Wireless.prefs, without which C:WirelessManager exits before
+    # opening its window and the scan UI cannot be reached at all. Nothing else
+    # creates it -- Prefs/Network only writes it once a network already exists.
+    make distfiles-emu68-wifi-prefs
+
+    # First-boot AROSTCP state for bwfm.device. Wireless.prefs alone does not
+    # start WirelessManager: Package-Startup also needs AutoRun,
+    # WirelessAutoRun, WirelessDevice and a usable interface database.
+    make distfiles-emu68-wifi-network-prefs
+    if [ "${BELLATRIX_WIFI_FW:-1}" = 1 ]; then
+        make distfiles-emu68-wifi-fw
+    fi
+
+    # Bluetooth patchram, for the same reason and with the same switch. Without
+    # it the controller still answers, but from ROM and with a placeholder
+    # BD_ADDR, which pairing cannot use.
+    if [ "${BELLATRIX_BT_FW:-1}" = 1 ]; then
+        make distfiles-emu68-bt-fw
+    fi
+
+    # dos64.library, which nothing here was building.
+    #
+    # posixc.library and stdcio.library both reference it by name. It existed
+    # nowhere on the card -- not in Libs/, not as a symbol in the ELF, only as
+    # headers -- so every open of it returned NULL, and a caller that does not
+    # check gets a jsr through a null base. Found while chasing ISSUE-0051.
+    #
+    # It is an ordinary %build_module in rom/dos64 and costs seconds.
+    make kernel-dos64
+
+    #
+    # The USB host controller: built here, and since 2026-08-29 kept.
+    #
+    # Turning USB off takes two separate steps, and doing only one is what let
+    # it keep booting when it was supposed to be gone. The kernel-usb alias in
+    # arch/m68k-emu68/mmakefile.src decides what the *distribution* target
+    # rebuilds; it does nothing about a copy already in the tree, and
+    # %build_module installs straight into Devs/USBHardware, so building the
+    # driver here to keep it compiling put it back on every card regardless.
+    # That is what the BELLATRIX_USB=0 branch below still has to undo by hand.
+    #
+    # The SFS handler, for the FAT-versus-SFS comparison sdcard.md asks for.
+    #
+    # It is not in CORERESIDENTS and does not need to be: an MBR partition of
+    # type 0x2f is mapped to DOSType SFS\0 by partition.library, which then
+    # looks for a handler by name, and L:sfs-handler is where it looks. Built
+    # unconditionally because it costs seconds and a card without an SFS
+    # partition never loads it.
+    make kernel-fs-sfs
+
+    # Both USB drivers, because there are two and both are ours.
+    #
+    # kernel-usb-arosotg is the AROS DWC2 engine, adopted from arm-native and
+    # ours to modify; kernel-usb-dwc2emu68 is the Bellatrix rewrite replacing
+    # it (ISSUE-0047). They are built, run and compared before either is
+    # deleted -- the same shape as the two SD card backends. Building only one
+    # is how the other stops being code.
+    make kernel-usb-arosotg
+    make kernel-usb-dwc2emu68
+
+    # USB ships by default, with our own controller on the card.
+    #
+    # It used to be off, on the grounds that a machine with no host controller
+    # cannot fault in one. That was a measurement baseline, and a pack built
+    # from it has no keyboard and no mouse -- silently, which is how it caught
+    # people out. BELLATRIX_USB=0 still builds that pack, deliberately, for
+    # measuring against.
+    #
+    # BELLATRIX_USB_DRIVER picks which controller goes on the card and both are
+    # always built: kernel-usb-dwc2emu68 is the Bellatrix rewrite (ISSUE-0047)
+    # and the default; kernel-usb-arosotg is the arm-native engine it replaces,
+    # kept buildable so the comparison stays possible.
+    if [ "${BELLATRIX_USB:-1}" = 1 ]; then
+        make kernel-usb-nopci
+        keep="${BELLATRIX_USB_DRIVER:-dwc2emu68}"
+        for d in "$BUILD/bin/$TARGET/AROS/Devs/USBHardware/"*.device; do
+            [ -e "$d" ] || continue
+            case "$(basename "$d")" in
+                "$keep.device") ;;
+                *) rm -f "$d" ;;
+            esac
+        done
+        echo "[aros] USB ENABLED on the card, host controller: $keep.device"
+    else
+        rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
+
+    # Removing the controller was not enough to stop USB running.
+    # Startup-Sequence line 39 tests SYS:Classes/USB, and that directory is
+    # still there, so every boot still does
+    #
+    #     Run <NIL: >NIL: QUIET AddUSBClasses
+    #
+    # which loads poseidon.library and some twenty classes *asynchronously*,
+    # alongside the rest of the sequence, on a machine that now has no host
+    # controller for any of it to bind to. PsdStackLoader is the same story.
+    # A TLSF backtrace caught AddUSBClasses in the act, and an async task is
+    # exactly the shape that makes a heap fault land in a different task each
+    # time. Take the directory away and the sequence skips the whole block on
+    # its own -- no patch to Startup-Sequence needed.
+    #
+    # bluetooth.class goes with it. That one is the HCI transport for a USB
+    # dongle; Bluetooth here comes off the PL011 through bthciuart, and
+    # Classes/Bluetooth is a separate directory that stays.
+        rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
+        rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \
+              "$BUILD/bin/$TARGET/AROS/C/AddUSBHardware" \
+              "$BUILD/bin/$TARGET/AROS/C/PsdStackLoader"
+        echo "[aros] USB built and left off the card (see mmakefile.src)"
+    fi
+fi
 
 # Record what the toolchain was built from, so a later `clean` can tell whether
 # preserving it is sound. Written after the build because that is when it is

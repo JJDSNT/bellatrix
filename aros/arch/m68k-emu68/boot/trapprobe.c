@@ -15,6 +15,7 @@
 
 #include <exec/types.h>
 #include <exec/execbase.h>
+#include <exec/memory.h>
 
 #include "m68k_exception.h"
 
@@ -144,7 +145,180 @@ static void describe_base(const char *what, ULONG base)
     emu68_console_puts("\n");
 }
 
-static void dump_stack(const char *what, ULONG sp)
+
+/*
+ * Ask whether the jump table under ExecBase is still intact.
+ *
+ * Every fatal exception here reaches a wild PC through `jsr -LVO(A6)`, and
+ * that has two possible causes which look identical from the register dump:
+ * A6 was wrong, or A6 was right and the six bytes it indexed were overwritten.
+ * The second one cannot be read off a register at all -- the base is correct,
+ * the offset is correct, and the damage is in memory the call passes through.
+ *
+ * It is separable, though, because a library's jump table has a shape. Each
+ * entry is a `struct JumpVec` -- `jmp` holding 0x4EF9 (`JMP abs.l`) followed
+ * by a 32-bit target -- laid out downwards from the base, so entry n sits at
+ * base - 6n. An entry whose first word is not 0x4EF9 is not a vector any
+ * more, and saying how many of those there are separates a stray write that
+ * hit one slot from a heap block that overran the whole table.
+ *
+ * ExecBase is used rather than A6's own base because exec is the one library
+ * every path goes through: if its table is intact the damage is elsewhere,
+ * and if it is not, nothing else on the machine is worth reading.
+ */
+extern struct ExecBase *SysBase;
+
+struct emu68_jumpvec
+{
+    UWORD jmp;
+    ULONG vec;
+} __attribute__((packed));
+
+static void describe_vector(const struct emu68_jumpvec *v, int n)
+{
+    emu68_console_puts("    LVO -");
+    puthex((ULONG)(n * 6));
+    emu68_console_puts(" at 0x");
+    puthex((ULONG)v);
+    emu68_console_puts(": ");
+    puthex(v->jmp);
+    emu68_console_puts(" ");
+    puthex(v->vec);
+    if (v->jmp != 0x4EF9)
+        emu68_console_puts("  <- not a JMP");
+    emu68_console_puts("\n");
+}
+
+static void describe_exec_vectors(void)
+{
+    const struct ExecBase *base = SysBase;
+    const struct emu68_jumpvec *table;
+    ULONG slots, broken = 0, listed = 0;
+    ULONG n;
+
+    emu68_console_puts("  SysBase 0x");
+    puthex((ULONG)base);
+
+    if (((ULONG)base & 1) || (ULONG)base < 0x1000 ||
+        (ULONG)base >= 0x34000000)
+    {
+        emu68_console_puts("  (not walkable)\n");
+        return;
+    }
+
+    slots = base->LibNode.lib_NegSize / 6;
+    emu68_console_puts("  lib_NegSize 0x");
+    puthex(base->LibNode.lib_NegSize);
+    emu68_console_puts(" -> ");
+    puthex(slots);
+    emu68_console_puts(" vectors\n");
+
+    if (slots == 0 || slots > 0x400)
+    {
+        emu68_console_puts("    (implausible, not walking)\n");
+        return;
+    }
+
+    table = (const struct emu68_jumpvec *)base;
+
+    /* The slot this crash went through, always, so the healthy runs have a
+     * reference to compare an unhealthy one against. */
+    describe_vector(&table[-94], 94);
+
+    for (n = 1; n <= slots; n++)
+    {
+        if (table[-(WORD)n].jmp == 0x4EF9)
+            continue;
+
+        broken++;
+        if (listed < 8)
+        {
+            describe_vector(&table[-(WORD)n], n);
+            listed++;
+        }
+    }
+
+    emu68_console_puts("    ");
+    puthex(broken);
+    emu68_console_puts(" of ");
+    puthex(slots);
+    emu68_console_puts(" vectors are not a JMP\n");
+}
+
+/*
+ * How deep to go, and why the two stacks get different budgets.
+ *
+ * The user stack is where the path is. A crash inside Intuition's input
+ * handler gave two names in the first twenty-four longwords and the rest of
+ * the call chain was below them, unreported. The supervisor stack, on the
+ * same occasion, spent all twenty-four on Supervisor()'s frames -- and those
+ * grow *upward* from SSP into stack already released, so most of what is
+ * printed there is history. It was read as a live exception loop twice before
+ * anyone read supervisor.S.
+ *
+ * So: the user stack gets the depth, the supervisor stack gets enough to show
+ * the frame that is actually live and little more.
+ */
+enum { TRAP_STACK_WORDS_USER = 64, TRAP_STACK_WORDS_SUPER = 12 };
+
+/*
+ * Is this longword inside RAM the system actually handed out?
+ *
+ * This used to be the constant range [0x02000000, 0x30600000), which was a
+ * guess and a wrong one: boot.c puts the heap wherever Emu68's pools end
+ * (`lower`, floored at 0x01000000), and on this machine that is below
+ * 0x02000000. The crash that mattered had its faulting PC at 0x01fffe7d and a
+ * live pointer at 0x01f9a2a4, and the marker called neither of them heap --
+ * so the two most important longwords in the dump read as debris for an hour.
+ *
+ * The bounds are not a constant to be corrected, they are already recorded:
+ * every MemHeader on SysBase->MemList carries the range it owns. Walk them.
+ * Chip memory is on that list too, which is right -- a pointer into chip RAM
+ * is just as much a live allocation as one into fast.
+ */
+static int in_a_memheader(ULONG value)
+{
+    const struct ExecBase *base = SysBase;
+    const struct MemHeader *mh;
+
+    /*
+     * CORRECTION, and the reason for the fallback.
+     *
+     * This walk replaced a hard-coded [0x02000000, 0x30600000) because that
+     * looked like a guess. It was a guess, but it was also right: the machine
+     * reports AbsExecBase as $020012f0, so the heap does begin at 0x02000000
+     * and the two longwords I said it had mislabelled were mislabelled for a
+     * different reason.
+     *
+     * Worse, deriving the bounds from SysBase makes the marker depend on the
+     * one thing that is broken in the crash it exists to read -- ISSUE-0082
+     * corrupts SysBase, so every walk returns nothing and the dump comes back
+     * with no markers at all. That happened, and it cost a dump.
+     *
+     * So: walk the MemHeaders when SysBase is sound, because that is exact,
+     * and fall back to the constants when it is not, because an approximate
+     * marker beats none.
+     */
+    if (((ULONG)base & 1) || (ULONG)base < 0x1000 ||
+        (ULONG)base >= 0x34000000)
+        return value >= 0x02000000 && value < 0x30600000;
+
+    for (mh = (const struct MemHeader *)base->MemList.lh_Head;
+         mh->mh_Node.ln_Succ != NULL;
+         mh = (const struct MemHeader *)mh->mh_Node.ln_Succ)
+    {
+        if (((ULONG)mh & 1) || (ULONG)mh < 0x1000 ||
+            (ULONG)mh >= 0x34000000)
+            return value >= 0x02000000 && value < 0x30600000;
+
+        if (value >= (ULONG)mh->mh_Lower && value < (ULONG)mh->mh_Upper)
+            return 1;
+    }
+
+    return 0;
+}
+
+static void dump_stack(const char *what, ULONG sp, int words)
 {
     const ULONG *p = (const ULONG *)sp;
     int i;
@@ -160,7 +334,7 @@ static void dump_stack(const char *what, ULONG sp)
 
     emu68_console_puts("\n");
 
-    for (i = 0; i < 24; i++)
+    for (i = 0; i < words; i++)
     {
         ULONG v = p[i];
 
@@ -169,8 +343,18 @@ static void dump_stack(const char *what, ULONG sp)
         emu68_console_puts(" 0x");
         puthex(v);
 
+        /*
+         * Two markers, because there are two places a return address can
+         * live and only one of them is the kernel image. A module loaded
+         * from disk returns into the heap, and the comment above is right
+         * that a heap longword cannot be told from data by inspection -- but
+         * an *even* one in the heap is at least a candidate, and saying so
+         * costs nothing and narrows the reading by hand that follows.
+         */
         if (v >= (ULONG)__aros_resident_start && v < (ULONG)__aros_resident_end)
             emu68_console_puts("  <- kernel");
+        else if ((v & 1) == 0 && in_a_memheader(v))
+            emu68_console_puts("  <- heap");
 
         emu68_console_puts("\n");
     }
@@ -195,6 +379,37 @@ static void dump_stack(const char *what, ULONG sp)
  */
 void emu68_trap_report(ULONG *regs)
 {
+    /*
+     * Report the first trap and nothing else.
+     *
+     * This function never returns -- it ends in a halt loop -- so a trap taken
+     * while it is running does not unwind, it re-enters. Everything below then
+     * runs again on a machine that is already broken: it walks two stacks and
+     * follows A6 as a library base, and any one of those reads can be the
+     * fault that brings it back here. Emu68 sees the result and says so:
+     *
+     *     [JIT:SYS] RE-ENTERED at depth 1 on core 0
+     *     [JIT:SYS] runaway exception recursion, halting core 0
+     *
+     * and the core is halted with none of the first trap's registers printed.
+     * That is the worst possible outcome for a reporter: the crash that
+     * mattered is replaced by the crash the reporter caused.
+     *
+     * So the second entry says one line and stops. Observed chasing gears
+     * under ISSUE-0045, where the whole report was lost this way.
+     */
+    static int reporting;
+
+    if (reporting)
+    {
+        emu68_console_puts("[AROS/Emu68] trap while reporting a trap"
+                           " -- stopping here\n");
+        for (;;)
+            ;
+    }
+    reporting = 1;
+
+    {
     static const char *const dnames[] = {
         "  D0 0x", "  D1 0x", "  D2 0x", "  D3 0x",
         "  D4 0x", "  D5 0x", "  D6 0x", "  D7 0x"
@@ -230,9 +445,11 @@ void emu68_trap_report(ULONG *regs)
      * costs a few lines.
      */
     describe_base(" A6 as a library base: ", regs[15]);
+    describe_exec_vectors();
 
-    dump_stack("  SSP 0x", (ULONG)&regs[16] + 8);
-    dump_stack("  USP 0x", regs[0]);
+    dump_stack("  SSP 0x", (ULONG)&regs[16] + 8, TRAP_STACK_WORDS_SUPER);
+    dump_stack("  USP 0x", regs[0], TRAP_STACK_WORDS_USER);
+    }
 
     for (;;)
         ;

@@ -1,0 +1,20 @@
+include $(SRCDIR)/config/aros.cfg
+
+# The SDIO transport the WiFi chip hangs off, adopted.
+#
+# Copied from arch/arm-native/soc/broadcom/2708/sdio rather than reached
+# through a patch series, the same way the USB, audio, VideoCore and SD card
+# drivers were. There is one copy and it is ours to modify.
+#
+# On a Pi 3 the BCM43438 sits on the Arasan SDHCI controller, which is only
+# free because soc/sdcard drives the card from SDHOST instead (see
+# SDCARD_BACKEND there). With the card on Arasan there is no WiFi on this
+# board at all -- the two cannot share the controller.
+#
+# The metatarget is kernel-sdio-emu68, not kernel-sdio-bcm2708: arm-native
+# already defines that name for the original of this code and mmake matches
+# metatargets across the whole tree, so asking for it here would build theirs.
+
+%build_module mmake=kernel-sdio-emu68 \
+  modname=sdio modtype=resource \
+  files="sdio_init"

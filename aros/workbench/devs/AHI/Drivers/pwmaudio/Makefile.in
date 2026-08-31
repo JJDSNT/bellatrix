@@ -1,0 +1,18 @@
+#
+#  Makefile.in for the Bellatrix PWM Audio AHI audio driver
+#
+#  Copied from AHI's RPiPWM, which is built for arm and aarch64 only, and
+#  ported to m68k-emu68. See patches/aros/0054 for why the upstream drivers
+#  keep their filter and ours is a separate directory.
+#
+
+VPATH		= @srcdir@
+
+srcdir		= @srcdir@
+
+DRIVER		= pwmaudio.audio
+MODEFILE	= PWMAUDIO
+
+OBJECTS		= rpipwm-init.o rpipwm-main.o rpipwm-playslave.o rpipwm-accel.o rpipwm-hwaccess.o
+
+include ../Common/Makefile.common

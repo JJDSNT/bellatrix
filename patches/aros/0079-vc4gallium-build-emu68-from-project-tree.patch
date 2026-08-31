@@ -1,0 +1,97 @@
+From: Bellatrix Project <bellatrix@example.invalid>
+Subject: [PATCH] vc4gallium: build emu68 from project tree
+
+Select the injected Bellatrix driver sources for emu68 while retaining the
+upstream ARM directory for raspi builds.
+---
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src
+@@ -2,6 +2,15 @@
+ include $(SRCDIR)/config/aros.cfg
+ include $(SRCDIR)/workbench/libs/mesa/mesa.cfg
+ 
++# Bellatrix owns the emu68 port of this driver. Keep this upstream build
++# integration as the single hidd-vc4gallium target, but compile the emu68
++# module from the injected project tree instead of the ARM driver directory.
++ifeq ($(AROS_TARGET_ARCH),emu68)
++VC4GALLIUM_PORTDIR := $(SRCDIR)/arch/m68k-emu68/hidd/vc4gallium
++else
++VC4GALLIUM_PORTDIR := $(SRCDIR)/$(CURDIR)
++endif
++
+ CUR_MESADIR = src/gallium
+ CUR_GALLIUMDIR = drivers/vc4
+ GALLIUM_PATH = $(top_srcdir)/$(CUR_MESADIR)
+@@ -45,11 +54,11 @@
+ # override, both shared with mesa3dgl (compiled once per module).
+ #
+ VC4GALLIUM_HIDD_SOURCES := \
+-    vc4_galliumclass \
+-    vc4_init \
+-    vc4_v3d \
+-    vc4_aros_bridge \
+-    vc4_drm_aros \
++    $(VC4GALLIUM_PORTDIR)/vc4_galliumclass \
++    $(VC4GALLIUM_PORTDIR)/vc4_init \
++    $(VC4GALLIUM_PORTDIR)/vc4_v3d \
++    $(VC4GALLIUM_PORTDIR)/vc4_aros_bridge \
++    $(VC4GALLIUM_PORTDIR)/vc4_drm_aros \
+     $(SRCDIR)/workbench/libs/mesa/aros_drm_shim \
+     $(SRCDIR)/workbench/libs/mesa/emul_arosc
+ 
+@@ -60,8 +69,8 @@
+ #
+ USER_INCLUDES := \
+     $(USER_INCLUDES) \
+-    -I$(SRCDIR)/$(CURDIR)/drm_compat \
+-    -I$(SRCDIR)/$(CURDIR) \
++    -I$(VC4GALLIUM_PORTDIR)/drm_compat \
++    -I$(VC4GALLIUM_PORTDIR) \
+     -I$(top_builddir)/galliumglue \
+     -iquote $(GALLIUM_PATH)/drivers \
+     -iquote $(GALLIUM_PATH)/drivers/vc4 \
+@@ -207,10 +216,10 @@
+ # compile with the driver's flags, then apply the same symbol rewrite.
+ # Hand-rolled rule = no Makedepend; list the local headers explicitly so
+ # editing them rebuilds this object instead of leaving it silently stale.
+-$(GCA_GENDIR)/aros_drm_vc4_raw.o : $(SRCDIR)/$(CURDIR)/aros_drm_vc4.c \
++$(GCA_GENDIR)/aros_drm_vc4_raw.o : $(VC4GALLIUM_PORTDIR)/aros_drm_vc4.c \
+         $(GCA_GENDIR)/.gca.stamp \
+-        $(SRCDIR)/$(CURDIR)/vc4_aros_bridge.h \
+-        $(SRCDIR)/$(CURDIR)/vc4gallium_intern.h
++        $(VC4GALLIUM_PORTDIR)/vc4_aros_bridge.h \
++        $(VC4GALLIUM_PORTDIR)/vc4gallium_intern.h
+ 	%compile_q opt="$(strip $(CFLAGS) $(USER_CFLAGS) $(CPPFLAGS) $(USER_CPPFLAGS) $(USER_INCLUDES))"
+ 
+ $(GCA_GENDIR)/aros_drm_vc4.o : $(GCA_GENDIR)/aros_drm_vc4_raw.o $(GCA_GENDIR)/gca_redefs.txt
+@@ -243,6 +252,7 @@
+ #
+ %build_module mmake=hidd-vc4gallium modname=vc4gallium modtype=hidd \
+     files="$(VC4GALLIUM_HIDD_SOURCES)" alwayscxxlink=yes \
++    conffile="$(VC4GALLIUM_PORTDIR)/vc4gallium.conf" \
+     uselibs="gallium_vc4_gca pthread" \
+     objdir="$(OBJDIR)/$(MESAGLVERSION)"
+ 
+diff --git a/workbench/libs/mesa/mmakefile.src b/workbench/libs/mesa/mmakefile.src
+--- a/workbench/libs/mesa/mmakefile.src
++++ b/workbench/libs/mesa/mmakefile.src
+@@ -55,10 +55,18 @@
+ ifneq ($(filter raspi emu68,$(AROS_TARGET_ARCH)),)
+ SHARED_LIB_SOURCES += aros_drm_shim
+ # Bridge ABI header (shared with the hidd), needed by aros_drm_shim.c.
++ifeq ($(AROS_TARGET_ARCH),emu68)
++USER_INCLUDES += -I$(SRCDIR)/arch/m68k-emu68/hidd/vc4gallium
++# hardware/bcm2708.h: this port keeps its own copy of the SoC header, and the
++# arm-native one below is written against ARM_PERIIOBASE, which does not
++# exist here. Both define the peripheral bases the render-scale gate reads.
++USER_INCLUDES += -I$(SRCDIR)/arch/m68k-emu68/include
++else
+ USER_INCLUDES += -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium
+ # hardware/bcm2708.h: the SoC gate on the render-scale feature (HVS5 has
+ # no scaled plane, so the Pi 4 must not divide the drawable).
+ USER_INCLUDES += -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/include
++endif
+ # The GalliumCoreAPI table linklib exists (galliumcoreapi in
+ # MESA3DGL_GALLIUMCORE) — let the sources take a real reference to it.
+ USER_CPPFLAGS += -DMESA3DGL_HAVE_COREAPI

@@ -155,6 +155,7 @@ static int FNAME_BCMSDC(BCM2708Init)(struct SDCardBase *SDCardBase)
         __BCM2708Bus->sdcb_IOReadByte = FNAME_BCMSDCBUS(BCMMMIOReadByte);
         __BCM2708Bus->sdcb_IOReadWord = FNAME_BCMSDCBUS(BCMMMIOReadWord);
         __BCM2708Bus->sdcb_IOReadLong = FNAME_BCMSDCBUS(BCMMMIOReadLong);
+        __BCM2708Bus->sdcb_IOReadLongs = FNAME_BCMSDCBUS(BCMMMIOReadLongs);
 
         __BCM2708Bus->sdcb_IOWriteByte = FNAME_BCMSDCBUS(BCMMMIOWriteByte);
         __BCM2708Bus->sdcb_IOWriteWord = FNAME_BCMSDCBUS(BCMMMIOWriteWord);

@@ -7,6 +7,9 @@
  */
 
 #include "boot.h"
+#include <aros/bootui.h>
+#include "bootui_api.h"
+#include "bootui_platform.h"
 
 #include <aros/kernel.h>
 #include <exec/memory.h>
@@ -18,6 +21,7 @@
 #include "kernel_romtags.h"
 #include "m68k_exception.h"
 #include "platform.h"
+#include <amiga/memory_map.h>
 
 #define FDT_MAGIC       0xd00dfeedUL
 #define FDT_BEGIN_NODE  1
@@ -59,12 +63,38 @@ extern const struct M68KException emu68_exception_table[];
 
 static struct TagItem emu68_boot_tags[9];
 
+/*
+ * Our boot milestones are ours; the boot presentation's are its own. Report
+ * progress in its vocabulary rather than handing it ours, so that neither
+ * side has to learn the other's -- and so that the stages this port has that
+ * no presentation cares about (the timer soak, the scheduler checks) simply
+ * do not translate.
+ */
+static uint32_t bootui_stage_for(uint32_t stage)
+{
+    switch (stage)
+    {
+    case EMU68_STAGE_ENTRY:          return BOOTUI_STAGE_ENTRY;
+    case EMU68_STAGE_EXEC_READY:     return BOOTUI_STAGE_EXEC;
+    case EMU68_STAGE_SINGLETASK:     return BOOTUI_STAGE_SYSTEM;
+    case EMU68_STAGE_KERNEL_READY:   return BOOTUI_STAGE_KERNEL;
+    case EMU68_STAGE_COLDSTART:      return BOOTUI_STAGE_COLDSTART;
+    case EMU68_STAGE_GRAPHICS_READY: return BOOTUI_STAGE_GRAPHICS;
+    case EMU68_STAGE_DOS_READY:      return BOOTUI_STAGE_DOS_READY;
+    case EMU68_STAGE_STARTUP:        return BOOTUI_STAGE_STARTUP;
+    case EMU68_STAGE_DESKTOP:        return BOOTUI_STAGE_DESKTOP;
+    default:                         return 0;
+    }
+}
+
 void emu68_set_stage(uint32_t stage)
 {
     struct Emu68BootContext *ctx = &emu68_boot_context;
+    uint32_t reported = bootui_stage_for(stage);
 
     ctx->stage = stage;
-    emu68_bootui_set_stage(stage);
+    if (reported)
+        bootui_set_stage(reported);
 
     /*
      * The first page is kept out of the allocator. Leave a big-endian marker
@@ -430,10 +460,40 @@ static void add_boot_tag(uint32_t *index, uint32_t tag, uint32_t data)
     (*index)++;
 }
 
+static int bootarg_present(const struct Emu68BootContext *ctx,
+                           const char *wanted)
+{
+    uint32_t i;
+    uint32_t wanted_len = 0;
+
+    while (wanted[wanted_len])
+        wanted_len++;
+
+    if (!(ctx->flags & EMU68_BOOT_BOOTARGS_VALID) || !ctx->bootargs)
+        return 0;
+
+    for (i = 0; i + wanted_len <= ctx->bootargs_size; i++)
+    {
+        uint32_t j;
+
+        if (i != 0 && ctx->bootargs[i - 1] != ' ')
+            continue;
+        for (j = 0; j < wanted_len && ctx->bootargs[i + j] == wanted[j]; j++)
+            ;
+        if (j == wanted_len &&
+            (i + j == ctx->bootargs_size || ctx->bootargs[i + j] == ' ' ||
+             ctx->bootargs[i + j] == '\0'))
+            return 1;
+    }
+
+    return 0;
+}
+
 static void start_aros(struct Emu68BootContext *ctx)
 {
     UWORD *ranges[3];
     struct MemHeader *memory;
+    struct MemHeader *chip_memory = 0;
     struct ExecBase *sys_base;
     void *user_stack;
     uint32_t lower;
@@ -547,9 +607,23 @@ static void start_aros(struct Emu68BootContext *ctx)
 
     BootMsg = emu68_boot_tags;
     memory = (struct MemHeader *)lower;
-    krnCreateTLSFMemHeader("System Memory", 0, memory, upper - lower,
-                           MEMF_CHIP | MEMF_FAST | MEMF_PUBLIC |
-                           MEMF_KICK | MEMF_LOCAL);
+    if (bootarg_present(ctx, "bellatrix.rigel=1"))
+    {
+        krnCreateTLSFMemHeader("Fast Memory", 0, memory, upper - lower,
+                               MEMF_FAST | MEMF_PUBLIC | MEMF_KICK |
+                               MEMF_LOCAL);
+        chip_memory = (struct MemHeader *)AMIGA_CHIP_RAM_ALLOC_BASE;
+        krnCreateMemHeader("Chip Memory", -10, chip_memory,
+                           AMIGA_CHIP_RAM_ALLOC_SIZE,
+                           MEMF_CHIP | MEMF_PUBLIC | MEMF_KICK | MEMF_LOCAL |
+                           MEMF_24BITDMA);
+    }
+    else
+    {
+        krnCreateTLSFMemHeader("System Memory", 0, memory, upper - lower,
+                               MEMF_CHIP | MEMF_FAST | MEMF_PUBLIC |
+                               MEMF_KICK | MEMF_LOCAL);
+    }
 
     ranges[0] = (UWORD *)__aros_resident_start;
     ranges[1] = (UWORD *)__aros_resident_end;
@@ -558,6 +632,12 @@ static void start_aros(struct Emu68BootContext *ctx)
     sys_base = krnPrepareExecBase(ranges, memory, BootMsg);
     if (sys_base)
     {
+        if (chip_memory)
+        {
+            Enqueue(&sys_base->MemList, &chip_memory->mh_Node);
+            sys_base->MaxLocMem = AMIGA_CHIP_RAM_SIZE;
+        }
+
         /*
          * Tell exec what Emu68 actually emulates.
          *
@@ -594,7 +674,8 @@ static void start_aros(struct Emu68BootContext *ctx)
         m68k_ExecInstallPreserveAll(sys_base);
         ctx->exec_base = sys_base;
         ctx->flags |= EMU68_BOOT_EXEC_READY;
-        emu68_bootui_add_resource();
+        bootui_add_resource();
+        bootui_platform_add_scanout_resource();
         emu68_set_stage(EMU68_STAGE_EXEC_READY);
         emu68_console_puts("[AROS/Emu68] ExecBase ready\n");
 
@@ -639,7 +720,8 @@ static void start_aros(struct Emu68BootContext *ctx)
 }
 
 void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
-                     uint32_t width, uint32_t height)
+                     uint32_t width, uint32_t height,
+                     uint32_t boot_us, uint32_t boot_stamp)
 {
     emu68_boot_context.magic = EMU68_BOOT_MAGIC;
     emu68_boot_context.abi_version = EMU68_BOOT_ABI;
@@ -655,10 +737,20 @@ void emu68_bootstrap(const void *fdt, void *framebuffer, uint32_t pitch,
     emu68_boot_context.bootargs = 0;
     emu68_boot_context.bootargs_size = 0;
     emu68_boot_context.exec_base = 0;
+    emu68_boot_context.boot_time_us =
+        (boot_stamp == EMU68_BOOT_STAMP) ? boot_us : 0;
     if (framebuffer && pitch && width && height)
         emu68_boot_context.flags |= EMU68_BOOT_FRAMEBUFFER;
 
-    emu68_bootui_init();
+    bootui_init();
+    /*
+     * Start the clock from the instant the machine started running m68k code,
+     * not from whenever a timer driver came up tens of stages later. Both are
+     * readings of the same free-running SoC counter, so the difference is
+     * elapsed time and nothing here has to keep count.
+     */
+    if (emu68_boot_context.boot_time_us)
+        bootui_clock_start(emu68_boot_context.boot_time_us);
     emu68_set_stage(EMU68_STAGE_ENTRY);
     emu68_console_init(framebuffer, pitch, width, height);
     emu68_console_puts("[AROS/Emu68] native m68k bootstrap\n");

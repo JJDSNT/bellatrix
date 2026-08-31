@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0044
 title: "Load modules the way AROS does, instead of linking every one into the kernel ELF"
-status: backlog
+status: doing
 priority: medium
 type: refactor
 owner: unassigned
@@ -19,7 +19,7 @@ related_files:
   - external/aros/arch/arm-native/soc/broadcom/2708/mmakefile.src
   - external/aros/config/make.tmpl
   - external/aros/rom/dos/cliinit.c
-  - AI_context/issues/ISSUE-0043.md
+  - AI_context/consolidated/history/ISSUE-0043.md
 ---
 
 # Summary
@@ -115,6 +115,29 @@ deliberately rather than drifting.
 - [ ] The kernel image no longer carries drivers the machine may not use
 
 # Execution log
+
+- 2026-08-22 -- **For graphics the hard part turns out not to apply, and the
+  work is done.** This issue was written around kickstart packages because a
+  gfx HIDD is resident at pri 9 before any filesystem exists, and Emu68 hands
+  the m68k side exactly one file. Both halves are true and neither matters: a
+  display driver does not need to be resident. AROS expects a *boot* driver in
+  the kickstart, registered with `DDRV_BootMode`, and the real driver to arrive
+  later from `DEVS:Monitors` -- `AROSMonDrvs`, run from `rom/dos/boot.c:103`,
+  executes what it finds there once DOS and the card exist.
+  `rom/hidds/gfx/headless` (new in the AROS HEAD refresh) is the worked
+  example: `%build_module ... moduledir=Storage/Drivers` plus a `%build_prog`
+  loader.
+
+  So `vcgfx` left `CORERESIDENTS` and is now `DEVS:Drivers/vcgfx.hidd` plus
+  `DEVS:Monitors/VideoCore`, with `fbgfx` as the resident boot driver. Verified
+  in QEMU: the disk driver loads and creates the screen bitmap.
+
+  What remains of this issue is everything that is *not* graphics -- the
+  filesystems, the USB stack, the shell commands still linked into the ELF.
+  The mechanism for those is still `%make_package`, and for those the one-file
+  boot chain is still the obstacle. The acceptance criteria below stand, minus
+  `GFX_BACKEND`, which is now a boot-driver choice rather than a display-driver
+  one.
 
 - 2026-08-18 -- Answered a follow-up: on aarch64 the driver is still a
   *resident*, it is simply not in the kernel binary. `arch/arm-native/.../

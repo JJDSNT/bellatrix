@@ -1,0 +1,56 @@
+;
+; Demo Reel 3 through the chipset, with the chipset on screen -- no keyboard.
+;
+; Runs from the Startup-Sequence, so nothing here may need input.
+;
+; The USB check comes first and is not decoration. The mouse enumerates
+; correctly -- descriptors of 18, 9 and 39 bytes, which is HID -- and then
+; never reports anything. The driver's own counters say where the gap is:
+; three of them are not per-address, and all three are at zero in every boot
+; so far -- no SOF service tick, no parked periodic NAK, no interrupt data --
+; so no interrupt IN transfer has ever reached the driver. Nothing below is
+; failing; nothing above is asking.
+;
+; The Startup-Sequence starts the classes like this:
+;
+;     Run <NIL: >NIL: QUIET AddUSBClasses
+;
+; asynchronous, quiet, and with its output on NIL:. If that fails it fails
+; without telling anyone. So run it here in the foreground with somewhere to
+; speak, and print what the stack looks like on either side of it.
+;
+Echo >DEBUG: "[demoreel-show] --- USB stack before"
+Version >DEBUG: poseidon.library
+List >DEBUG: USBCLASSES: LFORMAT "%N"
+
+Echo >DEBUG: "[demoreel-show] --- AddUSBClasses, in the foreground"
+AddUSBClasses >DEBUG:
+Echo >DEBUG: "[demoreel-show] --- AddUSBClasses returned"
+
+Echo >DEBUG: "[demoreel-show] --- can the guest read what Denise drew?"
+DeniseView >DEBUG: NOWINDOW
+
+;
+; The overlay covers the whole screen, so a working pointer would be hidden
+; under it. It goes up after the USB question has already been answered in
+; the log, not before.
+;
+Echo >DEBUG: "[demoreel-show] --- putting the aperture on the display"
+Run >NIL: <NIL: DeniseView SHOW
+
+;
+; toram is a script and Slish is a program; last time both returned at once
+; with nothing to show for it, because their output went to the boot console
+; and not here. Redirect Execute itself, which carries the commands inside it.
+;
+Echo >DEBUG: "[demoreel-show] --- ToRAM (assigns, 1 MB check, tunes to RAM:)"
+CD DemoReel3
+Execute >DEBUG: toram
+Echo >DEBUG: "[demoreel-show] --- ToRAM returned"
+
+Echo >DEBUG: "[demoreel-show] --- assigns now"
+Assign >DEBUG:
+
+Echo >DEBUG: "[demoreel-show] --- Slish"
+Slish >DEBUG:
+Echo >DEBUG: "[demoreel-show] --- Slish returned"

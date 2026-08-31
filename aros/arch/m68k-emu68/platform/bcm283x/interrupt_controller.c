@@ -16,6 +16,7 @@
  * bank 1 = GPUIRQ_PEND1/ENBL1/DIBL1, bank 2 = the small ARM-side set in
  * ARMIRQ_PEND/ENBL/DIBL.
  */
+#include <aros/debug.h>
 #include "../platform.h"
 
 #include <aros/kernel.h>
@@ -137,15 +138,69 @@ static void scan_bank(struct KernelBase *KernelBase, ULONG pending, ULONG base,
     for (bit = 0; bit < bits; bit++)
     {
         if (pending & (1UL << bit))
-            krnRunIRQHandlers(KernelBase, base + bit);
+        {
+            /*
+             * Count what is dispatched, and say so on the powers of two.
+             *
+             * The m68k PC, sampled from the chipset core, put this machine
+             * inside emu68_DispatchFrame, scan_bank and intc_read while it
+             * looked frozen -- an interrupt storm. But the bound in
+             * intc_dispatch() never reported, because every entry does find
+             * its source, run the handler and come back to a quiet read. The
+             * source asserts, is served, and asserts again, thousands of
+             * times a second.
+             *
+             * Which one is the whole question, and swapping the USB driver
+             * answered half of it: with usb2otg the machine is fine. Powers
+             * of two keep a healthy boot to a dozen lines and make a storm
+             * unmistakable -- and they name the IRQ. 9 is the USB host
+             * controller, 62 the SD card, 57 the PL011.
+             */
+            static ULONG counts[96];
+            ULONG irq = base + bit;
+
+            if (irq < 96 && ((++counts[irq] & (counts[irq] - 1)) == 0) &&
+                counts[irq] >= 4096)
+                bug("[intc] irq %lu dispatched %lu times\n", irq, counts[irq]);
+            krnRunIRQHandlers(KernelBase, irq);
+        }
     }
 }
+
+/*
+ * How many times one entry may drain the controller before returning.
+ *
+ * This was `for (;;)` -- keep going until nothing is pending -- which is
+ * correct only if every source can be served faster than it re-asserts. The
+ * DWC2 start-of-frame interrupt cannot: it arrives every 125 us for as long as
+ * a periodic transfer is queued, and the loop below reads five controller
+ * registers and runs a handler per round. The loop then never reaches a quiet
+ * read, the m68k never leaves the level-6 exception, no task is ever
+ * scheduled again, and the machine looks exactly like a hang: the boot clock
+ * stops, and every other core keeps logging.
+ *
+ * That is what a chipset core reporting from outside the CPU showed --
+ * `[BELLATRIX:LIVE] arm=0 ipl=0 sr=2610` with SR still changing, so a CPU
+ * spinning in supervisor mode at IPL 6, not one parked on a STOP.
+ *
+ * It was unreachable until the mouse's interrupt pipe started running: no
+ * periodic transfer ever reached the host controller before, so SOF was never
+ * enabled and this loop never met a source it could not outrun.
+ *
+ * A bound is the whole fix. The interrupt is a level, not an edge: whatever
+ * is still pending re-enters immediately, and re-entering is what the
+ * autovector is for. Draining a few rounds per entry keeps the saving the
+ * loop was written for -- most entries have one source and finish in one
+ * round -- without promising to outrun the hardware.
+ */
+#define INTC_DRAIN_ROUNDS 4
 
 static void intc_dispatch(struct KernelBase *KernelBase)
 {
     ULONG pending_arm, pending0, pending1;
+    unsigned round;
 
-    for (;;)
+    for (round = 0; round < INTC_DRAIN_ROUNDS; round++)
     {
         pending_arm = intc_read(ARMIRQ_PEND) &
                       intc_read(ARMIRQ_ENBL) &
@@ -162,6 +217,43 @@ static void intc_dispatch(struct KernelBase *KernelBase)
             scan_bank(KernelBase, pending0, 0 << 5, 32);
         if (pending1)
             scan_bank(KernelBase, pending1, 1 << 5, 32);
+    }
+
+    /*
+     * Name what would not go quiet.
+     *
+     * Bounding the loop above stops it spinning here, and by itself that
+     * changes nothing the machine can feel: the interrupt is a level, so
+     * whatever is still asserted re-enters through the exception instead,
+     * and the CPU is just as unable to run a task. A bound turns an
+     * unbreakable inner loop into an unbreakable outer one unless the source
+     * is dealt with -- and dealing with it starts by knowing which one it is.
+     *
+     * So say so, once per source and a handful of times. A number here is an
+     * IRQ number: 9 is the USB host controller, 62 the SD card, 57 the PL011.
+     * A bit with no handler registered is the other possibility and looks the
+     * same from in here, which is why the raw masks are printed rather than a
+     * conclusion.
+     */
+    if (round == INTC_DRAIN_ROUNDS)
+    {
+        static ULONG shouted;
+        static ULONG last_arm, last0, last1;
+
+        if (pending_arm != last_arm || pending0 != last0 || pending1 != last1)
+        {
+            last_arm = pending_arm;
+            last0 = pending0;
+            last1 = pending1;
+            shouted = 0;
+        }
+        if (shouted < 4)
+        {
+            shouted++;
+            bug("[intc] still pending after %u rounds: arm=%08lx gpu0=%08lx "
+                "gpu1=%08lx\n", (unsigned)INTC_DRAIN_ROUNDS,
+                pending_arm, pending0, pending1);
+        }
     }
 }
 

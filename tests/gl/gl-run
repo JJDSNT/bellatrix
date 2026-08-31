@@ -1,0 +1,20 @@
+.KEY demo/A
+.BRA {
+.KET }
+;
+; Run a MesaGL demo with the stack it actually needs.
+;
+;     Execute S:gl-run gears
+;
+; The shell gives a command AROS_STACKSIZE, which is 0xA000 -- 40 KB -- on
+; m68k. Mesa's initialisation is nowhere near that shallow: on a Raspberry Pi 3
+; the demos come up only after `stack 100000000`, and at 1 MB they do not. That
+; is not a tuning knob, it is the difference between working and not.
+;
+; Verified on hardware: with this stack, gl_test creates its context, reports
+; GL_RENDERER "VC4 V3D 2.1" and Mesa 20.0.8, and enters its render loop.
+;
+Stack 100000000
+SetEnv MESA_DEBUG 1
+SetEnv VC4_DEBUG cl,surf,perf,always_sync
+SYS:Extras/Demos/GL/{demo}

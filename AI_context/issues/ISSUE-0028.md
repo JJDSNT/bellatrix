@@ -17,7 +17,7 @@ blockers:
 related_files:
   - external/aros-bluzing/
   - aros/arch/m68k-emu68/soc/bluetooth/btuart_init.c
-  - AI_context/issues/ISSUE-0019.md
+  - AI_context/consolidated/history/ISSUE-0019.md
 ---
 
 # Summary
@@ -36,7 +36,7 @@ self-test.
 (`AI_context/consolidated/issue_bluetooth.md`, note of 2026-07-16): *"Bluetooth
 HID está funcional — scan, pairing e reconexão automática, e input de
 teclado/mouse/joystick chegando ao Amiga, todos comprovados."* The work that
-closed it is `AI_context/issues/ISSUE-0059.md`. An earlier section of the same
+closed it is `AI_context/consolidated/history/ISSUE-0059.md`. An earlier section of the same
 file says the opposite and is explicitly marked historical — read the note, not
 the body.
 

@@ -6,11 +6,18 @@
 	path = external/aros
 	url = https://github.com/aros-development-team/AROS.git
 	ignore = dirty
-[submodule "external/aros-bluzing"]
-	path = external/aros-bluzing
-	url = https://github.com/JJDSNT/aros-bluzing.git
-	ignore = dirty
 [submodule "external/aros-contrib"]
 	path = external/aros-contrib
 	url = https://github.com/aros-development-team/contrib.git
+	ignore = dirty
+[submodule "external/amitools"]
+	path = external/amitools
+	url = https://github.com/cnvogelg/amitools
+[submodule "external/wifipi"]
+	path = external/wifipi
+	url = https://github.com/michalsc/WiFiPi.device.git
+	ignore = dirty
+[submodule "external/rigel"]
+	path = external/rigel
+	url = https://github.com/JJDSNT/rigel.git
 	ignore = dirty

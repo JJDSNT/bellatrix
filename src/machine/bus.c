@@ -106,7 +106,7 @@ static struct bus_entry *bus_record(uint32_t address, int size, int write,
     return &bus_table[i];
 }
 
-void machine_bus_access(uint32_t address, int size, int write)
+static void machine_bus_access(uint32_t address, int size, int write)
 {
     const MachineRegion *region;
     MachineAccessFit fit;
@@ -162,10 +162,9 @@ void machine_bus_access(uint32_t address, int size, int write)
         case MACHINE_REGION_EXTERNAL:
             if (region->ops)
             {
-                if (write && region->ops->write)
-                    region->ops->write(region, address, size, 0);
-                else if (!write && region->ops->read)
-                    region->ops->read(region, address, size);
+                /* Provider transactions return through machine_bus_read/write.
+                 * Reaching the observer means the access straddled a boundary
+                 * or the provider did not implement that direction. */
                 break;
             }
             /* An EXTERNAL region with no owner is a declaration without an
@@ -191,6 +190,74 @@ void machine_bus_access(uint32_t address, int size, int write)
             }
             break;
     }
+}
+
+static uint64_t machine_open_bus_value(int size)
+{
+    switch (size)
+    {
+        case 1:  return 0xffu;
+        case 2:  return 0xffffu;
+        case 4:  return 0xffffffffu;
+        default: return UINT64_MAX;
+    }
+}
+
+int machine_bus_read(uint32_t address, int size, uint64_t *value)
+{
+    const MachineRegion *region;
+    MachineAccessFit fit;
+
+    region = machine_region_classify(address, (uint32_t)size, &fit);
+    if (region && fit == MACHINE_ACCESS_INSIDE &&
+        region->kind == MACHINE_REGION_EXTERNAL && region->ops &&
+        region->ops->read)
+    {
+        *value = region->ops->read(region, address, size);
+        return 1;
+    }
+
+    machine_bus_access(address, size, 0);
+
+    /*
+     * UNMAPPED is a machine decision, not an invitation to let Emu68 touch
+     * the still-faulting address.  Complete the transaction as open bus after
+     * recording it.  This also keeps the boot-time classic-domain probe useful
+     * without recursively entering the data-abort handler.
+     */
+    if (region && fit == MACHINE_ACCESS_INSIDE &&
+        (region->kind == MACHINE_REGION_UNMAPPED ||
+         (region->kind == MACHINE_REGION_EXTERNAL && !region->ops)))
+    {
+        *value = machine_open_bus_value(size);
+        return 1;
+    }
+
+    return 0;
+}
+
+int machine_bus_write(uint32_t address, int size, uint64_t value)
+{
+    const MachineRegion *region;
+    MachineAccessFit fit;
+
+    region = machine_region_classify(address, (uint32_t)size, &fit);
+    if (region && fit == MACHINE_ACCESS_INSIDE &&
+        region->kind == MACHINE_REGION_EXTERNAL && region->ops &&
+        region->ops->write)
+    {
+        region->ops->write(region, address, size, (uint32_t)value);
+        return 1;
+    }
+
+    machine_bus_access(address, size, 1);
+
+    if (region && fit == MACHINE_ACCESS_INSIDE &&
+        (region->kind == MACHINE_REGION_UNMAPPED ||
+         (region->kind == MACHINE_REGION_EXTERNAL && !region->ops)))
+        return 1;
+
+    return 0;
 }
 
 void machine_bus_report(void)

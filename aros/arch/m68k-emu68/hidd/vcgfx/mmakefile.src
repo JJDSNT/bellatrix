@@ -1,0 +1,78 @@
+include $(SRCDIR)/config/aros.cfg
+
+#MM kernel-m68k-emu68-vcgfx : kernel-hidd-gfx-includes kernel-mbox-emu68-includes kernel-dma-emu68-includes \
+#MM     kernel-m68k-emu68-vcgfx-monitor
+#MM kernel-m68k-emu68-vcgfx-monitor : kernel-hidd-gfx-includes
+
+#
+# The VideoCore 4 graphics driver from arch/arm-native, built for m68k.
+#
+# This is the real thing, not a framebuffer HIDD: vcgfx_hvs.c programs the
+# Hardware Video Scaler's display lists, vcgfx_hdmi.c the encoder,
+# vcgfx_dma.c the transfers. Where fbgfx is handed a surface and manages
+# bitmaps over it, this one owns the pipeline -- which is what ISSUE-0043 means
+# by driving the VideoCore ourselves, and what ISSUE-0012's hardware cursor
+# needs (a cursor is an HVS plane).
+#
+# These sources are ours.
+#
+# They started as arch/arm-native's and were carried across rather than
+# patched, because a patch series is the wrong shape for code we are actively
+# changing: nine patches had accumulated on one driver, every one of them
+# needing to be regenerated whenever a neighbouring hunk moved, and a rebase
+# of the AROS pin silently dropped one of them. What is here now is the
+# convergence the direction document asks for -- arm-native's driver as the
+# starting point, with the endian, display-list, framebuffer-allocation,
+# vsync-probe and handover work folded in.
+#
+# The cost is real and worth naming: fixes upstream makes to its copy no
+# longer arrive by rebasing a patch. Several of ours are bugs on any host and
+# belong upstream; sending them is the way to keep the two from diverging.
+#
+# Not in the kernel link list, and not because it is unfinished.
+#
+# This is the machine's real display driver, and AROS installs those from disk:
+# %build_module puts the .hidd in DEVS:Drivers, AROSMonDrvs (rom/dos/boot.c)
+# runs everything in DEVS:Monitors at boot, and the loader below brings this
+# one in. Registering through AddDisplayDriver() without DDRV_BootMode is what
+# tells graphics.library to retire the boot driver -- and if the VideoCore is
+# not there, nothing registers and the boot driver simply stays. That is the
+# framebuffer fallback, and it exists only because the two drivers are no
+# longer alternatives chosen at link time.
+#
+# rom/hidds/gfx/headless is the worked example of the same arrangement.
+#
+VC4DIR := $(SRCDIR)/$(CURDIR)
+
+FILES := \
+    $(VC4DIR)/vcgfx_init \
+    $(VC4DIR)/vcgfx_hiddclass \
+    $(VC4DIR)/vcgfx_dma \
+    $(VC4DIR)/vcgfx_memory \
+    $(VC4DIR)/vcgfx_sdtv \
+    $(VC4DIR)/vcgfx_hdmi \
+    $(VC4DIR)/vcgfx_hardware \
+    $(VC4DIR)/vcgfx_hvs \
+    $(VC4DIR)/vcgfx_denise \
+    $(VC4DIR)/vcgfx_pixfmts \
+    $(VC4DIR)/vcgfx_onbitmap \
+    $(VC4DIR)/vcgfx_offbitmap
+
+USER_INCLUDES := -I$(VC4DIR) \
+    -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/include \
+    -I$(SRCDIR)/arch/m68k-emu68/include
+USER_CPPFLAGS := -D__EMU68__
+
+MONITORDIR := $(AROSDIR)/Devs/Monitors
+
+%build_module mmake=kernel-m68k-emu68-vcgfx \
+  modname=vcgfx modtype=hidd \
+  conffile=$(VC4DIR)/vcgfx.conf \
+  files="$(FILES)" \
+  uselibs="hiddstubs"
+
+%build_prog mmake=kernel-m68k-emu68-vcgfx-monitor \
+  progname=VideoCore targetdir=$(MONITORDIR) \
+  files=disk_startup
+
+%common

@@ -1,0 +1,36 @@
+From: Bellatrix contributors
+Subject: [PATCH] AROSTCP: start stack before network managers
+
+WirelessManager links against bsdsocket.library. Starting it before AROSTCP
+means its OpenLibrary("bsdsocket.library") fails and its MUI AppIcon never
+survives long enough to appear. Bring the stack up first, then start the
+wireless and mobile managers that consume it.
+
+---
+ workbench/network/stacks/AROSTCP/S/Package-Startup | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/workbench/network/stacks/AROSTCP/S/Package-Startup b/workbench/network/stacks/AROSTCP/S/Package-Startup
+index 20f0205790..9f0221bf5e 100644
+--- a/workbench/network/stacks/AROSTCP/S/Package-Startup
++++ b/workbench/network/stacks/AROSTCP/S/Package-Startup
+@@ -8,6 +8,8 @@ Protect S/stopnet s add quiet
+ 
+ if ${AROSTCP/AutoRun} eq "True"
+ 
++  C:Execute S/startnet
++
+   if ${AROSTCP/WirelessAutoRun} eq "True"
+     Run >NIL: QUIET C:WirelessManager ${AROSTCP/WirelessDevice}
+   EndIf
+@@ -16,8 +18,6 @@ if ${AROSTCP/AutoRun} eq "True"
+     Run >NIL: QUIET C:ModemManager
+   EndIf
+ 
+-  C:Execute S/startnet
+-
+   if EXISTS ENV:AROSTCP/ServerAutoMounts
+     Mount ${AROSTCP/ServerAutoMounts} 
+   EndIf
+-- 
+2.39.5

@@ -1,0 +1,33 @@
+From 6a2f01f7a91d7d743f29ca1f6cb98db2f0ad0058 Mon Sep 17 00:00:00 2001
+From: Bellatrix contributors <bellatrix@localhost>
+Date: Tue, 25 Aug 2026 10:00:00 -0300
+Subject: [PATCH] stdc: use larger malloc puddles
+
+Mesa's software renderer allocates tens of megabytes through stdc.  With the
+64 KiB puddle size this creates hundreds of TLSF memory areas.  The allocator's
+free-list hardening validates blocks by walking the area list, making shader
+setup pathologically slow once the list grows large.
+
+Use 1 MiB puddles for the general stdc heap.  This keeps the validation cost
+bounded to a few dozen areas for Mesa workloads without changing allocation
+semantics or weakening the allocator checks.
+---
+ compiler/crt/stdc/malloc.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/compiler/crt/stdc/malloc.c b/compiler/crt/stdc/malloc.c
+index 93919846ae..ade55164d7 100644
+--- a/compiler/crt/stdc/malloc.c
++++ b/compiler/crt/stdc/malloc.c
+@@ -83,7 +83,7 @@ int __init_memstuff(struct StdCIntBase *StdCBase)
+           FindTask(NULL), StdCBase
+     ));
+ 
+-    StdCBase->mempool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, 65536L, 4096L);
++    StdCBase->mempool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, 1024L * 1024L, 4096L);
+ 
+     D(bug("[%s] %s: StdCBase->mempool(0x%p)\n", STDCNAME, __func__, StdCBase->mempool));
+ 
+-- 
+2.43.0
+

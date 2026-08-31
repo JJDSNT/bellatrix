@@ -4,9 +4,8 @@
  * The machine's view of a CPU transaction the MMU did not satisfy.
  *
  * Emu68 reconstructs the access and reports it here; the region table decides
- * what it means. Today no region has an owner, so every classic-domain access
- * is recorded and Emu68 goes on to service it exactly as before -- what
- * changes is what is known, not what happens.
+ * whether a registered provider serves it. Unowned regions are still observed
+ * and returned to Emu68 unchanged.
  */
 
 #ifndef BELLATRIX_MACHINE_BUS_H
@@ -19,12 +18,11 @@ extern "C" {
 #endif
 
 /*
- * Deliver a faulted guest access to the machine.
- *
- * An address in no installed region returns immediately, so this is safe to
- * place on the whole fault path. size is in bytes, as Emu68 reports it.
+ * Return nonzero when a registered provider completed the transaction.
+ * Otherwise Emu68 continues through its ordinary memory/open-bus path.
  */
-void machine_bus_access(uint32_t address, int size, int write);
+int machine_bus_read(uint32_t address, int size, uint64_t *value);
+int machine_bus_write(uint32_t address, int size, uint64_t value);
 
 /* Print the accesses seen so far, with their counts. */
 void machine_bus_report(void);

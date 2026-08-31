@@ -1,0 +1,139 @@
+;
+; Demo Reel 3's own ToRAM, one line at a time, with somewhere to speak.
+;
+; The icon runs C:IconX on the `DemoReel` script, which is three lines:
+;
+;     execute ToRAM
+;     C:run >NIL:  DemoReelData:Slish
+;     EndCLI >NIL:
+;
+; A window opens and nothing is written, which is what both a script that
+; died on its first line and a script whose output went nowhere look like.
+; IconX passes SYS_Output as NULL, so there is a real chance nothing the
+; script says ever reaches that window at all.
+;
+; ToRAM's first act is the 1989 idiom for "assign this to here":
+;
+;     if exists Monument
+;     c:assign DemoReel3: ""
+;     c:assign DemoReelData: ""
+;     endif
+;
+; An empty target. On AmigaOS 1.3 that is the current directory; on AROS,
+; `Assign NAME:` with no target REMOVES the assign, so if ReadArgs drops the
+; empty string rather than keeping it, the two assigns the whole demo is
+; built on are never made -- and every line after it fails against a device
+; that does not exist.
+;
+; This runs the same steps against DEBUG: and reports each one, including the
+; explicit-path form of the assign, so one boot says which half is broken.
+;
+CD SYS:DemoReel3
+Echo >DEBUG: "[dr3] --- the drawer"
+If EXISTS "Monument"
+    Echo >DEBUG: "[dr3] Monument is here, so ToRAM would do the assigns"
+Else
+    Echo >DEBUG: "[dr3] NO Monument -- wrong directory, nothing else matters"
+EndIf
+
+Echo >DEBUG: "[dr3] --- assign with an empty target, as the demo writes it"
+Assign >DEBUG: DemoReel3: ""
+Assign >DEBUG: DemoReelData: ""
+If EXISTS "DemoReel3:Monument"
+    Echo >DEBUG: "[dr3] the empty-target assign WORKED"
+Else
+    Echo >DEBUG: "[dr3] the empty-target assign did NOT take"
+    Echo >DEBUG: "[dr3] --- same assign, with the path spelled out"
+    Assign >DEBUG: DemoReel3: SYS:DemoReel3
+    Assign >DEBUG: DemoReelData: SYS:DemoReel3
+    If EXISTS "DemoReel3:Monument"
+        Echo >DEBUG: "[dr3] the explicit form WORKED -- it is the empty target"
+    Else
+        Echo >DEBUG: "[dr3] the explicit form failed too -- it is not the assign"
+    EndIf
+EndIf
+
+Echo >DEBUG: "[dr3] --- the assigns as the system sees them"
+Assign >DEBUG:
+
+Echo >DEBUG: "[dr3] --- DoWeHaveMem (sets WARN below 1 MB)"
+DemoReel3:DoWeHaveMem
+If WARN
+    Echo >DEBUG: "[dr3] DoWeHaveMem said WARN: not enough memory"
+Else
+    Echo >DEBUG: "[dr3] DoWeHaveMem was happy"
+EndIf
+
+Echo >DEBUG: "[dr3] --- the twelve files ToRAM puts in RAM:"
+;
+; All twelve, not one. The first version of this script copied dr3 alone and
+; then ran Slish, which returned at once -- and that told us nothing, because
+; Slish was looking for eleven files that were not there. A probe that skips
+; the setup and then reports on the thing that needed it is worse than no
+; probe: it produces an answer.
+;
+Copy >DEBUG: DemoReel3:centisec TO RAM:
+Copy >DEBUG: DemoReel3:mt1 TO RAM:
+Copy >DEBUG: DemoReel3:mt2 TO RAM:
+Copy >DEBUG: DemoReel3:mt3 TO RAM:
+Copy >DEBUG: DemoReel3:mt4 TO RAM:
+Copy >DEBUG: DemoReel3:mt5 TO RAM:
+Copy >DEBUG: DemoReel3:mt6 TO RAM:
+Copy >DEBUG: DemoReel3:mt7 TO RAM:
+Copy >DEBUG: DemoReel3:crash TO RAM:
+Copy >DEBUG: DemoReelData:slide TO RAM:
+Copy >DEBUG: DemoReelData:wall.cu TO RAM:
+Copy >DEBUG: DemoReelData:dr3 TO RAM:
+Echo >DEBUG: "[dr3] --- what RAM: holds now"
+List >DEBUG: RAM: LFORMAT "%N %L"
+
+;
+; The demo runs this as `C:run >NIL: DemoReelData:Slish` -- asynchronous and
+; with its output thrown away, so a crash here is silent by construction.
+; Run it in the foreground, talking, with the setup it actually expects.
+;
+
+;
+; What Slish opens, before asking it to run.
+;
+; Its own strings name five: intuition.library ("1.2 or higher"),
+; dos.library, graphics.library, timer.device and audio.device. Four of
+; those are here. audio.device is not -- not on the card, not in the kernel
+; ELF -- because this target builds neither implementation: AROS's AHI-backed
+; one is excluded for m68k on purpose ("do not override ROM Paula
+; audio.device") and the real Paula one lives under arch/m68k-amiga, which is
+; a different target.
+;
+; That is a fact. Whether it is why Slish quits is not: every failure Slish
+; has a string for prints something, and it printed nothing at all. So ask
+; each one by name and let the log say which is missing, rather than
+; assuming the interesting one is the answer.
+;
+Echo >DEBUG: "[dr3] --- what Slish opens"
+Version >DEBUG: intuition.library
+Version >DEBUG: dos.library
+Version >DEBUG: graphics.library
+Version >DEBUG: timer.device
+Version >DEBUG: audio.device
+
+
+;
+; Slish is NOT run here any more, and that is the finding.
+;
+; It returns OK having drawn nothing -- the census stays at bg=00000000,
+; non-bg=0 across it -- and the desktop that comes up after it has no working
+; pointer, while the same pointer worked in the boot UI moments earlier. The
+; two boots that ran Slish from here both ended that way, and so did the one
+; where the demo was started from its icon.
+;
+; So it is doing something after all: not drawing, but touching something the
+; input path needs and not putting it back. A 1989 program that opens
+; intuition.library, takes what it wants and exits is exactly the shape of
+; that.
+;
+; Leaving it out of the boot makes the desktop usable and turns the claim into
+; something a person can check in one gesture: click the icon, and watch the
+; pointer die at that moment rather than before ever having one.
+;
+Echo >DEBUG: "[dr3] --- Slish NOT run from here (it leaves input broken)"
+Echo >DEBUG: "[dr3] --- everything it needs is in place; click the icon"

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 29 Aug 2026 05:08:00 -0300
+Subject: [PATCH] dosboot: accept nobootrequesters argument
+
+AmigaOS system volumes can need to start before the disk-installed AROS GUI
+libraries exist.  Expose the existing BF_NO_BOOT_REQUESTERS policy as a boot
+argument so the initial CLI can run over NIL: without starting CON and its GUI
+library lookups.  The flag already carries through CliInit and __dos_Boot.
+---
+ rom/dosboot/dosboot_init.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/rom/dosboot/dosboot_init.c b/rom/dosboot/dosboot_init.c
+index 0000000000..1111111111 100644
+--- a/rom/dosboot/dosboot_init.c
++++ b/rom/dosboot/dosboot_init.c
+@@ -196,6 +196,10 @@ int dosboot_Init(LIBBASETYPEPTR LIBBASE)
+                     LIBBASE->db_BootFlags |= BF_EMERGENCY_CONSOLE;
+                     D(bug("[DOSBoot] %s: Emergency console selected\n", __func__));
+                 }
++                else if (0 == stricmp(node->ln_Name, "nobootrequesters"))
++                {
++                    LIBBASE->db_BootFlags |= BF_NO_BOOT_REQUESTERS;
++                }
+             }
+             IntExpBase(ExpansionBase)->BootFlags = LIBBASE->db_BootFlags;
+         }
+-- 
+2.43.0

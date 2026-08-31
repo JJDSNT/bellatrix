@@ -1,0 +1,149 @@
+exec: "is it aligned" is not the same question as "does a MemChunk fit"
+
+Allocate()'s consistency check tests both a chunk's address and its size
+against MEMCHUNK_TOTAL, which is
+
+    max(AROS_WORSTALIGN, sizeof(struct MemChunk))
+
+On m68k that is 8, because a MemChunk is two longwords, while AROS_WORSTALIGN
+is 4. So the check demands 8-byte alignment of an address on a target whose
+own ABI promises 4, and refuses addresses that are correct by its own rules.
+
+Not hypothetical. A program that builds a private MemHeader and aligns its
+pool to AROS_WORSTALIGN -- ordinary Amiga practice -- is refused on its first
+Allocate(). With a debug SysBase that is a dead-end alert; without one the
+chunk walk silently breaks and the allocation merely fails, which is quieter
+and equally wrong. On AmigaOS the same MemHeader works: Exec there does the
+arithmetic and does not audit the caller's alignment.
+
+Bellatrix's point is to be compatible with the Amiga, so the answer to a
+correct third-party binary cannot be "recompile it". The address is now
+checked against AROS_WORSTALIGN, which is the alignment this target actually
+promises; the size stays checked against MEMCHUNK_TOTAL, because that is what
+guarantees a split always leaves room behind for a MemChunk -- a real
+invariant rather than an ABI assumption.
+
+Corruption detection is not weakened in any way that matters: odd addresses,
+misaligned ones and sizes that are not a whole number of chunks are all still
+caught. What is no longer caught is a caller obeying the documented rule.
+
+The reporter in memory.c is split the same way, so it stops calling an
+address unaligned that the allocator now accepts.
+
+See AI_context/issues/ISSUE-0052.md, which also lists this as the fourth
+appearance of the same 4-versus-8 seam in this port.
+
+--- a/rom/exec/memory_nommu.c
++++ b/rom/exec/memory_nommu.c
+@@ -168,8 +168,40 @@
+             /*
+              * Memory list consistency checks.
+              * 1. Check alignment restrictions
++             *
++             * Address and size are checked against different things, because
++             * MEMCHUNK_TOTAL answers two different questions at once and only
++             * one of them is about alignment. It is
++             *
++             *     max(AROS_WORSTALIGN, sizeof(struct MemChunk))
++             *
++             * so on m68k it is 8: AROS_WORSTALIGN is 4 and a MemChunk is two
++             * longwords. The 8 is the space a free chunk needs to hold its own
++             * MemChunk -- it is not the alignment this target promises, which
++             * is 4, and testing the address against it rejects addresses the
++             * ABI says are fine.
++             *
++             * That is not hypothetical: a program building its own MemHeader
++             * and aligning its pool to AROS_WORSTALIGN -- ordinary Amiga
++             * practice, and correct by this target's own documented rules --
++             * was refused here on the first Allocate(). On AmigaOS the same
++             * MemHeader works, because Exec there does the arithmetic and does
++             * not audit the caller's alignment. Bellatrix is trying to be
++             * compatible with the Amiga, so the answer cannot be "recompile
++             * the program". See ISSUE-0052.
++             *
++             * The size still has to be a multiple of MEMCHUNK_TOTAL: that is
++             * what guarantees a split always leaves enough room behind for a
++             * MemChunk, and it is a real invariant rather than an ABI
++             * assumption.
++             *
++             * Corruption detection is not weakened in any way that matters. An
++             * odd address, a misaligned one, or a size that is not a whole
++             * number of chunks is still caught; what is no longer caught is a
++             * caller obeying the target's own alignment rule.
+              */
+-            if (((IPTR)p2|(IPTR)p2->mc_Bytes) & (MEMCHUNK_TOTAL-1))
++            if (((IPTR)p2 & (AROS_WORSTALIGN - 1)) ||
++                (p2->mc_Bytes & (MEMCHUNK_TOTAL - 1)))
+             {
+                 if (SysBase && SysBase->DebugAROSBase)
+                 {
+--- a/rom/exec/memory.c
++++ b/rom/exec/memory.c
+@@ -82,7 +82,11 @@
+ 
+     /* Print MemHeader details */
+     buffer = NewRawDoFmt("\nMemHeader 0x%p (0x%p - 0x%p)", (VOID_FUNC)RAWFMTFUNC_STRING, buffer, ctx->mh, ctx->mh->mh_Lower, ctx->mh->mh_Upper) - 1;
+-    if ((IPTR)ctx->mh->mh_First & (MEMCHUNK_TOTAL - 1))
++    /* Same split as the check in memory_nommu.c: the address answers to
++     * AROS_WORSTALIGN, the sizes to MEMCHUNK_TOTAL. Reporting an address as
++     * unaligned when the allocator now accepts it would just be misleading.
++     * ISSUE-0052. */
++    if ((IPTR)ctx->mh->mh_First & (AROS_WORSTALIGN - 1))
+         buffer = NewRawDoFmt("\n- Unaligned first chunk address (0x%p)", (VOID_FUNC)RAWFMTFUNC_STRING, buffer, ctx->mh->mh_First) - 1;
+ 
+     if (ctx->mh->mh_Free & (MEMCHUNK_TOTAL - 1))
+@@ -446,7 +450,21 @@
+  */
+ static BOOL validateHeader(struct MemHeader *mh, UBYTE op, APTR addr, IPTR size, struct TraceLocation *tp, struct ExecBase *SysBase)
+ {
+-    if (((IPTR)mh->mh_First & (MEMCHUNK_TOTAL - 1)) || (mh->mh_Free & (MEMCHUNK_TOTAL - 1)) ||        /* 1 */
++    /*
++     * Address against AROS_WORSTALIGN, sizes against MEMCHUNK_TOTAL.
++     *
++     * See the long note in memory_nommu.c's stdAlloc: MEMCHUNK_TOTAL is
++     * max(AROS_WORSTALIGN, sizeof(struct MemChunk)), so on m68k it is 8
++     * because a MemChunk is two longwords -- not because the target aligns to
++     * 8. It does not; AROS_WORSTALIGN is 4. Testing an address against it
++     * refuses addresses that are correct by this target's own ABI, and that
++     * is what stops a program with a private MemHeader -- ordinary Amiga
++     * practice -- from making its first Allocate(). ISSUE-0052.
++     *
++     * mh_Free stays on MEMCHUNK_TOTAL: it is a size, and a free count that is
++     * not a whole number of chunks really is inconsistent.
++     */
++    if (((IPTR)mh->mh_First & (AROS_WORSTALIGN - 1)) || (mh->mh_Free & (MEMCHUNK_TOTAL - 1)) ||        /* 1 */
+     (mh->mh_First &&
+      (((APTR)mh->mh_First < mh->mh_Lower) || ((APTR)mh->mh_First + mh->mh_Free > mh->mh_Upper))))    /* 2 */
+     {
+@@ -481,7 +499,15 @@
+  * 1. Both mc_Next and mc_Bytes must me MEMCHUNK_TOTAL-aligned, and mc_Bytes can not be zero.
+  * 2. End of this chunk must not be greater than mh->mh_Upper
+  * 3. mc_Next (if present) must point in between end of this chunk and mh->mh_Upper - MEMCHUNK_TOTAL.
+- *    There must be at least MEMHCUNK_TOTAL allocated bytes between free chunks.
++ *    There must be at least AROS_WORSTALIGN allocated bytes between free chunks.
++ *
++ *    AROS_WORSTALIGN and not MEMCHUNK_TOTAL: the bytes between two free
++ *    chunks are allocated, so they never have to hold a MemChunk -- the
++ *    smallest gap that can exist is the smallest allocation the target can
++ *    make, which is its worst-case alignment. On m68k that is 4, and
++ *    demanding 8 called a legitimate 4-byte gap corruption. The upper bound
++ *    keeps MEMCHUNK_TOTAL, because the last free chunk does have to hold one.
++ *    ISSUE-0052.
+  *
+  * This function is inlined for speed improvements.
+  */
+@@ -489,9 +515,12 @@
+                  UBYTE op, APTR addr, IPTR size,
+                  struct TraceLocation *tp, struct ExecBase *SysBase)
+ {
+-    if (((IPTR)p2->mc_Next & (MEMCHUNK_TOTAL-1)) || (p2->mc_Bytes == 0) || (p2->mc_Bytes & (MEMCHUNK_TOTAL-1))    ||    /* 1 */
++    /* Same split as validateHeader: mc_Next is an address and answers to
++     * AROS_WORSTALIGN; mc_Bytes is a size and still has to be a whole number
++     * of chunks, so a split always leaves room for a MemChunk. ISSUE-0052. */
++    if (((IPTR)p2->mc_Next & (AROS_WORSTALIGN-1)) || (p2->mc_Bytes == 0) || (p2->mc_Bytes & (MEMCHUNK_TOTAL-1))    ||    /* 1 */
+     ((APTR)p2 + p2->mc_Bytes > mh->mh_Upper)                                ||    /* 2 */
+-    (p2->mc_Next && (((APTR)p2->mc_Next < (APTR)p2 + p2->mc_Bytes + MEMCHUNK_TOTAL) ||                /* 3 */
++    (p2->mc_Next && (((APTR)p2->mc_Next < (APTR)p2 + p2->mc_Bytes + AROS_WORSTALIGN) ||                /* 3 */
+                  ((APTR)p2->mc_Next > mh->mh_Upper - MEMCHUNK_TOTAL))))
+     {
+         if (tp)

@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 29 Aug 2026 05:02:00 -0300
+Subject: [PATCH] lddemon: name null OpenLibrary callers
+
+An AmigaOS system volume reaches two early library opens and immediately
+calls through A6 == NULL.  Report the direct return address and task so the
+missing library can be tied to its bootstrap caller instead of inferred from
+adjacent log lines.
+---
+ rom/lddemon/lddemon.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/rom/lddemon/lddemon.c b/rom/lddemon/lddemon.c
+index 0000000000..1111111111 100644
+--- a/rom/lddemon/lddemon.c
++++ b/rom/lddemon/lddemon.c
+@@ -589,9 +589,16 @@ AROS_LH2(struct Library *, OpenLibrary,
+ 
+     LDReleaseObject(object, SysBase);
+ 
+-    if (!library)
+-        bug("[LDDemon] OpenLibrary(\"%s\", %u) opened but returned NULL\n",
+-            libname, version);
++    if (!library)
++    {
++        struct Task *caller = FindTask(NULL);
++
++        bug("[LDDemon] OpenLibrary(\"%s\", %u) opened but returned NULL; "
++            "caller=%p task=%s\n",
++            libname, version, __builtin_return_address(0),
++            (caller != NULL && caller->tc_Node.ln_Name != NULL)
++                ? caller->tc_Node.ln_Name : "<unnamed>");
++    }
+ 
+     return library;
+ 
+-- 
+2.43.0

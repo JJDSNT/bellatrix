@@ -1,0 +1,53 @@
+From: Bellatrix Project <bellatrix@localhost>
+Subject: [PATCH] Workbook: avoid varargs register pressure on m68k
+
+GCC 6.5 can run out of address registers while expanding the SetAttrs()
+varargs call in wbIcon_Update() for m68k.  Build an explicit tag list and use
+SetAttrsA() instead.  This is equivalent at runtime and gives the compiler a
+much simpler call sequence.
+---
+ workbench/system/Workbook/wbicon.c | 19 ++++++++++++++-----
+ 1 file changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/workbench/system/Workbook/wbicon.c b/workbench/system/Workbook/wbicon.c
+index 633002f7fd..cc254a2b45 100644
+--- a/workbench/system/Workbook/wbicon.c
++++ b/workbench/system/Workbook/wbicon.c
+@@ -45,6 +45,7 @@ void wbIcon_Update(Class *cl, Object *obj)
+     struct wbIcon *my = INST_DATA(cl, obj);
+     struct Rectangle rect;
+     UWORD w,h;
++    struct TagItem attrs[5];
+ 
+     /* Update the parent's idea of how big we are
+      */
+@@ -78,14 +79,21 @@ void wbIcon_Update(Class *cl, Object *obj)
+     D(bug("%s: %dx%d @%d,%d (%s)\n", my->File, (int)w, (int)h, (WORD)my->Icon->do_CurrentX, (WORD)my->Icon->do_CurrentY, my->Label));
+     my->Positioned = my->Icon->do_CurrentX != NO_ICON_POSITION &&
+                      my->Icon->do_CurrentY != NO_ICON_POSITION;
+-    SetAttrs(obj,
+-        GA_Left, (my->Icon->do_CurrentX == NO_ICON_POSITION) ? ~0 : my->Icon->do_CurrentX + rect.MinX,
++    attrs[0].ti_Tag = GA_Left;
++    attrs[0].ti_Data = (my->Icon->do_CurrentX == NO_ICON_POSITION) ?
++        ~0 : my->Icon->do_CurrentX + rect.MinX;
+         /* Classic Workbench leaves one pixel between Y=0 icons and the
+          * inner top edge of the window or backdrop screen. */
+-        GA_Top, (my->Icon->do_CurrentY == NO_ICON_POSITION) ? ~0 : my->Icon->do_CurrentY + rect.MinY + 1,
+-        GA_Width, w,
+-        GA_Height, h,
+-        TAG_END);
++    attrs[1].ti_Tag = GA_Top;
++    attrs[1].ti_Data = (my->Icon->do_CurrentY == NO_ICON_POSITION) ?
++        ~0 : my->Icon->do_CurrentY + rect.MinY + 1;
++    attrs[2].ti_Tag = GA_Width;
++    attrs[2].ti_Data = w;
++    attrs[3].ti_Tag = GA_Height;
++    attrs[3].ti_Data = h;
++    attrs[4].ti_Tag = TAG_END;
++
++    SetAttrsA(obj, attrs);
+ }
+ 
+ // OM_NEW
+-- 
+2.43.0

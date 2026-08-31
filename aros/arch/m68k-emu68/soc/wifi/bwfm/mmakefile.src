@@ -1,0 +1,19 @@
+include $(SRCDIR)/config/aros.cfg
+
+# The Broadcom FullMAC WiFi resource, adopted.
+#
+# Copied from arch/arm-native/soc/broadcom/2708/bwfm. It talks to the chip
+# through sdio.resource next door and is driven in turn by the generic
+# SANA-II device in workbench/devs/networks/bwfm, which needs the proto/bwfm.h
+# this module generates.
+#
+# Firmware is not here and is not ours: the device loads
+# DEVS:Firmware/brcmfmac<id>-sdio[.<board>].bin and its .txt NVRAM at runtime,
+# which come from linux-firmware and have to be put on the card.
+#
+# kernel-bwfm-emu68, not kernel-bwfm-bcm2708, for the same metatarget-collision
+# reason as the sdio module beside it.
+
+%build_module mmake=kernel-bwfm-emu68 \
+  modname=bwfm modtype=resource \
+  files="bwfm_init"

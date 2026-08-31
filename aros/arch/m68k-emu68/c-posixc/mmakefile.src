@@ -1,0 +1,36 @@
+include $(SRCDIR)/config/aros.cfg
+
+#
+# Its own directory precisely so it does not inherit -noposixc.
+#
+# arch/m68k-emu68/c sets that file-wide for BootProgress, which needs nothing
+# from the C runtime. This program needs the opposite: it exists to be linked
+# the way a contrib program is, so that "bug() is heard here and not there"
+# means something about the linkage rather than about our own build flags.
+#
+
+#MM- workbench-c-emu68-serialsayp : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-serialsayp \
+    progname=SerialSayP files=SerialSayP targetdir=$(AROS_C) \
+    coverageinstr=no
+
+#MM- workbench-c-emu68-openmesa : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-openmesa \
+    progname=OpenMesa files=OpenMesa targetdir=$(AROS_C) \
+    coverageinstr=no
+
+#MM- workbench-c-emu68-sdbench : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-sdbench \
+    progname=SDBench files=SDBench targetdir=$(AROS_C) \
+    coverageinstr=no
+
+#MM- workbench-c-emu68-sdraw : includes linklibs
+
+%build_prog mmake=workbench-c-emu68-sdraw \
+    progname=SDRaw files=SDRaw targetdir=$(AROS_C) \
+    coverageinstr=no
+
+%common

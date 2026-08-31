@@ -10,7 +10,13 @@
  */
 
 #include "machine/machine.h"
+#include "machine/memory.h"
 #include "machine/region.h"
+#include "machine/vecpage.h"
+#if CONFIG_RIGEL
+#include "amiga/bus.h"
+#include "amiga/frame.h"
+#endif
 
 #include <stdint.h>
 
@@ -54,17 +60,88 @@
 #define VECTOR_PAGE_SIZE        0x00001000UL
 #define VECTOR_PAGE_HOST_PHYS   0x00000000UL
 
+#define AMIGA_VECTOR_PAGE_SIZE  0x00001000UL
+
+#if CONFIG_RIGEL
+#define CIA_BASE                0x00BFD000UL
+#define CIA_SIZE                0x00002000UL
+#define RTC_BASE                0x00DC0000UL
+#define RTC_SIZE                0x00010000UL
+#define CUSTOM_BASE             0x00DFF000UL
+#define CUSTOM_SIZE             0x00001000UL
+#endif
+
 static const MachineRegion machine_map[] =
 {
     {
+#if CONFIG_RIGEL
+        /*
+         * Chip RAM minus its first page. The vector page is described
+         * separately below so that it can be fault-driven on request; the
+         * table refuses overlaps, so it has to be a hole here rather than a
+         * second description of the same addresses.
+         */
+        .base      = AMIGA_CHIP_RAM_BASE + AMIGA_VECTOR_PAGE_SIZE,
+        .size      = AMIGA_CHIP_RAM_SIZE - AMIGA_VECTOR_PAGE_SIZE,
+        .kind      = MACHINE_REGION_DIRECT,
+        .name      = "Chip RAM",
+        .host_phys = AMIGA_CHIP_RAM_BASE + AMIGA_VECTOR_PAGE_SIZE,
+#else
         .base      = VECTOR_PAGE_BASE,
         .size      = VECTOR_PAGE_SIZE,
         .kind      = MACHINE_REGION_DIRECT,
         .name      = "vectors + AbsExecBase",
         .host_phys = VECTOR_PAGE_HOST_PHYS,
+#endif
         .attr      = MMU_ATTR_CACHED,
     },
     {
+#if CONFIG_RIGEL
+        .base = AMIGA_CHIP_RAM_BASE + AMIGA_CHIP_RAM_SIZE,
+        .size = CIA_BASE - (AMIGA_CHIP_RAM_BASE + AMIGA_CHIP_RAM_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain before CIA",
+    },
+    {
+        .base = CIA_BASE,
+        .size = CIA_SIZE,
+        .kind = MACHINE_REGION_EXTERNAL,
+        .name = "Rigel CIA aperture",
+        .ops = &amiga_bus_ops,
+    },
+    {
+        .base = CIA_BASE + CIA_SIZE,
+        .size = RTC_BASE - (CIA_BASE + CIA_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain between CIA and RTC",
+    },
+    {
+        .base = RTC_BASE,
+        .size = RTC_SIZE,
+        .kind = MACHINE_REGION_EXTERNAL,
+        .name = "Rigel RTC aperture",
+        .ops = &amiga_bus_ops,
+    },
+    {
+        .base = RTC_BASE + RTC_SIZE,
+        .size = CUSTOM_BASE - (RTC_BASE + RTC_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain between RTC and custom chips",
+    },
+    {
+        .base = CUSTOM_BASE,
+        .size = CUSTOM_SIZE,
+        .kind = MACHINE_REGION_EXTERNAL,
+        .name = "Rigel custom-chip aperture",
+        .ops = &amiga_bus_ops,
+    },
+    {
+        .base = CUSTOM_BASE + CUSTOM_SIZE,
+        .size = (CLASSIC_DOMAIN_BASE + CLASSIC_DOMAIN_SIZE) -
+                (CUSTOM_BASE + CUSTOM_SIZE),
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain after custom chips",
+#else
         /*
          * Everything else in the classic domain. Not a statement that this is
          * one thing -- it is the absence of statements about it. As accesses
@@ -75,6 +152,7 @@ static const MachineRegion machine_map[] =
         .size = CLASSIC_DOMAIN_SIZE - VECTOR_PAGE_SIZE,
         .kind = MACHINE_REGION_UNMAPPED,
         .name = "classic domain, unclassified",
+#endif
     },
 };
 
@@ -86,10 +164,62 @@ static void machine_setup_memory(void)
 
     for (i = 0; i < MACHINE_MAP_ENTRIES; i++)
         machine_region_install(&machine_map[i]);
+
+#if CONFIG_RIGEL
+    /*
+     * The vector page, whose kind is a boot-time decision rather than a
+     * compile-time one.
+     *
+     * DIRECT is the normal answer and the legacy tree explains why it has to
+     * be: a write-trap here produced store-buffer coherency failures between
+     * the host's alias and the guest's own mapping. Fault-driven is the
+     * diagnostic for ISSUE-0082, where the question is who writes AbsExecBase
+     * -- and that question has no cheaper instrument, because a DIRECT page is
+     * by definition one the fault path never sees.
+     */
+    {
+        MachineRegion vectors =
+        {
+            .base      = AMIGA_CHIP_RAM_BASE,
+            .size      = AMIGA_VECTOR_PAGE_SIZE,
+            .host_phys = AMIGA_CHIP_RAM_BASE,
+            .attr      = MMU_ATTR_CACHED,
+        };
+
+        if (machine_vecpage_trapped())
+        {
+            vectors.kind = MACHINE_REGION_EXTERNAL;
+            vectors.name = "vectors + AbsExecBase (fault-driven)";
+            vectors.ops  = &machine_vecpage_ops;
+        }
+        else
+        {
+            vectors.kind = MACHINE_REGION_DIRECT;
+            vectors.name = "vectors + AbsExecBase";
+        }
+
+        machine_region_install(&vectors);
+    }
+#endif
 }
 
 void machine_init(void)
 {
     machine_setup_memory();
+#if CONFIG_RIGEL
+    /*
+     * Order matters, and it is not the obvious one.
+     *
+     * The frame aperture is installed after the static map, because it adds
+     * regions of its own and the table refuses an overlap -- which is the
+     * point of the table. But it is installed *before* the chipset, because
+     * amiga_bus_init() may run a selftest that programs a display, and a frame
+     * composed before there is an aperture to publish it into is a frame the
+     * guest never sees. That is not hypothetical: it is what the first run of
+     * the DeniseView probe reported.
+     */
+    amiga_frame_init();
+    amiga_bus_init();
+#endif
     machine_region_report();
 }

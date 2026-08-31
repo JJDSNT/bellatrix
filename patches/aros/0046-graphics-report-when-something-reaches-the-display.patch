@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 22 Aug 2026 14:10:00 -0300
+Subject: [PATCH 46/46] graphics: report when something reaches the display
+
+A boot presentation needs to know when AROS has real output of its own,
+so it can get out of the way -- of an error requester as readily as of a
+desktop. The obvious place to look is the Display class's Show(), and it
+is the wrong one. A driver may override Show() without calling
+OOP_DoSuperMethod(), and this machine has one of each:
+arch/aarch64-raspi's fbgfx overrides it and never forwards, while
+arch/arm-native's vcgfx does not override it at all. A hook in the base
+class would see half the presentations on the same machine.
+
+display_LoadViewPorts() is above both. It is the one place where a bitmap
+becomes the frontmost one, and it covers all three ways that happens --
+HIDD_Display_ShowViewPorts() on a compositing driver, the software
+compositor, and a plain Show() -- so nothing a driver does to its own
+method table can hide a presentation from it.
+
+What is reported is a fact, not an instruction: "something is on the
+display now". graphics.library does not act on it and does not know what
+the observer will do with it. The observer is optional and looked up by
+name, so with nothing listening this costs one OpenResource() per view
+load, and removing the observer entirely requires no change here.
+
+Guarded by __EMU68__ because bootui.resource is this port's, and because
+a target with no such resource should not pay even that.
+
+Second report, same principle: when a driver that is not a boot driver
+registers a display, say so. Anything that has been drawing into the
+surface a boot driver was serving has to stop before the new owner
+programs a mode, because the framebuffer can change address, pitch and
+depth without asking -- and drawing into the old geometry afterwards does
+not leave stale pixels, it corrupts the new owner's screen. On a Pi 3 and
+under QEMU that showed as the splash painted twice across the width and
+the desktop drawn twice.
+
+Registration rather than the handover interface, and deliberately. The
+handover only finds boot displays that reached the CDD chain; a boot
+driver whose display is still on the boot queue is invisible to it, and
+on this machine that is exactly where fbgfx's is -- the handover was
+offered to vcgfx and retired zero displays. Registration is the earliest
+point that is certainly above every driver and certainly before any mode
+is programmed.
+
+--- a/rom/graphics/graphics_display.c
++++ b/rom/graphics/graphics_display.c
+@@ -5,6 +5,9 @@
+ 
+ #define DEBUG 0
+ #include <aros/debug.h>
++#ifdef __EMU68__
++#include <aros/bootui.h>
++#endif
+ 
+ #include <proto/exec.h>
+ #include <proto/graphics.h>
+@@ -405,6 +408,35 @@
+             D(bug("[graphics.library/display] %s: Inserting driver 0x%p, ID 0x%08lX\n", __func__, mdd, mdd->display_idbase));
+             display_Queue(mdd, (struct gfxdisplay_data *)CDD(GfxBase), GfxBase);
+             display_Enable(mdd, GfxBase);
++
++            /*
++             * A driver that is not a boot driver has just taken the display.
++             *
++             * Anything that was drawing into the surface a boot driver was
++             * serving has to stop now, before this one programs a mode: the
++             * framebuffer can change address, pitch and depth without asking,
++             * and drawing into the old geometry afterwards does not leave
++             * stale pixels, it corrupts the new owner's screen.
++             *
++             * Said here rather than at the handover, because the handover
++             * only finds boot displays that reached this chain -- a boot
++             * driver still sitting on the boot queue is invisible to it, and
++             * on this machine that is exactly where it is. Registration is
++             * the earliest point that is certainly above every driver and
++             * certainly before the mode changes.
++             *
++             * Stated, not acted upon; the observer is optional.
++             */
++#ifdef __EMU68__
++            if (!(mdd->display_flags & DF_BootMode))
++            {
++                struct BootUIResource *bootui =
++                    (struct BootUIResource *)OpenResource(BOOTUI_RESOURCE_NAME);
++
++                if (bootui && bootui->set_stage)
++                    bootui->set_stage(BOOTUI_STAGE_HANDOVER);
++            }
++#endif
+         }
+     }
+ }
+@@ -508,6 +540,31 @@
+  * in it will screw up the display, likely with no chance to recover.
+  * Because of this we always return zero here.
+  */
++/*
++ * Report that AROS has put something on the display.
++ *
++ * This is the one place above every driver where a bitmap becomes the
++ * frontmost one, so it is where a boot presentation can learn that the system
++ * now has real output of its own -- an error requester as much as a desktop.
++ * Doing it here rather than in the generic Display class's Show() is not a
++ * preference: a driver may override Show() without calling
++ * OOP_DoSuperMethod(), and one that does would never be seen.
++ *
++ * The observer is optional and looked up by name; with nothing listening this
++ * costs one OpenResource() per view load. graphics.library states a fact and
++ * does not act on it, which keeps the dependency pointing the right way.
++ */
++static void display_ReportPresentation(struct GfxBase *GfxBase)
++{
++#ifdef __EMU68__
++    struct BootUIResource *bootui =
++        (struct BootUIResource *)OpenResource(BOOTUI_RESOURCE_NAME);
++
++    if (bootui && bootui->set_stage)
++        bootui->set_stage(BOOTUI_STAGE_PRESENTED);
++#endif
++}
++
+ ULONG display_LoadViewPorts(struct monitor_displaydata *mdd, struct HIDD_ViewPortData *vpd, struct View *v, struct GfxBase *GfxBase)
+ {
+     struct BitMap *bitmap;
+@@ -521,6 +578,8 @@
+     if (HIDD_Display_ShowViewPorts(mdd->mdisplay.display_obj, vpd))
+     {
+         DEBUG_LOADVIEW(bug("[graphics.library/display] %s: ShowViewPorts() worked\n", __func__));
++        if (vpd)
++            display_ReportPresentation(GfxBase);
+         return 0;
+     }
+ 
+@@ -586,6 +645,8 @@
+      	 */
+     	mdd->frontbm = bitmap;
+ 
++        display_ReportPresentation(GfxBase);
++
+ 	/*
+ 	 * Install the framebuffer into new bitmap. Only if software composition is inactive.
+ 	 * If it is active, our BitMap is mirrored, not replaced.

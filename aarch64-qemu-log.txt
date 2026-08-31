@@ -1,0 +1,143 @@
+[BOOT] AROS Bootstrap/AArch64 ARMv8-A
+[BOOT] Booted on Raspberry Pi 3 Model B
+[BOOT] local_intc points to /soc/interrupt-controller@40000000
+[BOOT] Mapping local interrupt area at 0000000040000000-00000000400000ff
+[BOOT] Configuring LEDs
+[BOOT] led-act: GPIO0 (0000003e 00000000 00000000)
+[BOOT] LED attached to virtgpio
+[BOOT] led-pwr: GPIO7 (0000000b 00000007 00000000)
+[BOOT] LED attached to expgpio
+[BOOT] DT memory usage: 65280
+[BOOT] Query system memory
+[BOOT] System memory range: 00000000-3bffffff
+[BOOT] Query VC memory
+[BOOT] VC Base = 3c000000, Size = 04000000
+[BOOT] ARM clock: setpoint 700000000 Hz, max 700000000 Hz
+[BOOT] DTB @ 0000000008400000, size 89462
+[BOOT] Bootstrap @ 00080000-001092e0
+[BOOT] Topmost address for kernel: 000000003c000000
+[BOOT] BSP image: 08000000-08310d1f
+[BOOT] mem_avail=194032
+[BOOT] Calculating core ELF size...
+[BOOT] Core: ro=139264 rw=656736
+[BOOT] Scanning BSP package at 0000000008000000 (size 3214624)...
+[BOOT] BSP magic: 50 4b 47 01
+[BOOT] PKG total_length=3214624, base=0000000008000000, file_end=0000000008310d20
+[BOOT] PKG module 1: elf_ro=21556 elf_rw=16 file=000000000800a748
+[BOOT] PKG module 2: elf_ro=93200 elf_rw=752 file=0000000008034630
+[BOOT] PKG module 3: elf_ro=8324 elf_rw=8 file=0000000008038ed4
+[BOOT] PKG module 50: elf_ro=9244 elf_rw=8 file=00000000083092f0
+[BOOT] PKG scan done: 52 modules
+[BOOT] Total sizes: ro=4194304 rw=2097152
+[BOOT] Zeroing kernel memory at 000000003ba00000 (6291456 bytes)...
+[BOOT] Physical address of kernel: 000000003ba00000
+[BOOT] Virtual address of kernel: 00000000f8000000
+[BOOT] Device tree (size: 89462) moved to 00000000f83ea280, phys 000000003bdea280
+[BOOT] Loading core ELF...
+[BOOT] Core loaded. Loading BSP modules...
+[BOOT] Kernel image is a package:
+[BOOT] Package size: 3139KB
+[BOOT]    00000000f8021f84 hub.class
+[BOOT]    00000000f80273c0 massstorage.class
+[BOOT]    00000000f803dfcc input.device
+[BOOT]    00000000f8040054 gameport.device
+[BOOT]    00000000f8041c74 keyboard.device
+[BOOT]    00000000f80437b4 console.device
+[BOOT]    00000000f804c1c0 sdcard.device
+[BOOT]    00000000f8054eac usb2otg.device
+[BOOT]    00000000f805f2f8 con-handler
+[BOOT]    00000000f8066b28 ram-handler
+[BOOT]    00000000f806c508 cdrom-handler
+[BOOT]    00000000f80773ac sfs-handler
+[BOOT]    00000000f809f098 fat-handler
+[BOOT]    00000000f80aa564 afs-handler
+[BOOT]    00000000f80b7020 hiddclass.hidd
+[BOOT]    00000000f80b9390 inputclass.hidd
+[BOOT]    00000000f80baf5c gfx.hidd
+[BOOT]    00000000f80e900c keyboard.hidd
+[BOOT]    00000000f80ea5f0 mouse.hidd
+[BOOT]    00000000f80ebc50 bus.hidd
+[BOOT]    00000000f80ec5f0 i2c.hidd
+[BOOT]    00000000f80f120c i2c-bcm2708.hidd
+[BOOT]    00000000f80f28e4 vc4gfx.hidd
+[BOOT]    00000000f80fb77c aros.library
+[BOOT]    00000000f80fc7e4 partition.library
+[BOOT]    00000000f8105054 utility.library
+[BOOT]    00000000f8107c10 oop.library
+[BOOT]    00000000f810c074 graphics.library
+[BOOT]    00000000f8126294 layers.library
+[BOOT]    00000000f812d5e4 intuition.library
+[BOOT]    00000000f81660b4 keymap.library
+[BOOT]    00000000f81683dc dos.library
+[BOOT]    00000000f817f4f4 poseidon.library
+[BOOT]    00000000f81af674 cgxbootpic.library
+[BOOT]    00000000f81b2b74 gadtools.library
+[BOOT]    00000000f81c2260 lowlevel.library
+[BOOT]    00000000f81c4324 openfirmware.resource
+[BOOT]    00000000f81c58dc misc.resource
+[BOOT]    00000000f81c67f4 bootloader.resource
+[BOOT]    00000000f81c7f90 dosboot.resource
+[BOOT]    00000000f81d04b0 lddemon.resource
+[BOOT]    00000000f81d2148 usbromstartup.resource
+[BOOT]    00000000f81d292c FileSystem.resource
+[BOOT]    00000000f81d2f14 shell.resource
+[BOOT]    00000000f81d8980 shellcommands.resource
+[BOOT]    00000000f81e0a78 mbox.resource
+[BOOT]    00000000f81e1c14 dma.resource
+[BOOT]    00000000f81e3198 sdio.resource
+[BOOT]    00000000f81e6320 bwfm.resource
+[BOOT]    00000000f81ed088 timer.device
+[BOOT]    00000000f81ef4a4 expansion.library
+[BOOT]    00000000f81f1388 processor.resource
+[BOOT] All 52 BSP modules loaded
+[BOOT] Flushing cache...
+[BOOT] Cache flushed
+[BOOT] Loading MMU tables...
+[BOOT] MMU loaded
+[BOOT] Creating device tree in kernel area at 00000000f83da380
+[BOOT] Kernel parameters @ 00000000f83ea84c: coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory
+[BOOT] Kernel taglist contains 16 entries
+[BOOT] Bootstrap wasted 68112 bytes of memory for kernels use
+[BOOT] Heading over to AROS kernel @ 00000000f8000000
+[Kernel] kernel_cstart entered
+[Kernel] calling cpu_Probe
+[Kernel] calling platform_Init
+[Kernel] platform_Init done
+[Kernel] stack @ 00000000f8400140, stack_super @ 00000000f8450140..00000000f84a0140 (SP_EL1 start 00000000f84a0100)
+[Kernel] AROS AArch64 Native Kernel built on Jul 27 2026
+[Kernel] dt_find_node('/')
+[Kernel] root=00000000f83da380
+[Kernel] dt_find_node('/')
+[Kernel] root=00000000f83da380
+[Kernel] Device: Raspberry Pi 3 Model B
+[Kernel] Entered kernel_cstart @ 0x00000000f80029ac, BootMsg @ 0x00000000000023f0
+[Kernel] Using PutChar implementation @ 0000000000086308
+[Kernel] Boot CPU TLS @ 0x000000000010a000
+[Kernel] calling core_SetupIntr
+[Kernel] Platform initialised
+[Kernel] Preparing memory 0x000000000000d000 -> 0x000000003ba00000
+[Kernel] - protected area 0x0000000000080000 -> 0x000000000010b000)
+[Kernel] Preparing ExecBase (memheader @ 0x000000000000d000)
+[Kernel] SysBase @ 0x000000000000f830
+[Kernel] InitCode(RTF_SINGLETASK) ...
+[Kernel:BCM2708] void bcm2708_init(APTR, APTR)()
+[Kernel:BCM2708] Uniprocessor build - secondary cores left parked
+[Kernel:BCM2708] IRQ chain probe: CS=00000008 PEND0=00000008 CORE0=00000100 ENBL0=00000008 ROUTING=00000000
+[Kernel] Continuing at EL1 on the OS stack ...
+[Kernel] InitCode(RTF_COLDSTART) ...
+[Exec] int Exec_ARMCPUInit(struct ExecBase *)()
+[Exec] int Exec_ARMCPUInit(struct ExecBase *): launched from Exec Bootstrap Task @ 0x0000000000012c70
+[Exec] int Exec_ARMCPUInit(struct ExecBase *): System Idle Task created @ 0x0000000000029130
+[OF] OpenFirmware_Init
+[OF] BootInto @ 000023f0
+[OF] OpenFirmware root at f83da380
+[USB2OTG] HS OTG Core Release: OT2.94a
+[USB2OTG] Architecture: 2 - Internal DMA
+[USB2OTG] HS OTG USB Driver Initialised
+Exec Bootstrap Task: Could not open version 36 or higher of library "intuition.library".
+[USB2OTG] Init: Core soft reset
+[USB2OTG] Host clock: 30-60Mhz (default)
+[USB2OTG] Init: Halting 8 host channels
+[USB2OTG] Init: Device connected, resetting port
+[SDBus00] MMC0: [1024MB Capacity]
+[CgxBootPic] int cgxbootpic_Init(struct CgxBootPicBase *)()
