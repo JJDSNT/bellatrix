@@ -144,7 +144,23 @@ static void describe_base(const char *what, ULONG base)
     emu68_console_puts("\n");
 }
 
-static void dump_stack(const char *what, ULONG sp)
+/*
+ * How deep to go, and why the two stacks get different budgets.
+ *
+ * The user stack is where the path is. A crash inside Intuition's input
+ * handler gave two names in the first twenty-four longwords and the rest of
+ * the call chain was below them, unreported. The supervisor stack, on the
+ * same occasion, spent all twenty-four on Supervisor()'s frames -- and those
+ * grow *upward* from SSP into stack already released, so most of what is
+ * printed there is history. It was read as a live exception loop twice before
+ * anyone read supervisor.S.
+ *
+ * So: the user stack gets the depth, the supervisor stack gets enough to show
+ * the frame that is actually live and little more.
+ */
+enum { TRAP_STACK_WORDS_USER = 64, TRAP_STACK_WORDS_SUPER = 12 };
+
+static void dump_stack(const char *what, ULONG sp, int words)
 {
     const ULONG *p = (const ULONG *)sp;
     int i;
@@ -160,7 +176,7 @@ static void dump_stack(const char *what, ULONG sp)
 
     emu68_console_puts("\n");
 
-    for (i = 0; i < 24; i++)
+    for (i = 0; i < words; i++)
     {
         ULONG v = p[i];
 
@@ -169,8 +185,18 @@ static void dump_stack(const char *what, ULONG sp)
         emu68_console_puts(" 0x");
         puthex(v);
 
+        /*
+         * Two markers, because there are two places a return address can
+         * live and only one of them is the kernel image. A module loaded
+         * from disk returns into the heap, and the comment above is right
+         * that a heap longword cannot be told from data by inspection -- but
+         * an *even* one in the heap is at least a candidate, and saying so
+         * costs nothing and narrows the reading by hand that follows.
+         */
         if (v >= (ULONG)__aros_resident_start && v < (ULONG)__aros_resident_end)
             emu68_console_puts("  <- kernel");
+        else if ((v & 1) == 0 && v >= 0x02000000 && v < 0x30600000)
+            emu68_console_puts("  <- heap");
 
         emu68_console_puts("\n");
     }
@@ -262,8 +288,8 @@ void emu68_trap_report(ULONG *regs)
      */
     describe_base(" A6 as a library base: ", regs[15]);
 
-    dump_stack("  SSP 0x", (ULONG)&regs[16] + 8);
-    dump_stack("  USP 0x", regs[0]);
+    dump_stack("  SSP 0x", (ULONG)&regs[16] + 8, TRAP_STACK_WORDS_SUPER);
+    dump_stack("  USP 0x", regs[0], TRAP_STACK_WORDS_USER);
     }
 
     for (;;)
