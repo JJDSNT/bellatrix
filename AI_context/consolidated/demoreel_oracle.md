@@ -70,3 +70,58 @@ frame 4000  DMACON=03f0 INTENA=61ac  pc=00c11456   (demo code in slow RAM)
 `rigel_input.h` has `JOY0DAT` -- Rigel can move a pointer -- but the harness
 CLI only exposes `--lmb FRAME[:HOLD]`, a click where the pointer already is.
 A `--mouse FRAME:X,Y` would remove the need to patch a disk to reach an icon.
+
+
+## What the trace says about the audio, and what it cannot say
+
+Six thousand frames -- two minutes of emulated time -- with `--trace`:
+
+| event | count |
+|---|---|
+| `compose` | 562666 |
+| `copper_write` | 17200 |
+| `bpl_fetch` | 410 |
+| `audio_period` | 95 |
+| `audio_per_write` | 24 |
+| `audio_dat_write` | 2 |
+
+**The audio DMA is never enabled.** `DMACON` keeps its audio bits clear in
+every run and the WAV comes back `peak 0` every time. The only audio activity
+is `AUDxPER` set to **1** on all four channels and two writes of `AUDxDAT` --
+period 1 with a zero sample is the classic idiom for *silencing* a channel,
+and Rigel's 95 `audio_period` complaints are it objecting to a period below
+the legal minimum. Nothing has asked to play anything.
+
+So "where does Slish open the audio" cannot be answered from these runs: they
+do not get far enough for there to be music. `INTENA=61ac` at frame 4000 --
+AUD0 and AUD1 unmasked -- says it intends to.
+
+## The disks, and the mistake worth not repeating
+
+`Slish` and `Monument` are on **disk 2**; `DemoReel` and `toram` are on disk
+1. `DemoReel3:` and `DemoReelData:` are the two **volume names**, so they
+resolve without any assign -- the `assign ... ""` block in `ToRAM` is the
+fallback for someone who has copied both disks into one drawer, which is
+exactly what `tools/demoreel/install.sh` does for the Bellatrix card.
+
+Two startup-sequences were tried in place of `LoadWB`:
+
+- `DemoReelData:Slish` directly -- reaches the title screen at frame 2400 and
+  Gurus by frame 6000 ("Software error - task held").
+- `cd DemoReel3: / execute DemoReel`, which is what the icon runs through
+  IconX -- nothing starts at all; the screen stays an empty Workbench. `run`
+  detaches and `EndCLI` closes the shell under it.
+
+Neither is the icon path. **Do not read the Guru as a Rigel defect**: it is a
+demo started in a way its author did not intend, and saying otherwise would be
+exactly the mistake this project keeps paying for.
+
+## What would make this a real oracle
+
+Mouse movement. `rigel_input.h` already has `JOY0DAT` -- Rigel can move a
+pointer -- and the harness exposes only `--lmb FRAME[:HOLD]`, a click wherever
+the pointer happens to be. A `--mouse FRAME:X,Y` would let a run double-click
+the demo's own icon, which is the only path the demo was built for, and would
+remove the need to patch a disk at all.
+
+That is a change in the `rigel` submodule, so it carries a pin bump with it.
