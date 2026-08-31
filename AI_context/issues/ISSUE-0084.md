@@ -45,6 +45,43 @@ entirely, and still:
 The machine is alive: the pointer moves to the last line of the log, and the
 LIVE probe shows varied PCs.
 
+# CORRECTION: the double-click works
+
+Written above and reasoned from at length: the click was delivered but its two
+halves did not arrive close enough together to be one gesture, because of the
+USB interrupt storm. That is wrong, and the user's own observation settles it:
+
+> "o duplo clique so nao funcionava no dpaint, eu conseguia abrir as pastas"
+
+Folders open. The double-click works. The storm is real and ISSUE-0078 still
+stands, but it is not why DPaint does not start, and the Startup-Sequence run
+had already removed the click from the question anyway.
+
+What is left is much sharper: **DPaint alone fails, and it fails before it
+opens anything.** No screen of any kind is created, so it dies earlier than its
+own mode requester.
+
+# What DPaint does before it opens a screen
+
+It opens disk fonts. `tools/dpaint/install.sh` stages a `fonts` drawer beside
+the binary -- `fonts/dpaint.font` and a `fonts/dpaint/` directory -- and the
+application asks diskfont for them at startup. Wanderer does not: it draws
+folder windows with the ROM font, which is exactly why folders still open while
+DPaint does not.
+
+That is the shape of a trap this project has already paid for once, recorded in
+the memory as "o cartao envenena-se sozinho": font indexes written by the guest
+onto the FAT volume, plus a fat-handler without its endian fix, and every
+subsequent boot hangs where those files are read back. `read_block_buffered` at
+15% of samples is the fat-handler churning, which is consistent with it.
+
+The same shape covers anything else DPaint wrote to its own drawer on an
+earlier run -- settings, the mode it was given -- coming back corrupt.
+
+It fits the one fact that no other explanation does: **it worked repeatedly
+this morning and then stopped**, with nothing in between that touched DPaint's
+files. A volume that poisons itself after a successful run does exactly that.
+
 # Where the time goes
 
 129 LIVE samples over the run:
@@ -106,7 +143,13 @@ this: a driver that burns CPU and an application that never gets its screen.
 
 # Where to start
 
-Two experiments, both free, in this order.
+Three experiments, free, in this order -- the first two do not need a build.
+
+**Replace DPaint on the card with a clean copy.** `out/dpaint/` holds what the
+extractor staged, untouched by any boot. Delete `DPaint/` on the card and copy
+that in its place. If it then starts, the volume poisoned itself and the
+question becomes which write did it -- which is the fat-handler endian work,
+not the display work.
 
 **Rename `Devs/Monitors/AmigaVideo` on the card.** If DPaint's requester then
 opens, the block is inside amigavideo and the profile above says where to look.

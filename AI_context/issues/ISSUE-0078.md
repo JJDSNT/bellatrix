@@ -171,18 +171,16 @@ split transactions off SOF and leaves that interrupt unmasked, so the machine
 takes 8000 interrupts a second for as long as a full- or low-speed device is
 attached behind the hub.
 
-The consequence is not subtle and it is not theoretical. The pointer still
-moves -- `[VCGFX:CUR] pos #384 115,121 visible=1` right at the end of the log,
-so input is delivered -- but a **double-click on an icon does not open it**.
-The click is delivered; the two halves of it do not arrive close enough
-together to be one gesture. Reported as "eu clico no icone do dpaint mas nao
-funciona, nao abre a tela de selecao".
+CORRECTION, same day: I read a failing double-click on the DPaint icon as the
+consequence of this, and it is not. The user opens folders by double-click
+without trouble -- "o duplo clique so nao funcionava no dpaint, eu conseguia
+abrir as pastas" -- so input gestures work. That failure is DPaint's own and is
+tracked in ISSUE-0084.
 
-That is the shape of the cost: not a dead input device, which would be obvious,
-but a desktop that responds to everything except the gestures with a deadline.
-And it makes the port hard to *test*, which is worse than a missing feature --
-every experiment that needs an application launched from Wanderer now needs a
-way around the mouse.
+What remains true is the cost itself: 8000 interrupts a second is a quarter of
+this machine's samples spent in dispatch (`emu68_DispatchFrame`, `scan_bank`,
+`intc_read`) for nothing, and the pointer moves the whole time -- so it is a
+tax, not a failure, which is why it went unnoticed for so long.
 
 The `int split never ran ... exorcise+requeue` lines say the split scheduling is
 also failing on its own terms, five times in one boot, on endpoints 1 and 2 of
