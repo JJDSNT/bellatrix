@@ -204,6 +204,21 @@ INTENA/INTREQ should be written against that, not against the current dormancy.
 The `nocomposition` boot argument is currently required to see anything on the
 framebuffer.
 
+## The chipset is a boot argument, not a build option
+
+`CONFIG_RIGEL` says whether the image *carries* Rigel. Whether the machine that
+boots *has* it is the bare word `rigel` on the kernel command line -- the single
+line in `cmdline.txt`, or `BELLATRIX_RIGEL=0/1` for `run.sh` and
+`make-sdcard.sh`. Absence is the off case; there is no `rigel=0`.
+
+Both halves read it and neither tells the other: `src/machine/options.c` for the
+host (address map, chipset init, cores 2 and 3, how `STOP` waits) and
+`arch/m68k-emu68/boot/boot.c` for the guest (one heap, or Fast plus a separate
+Chip pool). They can only disagree if `rigel` is asked for on a `CONFIG_RIGEL=0`
+image, and Emu68 says so loudly at boot. **Both print which machine they got** --
+the two compositions differ in what `AllocMem(MEMF_CHIP)` returns and in nothing
+else visible, so read those two lines before concluding anything about memory.
+
 ## Repository conventions
 
 - **Everything in the repository is written in English** — docs, issues, specs,

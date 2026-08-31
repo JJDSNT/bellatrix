@@ -18,6 +18,12 @@ what this machine could not.
 
 Every path a fault then takes already exists and is already exercised.
 What changes is who explains the crash.
+
+The condition is BELLATRIX_EMU68 alone, not BELLATRIX_EMU68 && CONFIG_RIGEL.
+The argument above is about booting an operating system, and a Bellatrix
+image built or booted without the chipset boots the same one; tying it to
+Rigel would have made a runtime chipset switch silently change something
+that has nothing to do with the chipset.
 ---
  src/ExecutionLoop.c | 28 +++++++++++++++++++++++++++-
  1 file changed, 27 insertions(+), 1 deletion(-)
@@ -58,7 +64,7 @@ diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 + * which task it was and where it came from, instead of a register dump from
 + * outside.
 + */
-+#if !defined(PISTORM_ANY_MODEL) && !(defined(BELLATRIX_EMU68) && CONFIG_RIGEL)
++#if !defined(PISTORM_ANY_MODEL) && !defined(BELLATRIX_EMU68)
          if (unlikely(PC == 0)) {
              M68K_SaveContext(ctx);
              return;

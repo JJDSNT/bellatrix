@@ -11,6 +11,7 @@
 
 #include "machine/machine.h"
 #include "machine/memory.h"
+#include "machine/options.h"
 #include "machine/region.h"
 #include "machine/vecpage.h"
 #if CONFIG_RIGEL
@@ -60,9 +61,19 @@
 #define VECTOR_PAGE_SIZE        0x00001000UL
 #define VECTOR_PAGE_HOST_PHYS   0x00000000UL
 
-#define AMIGA_VECTOR_PAGE_SIZE  0x00001000UL
-
 #if CONFIG_RIGEL
+/*
+ * With the chipset in the machine that page is also the first page of chip
+ * RAM, and the guest's allocation floor sits immediately above it. Say so,
+ * rather than repeating 0x1000 in a second constant that happens to agree:
+ * two definitions of one page is how a map and an allocator come to disagree
+ * by exactly one page and nothing says which is wrong.
+ */
+_Static_assert(AMIGA_CHIP_RAM_BASE == VECTOR_PAGE_BASE,
+               "the vector page is the first page of chip RAM");
+_Static_assert(AMIGA_CHIP_RAM_ALLOC_BASE == VECTOR_PAGE_BASE + VECTOR_PAGE_SIZE,
+               "the guest allocates chip RAM from above the vector page");
+
 #define CIA_BASE                0x00BFD000UL
 #define CIA_SIZE                0x00002000UL
 #define RTC_BASE                0x00DC0000UL
@@ -71,32 +82,46 @@
 #define CUSTOM_SIZE             0x00001000UL
 #endif
 
-static const MachineRegion machine_map[] =
+/*
+ * The machine without a chipset.
+ *
+ * The vector page is not described here: it is installed by
+ * machine_setup_memory() below, because whether it is direct or fault-driven
+ * is a boot-time decision and the table refuses overlapping descriptions.
+ * Everything above it is the absence of statements rather than a statement
+ * that it is one thing -- as accesses are attributed and classified, ranges
+ * come out of here and become regions of their own.
+ */
+static const MachineRegion plain_map[] =
 {
     {
+        .base = VECTOR_PAGE_BASE + VECTOR_PAGE_SIZE,
+        .size = CLASSIC_DOMAIN_SIZE - VECTOR_PAGE_SIZE,
+        .kind = MACHINE_REGION_UNMAPPED,
+        .name = "classic domain, unclassified",
+    },
+};
+
 #if CONFIG_RIGEL
-        /*
-         * Chip RAM minus its first page. The vector page is described
-         * separately below so that it can be fault-driven on request; the
-         * table refuses overlaps, so it has to be a hole here rather than a
-         * second description of the same addresses.
-         */
-        .base      = AMIGA_CHIP_RAM_BASE + AMIGA_VECTOR_PAGE_SIZE,
-        .size      = AMIGA_CHIP_RAM_SIZE - AMIGA_VECTOR_PAGE_SIZE,
+/*
+ * The machine with one: the low 24 bits belong to the classic chipset.
+ *
+ * Chip RAM is direct, minus its first page for the same reason as above; the
+ * three apertures are external and decode through Rigel; everything between
+ * them stays unmapped, so an access to a range nothing has claimed still
+ * reaches machine semantics instead of reading DRAM back.
+ */
+static const MachineRegion classic_map[] =
+{
+    {
+        .base      = VECTOR_PAGE_BASE + VECTOR_PAGE_SIZE,
+        .size      = AMIGA_CHIP_RAM_SIZE - VECTOR_PAGE_SIZE,
         .kind      = MACHINE_REGION_DIRECT,
         .name      = "Chip RAM",
-        .host_phys = AMIGA_CHIP_RAM_BASE + AMIGA_VECTOR_PAGE_SIZE,
-#else
-        .base      = VECTOR_PAGE_BASE,
-        .size      = VECTOR_PAGE_SIZE,
-        .kind      = MACHINE_REGION_DIRECT,
-        .name      = "vectors + AbsExecBase",
-        .host_phys = VECTOR_PAGE_HOST_PHYS,
-#endif
+        .host_phys = VECTOR_PAGE_HOST_PHYS + VECTOR_PAGE_SIZE,
         .attr      = MMU_ATTR_CACHED,
     },
     {
-#if CONFIG_RIGEL
         .base = AMIGA_CHIP_RAM_BASE + AMIGA_CHIP_RAM_SIZE,
         .size = CIA_BASE - (AMIGA_CHIP_RAM_BASE + AMIGA_CHIP_RAM_SIZE),
         .kind = MACHINE_REGION_UNMAPPED,
@@ -141,34 +166,33 @@ static const MachineRegion machine_map[] =
                 (CUSTOM_BASE + CUSTOM_SIZE),
         .kind = MACHINE_REGION_UNMAPPED,
         .name = "classic domain after custom chips",
-#else
-        /*
-         * Everything else in the classic domain. Not a statement that this is
-         * one thing -- it is the absence of statements about it. As accesses
-         * are attributed and classified, ranges come out of here and become
-         * regions of their own.
-         */
-        .base = VECTOR_PAGE_BASE + VECTOR_PAGE_SIZE,
-        .size = CLASSIC_DOMAIN_SIZE - VECTOR_PAGE_SIZE,
-        .kind = MACHINE_REGION_UNMAPPED,
-        .name = "classic domain, unclassified",
-#endif
     },
 };
+#endif
 
-#define MACHINE_MAP_ENTRIES (sizeof(machine_map) / sizeof(machine_map[0]))
+#define ARRAY_ENTRIES(a) (sizeof(a) / sizeof((a)[0]))
 
 static void machine_setup_memory(void)
 {
+    const MachineRegion *map = plain_map;
+    unsigned int entries = ARRAY_ENTRIES(plain_map);
     unsigned int i;
 
-    for (i = 0; i < MACHINE_MAP_ENTRIES; i++)
-        machine_region_install(&machine_map[i]);
-
 #if CONFIG_RIGEL
+    if (bellatrix_rigel_enabled())
+    {
+        map = classic_map;
+        entries = ARRAY_ENTRIES(classic_map);
+    }
+#endif
+
+    for (i = 0; i < entries; i++)
+        machine_region_install(&map[i]);
+
     /*
      * The vector page, whose kind is a boot-time decision rather than a
-     * compile-time one.
+     * compile-time one -- and which is the one page both compositions agree
+     * on, so it is described here once instead of in each map.
      *
      * DIRECT is the normal answer and the legacy tree explains why it has to
      * be: a write-trap here produced store-buffer coherency failures between
@@ -180,9 +204,9 @@ static void machine_setup_memory(void)
     {
         MachineRegion vectors =
         {
-            .base      = AMIGA_CHIP_RAM_BASE,
-            .size      = AMIGA_VECTOR_PAGE_SIZE,
-            .host_phys = AMIGA_CHIP_RAM_BASE,
+            .base      = VECTOR_PAGE_BASE,
+            .size      = VECTOR_PAGE_SIZE,
+            .host_phys = VECTOR_PAGE_HOST_PHYS,
             .attr      = MMU_ATTR_CACHED,
         };
 
@@ -200,26 +224,34 @@ static void machine_setup_memory(void)
 
         machine_region_install(&vectors);
     }
-#endif
 }
 
 void machine_init(void)
 {
+    /*
+     * What was asked for, before anything is built from it. A log that says
+     * which machine this boot is comes ahead of the map it produced.
+     */
+    bellatrix_options_report();
+
     machine_setup_memory();
 #if CONFIG_RIGEL
-    /*
-     * Order matters, and it is not the obvious one.
-     *
-     * The frame aperture is installed after the static map, because it adds
-     * regions of its own and the table refuses an overlap -- which is the
-     * point of the table. But it is installed *before* the chipset, because
-     * amiga_bus_init() may run a selftest that programs a display, and a frame
-     * composed before there is an aperture to publish it into is a frame the
-     * guest never sees. That is not hypothetical: it is what the first run of
-     * the DeniseView probe reported.
-     */
-    amiga_frame_init();
-    amiga_bus_init();
+    if (bellatrix_rigel_enabled())
+    {
+        /*
+         * Order matters, and it is not the obvious one.
+         *
+         * The frame aperture is installed after the static map, because it
+         * adds regions of its own and the table refuses an overlap -- which is
+         * the point of the table. But it is installed *before* the chipset,
+         * because amiga_bus_init() may run a selftest that programs a display,
+         * and a frame composed before there is an aperture to publish it into
+         * is a frame the guest never sees. That is not hypothetical: it is
+         * what the first run of the DeniseView probe reported.
+         */
+        amiga_frame_init();
+        amiga_bus_init();
+    }
 #endif
     machine_region_report();
 }

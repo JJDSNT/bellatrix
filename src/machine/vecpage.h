@@ -13,10 +13,10 @@
 extern "C" {
 #endif
 
-/* Called by Emu68's parse_cmdline (patches/emu68/0025). */
-void bellatrix_parse_cmdline(const char *cmdline);
-
-/* Did the command line ask for it? Decided before machine_init() runs. */
+/*
+ * Did the command line ask for it? Decided before machine_init() runs; the
+ * command line itself is read in machine/options.c.
+ */
 int machine_vecpage_trapped(void);
 
 extern const MachineRegionOps machine_vecpage_ops;

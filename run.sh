@@ -17,6 +17,10 @@
 #   ./run.sh --no-build     accepted and ignored; building is already off
 #   ./run.sh -- <args...>   everything after -- goes to qemu
 #
+# BELLATRIX_RIGEL=0/1 forces the classic chipset off or on for this boot; the
+# default is whatever the last build put in the image. BOOTARGS replaces the
+# kernel command line outright.
+#
 # QEMU emulates the Raspberry Pi. Emu68 is the bare-metal owner; when AROS is
 # in play, Emu68 loads its m68k ELF from -initrd. Ctrl-A X quits.
 #
@@ -123,8 +127,13 @@ if [ "$AROS" = 1 ]; then
     # muimaster.library and its Zune icon classes, and the screen stays on the
     # Emu68 logo.
     BOOTARGS="${BOOTARGS:-nocomposition}"
-    if [ "$(cat "$RIGEL_STAMP" 2>/dev/null || echo 0)" = 1 ]; then
-        BOOTARGS="$BOOTARGS bellatrix.rigel=1"
+    # The chipset is a boot argument now, on both sides of the boundary: `rigel`
+    # tells Emu68 to build the classic machine and tells AROS to expect it. The
+    # default follows the last build -- an image with no chipset in it has
+    # nothing to enable -- and BELLATRIX_RIGEL=0/1 overrides that, which is how
+    # one image gets booted both ways without rebuilding.
+    if [ "${BELLATRIX_RIGEL:-$(cat "$RIGEL_STAMP" 2>/dev/null || echo 0)}" = 1 ]; then
+        BOOTARGS="$BOOTARGS rigel"
     fi
     QEMU+=(-initrd "$INITRD")
     if [ "$USE_SD" = 1 ]; then

@@ -32,6 +32,7 @@ set(BELLATRIX_SOURCES
     ${BELLATRIX_ROOT}/src/machine/machine.c
     ${BELLATRIX_ROOT}/src/machine/bus.c
     ${BELLATRIX_ROOT}/src/machine/memory.c
+    ${BELLATRIX_ROOT}/src/machine/options.c
     ${BELLATRIX_ROOT}/src/machine/region.c
     ${BELLATRIX_ROOT}/src/machine/vecpage.c
 )

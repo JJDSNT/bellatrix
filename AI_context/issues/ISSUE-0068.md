@@ -6,7 +6,7 @@ priority: high
 type: research
 owner: unassigned
 created_at: 2026-08-29
-updated_at: 2026-08-29
+updated_at: 2026-08-31
 tags:
   - rigel
   - chipset
@@ -380,6 +380,56 @@ chipset off, `IMAGE_NAME` is `Emu68.img` and the copy into the firmware
 directory had the same source and destination, which `cp` refuses and `set -e`
 turned into a failed build. Nobody had hit it because nobody built the default
 twice. Fixed in the same change.
+
+## Selecting the chipset at boot
+
+*2026-08-31.* `CONFIG_RIGEL` had been doing two jobs: whether the image carries
+Rigel, and whether the machine it boots has one. Those are different questions
+and only the first belongs to the build -- a card in someone else's hands
+cannot be rebuilt to answer the second, and the two compositions are exactly
+what an investigation wants to alternate between.
+
+So the second job moved to the kernel command line, as the bare word `rigel`.
+Absence is the whole of the "off" case: there is no `rigel=0` to get wrong and
+no second spelling that has to agree with the first. It replaces
+`bellatrix.rigel=1`, which only ever told AROS what the image had already
+decided.
+
+`src/machine/options.c` is the one reader on the host side. It is called from
+Emu68's `parse_cmdline` (patch 0025), which runs before the MMU is programmed,
+before the secondary cores are released and long before the first instruction
+is translated -- so everything downstream is an ordinary runtime test of a
+value that never changes again:
+
+- `machine.c` installs `classic_map[]` or `plain_map[]`, and calls
+  `amiga_frame_init()`/`amiga_bus_init()` only for the first. The vector page
+  is now described once, outside both maps, because it is the one page they
+  agree on -- and the fault-driven diagnostic works in either composition as a
+  result.
+- `bellatrix_chipset_core_entry()` and `amiga_console_run_on_core()` hand cores
+  2 and 3 straight back, so a chipset-less boot parks them in Emu68's own WFE
+  instead of one of ours.
+- `EMIT_STOP` (patch 0015) picks its wait at translation time: WFI without the
+  chipset, PiStorm's WFE-over-`INT64` loop with it, because a level Rigel
+  publishes from another core reaches a sleeping CPU as an event and nothing
+  else.
+- Patch 0024's "fault at PC = 0 instead of stopping" lost its `CONFIG_RIGEL`
+  half. Its argument is about booting an operating system, which both
+  compositions do; leaving it coupled would have made the chipset switch
+  silently change something unrelated to the chipset.
+
+`arch/m68k-emu68/boot/boot.c` reads the same word for the guest's half of the
+decision -- Fast plus a separate Chip pool, or the single heap that is both --
+and both halves now print which machine they got. That matters more than it
+looks: the two differ in what `AllocMem(MEMF_CHIP)` returns and in nothing else
+visible at boot, so a command line that lost the word looks exactly like an
+image built without the chipset.
+
+The residual: the two halves agree by reading the same string, not by the
+machine telling the guest what it is. Ask for `rigel` on a `CONFIG_RIGEL=0`
+image and AROS still lays out chip memory the host does not have. Emu68 says so
+loudly at boot rather than silently disagreeing; publishing the decision on the
+`/emu68` node, beside `host-mem`, is the proper fix and is not done.
 
 # What is left
 

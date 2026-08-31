@@ -16,6 +16,7 @@
 
 #include "amiga/core.h"
 #include "amiga/bus.h"
+#include "machine/options.h"
 
 #include "A64.h"
 
@@ -92,6 +93,17 @@ int amiga_core_arrived(void)
 void bellatrix_chipset_core_entry(void)
 {
     uint64_t id;
+
+    /*
+     * Give the core straight back if this boot has no chipset.
+     *
+     * The wait below would park it harmlessly -- nothing ever sets the flag --
+     * but returning is what Emu68's own comment at the call site promises, and
+     * it puts the core in the WFE the rest of the machine expects it to be in
+     * rather than one of ours.
+     */
+    if (!bellatrix_rigel_enabled())
+        return;
 
     __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(id));
     id &= 3;

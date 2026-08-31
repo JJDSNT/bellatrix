@@ -665,9 +665,17 @@ EOF
     # logo; with fbgfx and vcgfx in its place that premise wants re-testing,
     # and a card that cannot be built without the flag cannot test it.
     #
+    # The chipset is a boot argument, read by both halves of the machine:
+    # Emu68 builds the classic address map from it (src/machine/options.c) and
+    # AROS lays its memory out to match (arch/m68k-emu68/boot/boot.c). Delete
+    # the word from cmdline.txt and the card boots the chipset-less machine
+    # from the same files -- which is the point of it being on the line rather
+    # than in the build.
+    #
+    # The default follows the image on the card; BELLATRIX_RIGEL=0/1 overrides.
     RIGEL_BOOTARG=""
-    if [ "$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)" = 1 ]; then
-        RIGEL_BOOTARG=" bellatrix.rigel=1"
+    if [ "${BELLATRIX_RIGEL:-$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)}" = 1 ]; then
+        RIGEL_BOOTARG=" rigel"
     fi
     printf '%s%s%s' \
         "${BELLATRIX_CMDLINE-nocomposition}" \

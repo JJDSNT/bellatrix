@@ -11,10 +11,16 @@ pretending the machine is a PiStorm.
 The Bellatrix Amiga boundary supplies the current Rigel level.  Also use the
 existing PiStorm event-wait loop for STOP, so a level publication plus SEV can
 wake the CPU and the pending aggregate is checked before sleeping.
+
+STOP chooses between the two waits at run time rather than at build time.  The
+chipset is a boot argument (machine/options.c), so one image has to be able to
+emit either shape; without Rigel nothing publishes INTF.IPL and WFI is still
+the right wait.  The command line is read long before the first translation, so
+this costs a predictable branch per translated STOP and nothing at run time.
 ---
  src/ExecutionLoop.c | 21 +++++++++++++++++++++
- src/M68k_LINE4.c    |  2 +-
- 2 files changed, 22 insertions(+), 1 deletion(-)
+ src/M68k_LINE4.c    | 79 +++++++++++++++++++++++++++++++++------------
+ 2 files changed, 74 insertions(+), 26 deletions(-)
 
 diff --git a/src/ExecutionLoop.c b/src/ExecutionLoop.c
 index cd1d54c..3d58f2e 100644
@@ -57,17 +63,93 @@ index cd1d54c..3d58f2e 100644
                   * On PiStorm32 IPL level is obtained by second CPU core from the GPIO directly.
                   *
 diff --git a/src/M68k_LINE4.c b/src/M68k_LINE4.c
-index cb0b5d6..eb3f0da 100644
 --- a/src/M68k_LINE4.c
 +++ b/src/M68k_LINE4.c
-@@ -1606,7 +1606,7 @@ static uint32_t EMIT_STOP(struct TranslatorContext *ctx, uint16_t opcode)
+@@ -1606,32 +1606,59 @@ static uint32_t EMIT_STOP(struct TranslatorContext *ctx, uint16_t opcode)
          msr_imm(3, 6, 7)  // Mask interrupts
      );
  
 -#ifndef PISTORM_ANY_MODEL
-+#if !defined(PISTORM_ANY_MODEL) && !(defined(BELLATRIX_EMU68) && CONFIG_RIGEL)
-     /* Non pistorm machines wait for interrupt only */
-     EMIT(ctx, wfi());
- #else
+-    /* Non pistorm machines wait for interrupt only */
+-    EMIT(ctx, wfi());
+-#else
+-    uint8_t tmpreg = RA_AllocARMRegister(ctx);
+-    uint8_t ctxReg = RA_GetCTX(ctx);
+-    uint32_t *start, *end;
+-
+-    // Don't wait for event if IRQ is already pending
+-    EMIT(ctx, 
+-        ldr64_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, INT64)),
+-        cbnz_64(tmpreg, 4)
+-    );
+-
+-    start = ctx->tc_CodePtr;
+-
+-    /* PiStorm waits for event and checks INT - aggregate of ~IPL0 and ARM */
+-    EMIT(ctx, 
+-        wfe(),
+-        ldr64_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, INT64))
+-    );
+-    end = ctx->tc_CodePtr;
+-    EMIT(ctx, cbz_64(tmpreg, start - end));
+-
+-    RA_FreeARMRegister(ctx, tmpreg);
+-#endif
++/*
++ * How STOP waits is a property of the machine, and this machine is not
++ * settled until it boots.
++ *
++ * Upstream picks between two shapes at compile time: a plain WFI, for a
++ * machine whose only interrupts are the host's own, and PiStorm's WFE loop
++ * over the INT64 aggregate, for one whose level is published by somebody
++ * else and announced with an SEV.  Bellatrix is the first without the
++ * chipset and the second with it -- Rigel may be stepped by a core of its
++ * own, and a level it publishes reaches a sleeping CPU as an event and
++ * nothing else.  Which of the two this boot is comes off the command line,
++ * read before any of this is translated and never changed afterwards, so
++ * the test below is an ordinary one taken once per translated STOP and both
++ * shapes are emitted from the same build.
++ */
++#if defined(PISTORM_ANY_MODEL)
++    const int wait_on_event = 1;
++#elif defined(BELLATRIX_EMU68) && CONFIG_RIGEL
++    extern int bellatrix_rigel_enabled(void);
++    const int wait_on_event = bellatrix_rigel_enabled();
++#else
++    const int wait_on_event = 0;
++#endif
++
++    if (!wait_on_event)
++    {
++        /* Non pistorm machines wait for interrupt only */
++        EMIT(ctx, wfi());
++    }
++    else
++    {
++        uint8_t tmpreg = RA_AllocARMRegister(ctx);
++        uint8_t ctxReg = RA_GetCTX(ctx);
++        uint32_t *start, *end;
++
++        // Don't wait for event if IRQ is already pending
++        EMIT(ctx, 
++            ldr64_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, INT64)),
++            cbnz_64(tmpreg, 4)
++        );
++
++        start = ctx->tc_CodePtr;
++
++        /* PiStorm waits for event and checks INT - aggregate of ~IPL0 and ARM */
++        EMIT(ctx, 
++            wfe(),
++            ldr64_offset(ctxReg, tmpreg, __builtin_offsetof(struct M68KState, INT64))
++        );
++        end = ctx->tc_CodePtr;
++        EMIT(ctx, cbz_64(tmpreg, start - end));
++
++        RA_FreeARMRegister(ctx, tmpreg);
++    }
+ 
+     *tmpptr = b(ctx->tc_CodePtr - tmpptr);
+ 
 -- 
 2.43.0

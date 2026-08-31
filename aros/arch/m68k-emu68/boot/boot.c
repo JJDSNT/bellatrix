@@ -607,8 +607,25 @@ static void start_aros(struct Emu68BootContext *ctx)
 
     BootMsg = emu68_boot_tags;
     memory = (struct MemHeader *)lower;
-    if (bootarg_present(ctx, "bellatrix.rigel=1"))
+    /*
+     * Which machine is underneath, and therefore which memory this is.
+     *
+     * The same word the host reads (src/machine/options.c): `rigel` on the
+     * command line means the low 24 bits belong to the classic chipset, so
+     * there is chip RAM to enqueue and the heap above 16 MB is Fast. Without
+     * it the machine has no chipset, nothing owns the classic domain, and the
+     * one heap this port has always had is both -- a guest that asked for
+     * MEMF_CHIP on that machine gets the only memory there is.
+     *
+     * Saying which was chosen is not decoration: the two differ in what
+     * AllocMem(MEMF_CHIP) returns and in nothing visible at boot, so a card
+     * whose command line lost the word looks exactly like one that never had
+     * the chipset built in.
+     */
+    if (bootarg_present(ctx, "rigel"))
     {
+        emu68_console_puts("[AROS/Emu68] chipset: rigel"
+                           " -- chip memory separate from fast\n");
         krnCreateTLSFMemHeader("Fast Memory", 0, memory, upper - lower,
                                MEMF_FAST | MEMF_PUBLIC | MEMF_KICK |
                                MEMF_LOCAL);
@@ -620,6 +637,8 @@ static void start_aros(struct Emu68BootContext *ctx)
     }
     else
     {
+        emu68_console_puts("[AROS/Emu68] chipset: none"
+                           " -- one heap, both chip and fast\n");
         krnCreateTLSFMemHeader("System Memory", 0, memory, upper - lower,
                                MEMF_CHIP | MEMF_FAST | MEMF_PUBLIC |
                                MEMF_KICK | MEMF_LOCAL);

@@ -41,7 +41,12 @@ Rigel DMA reaches the Bellatrix-owned backing through 16-bit memory callbacks.
 
 The same AROS ELF supports both compositions. The kernel build records its
 composition, and QEMU/SD/release tooling adds `bellatrix.rigel=1` only for a
-Rigel image. A Rigel build is named `Bellatrix.img`; a build without Rigel is
+Rigel image.
+<!-- Correction, 2026-08-31: the argument is now the bare word `rigel`, and it
+     selects the composition at boot on the host side too rather than only
+     telling AROS what the image already decided. See the "Selecting the
+     chipset at boot" section of AI_context/issues/ISSUE-0068.md. -->
+A Rigel build is named `Bellatrix.img`; a build without Rigel is
 named `Emu68.img`.
 
 Rigel RTC conversion and current-time services are supplied through host

@@ -35,6 +35,7 @@
 
 #include "machine/vecpage.h"
 
+#include "machine/options.h"
 #include "machine/region.h"
 
 #include "A64.h"
@@ -52,23 +53,9 @@
 
 extern struct M68KState *__m68k_state;
 
-static int vecpage_requested;
-
-void bellatrix_parse_cmdline(const char *cmdline)
-{
-    if (cmdline == 0)
-        return;
-
-    vecpage_requested = find_token(cmdline, "bellatrix.vecpage") != 0;
-
-    if (vecpage_requested)
-        kprintf("[BELLATRIX:VECPAGE] armed by the command line:"
-                " the first page of chip RAM is fault-driven\n");
-}
-
 int machine_vecpage_trapped(void)
 {
-    return vecpage_requested;
+    return bellatrix_vecpage_trapped();
 }
 
 static uint32_t vecpage_read(const MachineRegion *region, uint32_t address,

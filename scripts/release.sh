@@ -276,7 +276,7 @@ rm -rf "$QEMU_STAGE"; mkdir -p "$QEMU_STAGE"
 QEMU_KERNEL="${KERNEL_NAME%.gz}"
 QEMU_BOOTARGS="nocomposition"
 if [ "$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)" = 1 ]; then
-    QEMU_BOOTARGS="$QEMU_BOOTARGS bellatrix.rigel=1"
+    QEMU_BOOTARGS="$QEMU_BOOTARGS rigel"
 fi
 
 cp "$ROOT/out/images/$BUILT_KERNEL" "$QEMU_STAGE/$QEMU_KERNEL"

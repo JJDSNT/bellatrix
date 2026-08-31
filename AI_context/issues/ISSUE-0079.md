@@ -188,7 +188,8 @@ with `PC = 0` is a call through a library or device base that is null.
 
 **Ruled out: no chip memory.** `boot.c` creates a second `MemHeader`, "Chip
 Memory" at `AMIGA_CHIP_RAM_ALLOC_BASE` with `MEMF_CHIP | MEMF_24BITDMA`, and
-enqueues it on `SysBase->MemList` whenever `bellatrix.rigel=1`. The machine map
+enqueues it on `SysBase->MemList` whenever the command line carries `rigel`
+(spelled `bellatrix.rigel=1` until 2026-08-31). The machine map
 confirms the region: `$00000000-$001fffff DIRECT Chip RAM`.
 `AllocMem(MEMF_CHIP)` works, so `AudioBase->zerosample` is not the null.
 

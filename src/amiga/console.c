@@ -1,5 +1,7 @@
 #include "amiga/console.h"
 
+#include "machine/options.h"
+
 #include "A64.h"
 
 #include <stdatomic.h>
@@ -154,6 +156,15 @@ void amiga_console_drain(void)
 void amiga_console_run_on_core(void)
 {
     uint64_t id;
+
+    /*
+     * Nothing to drain on a boot with no chipset: amiga_console_init() is
+     * called from amiga_bus_init(), so console_ready stays clear and the spin
+     * below would burn a core forever waiting for a sink that is never
+     * installed. Hand the core back to Emu68's WFE instead.
+     */
+    if (!bellatrix_rigel_enabled())
+        return;
 
     __asm__ volatile("mrs %0, MPIDR_EL1" : "=r"(id));
     id &= 3;

@@ -68,7 +68,10 @@ cp out/aros/sd.img out/packs/pack-B-chipset-live.img
 `cia.resource`'s init onward. This is the one that produces numbers under load.
 
 `nocomposition` is still required on the kernel command line for anything to
-appear on the framebuffer.
+appear on the framebuffer. `make-sdcard.sh` also puts `rigel` there, which is
+what switches the classic chipset on: delete the word from `cmdline.txt` on the
+card and the same files boot the chipset-less machine, which is the cheapest
+way to ask whether a symptom is the chipset's at all.
 
 ## What to look for, image 1
 

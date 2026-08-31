@@ -68,6 +68,22 @@ build. With `CONFIG_RIGEL=0` Rigel is neither initialised by setup nor included
 in the Emu68 build; that composition is still supported, and switching the
 option in the same incremental build directory works.
 
+Whether an image that carries the chipset actually *uses* it is a boot
+argument, not a build option. `rigel` on the kernel command line — the single
+line in `cmdline.txt` on the card — builds the classic machine: the low 24 bits
+belong to Paula, Denise and the CIAs, chip memory becomes a pool of its own,
+and two more cores are handed out. Leave the word off and the same files boot
+the chipset-less machine. Both halves read it, Emu68 for the address map and
+AROS for its memory layout, and both say which one they got on the serial line.
+
+```
+nocomposition rigel        # cmdline.txt: classic chipset
+nocomposition              # cmdline.txt: no chipset, same card
+```
+
+`BELLATRIX_RIGEL=0` or `=1` sets it for `./run.sh` and `./scripts/make-sdcard.sh`;
+without it they follow whatever the last build put in the image.
+
 With Rigel enabled, `src/machine/` remains the memory-policy control plane: it
 marks the coarse CIA, RTC, and custom-chip apertures as external in the same
 table that programs the Emu68 MMU. `src/amiga/bus.c` is the thin provider, and
@@ -112,6 +128,9 @@ kernel=Bellatrix.img.gz   # Rigel build; Emu68.img.gz without Rigel
 arm_64bit=1
 initramfs aros-emu68-m68k.elf
 ```
+
+`cmdline.txt` beside it is the kernel command line, one line, and it is where
+the classic chipset is switched on and off — see `rigel` above.
 
 Here that file is AROS, so there is no system image to write: the card holds
 ordinary files on a partition you formatted yourself, and `config.txt` says
