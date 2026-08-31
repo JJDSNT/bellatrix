@@ -37,6 +37,10 @@ static void amiga_bus_selftest(void);
 static void amiga_bus_display_selftest(void);
 #endif
 
+static void amiga_bus_write(const MachineRegion *region, uint32_t address,
+                            int size, uint32_t value);
+static void amiga_chipset_enable_dma(void);
+
 /*
  * What did Denise actually produce?
  *
@@ -610,6 +614,7 @@ void amiga_bus_init(void)
          */
         amiga_core_enable();
         kprintf("[BELLATRIX:RIGEL] enabled; address decode owned by Rigel\n");
+        amiga_chipset_enable_dma();
 #if defined(CONFIG_RIGEL_SELFTEST) && CONFIG_RIGEL_SELFTEST
         amiga_bus_selftest();
         amiga_bus_display_selftest();
@@ -657,6 +662,46 @@ static uint32_t amiga_bus_read(const MachineRegion *region, uint32_t address,
     }
 
     return value;
+}
+
+/*
+ * The master DMA enable, which on this machine nobody else is going to set.
+ *
+ * DMACON bit 9 gates every other DMA channel: with it clear the Copper does
+ * not run, no bitplane is fetched and the blitter does not move a word, no
+ * matter what the per-channel bits say. Nothing in the whole AROS tree ever
+ * sets it -- amigavideo's initcustom writes 0x80E0 (COPEN|BLTEN|SPREN), its
+ * compositor writes 0x8100 (BPLEN), trackdisk writes 0x8010 (DSKEN), and every
+ * one of them assumes the master enable is already on because on an Amiga the
+ * Kickstart left it on before graphics.library ever ran.
+ *
+ * This machine has no Kickstart, so that assumption has no one to satisfy it.
+ * It was accidentally satisfied for a while by the display selftest, which
+ * wrote 0x8380 on its way to drawing a test pattern -- so when the selftest
+ * was switched off the chipset went quiet, and the symptom was a 320x256x5
+ * Amiga screen that opened correctly and composed nothing at all:
+ *
+ *     [BELLATRIX:RIGEL:CENSUS] frame=5000 ... non-bg=0/1369 flags=00
+ *
+ * flags carries RIGEL_FRAME_COPPER_ACTIVE, and it was clear on every frame of
+ * the session: the Copper had not executed a single MOVE.
+ *
+ * So set it here, alone, as the one thing a Kickstart would have left behind.
+ * Only bit 9 and SETCLR: every channel stays off until its own owner turns it
+ * on, which is what the rest of the system already expects.
+ */
+static void amiga_chipset_enable_dma(void)
+{
+    enum
+    {
+        CUSTOM_DMACON  = 0x00dff096u,
+        DMACON_SETCLR  = 0x8000u,
+        DMACON_DMAEN   = 0x0200u
+    };
+
+    amiga_bus_write(0, CUSTOM_DMACON, 2, DMACON_SETCLR | DMACON_DMAEN);
+    kprintf("[BELLATRIX:RIGEL] DMA master enable set"
+            " (no Kickstart does it here)\n");
 }
 
 static void amiga_bus_write(const MachineRegion *region, uint32_t address,
