@@ -26,9 +26,23 @@ CD SYS:Hannibals
 Echo >DEBUG: "[hannibals] --- what the demo says for itself"
 Type >DEBUG: s/text
 
-Echo >DEBUG: "[hannibals] --- add21k"
-add21k
-Echo >DEBUG: "[hannibals] --- add21k returned"
+;
+; add21k is NOT run, and it is the reason the first attempt got nowhere.
+;
+; It is a 280-byte helper from the 512 KB era: on an A500 the operating system
+; keeps the top of chip RAM to itself and this hands it back, which is where
+; the name comes from. On this machine it computed an address that exists
+; nowhere and asked Exec to free a megabyte at it:
+;
+;     [MM] Attempt to free 1000064 bytes at 0x3061eea4
+;     [MM] The block does not belong to any MemHeader
+;     Recoverable Alert! Task: add21k -- Error: 0x0100000F
+;
+; A recoverable alert holds the task, so the script never reached the demo at
+; all. And the machine has two megabytes of chip RAM: there is no top of
+; memory to reclaim and nothing this could add.
+;
+Echo >DEBUG: "[hannibals] --- add21k skipped (2 MB of chip; nothing to reclaim)"
 
 Echo >DEBUG: "[hannibals] --- handing the machine over"
 Hannidemo2.EXE
