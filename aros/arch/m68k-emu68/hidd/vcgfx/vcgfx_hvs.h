@@ -292,6 +292,9 @@ void vc4_hvs_dump(struct VideoCoreGfx_staticdata *xsd,
  * in supervisor mode and can wedge if called mid mode-set. */
 void vc4_hvs_init(struct VideoCoreGfx_staticdata *xsd);
 
+/* vcgfx_denise.c: start the task that raises the chipset's picture. */
+void vc4_denise_init(struct VideoCoreGfx_staticdata *xsd);
+
 /* Take ownership of the HDMI channel: inherit the fb plane from the
  * firmware list, author our own list (fb + cursor planes), repoint the
  * channel and verify the latch. Leaves the firmware in control (and

@@ -53,6 +53,7 @@ FILES := \
     $(VC4DIR)/vcgfx_hdmi \
     $(VC4DIR)/vcgfx_hardware \
     $(VC4DIR)/vcgfx_hvs \
+    $(VC4DIR)/vcgfx_denise \
     $(VC4DIR)/vcgfx_pixfmts \
     $(VC4DIR)/vcgfx_onbitmap \
     $(VC4DIR)/vcgfx_offbitmap

@@ -32,6 +32,7 @@ static uint32_t frame_flags;
 static uint32_t frame_count;
 static uint8_t  publish_reported;
 static uint32_t frame_phys;
+static uint32_t frame_chipflags;
 
 static uint32_t amiga_frame_reg(uint32_t offset)
 {
@@ -53,6 +54,7 @@ static uint32_t amiga_frame_reg(uint32_t offset)
          * machine/region.h.
          */
         case AMIGA_FRAME_REG_PHYS:    return frame_phys;
+        case AMIGA_FRAME_REG_CHIPFLAGS: return frame_chipflags;
         default:                      return 0;
     }
 }
@@ -191,6 +193,7 @@ void amiga_frame_publish(RigelContext *ctx)
     frame_height = rows;
     frame_count  = (uint32_t)frame.frame_count;
     frame_flags  = AMIGA_FRAME_FLAG_VALID;
+    frame_chipflags = (uint32_t)frame.flags;
 
     if (!publish_reported)
     {

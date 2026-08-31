@@ -33,9 +33,26 @@
 #define AMIGA_FRAME_REG_FLAGS   0x18u   /* bit 0: a frame has been published */
 #define AMIGA_FRAME_REG_COUNT   0x1cu   /* frames published, low 32 bits     */
 #define AMIGA_FRAME_REG_PHYS    0x20u   /* ARM physical address of the frame */
+/*
+ * What the chipset was doing while it composed this frame -- Rigel's own
+ * rigel_frame_flags_t, verbatim.
+ *
+ * A consumer needs this to tell a picture from an idle machine. "A frame has
+ * been published" (REG_FLAGS bit 0) is true from the first VBLANK onwards and
+ * stays true forever, so it cannot answer the only question a display asks:
+ * is there anything to show? COPPER_ACTIVE can, because the Copper executes a
+ * MOVE only when something programmed a display.
+ */
+#define AMIGA_FRAME_REG_CHIPFLAGS 0x24u
+
+/* Mirrors rigel_frame_flags_t; kept here so a guest needs no Rigel header. */
+#define AMIGA_FRAME_CHIP_HAM            0x01u
+#define AMIGA_FRAME_CHIP_DUAL_PLAYFIELD 0x02u
+#define AMIGA_FRAME_CHIP_SPRITES_ACTIVE 0x04u
+#define AMIGA_FRAME_CHIP_COPPER_ACTIVE  0x08u
 
 #define AMIGA_FRAME_MAGIC       0x444e5345UL   /* 'DNSE' */
-#define AMIGA_FRAME_VERSION     2UL
+#define AMIGA_FRAME_VERSION     3UL
 #define AMIGA_FRAME_FLAG_VALID  0x00000001UL
 
 /* Install the two regions. Called once, after the static machine map. */

@@ -103,6 +103,11 @@ static int FNAME_SUPPORT(Init)(LIBBASETYPEPTR LIBBASE)
      * takeover arms it (vcgfx_hvs.c). */
     vc4_hvs_init(xsd);
 
+    /* And the watcher that puts the classic chipset's picture on the panel
+     * when there is one. See vcgfx_denise.c for why it polls rather than
+     * being told. */
+    vc4_denise_init(xsd);
+
     if (!FNAME_SUPPORT(GetAttrBases)(interfaces, xsd->vcsd_attrBases, ATTRBASES_NUM))
         goto failure;
 
