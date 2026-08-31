@@ -6,7 +6,7 @@ priority: critical
 type: defect
 owner: unassigned
 created_at: 2026-08-30
-updated_at: 2026-08-30
+updated_at: 2026-08-31
 tags:
   - exec
   - emu68
@@ -138,14 +138,116 @@ quietly ending MainLoop, so a guest fault now reaches the trap reporter
 instead of stopping the machine with a register dump that reads like a clean
 exit.
 
+# The transfer that goes wild is named
+
+The dump of 2026-08-31 (`vector 0x0010 at PC 0x01fffe7d`) has the user stack
+deep enough to settle where control left. One longword carries the answer, and
+it is the one at the very top:
+
+```text
+USP 0x0203a27c
+  +0x00  0x3067c06c
+```
+
+Against the ELF that boot used (base `0x30600000`, so offset `0x7c06c`) that
+address is not merely "inside `LockIBase`" -- it is an exact instruction
+boundary, and the instruction before it is a call:
+
+```text
+0007c062:  2c79 <SysBase>   moveal  SysBase,%a6
+0007c068:  4eae fdcc        jsr     %a6@(-564)
+0007c06c:  2002             movel   %d2,%d0        <- the longword on the stack
+```
+
+`jsr` pushes exactly that return address and then transfers control. Finding
+it at USP+0 with the PC at `0x01fffe7d` is the signature of that transfer not
+arriving.
+
+And `-564` is not an unknown: `LVOObtainSemaphore` is 94
+(`gen/include/defines/exec_LVO.h:98`) and a vector is six bytes, so
+`-564` is **`ObtainSemaphore`**. `LockIBase` calls it, and the call lands
+nowhere.
+
+# Which leaves exactly two candidates
+
+`%a6` at that `jsr` is not a value some caller handed in. It is loaded two
+instructions earlier from the global `SysBase` -- the one symbol with **3011
+relocations** in this ELF. A corrupt `SysBase` does not produce one broken
+path; it stops the machine everywhere at once, and this machine went on
+running.
+
+So either the global is wrong anyway, or `%a6` was right and the six bytes it
+indexed are no longer a vector. On m68k a library's jump table is
+`struct JumpVec { UWORD jmp /* 0x4EF9 */; void *vec; }`
+(`arch/m68k-all/include/aros/cpu.h:60`), laid out downwards from the base, so
+entry *n* is at `base - 6n`. Nothing about a smashed entry is visible in a
+register dump: the base is right, the offset is right, and the damage is in
+memory the call passes *through*.
+
+It is visible in the table's shape, though -- an entry whose first word is not
+`0x4EF9` is not a vector any more. The trap probe now walks all of ExecBase's
+vectors and says how many fail that test, which separates a stray write that
+hit one slot from a heap block that overran the table. Exec is the right
+library to walk because every path goes through it.
+
+# CORRECTION: the wild PC is not "below the heap"
+
+Written above, twice: `0x01ffffbd` / `0x01fffe7d` "is below the heap
+(`0x02000000`)". That is wrong, and it is my instrument that said it.
+
+`boot.c:533` floors the heap's `lower` at `0x01000000` and then raises it to
+`host_mem_end` -- wherever Emu68's own pools end. On this machine that lands
+below `0x02000000`, and Rigel publishing its frame at `$01000000` is the other
+half of the same picture. So `0x01fffe7d` is *inside* fast RAM, and so is
+`0x01f9a2a4`, the other unmarked value on the stack.
+
+The `<- heap` marker in `trapprobe.c` carried `0x02000000` as a hard-coded
+lower bound. It was a guess, it was wrong, and it labelled the two most
+important longwords in the dump as debris. The bounds were never a constant to
+correct: every `MemHeader` on `SysBase->MemList` records the range it owns, so
+the probe walks them instead.
+
+# CORRECTION: this is not the input handler, it is OpenScreen
+
+`notify_mousemove_screensandwindows` lives in `inputhandler_support.c`, and
+that is why it was read above as "the input handler chain, which runs from an
+interrupt". It is not, here. The rest of the user stack names the caller:
+
+```text
+  int_openscreen +0x8c
+  ActivateMonitor +0xd6
+  notify_mousemove_screensandwindows +0x14
+  Intuition_69_LockIBase +0x18      <- top of stack
+```
+
+`rom/intuition/misc.c` ends `ActivateMonitor` with
+`SetAttrs(newmonitor, MA_PointerVisible, TRUE, TAG_DONE)` and then
+`notify_mousemove_screensandwindows(IntuitionBase)`. The last driver line in
+the log before the fault is `[AmigaVideo] setspritevisible()`, which is that
+`SetAttrs` arriving at the chipset driver.
+
+So this runs in DPaint's own task, inside `OpenScreen`, on the first monitor
+switch this machine has ever performed -- not from an interrupt.
+
+Only the top-of-stack longword is verified against the disassembly. The others
+are candidates: a kernel-range longword on a stack is not automatically a
+frame, and the probe marks them precisely so they can be checked rather than
+believed.
+
 # Where to start
 
-The exception frame is a 68010+ format with a vector offset, so the frame the
-handler builds and the frame it returns through have to agree. Read
-`arch/m68k-emu68/exec/` -- `dispatch.S`, `switch.S` -- against what Emu68's
-ExecutionLoop pushes for an exception, and check the S bit at the point
-`Supervisor()` returns.
+Read the next dump's vector scan first. It answers a yes/no question:
 
-`Exec_Supervisor_Exit` faulting on its own return instruction is a narrow
-enough symptom that reading the two sides against each other should settle it
-without another probe.
+- **`0 of N vectors are not a JMP`** -- ExecBase is intact, `%a6` was wrong,
+  and the global `SysBase` is what has to be explained.
+- **one broken vector** -- a stray write of a few bytes. What is adjacent to
+  ExecBase's jump table in the heap, and who wrote to it, is then the whole
+  question.
+- **many broken vectors** -- an allocation overran the table, and the size of
+  the run says how big the overrun was.
+
+The earlier plan here -- reading `dispatch.S` and `switch.S` against Emu68's
+exception frame -- came from the supervisor-stack misreading and is not
+supported by anything above. `Exec_Supervisor_Exit` is not faulting on its own
+return; those frames were history. Leave that alone until the vector scan says
+otherwise.
