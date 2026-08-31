@@ -81,6 +81,11 @@ nocomposition rigel        # cmdline.txt: classic chipset
 nocomposition              # cmdline.txt: no chipset, same card
 ```
 
+The line is the authority: without the word there is no chipset, whatever the
+image carries. It cannot go the other way -- ask for `rigel` on an image built
+with `CONFIG_RIGEL=0` and the machine says so and strikes the word out of the
+command line it hands to AROS, so both halves stay in agreement.
+
 `BELLATRIX_RIGEL=0` or `=1` sets it for `./run.sh` and `./scripts/make-sdcard.sh`;
 without it they follow whatever the last build put in the image.
 
@@ -280,7 +285,9 @@ Still being brought up:
 - **The display path.** `nocomposition` is currently required; with the
   compositor enabled the boot finishes but the screen never changes.
 
-Eight issues are filed under [`AI_context/issues/`](AI_context/issues/).
+Fifty-five issues are filed under [`AI_context/issues/`](AI_context/issues/),
+with the grep recipes for querying them in
+[`AI_context/README.md`](AI_context/README.md).
 
 ## Language
 

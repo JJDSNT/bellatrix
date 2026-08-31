@@ -432,7 +432,10 @@ The command line stays the authority, and deliberately so: a line without
 only ever the other way -- the word on the line, no chipset in the image -- and
 there the guest would build a chip-memory pool over addresses that fault.
 
-**The obvious fix does not work, and it is worth writing down why.** Publishing
+**The obvious fix does not work, and it is worth writing down why.** Written up
+on its own in `AI_context/consolidated/guest_device_tree_channel.md`, because it
+is not about the chipset and the next person to hit it will not be reading this
+issue. Publishing
 the decision as a property on `/emu68`, beside `host-mem`, is unimplementable:
 `dt_add_property()` edits Emu68's own parsed tree, while the guest receives
 `memcpy(fdt, dt_fdt_base(), dt_total_size())` -- a byte copy of the original
