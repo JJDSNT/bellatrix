@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 30 Aug 2026 00:00:00 -0300
+Subject: [PATCH] amigavideo: turn on the driver's own tracing
+
+It carries 165 D(bug()) calls -- its author traced every step of mode
+setting, the compositor and the bitmap class -- and on this port it hangs
+during its own initialisation, with OpenLibrary("amigavideo.hidd")
+handing the AmigaVideo task a NULL.
+
+Sampling the m68k PC from outside named two functions and went no
+further. Writing another probe would be building what is already here.
+
+Temporary: turn it off again once ISSUE-0081 is closed. It is a great
+deal of output on a serial line the rest of the boot has to share.
+---
+ arch/m68k-amiga/hidd/amigavideo/mmakefile.src | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/arch/m68k-amiga/hidd/amigavideo/mmakefile.src b/arch/m68k-amiga/hidd/amigavideo/mmakefile.src
+--- a/arch/m68k-amiga/hidd/amigavideo/mmakefile.src
++++ b/arch/m68k-amiga/hidd/amigavideo/mmakefile.src
+@@ -15,9 +15,20 @@
+                -D__OOP_NOLIBBASE__ \
+                -D__GRAPHICS_NOLIBBASE__ \
+                -D__UTILITY_NOLIBBASE__ \
+                -D__GRAPHICS_NOHIDDBASE__
+-#USER_CPPFLAGS += -DDEBUG=1
++# Turned ON, deliberately and temporarily.
++#
++# This driver carries 165 D(bug()) calls -- its author traced every step of
++# mode setting, the compositor and the bitmap class -- and on this port it
++# hangs during its own initialisation with OpenLibrary("amigavideo.hidd")
++# handing the AmigaVideo task a NULL. Sampling the m68k PC from outside got as
++# far as naming two functions and no further, and inventing another probe
++# would be building what is already here.
++#
++# Turn it off again once ISSUE-0081 is closed: it is a great deal of output on
++# a serial line that the rest of the boot has to share.
++USER_CPPFLAGS += -DDEBUG=1
+ 
+ %build_module mmake=kernel-amiga-m68k-amigavideo \
+     modname=amigavideo modtype=hidd \
+     files="$(AMIGAVIDEO_C_SOURCES)" uselibs="hiddstubs"
