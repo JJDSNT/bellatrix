@@ -11,6 +11,7 @@
 #include "amiga/frame.h"
 #include "amiga/irq.h"
 #include "machine/memory.h"
+#include "machine/vecpage.h"
 
 #include "A64.h"
 #include "M68k.h"
@@ -977,11 +978,23 @@ void amiga_clock_run_on_core(void)
             else if (absexec != absexec_latch && absexec_reports < 8u)
             {
                 absexec_reports++;
+                /*
+                 * Say whether the vector page is trapped, here, on the line
+                 * that always prints beside the crash.
+                 *
+                 * The banner for that lives in parse_cmdline, which runs
+                 * before anything a serial capture started by hand is likely
+                 * to contain -- so a run came back with no [VEC-W] lines and
+                 * no way to tell an unarmed trap from a silent one. Restating
+                 * it where the interesting output is makes that unreadable
+                 * result impossible.
+                 */
                 kprintf("[BELLATRIX:RIGEL:ABSEXEC] $%08x -> $%08x"
-                        " with the m68k at pc=%08x sr=%04x\n",
+                        " with the m68k at pc=%08x sr=%04x (vecpage %s)\n",
                         (unsigned)absexec_latch, (unsigned)absexec,
                         (unsigned)(__m68k_state != 0 ? __m68k_state->PC : 0),
-                        (unsigned)(__m68k_state != 0 ? __m68k_state->SR : 0));
+                        (unsigned)(__m68k_state != 0 ? __m68k_state->SR : 0),
+                        machine_vecpage_trapped() ? "ON" : "OFF");
                 absexec_latch = absexec;
             }
         }

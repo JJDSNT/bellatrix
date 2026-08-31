@@ -90,29 +90,44 @@ static void vecpage_write(const MachineRegion *region, uint32_t address,
     (void)region;
 
     /*
-     * Report every write, capped, and name AbsExecBase when it is hit.
+     * What gets a budget, and what must never have one.
      *
-     * The PC is the datum this whole instrument exists for. It is read out of
-     * the JIT's saved context, which is the last address the CPU left
-     * translated code at -- and for a fault taken *by* that store, that is the
-     * store itself.
+     * The first version of this capped every write at 32 reports, and that was
+     * the same mistake this project has now paid for three times: AROS fills
+     * the 68k vector table at startup, which is ~64 longwords, so the budget
+     * was gone before the interesting window began. A run then produced no
+     * [VEC-W] lines at all -- and a trap that was never armed produces exactly
+     * the same log, so the result said nothing either way. CLAUDE.md states
+     * the rule outright ("a probe that prints nothing and a probe that never
+     * ran look identical") and ISSUE-0078 records it as the most expensive
+     * trap in the dwc2 driver. It applies to new instruments too.
      *
-     * Reads are deliberately not reported. They are the overwhelming majority
-     * of the traffic here (3011 sites read AbsExecBase) and reporting them
-     * would bury the four lines that matter.
+     * So AbsExecBase is uncapped. There are two writes to it in a whole boot:
+     * exec installing itself, and the one this issue is about. Everything else
+     * shares a small budget, which is enough to characterise the traffic
+     * without burying those two.
+     *
+     * The PC is the datum this instrument exists for. It comes out of the
+     * JIT's saved context, which is the last address the CPU left translated
+     * code at -- and for the fault taken *by* this store, that is the store.
+     *
+     * Reads are deliberately not reported at all: 3011 sites in the kernel
+     * read AbsExecBase, and they would bury everything.
      */
     {
         static unsigned reported;
+        int absexec = (address < 8u && address + (uint32_t)size > 4u);
 
-        if (reported < 32u)
+        if (absexec || reported < 8u)
         {
-            reported++;
+            if (!absexec)
+                reported++;
+
             kprintf("[VEC-W%d] addr=%06x value=%08x pc=%08x sr=%04x%s\n",
                     size * 8, (unsigned)address, (unsigned)value,
                     (unsigned)(__m68k_state != 0 ? __m68k_state->PC : 0),
                     (unsigned)(__m68k_state != 0 ? __m68k_state->SR : 0),
-                    (address < 8u && address + (uint32_t)size > 4u)
-                        ? "  <- AbsExecBase" : "");
+                    absexec ? "  <- AbsExecBase" : "");
         }
     }
 
