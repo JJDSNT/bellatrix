@@ -240,3 +240,32 @@ Where it does earn its keep is the step after: once the demo runs, comparing
 frame by frame what Denise and Paula should be doing against what they do
 here. That is exactly an oracle, and it is how ISSUE-0071 already treats bus
 timing.
+
+
+## 2026-08-30, closing the day: where this actually stands
+
+The crash was chased into a corner and then reframed twice, both times by
+evidence rather than argument.
+
+**Emu68 was not breaking.** `ExecutionLoop.c:321` ends `MainLoop` when the
+guest reaches `PC == 0` -- Emu68's convention for the bare-metal test
+executables it also runs. On a machine booting an operating system that is a
+guest bug, not a finished program, and ending the loop turned it into a
+stopped machine with no explanation. `patches/emu68/0024` lets the guest fault
+instead, so AROS runs its own trap handler and says which task it was.
+
+**The crash is very likely the demo's, not ours.** The same `Slish`, started
+the same way on a real Kickstart in the Rigel harness, answers "Software error
+- task held". Same class of bug; the difference was entirely in who caught it.
+
+**And Denise was never written on Bellatrix.** Twenty `[rigel] event=` lines
+in the whole run, all `audio_per_write` from AROS's own audio.device
+initialising, and the event log is capped at 64 so the absence is real. The
+census reads `non-bg=0, sum=00000000` throughout. `Slish`'s own direct chipset
+writes -- `COP1LC`, `DMACON`, `INTREQR`, disassembled in ISSUE-0068 -- are all
+past the point where it dies.
+
+So this issue is now downstream of two others: ISSUE-0081, because without
+`amigavideo` there is no producer for anything that draws through
+`graphics.library`; and ISSUE-0080, which picks a workload that needs no
+producer at all.
