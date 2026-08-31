@@ -208,3 +208,49 @@ amigavideo refused the cursor shape. No cursor is the visible half of that;
 whether it shares a cause with the black screen is unknown.
 
 See ISSUE-0082 for how this was reached.
+
+# The legacy tree had a switch, and it is a different shape
+
+Asked whether the legacy VideoCore driver had an RTG/Denise switch, I said no
+after searching `src/`. That was wrong: it is in the patch series, and not
+against Emu68 but against **Emu68-tools' `vc4.card`**, the RTG board driver --
+`patches/0037-videocore-bellatrix-native-hvs-switch.patch`.
+
+`vc4.card` already carried an **RTG <-> Unicam (CSI)** switch: on a PiStorm the
+CSI plane shows the Amiga's own video captured through the camera port, and
+Picasso96's `SetSwitch()` flips between the RTG desktop and it. Legacy swapped
+the Unicam display list for one pointing at Bellatrix's framebuffer:
+
+```c
+/* Bellatrix has no physical Denise/CSI capture.  Its Rigel framebuffer is
+   published by Emu68 and can be fed to the same HVS native/RTG switch. */
+```
+
+The address arrives as a device-tree property (`/emu68/bellatrix-native-fb`,
+patch 0036) and `SetSwitch()` writes the native display list into DISPLIST1 at
+`0xf2400024`. Full screen, `CONTROL_UNITY`, `RGBFB_R5G6B5PC`, no scaler.
+
+Against what this tree now ships:
+
+| | legacy | vcgfx_denise.c |
+|---|---|---|
+| form | whole-screen switch | plane composited above the desktop |
+| driver | `SetSwitch()`, the RTG API | a task polling COPPER_ACTIVE |
+| scale | unity | 3x integer |
+| lives in | `vc4.card` (Emu68-tools) | `vcgfx.hidd` (ours) |
+
+And one difference that changes the whole accounting: in legacy, Bellatrix drew
+**straight into Emu68's own framebuffer** -- the one `init_display()` returns --
+with no aperture and no copy. Here Rigel composes into a buffer of its own, we
+copy each frame into the aperture at `$01000000`, and vcgfx composites from
+there. `src/amiga/frame.c` argues the copy is what removes the coherency
+question; legacy's arrangement did not have the question to remove.
+
+The switch is not reusable as it stands, because it lives in a driver this tree
+does not use: our display is `vcgfx.hidd`. But the mechanism transfers whole --
+vcgfx already authors HVS display lists, so a second list plus a DISPLIST1 flip
+is the same idea in our own driver, and it would replace the polling task with
+something the graphics system drives.
+
+Worth doing, and not yet done. The overlay shipped first because it reuses
+`vc4_hvs_overlay()`, which already existed for windowed GL.
