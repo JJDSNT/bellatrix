@@ -254,3 +254,7 @@ something the graphics system drives.
 
 Worth doing, and not yet done. The overlay shipped first because it reuses
 `vc4_hvs_overlay()`, which already existed for windowed GL.
+
+The mechanism, its switch modes, its filter kernels and what legacy did and did
+not use them for are written up in
+`AI_context/consolidated/videocore_native_switch.md`.
