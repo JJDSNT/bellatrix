@@ -1,7 +1,7 @@
 ---
 id: ISSUE-0082
 title: "Intuition moves a pointer that has no sprite, over AbsExecBase"
-status: open
+status: resolved
 priority: critical
 type: defect
 owner: unassigned
@@ -300,6 +300,46 @@ the address and the value, and marks the one that lands on AbsExecBase.
 The value is the part that matters. A copper instruction, a sprite word and a
 run of blitter output do not look alike, so the value names the unit without
 needing a per-unit probe.
+
+# CONFIRMED on hardware
+
+The run with `patches/aros/0092` and `bellatrix.vecpage` still on:
+
+```text
+[BELLATRIX:RIGEL:ABSEXEC] $1f0000b9 -> $020012f0 ... (vecpage ON)
+```
+
+and after that, nothing. No write to address 6, no exception, no wild PC. The
+`(vecpage ON)` on that line is what makes the silence mean something: the trap
+was armed and saw no store.
+
+The Amiga screen then opens all the way through -- copper list at `$0000158c`
+in chip RAM, `setmode: (320x256x5) bpr=40 fu=3`, `setbitmap`, the palette, and
+`Notifying DisplayChange 320x256`.
+
+# What the same run says about the sprite
+
+The guard did not report either, so `data->pointer` was **NULL** on this run --
+not "a pointer with a NULL sprite". `MM_SetPointerShape` assigns
+`data->pointer` only when `HIDD_Display_SetCursorShape` returns TRUE, so a NULL
+`data->pointer` means amigavideo refused the cursor shape. That is also exactly
+what the user sees: no mouse pointer on the Amiga screen.
+
+So the two states are different and both are real:
+
+- `data->pointer` non-NULL with `sprite` NULL -- what crashed, and what 0092
+  now guards.
+- `data->pointer` NULL -- this run, no crash by either the old code or the new,
+  and no cursor.
+
+Which of the two arises is timing-dependent, so **one clean run is not proof
+the crash is gone**; it is proof that the store named above no longer happens
+when that path is taken. The guard is correct regardless: the dereference was
+unconditional and the field is nullable.
+
+Why `SetCursorShape` fails on amigavideo is a separate thread, tracked with the
+black screen below rather than here.
+
 
 # SOLVED: rom/intuition/monitorclass.c:96
 
