@@ -126,6 +126,7 @@ AROS_LH1(ULONG, ShutdownA,
         break;
 
     case SD_ACTION_COLDREBOOT:
+    case SD_ACTION_REBOOT:      /* the Pi has one hardware reboot path */
         Exec_DoResetCallbacks((struct IntExecBase *)SysBase, action);
         pm_full_reset(pm);
         break;
