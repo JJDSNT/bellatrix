@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0082
-title: "A wild jump out of Intuition's input path when an Amiga screen opens"
+title: "The chipset writes over AbsExecBase at chip RAM address 4"
 status: open
 priority: critical
 type: defect
@@ -11,11 +11,13 @@ tags:
   - exec
   - emu68
   - m68k
-  - supervisor
+  - rigel
+  - chipset
 blockers: []
 related_files:
-  - aros/arch/m68k-emu68/exec/
-  - external/emu68/src/ExecutionLoop.c
+  - src/amiga/bus.c
+  - aros/arch/m68k-emu68/boot/mmakefile.src
+  - aros/arch/m68k-emu68/include/amiga/memory_map.h
 ---
 
 # How it presents
@@ -234,20 +236,79 @@ are candidates: a kernel-range longword on a stack is not automatically a
 frame, and the probe marks them precisely so they can be checked rather than
 believed.
 
+# ANSWERED: SysBase is address 4, and it is in chip RAM
+
+The vector scan was built to decide between "A6 was wrong" and "the vector
+slot was overwritten". It reported neither:
+
+```text
+ A6 as a library base: 02000121  (not a library base)
+  SysBase 0x02000121  (not walkable)
+```
+
+`SysBase` -- the global itself, read out of memory by the reporter -- holds the
+same garbage as A6. So A6 was loaded correctly; the thing it was loaded *from*
+is what changed.
+
+And that thing is not in the kernel's data segment at all:
+
+```text
+$ m68k-aros-nm aros-emu68-m68k.elf | grep -wE 'SysBase|AbsExecBase'
+00000004 A AbsExecBase
+00000004 A SysBase
+```
+
+`arch/m68k-emu68/boot/mmakefile.src` links both as **absolute address 4**
+(`-Wl,--defsym,SysBase=0x4`). Every `moveal SysBase,%a6` in this kernel is
+`moveal 4,%a6`, and address 4 is a longword of **chip RAM** -- the region
+Rigel owns.
+
+That is why `AMIGA_CHIP_RAM_ALLOC_BASE` is `0x1000` and not `0`: the first
+page is reserved and nothing allocates there. But nothing was checking that
+nothing *writes* there either, and something does.
+
+The three A6 values across three runs are the evidence that it is data and not
+a pointer: `0x0200011b`, `0x020000b1`, `0x02000121`. Same high word, low word
+different every time -- whatever the chipset happened to be moving.
+
+# Why every earlier reading was consistent with this
+
+- The wild PC is always just below the heap and always odd. `A6 - 564` with a
+  corrupt A6 lands wherever it lands, and an odd base gives an odd target.
+- It only started when DPaint opened an Amiga screen. That is the first time
+  the blitter has moved real data through Rigel.
+- The call that dies is whichever library call comes next. `LockIBase ->
+  ObtainSemaphore` is not special; it is simply the first `jsr -LVO(A6)` after
+  the write.
+- Nothing in Intuition, amigavideo or DPaint is at fault. All three finished
+  their work.
+
+`setspritevisible()` being the last line before the fault does not make it the
+culprit either: `csd->copper1_spritept` points into the copper list, not into
+low memory, and the console on this port is deferred, so the last line printed
+is not the last thing that ran.
+
+# The guard
+
+`src/amiga/bus.c:amiga_chip_ram_write16()` is the single funnel every chipset
+DMA write to chip RAM passes through -- blitter, copper, sprites, bitplanes,
+disk, audio. It now reports any write below `AMIGA_CHIP_RAM_ALLOC_BASE`, with
+the address and the value, and marks the one that lands on AbsExecBase.
+
+The value is the part that matters. A copper instruction, a sprite word and a
+run of blitter output do not look alike, so the value names the unit without
+needing a per-unit probe.
+
 # Where to start
 
-Read the next dump's vector scan first. It answers a yes/no question:
+Read the `[BELLATRIX:RIGEL:LOWCHIP]` lines from the next run.
 
-- **`0 of N vectors are not a JMP`** -- ExecBase is intact, `%a6` was wrong,
-  and the global `SysBase` is what has to be explained.
-- **one broken vector** -- a stray write of a few bytes. What is adjacent to
-  ExecBase's jump table in the heap, and who wrote to it, is then the whole
-  question.
-- **many broken vectors** -- an allocation overran the table, and the size of
-  the run says how big the overrun was.
+- **A run of consecutive addresses** -- a DMA channel with a destination
+  pointer that is zero or has wrapped. The blitter's D channel is the only one
+  moving that much data here.
+- **A single write to 4 or 6** -- a pointer register that was loaded with a
+  low value, once.
+- **Nothing at all** -- then the write does not come from the chipset, and
+  the CPU-side path (`machine_chip_ram_write16`'s other callers, and Emu68's
+  own classifier) is where to look next.
 
-The earlier plan here -- reading `dispatch.S` and `switch.S` against Emu68's
-exception frame -- came from the supervisor-stack misreading and is not
-supported by anything above. `Exec_Supervisor_Exit` is not faulting on its own
-return; those frames were history. Leave that alone until the vector scan says
-otherwise.
