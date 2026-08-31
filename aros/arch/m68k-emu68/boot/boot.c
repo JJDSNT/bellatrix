@@ -395,16 +395,28 @@ static void parse_fdt(struct Emu68BootContext *ctx)
             {
                 /*
                  * Emu68's own allocator lives in the same DRAM we are told we
-                 * own, and this is where it says so. Without it the guest heap
-                 * is built over the top of it and the two hand out the same
-                 * addresses -- measured on 2026-08-13 as a sixteen-megabyte
-                 * overlap.
+                 * own. Without knowing where it ends, the guest heap is built
+                 * over the top of it and the two hand out the same addresses --
+                 * measured on 2026-08-13 as a sixteen-megabyte overlap.
                  *
-                 * That overlap was real and this closes it, but it was not the
-                 * cause of the heap corruption it was found while chasing; that
-                 * was an undersized TLSF split (patches/aros/0011). Keeping the
-                 * two claims apart matters, because the first was asserted as a
-                 * fix on one run and withdrawn -- see
+                 * That overlap was real and it is closed, but **not here**.
+                 * Nothing publishes this property: `dt_add_property()` edits
+                 * Emu68's own parsed tree, while the guest receives a byte copy
+                 * of the original blob, which has no /emu68 node in it at all.
+                 * Three attempts to announce the extent this way were made and
+                 * none arrived; patches/emu68/0007 trims Emu68's own range out
+                 * of /memory instead, so `memory_base` above is already right
+                 * and this branch has never once been taken.
+                 *
+                 * It is kept because it costs nothing and is correct if a host
+                 * ever does publish it -- and stated plainly because reading it
+                 * as the working mechanism is how the fourth attempt gets made.
+                 *
+                 * Separately: the overlap was not the cause of the heap
+                 * corruption it was found while chasing; that was an undersized
+                 * TLSF split (patches/aros/0011). Keeping the two claims apart
+                 * matters, because the first was asserted as a fix on one run
+                 * and withdrawn -- see
                  * AI_context/consolidated/history/ISSUE-0007.md.
                  */
                 const uint32_t *cells = (const uint32_t *)value;
@@ -543,8 +555,10 @@ static void start_aros(struct Emu68BootContext *ctx)
      * independent allocators handing out the same addresses. The guest
      * allocator's own free-list pointers came back as somebody else's data.
      *
-     * host_mem_end is what Emu68 now publishes on /emu68. Zero means an Emu68
-     * that does not publish it, and then this is no worse than before.
+     * host_mem_end would come from /emu68 and is always zero, because nothing
+     * publishes it -- see the comment at that branch. Emu68 trims its own
+     * range out of /memory instead (patches/emu68/0007), so `lower` is already
+     * above its pools by the time this is reached.
      */
     if (ctx->host_mem_end > lower)
         lower = ctx->host_mem_end;
