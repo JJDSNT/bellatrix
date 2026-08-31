@@ -33,6 +33,22 @@ static uint32_t frame_count;
 static uint8_t  publish_reported;
 static uint32_t frame_phys;
 static uint32_t frame_chipflags;
+static uint32_t dmacon_shadow;
+
+/*
+ * DMACON is write-only and read back through DMACONR, so the only way to know
+ * what is enabled is to watch what is written. SETCLR (bit 15) makes the write
+ * a set-mask; without it, a clear-mask. Rigel keeps its own copy for its own
+ * use; this one exists so the frame descriptor can answer "is there a bitplane
+ * display" without a Rigel header on the consumer's side.
+ */
+void amiga_frame_note_dmacon(uint32_t value)
+{
+    if (value & 0x8000u)
+        dmacon_shadow |= value & 0x7fffu;
+    else
+        dmacon_shadow &= ~(value & 0x7fffu);
+}
 
 static uint32_t amiga_frame_reg(uint32_t offset)
 {
@@ -194,6 +210,8 @@ void amiga_frame_publish(RigelContext *ctx)
     frame_count  = (uint32_t)frame.frame_count;
     frame_flags  = AMIGA_FRAME_FLAG_VALID;
     frame_chipflags = (uint32_t)frame.flags;
+    if (dmacon_shadow & 0x0100u)
+        frame_chipflags |= AMIGA_FRAME_CHIP_BPLEN;
 
     if (!publish_reported)
     {

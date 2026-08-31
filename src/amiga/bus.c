@@ -709,6 +709,10 @@ static void amiga_bus_write(const MachineRegion *region, uint32_t address,
 {
     rigel_mmio_result_t result;
 
+    /* Watch DMACON on its way past; see amiga_frame_note_dmacon(). */
+    if (address == 0x00dff096u && size == 2)
+        amiga_frame_note_dmacon(value);
+
     (void)region;
     if (rigel == 0)
         return;

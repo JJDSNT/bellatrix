@@ -56,7 +56,20 @@
 #define DENISE_MAGIC            0x444e5345UL   /* 'DNSE' */
 #define DENISE_MIN_VERSION      3UL
 #define DENISE_FLAG_VALID       0x00000001UL
-#define DENISE_CHIP_COPPER      0x00000008UL
+/*
+ * Bitplane DMA, not COPPER_ACTIVE.
+ *
+ * COPPER_ACTIVE was the first rule here and it was wrong. amigavideo's
+ * initcustom programs a default Copper list at driver init and leaves it
+ * running, so the flag is set from then on with no screen open -- and this
+ * task duly raised an empty 256x256 picture over the boot display, which is
+ * what a person saw. "The Copper executes a MOVE only when something
+ * programmed a display" was simply not true.
+ *
+ * BPLEN is the bit that means what was wanted: amigavideo's compositor sets it
+ * when it shows a screen and clears it when it blanks.
+ */
+#define DENISE_CHIP_BPLEN       0x80000000UL
 
 /*
  * How the picture is placed.
@@ -116,7 +129,7 @@ static void denise_watcher(void)
          * Copper flag set from its last frame would otherwise hold a frozen
          * picture over the desktop forever.
          */
-        want = (chipflags & DENISE_CHIP_COPPER) != 0 && count != last_count;
+        want = (chipflags & DENISE_CHIP_BPLEN) != 0 && count != last_count;
 
         if (count != last_count)
         {
@@ -131,7 +144,7 @@ static void denise_watcher(void)
             want = up;
         }
 
-        if (want == up)
+        if (!want && !up)
             continue;
 
         if (want)
@@ -148,14 +161,30 @@ static void denise_watcher(void)
             if (ovl.ovl_Phys == 0 || ovl.ovl_Width == 0 || ovl.ovl_Height == 0)
                 continue;
 
+            /*
+             * Applied on every tick, not only on the way up.
+             *
+             * vcgfx re-authors the whole display list whenever it takes the
+             * display or changes mode, and that drops the plane without
+             * telling anyone -- `hvs_takeover` clears hvs_OvlActive outright.
+             * A task that raised the plane once and then trusted its own
+             * memory of it showed a rectangle during the boot display and
+             * nothing afterwards.
+             *
+             * Re-applying costs nothing in the steady state: unchanged
+             * geometry patches the live entry rather than rebuilding the list.
+             * After a rebuild the same call is structural again and the plane
+             * comes back by itself.
+             */
             if (vc4_hvs_overlay(xsd, &ovl))
             {
+                if (!up)
+                    bug("[VideoCoreGfx:Denise] plane up -- %ux%u at $%08x,"
+                        " scaled to %ux%u\n",
+                        (unsigned)ovl.ovl_Width, (unsigned)ovl.ovl_Height,
+                        (unsigned)ovl.ovl_Phys,
+                        (unsigned)ovl.ovl_DestW, (unsigned)ovl.ovl_DestH);
                 up = TRUE;
-                bug("[VideoCoreGfx:Denise] plane up -- %ux%u at $%08x,"
-                    " scaled to %ux%u\n",
-                    (unsigned)ovl.ovl_Width, (unsigned)ovl.ovl_Height,
-                    (unsigned)ovl.ovl_Phys,
-                    (unsigned)ovl.ovl_DestW, (unsigned)ovl.ovl_DestH);
             }
             else
             {

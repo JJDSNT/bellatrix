@@ -51,6 +51,21 @@
 #define AMIGA_FRAME_CHIP_SPRITES_ACTIVE 0x04u
 #define AMIGA_FRAME_CHIP_COPPER_ACTIVE  0x08u
 
+/*
+ * Bellatrix's own bit, above Rigel's: bitplane DMA is enabled.
+ *
+ * COPPER_ACTIVE was tried for this and is wrong. amigavideo's initcustom
+ * programs a default Copper list at driver init and leaves it running, so the
+ * Copper executes MOVEs from then on with no screen open at all -- and a
+ * consumer keyed on it raises an empty 256x256 picture over the boot display,
+ * which is exactly what happened.
+ *
+ * BPLEN is the register that means what was wanted. amigavideo's compositor
+ * writes SETCLR|BPLEN when it shows a screen and clears BPLEN when it blanks,
+ * from the CPU, through the custom aperture -- so this side sees every change.
+ */
+#define AMIGA_FRAME_CHIP_BPLEN          0x80000000u
+
 #define AMIGA_FRAME_MAGIC       0x444e5345UL   /* 'DNSE' */
 #define AMIGA_FRAME_VERSION     3UL
 #define AMIGA_FRAME_FLAG_VALID  0x00000001UL
@@ -60,5 +75,8 @@ void amiga_frame_init(void);
 
 /* Copy one finished frame into the aperture and update the descriptor. */
 void amiga_frame_publish(RigelContext *ctx);
+
+/* Every CPU write to DMACON, so the descriptor can report bitplane DMA. */
+void amiga_frame_note_dmacon(uint32_t value);
 
 #endif /* BELLATRIX_AMIGA_FRAME_H */
