@@ -519,10 +519,51 @@ static rigel_u16 amiga_chip_ram_read16(void *opaque, rigel_u32 address)
     return machine_chip_ram_read16(address);
 }
 
+/*
+ * Every chipset DMA write to chip RAM funnels through here -- blitter, copper,
+ * sprites, bitplanes, disk, audio -- so it is the one place that can say
+ * whether the chipset ever writes somewhere it must not.
+ *
+ * There is such a place, and it is not a matter of taste. AROS m68k links
+ * `SysBase` and `AbsExecBase` as absolute address 4
+ * (`arch/m68k-emu68/boot/mmakefile.src`: `--defsym,SysBase=0x4`), so every one
+ * of the 3011 `moveal SysBase,%a6` in the kernel reads a longword out of the
+ * first page of chip RAM. That page is why AMIGA_CHIP_RAM_ALLOC_BASE is
+ * 0x1000 and not 0: nothing allocates below it, so nothing should ever write
+ * there either.
+ *
+ * A chipset write below that floor overwrites ExecBase's address, and the
+ * machine then dies at whatever library call happens to come next -- a wild
+ * `jsr -LVO(A6)` with an A6 that was correct when it was read and garbage by
+ * the time it was used. That is exactly the crash under ISSUE-0082, whose A6
+ * came back as 0x0200011b, 0x020000b1 and 0x02000121 on three runs: not
+ * random, and not a pointer, but whatever the chipset was moving at the time.
+ *
+ * Report the address and the value rather than only a count. The value is the
+ * evidence of which unit is responsible: a copper instruction, a sprite word
+ * and a run of blitter output do not look alike.
+ */
 static void amiga_chip_ram_write16(void *opaque, rigel_u32 address,
                                    rigel_u16 value)
 {
     (void)opaque;
+
+    if (address < AMIGA_CHIP_RAM_ALLOC_BASE)
+    {
+        static unsigned reported;
+
+        if (reported < 16u)
+        {
+            reported++;
+            kprintf("[BELLATRIX:RIGEL:LOWCHIP] write $%04x to $%06x"
+                    " -- below the allocation floor ($%06x)%s\n",
+                    (unsigned)value, (unsigned)address,
+                    (unsigned)AMIGA_CHIP_RAM_ALLOC_BASE,
+                    (address >= 4u && address < 8u)
+                        ? "  <- this is AbsExecBase" : "");
+        }
+    }
+
     machine_chip_ram_write16(address, value);
 }
 
