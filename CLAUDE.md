@@ -215,9 +215,19 @@ Both halves read it and neither tells the other: `src/machine/options.c` for the
 host (address map, chipset init, cores 2 and 3, how `STOP` waits) and
 `arch/m68k-emu68/boot/boot.c` for the guest (one heap, or Fast plus a separate
 Chip pool). They can only disagree if `rigel` is asked for on a `CONFIG_RIGEL=0`
-image, and Emu68 says so loudly at boot. **Both print which machine they got** --
-the two compositions differ in what `AllocMem(MEMF_CHIP)` returns and in nothing
-else visible, so read those two lines before concluding anything about memory.
+image -- and Emu68 then blanks the word out of the guest's copy of the command
+line (`patches/emu68/0026`), so the guest agrees with the machine rather than
+with the request. **Both print which machine they got** -- the two compositions
+differ in what `AllocMem(MEMF_CHIP)` returns and in nothing else visible, so
+read those two lines before concluding anything about memory.
+
+**A property on `/emu68` is not a channel to the guest.** `dt_add_property()`
+edits Emu68's own parsed tree; the guest receives a byte copy of the original
+blob, which has no `/emu68` node in it. Four attempts have now been made -- see
+`patches/emu68/0007`. What reaches the guest is an in-place correction of the
+copy, which is what patch 0007 does for `/memory` and patch 0026 for
+`/chosen/bootargs`. `boot.c`'s `/emu68/host-mem` reader is dead for this reason
+and is kept only as a no-cost guard.
 
 ## Repository conventions
 

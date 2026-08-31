@@ -31,6 +31,16 @@ int bellatrix_rigel_enabled(void);
 int bellatrix_vecpage_trapped(void);
 
 /*
+ * Hand the guest the command line the machine actually implemented.
+ *
+ * Called once Emu68 has copied the device tree the guest will receive, and
+ * before the guest runs. `guest_fdt` is that copy and `own_fdt` is the blob it
+ * was copied from, so a property's address in Emu68's own parsed tree maps to
+ * the copy by the same offset arithmetic patch 0007 uses for /memory.
+ */
+void bellatrix_correct_guest_cmdline(void *guest_fdt, const void *own_fdt);
+
+/*
  * Say what was decided, once, from machine_init().
  *
  * Not at parse time: parse_cmdline runs twice on some boots, and a machine

@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 31 Aug 2026 00:00:00 -0300
+Subject: [PATCH] Hand the guest the command line the machine implemented
+
+The chipset is selected by a boot argument read by both halves of this port:
+Emu68 builds the classic address map from it, the guest lays out its memory
+to match.  Two readers of one string agree by construction in every case but
+one -- the word is on the line and the image carries no chipset to enable --
+and there the guest builds a chip-memory pool over addresses that fault.
+
+Give the embedder the copy of the device tree the guest will receive, right
+after it is made, so it can correct that line the way patch 0007 corrects
+/memory: in place, in the copy, leaving Emu68's own tree alone.
+
+It has to be this and not a property on /emu68.  dt_add_property() edits the
+parsed tree, while the guest receives a byte copy of the original blob, which
+has no /emu68 node in it at all -- the same wall patch 0007 hit three times.
+
+Nothing here can turn a chipset on: a command line that does not ask for one
+is handed over untouched, whatever the image carries.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ src/aarch64/start.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/src/aarch64/start.c b/src/aarch64/start.c
+--- a/src/aarch64/start.c
++++ b/src/aarch64/start.c
+@@ -1643,6 +1643,23 @@
+         void *fdt = (void*)(top_of_ram - ((dt_total_size() + 4095) & ~4095));
+         memcpy(fdt, dt_fdt_base(), dt_total_size());
+         top_of_ram -= (dt_total_size() + 4095) & ~4095;
++
++#ifdef BELLATRIX_EMU68
++        /*
++         * The guest's copy of the tree exists and nothing has read it yet.
++         *
++         * This is the only window in which the command line the guest will
++         * see can still be corrected, and correcting the copy is the only
++         * channel that reaches it at all -- see the comment in
++         * src/machine/options.c, and patch 0007 for the same lesson learned
++         * on /memory.
++         */
++        {
++            extern void bellatrix_correct_guest_cmdline(void *guest_fdt,
++                                                        const void *own_fdt);
++            bellatrix_correct_guest_cmdline(fdt, dt_fdt_base());
++        }
++#endif
+ 
+         if (initramfs_loc)
+         {
+-- 
+2.43.0

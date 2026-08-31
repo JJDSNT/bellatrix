@@ -425,11 +425,62 @@ looks: the two differ in what `AllocMem(MEMF_CHIP)` returns and in nothing else
 visible at boot, so a command line that lost the word looks exactly like an
 image built without the chipset.
 
-The residual: the two halves agree by reading the same string, not by the
-machine telling the guest what it is. Ask for `rigel` on a `CONFIG_RIGEL=0`
-image and AROS still lays out chip memory the host does not have. Emu68 says so
-loudly at boot rather than silently disagreeing; publishing the decision on the
-`/emu68` node, beside `host-mem`, is the proper fix and is not done.
+### Closing the one direction the two halves could disagree in
+
+The command line stays the authority, and deliberately so: a line without
+`rigel` boots the chipset-less machine whatever the image carries. The gap was
+only ever the other way -- the word on the line, no chipset in the image -- and
+there the guest would build a chip-memory pool over addresses that fault.
+
+**The obvious fix does not work, and it is worth writing down why.** Publishing
+the decision as a property on `/emu68`, beside `host-mem`, is unimplementable:
+`dt_add_property()` edits Emu68's own parsed tree, while the guest receives
+`memcpy(fdt, dt_fdt_base(), dt_total_size())` -- a byte copy of the original
+blob, which has no `/emu68` node in it at all. `patches/emu68/0007` records
+three earlier attempts that died on exactly this, and hit the same wall for
+`host-mem`; it corrects the guest's copy of `/memory` in place instead.
+
+That is also this fix. `bellatrix_correct_guest_cmdline()` runs in the one
+window where the guest's copy of the tree exists and nothing has read it yet
+(`patches/emu68/0026`), and blanks `rigel` out of the copy when the machine did
+not enable it. Blanking is length-preserving, so nothing in the flattened blob
+moves. The guest is then handed the command line the machine *implemented*
+rather than the one that was asked for, and there is one reader of one string
+again. Nothing in it can turn a chipset on.
+
+**Also corrected while here:** `boot.c`'s `/emu68/host-mem` reader has never
+once been taken, and its comment claimed it was what closed the 16 MB overlap.
+It was not -- patch 0007's `/memory` trim was. The branch is kept (it costs
+nothing and is right if a host ever does publish it) and now says so, because
+reading it as the working mechanism is how the fourth attempt gets made. This
+was found by starting to make that fourth attempt.
+
+Validation, `t1`/`t2` from one `CONFIG_RIGEL=1` image and `t3` from a
+`CONFIG_RIGEL=0` one:
+
+```text
+./run.sh --headless --no-sd
+    [BELLATRIX] chipset: Rigel, asked for by "rigel" on the command line
+    [BELLATRIX] machine map, 11 regions:
+    [AROS/Emu68] chipset: rigel -- chip memory separate from fast
+
+BELLATRIX_RIGEL=0 ./run.sh --headless --no-sd
+    [BELLATRIX] chipset: none -- add "rigel" to the command line ...
+    [BELLATRIX] machine map, 2 regions:
+    [AROS/Emu68] chipset: none -- one heap, both chip and fast
+
+CONFIG_RIGEL=0 ./scripts/build.sh
+BELLATRIX_RIGEL=1 ./run.sh --headless --no-sd
+    [BELLATRIX] "rigel" removed from the command line handed to the guest: \
+        this image carries no chipset
+    [BELLATRIX] chipset: "rigel" was asked for, but this image was built \
+        with CONFIG_RIGEL=0 and carries none
+    [BELLATRIX] machine map, 2 regions:
+    [AROS/Emu68] chipset: none -- one heap, both chip and fast
+```
+
+All three reach `kernel.resource ready` with no region refused. Before this,
+the third printed `[AROS/Emu68] chipset: rigel` against a two-region map.
 
 # What is left
 
