@@ -412,6 +412,32 @@ else
     echo "[sdcard] classic chipset display driver ON -- the panel needs DeniseView SHOW"
 fi
 
+# BELLATRIX_HANNIBALS puts a drawer of "The evil Hannibals from Mars" on the
+# card, the same way and for the same reason: it is somebody else's work and
+# tools/hannibals/install.sh extracts it from your own ADF into out/, which is
+# git-ignored.
+#
+# It is here because of what it does not need. The demo opens dos.library and
+# nothing else, and takes the machine over itself -- so unlike an application
+# that draws through graphics.library, it needs no display driver on our side.
+# It programs Denise, so there is no producer to supply and no ownership to
+# arbitrate between vcgfx and amigavideo. Everything it does lands in Rigel.
+#
+# Expect AROS not to survive it. Turning the operating system off is the first
+# thing a demo does, and that is the test, not a failure. The ARM side keeps
+# running -- platform interrupts are not Paula's -- so the serial log carries
+# on and says what the chipset was asked for.
+if [ -n "${BELLATRIX_HANNIBALS:-}" ]; then
+    if [ ! -d "$BELLATRIX_HANNIBALS" ]; then
+        echo "ERROR: BELLATRIX_HANNIBALS=$BELLATRIX_HANNIBALS is not a directory" >&2
+        echo "       Run tools/hannibals/install.sh first." >&2
+        exit 2
+    fi
+    mkdir -p "$STAGE/Hannibals"
+    cp -al "$BELLATRIX_HANNIBALS/." "$STAGE/Hannibals/" 2>/dev/null ||         cp -a "$BELLATRIX_HANNIBALS/." "$STAGE/Hannibals/"
+    echo "[sdcard] Hannibals on the card: $(find "$STAGE/Hannibals" -type f | wc -l) files"
+fi
+
 # BELLATRIX_DEMOREEL puts a drawer of extracted Demo Reel 3 files on the card.
 #
 # Not on every card, and not in the repository: the demo is commercial software

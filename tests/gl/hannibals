@@ -1,0 +1,35 @@
+;
+; "The evil Hannibals from Mars", which is a demo and behaves like one.
+;
+; Its own disk starts it with three lines and no icon:
+;
+;     type s:text
+;     add21k
+;     hannidemo2.EXE
+;
+; The same three, from the drawer the card carries. `s:` there means the
+; demo's own s/, not ours, so the paths are spelled out.
+;
+; Why this one. It opens dos.library and nothing else -- the only absolute
+; chipset references in the binary are INTENA and DMACON, which is how a
+; program says "the operating system is off now, I have the hardware". So it
+; needs no display driver from us: it programs Denise itself. Nothing to
+; supply, nothing to arbitrate.
+;
+; AROS is not expected to survive this, and that is the point rather than a
+; fault. What the serial line keeps saying afterwards is Bellatrix's own --
+; the chipset core, the census, the interrupt counters -- because platform
+; interrupts are not Paula's and the ARM side is untouched by a guest turning
+; the Amiga off.
+;
+CD SYS:Hannibals
+Echo >DEBUG: "[hannibals] --- what the demo says for itself"
+Type >DEBUG: s/text
+
+Echo >DEBUG: "[hannibals] --- add21k"
+add21k
+Echo >DEBUG: "[hannibals] --- add21k returned"
+
+Echo >DEBUG: "[hannibals] --- handing the machine over"
+Hannidemo2.EXE
+Echo >DEBUG: "[hannibals] --- it gave the machine back"
