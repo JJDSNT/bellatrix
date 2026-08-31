@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0082
-title: "Exec_Supervisor_Exit takes a privilege violation, in a loop, when an Amiga screen opens"
+title: "A wild jump out of Intuition's input path when an Amiga screen opens"
 status: open
 priority: critical
 type: defect
@@ -45,7 +45,32 @@ Then the guest dies:
 `0x01ffffbd` is below the heap (`0x02000000`) in memory filled with `0x5555`,
 and the PC is odd. That is the end of a runaway, not its cause.
 
-# The cause is on the supervisor stack
+# CORRECTION: the supervisor stack is not the cause
+
+The first reading of this dump was wrong and is kept here because the mistake
+is instructive.
+
+The supervisor stack holds the same eight-byte frame two dozen times, and it
+was read as an exception loop. It is neither a loop nor a fault.
+
+`Supervisor()` on m68k works by deliberately faulting
+(`arch/m68k-all/exec/supervisor.S`): `or.w #0x2000, %sr` is privileged, so
+calling it from user mode raises a privilege violation, and
+`Exec_Supervisor_Trap` recognises the faulting PC and grants permission by
+**rewriting the frame's PC to `Exec_Supervisor_Exit`** before jumping to the
+user's function. The frames in the dump are exactly that, correctly formed.
+
+Emu68 enforces the privilege properly -- `M68k_LINE0.c:838` tests SRB_S and
+emits `VECTOR_PRIVILEGE_VIOLATION` -- so the mechanism is working end to end.
+
+And the dump walks *upward* from SSP, into addresses the stack has already
+released. Those frames are history, not live state.
+
+Two readings of one dump, both wrong, before reading the code that produces
+it. The rule this cost: resolve the mechanism in the source before drawing a
+shape from a memory dump.
+
+# What the stacks actually say
 
 `SSP 0x02020600` holds the same exception frame, over and over, for the whole
 dump:
@@ -77,15 +102,28 @@ exactly what a newly opened screen causes.
 
 # What it means
 
-`Exec_Supervisor_Exit` ends `Supervisor()`, and the instruction that returns
-from supervisor mode is privileged. Taking a privilege violation there means
-the CPU is not in supervisor mode when it runs -- the S bit in SR is not what
-that code requires.
+A wild jump, and the cause is not known.
 
-That is the Exec/Emu68 boundary: who owns the supervisor transition, and
-whether Emu68's SR handling matches what `arch/m68k-emu68/exec` assumes. It is
-not the chipset, not amigavideo and not DPaint; all three had already done
-their work correctly by the time this fires.
+`0x01ffffbd` is odd and sits just below the heap base (`0x02000000`) in memory
+filled with `0x5555`. `A6 = 0x0200011b` is odd too and the reporter says it is
+not a library base. Two accesses at `pc=0x01fffee7` reached `0x00b7a2a4`, in
+the unmapped classic domain. All of that is a runaway already in progress.
+
+What is not runaway is the user stack, and it is the only evidence of where
+this started:
+
+```text
+Intuition_69_LockIBase +0x18
+notify_mousemove_screensandwindows +0x14
+```
+
+`rom/intuition/inputhandler.c` -- the input handler chain, which runs from an
+interrupt, walking screens and windows after the pointer moves. A screen that
+has just been created on a monitor that has never had one before is the new
+thing in that walk.
+
+It is not the chipset, not amigavideo and not DPaint: all three finished their
+work, correctly, before this fires.
 
 # Why it is visible only now
 
