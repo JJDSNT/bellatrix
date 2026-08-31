@@ -48,4 +48,45 @@ mv "$inner"/* "$OUT"/ 2>/dev/null || true
 mv "$inner"/.[!.]* "$OUT"/ 2>/dev/null || true
 rmdir "$inner"
 
+# The data file's name cannot exist on the card, so both sides of it move.
+#
+# The demo's second half is a 406 KB file called `Har vi røget hash?` -- a
+# Danish joke, and 'LOAD' plus m68k code at its head, so it is program and not
+# decoration. Hannidemo2.EXE opens it by that name: the string sits at offset
+# 0x292 as `Har vi r\xf8get hash?`.
+#
+# Our boot volume is FAT32, because that is what the Pi's firmware reads, and
+# FAT forbids `?` in a name. mtools drops the file without a word, the demo
+# finds nothing and sits there -- which is exactly what happened, with the
+# drawer looking correct in every listing except the card's own.
+#
+# So rename the file and patch the name the binary asks for, to the same
+# thing. This edits somebody else's program, which is worth being explicit
+# about: it is your copy, it stays under out/ which is git-ignored, nothing is
+# redistributed, and it is the only way to put this demo on a volume whose
+# filesystem cannot spell its data file. The replacement is shorter and
+# NUL-padded, so nothing after it moves.
+python3 - "$OUT" <<'PATCH'
+import io, os, sys
+
+out = sys.argv[1]
+OLD = b"Har vi r\xf8get hash?\x00"
+NEW = b"hannidata\x00" + b"\x00" * (len(OLD) - len(b"hannidata\x00"))
+
+exe = os.path.join(out, "Hannidemo2.EXE")
+d = io.open(exe, "rb").read()
+n = d.count(OLD)
+if n != 1:
+    sys.exit("Hannidemo2.EXE: expected one copy of the data file's name, found %d" % n)
+io.open(exe, "wb").write(d.replace(OLD, NEW))
+
+for name in os.listdir(out):
+    if name.startswith("Har vi r") and name.endswith("hash?"):
+        os.rename(os.path.join(out, name), os.path.join(out, "hannidata"))
+        break
+else:
+    sys.exit("the data file is not where it was expected")
+print("[hannibals] data file renamed to 'hannidata', and the binary asks for it")
+PATCH
+
 echo "[hannibals] $(find "$OUT" -type f | wc -l) files in $OUT"
