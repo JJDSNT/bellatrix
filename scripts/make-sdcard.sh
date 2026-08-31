@@ -412,6 +412,33 @@ else
     echo "[sdcard] classic chipset display driver ON -- the panel needs DeniseView SHOW"
 fi
 
+# BELLATRIX_DPAINT puts Deluxe Paint IV on the card, in a drawer with its icon
+# so Wanderer shows it and it can be started the way anyone would start it.
+#
+# It is the counterpart to the demo workloads: an ordinary AmigaOS
+# application, well-behaved and heavily exercised, which opens a custom screen
+# through intuition and graphics.library and leans on the blitter. That is the
+# path most Amiga software actually takes, and the half of the machine a demo
+# that turns the operating system off never touches.
+#
+# What it exercises today is AROS and this machine, not the chipset: without
+# DEVS:Monitors/AmigaVideo there is no classic display driver, so
+# graphics.library renders to the VideoCore through vcgfx and Rigel's Denise
+# is handed nothing. The chipset half of this workload needs ISSUE-0081.
+if [ -n "${BELLATRIX_DPAINT:-}" ]; then
+    if [ ! -d "$BELLATRIX_DPAINT" ]; then
+        echo "ERROR: BELLATRIX_DPAINT=$BELLATRIX_DPAINT is not a directory" >&2
+        echo "       Run tools/dpaint/install.sh first." >&2
+        exit 2
+    fi
+    mkdir -p "$STAGE/DPaint"
+    cp -al "$BELLATRIX_DPAINT/." "$STAGE/DPaint/" 2>/dev/null || \
+        cp -a "$BELLATRIX_DPAINT/." "$STAGE/DPaint/"
+    # Wanderer needs an icon for the drawer itself, not only for what is in it.
+    [ -f "$STAGE/DPaint/Disk.info" ] && cp -a "$STAGE/DPaint/Disk.info" "$STAGE/DPaint.info"
+    echo "[sdcard] Deluxe Paint on the card: $(find "$STAGE/DPaint" -type f | wc -l) files"
+fi
+
 # BELLATRIX_HANNIBALS puts a drawer of "The evil Hannibals from Mars" on the
 # card, the same way and for the same reason: it is somebody else's work and
 # tools/hannibals/install.sh extracts it from your own ADF into out/, which is
