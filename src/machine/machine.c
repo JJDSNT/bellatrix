@@ -12,6 +12,7 @@
 #include "machine/machine.h"
 #include "machine/memory.h"
 #include "machine/region.h"
+#include "machine/vecpage.h"
 #if CONFIG_RIGEL
 #include "amiga/bus.h"
 #include "amiga/frame.h"
@@ -59,6 +60,8 @@
 #define VECTOR_PAGE_SIZE        0x00001000UL
 #define VECTOR_PAGE_HOST_PHYS   0x00000000UL
 
+#define AMIGA_VECTOR_PAGE_SIZE  0x00001000UL
+
 #if CONFIG_RIGEL
 #define CIA_BASE                0x00BFD000UL
 #define CIA_SIZE                0x00002000UL
@@ -72,11 +75,17 @@ static const MachineRegion machine_map[] =
 {
     {
 #if CONFIG_RIGEL
-        .base      = AMIGA_CHIP_RAM_BASE,
-        .size      = AMIGA_CHIP_RAM_SIZE,
+        /*
+         * Chip RAM minus its first page. The vector page is described
+         * separately below so that it can be fault-driven on request; the
+         * table refuses overlaps, so it has to be a hole here rather than a
+         * second description of the same addresses.
+         */
+        .base      = AMIGA_CHIP_RAM_BASE + AMIGA_VECTOR_PAGE_SIZE,
+        .size      = AMIGA_CHIP_RAM_SIZE - AMIGA_VECTOR_PAGE_SIZE,
         .kind      = MACHINE_REGION_DIRECT,
         .name      = "Chip RAM",
-        .host_phys = AMIGA_CHIP_RAM_BASE,
+        .host_phys = AMIGA_CHIP_RAM_BASE + AMIGA_VECTOR_PAGE_SIZE,
 #else
         .base      = VECTOR_PAGE_BASE,
         .size      = VECTOR_PAGE_SIZE,
@@ -155,6 +164,43 @@ static void machine_setup_memory(void)
 
     for (i = 0; i < MACHINE_MAP_ENTRIES; i++)
         machine_region_install(&machine_map[i]);
+
+#if CONFIG_RIGEL
+    /*
+     * The vector page, whose kind is a boot-time decision rather than a
+     * compile-time one.
+     *
+     * DIRECT is the normal answer and the legacy tree explains why it has to
+     * be: a write-trap here produced store-buffer coherency failures between
+     * the host's alias and the guest's own mapping. Fault-driven is the
+     * diagnostic for ISSUE-0082, where the question is who writes AbsExecBase
+     * -- and that question has no cheaper instrument, because a DIRECT page is
+     * by definition one the fault path never sees.
+     */
+    {
+        MachineRegion vectors =
+        {
+            .base      = AMIGA_CHIP_RAM_BASE,
+            .size      = AMIGA_VECTOR_PAGE_SIZE,
+            .host_phys = AMIGA_CHIP_RAM_BASE,
+            .attr      = MMU_ATTR_CACHED,
+        };
+
+        if (machine_vecpage_trapped())
+        {
+            vectors.kind = MACHINE_REGION_EXTERNAL;
+            vectors.name = "vectors + AbsExecBase (fault-driven)";
+            vectors.ops  = &machine_vecpage_ops;
+        }
+        else
+        {
+            vectors.kind = MACHINE_REGION_DIRECT;
+            vectors.name = "vectors + AbsExecBase";
+        }
+
+        machine_region_install(&vectors);
+    }
+#endif
 }
 
 void machine_init(void)

@@ -33,6 +33,7 @@ set(BELLATRIX_SOURCES
     ${BELLATRIX_ROOT}/src/machine/bus.c
     ${BELLATRIX_ROOT}/src/machine/memory.c
     ${BELLATRIX_ROOT}/src/machine/region.c
+    ${BELLATRIX_ROOT}/src/machine/vecpage.c
 )
 
 list(APPEND BASE_FILES ${BELLATRIX_SOURCES})
