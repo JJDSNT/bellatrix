@@ -158,7 +158,34 @@ static int FNAME_SUPPORT(Init)(LIBBASETYPEPTR LIBBASE)
                  * InitLib (no disk yet); it loads lazily from
                  * HIDD_Gfx_CreateObject, falling back to softpipe. */
 
-                if (AddDisplayDriver(LIBBASE->vsd.vcsd_VideoCoreGfxClass, NULL, TAG_DONE) == DD_OK)
+                /*
+                 * Ask for a monitor ID above the block the Amiga chipset owns.
+                 *
+                 * This registered with no DDRV_MonitorID, so graphics.library
+                 * picked the next free one -- and being the first driver up,
+                 * that landed low. arch/m68k-amiga's amigavideo then asks for
+                 * `DDRV_MonitorID 0, DDRV_IDMask 0xF0000000`, which with that
+                 * mask claims the whole range [0x00000000, 0x10000000): a
+                 * quarter of the ID space, starting at zero. Our base sits
+                 * inside it, AddDisplayDriver() finds the clash and answers
+                 * DD_ID_EXISTS.
+                 *
+                 * What that looks like from outside is a machine with no
+                 * classic display driver at all: amigavideo expunges itself,
+                 * OpenLibrary("amigavideo.hidd") hands the AmigaVideo task a
+                 * NULL, Denise is never given anything to draw, and Deluxe
+                 * Paint's mode requester has no Amiga modes to offer. It was
+                 * read as a hang for most of a day; the driver's own tracing
+                 * said `AddDisplayDriver() result: 2` in one line.
+                 *
+                 * Monitor 0 belongs to the chipset by the platform's own
+                 * definition -- on an Amiga it *is* the display -- so the
+                 * board that is not the chipset is the one that moves. This
+                 * is the first ID outside amigavideo's block.
+                 */
+                if (AddDisplayDriver(LIBBASE->vsd.vcsd_VideoCoreGfxClass, NULL,
+                                     DDRV_MonitorID, 0x10000000,
+                                     TAG_DONE) == DD_OK)
                 {
                     D(bug("[VideoCoreGfx] Display Driver Registered\n"));
 
