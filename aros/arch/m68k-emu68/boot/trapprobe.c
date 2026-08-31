@@ -15,6 +15,7 @@
 
 #include <exec/types.h>
 #include <exec/execbase.h>
+#include <exec/memory.h>
 
 #include "m68k_exception.h"
 
@@ -260,6 +261,45 @@ static void describe_exec_vectors(void)
  */
 enum { TRAP_STACK_WORDS_USER = 64, TRAP_STACK_WORDS_SUPER = 12 };
 
+/*
+ * Is this longword inside RAM the system actually handed out?
+ *
+ * This used to be the constant range [0x02000000, 0x30600000), which was a
+ * guess and a wrong one: boot.c puts the heap wherever Emu68's pools end
+ * (`lower`, floored at 0x01000000), and on this machine that is below
+ * 0x02000000. The crash that mattered had its faulting PC at 0x01fffe7d and a
+ * live pointer at 0x01f9a2a4, and the marker called neither of them heap --
+ * so the two most important longwords in the dump read as debris for an hour.
+ *
+ * The bounds are not a constant to be corrected, they are already recorded:
+ * every MemHeader on SysBase->MemList carries the range it owns. Walk them.
+ * Chip memory is on that list too, which is right -- a pointer into chip RAM
+ * is just as much a live allocation as one into fast.
+ */
+static int in_a_memheader(ULONG value)
+{
+    const struct ExecBase *base = SysBase;
+    const struct MemHeader *mh;
+
+    if (((ULONG)base & 1) || (ULONG)base < 0x1000 ||
+        (ULONG)base >= 0x34000000)
+        return 0;
+
+    for (mh = (const struct MemHeader *)base->MemList.lh_Head;
+         mh->mh_Node.ln_Succ != NULL;
+         mh = (const struct MemHeader *)mh->mh_Node.ln_Succ)
+    {
+        if (((ULONG)mh & 1) || (ULONG)mh < 0x1000 ||
+            (ULONG)mh >= 0x34000000)
+            return 0;
+
+        if (value >= (ULONG)mh->mh_Lower && value < (ULONG)mh->mh_Upper)
+            return 1;
+    }
+
+    return 0;
+}
+
 static void dump_stack(const char *what, ULONG sp, int words)
 {
     const ULONG *p = (const ULONG *)sp;
@@ -295,7 +335,7 @@ static void dump_stack(const char *what, ULONG sp, int words)
          */
         if (v >= (ULONG)__aros_resident_start && v < (ULONG)__aros_resident_end)
             emu68_console_puts("  <- kernel");
-        else if ((v & 1) == 0 && v >= 0x02000000 && v < 0x30600000)
+        else if ((v & 1) == 0 && in_a_memheader(v))
             emu68_console_puts("  <- heap");
 
         emu68_console_puts("\n");
