@@ -89,6 +89,17 @@ command line it hands to AROS, so both halves stay in agreement.
 `BELLATRIX_RIGEL=0` or `=1` sets it for `./run.sh` and `./scripts/make-sdcard.sh`;
 without it they follow whatever the last build put in the image.
 
+Chipset time comes from the wall clock, which a Pi 3 can keep and QEMU cannot:
+under emulation the chipset delivers about a fifth of the colour clocks a second
+of real time asks for, and the rest are discarded while its core stays pinned
+and holds the lock every CPU access to the classic domain waits on.
+`bellatrix.chipdiv=N` runs that clock at 1/N of real time instead, so the
+machine asks for what the host can actually give. It changes only the rate;
+what a colour clock does, and what it costs, is unchanged. Leave it out on
+hardware. Under QEMU, `BELLATRIX_CHIPDIV=8 ./run.sh` is a reasonable start --
+divide 3546895 by the `CCK/s` the `[BELLATRIX:RIGEL:PERF]` line reports and
+round up.
+
 With Rigel enabled, `src/machine/` remains the memory-policy control plane: it
 marks the coarse CIA, RTC, and custom-chip apertures as external in the same
 table that programs the Emu68 MMU. `src/amiga/bus.c` is the thin provider, and

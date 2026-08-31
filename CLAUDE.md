@@ -221,6 +221,17 @@ with the request. **Both print which machine they got** -- the two compositions
 differ in what `AllocMem(MEMF_CHIP)` returns and in nothing else visible, so
 read those two lines before concluding anything about memory.
 
+**Under QEMU the chipset needs `bellatrix.chipdiv=N` to be usable at all.**
+Chipset time is a function of the wall clock and of nothing else, so a host
+that cannot deliver 3546895 colour clocks a second does not get a slower
+chipset: it gets a core saturated at 100%, four fifths of the requested colour
+clocks discarded at the catch-up cap, and a 5.9 ms lock hold in front of every
+CPU access to the classic domain. Measured, and the boot stalls in the graphics
+drivers because of it. `BELLATRIX_CHIPDIV=8 ./run.sh` scales the demand to what
+the host can supply and nothing else -- a colour clock still costs a colour
+clock. It is 1 by default, which is right on a Pi 3 and wrong nowhere else.
+ISSUE-0075 has both measurements.
+
 **A property on `/emu68` is not a channel to the guest.** `dt_add_property()`
 edits Emu68's own parsed tree; the guest receives a byte copy of the original
 blob, which has no `/emu68` node in it. Four attempts have now been made -- see

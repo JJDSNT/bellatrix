@@ -11,6 +11,7 @@
 #include "amiga/frame.h"
 #include "amiga/irq.h"
 #include "machine/memory.h"
+#include "machine/options.h"
 #include "machine/vecpage.h"
 
 #include "A64.h"
@@ -332,6 +333,12 @@ static void amiga_clock_consume(void)
  * the chipset core raises the IPL and sends the event that ends the STOP, so
  * the guest parks in WFE exactly as it would on a real machine.
  *
+ * What "real time" means is the one thing the command line may scale, with
+ * `bellatrix.chipdiv=N`, and only because a host that cannot keep up is
+ * already scaling it -- badly, by discarding whatever it could not deliver at
+ * AMIGA_CCK_MAX_CATCHUP below. See bellatrix_chipset_divisor(); it is 1 on
+ * hardware and the arithmetic here is then unchanged.
+ *
  * ISSUE-0075.
  */
 static uint64_t wall_last;
@@ -367,6 +374,17 @@ static void amiga_clock_advance_wall(void)
     }
     elapsed = now - wall_last;
     wall_last = now;
+
+    /*
+     * The divisor multiplies the denominator rather than dividing the result,
+     * so the remainder is carried against the same scale it was produced at
+     * and `chipdiv` costs no accuracy: 1/N of real time is still exact to the
+     * counter tick, not to the tick divided N times over.
+     *
+     * Off by default -- freq * 1 is freq, and the two lines below are then
+     * literally what they were. See bellatrix_chipset_divisor().
+     */
+    freq *= bellatrix_chipset_divisor();
 
     /* ticks * CCK/s / Hz, with the remainder carried so it does not drift. */
     scaled = elapsed * AMIGA_CCK_PER_SECOND + wall_remainder;

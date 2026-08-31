@@ -39,8 +39,16 @@
 #define OPTION_RIGEL    "rigel"
 #define OPTION_VECPAGE  "bellatrix.vecpage"
 
+/*
+ * The one option here that carries a value, and it is spelled the way Emu68
+ * spells its own (`ICNT=`, `CCRD=`, `cs_dist=`): find_token() treats a token
+ * ending in `=` as a prefix match, so the digits are read from just past it.
+ */
+#define OPTION_CHIPDIV  "bellatrix.chipdiv="
+
 static int option_rigel;
 static int option_vecpage;
+static uint32_t option_chipdiv = 1;
 
 void bellatrix_parse_cmdline(const char *cmdline)
 {
@@ -61,6 +69,69 @@ void bellatrix_parse_cmdline(const char *cmdline)
         option_rigel = 1;
     if (find_token(cmdline, OPTION_VECPAGE))
         option_vecpage = 1;
+
+    /*
+     * How much slower than real time the chipset's clock is allowed to run.
+     *
+     * Chipset time comes from the wall clock and from nothing else
+     * (src/amiga/bus.c), which is right for the machine this is: on a Pi 3 the
+     * chipset sustains 112% of realtime, so it asks for 3546895 colour clocks
+     * a second and can deliver them. On a host that cannot, the same code
+     * still asks for all of them, gets about a fifth of the way, and has the
+     * rest discarded by the catch-up cap -- measured under QEMU/TCG: 690000
+     * CCK/s against 3546895 asked for, the chipset core inside amiga_clock_step
+     * 95% of the time, and 81% of the requested colour clocks silently dropped.
+     *
+     * That is already a divisor. It is simply an implicit one, it is not
+     * measured, it varies with load, and it is paid for with a core pegged at
+     * 100% believing it is behind -- which is also what makes every CPU access
+     * to the classic domain queue behind the chipset lock.
+     *
+     * So make it explicit. `bellatrix.chipdiv=N` scales the rate at which real
+     * time is turned into colour clocks; nothing inside amiga_clock_step()
+     * changes, so a colour clock still costs exactly what a colour clock costs
+     * and cycle-exactness is untouched. What changes is how many of them a
+     * second of real time buys.
+     *
+     * 1 by default, so hardware is unaffected and this cannot become a
+     * performance default that nobody chose. Under QEMU, divide the realtime
+     * rate by the "CCK/s" the [BELLATRIX:RIGEL:PERF] line reports and round up
+     * generously -- the core wants slack, not a rate it can only just meet.
+     *
+     * Assigning only when the token is present is the accumulate rule above:
+     * a second parse_cmdline() call with an overlay line must not silently
+     * reset this to 1.
+     */
+    {
+        const char *tok = find_token(cmdline, OPTION_CHIPDIV);
+
+        if (tok != 0)
+        {
+            const char *c = &tok[sizeof(OPTION_CHIPDIV) - 1];
+            uint32_t val = 0;
+            int i;
+
+            for (i = 0; i < 4; i++)
+            {
+                if (c[i] < '0' || c[i] > '9')
+                    break;
+                val = val * 10u + (uint32_t)(c[i] - '0');
+            }
+
+            /*
+             * A missing or zero value means 1, not "stop the chipset". The
+             * clamp is there because `pending_cck` would otherwise take
+             * minutes of real time to reach a single colour clock, which is a
+             * machine that looks hung rather than one that looks slow.
+             */
+            if (val == 0)
+                val = 1;
+            if (val > 1024)
+                val = 1024;
+
+            option_chipdiv = val;
+        }
+    }
 }
 
 int bellatrix_rigel_enabled(void)
@@ -75,6 +146,11 @@ int bellatrix_rigel_enabled(void)
 int bellatrix_vecpage_trapped(void)
 {
     return option_vecpage;
+}
+
+uint32_t bellatrix_chipset_divisor(void)
+{
+    return option_chipdiv;
 }
 
 /*
@@ -179,4 +255,14 @@ void bellatrix_options_report(void)
     if (option_vecpage)
         kprintf("[BELLATRIX:VECPAGE] armed by the command line:"
                 " the first page of chip RAM is fault-driven\n");
+
+    /*
+     * Only worth a line when it is not 1: on hardware it always is, and a
+     * boot log that says "the chipset runs at real time" every time teaches
+     * the reader to skip the line that matters.
+     */
+    if (option_chipdiv != 1)
+        kprintf("[BELLATRIX:RIGEL] chipset clock: 1/%u of real time, asked for"
+                " by \"" OPTION_CHIPDIV "%u\" on the command line\n",
+                (unsigned)option_chipdiv, (unsigned)option_chipdiv);
 }

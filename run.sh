@@ -21,6 +21,10 @@
 # default is whatever the last build put in the image. BOOTARGS replaces the
 # kernel command line outright.
 #
+# BELLATRIX_CHIPDIV=N runs the chipset's clock at 1/N of real time. Unset is 1,
+# which is what hardware wants; QEMU cannot deliver a fifth of the colour clocks
+# real time asks for, so 8 to 16 is the useful range here (see below).
+#
 # QEMU emulates the Raspberry Pi. Emu68 is the bare-metal owner; when AROS is
 # in play, Emu68 loads its m68k ELF from -initrd. Ctrl-A X quits.
 #
@@ -77,7 +81,7 @@ while [ $# -gt 0 ]; do
         --sd)       SD="$2"; shift ;;
         --debug)    DEBUG="$2"; shift ;;
         --)         shift; EXTRA=("$@"); break ;;
-        -h|--help)  sed -n '2,27p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)  sed -n '2,31p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
@@ -134,6 +138,17 @@ if [ "$AROS" = 1 ]; then
     # one image gets booted both ways without rebuilding.
     if [ "${BELLATRIX_RIGEL:-$(cat "$RIGEL_STAMP" 2>/dev/null || echo 0)}" = 1 ]; then
         BOOTARGS="$BOOTARGS rigel"
+    fi
+    # How fast chipset time runs. Chipset time comes from the wall clock, and a
+    # host that cannot keep up does not get a slower chipset -- it gets a core
+    # pinned at 100% believing it is behind, with the colour clocks it could not
+    # deliver discarded at the catch-up cap, and every CPU access to the classic
+    # domain queueing behind the chipset lock. Measured under QEMU/TCG here:
+    # 690000 CCK/s against the 3546895 real time asks for, so four fifths of
+    # them are thrown away. BELLATRIX_CHIPDIV scales the demand to what the host
+    # can actually deliver; read the CCK/s off [BELLATRIX:RIGEL:PERF] and divide.
+    if [ -n "${BELLATRIX_CHIPDIV:-}" ]; then
+        BOOTARGS="$BOOTARGS bellatrix.chipdiv=$BELLATRIX_CHIPDIV"
     fi
     QEMU+=(-initrd "$INITRD")
     if [ "$USE_SD" = 1 ]; then

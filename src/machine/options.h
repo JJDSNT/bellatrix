@@ -12,6 +12,8 @@
 #ifndef BELLATRIX_MACHINE_OPTIONS_H
 #define BELLATRIX_MACHINE_OPTIONS_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,6 +31,15 @@ int bellatrix_rigel_enabled(void);
 
 /* Did the command line ask for the fault-driven vector page? */
 int bellatrix_vecpage_trapped(void);
+
+/*
+ * How much slower than real time the chipset's clock runs -- `chipdiv=N`.
+ *
+ * Always at least 1, which is the answer on hardware and the default
+ * everywhere. It scales only the rate at which real time becomes colour
+ * clocks; what a colour clock does, and what it costs, is unchanged.
+ */
+uint32_t bellatrix_chipset_divisor(void);
 
 /*
  * Hand the guest the command line the machine actually implemented.
