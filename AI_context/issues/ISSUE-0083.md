@@ -1,6 +1,6 @@
 ---
 id: ISSUE-0083
-title: "The Amiga screen opens and stays black: Rigel composes nothing"
+title: "The Amiga picture is composed but never raised onto the panel"
 status: open
 priority: high
 type: defect
@@ -61,6 +61,58 @@ picture never changes.
 - **Not register delivery.** amigavideo writes `$dff000`, which is a
   MACHINE_REGION_EXTERNAL aperture owned by `amiga_bus_ops`, so those writes
   reach Rigel by construction.
+
+# CONFIRMED: the master enable was it, and the picture exists
+
+With `DMACON = SETCLR|DMAEN` set at bring-up:
+
+```text
+[BELLATRIX:RIGEL] clock armed by a write to $00dff096
+[BELLATRIX:RIGEL] DMA master enable set (no Kickstart does it here)
+...
+[BELLATRIX:RIGEL:CENSUS] something is drawing
+[BELLATRIX:RIGEL:CENSUS] frame=6000 352x256 pitch=4096 bg=00000000
+                         non-bg=138/1887 sum=479ec06a flags=0c
+```
+
+`flags=0c` is `COPPER_ACTIVE | SPRITES_ACTIVE`. The Copper runs, sprites are
+armed, the frame resized itself from the idle 256x256 to a real **352x256**,
+and 138 of 1887 sampled pixels carry content. The chipset is composing a
+picture for the first time.
+
+# What is left is presentation, not composition
+
+The panel still shows black, and the reason is in the same log:
+
+```text
+[BELLATRIX]   $01000000-$011fffff DIRECT   Denise frame aperture (host $31237000)
+[VC4HVS] takeover: ACTIVE - list 3584, out 1920x1080, fb 1920x1080 -> 1920x1080
+[VideoCoreGfx] assembling off-scanout (front page 0x3d827000, ...)
+```
+
+The scanout is vcgfx's framebuffer at `0x3d827000`. Rigel's composed frame is
+at host `0x31237000` and reaches the panel only as an **overlay plane on the
+VC4 scaler** -- `DeniseView` sets vcgfx's `aoHidd_VC4BM_Overlay` to it and
+holds it up for as long as the command runs (`c/DeniseView.c:160`).
+
+So when Intuition activates the amigavideo monitor, vcgfx stops drawing its own
+bitmap and nothing raises the overlay. Both halves are working and neither is
+on screen.
+
+This is the coexistence question from ISSUE-0081 arriving at its concrete form:
+the Amiga picture is a plane, the raise is manual by deliberate choice, and the
+moment Intuition activates the Amiga monitor is exactly the moment the plane
+would have to go up if it were not.
+
+# Works today
+
+From a Shell, before starting the application:
+
+```text
+Run DeniseView SHOW
+```
+
+then open the Amiga-mode screen. The plane stays up while DeniseView runs.
 
 # FOUND: the DMA master enable is never set
 
