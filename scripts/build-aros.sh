@@ -58,6 +58,18 @@ ELF="bin/$TARGET/AROS/aros-$TARGET.elf"
 export BELLATRIX_FRAME_POINTERS="${BELLATRIX_FRAME_POINTERS:-1}"
 FP_STAMP="$BUILD/.bellatrix-frame-pointers"
 
+# What configure looked like when this tree was configured. The mtime shortcut
+# further down cannot tell "checked out again, byte for byte the same" from
+# "the pin moved and configure genuinely changed", and guessing wrong the
+# second way is silent: the build proceeds with a stale config/make.cfg and
+# dies much later on an unsubstituted @variable@ from a substitution the old
+# configure never knew about.
+CONFIGURE_STAMP="$BUILD/.bellatrix-configure-digest"
+
+configure_digest() {
+    md5sum "$SRC/configure" 2>/dev/null | cut -d' ' -f1
+}
+
 fp_state() {
     local want="$BELLATRIX_FRAME_POINTERS"
     local have
@@ -499,6 +511,18 @@ if [ -f "$BUILD/mmake.config" ] && \
     rm -f "$BUILD/mmake.config"
 fi
 
+# A pin bump can change configure itself -- it grows a substitution, and every
+# config/*.in that uses it is expanded by config.status. Nothing downstream
+# notices: make.cfg keeps the old expansion and the literal @name@ reaches the
+# compiler as a filename. An unstamped tree is one configured before this
+# check existed, so say nothing and adopt the digest at the next configure.
+if [ -f "$BUILD/mmake.config" ] && [ -f "$CONFIGURE_STAMP" ] && \
+   [ "$(cat "$CONFIGURE_STAMP")" != "$(configure_digest)" ]; then
+    echo "[aros] configure changed with the submodule pin —"
+    echo "[aros] reconfiguring, which rebuilds the tree (the toolchain is kept)"
+    rm -f "$BUILD/mmake.config"
+fi
+
 # configure is only re-run when there is nothing to build with. It regenerates
 # the whole bin/<target>/gen tree, so running it needlessly is not free.
 if [ ! -f "$BUILD/mmake.config" ]; then
@@ -517,6 +541,7 @@ if [ ! -f "$BUILD/mmake.config" ]; then
     fi
     "$SRC/configure" "${CONFIGURE_ARGS[@]}"
     echo "$BELLATRIX_FRAME_POINTERS" > "$FP_STAMP"
+    configure_digest > "$CONFIGURE_STAMP"
 else
     echo "[aros] already configured"
 
@@ -532,9 +557,12 @@ else
     # config/aros.cfg which includes make.cfg, and the whole tree goes out of
     # date. That is why builds here were rebuilding everything after a reset.
     #
-    # So bump the generated files past it in the same breath. Sound because the
-    # trigger is an mtime with identical content, which is the only kind of
-    # change a submodule checkout can produce.
+    # So bump the generated files past it in the same breath. Sound only
+    # because a real change to configure has already been caught above by its
+    # digest and turned into a reconfigure -- reaching here means the content
+    # is identical and the mtime is the whole of the difference. It is not
+    # true that a submodule checkout can only produce that: a pin bump changes
+    # configure for real, and this shortcut used to hide it.
     if [ -f "$BUILD/config.status" ] && \
        [ "$SRC/configure" -nt "$BUILD/config.status" ]; then
         echo "[aros] configure is newer only by mtime — keeping the build tree"

@@ -40,6 +40,20 @@ __Dispatch_this:
         move.l  %d0,%a5
 2:
         /*
+         * Per-task CPU accounting (../kernel/cpuusage.c). Placed here, after
+         * ThisTask is current and before the frame is restored, because every
+         * way onto the CPU passes through this label -- the involuntary
+         * Switch, the Wait() path in m68k_VoluntarySwitch, and the idle loop's
+         * return from emu68_DispatchFrame. One hook where the arm port needs
+         * its accounting in both cpu_Switch and cpu_Dispatch.
+         *
+         * Safe to call here: %a5 holds the frame and is callee-saved, and
+         * everything the jsr may clobber (%d0-%d1/%a0-%a1) is reloaded from
+         * the frame by the movem below. The SR is already at level 7, which
+         * the MOVEC it issues requires.
+         */
+        jsr     emu68_CpuUsageDispatch
+        /*
          * No Paula write here. Host interrupts arrive as a level in INTF.IPL
          * (patches/emu68/0003) and the SR mask restored by the rte below is
          * what gates them -- writing INTENA would be a page fault per dispatch

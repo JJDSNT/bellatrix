@@ -23,7 +23,7 @@ diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/a
  CUR_MESADIR = src/gallium
  CUR_GALLIUMDIR = drivers/vc4
  GALLIUM_PATH = $(top_srcdir)/$(CUR_MESADIR)
-@@ -45,11 +54,11 @@ VC4_DRIVER_SOURCES := \
+@@ -45,11 +54,11 @@
  # override, both shared with mesa3dgl (compiled once per module).
  #
  VC4GALLIUM_HIDD_SOURCES := \
@@ -40,7 +40,7 @@ diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/a
      $(SRCDIR)/workbench/libs/mesa/aros_drm_shim \
      $(SRCDIR)/workbench/libs/mesa/emul_arosc
  
-@@ -60,8 +69,8 @@ VC4GALLIUM_HIDD_SOURCES := \
+@@ -60,8 +69,8 @@
  #
  USER_INCLUDES := \
      $(USER_INCLUDES) \
@@ -51,7 +51,7 @@ diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/a
      -I$(top_builddir)/galliumglue \
      -iquote $(GALLIUM_PATH)/drivers \
      -iquote $(GALLIUM_PATH)/drivers/vc4 \
-@@ -207,10 +216,10 @@ $(GCA_GENDIR)/gca_glue.o : $(GCA_GENDIR)/gca_glue.S $(GCA_GENDIR)/.gca.stamp
+@@ -207,10 +216,10 @@
  # compile with the driver's flags, then apply the same symbol rewrite.
  # Hand-rolled rule = no Makedepend; list the local headers explicitly so
  # editing them rebuilds this object instead of leaving it silently stale.
@@ -65,7 +65,8 @@ diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/a
  	%compile_q opt="$(strip $(CFLAGS) $(USER_CFLAGS) $(CPPFLAGS) $(USER_CPPFLAGS) $(USER_INCLUDES))"
  
  $(GCA_GENDIR)/aros_drm_vc4.o : $(GCA_GENDIR)/aros_drm_vc4_raw.o $(GCA_GENDIR)/gca_redefs.txt
-@@ -246,5 +255,6 @@ linklibs-galliumcoreapi : $(top_libdir)/libgalliumcoreapi.a
+@@ -243,6 +252,7 @@
+ #
  %build_module mmake=hidd-vc4gallium modname=vc4gallium modtype=hidd \
      files="$(VC4GALLIUM_HIDD_SOURCES)" alwayscxxlink=yes \
 +    conffile="$(VC4GALLIUM_PORTDIR)/vc4gallium.conf" \
@@ -75,15 +76,22 @@ diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/a
 diff --git a/workbench/libs/mesa/mmakefile.src b/workbench/libs/mesa/mmakefile.src
 --- a/workbench/libs/mesa/mmakefile.src
 +++ b/workbench/libs/mesa/mmakefile.src
-@@ -55,5 +55,9 @@ SHARED_LIB_SOURCES += aros_drm_shim
+@@ -55,10 +55,18 @@
+ ifneq ($(filter raspi emu68,$(AROS_TARGET_ARCH)),)
+ SHARED_LIB_SOURCES += aros_drm_shim
  # Bridge ABI header (shared with the hidd), needed by aros_drm_shim.c.
 +ifeq ($(AROS_TARGET_ARCH),emu68)
 +USER_INCLUDES += -I$(SRCDIR)/arch/m68k-emu68/hidd/vc4gallium
++# hardware/bcm2708.h: this port keeps its own copy of the SoC header, and the
++# arm-native one below is written against ARM_PERIIOBASE, which does not
++# exist here. Both define the peripheral bases the render-scale gate reads.
++USER_INCLUDES += -I$(SRCDIR)/arch/m68k-emu68/include
 +else
  USER_INCLUDES += -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium
+ # hardware/bcm2708.h: the SoC gate on the render-scale feature (HVS5 has
+ # no scaled plane, so the Pi 4 must not divide the drawable).
+ USER_INCLUDES += -I$(SRCDIR)/arch/arm-native/soc/broadcom/2708/include
 +endif
  # The GalliumCoreAPI table linklib exists (galliumcoreapi in
  # MESA3DGL_GALLIUMCORE) — let the sources take a real reference to it.
  USER_CPPFLAGS += -DMESA3DGL_HAVE_COREAPI
--- 
-2.39.5

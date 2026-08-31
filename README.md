@@ -44,10 +44,16 @@ cd bellatrix
 
 ./scripts/setup.sh          # check out the submodules, apply the patch series
 ./scripts/build.sh          # Emu68        → out/images/Emu68.img
-./scripts/build-aros.sh     # AROS m68k    → out/aros/aros-emu68-m68k.elf
+./scripts/build-aros.sh full # AROS m68k + distribution tree
 ./scripts/make-sdcard.sh    # boot media   → out/aros/sd.img
 ./run.sh                    # boot the lot under QEMU
 ```
+
+The Pi-oriented distribution can contain onboard devices that QEMU does not
+emulate.  In particular, loading `bthciuart.device` blocks the startup while it
+waits for the Pi's BCM43438 Bluetooth controller.  See the [QEMU SD-card
+recipe](docs/aros.md#qemu-sd-card-profile) for the currently validated staging
+step and the exact boot command.
 
 Rigel, the classic Amiga chipset, is built in by default:
 

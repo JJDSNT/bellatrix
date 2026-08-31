@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sun, 31 Aug 2026 00:00:00 -0300
+Subject: [PATCH] exec: room for a task's instruction count, not only its time
+
+iet_CpuUsage is a share of wall clock, which is the only thing a machine
+with a cycle counter can measure. A machine whose CPU is translated can
+measure something else: how many guest instructions a task actually
+executed. The two disagree whenever some code runs or translates more
+cheaply than other code -- a task busy on MMIO and a task busy on
+register arithmetic do very different amounts of m68k work per second.
+
+Three fields, at the end of the structure and next to the sample state
+they mirror. Every target that cannot count instructions leaves them
+zero, which is what they already read.
+
+arch/m68k-emu68 fills them from Emu68's INSNCNT control register.
+---
+diff --git a/rom/exec/etask.h b/rom/exec/etask.h
+index c44955392b..fbeef1352e 100644
+--- a/rom/exec/etask.h
++++ b/rom/exec/etask.h
+@@ -66,6 +66,16 @@ struct IntETask
+     /* Last CPU-usage sample, for arches that sweep iet_CpuUsage. */
+     UQUAD               iet_LastBusy;           /* iet_private2 at the last sample         */
+     UQUAD               iet_LastUsageStamp;     /* when that sample was taken              */
++    /*
++     * Guest work done, for a target that runs the CPU under a translator and
++     * can count its instructions. iet_CpuUsage is a share of wall clock; this
++     * is a share of instructions actually executed, which is not the same
++     * number whenever some code translates or runs more cheaply than other
++     * code. Left at zero by every target that cannot count them.
++     */
++    UQUAD               iet_CpuInsn;            /* instructions this task has executed     */
++    UQUAD               iet_LastInsn;           /* iet_CpuInsn at the last sample          */
++    ULONG               iet_InsnUsage;          /* share of instructions, 0..0xffffffff    */
+     ULONG               iet_QuantumLeft;        /* scheduler ticks left of this task's slice */
+ #ifdef DEBUG_ETASK
+     STRPTR              iet_Me;

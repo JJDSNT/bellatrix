@@ -20,7 +20,7 @@ TARGET_ISA_AFLAGS := $(ISA_MC68060_FLAGS)
 
 %build_archspecific \
   mainmmake=kernel-exec modname=exec maindir=rom/exec \
-  files="preparecontext" \
+  files="preparecontext shutdowna" \
   asmfiles="switch dispatch" \
   arch=emu68-m68k
 
