@@ -151,3 +151,56 @@ completes with `HCINT=0x23`, and nothing follows. `channel_irq()` should take
 trace warning above before treating that as established. The first move is to
 make the arm/irq lines unsuppressable for one boot and settle whether
 `arm_control_data()` is reached.
+
+# 2026-08-31: the old driver is why the desktop is unusable
+
+`kernel-usb-m68k-emu68` is still pointed at `kernel-usb-arosotg` while this
+issue is open, and a boot with the Amiga display work finished shows what that
+costs:
+
+```text
+[intc] irq 9 dispatched 524288 times
+[intc] still pending after 4 rounds: arm=00000000 gpu0=00000200 gpu1=00000000
+[USB2OTG] SOF: int split never ran, 40 uframes chan=2 dev=4 ep=1 — exorcise+requeue (#4)
+```
+
+IRQ 9 is the USB controller and GPU0 bit 9 is the same source still asserted
+after the dispatcher's four drain rounds. Half a million dispatches is the SOF
+rate (8 kHz) sustained for the length of the boot: the old driver schedules
+split transactions off SOF and leaves that interrupt unmasked, so the machine
+takes 8000 interrupts a second for as long as a full- or low-speed device is
+attached behind the hub.
+
+The consequence is not subtle and it is not theoretical. The pointer still
+moves -- `[VCGFX:CUR] pos #384 115,121 visible=1` right at the end of the log,
+so input is delivered -- but a **double-click on an icon does not open it**.
+The click is delivered; the two halves of it do not arrive close enough
+together to be one gesture. Reported as "eu clico no icone do dpaint mas nao
+funciona, nao abre a tela de selecao".
+
+That is the shape of the cost: not a dead input device, which would be obvious,
+but a desktop that responds to everything except the gestures with a deadline.
+And it makes the port hard to *test*, which is worse than a missing feature --
+every experiment that needs an application launched from Wanderer now needs a
+way around the mouse.
+
+The `int split never ran ... exorcise+requeue` lines say the split scheduling is
+also failing on its own terms, five times in one boot, on endpoints 1 and 2 of
+device 4 -- the interrupt endpoints of the input device itself.
+
+This raises the priority of finishing `dwc2emu68`: the new driver masks SOF
+except while a split is actually pending, which is the whole reason that design
+was chosen (see the W1C fix and `update_sof_irq()` above).
+
+## Working around it meanwhile
+
+Launch from `S:Startup-Sequence` rather than from an icon -- no double-click,
+no deadline. The card's boot partition is FAT, so the file is editable from
+any PC that mounts it:
+
+```text
+Run >NIL: SYS:DPaint/dpaint
+```
+
+Single clicks still work, so an application's own requesters remain usable
+once it is running.
