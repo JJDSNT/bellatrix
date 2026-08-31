@@ -42,6 +42,14 @@ int bellatrix_vecpage_trapped(void);
 uint32_t bellatrix_chipset_divisor(void);
 
 /*
+ * Should the chipset core hold back a step that cannot reach a deadline?
+ *
+ * Off by default: it is a performance change to the chipset, and those are
+ * opt-in here rather than something a boot acquires by being rebuilt.
+ */
+int bellatrix_chipset_floor(void);
+
+/*
  * Hand the guest the command line the machine actually implemented.
  *
  * Called once Emu68 has copied the device tree the guest will receive, and

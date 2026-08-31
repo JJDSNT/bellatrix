@@ -45,10 +45,12 @@
  * ending in `=` as a prefix match, so the digits are read from just past it.
  */
 #define OPTION_CHIPDIV  "bellatrix.chipdiv="
+#define OPTION_CHIPFLOOR "bellatrix.chipfloor"
 
 static int option_rigel;
 static int option_vecpage;
 static uint32_t option_chipdiv = 1;
+static int option_chipfloor;
 
 void bellatrix_parse_cmdline(const char *cmdline)
 {
@@ -69,6 +71,8 @@ void bellatrix_parse_cmdline(const char *cmdline)
         option_rigel = 1;
     if (find_token(cmdline, OPTION_VECPAGE))
         option_vecpage = 1;
+    if (find_token(cmdline, OPTION_CHIPFLOOR))
+        option_chipfloor = 1;
 
     /*
      * How much slower than real time the chipset's clock is allowed to run.
@@ -151,6 +155,11 @@ int bellatrix_vecpage_trapped(void)
 uint32_t bellatrix_chipset_divisor(void)
 {
     return option_chipdiv;
+}
+
+int bellatrix_chipset_floor(void)
+{
+    return option_chipfloor;
 }
 
 /*
@@ -265,4 +274,8 @@ void bellatrix_options_report(void)
         kprintf("[BELLATRIX:RIGEL] chipset clock: 1/%u of real time, asked for"
                 " by \"" OPTION_CHIPDIV "%u\" on the command line\n",
                 (unsigned)option_chipdiv, (unsigned)option_chipdiv);
+
+    if (option_chipfloor)
+        kprintf("[BELLATRIX:RIGEL] chipset core: steps only when a step can"
+                " reach an observable deadline (\"" OPTION_CHIPFLOOR "\")\n");
 }

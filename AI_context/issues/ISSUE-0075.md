@@ -266,3 +266,76 @@ run that reached `display takeover` at 242 s did so at `chipdiv=8`.
 The trap generalises past this issue: **an image left in `out/images/` is not
 evidence of the tree it is being compared against.** The build ID is printed on
 the thirty-something line of every boot and settles it in one grep.
+
+
+# 2026-08-31: the floor, and what it is actually worth
+
+The cost the divisor exposed has a shape, and the arithmetic names it. Two
+`PERF` lines from the same machine, one saturated and one keeping up:
+
+```text
+212 CCK/call at 1449 ns/CCK  ->  307188 ns per call
+ 17 CCK/call at 2046 ns/CCK  ->   34782 ns per call
+```
+
+Solve for a fixed cost per call and a marginal cost per colour clock: **11 us
+fixed, 1397 ns marginal**. At 17 colour clocks a call, two thirds of every call
+into Rigel is entry and exit. The core that keeps up is not doing more work --
+it is paying the same overhead twelve times more often.
+
+The cause is the clamp in the drain, `if (pending_cck < quantum) quantum =
+pending_cck`, which exists so a step never runs past the time that has actually
+elapsed. A core that keeps up finds a handful of colour clocks banked each pass
+and spends a whole step on them.
+
+## The floor is not a number anyone chooses
+
+`amiga_clock_quantum()` is already the distance to the next thing Rigel
+considers observable. **A step shorter than that cannot produce an event** --
+no VBLANK, no copper wake, no blitter completion, no interrupt -- so declining
+to take it costs nothing that can be seen. `bellatrix.chipfloor` holds the core
+back until `pending_cck` reaches the quantum.
+
+One thing it does cost, and it is why this is opt-in rather than the default:
+the beam registers move continuously and are not a deadline. A CPU polling
+VPOSR with nothing else programmed reads a position up to `AMIGA_MAX_STEP_CCK`
+(512, about two PAL scanlines) behind real time. Whenever anything *is*
+programmed the quantum collapses toward 1 and the lag with it. That trade is
+the user's to make, per the standing rule that no Rigel performance change
+regresses cycle-exactness by default.
+
+Note also that the floor does nothing while the core is behind: at divisor 1
+under QEMU `pending_cck` is pinned at the catch-up cap, far above any quantum,
+so the gate never closes. It only pays when the core keeps up -- which is to
+say, with a divisor, or on hardware.
+
+## Measured: four runs, alternated, chipdiv=8, same image, host idle
+
+| | calls | CCK/call | ns/CCK | core occupancy | display takeover |
+|---|---|---|---|---|---|
+| floor off | 9.43M / 8.03M | 8 / 9 | 1875 / 1893 | 79.2% / 80.0% | 137.7 / 143.8 s |
+| floor on | 417K / 415K | 182 / 183 | 1563 / 1572 | 66.0% / 66.4% | 140.2 / 138.0 s |
+
+All four stepped the same 76.00M colour clocks and all four reached
+`display takeover`. So, for identical work: **20x fewer calls into Rigel, 17%
+off the cost of a colour clock, and 13 points of a core given back.**
+
+**The boot did not get faster** -- 140 s either way. That is the honest reading
+and it is not a disappointment: at `chipdiv=8` the CPU is no longer starved of
+the lock, so the constraint has moved to TCG and freeing chipset core time buys
+nothing here. What the floor buys is headroom, and headroom only shows where
+the core is the constraint.
+
+## Where that headroom is worth something, and why it is still untested
+
+On a Pi 3 the chipset costs 250 ns per colour clock against a 282 ns realtime
+budget -- 88.7% of a core, leaving 11.3% for the CPU (above). Seventeen percent
+off 250 would be 208 ns/CCK, which is 73.7% of a core and **more than doubles
+what is left for the CPU**, 11.3% to 26.3%.
+
+That number is not a prediction. The 17% was measured under QEMU, where a
+fixed per-call cost is inflated by TCG far beyond what it is on an A53; on
+hardware the same fixed cost is a smaller fraction of the same work and the
+gain will be smaller. QEMU shows the shape, the Pi decides the magnitude.
+**This wants a hardware measurement before anything is concluded from it**,
+and it is the cheapest experiment on the list: one boot argument, no rebuild.

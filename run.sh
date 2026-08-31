@@ -24,6 +24,8 @@
 # BELLATRIX_CHIPDIV=N runs the chipset's clock at 1/N of real time. Unset is 1,
 # which is what hardware wants; QEMU cannot deliver a fifth of the colour clocks
 # real time asks for, so 8 to 16 is the useful range here (see below).
+# BELLATRIX_CHIPFLOOR=1 keeps the chipset core from taking steps too short to
+# reach a deadline. Off by default; see below.
 #
 # QEMU emulates the Raspberry Pi. Emu68 is the bare-metal owner; when AROS is
 # in play, Emu68 loads its m68k ELF from -initrd. Ctrl-A X quits.
@@ -81,7 +83,7 @@ while [ $# -gt 0 ]; do
         --sd)       SD="$2"; shift ;;
         --debug)    DEBUG="$2"; shift ;;
         --)         shift; EXTRA=("$@"); break ;;
-        -h|--help)  sed -n '2,31p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        -h|--help)  sed -n '2,33p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     esac
     shift
@@ -149,6 +151,13 @@ if [ "$AROS" = 1 ]; then
     # can actually deliver; read the CCK/s off [BELLATRIX:RIGEL:PERF] and divide.
     if [ -n "${BELLATRIX_CHIPDIV:-}" ]; then
         BOOTARGS="$BOOTARGS bellatrix.chipdiv=$BELLATRIX_CHIPDIV"
+    fi
+    # BELLATRIX_CHIPFLOOR=1 stops the chipset core taking a step too short to
+    # reach an observable deadline. Off by default: it is a performance change
+    # to the chipset, and it makes a CPU polling the beam with nothing else
+    # programmed read a position up to two scanlines stale.
+    if [ "${BELLATRIX_CHIPFLOOR:-0}" = 1 ]; then
+        BOOTARGS="$BOOTARGS bellatrix.chipfloor"
     fi
     QEMU+=(-initrd "$INITRD")
     if [ "$USE_SD" = 1 ]; then

@@ -100,6 +100,16 @@ hardware. Under QEMU, `BELLATRIX_CHIPDIV=8 ./run.sh` is a reasonable start --
 divide 3546895 by the `CCK/s` the `[BELLATRIX:RIGEL:PERF]` line reports and
 round up.
 
+Once the chipset core keeps up with its clock it starts paying a full step into
+Rigel for a handful of colour clocks at a time. `bellatrix.chipfloor`
+(`BELLATRIX_CHIPFLOOR=1`) holds a step back until it is long enough to reach the
+next thing the chipset can observe, which is a step that could not have produced
+an event anyway: measured at `chipdiv=8`, twenty times fewer calls for the same
+colour clocks, 17% off the cost of each one, and thirteen points of a core given
+back. It is off by default because the beam registers are not a deadline -- with
+it on, a CPU polling VPOSR with nothing else programmed reads a position up to
+two scanlines stale.
+
 With Rigel enabled, `src/machine/` remains the memory-policy control plane: it
 marks the coarse CIA, RTC, and custom-chip apertures as external in the same
 table that programs the Emu68 MMU. `src/amiga/bus.c` is the thin provider, and

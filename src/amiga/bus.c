@@ -293,6 +293,40 @@ static rigel_cycle_t amiga_clock_quantum(void)
     return quantum;
 }
 
+/*
+ * Is there enough time banked for a step to be worth taking?
+ *
+ * Measured at chipdiv=8 under QEMU, where the core stops being saturated and
+ * starts keeping up: 3127659 calls for 52001614 colour clocks -- 17 CCK per
+ * call, against 212 when it was behind -- and ns/CCK rose from 1449 to 2046
+ * even though the work per colour clock had not changed. Solving the two for
+ * a fixed cost per call and a marginal cost per colour clock gives 11 us and
+ * 1397 ns: at 17 CCK a call, two thirds of every call is entry and exit.
+ *
+ * The reason is in amiga_clock_consume() and in the drain below: both clamp
+ * the quantum down to `pending_cck` so a step never runs past the time that
+ * has actually elapsed. A core that keeps up finds a few colour clocks banked
+ * each pass, and pays a whole step to spend them.
+ *
+ * The floor is not a number anyone has to choose. amiga_clock_quantum() is by
+ * construction the distance to the next thing Rigel considers observable, so
+ * a step shorter than that **cannot produce an event**: no VBLANK, no copper
+ * wake, no blitter completion, no interrupt. Declining to take it costs
+ * nothing that can be seen -- with one exception, which is why this is
+ * opt-in: the beam registers move continuously, and a CPU polling VPOSR with
+ * nothing programmed reads a position up to AMIGA_MAX_STEP_CCK (512, about
+ * two PAL scanlines) behind where real time says it is. Whenever anything is
+ * programmed the quantum collapses toward 1 and the lag with it.
+ *
+ * ISSUE-0075.
+ */
+static int amiga_clock_floor_reached(void)
+{
+    if (!bellatrix_chipset_floor())
+        return 1;
+    return pending_cck >= amiga_clock_quantum();
+}
+
 static void amiga_clock_consume(void)
 {
     while (pending_cck != 0)
@@ -1151,6 +1185,17 @@ void amiga_clock_run_on_core(void)
 
         amiga_core_lock_acquire();
         amiga_clock_advance_wall();
+        if (!amiga_clock_floor_reached())
+        {
+            /*
+             * Nothing worth stepping for. Give the lock straight back -- the
+             * CPU is very likely waiting on it -- and yield rather than
+             * spinning the acquire at full rate.
+             */
+            amiga_core_lock_release();
+            __asm__ volatile("yield" ::: "memory");
+            continue;
+        }
         while (pending_cck != 0 && budget != 0)
         {
             rigel_cycle_t quantum = amiga_clock_quantum();
