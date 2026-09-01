@@ -628,7 +628,7 @@ hdmi_drive=2
 # naming a file the firmware cannot find is ignored without a word -- which
 # would read as "configured" while changing nothing.
 #
-# It may not be needed: btuart.resource reports "[BTUART] ready:
+# It may not be needed: pl011bt.resource reports "[PL011BT] ready:
 # PL011=0xf2201000" on hardware and the transport reaches the HCI layer, so
 # something is already routing the PL011 to the radio. Whether that is Emu68's
 # device tree or the firmware default has not been established. Settle that

@@ -1,6 +1,6 @@
 include $(SRCDIR)/config/aros.cfg
 
-#MM kernel-brcmfw : kernel-bluetooth-library-includes
+#MM kernel-brcmbt : kernel-bluetooth-library-includes
 
 #
 # The Broadcom Bluetooth firmware loader.
@@ -15,20 +15,20 @@ include $(SRCDIR)/config/aros.cfg
 # converted the .hcd to C at build time and linked it in; keeping it a file
 # means changing controllers is changing a file.
 #
-BRCMFWDIR := $(SRCDIR)/$(CURDIR)
+BRCMBTDIR := $(SRCDIR)/$(CURDIR)
 
 USER_LDFLAGS := -static
-USER_INCLUDES := -I$(BRCMFWDIR) \
+USER_INCLUDES := -I$(BRCMBTDIR) \
                  -I$(SRCDIR)/rom/bluetooth/bluetooth/include \
                  -I$(SRCDIR)/rom/bluetooth/stack/include
 
-FILES := brcmfw
+FILES := brcmbt
 
 # %build_module_library with modsuffix=fwl, exactly as the Realtek loaders do
 # -- the stack looks for *.fwl in that directory, so a .library there is not
 # found however correct it is.
-%build_module_library mmake=kernel-brcmfw \
-    modname=brcmfw modtype=library modsuffix="fwl" \
+%build_module_library mmake=kernel-brcmbt \
+    modname=brcmbt modtype=library modsuffix="fwl" \
     moduledir=Devs/Bluetooth/FWLoaders \
     files="$(FILES)"
 

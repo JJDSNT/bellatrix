@@ -1,7 +1,7 @@
 /*
     Copyright (C) 2026, The AROS Development Team. All rights reserved.
 
-    Desc: bthciuart.device -- device entry points.
+    Desc: h4bthci.device -- device entry points.
 */
 
 #include <aros/debug.h>
@@ -11,23 +11,23 @@
 #include <dos/dostags.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
-#include <proto/btuart.h>
+#include <proto/pl011bt.h>
 
-#include "bthciuart_intern.h"
+#include "h4bthci_intern.h"
 
 #include LC_LIBDEFS_FILE
 
 #define NewList(list) NEWLIST(list)
 
-static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR BTHCIUARTBase)
+static int GM_UNIQUENAME(Init)(LIBBASETYPEPTR H4BTHCIBase)
 {
-    InitSemaphore(&BTHCIUARTBase->hu_Lock);
+    InitSemaphore(&H4BTHCIBase->hu_Lock);
     return TRUE;
 }
 
-static int GM_UNIQUENAME(Expunge)(LIBBASETYPEPTR BTHCIUARTBase)
+static int GM_UNIQUENAME(Expunge)(LIBBASETYPEPTR H4BTHCIBase)
 {
-    return BTHCIUARTBase->hu_Unit ? FALSE : TRUE;
+    return H4BTHCIBase->hu_Unit ? FALSE : TRUE;
 }
 
 /*
@@ -35,26 +35,26 @@ static int GM_UNIQUENAME(Expunge)(LIBBASETYPEPTR BTHCIUARTBase)
  * unit number is not a second radio, so it is refused rather than silently
  * answered with the same hardware.
  */
-static struct BTHCIUARTUnit *bthciuart_OpenUnit(LIBBASETYPEPTR BTHCIUARTBase,
+static struct H4BTHCIUnit *h4bthci_OpenUnit(LIBBASETYPEPTR H4BTHCIBase,
                                                 ULONG unitnum)
 {
-    struct BTHCIUARTUnit *unit;
+    struct H4BTHCIUnit *unit;
     struct Task *task;
 
     if (unitnum != 0)
         return NULL;
 
-    ObtainSemaphore(&BTHCIUARTBase->hu_Lock);
-    if (BTHCIUARTBase->hu_Unit)
+    ObtainSemaphore(&H4BTHCIBase->hu_Lock);
+    if (H4BTHCIBase->hu_Unit)
     {
-        ReleaseSemaphore(&BTHCIUARTBase->hu_Lock);
+        ReleaseSemaphore(&H4BTHCIBase->hu_Lock);
         return NULL;
     }
 
-    unit = AllocVec(sizeof(struct BTHCIUARTUnit), MEMF_PUBLIC | MEMF_CLEAR);
+    unit = AllocVec(sizeof(struct H4BTHCIUnit), MEMF_PUBLIC | MEMF_CLEAR);
     if (unit)
     {
-        unit->hu_Base = BTHCIUARTBase;
+        unit->hu_Base = H4BTHCIBase;
         NewList(&unit->hu_Unit.unit_MsgPort.mp_MsgList);
         NewList((struct List *)&unit->hu_EventQueue);
         NewList((struct List *)&unit->hu_ACLQueue);
@@ -66,8 +66,8 @@ static struct BTHCIUARTUnit *bthciuart_OpenUnit(LIBBASETYPEPTR BTHCIUARTBase,
         SetSignal(0, SIGF_SINGLE);
 
         task = (struct Task *)CreateNewProcTags(
-            NP_Entry,    (IPTR)bthciuart_UnitTask,
-            NP_Name,     (IPTR)"bthciuart.device unit",
+            NP_Entry,    (IPTR)h4bthci_UnitTask,
+            NP_Name,     (IPTR)"h4bthci.device unit",
             NP_Priority, 10,
             NP_UserData, (IPTR)unit,
             TAG_END);
@@ -85,20 +85,20 @@ static struct BTHCIUARTUnit *bthciuart_OpenUnit(LIBBASETYPEPTR BTHCIUARTBase,
         else
         {
             unit->hu_Open = TRUE;
-            BTHCIUARTBase->hu_Unit = unit;
+            H4BTHCIBase->hu_Unit = unit;
         }
     }
 
-    ReleaseSemaphore(&BTHCIUARTBase->hu_Lock);
+    ReleaseSemaphore(&H4BTHCIBase->hu_Lock);
     return unit;
 }
 
-static void bthciuart_CloseUnit(LIBBASETYPEPTR BTHCIUARTBase,
-                                struct BTHCIUARTUnit *unit)
+static void h4bthci_CloseUnit(LIBBASETYPEPTR H4BTHCIBase,
+                                struct H4BTHCIUnit *unit)
 {
-    ObtainSemaphore(&BTHCIUARTBase->hu_Lock);
-    BTHCIUARTBase->hu_Unit = NULL;
-    ReleaseSemaphore(&BTHCIUARTBase->hu_Lock);
+    ObtainSemaphore(&H4BTHCIBase->hu_Lock);
+    H4BTHCIBase->hu_Unit = NULL;
+    ReleaseSemaphore(&H4BTHCIBase->hu_Lock);
 
     Forbid();
     unit->hu_ReadySignal = SIGB_SINGLE;
@@ -114,11 +114,11 @@ static void bthciuart_CloseUnit(LIBBASETYPEPTR BTHCIUARTBase,
     FreeVec(unit);
 }
 
-static int GM_UNIQUENAME(Open)(LIBBASETYPEPTR BTHCIUARTBase,
+static int GM_UNIQUENAME(Open)(LIBBASETYPEPTR H4BTHCIBase,
                                struct IOBTHCIReq *ioreq, ULONG unitnum,
                                ULONG flags)
 {
-    struct BTHCIUARTUnit *unit;
+    struct H4BTHCIUnit *unit;
 
     ioreq->iobt_Req.io_Unit = NULL;
 
@@ -128,7 +128,7 @@ static int GM_UNIQUENAME(Open)(LIBBASETYPEPTR BTHCIUARTBase,
         return FALSE;
     }
 
-    unit = bthciuart_OpenUnit(BTHCIUARTBase, unitnum);
+    unit = h4bthci_OpenUnit(H4BTHCIBase, unitnum);
     if (!unit)
     {
         ioreq->iobt_Req.io_Error = IOERR_OPENFAIL;
@@ -140,13 +140,13 @@ static int GM_UNIQUENAME(Open)(LIBBASETYPEPTR BTHCIUARTBase,
     return TRUE;
 }
 
-static int GM_UNIQUENAME(Close)(LIBBASETYPEPTR BTHCIUARTBase,
+static int GM_UNIQUENAME(Close)(LIBBASETYPEPTR H4BTHCIBase,
                                 struct IOBTHCIReq *ioreq)
 {
-    struct BTHCIUARTUnit *unit = (struct BTHCIUARTUnit *)ioreq->iobt_Req.io_Unit;
+    struct H4BTHCIUnit *unit = (struct H4BTHCIUnit *)ioreq->iobt_Req.io_Unit;
 
     if (unit)
-        bthciuart_CloseUnit(BTHCIUARTBase, unit);
+        h4bthci_CloseUnit(H4BTHCIBase, unit);
 
     ioreq->iobt_Req.io_Unit = (APTR)-1;
     ioreq->iobt_Req.io_Device = (APTR)-1;
@@ -160,11 +160,11 @@ ADD2CLOSEDEV(GM_UNIQUENAME(Close), 0)
 
 AROS_LH1(void, BeginIO,
          AROS_LHA(struct IOBTHCIReq *, ioreq, A1),
-         struct BTHCIUARTBase *, BTHCIUARTBase, 5, BTHCIUART)
+         struct H4BTHCIBase *, H4BTHCIBase, 5, H4BTHCI)
 {
     AROS_LIBFUNC_INIT
 
-    struct BTHCIUARTUnit *unit = (struct BTHCIUARTUnit *)ioreq->iobt_Req.io_Unit;
+    struct H4BTHCIUnit *unit = (struct H4BTHCIUnit *)ioreq->iobt_Req.io_Unit;
     LONG ret;
 
     ioreq->iobt_Req.io_Message.mn_Node.ln_Type = NT_MESSAGE;
@@ -176,7 +176,7 @@ AROS_LH1(void, BeginIO,
         ret = 0;
     }
     else
-        ret = bthciuart_QueueRequest(unit, ioreq);
+        ret = h4bthci_QueueRequest(unit, ioreq);
 
     if (ret >= 0)
     {
@@ -191,11 +191,11 @@ AROS_LH1(void, BeginIO,
 
 AROS_LH1(LONG, AbortIO,
          AROS_LHA(struct IOBTHCIReq *, ioreq, A1),
-         struct BTHCIUARTBase *, BTHCIUARTBase, 6, BTHCIUART)
+         struct H4BTHCIBase *, H4BTHCIBase, 6, H4BTHCI)
 {
     AROS_LIBFUNC_INIT
 
-    struct BTHCIUARTUnit *unit = (struct BTHCIUARTUnit *)ioreq->iobt_Req.io_Unit;
+    struct H4BTHCIUnit *unit = (struct H4BTHCIUnit *)ioreq->iobt_Req.io_Unit;
     struct MinNode *mn;
     LONG found = -1;
 

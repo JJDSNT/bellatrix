@@ -76,8 +76,8 @@ still linked has not been traced; that is the work.
 
 # Second, smaller
 
-`btuart`-style rule broken in the same file: the SOF handler's sibling in
-`btuart_init.c` documents "no call back into AROS" and then calls `bug()` from
+`pl011bt`-style rule broken in the same file: the SOF handler's sibling in
+`pl011bt_init.c` documents "no call back into AROS" and then calls `bug()` from
 interrupt context. Here the guard does the same. It is bounded, so it is not
 the defect, but it is worth removing once the cause is fixed — a `bug()` inside
 an interrupt handler that fires on a corrupted list is the worst possible place

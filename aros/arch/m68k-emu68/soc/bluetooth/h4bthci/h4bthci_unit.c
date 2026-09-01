@@ -11,17 +11,17 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/utility.h>
-#include <proto/btuart.h>
+#include <proto/pl011bt.h>
 #include <bluetooth/hci.h>
 
 #include <string.h>
 
-#include "bthciuart_intern.h"
+#include "h4bthci_intern.h"
 
-/* proto/btuart.h declares this as APTR for a resource, not a library base --
+/* proto/pl011bt.h declares this as APTR for a resource, not a library base --
  * a resource is not opened with OpenLibrary and has no library node. The unit
  * task fills it in; it is the only thing here that touches the hardware. */
-APTR BTUARTBase;
+APTR PL011BTBase;
 
 /*
  * A UART hands over bytes; HCI is packets. Everything in this file exists to
@@ -34,21 +34,21 @@ APTR BTUARTBase;
  *   SCO    2 byte handle, 1 byte length
  * so the reassembler has to know all three to know when a packet is whole.
  */
-static ULONG bthciuart_PacketLength(const UBYTE *buf, ULONG have)
+static ULONG h4bthci_PacketLength(const UBYTE *buf, ULONG have)
 {
     switch (buf[0])
     {
-    case BTHCIUART_H4_EVENT:
+    case H4BTHCI_EVENT:
         if (have < 3)
             return 0;
         return 3 + buf[2];
 
-    case BTHCIUART_H4_ACL:
+    case H4BTHCI_ACL:
         if (have < 5)
             return 0;
         return 5 + buf[3] + (((ULONG)buf[4]) << 8);
 
-    case BTHCIUART_H4_SCO:
+    case H4BTHCI_SCO:
         if (have < 4)
             return 0;
         return 4 + buf[3];
@@ -60,14 +60,14 @@ static ULONG bthciuart_PacketLength(const UBYTE *buf, ULONG have)
          * saying so is the only honest recovery, and a controller that does
          * this is broken in a way worth seeing in the log.
          */
-        bug("[bthciuart] unknown H4 packet type 0x%02x, dropping a byte\n",
+        bug("[h4bthci] unknown H4 packet type 0x%02x, dropping a byte\n",
             buf[0]);
         return (ULONG)-1;
     }
 }
 
 /* Hand a complete event to whoever is waiting, and to every listener. */
-static void bthciuart_DeliverEvent(struct BTHCIUARTUnit *unit,
+static void h4bthci_DeliverEvent(struct H4BTHCIUnit *unit,
                                    const UBYTE *packet, ULONG length)
 {
     struct IOBTHCIReq *ioreq = NULL;
@@ -107,7 +107,7 @@ static void bthciuart_DeliverEvent(struct BTHCIUARTUnit *unit,
     ObtainSemaphore(&unit->hu_QueueLock);
     for (mn = unit->hu_Listeners.mlh_Head; mn->mln_Succ; mn = mn->mln_Succ)
     {
-        struct BTHCIUARTListener *listener = (struct BTHCIUARTListener *)mn;
+        struct H4BTHCIListener *listener = (struct H4BTHCIListener *)mn;
         struct BTHCIEventMsg *msg;
 
         msg = AllocVec(sizeof(struct BTHCIEventMsg), MEMF_PUBLIC | MEMF_CLEAR);
@@ -124,7 +124,7 @@ static void bthciuart_DeliverEvent(struct BTHCIUARTUnit *unit,
     ReleaseSemaphore(&unit->hu_QueueLock);
 }
 
-static void bthciuart_DeliverACL(struct BTHCIUARTUnit *unit,
+static void h4bthci_DeliverACL(struct H4BTHCIUnit *unit,
                                  const UBYTE *packet, ULONG length)
 {
     struct IOBTHCIReq *ioreq = NULL;
@@ -157,11 +157,11 @@ static void bthciuart_DeliverACL(struct BTHCIUARTUnit *unit,
     ReplyMsg(&ioreq->iobt_Req.io_Message);
 }
 
-static void bthciuart_Reassemble(struct BTHCIUARTUnit *unit)
+static void h4bthci_Reassemble(struct H4BTHCIUnit *unit)
 {
     while (unit->hu_RXLen > 0)
     {
-        ULONG want = bthciuart_PacketLength(unit->hu_RX, unit->hu_RXLen);
+        ULONG want = h4bthci_PacketLength(unit->hu_RX, unit->hu_RXLen);
 
         if (want == (ULONG)-1)
         {
@@ -173,11 +173,11 @@ static void bthciuart_Reassemble(struct BTHCIUARTUnit *unit)
 
         switch (unit->hu_RX[0])
         {
-        case BTHCIUART_H4_EVENT:
-            bthciuart_DeliverEvent(unit, unit->hu_RX, want);
+        case H4BTHCI_EVENT:
+            h4bthci_DeliverEvent(unit, unit->hu_RX, want);
             break;
-        case BTHCIUART_H4_ACL:
-            bthciuart_DeliverACL(unit, unit->hu_RX, want);
+        case H4BTHCI_ACL:
+            h4bthci_DeliverACL(unit, unit->hu_RX, want);
             break;
         default:
             break;                      /* SCO is accepted and discarded */
@@ -192,8 +192,8 @@ static void bthciuart_Reassemble(struct BTHCIUARTUnit *unit)
 /*
  * Send one packet, type byte first.
  *
- * BTUARTWrite() returns the number of bytes it accepted, not a status: a
- * successful one-byte write returns 1. This compared that against BTUART_OK,
+ * PL011BTWrite() returns the number of bytes it accepted, not a status: a
+ * successful one-byte write returns 1. This compared that against PL011BT_OK,
  * which is 0, so every successful write was read as a failure and every HCI
  * command came back as "HCI transmission failed, host error (3)" -- the
  * transport being up made that look like the radio not answering.
@@ -202,7 +202,7 @@ static void bthciuart_Reassemble(struct BTHCIUARTUnit *unit)
  * short write rather than an error. The caller has to push the remainder,
  * which nothing did.
  */
-static LONG bthciuart_WriteAll(struct BTHCIUARTUnit *unit, const UBYTE *data,
+static LONG h4bthci_WriteAll(struct H4BTHCIUnit *unit, const UBYTE *data,
                                ULONG length)
 {
     ULONG done = 0;
@@ -210,11 +210,11 @@ static LONG bthciuart_WriteAll(struct BTHCIUARTUnit *unit, const UBYTE *data,
 
     while (done < length)
     {
-        LONG n = BTUARTWrite(unit, data + done, length - done);
+        LONG n = PL011BTWrite(unit, data + done, length - done);
 
         if (n < 0)
         {
-            bug("[bthciuart] BTUARTWrite failed, rc=%ld\n", (LONG)n);
+            bug("[h4bthci] PL011BTWrite failed, rc=%ld\n", (LONG)n);
             return BTIOERR_HOSTERROR;
         }
         if (n == 0)
@@ -222,7 +222,7 @@ static LONG bthciuart_WriteAll(struct BTHCIUARTUnit *unit, const UBYTE *data,
             /* FIFO full: give it room rather than spinning forever. */
             if (++spins > 100000)
             {
-                bug("[bthciuart] transmit FIFO stayed full, %lu of %lu sent\n",
+                bug("[h4bthci] transmit FIFO stayed full, %lu of %lu sent\n",
                     done, length);
                 return BTIOERR_HOSTERROR;
             }
@@ -234,21 +234,21 @@ static LONG bthciuart_WriteAll(struct BTHCIUARTUnit *unit, const UBYTE *data,
     return 0;
 }
 
-static LONG bthciuart_Send(struct BTHCIUARTUnit *unit, UBYTE type,
+static LONG h4bthci_Send(struct H4BTHCIUnit *unit, UBYTE type,
                            const UBYTE *data, ULONG length)
 {
     UBYTE hdr = type;
-    LONG err = bthciuart_WriteAll(unit, &hdr, 1);
+    LONG err = h4bthci_WriteAll(unit, &hdr, 1);
 
     if (err)
         return err;
     if (length)
-        return bthciuart_WriteAll(unit, data, length);
+        return h4bthci_WriteAll(unit, data, length);
 
     return 0;
 }
 
-LONG bthciuart_QueueRequest(struct BTHCIUARTUnit *unit, struct IOBTHCIReq *ioreq)
+LONG h4bthci_QueueRequest(struct H4BTHCIUnit *unit, struct IOBTHCIReq *ioreq)
 {
     switch (ioreq->iobt_Req.io_Command)
     {
@@ -291,14 +291,14 @@ LONG bthciuart_QueueRequest(struct BTHCIUARTUnit *unit, struct IOBTHCIReq *ioreq
 
     case BTCMD_WRITEHCI:
         ioreq->iobt_Req.io_Error =
-            bthciuart_Send(unit, BTHCIUART_H4_COMMAND,
+            h4bthci_Send(unit, H4BTHCI_COMMAND,
                            ioreq->iobt_Data, ioreq->iobt_Length);
         ioreq->iobt_Actual = ioreq->iobt_Req.io_Error ? 0 : ioreq->iobt_Length;
         return 0;
 
     case BTCMD_WRITEACL:
         ioreq->iobt_Req.io_Error =
-            bthciuart_Send(unit, BTHCIUART_H4_ACL,
+            h4bthci_Send(unit, H4BTHCI_ACL,
                            ioreq->iobt_Data, ioreq->iobt_Length);
         ioreq->iobt_Actual = ioreq->iobt_Req.io_Error ? 0 : ioreq->iobt_Length;
         return 0;
@@ -319,8 +319,8 @@ LONG bthciuart_QueueRequest(struct BTHCIUARTUnit *unit, struct IOBTHCIReq *ioreq
 
     case BTCMD_ADDMSGPORT:
     {
-        struct BTHCIUARTListener *listener =
-            AllocVec(sizeof(struct BTHCIUARTListener), MEMF_PUBLIC | MEMF_CLEAR);
+        struct H4BTHCIListener *listener =
+            AllocVec(sizeof(struct H4BTHCIListener), MEMF_PUBLIC | MEMF_CLEAR);
 
         if (!listener)
         {
@@ -342,7 +342,7 @@ LONG bthciuart_QueueRequest(struct BTHCIUARTUnit *unit, struct IOBTHCIReq *ioreq
         ObtainSemaphore(&unit->hu_QueueLock);
         for (mn = unit->hu_Listeners.mlh_Head; mn->mln_Succ; mn = mn->mln_Succ)
         {
-            struct BTHCIUARTListener *listener = (struct BTHCIUARTListener *)mn;
+            struct H4BTHCIListener *listener = (struct H4BTHCIListener *)mn;
 
             if (listener->hl_Port == (struct MsgPort *)ioreq->iobt_Data)
             {
@@ -373,10 +373,10 @@ LONG bthciuart_QueueRequest(struct BTHCIUARTUnit *unit, struct IOBTHCIReq *ioreq
     }
 }
 
-void bthciuart_UnitTask(void)
+void h4bthci_UnitTask(void)
 {
     struct Task *self = FindTask(NULL);
-    struct BTHCIUARTUnit *unit = (struct BTHCIUARTUnit *)
+    struct H4BTHCIUnit *unit = (struct H4BTHCIUnit *)
         ((struct Process *)self)->pr_Task.tc_UserData;
     struct Task *waiter;
 
@@ -385,40 +385,40 @@ void bthciuart_UnitTask(void)
      *
      * There are four of them and none of them said anything, so a failure
      * arrived at AddBTHardware as the single word "failed" -- with the
-     * resource itself reporting "[BTUART] ready" a moment earlier, which
+     * resource itself reporting "[PL011BT] ready" a moment earlier, which
      * makes the two impossible to tell apart from a log. Each step now names
      * itself and its return code.
      */
-    BTUARTBase = OpenResource("btuart.resource");
-    if (!BTUARTBase)
-        bug("[bthciuart] btuart.resource not available\n");
+    PL011BTBase = OpenResource("pl011bt.resource");
+    if (!PL011BTBase)
+        bug("[h4bthci] pl011bt.resource not available\n");
     else
     {
-        LONG rc = BTUARTClaim(unit);
+        LONG rc = PL011BTClaim(unit);
 
-        if (rc != BTUART_OK)
-            bug("[bthciuart] BTUARTClaim failed, rc=%ld\n", (LONG)rc);
+        if (rc != PL011BT_OK)
+            bug("[h4bthci] PL011BTClaim failed, rc=%ld\n", (LONG)rc);
         else
         {
-            rc = BTUARTSetPower(unit, 1);
-            if (rc != BTUART_OK)
-                bug("[bthciuart] BTUARTSetPower failed, rc=%ld\n", (LONG)rc);
+            rc = PL011BTSetPower(unit, 1);
+            if (rc != PL011BT_OK)
+                bug("[h4bthci] PL011BTSetPower failed, rc=%ld\n", (LONG)rc);
             else
             {
-                rc = BTUARTConfigure(unit, BTHCIUART_BAUD,
-                        BTUART_CONFIG_RTS_CTS);
-                if (rc != BTUART_OK)
-                    bug("[bthciuart] BTUARTConfigure(%lu baud) failed,"
-                        " rc=%ld\n", (ULONG)BTHCIUART_BAUD, (LONG)rc);
+                rc = PL011BTConfigure(unit, H4BTHCI_BAUD,
+                        PL011BT_CONFIG_RTS_CTS);
+                if (rc != PL011BT_OK)
+                    bug("[h4bthci] PL011BTConfigure(%lu baud) failed,"
+                        " rc=%ld\n", (ULONG)H4BTHCI_BAUD, (LONG)rc);
                 else
                 {
-                    bug("[bthciuart] transport up at %lu baud\n",
-                        (ULONG)BTHCIUART_BAUD);
+                    bug("[h4bthci] transport up at %lu baud\n",
+                        (ULONG)H4BTHCI_BAUD);
                     unit->hu_Task = self;
                 }
             }
             if (!unit->hu_Task)
-                BTUARTRelease(unit);
+                PL011BTRelease(unit);
         }
     }
 
@@ -432,13 +432,13 @@ void bthciuart_UnitTask(void)
     if (!unit->hu_Task)
         return;
 
-    bug("[bthciuart] claimed the PL011 at %u baud\n",
-        (unsigned)BTHCIUART_BAUD);
+    bug("[h4bthci] claimed the PL011 at %u baud\n",
+        (unsigned)H4BTHCI_BAUD);
 
     /*
      * Polled, and that is a known cost rather than a design.
-     * btuart.resource's capability bits say whether RX and TX interrupts are
-     * available (BTUART_CAP_RX_INTERRUPT), and they are zero until that path
+     * pl011bt.resource's capability bits say whether RX and TX interrupts are
+     * available (PL011BT_CAP_RX_INTERRUPT), and they are zero until that path
      * is proven -- so until then the honest thing is a poll with a delay
      * rather than a wait that would never be signalled.
      */
@@ -449,19 +449,19 @@ void bthciuart_UnitTask(void)
         if (SetSignal(0, 0) & SIGBREAKF_CTRL_C)
             break;
 
-        got = BTUARTRead(unit, unit->hu_RX + unit->hu_RXLen,
-                         BTHCIUART_RXBUF - unit->hu_RXLen);
+        got = PL011BTRead(unit, unit->hu_RX + unit->hu_RXLen,
+                         H4BTHCI_RXBUF - unit->hu_RXLen);
         if (got > 0)
         {
             unit->hu_RXLen += got;
-            bthciuart_Reassemble(unit);
+            h4bthci_Reassemble(unit);
         }
         else
             Delay(1);
     }
 
-    BTUARTSetPower(unit, 0);
-    BTUARTRelease(unit);
+    PL011BTSetPower(unit, 0);
+    PL011BTRelease(unit);
 
     Forbid();
     unit->hu_Task = NULL;

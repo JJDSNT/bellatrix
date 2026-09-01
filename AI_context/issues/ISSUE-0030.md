@@ -130,7 +130,7 @@ The plan's premise was never tested, and everything since argues against it:
 **The one case that would change this**: raising the baud rate. Vendor bring-up
 normally switches the BCM43438 to 3 Mbaud after firmware download, and errors
 that do not exist at 115200 can appear there. If that day comes, measure the
-UART error bits — `BTUARTRead` reports them now — before reaching for H5.
+UART error bits — `PL011BTRead` reports them now — before reaching for H5.
 
 # Decisions taken
 

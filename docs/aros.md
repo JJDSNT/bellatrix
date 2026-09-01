@@ -258,7 +258,7 @@ tree that has them.
 The full distribution is also used for Raspberry Pi hardware, so it may carry
 the onboard Bluetooth transport and both experimental DWC2 host-controller
 drivers. QEMU's `raspi3b` machine does not emulate the BCM43438 attached to the
-PL011. If `bthciuart.device` is present, `AddBTHardware` waits for an HCI reply
+PL011. If `h4bthci.device` is present, `AddBTHardware` waits for an HCI reply
 that can never arrive and the boot remains at `STARTING SERVICES`. The message
 `USB2OTG Init: No device connected on port!` is benign: it only says that the
 emulated USB port is empty.
@@ -272,7 +272,7 @@ and retain the `usb2otg` backend that is known to complete the emulated boot:
 
 rm -rf out/qemu-dist-AROS
 cp -a out/build/aros/bin/emu68-m68k/AROS out/qemu-dist-AROS
-rm out/qemu-dist-AROS/Devs/Bluetooth/bthciuart.device
+rm out/qemu-dist-AROS/Devs/Bluetooth/h4bthci.device
 rm out/qemu-dist-AROS/Devs/USBHardware/dwc2emu68.device
 
 ./scripts/make-sdcard.sh \

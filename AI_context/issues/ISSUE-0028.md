@@ -16,7 +16,7 @@ tags:
 blockers:
 related_files:
   - external/aros-bluzing/
-  - aros/arch/m68k-emu68/soc/bluetooth/btuart_init.c
+  - aros/arch/m68k-emu68/soc/bluetooth/pl011bt_init.c
   - AI_context/consolidated/history/ISSUE-0019.md
 ---
 
@@ -160,7 +160,7 @@ Ordered so each step is demonstrable on its own.
    asked for. It needs 1-3 underneath, but its *interface* can be specified now
    and is the thing that makes the rest testable by a person rather than by a
    serial log.
-6. ~~**Receive interrupt in `btuart.resource`.**~~ Done 2026-08-16: the PL011
+6. ~~**Receive interrupt in `pl011bt.resource`.**~~ Done 2026-08-16: the PL011
    interrupt drains into a ring and RSSI values came back correct on hardware.
    What legacy had and this does not is the observability around it — the
    watermark, the per-tick budget, and telling silence from a drain failure.
@@ -250,7 +250,7 @@ single most useful thing in the legacy tree:
 So the overrun we chased on 2026-08-16 was known, and legacy's answer was to
 **disable LE scanning entirely**, leaving the condition for re-enabling it
 written down: drain the PL011 by interrupt. That landed the same day (see
-`btuart.resource`), which means the TODO is now met and this is the first time
+`pl011bt.resource`), which means the TODO is now met and this is the first time
 LE scanning has been viable on this port.
 
 The number matters for sizing. This controller does not emit one advertising
@@ -360,7 +360,7 @@ power-cycle that would otherwise mask it. We now have the interrupt that makes
 this checkable and no such check.
 
 **The IRQ top half preserves FE/PE/BE/OE from every read**, and the ring
-watermark is published. We do the first half (see `BTUARTRead`) and not the
+watermark is published. We do the first half (see `PL011BTRead`) and not the
 second.
 
 **Receive has a per-tick budget** — bytes and H4 callbacks both — so a burst

@@ -33,8 +33,8 @@ ever apply to this hardware:
 `rtlbtv1.fwl` and `rtlbtv2.fwl` are **Realtek** Bluetooth firmware loaders,
 installed into `Devs/Bluetooth/FWLoaders/` at 9.3 KB and 9.1 KB. The Raspberry
 Pi 3's radio is a **Broadcom BCM43438** on a UART, which is what
-`Devs/Bluetooth/bthciuart.device` is for and why `build-aros.sh` builds
-`kernel-bthciuart` explicitly.
+`Devs/Bluetooth/h4bthci.device` is for and why `build-aros.sh` builds
+`kernel-h4bthci` explicitly.
 
 Neither loader can initialise this radio. They are loaded on every boot
 regardless, because `bluetooth.library` loads whatever is in the FWLoaders
@@ -49,7 +49,7 @@ useful to this machine — there is nothing useful to put in it.
 
 That is worth stating separately from the waste, because it bounds what
 Bluetooth on this port can currently be: the HCI transport exists
-(`bthciuart.device`), and the firmware handshake for our chip does not. See
+(`h4bthci.device`), and the firmware handshake for our chip does not. See
 [ISSUE-0030](ISSUE-0030.md) for what the legacy port established about the
 Bluetooth stack.
 

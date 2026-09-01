@@ -9,7 +9,7 @@ created_at: 2026-08-21
 updated_at: 2026-08-24
 tags:
   - bluetooth
-  - btuart
+  - pl011bt
   - raspberry-pi-3
   - aros-head
 blockers:
@@ -25,7 +25,7 @@ related_files:
 # Summary
 
 After the Bellatrix update to the current AROS HEAD is validated, connect the
-existing Raspberry Pi 3 `btuart.resource` to the Bluetooth stack now maintained
+existing Raspberry Pi 3 `pl011bt.resource` to the Bluetooth stack now maintained
 in the main AROS tree. The standalone `aros-bluzing` integration is deprecated;
 its UART and Broadcom work remains reference material, not a component to inject
 under `contrib`.
@@ -39,7 +39,7 @@ It does not yet provide a real H4 UART hardware backend for the Raspberry Pi 3
 onboard controller.
 
 Bellatrix already has the platform boundary needed for that backend:
-`btuart.resource` owns the PL011, routing, clock, power and interrupt-driven RX
+`pl011bt.resource` owns the PL011, routing, clock, power and interrupt-driven RX
 ring. The old standalone Bluzing tree also contains a working direction for the
 transport and hardware tests, but its Manager Task, library, package startup and
 USB integration have been superseded by the native AROS design.
@@ -49,7 +49,7 @@ USB integration have been superseded by the native AROS design.
 Implement the following native path without restoring the old contrib package:
 
 ```text
-Bellatrix btuart.resource
+Bellatrix pl011bt.resource
         -> native AROS Bluetooth UART hardware module
         -> bluetooth.library hardware registration/API
         -> H4 and btcore code from rom/bluetooth/stack
@@ -59,7 +59,7 @@ Bellatrix btuart.resource
 # Reusable work
 
 - `ports/aros/transport-uart`: reference for H4 RX/TX pumping, timing and error
-  handling over `btuart.resource`.
+  handling over `pl011bt.resource`.
 - `ports/aros/uart-selftest`: reference for staged PL011/H4/controller bring-up
   validation before enabling the complete stack.
 - `protocols/vendor_init/broadcom`: requirements and protocol notes for a future
@@ -83,7 +83,7 @@ Bellatrix btuart.resource
 1. Finish and validate the Bellatrix update to the current AROS HEAD.
 2. Study the hardware contract used by `rom/bluetooth/hardware/vbthci` and the
    current USB Bluetooth registration path.
-3. Design a native UART hardware module around `btuart.resource`, retaining the
+3. Design a native UART hardware module around `pl011bt.resource`, retaining the
    main tree's ownership, object and event model.
 4. Port only the useful H4 transport mechanics from the standalone tree.
 5. Adapt the UART self-test to the native stack and validate controller reset,
@@ -96,7 +96,7 @@ Bellatrix btuart.resource
 # Decisions taken
 
 - The AROS main-tree Bluetooth implementation is authoritative.
-- Bellatrix-specific platform access remains behind `btuart.resource`.
+- Bellatrix-specific platform access remains behind `pl011bt.resource`.
 - New AROS-side integration will be maintained as a numbered Bellatrix patch or
   proposed upstream; `external/aros` will not be edited as an unrecorded fork.
 - The old standalone repository is historical/reference material only.
@@ -107,7 +107,7 @@ Bellatrix btuart.resource
 - [ ] The onboard Pi 3 controller registers through the native
       `bluetooth.library` hardware model.
 - [ ] H4 command, event and ACL traffic operates without RX-ring loss or stale
-      ownership of `btuart.resource`.
+      ownership of `pl011bt.resource`.
 - [ ] Native discovery sees real devices on Pi 3 hardware.
 - [ ] A Bluetooth HID device works through `bthid.class`.
 - [ ] Shutdown and restart release all UART, task and message resources cleanly.
@@ -117,7 +117,7 @@ Bellatrix btuart.resource
 # Execution log
 
 - 2026-08-22 -- **The submodule is gone and the transport exists.**
-  `bthciuart.device` (`soc/bluetooth/bthciuart/`) presents `btuart.resource`
+  `h4bthci.device` (`soc/bluetooth/h4bthci/`) presents `pl011bt.resource`
   to AROS's stack as an HCI device in `DEVS:Bluetooth`: H4 framing and the
   AROS device protocol, nothing about the board. `external/aros-bluzing` was
   removed after checking that nothing in it was still ours -- the stack is
@@ -128,7 +128,7 @@ Bellatrix btuart.resource
   replaced. AROS ships `Prefs/Bluetooth` for that half.
 
   The card now carries one Bluetooth: `bluetooth.library`, `BTStackLoader`,
-  `bthid.class`, the firmware loaders, `vbthci.device` and `bthciuart.device`.
+  `bthid.class`, the firmware loaders, `vbthci.device` and `h4bthci.device`.
   A stale `Prefs/Env-Archive/SYS/Packages/aros-bluzing` was removed with it --
   a card shipping that has the Startup-Sequence looking for a package that is
   not there.
@@ -136,7 +136,7 @@ Bellatrix btuart.resource
   **None of it has run.** `C:BTStackLoader` is called by the stock
   Startup-Sequence, so the next boot is the first time this path has all its
   pieces. Three things are unknown and none should be assumed: whether the
-  stack picks our device over `vbthci`, whether `btuart.resource` yields the
+  stack picks our device over `vbthci`, whether `pl011bt.resource` yields the
   PL011 when the unit task claims it, and whether a BCM43438 answers HCI at
   all before a patchram upload -- which this port still does not do.
 
@@ -175,6 +175,11 @@ On a Raspberry Pi 3, with `AddBTHardware` added to `S:Startup-Sequence`
     ...ready: AA:AA:AA:AA:AA:AA, HCI 4.1, LMP 4.1 (Broadcom), BR/EDR + LE
     New hardware ... added (Raspberry Pi onboard Bluetooth, ...)
 
+(The transport was called `bthciuart.device` when that was recorded. It is
+`h4bthci.device` since 2026-09-01, along with `btuart.resource` ->
+`pl011bt.resource` and `brcmfw` -> `brcmbt`; the log above is quoted as it was
+captured. `aros/arch/m68k-emu68/soc/bluetooth/README.md` records why.)
+
 The controller resets, reports its version, features and buffer sizes, and the
 stack registers it. Steps 0 through 13 of the HCI bring-up all return ok.
 
@@ -209,7 +214,7 @@ its own explanation.
 Legacy also had an RX ring in `bt_hal_raspi3.c` with `s_rx_ring_overflow`
 counting bytes lost when it filled. **We have the same, and better** -- an
 8 KB ring against legacy's 2 KB, `rx_dropped` and `rx_errors`, and
-`BTUARTRead()` reports `[BTUART] rx ring overflow, N byte(s) dropped`
+`PL011BTRead()` reports `[PL011BT] rx ring overflow, N byte(s) dropped`
 whenever any were lost. An earlier version of this section said the counter
 was missing; it was not, and that claim was made without checking.
 
@@ -246,9 +251,9 @@ one of them is misreading the Read_Local_Version response.
 Two of the three items below are no longer true, and the issue was read as
 current for three days after they stopped being so.
 
-**The transport exists.** `aros/arch/m68k-emu68/soc/bluetooth/bthciuart` builds
-`Devs/Bluetooth/bthciuart.device` -- H4 framing over the PL011 that
-`btuart.resource` owns -- and `build-aros.sh` builds it. It is on the card.
+**The transport exists.** `aros/arch/m68k-emu68/soc/bluetooth/h4bthci` builds
+`Devs/Bluetooth/h4bthci.device` -- H4 framing over the PL011 that
+`pl011bt.resource` owns -- and `build-aros.sh` builds it. It is on the card.
 
 **There is only one bluetooth.library on the card.** The
 `kernel-bluetooth-m68k-emu68` alias is enabled, so `Libs/bluetooth.library`
@@ -274,7 +279,7 @@ Loading the stack against vbthci under QEMU separates "the stack works" from
    `rom/bluetooth/hardware/vbthci/mmakefile.src` is the model:
    `%build_module modtype=device moduledir=Devs/Bluetooth uselibs="btcore"`.
    The Pi's onboard controller sits on the PL011 that
-   `soc/bluetooth/btuart.resource` already owns -- exclusive claim, PL011
+   `soc/bluetooth/pl011bt.resource` already owns -- exclusive claim, PL011
    configuration, `BT_REG_EN`, GPCLK2 as the 32.768 kHz LPO, polled read and
    write. What does not exist is the device that presents that as HCI.
 2. **Two bluetooth.library, one system.** Enabling the alias and keeping the

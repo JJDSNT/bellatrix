@@ -87,7 +87,7 @@ include $(SRCDIR)/config/aros.cfg
 # turns it on. What is still missing afterwards is the transport: the stack
 # talks to HCI devices in DEVS:Bluetooth, and the only one upstream is vbthci,
 # a virtual one. The Pi's onboard controller hangs off the PL011 that
-# soc/bluetooth/btuart.resource already owns, and nothing yet bridges the two.
+# soc/bluetooth/pl011bt.resource already owns, and nothing yet bridges the two.
 # See ISSUE-0046.
 # The components of kernel-bluetooth, minus the firmware loaders.
 #
@@ -113,8 +113,8 @@ include $(SRCDIR)/config/aros.cfg
 #MM      bluetooth-shellcommands \
 #MM      kernel-bluetooth-hardware \
 #MM      kernel-bluetooth-prefs \
-#MM      kernel-bthciuart \
-#MM      kernel-brcmfw
+#MM      kernel-h4bthci \
+#MM      kernel-brcmbt
 
 
 #
@@ -165,7 +165,7 @@ EMU68WIFIFW_FILES  := brcm/brcmfmac43430-sdio.bin brcm/brcmfmac43430-sdio.txt \
 # HCI_Reset and reports its version without one, but with a placeholder
 # BD_ADDR of AA:AA:AA:AA:AA:AA, and pairing needs a real address.
 #
-# soc/bluetooth/brcmfw reads this at runtime from DEVS:Firmware/brcm/. The
+# soc/bluetooth/brcmbt reads this at runtime from DEVS:Firmware/brcm/. The
 # legacy tree fetched the same file and converted it to a C source at build
 # time (BTstack's convert_hcd.py) to link it in; keeping it a file means
 # changing controllers is changing a file.

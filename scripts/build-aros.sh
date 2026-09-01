@@ -617,7 +617,7 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # publishes at $01000000; the census it prints is meant to be compared with
     # the one Bellatrix prints on its own side.
     make workbench-c-emu68-deniseview
-    make kernel-bthciuart
+    make kernel-h4bthci
 
     # S:Startup-Sequence, because a patch to it otherwise never reaches a card.
     #
@@ -799,7 +799,7 @@ else
 # its own -- no patch to Startup-Sequence needed.
 #
 # bluetooth.class goes with it. That one is the HCI transport for a USB
-# dongle; Bluetooth here comes off the PL011 through bthciuart, and
+# dongle; Bluetooth here comes off the PL011 through h4bthci, and
 # Classes/Bluetooth is a separate directory that stays.
     rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
     rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \

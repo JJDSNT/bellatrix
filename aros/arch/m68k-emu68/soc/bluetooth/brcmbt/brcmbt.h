@@ -1,5 +1,5 @@
-#ifndef BRCMFW_H
-#define BRCMFW_H
+#ifndef BRCMBT_H
+#define BRCMBT_H
 /*
  * Libbase for the Broadcom Bluetooth firmware loader.
  *
@@ -49,4 +49,4 @@ struct BrcmFwBase
  */
 #define BRCM_HCD_HDR                3
 
-#endif /* BRCMFW_H */
+#endif /* BRCMBT_H */

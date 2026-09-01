@@ -1,7 +1,7 @@
 /* Copyright (C) 2026, The Bellatrix Project. All rights reserved. */
 
-#ifndef BTUART_PRIVATE_H
-#define BTUART_PRIVATE_H
+#ifndef PL011BT_PRIVATE_H
+#define PL011BT_PRIVATE_H
 
 #include <exec/nodes.h>
 #include <exec/semaphores.h>
@@ -15,10 +15,10 @@
  * back to back overflow a 2 KB ring, and an overflow costs the H4 framer its
  * synchronisation just as an overrun does. 8 KB holds six.
  */
-#define BTUART_RX_RING 8192
+#define PL011BT_RX_RING 8192
 #include <exec/types.h>
 
-struct BTUARTBase
+struct PL011BTBase
 {
     struct Node node;
     struct SignalSemaphore lock;
@@ -30,10 +30,10 @@ struct BTUARTBase
     ULONG uart_clock_hz;
     ULONG baud;
     ULONG config_flags;
-    ULONG rx_errors;   /* receive status reports emitted, see BTUARTRead */
+    ULONG rx_errors;   /* receive status reports emitted, see PL011BTRead */
 
     /*
-     * Receive ring, filled by the PL011 interrupt and drained by BTUARTRead().
+     * Receive ring, filled by the PL011 interrupt and drained by PL011BTRead().
      *
      * The FIFO holds sixteen bytes, which at 115200 baud is 1.4 ms. Nothing
      * scheduled can be relied on to visit it that often: polling at 10 ms lost
@@ -43,10 +43,10 @@ struct BTUARTBase
      * latency instead of bytes.
      */
     volatile ULONG rx_head;   /* written by the handler */
-    volatile ULONG rx_tail;   /* written by BTUARTRead */
+    volatile ULONG rx_tail;   /* written by PL011BTRead */
     volatile ULONG rx_dropped;
     BOOL rx_irq_armed;
-    UBYTE rx_ring[BTUART_RX_RING];
+    UBYTE rx_ring[PL011BT_RX_RING];
 };
 
-#endif /* BTUART_PRIVATE_H */
+#endif /* PL011BT_PRIVATE_H */

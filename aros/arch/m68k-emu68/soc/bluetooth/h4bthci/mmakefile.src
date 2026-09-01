@@ -1,6 +1,6 @@
 include $(SRCDIR)/config/aros.cfg
 
-#MM kernel-bthciuart : kernel-bluetooth-library-includes kernel-btuart-emu68-includes
+#MM kernel-h4bthci : kernel-bluetooth-library-includes kernel-pl011bt-emu68-includes
 
 #
 # The HCI transport for the Pi's onboard controller.
@@ -8,7 +8,7 @@ include $(SRCDIR)/config/aros.cfg
 # AROS's Bluetooth stack talks to HCI devices in DEVS:Bluetooth. Upstream ships
 # exactly one, vbthci, and it is virtual -- so on real hardware the stack has
 # nothing to talk to. This is the other half: H4 framing over the PL011 that
-# soc/bluetooth's btuart.resource owns.
+# soc/bluetooth's pl011bt.resource owns.
 #
 # It deliberately knows nothing about the board. Pin muxing, the LPO on GPCLK2,
 # BT_REG_EN, the baud rate and flow control all belong to that resource, and
@@ -18,19 +18,19 @@ include $(SRCDIR)/config/aros.cfg
 # sends it a patchram image, and the Broadcom vendor protocol for that is
 # outside this driver as it is outside the resource.
 #
-BTHCIUARTDIR := $(SRCDIR)/$(CURDIR)
+H4BTHCIDIR := $(SRCDIR)/$(CURDIR)
 
 FILES := \
-    $(BTHCIUARTDIR)/bthciuart_device \
-    $(BTHCIUARTDIR)/bthciuart_unit
+    $(H4BTHCIDIR)/h4bthci_device \
+    $(H4BTHCIDIR)/h4bthci_unit
 
-USER_INCLUDES := -I$(BTHCIUARTDIR) \
+USER_INCLUDES := -I$(H4BTHCIDIR) \
     -I$(SRCDIR)/rom/bluetooth/stack/include \
     -I$(SRCDIR)/arch/m68k-emu68/include
 
-%build_module mmake=kernel-bthciuart \
-    modname=bthciuart modtype=device \
-    conffile=$(BTHCIUARTDIR)/bthciuart.conf \
+%build_module mmake=kernel-h4bthci \
+    modname=h4bthci modtype=device \
+    conffile=$(H4BTHCIDIR)/h4bthci.conf \
     moduledir=Devs/Bluetooth \
     files="$(FILES)"
 

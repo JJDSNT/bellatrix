@@ -1,6 +1,6 @@
 /*
  *----------------------------------------------------------------------------
- *   brcmfw.fwl - Broadcom Bluetooth firmware (patchram) loader
+ *   brcmbt.fwl - Broadcom Bluetooth firmware (patchram) loader
  *----------------------------------------------------------------------------
  *
  * A pluggable BtFirmwareLoader for Broadcom controllers, which is what the
@@ -29,7 +29,7 @@
 #include <proto/dos.h>
 #include <proto/bluetooth.h>
 
-#include "brcmfw.h"
+#include "brcmbt.h"
 
 #include LC_LIBDEFS_FILE
 
@@ -146,12 +146,12 @@ static LONG brcmWaitRestart(struct BtFirmwareContext *ctx)
         }
 
         ctx->fwc_Log(ctx, RETURN_WARN,
-            "brcmfw: controller has not answered %ld probe(s) since Launch_RAM",
+            "brcmbt: controller has not answered %ld probe(s) since Launch_RAM",
             (LONG)(attempt + 1));
     }
 
     ctx->fwc_Log(ctx, RETURN_ERROR,
-        "brcmfw: controller did not come back after Launch_RAM");
+        "brcmbt: controller did not come back after Launch_RAM");
     return -1;
 }
 /* \\\ */
@@ -206,18 +206,18 @@ static LONG brcmLoad(struct BtFirmwareLoader *self,
          * the bring-up over a file the user may deliberately not have.
          */
         ctx->fwc_Log(ctx, RETURN_WARN,
-            "brcmfw: no %s, continuing without patchram", path);
+            "brcmbt: no %s, continuing without patchram", path);
         return 0;
     }
 
-    ctx->fwc_Log(ctx, RETURN_OK, "brcmfw: %s, %ld bytes", path, size);
+    ctx->fwc_Log(ctx, RETURN_OK, "brcmbt: %s, %ld bytes", path, size);
 
     err = ctx->fwc_HciCommand(ctx, HC_OP_BRCM_DOWNLOAD_MINIDRV, NULL, 0,
                               &status, NULL, NULL, 0);
     if (err || status)
     {
         ctx->fwc_Log(ctx, RETURN_ERROR,
-            "brcmfw: Download_Minidriver failed (err %ld, status 0x%02lx)",
+            "brcmbt: Download_Minidriver failed (err %ld, status 0x%02lx)",
             err, (LONG)status);
         FreeVec(fw);
         return -1;
@@ -231,7 +231,7 @@ static LONG brcmLoad(struct BtFirmwareLoader *self,
         if (offset + BRCM_HCD_HDR + plen > size)
         {
             ctx->fwc_Log(ctx, RETURN_ERROR,
-                "brcmfw: truncated record at %ld of %ld", offset, size);
+                "brcmbt: truncated record at %ld of %ld", offset, size);
             FreeVec(fw);
             return -1;
         }
@@ -241,7 +241,7 @@ static LONG brcmLoad(struct BtFirmwareLoader *self,
         if (err || status)
         {
             ctx->fwc_Log(ctx, RETURN_ERROR,
-                "brcmfw: record %ld (opcode 0x%04lx) failed"
+                "brcmbt: record %ld (opcode 0x%04lx) failed"
                 " (err %ld, status 0x%02lx)",
                 records, (LONG)opcode, err, (LONG)status);
             FreeVec(fw);
@@ -254,7 +254,7 @@ static LONG brcmLoad(struct BtFirmwareLoader *self,
 
     FreeVec(fw);
     ctx->fwc_Log(ctx, RETURN_OK,
-        "brcmfw: %ld records applied; controller restarting", records);
+        "brcmbt: %ld records applied; controller restarting", records);
 
     return brcmWaitRestart(ctx);
 }

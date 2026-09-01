@@ -50,7 +50,7 @@ cd bellatrix
 ```
 
 The Pi-oriented distribution can contain onboard devices that QEMU does not
-emulate.  In particular, loading `bthciuart.device` blocks the startup while it
+emulate.  In particular, loading `h4bthci.device` blocks the startup while it
 waits for the Pi's BCM43438 Bluetooth controller.  See the [QEMU SD-card
 recipe](docs/aros.md#qemu-sd-card-profile) for the currently validated staging
 step and the exact boot command.

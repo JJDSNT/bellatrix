@@ -21,7 +21,10 @@ describes as "a firmware loader bound after this controller was already up":
 it uploads the patchram, the controller restarts on Launch_RAM, and the
 bring-up is re-run from HCB_RESET against a chip that is still restarting.
 
-Measured on a Pi 3, that failed the same way every boot:
+Measured on a Pi 3, that failed the same way every boot (the transport was
+called bthciuart.device and the firmware loader brcmfw at the time; they
+are h4bthci.device and brcmbt now, and the log below is quoted as it was
+recorded):
 
     bthciuart.device/0 ready: AA:AA:AA:AA:AA:AA, HCI 4.1, LMP 4.1 (Broadcom)
     brcmfw: 167 records applied; controller restarting
@@ -85,9 +88,9 @@ index b4f4c7b..a4ee7a5 100644
  If EXISTS "C:BTStackLoader"
      BTStackLoader >NIL:
  EndIf
-+If EXISTS "DEVS:Bluetooth/bthciuart.device"
++If EXISTS "DEVS:Bluetooth/h4bthci.device"
 +    Echo "starting AddBTHardware" >"SDCARD0P0:bt-hardware.log"
-+    AddBTHardware DEVS:Bluetooth/bthciuart.device >>"SDCARD0P0:bt-hardware.log"
++    AddBTHardware DEVS:Bluetooth/h4bthci.device >>"SDCARD0P0:bt-hardware.log"
 +    ; AddBTHardware prints "failed" and nothing else. The reason is recorded
 +    ; through btAddErrorMsg(), which is what BTErrorLog reports -- without it
 +    ; the log says something went wrong and never what.
