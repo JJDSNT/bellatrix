@@ -432,8 +432,10 @@ void h4bthci_UnitTask(void)
     if (!unit->hu_Task)
         return;
 
-    bug("[h4bthci] claimed the PL011 at %u baud\n",
-        (unsigned)H4BTHCI_BAUD);
+    /* %lu, not %u: kprintf goes through VNewRawDoFmt, where a %u is
+     * fetched as a 16-bit UWORD -- 115200 came out as 49664. */
+    bug("[h4bthci] claimed the PL011 at %lu baud\n",
+        (ULONG)H4BTHCI_BAUD);
 
     /*
      * Polled, and that is a known cost rather than a design.
