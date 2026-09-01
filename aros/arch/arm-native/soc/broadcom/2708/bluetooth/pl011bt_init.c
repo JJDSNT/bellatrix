@@ -159,7 +159,7 @@ static LONG firmware_gpio_set(struct PL011BTBase *PL011BTBase, ULONG gpio,
     msg[9] = 0;
     msg[10] = AROS_LONG2LE(enabled != 0);
     msg[11] = 0;
-    if (MBoxCall((APTR)VCMB_BASE, VCMB_PROPCHAN, msg) == msg &&
+    if (MBoxCall((APTR)(IPTR)VCMB_BASE, VCMB_PROPCHAN, msg) == msg &&
         (AROS_LE2LONG(msg[1]) & VCTAG_RESP))
         result = PL011BT_OK;
 
@@ -173,7 +173,7 @@ static LONG firmware_gpio_set(struct PL011BTBase *PL011BTBase, ULONG gpio,
         msg[5] = AROS_LONG2LE(gpio);
         msg[6] = AROS_LONG2LE(enabled != 0);
         msg[7] = 0;
-        if (MBoxCall((APTR)VCMB_BASE, VCMB_PROPCHAN, msg) != msg ||
+        if (MBoxCall((APTR)(IPTR)VCMB_BASE, VCMB_PROPCHAN, msg) != msg ||
             !(AROS_LE2LONG(msg[1]) & VCTAG_RESP))
             result = PL011BT_ERR_UNAVAILABLE;
     }
@@ -199,7 +199,7 @@ static ULONG query_uart_clock(struct PL011BTBase *PL011BTBase)
     msg[6] = 0;
     msg[7] = 0;
 
-    if (MBoxCall((APTR)VCMB_BASE, VCMB_PROPCHAN, msg) != msg)
+    if (MBoxCall((APTR)(IPTR)VCMB_BASE, VCMB_PROPCHAN, msg) != msg)
         return UART_CLOCK_FALLBACK_HZ;
     if (AROS_LE2LONG(msg[6]) == 0)
         return UART_CLOCK_FALLBACK_HZ;
