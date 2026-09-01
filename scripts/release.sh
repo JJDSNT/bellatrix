@@ -222,8 +222,21 @@ if [ "$SKIP_BUILD" = 0 ]; then
     # The card is made from the distribution tree, which only the full build
     # produces. The lean target would leave every library, Zune class and C:
     # command at whatever the tree happened to hold.
+    # The release ships the USB controller that reaches a desktop.
+    #
+    # Both are ours and both are built. dwc2emu68 is the Bellatrix rewrite and
+    # is the default everywhere else, because it is the one being finished and
+    # development should exercise it -- but ISSUE-0078 is open and high, and it
+    # says what that means for a card: with dwc2emu68 the boot stops about
+    # eight seconds in and never reaches the desktop, while usb2otg on the same
+    # board boots and drives the mouse. usb2otg costs a tax rather than a
+    # failure (8000 interrupts a second off SOF, ISSUE-0078 again), and a tax
+    # is what a release can carry. A boot that stops is not.
+    #
+    # Pinned here rather than left to the default, for the same reason the
+    # chipset is pinned off below: a release should say what it ships.
     say "building AROS (full)"
-    "$ROOT/scripts/build-aros.sh" full
+    BELLATRIX_USB_DRIVER=usb2otg "$ROOT/scripts/build-aros.sh" full
 else
     say "skipping the build, using what is there"
 fi

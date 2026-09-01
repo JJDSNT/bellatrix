@@ -693,16 +693,6 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     make kernel-dos64
 
     #
-    # The USB host controller: built here, and since 2026-08-29 kept.
-    #
-    # Turning USB off takes two separate steps, and doing only one is what let
-    # it keep booting when it was supposed to be gone. The kernel-usb alias in
-    # arch/m68k-emu68/mmakefile.src decides what the *distribution* target
-    # rebuilds; it does nothing about a copy already in the tree, and
-    # %build_module installs straight into Devs/USBHardware, so building the
-    # driver here to keep it compiling put it back on every card regardless.
-    # That is what the BELLATRIX_USB=0 branch below still has to undo by hand.
-    #
     # The SFS handler, for the FAT-versus-SFS comparison sdcard.md asks for.
     #
     # It is not in CORERESIDENTS and does not need to be: an MBR partition of
@@ -712,65 +702,110 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # partition never loads it.
     make kernel-fs-sfs
 
-    # Both USB drivers, because there are two and both are ours.
-    #
-    # kernel-usb-arosotg is the AROS DWC2 engine, adopted from arm-native and
-    # ours to modify; kernel-usb-dwc2emu68 is the Bellatrix rewrite replacing
-    # it (ISSUE-0047). They are built, run and compared before either is
-    # deleted -- the same shape as the two SD card backends. Building only one
-    # is how the other stops being code.
-    make kernel-usb-arosotg
-    make kernel-usb-dwc2emu68
+fi
 
-    # USB ships by default, with our own controller on the card.
+#
+# The USB host controller, and which one goes on the card.
+#
+# Outside the metatarget branch above, deliberately. Everything in that branch
+# is "build what the lean target does not pull in", and this is not that: it is
+# a policy about what the *tree* ends up holding, and the tree is what a card
+# and a release are made from. It lived inside for a while and the consequence
+# was silent -- `build-aros.sh full` is what release.sh calls, so on the build
+# a release is actually made from the selection never ran, BELLATRIX_USB and
+# BELLATRIX_USB_DRIVER were ignored, and Devs/USBHardware kept whatever the
+# AROS-<target> metatarget happened to leave. With two drivers in there
+# S:Startup-Sequence adds both, one after the other, each guarded by its own
+# `If EXISTS` -- two host-controller drivers started against one OTG core.
+#
+# Turning USB off also takes two separate steps, and doing only one is what let
+# it keep booting when it was supposed to be gone. The kernel-usb alias in
+# arch/m68k-emu68/mmakefile.src decides what the *distribution* target
+# rebuilds; it does nothing about a copy already in the tree, and
+# %build_module installs straight into Devs/USBHardware, so building the
+# driver here to keep it compiling put it back on every card regardless.
+# That is what the BELLATRIX_USB=0 branch below still has to undo by hand.
+#
+# Both USB drivers, because there are two and both are ours.
+#
+# kernel-usb-arosotg is the AROS DWC2 engine, adopted from arm-native and
+# ours to modify; kernel-usb-dwc2emu68 is the Bellatrix rewrite replacing
+# it (ISSUE-0047). They are built, run and compared before either is
+# deleted -- the same shape as the two SD card backends. Building only one
+# is how the other stops being code.
+make kernel-usb-arosotg
+make kernel-usb-dwc2emu68
+
+# USB ships by default, with our own controller on the card.
+#
+# It used to be off, on the grounds that a machine with no host controller
+# cannot fault in one. That was a measurement baseline, and a pack built
+# from it has no keyboard and no mouse -- silently, which is how it caught
+# people out. BELLATRIX_USB=0 still builds that pack, deliberately, for
+# measuring against.
+#
+# BELLATRIX_USB_DRIVER picks which controller goes on the card and both are
+# always built: kernel-usb-dwc2emu68 is the Bellatrix rewrite (ISSUE-0047)
+# and the default; kernel-usb-arosotg is the arm-native engine it replaces,
+# kept buildable so the comparison stays possible.
+if [ "${BELLATRIX_USB:-1}" = 1 ]; then
+    make kernel-usb-nopci
+    keep="${BELLATRIX_USB_DRIVER:-dwc2emu68}"
+
+    # Refuse a name that matches nothing, before deleting anything.
     #
-    # It used to be off, on the grounds that a machine with no host controller
-    # cannot fault in one. That was a measurement baseline, and a pack built
-    # from it has no keyboard and no mouse -- silently, which is how it caught
-    # people out. BELLATRIX_USB=0 still builds that pack, deliberately, for
-    # measuring against.
-    #
-    # BELLATRIX_USB_DRIVER picks which controller goes on the card and both are
-    # always built: kernel-usb-dwc2emu68 is the Bellatrix rewrite (ISSUE-0047)
-    # and the default; kernel-usb-arosotg is the arm-native engine it replaces,
-    # kept buildable so the comparison stays possible.
-    if [ "${BELLATRIX_USB:-1}" = 1 ]; then
-        make kernel-usb-nopci
-        keep="${BELLATRIX_USB_DRIVER:-dwc2emu68}"
+    # The loop below keeps one file and removes the rest, so a misspelt driver
+    # removes every one of them and leaves a card with no host controller --
+    # which boots, and has no keyboard and no mouse. That is the exact failure
+    # BELLATRIX_USB=0 was already caught producing silently, and a typo should
+    # not be able to reproduce it.
+    if [ ! -e "$BUILD/bin/$TARGET/AROS/Devs/USBHardware/$keep.device" ]; then
+        echo "ERROR: BELLATRIX_USB_DRIVER=$keep, but no $keep.device was built" >&2
+        echo "       built:" >&2
         for d in "$BUILD/bin/$TARGET/AROS/Devs/USBHardware/"*.device; do
-            [ -e "$d" ] || continue
-            case "$(basename "$d")" in
-                "$keep.device") ;;
-                *) rm -f "$d" ;;
-            esac
+            [ -e "$d" ] && echo "         $(basename "$d" .device)" >&2
         done
-        echo "[aros] USB ENABLED on the card, host controller: $keep.device"
-    else
-        rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
-
-    # Removing the controller was not enough to stop USB running.
-    # Startup-Sequence line 39 tests SYS:Classes/USB, and that directory is
-    # still there, so every boot still does
-    #
-    #     Run <NIL: >NIL: QUIET AddUSBClasses
-    #
-    # which loads poseidon.library and some twenty classes *asynchronously*,
-    # alongside the rest of the sequence, on a machine that now has no host
-    # controller for any of it to bind to. PsdStackLoader is the same story.
-    # A TLSF backtrace caught AddUSBClasses in the act, and an async task is
-    # exactly the shape that makes a heap fault land in a different task each
-    # time. Take the directory away and the sequence skips the whole block on
-    # its own -- no patch to Startup-Sequence needed.
-    #
-    # bluetooth.class goes with it. That one is the HCI transport for a USB
-    # dongle; Bluetooth here comes off the PL011 through bthciuart, and
-    # Classes/Bluetooth is a separate directory that stays.
-        rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
-        rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \
-              "$BUILD/bin/$TARGET/AROS/C/AddUSBHardware" \
-              "$BUILD/bin/$TARGET/AROS/C/PsdStackLoader"
-        echo "[aros] USB built and left off the card (see mmakefile.src)"
+        exit 1
     fi
+
+    # Exactly one, because S:Startup-Sequence adds every one it finds.
+    #
+    # Its two blocks are each guarded by their own `If EXISTS`, so a card
+    # holding both drivers starts both against the same OTG core rather than
+    # choosing between them.
+    for d in "$BUILD/bin/$TARGET/AROS/Devs/USBHardware/"*.device; do
+        [ -e "$d" ] || continue
+        case "$(basename "$d")" in
+            "$keep.device") ;;
+            *) rm -f "$d" ;;
+        esac
+    done
+    echo "[aros] USB ENABLED on the card, host controller: $keep.device"
+else
+    rm -rf "$BUILD/bin/$TARGET/AROS/Devs/USBHardware"
+
+# Removing the controller was not enough to stop USB running.
+# Startup-Sequence line 39 tests SYS:Classes/USB, and that directory is
+# still there, so every boot still does
+#
+#     Run <NIL: >NIL: QUIET AddUSBClasses
+#
+# which loads poseidon.library and some twenty classes *asynchronously*,
+# alongside the rest of the sequence, on a machine that now has no host
+# controller for any of it to bind to. PsdStackLoader is the same story.
+# A TLSF backtrace caught AddUSBClasses in the act, and an async task is
+# exactly the shape that makes a heap fault land in a different task each
+# time. Take the directory away and the sequence skips the whole block on
+# its own -- no patch to Startup-Sequence needed.
+#
+# bluetooth.class goes with it. That one is the HCI transport for a USB
+# dongle; Bluetooth here comes off the PL011 through bthciuart, and
+# Classes/Bluetooth is a separate directory that stays.
+    rm -rf "$BUILD/bin/$TARGET/AROS/Classes/USB"
+    rm -f "$BUILD/bin/$TARGET/AROS/C/AddUSBClasses" \
+          "$BUILD/bin/$TARGET/AROS/C/AddUSBHardware" \
+          "$BUILD/bin/$TARGET/AROS/C/PsdStackLoader"
+    echo "[aros] USB built and left off the card (see mmakefile.src)"
 fi
 
 # Record what the toolchain was built from, so a later `clean` can tell whether
