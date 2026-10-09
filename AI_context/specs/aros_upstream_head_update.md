@@ -82,6 +82,16 @@ task launch hooks and CPU accounting. Review `0002` and `0010` alongside the
 generic scheduler and assembly includes. Verify every local producer and
 consumer of reschedule flags and every call/return through ExitIntr.
 
+**Provenance clarification:** IntETask is an upstream AROS internal structure,
+not a Bellatrix invention. Its existing accounting fields were already in the
+pinned upstream tree. Bellatrix specifically implements m68k CPU-time accounting
+through Emu68 counters and adds `iet_CpuInsn`, `iet_LastInsn` and
+`iet_InsnUsage` in patch `0093`, exposing them through `0094`.
+Upstream's decision to omit accounting state on traditional m68k targets does
+not mean that state is unnecessary on Emu68. Preserve this port capability;
+the incompatibility is a target assumption changed upstream, not evidence that
+Bellatrix's original implementation was incorrect.
+
 **Confirmed source incompatibility:** HEAD's `rom/exec/etask.h` excludes
 `iet_private1`, `iet_private2`, `iet_LastBusy` and `iet_LastUsageStamp` on m68k.
 Bellatrix's `kernel/cpuusage.c` reads/writes `iet_private2` and `iet_LastBusy`;
@@ -131,8 +141,35 @@ and metadata failures stop destructive follow-up (`647e2472ab`, `c0e0af6d2f`).
 Also include DE_MAXTRANSFER, dirty-volume validation, requester suppression
 and long-name lookup improvements.
 
-Reconcile `0037`'s fixed cache sizing with `efbf24238c`'s volume-scaled policy.
-Retain the DMA-alignment requirement from `0038` in the resulting policy.
+### FAT patch decisions confirmed against the audited HEAD
+
+| Local patch | Source finding at HEAD | Migration action |
+|---|---|---|
+| `0006` — cluster/size writes | FillDirEntry, OpCreateDir, OpWrite and OpSetFileSize perform the required little-endian conversions. | Remove the redundant local patch when moving the pin; retain upstream's checked-write/error handling. |
+| `0008` — FAT dates | Conversion is upstream, with subsequent explicit-width refinement in `9213952b4f`. | Remove the local patch and keep the refined upstream implementation. |
+| `0023` — decoded clusters and volume ID | Parent lookup/rename use decoded clusters; formatted volume ID is encoded little-endian. | Remove the redundant local patch when moving the pin. |
+| `0037` — fixed cache size/hash | `efbf24238c` supplies a volume-scaled policy instead of the local fixed values. | Replace the fixed policy with upstream's policy and measure the Bellatrix workload. Add a targeted adjustment only if measured regression justifies it. |
+| `0038` — 32-byte data alignment | Cache_CreateCache still places data immediately after BlockRange, without guaranteeing 32-byte alignment. | Refresh and retain the alignment change against HEAD. |
+
+These decisions are based on comparing code sites, not merely on failed patch
+application or matching commit subjects. Remove superseded patches as part of
+the new-pin migration, not while the old pin still depends on them.
+
+**Important improvement to preserve while refreshing `0038`:** HEAD checks
+`b != NULL` before initializing each allocated BlockRange. The old patch
+context initializes fields before that check. Add the 31 bytes of alignment
+slack to the allocation and calculate the aligned data address only inside the
+successful-allocation branch. Preserve the allocation base for FreeVec,
+sufficient buffer capacity, and upstream allocation-failure cleanup. Do not
+reintroduce a NULL dereference while restoring DMA alignment.
+
+The expected result is one retained FAT-specific alignment patch, with a
+cache-policy adjustment only if needed after measurement. Validate cache
+working-set behavior with large library/ELF loading, transfer counters and
+memory consumption; check direct DMA versus bounce-buffer use on the DMA
+backend. Run create/write/resize/rename/date/flush and cross-reader disk checks
+before declaring the three endian patches safely retired. These are source
+findings and implementation requirements, not completed runtime tests.
 Review generic sdcard `0003` separately: it still applies at this HEAD.
 Audit all three local SD backends; Pi 5 SD/SDIO changes do not automatically
 improve the Pi 3 implementations. Include partition buffer defaults,
@@ -327,7 +364,8 @@ setup. Do not assume the numeric prefix is a unique patch identifier.
       and timed waits are exercised.
 - [ ] FAT create/read/overwrite/resize/rename/date/flush and long-name paths
       verified; big-endian disk data inspected and failures do not discard
-      retryable dirty state. DMA cache alignment is preserved.
+      retryable dirty state. DMA cache alignment is preserved, allocation failure
+      remains safe, and volume-scaled cache performance is measured.
 - [ ] Real Pi USB keyboard/mouse under CPU/GL load and bulk transfers checked;
       interrupt load and timeouts compared; advertised capabilities are accurate.
 - [ ] Real Pi BT firmware/address, scan, pair, reconnect and enabled GATT roles
