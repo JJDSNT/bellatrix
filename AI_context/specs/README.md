@@ -12,3 +12,8 @@ derived (optional `spec_id` in the issue frontmatter).
 ## Versioning
 
 There is no version table: a spec's history is the git log of its own file.
+
+## Planned integration work
+
+- [AROS upstream HEAD update](aros_upstream_head_update.md) — audited baseline,
+  contribution provenance, patch and driver reconciliation, and acceptance checks.
