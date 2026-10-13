@@ -21,3 +21,7 @@
 	path = external/rigel
 	url = https://github.com/JJDSNT/rigel.git
 	ignore = dirty
+[submodule "external/emucontrol"]
+	path = external/emucontrol
+	url = https://github.com/michalsc/EmuControl.git
+	ignore = dirty
