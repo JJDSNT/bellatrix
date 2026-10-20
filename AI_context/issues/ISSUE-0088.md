@@ -268,6 +268,32 @@ resolved.
   [ISSUE-0051](ISSUE-0051.md) are reasoning about a Mesa that is about to
   be replaced, so re-baseline them here.
 
+### M2 is split, and Mesa 20.0.8 stays supported (decided 2026-10-20)
+
+From `2e30a0877e` on, upstream's `configure` builds Mesa 26.0.0 unless
+`--with-mesagl=<version>` says otherwise. Master still ships
+`mesa-20.0.8-aros.diff`, and the 20.3.2, 21.0.2 and 26.0.0 diffs, beside it.
+
+- **M2a:** move the pin, build with `--with-mesagl=20.0.8`. What is left is
+  the small part: `0001`, `0028`, `0090`, the `bcm2708.h` re-sync, and the
+  RP5, ELF and atomics changes.
+- **M2b:** build with upstream's default, Mesa 26. Port the `vc4gallium`
+  glue, carry the m68k and big-endian fixes (`0061`-`0067`, `0070`, `0071`)
+  over to Mesa 26 where they still apply, and check `0036`, `0069` and
+  `0079`. M2b comes straight after M2a, so no later milestone is measured on
+  a Mesa other than upstream's default.
+
+**The option is permanent support, not a stopgap.** `build-aros.sh`
+currently passes `configure` only `--target` and `--enable-ccache`. It gets a
+`BELLATRIX_MESAGL` setting, which is empty by default and so gives
+upstream's default. Changing it forces a reconfigure, as
+`BELLATRIX_FRAME_POINTERS` does. **Mesa 20.0.8 stays a working choice on
+`emu68-m68k` for as long as upstream keeps the option**: the 20.0.8 fixes
+are kept beside their Mesa 26 counterparts, and are not retired once Mesa 26
+works. The 20.3.2 and 21.0.2 diffs have never had our fixes and are not
+claimed. When upstream drops `--with-mesagl` or the 20.0.8 diff, that is the
+moment to retire ours, and the milestone that sees it says so here.
+
 ## M3 — `92a7198be1` (#205, 2026-09-13): m68k stack alignment
 
 - **Upstream:** `765871daef` *Fix m68k stack alignment and minimum process
