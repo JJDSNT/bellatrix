@@ -76,6 +76,43 @@ renamed `BCM2711_GPUIRQ_OFFSET` to `BCM271X_GPUIRQ_OFFSET`, guarded
 change lands in M2 (`3ecd43bdfa`), so M2 has to re-sync the header or it
 will not compile.
 
+# What the bump will not bring: `scripts/upstream-forks.py`
+
+The hand-made inventory of the third path above missed six forks:
+`hdmiaudio`, `battclock`, `arasan.h`, `videocore.h`, `mbox_init.c` and
+`sdcard_bcm2708init.c`. So the inventory is now a script. It pairs every
+file under `aros/` with an upstream file of the same name. A pair is kept
+when the contents still resemble each other (difflib ≥ 0.35), or always
+when ours replaces an `m68k-all`, `m68k-amiga` or `rom` file by path. The
+build swaps those by name, however far they have drifted. Pairing runs at
+both ends of the range, so an origin that only appears inside it is found
+too; the Bluetooth transport upstream adopted from us is one. The script
+then lists the upstream commits that touched each origin.
+
+```bash
+scripts/upstream-forks.py --base <previous milestone> --to <this milestone>
+```
+
+At 2026-10-20 there are 120 files of ours with an upstream origin, and 60 of
+them have changes in `f7b538f..a399fe2fc7`. Run the script at every
+milestone. Each commit it lists is ported, or rejected in this file with a
+reason, before the milestone counts as done. That is the guarantee that
+nothing relevant upstream is lost between our pin and HEAD.
+
+What it reports per milestone (`→` our directory):
+
+| M | Upstream commits to our forks |
+|---|---|
+| M1 | `20091ece37` GPCLK2/GPFSEL → `include/hardware` (**done**, re-synced); `17da3e3db8` is our transport arriving upstream → `soc/bluetooth`, which diverges on purpose (ISSUE-0087) |
+| M2 | `a3cfa659ed`, `622d07129a` Mesa 26 glue → `hidd/vc4gallium`; `3ecd43bdfa`, `72311ea24c`, `f3b47ce8e1` → `include/hardware`; RP5 only → `soc/wifi`, `soc/sdcard`, `hidd/vcgfx` |
+| M3 | **`ec982ac781` RPiHDMI with the new `dma.resource` → `hdmiaudio`, all 8 files** (the audio path ISSUE-0055 confirmed) |
+| M4 | `642046b4a1` → `soc/usb`; `b6c3d80b2b` → `timer/ticks.c`; `95f5d15b77` → `kernel/getsystemattr.c` (SMP, likely a reject) |
+| M5 | usb2otg batch of 19/09 (6 commits) → `soc/usb`; `8a8d180631` → `timer/ticks.c` |
+| M6 | vc4gallium of 27/09 (6) → `hidd/vc4gallium`; **`28674a157b` → `battclock`**; `ca064a18a5` → `timer/timer_init.c`; `2fce860abc`, `eb67886d75` → `include/hardware`; `cf91862a8d` → `soc/wifi`; vcgfx BCM2712 (12) → `hidd/vcgfx` |
+| M7 | **`ba01955a0b` → `exec/dispatch.S`**; `73eba4ee38`, `ee2e5812c1` → `soc/bluetooth` |
+| M8 | `bd0d438f7d` → `soc/wifi`; `fd3ad20c3a` → `soc/usb`; `71623f789e` → `soc/sdcard`; doc-only `595121c85c`, `75659fb32b` |
+| M9 | **`4ac3fbc085` → `kernel/kernel_cpu.c`**; `6042b4a8ea` → `soc/sdcard` (the write wait is done, see M0) |
+
 # Standing rules every milestone follows
 
 These come from the notes and each was paid for once.
@@ -198,6 +235,11 @@ Position `#n` is the commit's index in the 1243-commit range.
   size*, which changes every process stack on this CPU. Also the FAT clean
   shutdown bit (`294e6e2788`) and Mesa without `-ffast-math`.
 - **Patches:** none new.
+- **Ports:** `aros/workbench/devs/AHI/Drivers/hdmiaudio` gets `ec982ac781`
+  (RPiHDMI compatible with BCM2712, following the updated `dma.resource`).
+  We compile `dma.resource` from upstream in place, so it changed under our
+  fork in M2. Read the fork against it here, before anyone takes the
+  silence for a regression.
 - **Why alone:** it is the one change in September that can break
   everything at once on m68k and nothing on any other target, and it must
   not share a boot with the toolchain change.
