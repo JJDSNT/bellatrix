@@ -1,0 +1,22 @@
+.KEY x
+.BRA {
+.KET }
+;
+; Multi-block writes to the card, for comparison on the host afterwards.
+;
+; Upstream 6042b4a8ea found that SDHOST on Pi 1-3 can drop the last block of
+; a write when CMD12 follows the DMA too closely, and still report success.
+; Nothing on this side can see that, so the copies are read back off the
+; image after shutdown and compared with the originals byte for byte:
+;
+;   mcopy -i out/aros/sd.img@@1M ::sdwrite/<name> - | cmp - <original>
+;
+; Three sizes: two multi-block writes, one of them not a multiple of 512, and
+; one small file.
+;
+Echo >DEBUG: "[sdwrite] start"
+MakeDir SYS:sdwrite
+Copy LIBS:lzma.library SYS:sdwrite/lzma.library >DEBUG:
+Copy LIBS:png.library SYS:sdwrite/png.library >DEBUG:
+Copy C:Copy SYS:sdwrite/Copy >DEBUG:
+Echo >DEBUG: "[sdwrite] done"
