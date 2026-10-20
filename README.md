@@ -283,6 +283,7 @@ reports `pristine`, `applied`, `dirty` or `broken`.
 | [`docs/irq.md`](docs/irq.md) | how a host interrupt becomes an m68k interrupt, and the three mechanisms available for it |
 | [`patches/README.md`](patches/README.md) | the patch and injection conventions |
 | [`AI_context/`](AI_context/) | open issues and consolidated knowledge |
+| [`AROS HEAD update roadmap`](AI_context/specs/aros_upstream_head_update.md) | audited upstream changes, Bellatrix contribution provenance, patch reconciliation and validation required to update the AROS submodule |
 
 Nothing in either patch series is specific to this project — all of it is a
 candidate for upstreaming. Two of them are ordinary upstream bugs that this
