@@ -27,6 +27,11 @@ related_files:
 
 # Summary
 
+> **2026-10-20:** the execution plan for this contract is
+> [ISSUE-0088](ISSUE-0088.md), nine milestones from `f7b538f` to
+> `a399fe2fc7`. The snapshot hashes and the "Immediate next slice" below are
+> history: the SD group was taken in ISSUE-0085.
+
 Bellatrix's AROS pin is behind an upstream HEAD that now contains reference
 implementations directly relevant to this port, especially in AArch64 and the
 shared Raspberry Pi drivers. Updating is valuable, but a blind submodule bump
