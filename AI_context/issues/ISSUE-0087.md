@@ -67,7 +67,7 @@ that file's `skip-worktree` bit -- `git reset --hard` then skips the file and
 the deleted patch stays applied forever, with `--reset` unable to fix it
 because fixing it is the thing it no longer knows how to do.
 
-The order is therefore:
+~~The order is therefore:~~
 
 ```bash
 ./scripts/setup.sh --reset          # with the patches still present
@@ -75,6 +75,17 @@ rm patches/aros/009[5-9]-*.patch
 git -C external/aros ls-files -v | grep '^S'   # nothing of ours should remain
 ./scripts/setup.sh --verify
 ```
+
+> **Correction, 2026-10-20: this order does not work.** `--reset`
+> un-applies the series and then **applies it again** in the same run.
+> `scripts/setup.sh` resets the tree, finds it `pristine`, and goes straight
+> on to `apply_series` and `--skip-worktree`. So the five patches are still
+> applied and marked when they are deleted, which is the trap this section
+> exists to avoid. The working order is ISSUE-0085's *Doing it*: clear
+> `skip-worktree`, remove the files the series created and the injected
+> links, `reset --hard` and `clean -fd`, check out the new pin, delete the
+> patches, then `./scripts/setup.sh`. The M1 milestone of
+> [ISSUE-0088](ISSUE-0088.md) does it that way.
 
 # What does not retire
 

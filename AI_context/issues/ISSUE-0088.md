@@ -125,6 +125,39 @@ These come from the notes and each was paid for once.
    Belongs to [ISSUE-0040](ISSUE-0040.md). It goes first because every
    milestone after it writes to the card.
 
+## M0 — result (2026-10-20)
+
+**Baseline: `f7b538f` with branch `bluetooth-aarch64-port` at `e05f39f`
+reaches the desktop under QEMU.** Wanderer is up with RAM Disk, the card
+volume and Wireless Manager. The serial log has 645 lines; the BootUI
+sequence runs BELLATRIX, EXEC, KERNEL, DOS, SERVICES, WANDERER. The only
+failures are WiFi's, which are expected with no chip under QEMU (`SDIO
+probe failed: initial CMD5`). SD reads run at 46 KB/s
+(`[SDHost00] 1024 cmds ... 4096 KB in 87217 ms`).
+
+**Why ISSUE-0085's boot did not get there.** The first `build-aros.sh full`
+here died on
+`No rule to make target '.../workbench/hidds/v3d/v3d_aros_override.h'`.
+`gen/workbench/libs/mesa/20.0.8/gallium_v3d/` was entirely from 2026-08-25/26,
+from before upstream moved v3d to `arch/arm-native/.../hidd/v3d`
+(`983cc6704b`, in the 08-31 bump). Its `.d` files still named the old path.
+So **no `full` build had completed since that bump.** The card ISSUE-0085
+booted carried modules from a distribution tree older than its kernel,
+which is ISSUE-0058 §7's trap. That is the likeliest reading of the stall
+it left unattributed. The fix was to delete that directory and
+`gen/lib/mesa20.0.8/libgallium_v3d.a`, both generated. On a bump that moves
+a directory, look for generated `.d` files that still name its old path.
+
+**M0.3 done (`721e3b5`):** the sdhost write wait is ported and the DMA sleep
+is not. `tests/gl/sdwrite` copies three files (155916, 202092 and 16648
+bytes) at boot. Read back off the image with `mcopy`, all three are
+identical. No `write did not finish`, and the boot reaches Wanderer. This
+shows the wait does not break writes. It does not show the fix: QEMU drains
+the FIFO synchronously and cannot lose the block, so that needs a Pi.
+
+Noticed, not chased: files AROS writes to the card get the FAT date
+2106-01-01. Look at it in M7, where the FAT date series arrives.
+
 # The milestones
 
 Position `#n` is the commit's index in the 1243-commit range.
