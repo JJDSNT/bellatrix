@@ -283,16 +283,27 @@ From `2e30a0877e` on, upstream's `configure` builds Mesa 26.0.0 unless
   `0079`. M2b comes straight after M2a, so no later milestone is measured on
   a Mesa other than upstream's default.
 
-**The option is permanent support, not a stopgap.** `build-aros.sh`
-currently passes `configure` only `--target` and `--enable-ccache`. It gets a
-`BELLATRIX_MESAGL` setting, which is empty by default and so gives
-upstream's default. Changing it forces a reconfigure, as
-`BELLATRIX_FRAME_POINTERS` does. **Mesa 20.0.8 stays a working choice on
-`emu68-m68k` for as long as upstream keeps the option**: the 20.0.8 fixes
-are kept beside their Mesa 26 counterparts, and are not retired once Mesa 26
-works. The 20.3.2 and 21.0.2 diffs have never had our fixes and are not
-claimed. When upstream drops `--with-mesagl` or the 20.0.8 diff, that is the
-moment to retire ours, and the milestone that sees it says so here.
+**Follow upstream's model, so it stays easy to track.** Upstream carries
+one `mesa-<version>-aros.diff` per Mesa version and picks the version in
+`configure`. Bellatrix mirrors that shape instead of inventing its own:
+
+- **One set of fixes per version, on that version's diff.** `0061`-`0067`,
+  `0070` and `0071` already patch `mesa-20.0.8-aros.diff`. Their Mesa 26
+  counterparts patch `mesa-26.0.0-aros.diff` in the same way, and their names
+  say which version they belong to. Diffing our series against upstream's
+  files then shows exactly what we carry, per version. Mesa 20.0.8 stays a
+  working choice on `emu68-m68k`, with its fixes kept beside Mesa 26's
+  rather than retired once Mesa 26 works. The 20.3.2 and 21.0.2 diffs have
+  never had our fixes and are not claimed.
+- **`BELLATRIX_MESAGL` is a 1:1 pass-through of `--with-mesagl`**, empty by
+  default so upstream's default applies. Changing it forces a reconfigure,
+  as `BELLATRIX_FRAME_POINTERS` does. It is permanent support, not an M2a
+  stopgap. `build-aros.sh` currently passes `configure` only `--target` and
+  `--enable-ccache`.
+- **Send the fixes upstream, into their diff files.** Upstream already took
+  a big-endian Mesa fix for ppc (`cfdecb2c1f`), and our FAT and Bluetooth
+  work. Each fix it takes is one patch fewer to carry and re-check at every
+  bump.
 
 ## M3 — `92a7198be1` (#205, 2026-09-13): m68k stack alignment
 
