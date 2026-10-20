@@ -305,6 +305,71 @@ one `mesa-<version>-aros.diff` per Mesa version and picks the version in
   work. Each fix it takes is one patch fewer to carry and re-check at every
   bump.
 
+### Our Mesa fixes stop being patches of a patch (researched 2026-10-20)
+
+**Found while researching this: the Mesa build is not reproducible today.**
+`0061`-`0071` edit `mesa-20.0.8-aros.diff`, upstream's patch against the
+Mesa sources. With `0061` applied, that file is **malformed**. Its
+`ralloc.c` hunks carry wrong line counts: `@@ -160,13 +164,18 @@` heads 11
+old lines and 15 new ones. `patch` rejects the whole file
+(`malformed patch at line 1253`) under every later patch in the series.
+`git apply` of the outer patch cannot notice, because it never parses the
+diff inside.
+
+It has gone unseen since 2026-08-25 because `fetch.sh` never looks again:
+
+- it copies each patch into `Ports/mesa/` once and from then on prefers
+  that copy (`fetch_cached` checks the destination before the origins);
+- it stamps `.mesa-20.0.8.tar.xz.unpacked` and `.<patch>.applied`, and
+  never unpacks or patches again while those exist.
+
+This tree's copy is upstream's original 42512-byte file from 2026-08-21.
+The fixes reached the compiled sources because they were applied to
+`Ports/mesa/mesa-20.0.8/` by hand (`670955f`: "applied and tested"). So
+this machine builds a GL that works. A fresh clone, CI, or anything that
+clears `Ports/mesa` fails in `mesa3d-fetch` instead.
+
+**The fix is the model chosen above, and it already exists.**
+`aros/workbench/libs/mesa/bellatrix/mesa-20.0.8-bellatrix.diff` (158 lines,
+15 hunks) is `diff -ruN` between tarball + upstream's unmodified
+`aros.diff` and the hand-patched sources in `Ports/mesa`. Those differ in
+exactly the four files `0061`-`0071` target, and nothing else:
+`cso_cache.c`, `ff_fragment_shader.cpp`, `formats.c` and `ralloc.c`.
+Applied with `patch -p1` on top of upstream's diff, it reproduces the
+tested sources byte for byte. It is committed now, ahead of M2a, because
+until then the only other copy of these fixes is a build tree that a
+`clean` deletes.
+
+How it goes in, in M2a. Both questions are answered from `scripts/fetch.sh`:
+
+- **A second patch is supported.** `PATCHSPEC` is a list
+  (`for patch in $patches`), applied in order, ours after upstream's.
+- **It cannot be named with a subdirectory.** `bellatrix/x.diff` would
+  have its copy and its `.applied` stamp written under a `.bellatrix/`
+  that does not exist. `patches_origins` *is* a list, though
+  (`fetch_multiple`: `for origin in $origins`). So the patch keeps a flat
+  name and `bellatrix/` is added as a second origin.
+- **One numbered patch, two lines:** `mesa.cfg` appends
+  `$(ARCHBASE)-bellatrix.diff:$(ARCHBASE):-p1` to `PATCHSPEC` only when that
+  file exists (`$(wildcard ...)`; a listed patch that cannot be fetched is
+  a fetch error), and the `%fetch` in `mmakefile.src` gets
+  `patches_origins="$(SRCDIR)/$(CURDIR) $(SRCDIR)/$(CURDIR)/bellatrix"`.
+  A version we carry nothing for builds exactly as upstream's.
+- **`0061`-`0067`, `0070` and `0071` are deleted** (un-applied first, per
+  CLAUDE.md). `0064` and `0067` existed only to repair the inner diff's
+  context.
+- **Editing a patch must invalidate `Ports/mesa`, and today nothing
+  does.** That holds for upstream's `aros.diff` on a pin bump too, so M2b
+  needs it either way. `build-aros.sh` stamps a digest of the patch files
+  the selected `PATCHSPEC` names, and on a mismatch removes
+  `Ports/mesa/<version>`, the copied patches and their stamps. This is the
+  same pattern as the configure digest.
+- **Proof:** clear `Ports/mesa`, build, and boot GL as ISSUE-0045 did.
+  Until a fetch from scratch has been seen to work, the old failure is
+  only moved, not fixed.
+
+Mesa 26 gets `mesa-26.0.0-bellatrix.diff` in M2b, written the same way.
+
 ## M3 — `92a7198be1` (#205, 2026-09-13): m68k stack alignment
 
 - **Upstream:** `765871daef` *Fix m68k stack alignment and minimum process
