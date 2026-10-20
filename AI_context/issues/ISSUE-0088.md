@@ -23,7 +23,7 @@ related_files:
   - AI_context/issues/ISSUE-0058.md
   - AI_context/issues/ISSUE-0069.md
   - AI_context/issues/ISSUE-0085.md
-  - AI_context/issues/ISSUE-0087.md
+  - AI_context/consolidated/history/ISSUE-0087.md
 ---
 
 # Summary
@@ -204,13 +204,22 @@ Position `#n` is the commit's index in the 1243-commit range.
 - **Upstream:** our own `0095`-`0099` and the
   `arch/arm-native/soc/broadcom/2708/bluetooth` transport, merged. Diffed
   against ours: identical apart from three `.gitignore` files.
-- **Patches:** retire `0095`-`0099` in the order ISSUE-0087 writes down.
-  Run `--reset` with the patches still present, then delete them, then check
-  `ls-files -v | grep '^S'`. Remove `aros/arch/arm-native/soc/broadcom/2708/bluetooth`;
-  after M1 `setup.sh` would silently stop linking it anyway (ISSUE-0087,
-  *The silent half*).
+- **Patches:** retire `0095`-`0099`. Remove `aros/arch/arm-native/`;
+  after M1, `setup.sh` would silently stop linking it anyway
+  ([ISSUE-0087](../consolidated/history/ISSUE-0087.md), *The silent half*).
 - **Not retired:** `aros/arch/m68k-emu68/soc/bluetooth`, the m68k sibling.
 - **Done when:** ISSUE-0087 closes; the branch merges into main.
+
+**Result (2026-10-20): done.** ISSUE-0087's own order was wrong. `--reset`
+re-applies the series, so the patches would have been deleted while still
+applied. ISSUE-0085's procedure was used instead. After `setup.sh`,
+`--verify` says `applied (70 patches)`. The only fork change in range is
+`bcm2708.h`, now re-synced: it differs from upstream's in the same 99 lines
+it did at the old pin, which are the guard and the Bellatrix block. The
+toolchain digest is unchanged. `full` build, fresh card, QEMU: the desktop
+is the same as M0's, with the same expected WiFi failures, SD at 47 KB/s
+against 46, and the m68k Bluetooth sibling loading. ISSUE-0087 is
+resolved.
 
 ## M2 — `2e30a0877e` (#144, 2026-09-09): Mesa 26 and the BCM2712 drivers
 

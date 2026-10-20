@@ -1,18 +1,17 @@
 ---
 id: ISSUE-0087
 title: "Retiring the Bluetooth port once upstream carries it"
-status: open
+status: resolved
 priority: medium
 type: chore
 owner: unassigned
 created_at: 2026-09-01
-updated_at: 2026-09-01
+updated_at: 2026-10-20
 tags:
   - bluetooth
   - upstream
   - submodules
 blockers:
-  - the AROS pull request has to be merged first
 related_files:
   - aros/arch/arm-native/soc/broadcom/2708/bluetooth
   - patches/aros/0095-gpio-preserve-the-other-pins-when-selecting-a-function.patch
@@ -85,7 +84,7 @@ git -C external/aros ls-files -v | grep '^S'   # nothing of ours should remain
 > `skip-worktree`, remove the files the series created and the injected
 > links, `reset --hard` and `clean -fd`, check out the new pin, delete the
 > patches, then `./scripts/setup.sh`. The M1 milestone of
-> [ISSUE-0088](ISSUE-0088.md) does it that way.
+> [ISSUE-0088](../../issues/ISSUE-0088.md) does it that way.
 
 # What does not retire
 
@@ -102,3 +101,25 @@ review changed something on the way in. A `diff -r` between
 `external/aros/arch/arm-native/soc/broadcom/2708/bluetooth` and our copy
 answers it in one command, and anything it reports is a change we did not
 make and may want to understand.
+
+# Resolution (2026-10-20)
+
+Retired in milestone M1 of [ISSUE-0088](../../issues/ISSUE-0088.md), with the
+pin moved to `78f2959e68`. Upstream merged the pull request as `6694ab5a04`,
+`20091ece37`, `2961ec8729`, `de14a5d3d5`, `17da3e3db8` and `78f2959e68`.
+
+- **Checked first, as asked above.** `diff -r` between upstream's
+  `arch/arm-native/soc/broadcom/2708/bluetooth` and ours showed only three
+  `.gitignore` files that upstream added. No review change came back.
+- **The order used** was ISSUE-0085's, not the one in *The loud half*
+  (see the correction there). `skip-worktree` was cleared, the created files
+  and injected links removed, the tree reset and cleaned, the pin checked
+  out, `0095`-`0099` and `aros/arch/arm-native/` deleted, and then
+  `setup.sh` run. Afterwards `--verify` said `applied (70 patches)`, the
+  `bluetooth` directory under `external/aros` is upstream's own rather than
+  a link, and no deleted patch left a file marked.
+- **What did not retire** still does not: `aros/arch/m68k-emu68/soc/bluetooth`
+  builds and loads under QEMU (`[PL011BT] ready`, `h4bthci.device`,
+  `brcmbt.fwl`).
+- **Not hardware-tested at the new pin.** The m68k sibling did not change,
+  but the card has not been on a Pi.
