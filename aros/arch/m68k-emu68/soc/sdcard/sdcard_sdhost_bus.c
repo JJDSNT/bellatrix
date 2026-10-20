@@ -142,6 +142,39 @@ static int sdhost_wait_cmd_idle(struct sdcard_Bus *bus, int timeout_us)
     return -1;
 }
 
+/* The data FSM states sdhost_wait_write_done() waits for. Upstream names
+ * them in hardware/sdhost.h from 6042b4a8ea on; the pin this port builds
+ * against does not have them yet, so they are defined here until it does. */
+#ifndef SDEDM_FSM_MASK
+#define  SDEDM_FSM_MASK                 0xfU
+#define  SDEDM_FSM_DATAMODE             0x1
+#define  SDEDM_FSM_WRITESTART1          0xa
+#endif
+
+/* A write's DMA ends once the last word is in the FIFO, not on the card.
+ * Wait for the data FSM to finish the last block before anything else: a
+ * CMD12 sent earlier makes the card drop that block, so a multi-block write
+ * would lose its last sector now and then and still report success.
+ * Taken from upstream 6042b4a8ea (sdcard: faster SD I/O, and fix lost
+ * sectors on Pi 1-3). */
+static int sdhost_wait_write_done(struct sdcard_Bus *bus, int timeout_us)
+{
+    ULONG edm, fsm;
+
+    while (timeout_us-- > 0)
+    {
+        edm = sdhost_read(bus, SDEDM);
+        fsm = edm & SDEDM_FSM_MASK;
+        if (!(edm & SDEDM_FIFO_LEVEL_MASK) &&
+            (fsm == SDEDM_FSM_DATAMODE || fsm == SDEDM_FSM_WRITESTART1))
+            return 0;
+        sdcard_Udelay(1);
+    }
+    bug("[SDHost%02u] write did not finish: SDEDM=%08x SDHSTS=%08x\n",
+        bus->sdcb_BusNum, sdhost_read(bus, SDEDM), sdhost_read(bus, SDHSTS));
+    return -1;
+}
+
 /* Drain any residual FIFO data left over from a previous command. */
 static void sdhost_flush_fifo(struct sdcard_Bus *bus)
 {
@@ -689,6 +722,11 @@ ULONG FNAME_SDHOSTBUS(SendCmd)(struct TagItem *CmdTags, struct sdcard_Bus *bus)
                 if (t0)
                     sdhost_us_copy += sdcard_CurrentTime() - t0;
             }
+        }
+        else if (sdhost_wait_write_done(bus, 500000) != 0)
+        {
+            retval = -1;
+            goto done;
         }
 
         priv->xfer_active = FALSE;
