@@ -17,6 +17,12 @@ diagnostic capabilities retained.
 This is an implementation roadmap, not evidence that the update has been
 performed. The submodule pin remains unchanged by this document.
 
+> **Execution (2026-10-20):** the update is being carried out in milestones
+> by [ISSUE-0088](../issues/ISSUE-0088.md), which places each finding below
+> in a milestone and treats this spec's checklist as the definition of done.
+> M1 has moved the pin to `78f2959e68` and retired `0095`-`0099`, the
+> Bluetooth transport upstream took from this project.
+
 | Snapshot | Commit |
 |---|---|
 | Bellatrix main inspected | `6cbe212c57f14abae932dc70a0af33c4a2d07929` |

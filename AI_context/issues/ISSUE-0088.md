@@ -49,6 +49,36 @@ further the same day to `f7b538f`. `f7b538f` is the real starting point.
 Each milestone is a separate pin bump, built, booted and committed before the
 next one starts. That is "one pack, one variable" applied to upstream.
 
+# Relation to the audit in `AI_context/specs/aros_upstream_head_update.md`
+
+That spec (2026-10-09, upstream `3914027415`, 814 commits) is the detailed
+audit, and its acceptance checklist is the definition of done for the whole
+refresh. This issue is how it gets executed: the same reconciliation, cut
+into milestones that are each built, booted and committed. The spec allows
+that ("stages may be validated separately"). This file and the spec were
+written without knowing about each other; they were reconciled on
+2026-10-20, and where they differ, the spec's findings win.
+
+What the spec adds, placed by milestone:
+
+| M | From the spec |
+|---|---|
+| M2 | Patches `0061`-`0067`, `0070` and `0071` edit the **Mesa 20.0.8** patch file. Mesa 26 becomes the default here, so they still apply but no longer reach the active build. Audit each against Mesa 26 and keep `0036` (m68k trampolines in `galliumglue.py`, which upstream still limits to arm/aarch64), `0069` and `0079`. Check `7756f31db8` (64-bit atomics) against `0057`. |
+| M5 | **Build blocker:** `38dc95623a` removes `iet_private1/2`, `iet_LastBusy` and `iet_LastUsageStamp` from `IntETask` on m68k, and our `kernel/cpuusage.c` reads and writes `iet_private2` and `iet_LastBusy` (lines 147-218). Keep the accounting: put the fields back under a port capability, or replace them with an explicit design. Keep `0093`/`0094` consistent with that. Do not delete the accounting to make the build pass. |
+| M5 | usb2otg: the SOF wake (`2b1739fe22`) uses system timer channel 1, while our heartbeat is on channel 3. Check IRQ registration, ownership and acknowledgement before taking it. |
+| M6 | `0037` is replaced by upstream's volume-scaled cache (`efbf24238c`), then measured. `0038` is refreshed, not retired: HEAD still does not align the data, and the refresh must put the alignment slack inside the `b != NULL` branch. Do not take `b76276f7dc` (2 KiB system stacks) without a measurement, and do not undo `0005`. |
+| M6/M7 | `0057` (m68k test-and-set returns the old value) stays: HEAD's version is still wrong. `0058` is reviewed against the new allocator, not dropped by title. |
+| M7 | `0006`, `0008` and `0023` retire, confirmed site by site in the spec; keep `9213952b4f`'s explicit-width dates. `ba01955a0b` also changes `ExitIntr()`'s calling convention and routes dispatch through `ex_LaunchPoint`, so every local producer and consumer of the reschedule flags is checked, not only `dispatch.S`. |
+| M3 | `ec982ac781` (`hdmiaudio`) and `3ecd43bdfa` (`dma.resource`) are ported together. Also check `8397060fe5` (cache-line-aligned mailbox messages). |
+
+**Deviation from the spec's workflow, recorded.** The spec, step 1, says to
+use an isolated checkout or worktree and not to reset a working development
+tree. M1 was done in place in the main checkout, with the user's
+authorisation, after `setup.sh --verify` had shown the submodule was exactly
+pin plus series, with no local edits. From M2 on, use a worktree as the spec
+says, because the reconciliations there leave the tree unbuildable for a
+while.
+
 # Three ways upstream reaches this port
 
 A pin bump only delivers the first. The plan has to name all three, because
