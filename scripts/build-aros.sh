@@ -82,7 +82,7 @@ mesagl_state() {
     if [ ! -f "$BUILD/mmake.config" ]; then
         echo "$want (the next configure)"
     elif [ "$have" = "$want" ]; then
-        echo "$want ($(sed -n 's/^OPT_MESAGL *:= *//p' "$BUILD/config/make.cfg" 2>/dev/null))"
+        echo "$want ($(sed -n 's/^OPT_MESAGL *:= *//p' "$BUILD/bin/$TARGET/gen/config/target.cfg" 2>/dev/null))"
     else
         echo "$have in this tree, $want requested — the next build reconfigures and rebuilds"
     fi
@@ -636,7 +636,7 @@ mesa_patches_digest() {
     done
 }
 
-MESA_VERSION="$(sed -n 's/^OPT_MESAGL *:= *//p' "$BUILD/config/make.cfg" 2>/dev/null)"
+MESA_VERSION="$(sed -n 's/^OPT_MESAGL *:= *//p' "$BUILD/bin/$TARGET/gen/config/target.cfg" 2>/dev/null)"
 MESA_PORTS="$BUILD/bin/$TARGET/Ports/mesa"
 if [ -n "$MESA_VERSION" ]; then
     stamp="$MESA_PORTS/.bellatrix-patches-mesa-$MESA_VERSION"
@@ -680,7 +680,12 @@ make "$METATARGET"
 # module on the card came from.
 #
 # Building it after the link costs seconds and removes the question.
-if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
+# The disk-installed drivers are not reached from either metatarget, so they
+# are built here after both. They used to follow the lean build only, which
+# made a card from a fresh tree depend on the order builds had been run in:
+# `full` alone left them out, and a lean build before any `full` failed on
+# the network prefs, which copy files only `full` puts in the tree.
+if [ "$METATARGET" = "kernel-link-$TARGET" ] || [ "$METATARGET" = "AROS-$TARGET" ]; then
     echo "[aros] building the disk-installed drivers"
     make kernel-m68k-emu68-vcgfx
 
@@ -699,6 +704,23 @@ if [ "$METATARGET" = "kernel-link-$TARGET" ]; then
     # the one Bellatrix prints on its own side.
     make workbench-c-emu68-deniseview
     make kernel-h4bthci
+    # The Bluetooth stack the Startup-Sequence loads (BTStackLoader,
+    # AddBTHardware, AddBTClasses, BTErrorLog) and the loader it opens from
+    # DEVS:Bluetooth/FWLoaders. Until 2026-10-24 these reached the card only
+    # because they had once been built by hand into the tree.
+    make kernel-brcmbt
+    make kernel-bluetooth-library
+    make bluetooth-shellcommands
+    make kernel-bluetooth-classes-bthid
+    make kernel-bluetooth-firmware
+    make kernel-bluetooth-hardware
+    make kernel-bluetooth-prefs
+    # The probes tests/gl and the boot tests call by name.
+    make workbench-c-emu68-openmesa
+    make workbench-c-emu68-sdbench
+    make workbench-c-emu68-sdraw
+    make workbench-c-emu68-serialsay
+    make workbench-c-emu68-serialsayp
 
     # S:Startup-Sequence, because a patch to it otherwise never reaches a card.
     #
