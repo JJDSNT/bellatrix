@@ -11,10 +11,10 @@
 ; the rest of it is.
 ;
 ; Nothing is opened before the big one, so the line that comes out belongs to
-; mesa3dgl20-0.library and to nothing else.
+; the Mesa library ENV:SYS/GL.default names and to nothing else.
 ;
-Echo >DEBUG: "[gl-load] --- OpenMesa mesa3dgl20-0.library (10 MB)"
+Echo >DEBUG: "[gl-load] --- OpenMesa (10 MB)"
 Date >DEBUG:
-OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+OpenMesa >NIL: <NIL:
 Date >DEBUG:
 Echo >DEBUG: "[gl-load] --- returned"

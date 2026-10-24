@@ -17,7 +17,7 @@
 ; the relocation and the init, not the version string.
 ;
 Echo >DEBUG: "[gl-probe] libraries present:"
-List >DEBUG: LIBS:gl.library LIBS:gallium.library LIBS:mesa3dgl20-0.library
+List >DEBUG: LIBS:gl.library LIBS:gallium.library LIBS:mesa3dgl#?.library
 Echo >DEBUG: "[gl-probe] drivers present:"
 List >DEBUG: DEVS:Drivers/gallium.hidd DEVS:Drivers/vc4gallium.hidd DEVS:Drivers/softpipe.hidd
 
@@ -26,9 +26,9 @@ Date >DEBUG:
 Version >DEBUG: gallium.library
 Date >DEBUG:
 
-Echo >DEBUG: "[gl-probe] --- opening mesa3dgl20-0.library (10 MB)"
+Echo >DEBUG: "[gl-probe] --- opening the Mesa library ENV:SYS/GL.default names"
 Date >DEBUG:
-Version >DEBUG: mesa3dgl20-0.library
+OpenMesa >DEBUG:
 Date >DEBUG:
 
 Echo >DEBUG: "[gl-probe] --- opening gl.library"
@@ -56,8 +56,8 @@ Stack >DEBUG:
 ; attempt ran with DEBUG 1 in internalloadseg_elf.c, which writes thousands of
 ; lines through the raw serial, and "the log stopped growing" cannot be told
 ; from "the serial stopped accepting" when the serial is what is being flooded.
-Echo >DEBUG: "[gl-probe] --- OpenMesa mesa3dgl20-0.library (10 MB), quiet"
+Echo >DEBUG: "[gl-probe] --- OpenMesa (10 MB), quiet"
 Date >DEBUG:
-OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+OpenMesa >NIL: <NIL:
 Date >DEBUG:
 Echo >DEBUG: "[gl-probe] --- OpenMesa returned"

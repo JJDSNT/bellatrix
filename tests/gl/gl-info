@@ -1,0 +1,20 @@
+.KEY x
+.BRA {
+.KET }
+;
+; The whole GL path, once: glinfo opens gl.library, which opens the Mesa
+; library ENV:SYS/GL.default names, which loads its Gallium driver. Its
+; GL_VERSION / GL_RENDERER lines go to DEBUG:, and with them which Mesa the
+; card was built with.
+;
+; Needs a display, so run it late:
+;   BELLATRIX_BOOT_TEST=gl-info BELLATRIX_BOOT_TEST_LATE=1 ./scripts/make-sdcard.sh
+;
+Echo >DEBUG: "[gl-info] GL.default:"
+Type >DEBUG: ENV:SYS/GL.default
+Echo >DEBUG: "[gl-info] OpenMesa:"
+OpenMesa >DEBUG:
+Echo >DEBUG: "[gl-info] glinfo:"
+Stack 100000000
+SYS:Extras/Demos/GL/glinfo >DEBUG:
+Echo >DEBUG: "[gl-info] done"
