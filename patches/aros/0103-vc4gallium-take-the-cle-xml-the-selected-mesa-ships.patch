@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 24 Oct 2026 15:30:00 -0300
+Subject: [PATCH] vc4gallium: take the CLE XML the selected Mesa ships
+
+589dba6334 generates v3d_packet_v21_pack.h from vc4_packet.xml, which only
+Mesa 26 has. This file still builds vc4 for Mesa 20.0.8 (its source lists
+and its hidd-vc4gallium-mesa20.0.8 target say so), and there the
+description is v3d_packet_v21.xml, so that build now stops at
+"No rule to make target .../src/broadcom/cle/vc4_packet.xml". Use
+vc4_packet.xml where it exists and v3d_packet_v21.xml otherwise.
+---
+diff --git a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src
+--- a/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src
++++ b/arch/arm-native/soc/broadcom/2708/hidd/vc4gallium/mmakefile.src
+@@ -166,13 +166,16 @@
+ # (Mesa's meson build does this via custom_target; we do it manually here).
+ # vc4 is version 21 of the packet description. Since Mesa 26 that comes from
+ # vc4_packet.xml: the versioned XMLs are gone, and the versions above 21
+-# belong to v3d, which AROS does not build.
++# belong to v3d, which AROS does not build. Older Mesa versions, still
++# selectable with --with-mesagl, ship it as v3d_packet_v21.xml; take
++# whichever this version has.
+ #
+ CLE_SRCDIR := $(top_srcdir)/src/broadcom/cle
+ CLE_GENDIR := $(top_builddir)/src/broadcom/cle
+ CLE_GENSCRIPT := $(CLE_SRCDIR)/gen_pack_header.py
++CLE_VC4_XML := $(firstword $(wildcard $(CLE_SRCDIR)/vc4_packet.xml) $(CLE_SRCDIR)/v3d_packet_v21.xml)
+ 
+-$(CLE_GENDIR)/v3d_packet_v21_pack.h: $(CLE_GENSCRIPT) $(CLE_SRCDIR)/vc4_packet.xml
++$(CLE_GENDIR)/v3d_packet_v21_pack.h: $(CLE_GENSCRIPT) $(CLE_VC4_XML)
+ 	%mkdir_q dir="$(CLE_GENDIR)"
+ 	$(Q)$(ECHO) "Generating $(patsubst $(TOP)/%,%,$@)"
+ 	$(Q)$(PYTHON) $(PYTHON_FLAGS) $^ 21 > $@

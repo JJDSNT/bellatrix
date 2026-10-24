@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 24 Oct 2026 14:30:00 -0300
+Subject: [PATCH] egl: do not build against a Mesa older than 26
+
+The Mesa 26 port enabled egl.library, which upstream had not built before,
+with a source list and an egl_arosmesa.c written for Mesa 26 only. Selecting
+an older Mesa with --with-mesagl -- 20.0.8 is still offered -- now stops the
+build at "No rule to make target .../src/egl/main/eglconfigdebug.c".
+
+Build it only when the Mesa sources lack src/egl/Makefile.sources, the same
+test the Mesa libraries here use to tell an old Mesa from a new one, and
+otherwise leave the target empty, as it effectively was before.
+---
+diff --git a/workbench/libs/egl/mmakefile.src b/workbench/libs/egl/mmakefile.src
+--- a/workbench/libs/egl/mmakefile.src
++++ b/workbench/libs/egl/mmakefile.src
+@@ -56,10 +56,25 @@
+ USER_LDFLAGS += $(TARGET_CXX_LIBS)
+ endif
+ 
++# egl.library is written against Mesa 26. Before it upstream did not build
++# EGL at all, and an older Mesa selected with --with-mesagl -- recognisable,
++# as the Mesa libraries here already recognise it, by the Makefile.sources
++# it still ships -- has neither the files listed above nor the API
++# egl_arosmesa.c uses. Keep not building it there.
++ifeq ($(wildcard $(EGL_PATH)/Makefile.sources),)
+ %build_module mmake=workbench-libs-egl \
+     modname=egl modtype=library linklibname=EGL \
+     files="$(LIBRARY_SOURCES)" \
+     alwayscxxlink=yes uselibs="glapi mesa mesautil compiler galliumauxiliary GL z1 pthread"
++else
++# %build_module above still declares its metatargets to mmake (#MM lines are
++# read whatever make's conditionals say), so every one of them -- -quick,
++# -makefile, -includes, -linklib, the per-arch variants -- needs a rule.
++workbench-libs-egl :
++	@$(NOP)
++workbench-libs-egl% :
++	@$(NOP)
++endif
+ 
+ %common
+ 

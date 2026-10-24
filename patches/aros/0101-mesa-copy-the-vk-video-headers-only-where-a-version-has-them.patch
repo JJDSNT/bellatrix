@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 24 Oct 2026 10:00:00 -0300
+Subject: [PATCH] mesa: copy the vk_video headers only where a version has them
+
+The Mesa 26 port added an unconditional copy of include/vk_video. Older
+versions -- 20.0.8, still offered by --with-mesagl -- do not ship that
+directory, so selecting one stops the build at mesa3d-includes-copy with
+"No rule to make target .../include/vk_video/vulkan_video_codecs_common.h".
+Guard it the way the same file already guards eglextchromium.h.
+---
+diff --git a/workbench/libs/mesa/mmakefile.src b/workbench/libs/mesa/mmakefile.src
+--- a/workbench/libs/mesa/mmakefile.src
++++ b/workbench/libs/mesa/mmakefile.src
+@@ -178,6 +178,10 @@
+     vulkan_video_codec_vp9std.h \
+     vulkan_video_codec_vp9std_decode.h
+ 
++# Only Mesa versions that ship include/vk_video have them to copy; an older
++# version selected with --with-mesagl would otherwise stop the build here.
++ifneq ($(wildcard $(top_srcdir)/include/vk_video),)
+ %copy_includes mmake=mesa3d-includes-copy path=vk_video dir=$(top_srcdir)/include/vk_video includes=$(VK_VIDEO_INCLUDE_FILES)
++endif
+ 
+ %common
