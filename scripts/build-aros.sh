@@ -58,6 +58,36 @@ ELF="bin/$TARGET/AROS/aros-$TARGET.elf"
 export BELLATRIX_FRAME_POINTERS="${BELLATRIX_FRAME_POINTERS:-1}"
 FP_STAMP="$BUILD/.bellatrix-frame-pointers"
 
+# Which Mesa upstream's configure builds: passed straight through as
+# --with-mesagl, and empty by default, which leaves upstream's own default in
+# charge. This mirrors upstream rather than choosing for it: upstream keeps
+# one mesa-<version>-aros.diff per version and selects in configure, and
+# Bellatrix keeps its fixes per version beside them, in
+# aros/workbench/libs/mesa/bellatrix/. A version is only a working choice on
+# this target if a -bellatrix.diff exists for it.
+#
+#   BELLATRIX_MESAGL=20.0.8 ./scripts/build-aros.sh full
+#
+# configure writes the version into make.cfg, so, as with frame pointers, a
+# change can only take effect by reconfiguring; MESAGL_STAMP enforces it.
+export BELLATRIX_MESAGL="${BELLATRIX_MESAGL:-}"
+MESAGL_STAMP="$BUILD/.bellatrix-mesagl"
+
+mesagl_state() {
+    local want="${BELLATRIX_MESAGL:-upstream default}"
+    local have
+    have="$(cat "$MESAGL_STAMP" 2>/dev/null || echo "")"
+    have="${have:-upstream default}"
+
+    if [ ! -f "$BUILD/mmake.config" ]; then
+        echo "$want (the next configure)"
+    elif [ "$have" = "$want" ]; then
+        echo "$want ($(sed -n 's/^OPT_MESAGL *:= *//p' "$BUILD/config/make.cfg" 2>/dev/null))"
+    else
+        echo "$have in this tree, $want requested — the next build reconfigures and rebuilds"
+    fi
+}
+
 # What configure looked like when this tree was configured. The mtime shortcut
 # further down cannot tell "checked out again, byte for byte the same" from
 # "the pin moved and configure genuinely changed", and guessing wrong the
@@ -370,6 +400,7 @@ if [ "$MODE" = status ]; then
                          elif command -v ccache >/dev/null; then echo "available, not configured into this tree"
                          else echo "not installed"; fi)"
     echo "frame ptrs:  $(fp_state)"
+    echo "mesa:        $(mesagl_state)"
     echo "toolchain:   $state (key $(toolchain_key))"
     [ "$state" = ready ] && echo "             $(host_tools_dir)/crosstools"
     echo "kernel ELF:  $([ -f "$BUILD/$ELF" ] && stat -c '%y' "$BUILD/$ELF" | cut -d. -f1 || echo "not built")"
@@ -511,6 +542,13 @@ if [ -f "$BUILD/mmake.config" ] && \
     rm -f "$BUILD/mmake.config"
 fi
 
+if [ -f "$BUILD/mmake.config" ] && \
+   [ "$(cat "$MESAGL_STAMP" 2>/dev/null || echo "")" != "$BELLATRIX_MESAGL" ]; then
+    echo "[aros] BELLATRIX_MESAGL changed to '${BELLATRIX_MESAGL:-upstream default}' —"
+    echo "[aros] reconfiguring, which rebuilds the tree (the toolchain is kept)"
+    rm -f "$BUILD/mmake.config"
+fi
+
 # A pin bump can change configure itself -- it grows a substitution, and every
 # config/*.in that uses it is expanded by config.status. Nothing downstream
 # notices: make.cfg keeps the old expansion and the literal @name@ reaches the
@@ -533,6 +571,7 @@ if [ ! -f "$BUILD/mmake.config" ]; then
     # running the usual build. An existing tree adopts it at its next
     # `clean`/`distclean`, or never.
     CONFIGURE_ARGS=(--target="$TARGET")
+    [ -n "$BELLATRIX_MESAGL" ] && CONFIGURE_ARGS+=(--with-mesagl="$BELLATRIX_MESAGL")
     if command -v ccache >/dev/null; then
         CONFIGURE_ARGS+=(--enable-ccache)
         echo "[aros] configuring for $TARGET (with ccache)"
@@ -541,6 +580,7 @@ if [ ! -f "$BUILD/mmake.config" ]; then
     fi
     "$SRC/configure" "${CONFIGURE_ARGS[@]}"
     echo "$BELLATRIX_FRAME_POINTERS" > "$FP_STAMP"
+    echo "$BELLATRIX_MESAGL" > "$MESAGL_STAMP"
     configure_digest > "$CONFIGURE_STAMP"
 else
     echo "[aros] already configured"
@@ -570,6 +610,47 @@ else
         for cfg in "$BUILD/config/make.cfg" "$BUILD/compiler/include/geninc.cfg"; do
             [ -f "$cfg" ] && touch "$cfg"
         done
+    fi
+fi
+
+# Mesa's sources must be what its patches say they are.
+#
+# scripts/fetch.sh copies each patch into Ports/mesa once and prefers that
+# copy from then on, and stamps the unpack and every applied patch; while the
+# stamps exist it never unpacks or patches again. So an edited patch -- ours,
+# or upstream's mesa-<version>-aros.diff on a pin bump -- never reaches the
+# compiled sources, and nothing says so. That is how a malformed
+# mesa-20.0.8-aros.diff went unseen from 2026-08-25 to 2026-10-20 while the
+# sources it should have produced had been patched by hand (ISSUE-0088).
+#
+# The stamp is a digest of the patch files the selected version's PATCHSPEC
+# names. When it differs, the unpacked tree, the copied patches and fetch.sh's
+# stamps all go, and the next fetch starts from the tarball. A missing stamp
+# counts as different: there is no knowing what those sources were patched
+# with.
+mesa_patches_digest() {
+    local v="$1" f
+    for f in "$SRC/workbench/libs/mesa/mesa-$v-aros.diff" \
+             "$SRC/workbench/libs/mesa/bellatrix/mesa-$v-bellatrix.diff"; do
+        [ -f "$f" ] && echo "$(basename "$f") $(md5sum < "$f" | cut -d' ' -f1)"
+    done
+}
+
+MESA_VERSION="$(sed -n 's/^OPT_MESAGL *:= *//p' "$BUILD/config/make.cfg" 2>/dev/null)"
+MESA_PORTS="$BUILD/bin/$TARGET/Ports/mesa"
+if [ -n "$MESA_VERSION" ]; then
+    stamp="$MESA_PORTS/.bellatrix-patches-mesa-$MESA_VERSION"
+    if [ "$(cat "$stamp" 2>/dev/null)" != "$(mesa_patches_digest "$MESA_VERSION")" ]; then
+        if [ -e "$MESA_PORTS/mesa-$MESA_VERSION" ]; then
+            echo "[aros] Mesa $MESA_VERSION's patches differ from what Ports/mesa was made from —"
+            echo "[aros] unpacking and patching it again from the tarball"
+        fi
+        rm -rf "$MESA_PORTS/mesa-$MESA_VERSION"
+        rm -f "$MESA_PORTS/.mesa-$MESA_VERSION".tar.*.unpacked \
+              "$MESA_PORTS/.mesa-$MESA_VERSION"-*.diff.applied \
+              "$MESA_PORTS/mesa-$MESA_VERSION"-*.diff
+        mkdir -p "$MESA_PORTS"
+        mesa_patches_digest "$MESA_VERSION" > "$stamp"
     fi
 fi
 
