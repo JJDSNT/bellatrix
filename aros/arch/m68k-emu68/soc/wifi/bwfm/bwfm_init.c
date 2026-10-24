@@ -1639,9 +1639,13 @@ static int bwfm_init(struct BWFMBase *BWFMBase)
 
     SDIOBase = OpenResource("sdio.resource");
     if (!SDIOBase)
+    {
+        /* Fail rather than carry on: the resource would be left
+         * half-initialised with no bus to talk to. Upstream 2e797599cc. */
         bug("[WIFI:BWFM] resource init: sdio.resource unavailable\n");
-    else
-        bug("[WIFI:BWFM] resource init OK: attach deferred\n");
+        return FALSE;
+    }
+    bug("[WIFI:BWFM] resource init OK: attach deferred\n");
 
     /* Chip bring-up (power + enumeration) is deferred to the first BWFMAttach(),
      * which bwfm.device calls when it is opened - so the WiFi chip stays
