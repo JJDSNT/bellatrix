@@ -22,7 +22,7 @@
  *
  * So the header grew a constant at a time, each one added when a port failed
  * to compile: BCM2836_PERIPHYSBASE for the audio driver, then the whole clock
- * manager and BCM2711_GPUIRQ_OFFSET for the WiFi SDIO transport. Carrying the
+ * manager and BCM271X_GPUIRQ_OFFSET for the WiFi SDIO transport. Carrying the
  * subset that happened to be needed yet is not a design, it is a queue of
  * future failures, so the whole map is here now and the next port will not
  * find it missing.
@@ -75,7 +75,7 @@
  * INTID n + 96. Anything using an IRQ_* number below has to add it when
  * running on that SoC.
  */
-#define BCM2711_GPUIRQ_OFFSET                           96
+#define BCM271X_GPUIRQ_OFFSET                           96
 
 #define SYSTIMER_BASE                                   (ARM_PERIIOBASE + 0x003000)
 #define ARMTIMER_BASE                                   (ARM_PERIIOBASE + 0x00b000)
@@ -87,7 +87,10 @@
 #define SPI0_BASE                                       (ARM_PERIIOBASE + 0x204000)
 #define BSC0_BASE                                       (ARM_PERIIOBASE + 0x205000)
 #define GPIO_PWM                                        (ARM_PERIIOBASE + 0x20C000)
+/* Overridable: the BCM2712 controller is outside the peripheral window */
+#ifndef DMA0_BASE
 #define DMA0_BASE                                       (ARM_PERIIOBASE + 0x007000)
+#endif
 #define V3D_BASE                                        (ARM_PERIIOBASE + 0xc00000)
 
 /* PWM registers */

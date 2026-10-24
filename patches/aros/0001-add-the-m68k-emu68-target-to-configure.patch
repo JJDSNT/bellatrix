@@ -12,10 +12,10 @@ this series follows from that distinction being expressible.
  2 files changed, 102 insertions(+), 5 deletions(-)
 
 diff --git a/configure b/configure
-index 13d10bbbf8..667d5864cc 100755
+index e5df3fbf73..d0ec03f8c0 100755
 --- a/configure
 +++ b/configure
-@@ -11336,6 +11336,40 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
+@@ -11403,6 +11403,40 @@ printf '%s\n' "$darwin_sdk_path" >&6; }
          aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Dthumb"
          ;;
  
@@ -56,7 +56,7 @@ index 13d10bbbf8..667d5864cc 100755
      amiga*)
          # Extract the first word of "gzip", so it can be a program name with args.
  set dummy gzip; ac_word=$2
-@@ -12494,7 +12528,21 @@ spec_obj_format="-m $aros_object_format"
+@@ -12585,7 +12619,21 @@ spec_obj_format="-m $aros_object_format"
  # as well as floating-point ABI.
  case "$aros_target_cpu" in
      *m68k*)
@@ -79,7 +79,7 @@ index 13d10bbbf8..667d5864cc 100755
          aros_isa_targets="M68K_ISA_TARGETS              :=MC68020 MC68040"
          aros_isa_extra="$aros_isa_extra$export_newline$aros_isa_targets$export_newline"
          aros_isa_extra="$aros_isa_extra$m68k_isa_extra$export_newline$m68k_020_isa_extra$export_newline$m68k_030_isa_extra$export_newline$m68k_040_isa_extra$export_newline$m68k_060_isa_extra$export_newline$m68k_ac080_isa_extra$export_newline"
-@@ -21656,7 +21704,6 @@ fi
+@@ -21752,6 +21800,6 @@ fi
  aros_shared_ar="$aros_shared_ld $aros_shared_ldflags -o"
  
  if test -n "$aros_shared_cflags" ; then
@@ -88,12 +88,11 @@ index 13d10bbbf8..667d5864cc 100755
 +        echo "SHARED_CFLAGS := $aros_shared_cflags" >> ${aros_hostcfg_dir}/host.cfg
 +        echo "SHARED_AR := $aros_shared_ar" >> ${aros_hostcfg_dir}/host.cfg
  fi
--
 diff --git a/configure.in b/configure.in
-index 3f758b7816..7de040478d 100644
+index 40c391e21e..cadc0c1ec1 100644
 --- a/configure.in
 +++ b/configure.in
-@@ -2241,6 +2241,42 @@ case "$target_os" in
+@@ -2249,6 +2249,42 @@ case "$target_os" in
          aros_target_mkdep="$aros_target_mkdep -D__GNUC__ -Dthumb"
          ;;
  
@@ -136,7 +135,7 @@ index 3f758b7816..7de040478d 100644
      amiga*)
          AROS_PROG(GZIP,[gzip])
          host_extra_cfg+="$export_newline""GZIP                          := $GZIP"
-@@ -2817,7 +2853,21 @@ spec_obj_format="-m $aros_object_format"
+@@ -2855,7 +2891,21 @@ spec_obj_format="-m $aros_object_format"
  # as well as floating-point ABI.
  case "$aros_target_cpu" in
      *m68k*)
