@@ -270,6 +270,14 @@ resolved.
 
 ### M2 is split, and Mesa 20.0.8 stays supported (decided 2026-10-20)
 
+> **Correction, 2026-10-24: M2 was not split after all, and Mesa 20.0.8 is
+> no longer supported.** Building it at this pin showed that upstream's
+> `--with-mesagl=20.0.8` has not built for anyone since its Mesa 26 port. The
+> option and some 20.0.8 paths remain, but `mesa3dgl.library`'s own glue was
+> rewritten for Mesa >= 22. See *M2 — result* below. The model described here
+> still holds: per-version fix files, and `BELLATRIX_MESAGL` passed through
+> unchanged.
+
 From `2e30a0877e` on, upstream's `configure` builds Mesa 26.0.0 unless
 `--with-mesagl=<version>` says otherwise. Master still ships
 `mesa-20.0.8-aros.diff`, and the 20.3.2, 21.0.2 and 26.0.0 diffs, beside it.
@@ -369,6 +377,65 @@ How it goes in, in M2a. Both questions are answered from `scripts/fetch.sh`:
   only moved, not fixed.
 
 Mesa 26 gets `mesa-26.0.0-bellatrix.diff` in M2b, written the same way.
+
+### M2 — result (2026-10-24): done, on Mesa 26
+
+Done in the worktree `/home/jaime/bellatrix-m2a`, branch
+`aros-refresh-m2a`, from a build with no prior tree. A build that never
+touched a hand-patched tree is the reproducibility proof this milestone
+needed. Pin `2e30a0877e`, 61 numbered patches.
+
+**Mesa.** Upstream's `--with-mesagl=20.0.8` fails in five places. Four are
+peripheral, and each was fixed the way upstream fixes the same thing next
+door: the `vk_video` include copy, `egl.library` (never built before Mesa
+26), vc4's CLE XML, and v3d's unconditional place in vc4's GalliumCoreAPI
+union. Those are patches 0101-0104, kept in `33eb0af` for upstream and then
+retired. The fifth is the library glue itself: `mesa3dgl_types.h` lost its
+`__has_include` fallback and `mesa3dgl_*.c` now use the post-22 API without
+`st_api`. Keeping 20.0.8 would mean forking that glue. So M2 follows
+upstream's default, and the M2a/M2b split collapsed into one milestone.
+
+`mesa-26.0.0-bellatrix.diff` carries what Mesa 26 still needs:
+
+- **ralloc**, aligned allocation and a realloc-free resize. Mesa 26 has
+  `alignas(8)` on the header but still `malloc()`s it.
+- **cso**, with `cso_construct_key()` folding a key's tail in instead of
+  asserting the size is a multiple of four.
+
+The `formats.c` fix is now in Mesa itself, and the fixed-function
+instrumentation's file is gone. Under QEMU: `GL_VERSION: 3.3 (Compatibility
+Profile) Mesa 26.0.0`, renderer softpipe, through `tests/gl/gl-info`. VC4
+needs a Pi.
+
+**Mechanism verified.** Patch 0100 applies the per-version diff as a
+second `PATCHSPEC` entry; the fetch stamps both patches `.applied`. The
+`Ports/mesa` invalidation had a bug: it read `OPT_MESAGL` from the wrong
+file. Once fixed, it rebuilt Mesa 26's sources from the tarball on its
+first run.
+
+**Reproducibility, found on the way.** A from-scratch `full` build made a
+card without the Bluetooth stack, the WiFi and Bluetooth firmware, the
+network prefs, `sfs-handler`, `dos64.library` or our `C:` probes. Those
+targets had followed the lean build only, or had never been in the script,
+and the main tree had them only because they had once been built into it.
+`build-aros.sh` now builds them after `full` as well. Card contents now
+match M1's, except for four stale `Devs/` copies of modules the kernel
+carries (`audio.device`, `dosboot`, `lddemon`, `pl011bt`), which the main
+tree should drop as well. `make-sdcard.sh` and the GL probes no longer name
+`mesa3dgl20-0`; they read `ENVARC:SYS/GL.default`, as `gl.library` does.
+
+**Boot, QEMU.** The desktop comes up with Wireless Manager, the WiFi
+failures are the expected ones, and SD reads at 41 KB/s (single run).
+
+**Forks** (`upstream-forks.py`, M1..M2):
+
+- **Ported:** `bcm2708.h` (`72311ea24c`, `3ecd43bdfa`); the sdio rename and
+  `IPTR`; bwfm's fail-without-sdio (`2e797599cc`); the vc4gallium glue
+  (`622d07129a`, `a3cfa659ed`).
+- **Rejected as BCM2712-only:** `f3b47ce8e1` (arasan.h, sdcard),
+  `b6fd46e3d6` (vcgfx), the 2712 bail in `72311ea24c`.
+- **Retired:** `0090`, because upstream `8643e85cd8` removed
+  `waitvblank()`.
 
 ## M3 — `92a7198be1` (#205, 2026-09-13): m68k stack alignment
 
