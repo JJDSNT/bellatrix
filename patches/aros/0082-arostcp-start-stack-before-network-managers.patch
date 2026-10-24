@@ -11,7 +11,7 @@ wireless and mobile managers that consume it.
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/workbench/network/stacks/AROSTCP/S/Package-Startup b/workbench/network/stacks/AROSTCP/S/Package-Startup
-index 20f0205790..9f0221bf5e 100644
+index d991b93cdb..00592a1d67 100644
 --- a/workbench/network/stacks/AROSTCP/S/Package-Startup
 +++ b/workbench/network/stacks/AROSTCP/S/Package-Startup
 @@ -8,6 +8,8 @@ Protect S/stopnet s add quiet
@@ -21,7 +21,7 @@ index 20f0205790..9f0221bf5e 100644
 +  C:Execute S/startnet
 +
    if ${AROSTCP/WirelessAutoRun} eq "True"
-     Run >NIL: QUIET C:WirelessManager ${AROSTCP/WirelessDevice}
+     Run >NIL: QUIET C:WirelessManager ${AROSTCP/WirelessDevice} NOGUI
    EndIf
 @@ -16,8 +18,6 @@ if ${AROSTCP/AutoRun} eq "True"
      Run >NIL: QUIET C:ModemManager
@@ -32,5 +32,3 @@ index 20f0205790..9f0221bf5e 100644
    if EXISTS ENV:AROSTCP/ServerAutoMounts
      Mount ${AROSTCP/ServerAutoMounts} 
    EndIf
--- 
-2.39.5
