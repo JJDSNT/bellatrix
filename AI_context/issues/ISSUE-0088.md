@@ -451,6 +451,31 @@ failures are the expected ones, and SD reads at 41 KB/s (single run).
   everything at once on m68k and nothing on any other target, and it must
   not share a boot with the toolchain change.
 
+### M3 — result (2026-10-24): done
+
+Pin `92a7198be1`, and the series applies unchanged (61 patches).
+
+- **Stack alignment (`765871daef`).** It reaches this target through one
+  path: `AROS_STACKALIGN 8` in `arch/m68k-all/include/aros/cpu.h`. The
+  generic `rom/exec/newaddtask.c` uses it to align `tc_SPReg` before our
+  `PrepareContext` runs, and we override neither file.
+  `PROC_MINSTACKSIZE` in m68k-amiga's `dos_platform.h` does not apply,
+  because this target compiles `rom/dos/dos_platform.h`. The `cpu.h`
+  change rebuilds the whole tree, and ccache cannot help with that.
+- **Mesa.** Upstream changed `mesa-26.0.0-aros.diff` in this range. The
+  build noticed and rebuilt `Ports/mesa` from the tarball, the first time
+  that mechanism fired on an upstream change and not one of ours.
+- **Fork (`hdmiaudio`, `ec982ac781`).** Ported only the RAM-packet fix:
+  disable the infoframe slot and wait for it to go idle before writing,
+  then enable it together with the packet path (bit 16). Not taken: DMA4
+  and dma40 (BCM2712), the second HDMI port, 64-bit peripheral bases, and
+  the legacy engine's address translation, which `GPU_BUS_ADDR` already
+  does since `51a300c`. Audio cannot be tested under QEMU, so this needs
+  a Pi.
+- **QEMU.** The desktop comes up as in M2, with the same expected WiFi
+  failures, SD at 47 KB/s, and `gl-info` reporting Mesa 26.0.0 on
+  softpipe.
+
 ## M4 — `08e347406b` (#230, 2026-09-14): the toolchain moves
 
 - **Upstream:** `52bab89955` rewrites `tools/crosstools/gnu/gcc-6.5.0-aros.diff`,
