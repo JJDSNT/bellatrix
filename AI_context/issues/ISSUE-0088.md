@@ -489,6 +489,24 @@ Pin `92a7198be1`, and the series applies unchanged (61 patches).
 - **Watch:** every m68k binary now links `cxx-startup.o`. A boot difference
   here is the toolchain's, which is why nothing else rides in M4.
 
+### M4 — result (2026-10-24): done
+
+Pin `08e347406b`, and the series applies unchanged. The toolchain digest
+moved from `a88db85e62ede04f` to `8469c4648a37b6a6`. No prebuilt copy
+existed (the CI release 404'd), so `build-aros.sh clean full --yes` built
+binutils 2.32 and gcc 6.5.0 and then all of AROS: 1 h 53 min on this
+machine. The new toolchain is in `~/.cache/bellatrix/toolchain`. This is
+the only toolchain change between the old pin and HEAD; no later milestone
+moves the digest.
+
+- **Forks** (`upstream-forks.py`): three commits, all rejected because the
+  m68k guest runs on one core. `642046b4a1` (usb2otg worker priority)
+  touches a task that exists only under `__AROSEXEC_SMP__`. `b6c3d80b2b`
+  (EClock watermark CAS) fixes a race between cores inside `Disable()`.
+  `95f5d15b77` (getsystemattr) is the aarch64 SMP layer.
+- **QEMU.** Same as M3: desktop, expected WiFi failures, SD at 43 KB/s,
+  `gl-info` on Mesa 26.0.0 and softpipe, all now built with the new gcc.
+
 ## M5 — `19ba9b56bc` (#398, 2026-09-25): m68k task state, USB
 
 - **Upstream:** `7c59bc3f94`, `38dc95623a`, `0162d11a35` (right-sized
