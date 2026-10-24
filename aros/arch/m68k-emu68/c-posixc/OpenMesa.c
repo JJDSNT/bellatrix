@@ -23,11 +23,30 @@
 #include <proto/exec.h>
 #include <proto/timer.h>
 #include <devices/timer.h>
+#include <dos/var.h>
+#include <string.h>
 
 int main(int argc, char *argv[])
 {
-    const char *name = (argc > 1) ? argv[1] : "mesa3dgl20-0.library";
+    /* With no argument, open the Mesa library gl.library itself would: the
+     * one ENV:SYS/GL.default names, which the build writes for the Mesa
+     * version it built (mesa3dgl20-0, mesa3dgl26-0, ...). */
+    static char fromenv[64];
+    const char *name = (argc > 1) ? argv[1] : NULL;
     struct Library *lib;
+
+    if (!name)
+    {
+        LONG len = GetVar((CONST_STRPTR)"SYS/GL.default", (STRPTR)fromenv,
+                          sizeof(fromenv) - 8, GVF_GLOBAL_ONLY);
+        if (len <= 0)
+        {
+            bug("[openmesa] no ENV:SYS/GL.default and no library named\n");
+            return RETURN_FAIL;
+        }
+        strcat(fromenv, ".library");
+        name = fromenv;
+    }
 
     bug("[openmesa] opening '%s'\n", name);
     lib = OpenLibrary((CONST_STRPTR)name, 0);

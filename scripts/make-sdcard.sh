@@ -124,9 +124,15 @@ done
 # complete matching stack and at least the diagnostic/demo programs used to
 # exercise it on a Pi.  Failing here prevents a successful-looking archive
 # made from a stale distribution tree that contains only the 2D driver.
+#
+# Which Mesa library that is depends on the Mesa the tree was built with
+# (BELLATRIX_MESAGL, else upstream's default). The build records it the way
+# gl.library looks it up, in ENVARC:SYS/GL.default, so read it from there
+# rather than naming one version.
+MESAGL_LIB="$(cat "$DIST/Prefs/Env-Archive/SYS/GL.default" 2>/dev/null)"
 REQUIRED_3D=(
     Libs/gl.library
-    Libs/mesa3dgl20-0.library
+    "Libs/${MESAGL_LIB:-<no ENVARC:SYS/GL.default>}.library"
     Libs/gallium.library
     Devs/Drivers/gallium.hidd
     Devs/Drivers/vc4gallium.hidd

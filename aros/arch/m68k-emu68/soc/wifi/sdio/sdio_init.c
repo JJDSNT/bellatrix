@@ -1138,7 +1138,7 @@ static int sdio_do_probe(struct SDIOBase *SDIOBase)
         unsigned int irq = IRQ_VC_ARASANSDIO;
 
         if (SDIOBase->sdio_periiobase == BCM2711_PERIIOBASE)
-            irq += BCM2711_GPUIRQ_OFFSET;
+            irq += BCM271X_GPUIRQ_OFFSET;
 
         SDIOBase->sdio_IRQHandle = KrnAddIRQHandler(irq,
                                                     sdio_irq_handler, SDIOBase, NULL);

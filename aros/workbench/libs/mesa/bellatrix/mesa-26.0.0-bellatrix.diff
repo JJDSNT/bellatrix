@@ -1,0 +1,104 @@
+diff -ruN mesa-26.0.0/src/gallium/auxiliary/cso_cache/cso_cache.h mesa-26.0.0.aros/src/gallium/auxiliary/cso_cache/cso_cache.h
+--- mesa-26.0.0/src/gallium/auxiliary/cso_cache/cso_cache.h	2026-10-24 14:42:02.821140085 -0300
++++ mesa-26.0.0.aros/src/gallium/auxiliary/cso_cache/cso_cache.h	2026-10-24 14:42:02.843369524 -0300
+@@ -182,11 +182,17 @@
+    const unsigned *ikey = (const unsigned *)key;
+    unsigned num_elements = key_size / 4;
+ 
+-   assert(key_size % 4 == 0);
+-
++   /* AROS: not every key is a whole number of words. On the m68k ABI
++    * structures align to two bytes, and the compact blend key comes out
++    * two bytes short of a multiple of four. Fold the tail in rather than
++    * assert on it. */
+    for (unsigned i = 0; i < num_elements; i++)
+       hash ^= ikey[i];
+ 
++   const unsigned char *tail = (const unsigned char *)key + num_elements * 4;
++   for (unsigned i = 0; i < (unsigned)key_size % 4; i++)
++      hash ^= (unsigned)tail[i] << (8 * i);
++
+    return hash;
+ }
+ 
+diff -ruN mesa-26.0.0/src/util/ralloc.c mesa-26.0.0.aros/src/util/ralloc.c
+--- mesa-26.0.0/src/util/ralloc.c	2026-10-24 14:40:58.298611640 -0300
++++ mesa-26.0.0.aros/src/util/ralloc.c	2026-10-24 14:41:09.716670989 -0300
+@@ -34,6 +34,7 @@
+ #include "util/u_printf.h"
+ 
+ #include "ralloc.h"
++#include "util/os_memory.h"
+ 
+ #define CANARY 0x5A1106
+ 
+@@ -68,6 +69,12 @@
+    struct ralloc_header *next;
+ 
+    void (*destructor)(void *);
++
++   /* AROS: the payload size, so resize() can copy without realloc(). The
++    * header is aligned with alignas(), but malloc() on m68k AROS may hand
++    * back an address that is 4 modulo 8, so blocks come from
++    * os_malloc_aligned() instead, and that has no realloc. */
++   size_t aros_size;
+ };
+ 
+ typedef struct ralloc_header ralloc_header;
+@@ -115,8 +122,9 @@
+     *  - Allocations of a size that rounds up to a multiple of 8 bytes and
+     *    not 16 bytes, are only required to have at least 8 byte alignment.
+     */
+-   void *block = malloc(align64(size + sizeof(ralloc_header),
+-                                alignof(ralloc_header)));
++   void *block = os_malloc_aligned(align64(size + sizeof(ralloc_header),
++                                           alignof(ralloc_header)),
++                                   alignof(ralloc_header));
+    ralloc_header *info;
+    ralloc_header *parent;
+ 
+@@ -133,6 +141,7 @@
+    info->prev = NULL;
+    info->next = NULL;
+    info->destructor = NULL;
++   info->aros_size = size;
+ 
+    parent = ctx != NULL ? get_header(ctx) : NULL;
+ 
+@@ -164,12 +173,16 @@
+    ralloc_header *child, *old, *info;
+ 
+    old = get_header(ptr);
+-   info = realloc(old, align64(size + sizeof(ralloc_header),
+-                               alignof(ralloc_header)));
++   info = os_malloc_aligned(align64(size + sizeof(ralloc_header),
++                                    alignof(ralloc_header)),
++                            alignof(ralloc_header));
+ 
+    if (info == NULL)
+       return NULL;
+ 
++   memcpy(info, old, sizeof(ralloc_header) + MIN2(old->aros_size, size));
++   info->aros_size = size;
++
+    /* Update parent and sibling's links to the reallocated node. */
+    if (info != old && info->parent != NULL) {
+       if (info->parent->child == old)
+@@ -186,6 +199,8 @@
+    for (child = info->child; child != NULL; child = child->next)
+       child->parent = info;
+ 
++   os_free_aligned(old);
++
+    return PTR_FROM_HEADER(info);
+ }
+ 
+@@ -323,7 +338,7 @@
+    if (info->destructor != NULL)
+       info->destructor(PTR_FROM_HEADER(info));
+ 
+-   free(info);
++   os_free_aligned(info);
+ }
+ 
+ void

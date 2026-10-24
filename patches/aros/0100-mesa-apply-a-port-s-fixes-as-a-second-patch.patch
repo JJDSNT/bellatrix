@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 24 Oct 2026 01:52:42 -0300
+Subject: [PATCH] mesa: apply a port's fixes as a second patch, not as edits to
+ the first
+
+A port that needs changes to a Mesa version had to edit that version's
+mesa-<version>-aros.diff: a patch of a patch. Nothing parses the inner diff
+when the outer one is applied, so it can break silently -- ours did, with
+hunk counts that patch(1) rejects -- and every upstream change to the file
+can break the edit for reasons of context alone.
+
+PATCHSPEC already takes a list and patches_origins a list of directories,
+so the fixes become their own patch, bellatrix/<version>-bellatrix.diff,
+applied after the version's. Without that file nothing changes.
+---
+ workbench/libs/mesa/mesa.cfg      | 9 +++++++++
+ workbench/libs/mesa/mmakefile.src | 3 ++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/workbench/libs/mesa/mesa.cfg b/workbench/libs/mesa/mesa.cfg
+index 472ca62428..9f6ef760a0 100644
+--- a/workbench/libs/mesa/mesa.cfg
++++ b/workbench/libs/mesa/mesa.cfg
+@@ -38,6 +38,15 @@ else
+ PATCHSPEC :=
+ endif
+ 
++# Fixes a port carries for this Mesa version, kept as a second patch applied
++# after the version's own rather than as edits to it. The patch lives in
++# bellatrix/ beside this file and is named like the version patch; a version
++# with no such file builds exactly as before.
++BELLATRIX_PATCHFILE := $(SRCDIR)/$(aros_mesadir)/bellatrix/$(ARCHBASE)-bellatrix.diff
++ifneq ($(wildcard $(BELLATRIX_PATCHFILE)),)
++PATCHSPEC += $(ARCHBASE)-bellatrix.diff:$(ARCHBASE):-p1
++endif
++
+ ifeq ($(AROS_TARGET_CPU),x86_64)
+ MESA_USE_ASM=TRUE
+ endif
+diff --git a/workbench/libs/mesa/mmakefile.src b/workbench/libs/mesa/mmakefile.src
+index 6ac447e25d..fb17767c79 100644
+--- a/workbench/libs/mesa/mmakefile.src
++++ b/workbench/libs/mesa/mmakefile.src
+@@ -14,7 +14,8 @@ include $(SRCDIR)/$(CURDIR)/mesa.cfg
+ #MM- ports-includes : mesa3d-includes-copy
+ #MM mesa3d-includes-copy : mesa3d-fetch
+ 
+-%fetch mmake=mesa3d-fetch archive=$(ARCHBASE) destination=$(PORTSDIR)/mesa location=$(PORTSSOURCEDIR) archive_origins=$(REPOSITORIES) suffixes="tar.xz tar.gz" patches_specs=$(PATCHSPEC)
++%fetch mmake=mesa3d-fetch archive=$(ARCHBASE) destination=$(PORTSDIR)/mesa location=$(PORTSSOURCEDIR) archive_origins=$(REPOSITORIES) suffixes="tar.xz tar.gz" patches_specs=$(PATCHSPEC) \
++    patches_origins="$(SRCDIR)/$(CURDIR) $(SRCDIR)/$(CURDIR)/bellatrix"
+ 
+ %create_patch mmake=mesa3d-create-patch \
+     archive=$(ARCHBASE) suffixes="tar.xz tar.gz" \
+-- 
+2.43.0
+

@@ -15,6 +15,6 @@ Echo >DEBUG: "[stack] now:"
 Stack >DEBUG:
 Echo >DEBUG: "[stack] opening mesa3dgl with 100 MB of stack"
 Date >DEBUG:
-OpenMesa mesa3dgl20-0.library >NIL: <NIL:
+OpenMesa >NIL: <NIL:
 Date >DEBUG:
 Echo >DEBUG: "[stack] OpenMesa returned"
