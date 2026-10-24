@@ -40,18 +40,6 @@
 #define RPIHDMI_CHANNEL_MASK 0x03
 
 /*
- * Microsecond delay using a busy loop on the system timer.
- */
-static void udelay(IPTR peribase, ULONG us)
-{
-    volatile ULONG *clo = (volatile ULONG *) (peribase + 0x003004);
-    ULONG start = AROS_LE2LONG(*clo);
-
-    while ((AROS_LE2LONG(*clo) - start) < us)
-        ;
-}
-
-/*
  * Map sample rate to MAI format enum value.
  */
 static ULONG srate_to_mai_enum(ULONG samplerate)
@@ -159,6 +147,8 @@ static void hdmi_write_audio_infoframe(struct RPiHDMIData *dd)
     ULONG slot_base = HDMI_RAM_PKT_START(dd) + 4 * 0x24;
     UBYTE infoframe[14];
     UBYTE checksum;
+    ULONG cfg;
+    int try = 100;
     int i;
 
     /* Header */
@@ -188,7 +178,16 @@ static void hdmi_write_audio_infoframe(struct RPiHDMIData *dd)
      * Each RAM packet slot holds data packed as 32-bit LE words.
      * Header (3 bytes) + checksum + data bytes (10 bytes) = 14 bytes.
      * Written as ULONG words, low byte first.
+     *
+     * The slot's RAM is locked while the packet is being sent, so disable
+     * the slot and wait for its status bit to drop before writing -- as
+     * upstream's RPiHDMI (ec982ac781) and Linux's vc4_hdmi do.
      */
+    cfg = rd32le(HDMI_RAM_PKT_CFG(dd)) & ~(1 << 4);
+    wr32le(HDMI_RAM_PKT_CFG(dd), cfg);
+    while ((rd32le(HDMI_RAM_PKT_STATUS(dd)) & (1 << 4)) && try-- > 0)
+        udelay(dd->periiobase, 100);
+
     for (i = 0; i < 14; i += 4) {
         ULONG word = 0;
         int j;
@@ -197,8 +196,10 @@ static void hdmi_write_audio_infoframe(struct RPiHDMIData *dd)
         wr32le(slot_base + i, word);
     }
 
-    /* Enable the audio infoframe packet (bit 4 = packet_id 4) */
-    wr32le(HDMI_RAM_PKT_CFG(dd), rd32le(HDMI_RAM_PKT_CFG(dd)) | (1 << 4));
+    /* Enable the audio infoframe packet (bit 4 = packet_id 4), and the RAM
+     * packet path itself, which is off on a port the firmware found no
+     * display on. */
+    wr32le(HDMI_RAM_PKT_CFG(dd), cfg | RAM_PKT_CFG_ENABLE | (1 << 4));
 }
 
 

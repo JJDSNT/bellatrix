@@ -97,6 +97,9 @@ static inline void wr32le(ULONG addr, ULONG val)
     ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.audio_packet_cfg))
 #define HDMI_RAM_PKT_CFG(dd)     \
     ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.ram_packet_cfg))
+/* RAM_PACKET_CONFIG: the RAM packet path itself (Linux vc4_hdmi's
+ * VC4_HDMI_RAM_PACKET_ENABLE); bits 0-15 enable the individual slots. */
+#define RAM_PKT_CFG_ENABLE      (1 << 16)
 #define HDMI_RAM_PKT_STATUS(dd)  \
     ((dd->periiobase) + (dd->soc->hdmi_base) + (dd->soc->regs.ram_packet_status))
 #define HDMI_CRP_CFG(dd)         \
@@ -195,5 +198,17 @@ static inline void wr32le(ULONG addr, ULONG val)
 /* Hardware setup/teardown functions */
 void hdmi_mai_init(struct RPiHDMIData *dd);
 void hdmi_mai_stop(struct RPiHDMIData *dd);
+
+/*
+ * Microsecond delay using a busy loop on the system timer.
+ */
+static inline void udelay(IPTR peribase, ULONG us)
+{
+    volatile ULONG *clo = (volatile ULONG *) (peribase + 0x003004);
+    ULONG start = AROS_LE2LONG(*clo);
+
+    while ((AROS_LE2LONG(*clo) - start) < us)
+        ;
+}
 
 #endif /* AHI_Drivers_RPiHDMI_hwaccess_h */
