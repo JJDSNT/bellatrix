@@ -308,10 +308,9 @@ one `mesa-<version>-aros.diff` per Mesa version and picks the version in
   as `BELLATRIX_FRAME_POINTERS` does. It is permanent support, not an M2a
   stopgap. `build-aros.sh` currently passes `configure` only `--target` and
   `--enable-ccache`.
-- **Send the fixes upstream, into their diff files.** Upstream already took
-  a big-endian Mesa fix for ppc (`cfdecb2c1f`), and our FAT and Bluetooth
-  work. Each fix it takes is one patch fewer to carry and re-check at every
-  bump.
+- **Sending anything to AROS is not part of this refresh** (the user,
+  2026-10-24). The refresh updates Bellatrix. Upstreaming, if it happens,
+  is a separate decision taken after it.
 
 ### Our Mesa fixes stop being patches of a patch (researched 2026-10-20)
 
@@ -389,7 +388,7 @@ needed. Pin `2e30a0877e`, 61 numbered patches.
 peripheral, and each was fixed the way upstream fixes the same thing next
 door: the `vk_video` include copy, `egl.library` (never built before Mesa
 26), vc4's CLE XML, and v3d's unconditional place in vc4's GalliumCoreAPI
-union. Those are patches 0101-0104, kept in `33eb0af` for upstream and then
+union. Those are patches 0101-0104, kept in `33eb0af`'s history and then
 retired. The fifth is the library glue itself: `mesa3dgl_types.h` lost its
 `__has_include` fallback and `mesa3dgl_*.c` now use the post-22 API without
 `st_api`. Keeping 20.0.8 would mean forking that glue. So M2 follows
