@@ -21,10 +21,10 @@ itself costs 79 ms and the bounce copy costs 4420 ms.
 Thirty-one bytes of slack per buffer buys all of them the direct path.
 ---
 diff --git a/rom/filesys/fat/cache.c b/rom/filesys/fat/cache.c
-index cc7e3151fd..dcab7d703c 100644
+index fb78a8b85c..b07fa415b1 100644
 --- a/rom/filesys/fat/cache.c
 +++ b/rom/filesys/fat/cache.c
-@@ -135,14 +135,34 @@ APTR Cache_CreateCache(APTR priv, ULONG hash_size, ULONG block_count,
+@@ -155,14 +155,34 @@ APTR Cache_CreateCache(APTR priv, ULONG hash_size, ULONG block_count,
  
          for(i = 0; i < block_count && success; i++)
          {
@@ -49,7 +49,7 @@ index cc7e3151fd..dcab7d703c 100644
 +             * allocation's base, which is what Cache_DestroyCache() frees.
 +             */
 +            b = AllocVec(sizeof(struct BlockRange) + 31
-                 + (c->block_size << RANGE_SHIFT), MEMF_PUBLIC);
+                 + (c->block_size << c->range_shift), MEMF_PUBLIC);
              if(b != NULL)
              {
                  b->use_count = 0;
