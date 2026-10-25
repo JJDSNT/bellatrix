@@ -21,12 +21,14 @@
 
 #define DEVNAME         "usb2otg.device"
 
-#define USB2OTG_DT_COMPATIBLE "brcm,bcm2708-usb"
+#define USB2OTG_DT_COMPATIBLE "brcm,bcm2835-usb"
+#define USB2OTG_DT_COMPATIBLE_LEGACY "brcm,bcm2708-usb"
 
 const char devname[]    = MOD_NAME_STRING;
 
 AROS_INTP(FNAME_DEV(PendingInt));
 AROS_INTP(FNAME_DEV(NakTimeoutInt));
+AROS_INTP(FNAME_DEV(SofGateInt));
 
 IPTR    __arm_periiobase __attribute__((used)) = 0 ;
 
@@ -61,6 +63,8 @@ static BOOL FNAME_DEV(DTEnabled)(void)
        such node means this machine has no OTG core of ours - BCM2712 puts a
        different controller somewhere else entirely. */
     key = OF_FindNodeByCompatible(NULL, USB2OTG_DT_COMPATIBLE);
+    if (key == NULL)
+        key = OF_FindNodeByCompatible(NULL, USB2OTG_DT_COMPATIBLE_LEGACY);
     if (key == NULL)
         return FALSE;
 
@@ -255,7 +259,6 @@ static int FNAME_DEV(Init)(LIBBASETYPEPTR USB2OTGBase)
                                     NewList(&USB2OTGBase->hd_Unit->hu_CtrlXFerQueue);
                                     NewList(&USB2OTGBase->hd_Unit->hu_IntXFerQueue);
                                     NewList(&USB2OTGBase->hd_Unit->hu_IntXFerScheduled);
-                                    NewList(&USB2OTGBase->hd_Unit->hu_IsoXFerQueue);
                                     NewList(&USB2OTGBase->hd_Unit->hu_BulkXFerQueue);
                                     NewList(&USB2OTGBase->hd_Unit->hu_TDQueue);
                                     NewList(&USB2OTGBase->hd_Unit->hu_AbortQueue);
@@ -289,6 +292,8 @@ static int FNAME_DEV(Init)(LIBBASETYPEPTR USB2OTGBase)
                                         bug("[USB2OTG] Failed to create CPU0 worker task\n");
                                         return FALSE;
                                     }
+                                    USB2OTGBase->hd_Unit->hu_SofGateWakeFrame = 0xffff;
+
                                     CopyMem(USB2OTGBase->hd_TimerReq, &USB2OTGBase->hd_Unit->hu_NakTimeoutReq, sizeof(struct timerequest));
                                     USB2OTGBase->hd_Unit->hu_NakTimeoutReq.tr_node.io_Message.mn_ReplyPort = USB2OTGBase->hd_Unit->hu_WorkerPort;
                                     USB2OTGBase->hd_Unit->hu_NakTimeoutReq.tr_time.tv_secs = 0;
@@ -311,6 +316,11 @@ static int FNAME_DEV(Init)(LIBBASETYPEPTR USB2OTGBase)
                                         USB2OTGBase->hd_Unit->hu_TTClearPending[i].tc_Hub = 0;
 
                                     USB2OTGBase->hd_Unit->hu_GlobalIRQHandle = KrnAddIRQHandler(IRQ_VC_USB, FNAME_DEV(GlobalIRQHandler), USB2OTGBase->hd_Unit, SysBase);
+
+                                    wr32le(SYSTIMER_CS, 1 << USB2OTG_SOF_GATE_TIMER);
+                                    USB2OTGBase->hd_Unit->hu_SofGateIRQHandle =
+                                        KrnAddIRQHandler(IRQ_TIMER0 + USB2OTG_SOF_GATE_TIMER,
+                                            FNAME_DEV(SofGateInt), USB2OTGBase->hd_Unit, SysBase);
                                     USB2OTGBase->hd_Unit->hu_USB2OTGBase = USB2OTGBase;
 
                                     D(bug("[USB2OTG] %s: Installed Global IRQ Handler [handle @ 0x%p] for IRQ #%ld\n",
@@ -584,10 +594,6 @@ AROS_LH1(void, FNAME_DEV(BeginIO),
 
             case UHCMD_INTXFER:
                 ret = FNAME_DEV(cmdIntXFer)(ioreq, otg_Unit, USB2OTGBase);
-                break;
-
-            case UHCMD_ISOXFER:
-                ret = FNAME_DEV(cmdIsoXFer)(ioreq, otg_Unit, USB2OTGBase);
                 break;
 
             default:

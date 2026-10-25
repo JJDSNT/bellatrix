@@ -17,10 +17,10 @@ zero, which is what they already read.
 arch/m68k-emu68 fills them from Emu68's INSNCNT control register.
 ---
 diff --git a/rom/exec/etask.h b/rom/exec/etask.h
-index c44955392b..fbeef1352e 100644
+index 9cf2cf6fde..b15a54fd75 100644
 --- a/rom/exec/etask.h
 +++ b/rom/exec/etask.h
-@@ -66,6 +66,16 @@ struct IntETask
+@@ -77,6 +77,16 @@ struct IntETask
      /* Last CPU-usage sample, for arches that sweep iet_CpuUsage. */
      UQUAD               iet_LastBusy;           /* iet_private2 at the last sample         */
      UQUAD               iet_LastUsageStamp;     /* when that sample was taken              */
@@ -35,5 +35,5 @@ index c44955392b..fbeef1352e 100644
 +    UQUAD               iet_LastInsn;           /* iet_CpuInsn at the last sample          */
 +    ULONG               iet_InsnUsage;          /* share of instructions, 0..0xffffffff    */
      ULONG               iet_QuantumLeft;        /* scheduler ticks left of this task's slice */
+ #endif
  #ifdef DEBUG_ETASK
-     STRPTR              iet_Me;

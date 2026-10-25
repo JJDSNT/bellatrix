@@ -1,0 +1,18 @@
+.KEY x
+.BRA {
+.KET }
+;
+; Per-task CPU share, as TaskList reads it through TaskTag_CPUUsage. On this
+; target that number comes from arch/m68k-emu68/kernel/cpuusage.c sampling
+; Emu68's counters into struct IntETask, which upstream compacts on m68k and
+; patch 0044 keeps whole here. All zeros means the accounting is gone.
+;
+; Run it late, so there is something running to account for:
+;   BELLATRIX_BOOT_TEST=cpu-usage BELLATRIX_BOOT_TEST_LATE=1 ./scripts/make-sdcard.sh
+;
+Echo >DEBUG: "[cpu-usage] TaskList:"
+TaskList >DEBUG:
+Wait 2
+Echo >DEBUG: "[cpu-usage] TaskList, 2s later:"
+TaskList >DEBUG:
+Echo >DEBUG: "[cpu-usage] done"
