@@ -12,14 +12,11 @@ framebuffer and no blitter, where the planar emit is simply wrong.
 Tests AROS_TARGET_ARCH=amiga instead, which is the property the choice
 is actually about.
 ---
- rom/dosboot/mmakefile.src | 6 +++---
- 1 file changed, 3 insertions(+), 3 deletions(-)
-
 diff --git a/rom/dosboot/mmakefile.src b/rom/dosboot/mmakefile.src
-index c5f914fb54..87175b3eef 100644
+index f8d1389255..769f86f93f 100644
 --- a/rom/dosboot/mmakefile.src
 +++ b/rom/dosboot/mmakefile.src
-@@ -4,13 +4,13 @@ include $(SRCDIR)/config/aros.cfg
+@@ -4,14 +4,14 @@ include $(SRCDIR)/config/aros.cfg
  NOMEDIA_IMAGE := nomedia
  
  # Match the asset format to the target's display hardware:
@@ -27,12 +24,13 @@ index c5f914fb54..87175b3eef 100644
 +#  - native Amiga has PLANAR display hardware. Emit native planar bitplanes
  #    so the image can be drawn with BltBitMap (blitter, planar->planar). The
  #    alternative - per-pixel chunky->planar C2P on a 7MHz 68000 - is prohibitively
- #    slow (~seconds per full-image draw).
+ #    slow (~seconds per full-image draw). LZ packed (-pz): 1.6 KB less ROM than
+ #    byterun1, still unpacked once.
 -#  - other targets (x86/x64 etc.) have a CHUNKY framebuffer, so keep the chunky
 +#  - other targets (including non-Amiga m68k) have a CHUNKY framebuffer, so keep the chunky
  #    emit: WriteChunkyPixels writes chunky->chunky with no planar conversion at all.
 -ifeq ($(AROS_TARGET_CPU),m68k)
 +ifeq ($(AROS_TARGET_ARCH),amiga)
- NOMEDIA_ILBMTOC_FLAGS := -p
+ NOMEDIA_ILBMTOC_FLAGS := -pz
  else
  NOMEDIA_ILBMTOC_FLAGS :=

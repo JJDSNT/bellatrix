@@ -128,12 +128,13 @@ if [ "$DISPLAY_ARG" != "none" ]; then
 fi
 
 if [ "$AROS" = 1 ]; then
-    # nocomposition is currently required to see anything on the framebuffer.
-    # Without it DEVS:Monitors/Compositor installs successfully and then nothing
-    # reaches the display: the boot runs to completion, Wanderer loads
-    # muimaster.library and its Zune icon classes, and the screen stays on the
-    # Emu68 logo.
-    BOOTARGS="${BOOTARGS:-nocomposition}"
+    # No display argument any more. `nocomposition` used to be required: it kept
+    # AROSMonDrvs from starting DEVS:Monitors/Compositor, which installed and
+    # then left the screen on the Emu68 logo. Upstream b72155e2bb (pin
+    # e9e1f786da) deleted that program -- every display now owns a compositor
+    # inside gfx.hidd -- and AROSMonDrvs ignores the argument. A boot without it
+    # reaches the desktop (ISSUE-0088, M10a).
+    BOOTARGS="${BOOTARGS-}"
     # The chipset is a boot argument now, on both sides of the boundary: `rigel`
     # tells Emu68 to build the classic machine and tells AROS to expect it. The
     # default follows the last build -- an image with no chipset in it has
@@ -184,6 +185,7 @@ else
 fi
 
 [ -n "$DEBUG" ] && BOOTARGS="$BOOTARGS sysdebug=$DEBUG"
+BOOTARGS="${BOOTARGS# }"
 QEMU+=(-append "$BOOTARGS")
 
 echo "[run] $WHAT | display: $DISPLAY_ARG | append: $BOOTARGS"
