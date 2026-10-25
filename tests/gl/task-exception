@@ -1,0 +1,20 @@
+.KEY x
+.BRA {
+.KET }
+;
+; Task exceptions on this port: upstream's two tests from 4ac3fbc085, which
+; check that a signal exception returns with interrupt nesting balanced and
+; with the interrupted code's CCR intact. Our frame is not upstream's (68
+; bytes, kernel/context.c), so this is what says the port of that fix holds.
+; Each prints SIGNAL EXCEPTION FAIL lines on failure and returns 20.
+;
+; The binaries are built by 'make test-exec-signalexception' and are not in
+; the distribution's C:, so copy them onto the card's C: before booting.
+;
+Echo >DEBUG: "[task-exception] signalexception:"
+C:signalexception >DEBUG:
+Echo >DEBUG: "[task-exception] signalexception rc=$RC"
+Echo >DEBUG: "[task-exception] exceptioncontext:"
+C:exceptioncontext >DEBUG:
+Echo >DEBUG: "[task-exception] exceptioncontext rc=$RC"
+Echo >DEBUG: "[task-exception] done"

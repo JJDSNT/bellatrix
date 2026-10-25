@@ -725,6 +725,47 @@ Pin `7a69e65d61`, and the series applies unchanged (59 patches).
   itself.** The sdhost pieces go in only after M0.3 has been measured, and
   never the DMA sleep (see M0.3).
 
+### M9 — result (2026-10-25): done
+
+Pin `a399fe2fc7`, 59 numbered patches.
+
+- **`0038` refreshed** for `a5e6a6d1c0`, which replaced `RANGE_SHIFT` with a
+  per-cache `range_shift`. The write-coalescing `flush_buf` that commit adds
+  is not 32-byte aligned, so its writes go through the SDHOST bounce
+  buffer. That is correct, only slower.
+- **Task exceptions (`4ac3fbc085`), ported to our 68-byte frame.**
+  `context.c` keeps the interrupted SR beside the PC past the shifted frame.
+  `cpu_Exception` calls `Enable()` to balance the `Disable()` that
+  `Exec_Exception()` never did, then restores CCR before returning. Upstream's
+  `exceptioncontext` test passes (0 failures, 100 callbacks, 50 M
+  comparisons). Its `signalexception` test fails here, but the same failure
+  occurs with these changes reverted, so it predates them:
+  [ISSUE-0089](ISSUE-0089.md).
+- **SDHOST, the rest of `6042b4a8ea`.**
+  - The bounce buffer is now aligned to 64 bytes, the A53 line.
+  - 127-block commands and equal pieces arrive with the pin in
+    `rom/devs/sdcard`. They fit our lite DMA channel's 16-bit length,
+    because only ADMA2 buses set `AF_Bus_DMA`.
+  - `DMACHF_IRQ` and the DMA sleep stay out on purpose (see M0).
+- **QEMU.** Desktop with the expected WiFi failures, SD at 175 KB/s;
+  `sdwrite`, `gl-info` and `cpu-usage` pass, with no alert or heap report.
+
+### M10 — `6fe38896f3` and later (added 2026-10-25)
+
+Master moved after this plan was written: 72 commits between `a399fe2fc7`
+and `6fe38896f3` (2026-10-24), more by the time M10 starts. They are not an
+appendix to M9:
+
+- `b72155e2bb` moves display composition into `gfx.hidd` and adds
+  composited layers. This is the compositor that today requires
+  `nocomposition` at boot (ISSUE-0048), and it touches files our patches
+  touch.
+- Two `ram-handler` commits (`df6a9f8e40`, `f44a5135a1`) touch files that
+  three of our patches touch.
+- There are also m68k-amiga ROM-space and trackdisk changes, and `dosboot`.
+
+M10 records its exact target when it starts.
+
 # Read and set aside
 
 These are recorded so the next pass does not re-read them. Everything BCM2712

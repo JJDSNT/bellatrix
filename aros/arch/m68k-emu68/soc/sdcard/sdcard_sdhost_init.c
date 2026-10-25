@@ -223,17 +223,19 @@ static int FNAME_SDHOST(SDHostInit)(struct SDCardBase *SDCardBase)
                 }
 
                 /* Allocate cache-line-aligned bounce buffer for DMA reads.
-                 * CacheClearE on unaligned buffers corrupts adjacent memory. */
+                 * CacheClearE on unaligned buffers corrupts adjacent memory,
+                 * and the lines are 64 bytes on the Cortex-A53 Emu68 maintains
+                 * them on (upstream 6042b4a8ea). */
                 {
                     /* Sized to hold one full SD_CHUNK_BLOCKS transfer
                      * (128 sectors * 512 B = 64 KB).  Caller buffers in
                      * high virtual memory must bounce through here. */
-                    ULONG bounce_alloc = 65536 + 31;
+                    ULONG bounce_alloc = 65536 + 63;
                     APTR bounce_raw = AllocMem(bounce_alloc, MEMF_PUBLIC | MEMF_CLEAR);
                     if (bounce_raw)
                     {
                         priv->dma_bounce_raw = bounce_raw;
-                        priv->dma_bounce = (APTR)(((IPTR)bounce_raw + 31) & ~31);
+                        priv->dma_bounce = (APTR)(((IPTR)bounce_raw + 63) & ~63);
                         priv->dma_bounce_size = 65536;
                     }
                     else
