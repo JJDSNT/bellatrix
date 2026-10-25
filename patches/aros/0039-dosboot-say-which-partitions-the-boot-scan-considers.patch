@@ -15,20 +15,11 @@ step it takes; the trace was only switched off.
 
 Diagnostic, and loud. Carried only while that is open.
 ---
---- a/rom/dosboot/bootscan.c
-+++ b/rom/dosboot/bootscan.c
-@@ -4,6 +4,8 @@
-     Desc: Discover all mountable partitions
- */
- 
-+#define DEBUG 1
-+
- #include <string.h>
- #include <stdlib.h>
- 
+diff --git a/rom/dos/internalloadseg_elf.c b/rom/dos/internalloadseg_elf.c
+index a0f5a55036..c70e24a2a8 100644
 --- a/rom/dos/internalloadseg_elf.c
 +++ b/rom/dos/internalloadseg_elf.c
-@@ -59,6 +59,32 @@
+@@ -61,6 +61,32 @@ struct SRBuffer
      APTR    srb_Buffer;
  };
  
@@ -61,7 +52,7 @@ Diagnostic, and loud. Carried only while that is open.
  static int elf_read_block
  (
      BPTR               file,
-@@ -72,6 +98,30 @@
+@@ -74,6 +100,30 @@ static int elf_read_block
  {
      D(bug("[ELF Loader] elf_read_block (offset=%d, size=%d)\n", offset, size));
  
@@ -92,7 +83,7 @@ Diagnostic, and loud. Carried only while that is open.
      if (size <= LOADSEG_SMALL_READ && (offset >= srb->srb_FileOffset) &&
              ((offset + size) <= (srb->srb_FileOffset + srb->srb_Len)) &&
              srb->srb_Buffer != NULL)
-@@ -1734,6 +1784,21 @@
+@@ -1770,6 +1820,21 @@ static BPTR load_seg_elf_int
                                 arena ? &arena_cursor : NULL,
                                 force31 ? MEMF_31BIT : 0, &srb, DOSBase))
                      goto error;
@@ -114,14 +105,14 @@ Diagnostic, and loud. Carried only while that is open.
              }
          }
      }
-@@ -1771,7 +1836,15 @@
-         if ((sh[i].type == SHT_REL || sh[i].type == SHT_RELA) && sh[sh[i].info].addr)
+@@ -1809,7 +1874,15 @@ static BPTR load_seg_elf_int
+         if ((sh[i].type == SHT_REL || sh[i].type == SHT_RELA) && sh[i].size && sh[sh[i].info].addr)
          {
              sh[i].addr = load_block(file, sh[i].offset, sh[i].size, funcarray, &srb, DOSBase);
 -            if (!sh[i].addr || !relocate(&eh, sh, i, symtab_shndx, reloc_out_of_range, DOSBase))
 +            ULONG relt0 = ilsd_now();
-+            int   relok = !sh[i].addr
-+                        || relocate(&eh, sh, i, symtab_shndx,
++            int   relok = sh[i].addr
++                        && relocate(&eh, sh, i, symtab_shndx,
 +                                    reloc_out_of_range, DOSBase);
 +
 +            ilsd_us_reloc += ilsd_now() - relt0;
@@ -131,7 +122,7 @@ Diagnostic, and loud. Carried only while that is open.
                  goto error;
  
              ilsFreeMem(sh[i].addr, sh[i].size);
-@@ -1841,8 +1914,22 @@
+@@ -1897,8 +1970,22 @@ BPTR InternalLoadSeg_ELF
      BOOL reloc_out_of_range = FALSE;
      BPTR seg;
  
@@ -154,3 +145,16 @@ Diagnostic, and loud. Carried only while that is open.
  #if defined(__x86_64__)
      if (!seg && reloc_out_of_range)
      {
+diff --git a/rom/dosboot/bootscan.c b/rom/dosboot/bootscan.c
+index d1715095cf..ac995d7816 100644
+--- a/rom/dosboot/bootscan.c
++++ b/rom/dosboot/bootscan.c
+@@ -4,6 +4,8 @@
+     Desc: Discover all mountable partitions
+ */
+ 
++#define DEBUG 1
++
+ #include <string.h>
+ #include <stdlib.h>
+ 
