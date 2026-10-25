@@ -843,6 +843,56 @@ and overlay yield, pl011bt DT-following, the FAT 2106 date under QEMU,
 `flush_buf` alignment, [ISSUE-0089](ISSUE-0089.md), and `nocomposition`
 on a Pi.
 
+# What is still open after M10 (2026-10-25)
+
+The pin is at master and every milestone passed under QEMU. That is not
+the exit: ISSUE-0069's exit criteria include its acceptance matrix, and the
+hardware column of that matrix has not been run on any milestone. In
+order of weight:
+
+1. **The Pi 3 column of ISSUE-0069's acceptance matrix**, on the M10b
+   build: repeated cold boots and shutdown/reboot; SD (DMA direct and
+   bounced, timeout recovery, stress); timer (wrap-safe long run,
+   `timer.device` deadlines); HVS scanout and VC4 GL render/submit/present;
+   GPU, SD, USB, audio and framebuffer coherency; Bluetooth and WiFi
+   transport, firmware, association and input; FAT/SFS stress and
+   power-cycle recovery.
+2. **Items deferred to a Pi** during the milestones:
+   - boot without `nocomposition` (M10a; `vcgfx` finds an HVS there, QEMU
+     has none);
+   - the HVS4 half of `b1a906ce68` (deferred latch with `LatchWait`) and
+     `ced37ca08f` (take a GL overlay down when something draws over it), M6;
+   - `pl011bt` following the device tree (`73eba4ee38`, `ee2e5812c1`), M7;
+   - `sdcard_bcm2708init.c` `71623f789e` as a candidate for ISSUE-0029's
+     boot-time timeout, M8;
+   - the real SD read rate. Every "SD reads at N KB/s" figure in the
+     milestone results above is the driver's wall-clock report, which
+     divides by the time between reports, idle included: it measures
+     demand, not the card. Device-level under QEMU is about 550 KB/s with
+     Rigel and 1.1 MB/s without, 95% of it inside the SDCMD write that QEMU
+     executes synchronously; the driver's own code is about 30 ms per MB.
+     The number that matters needs `rawbench`/`sdbench` on a Pi.
+3. **Deferred by design, needing work of their own:**
+   - timer `8a8d180631` (arm the tick compare for the head `MICROHZ`
+     request): the compare channel belongs to the platform heartbeat here,
+     so `timer.device` re-arming it needs a design, not a port (M5);
+   - `flush_buf` from `a5e6a6d1c0` is not 32-byte aligned, so FAT's
+     coalesced writes go through the SDHOST bounce buffer (M9);
+   - FAT date 2106-01-01 on files written under QEMU; the likely cause,
+     unconfirmed, is no RTC and a clock before FAT's 1980 epoch (M7);
+   - [ISSUE-0089](ISSUE-0089.md): a task's own signal exception waits for
+     the next tick (M9).
+4. **Housekeeping:**
+   - the SD driver's rate report should print the in-command rate beside
+     the wall-clock one, so it stops reading as card speed;
+   - `tests/gl/sdbench` still reads `mesa3dgl20-0.library`, which no longer
+     exists (fixed only in the `bellatrix-m2a` worktree, uncommitted);
+   - the main tree's `out/` predates M2: its next build reconfigures and
+     rebuilds everything;
+   - our Mesa fixes (`mesa-26.2.5-bellatrix.diff`) are candidates to offer
+     upstream now that the refresh is done, as the owner planned
+     (2026-10-20).
+
 # Read and set aside
 
 These are recorded so the next pass does not re-read them. Everything BCM2712
