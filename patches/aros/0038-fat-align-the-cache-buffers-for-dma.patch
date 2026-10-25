@@ -20,9 +20,11 @@ itself costs 79 ms and the bounce copy costs 4420 ms.
 
 Thirty-one bytes of slack per buffer buys all of them the direct path.
 ---
+diff --git a/rom/filesys/fat/cache.c b/rom/filesys/fat/cache.c
+index cc7e3151fd..dcab7d703c 100644
 --- a/rom/filesys/fat/cache.c
 +++ b/rom/filesys/fat/cache.c
-@@ -113,12 +113,31 @@
+@@ -135,14 +135,34 @@ APTR Cache_CreateCache(APTR priv, ULONG hash_size, ULONG block_count,
  
          for(i = 0; i < block_count && success; i++)
          {
@@ -43,16 +45,19 @@ Thirty-one bytes of slack per buffer buys all of them the direct path.
 +             * through a bounce buffer instead, and that copy is a JITted word
 +             * loop costing fifty-five times the DMA it replaces.
 +             *
-+             * Thirty-one bytes buys all of them the direct path.
++             * Thirty-one bytes buys all of them the direct path. b stays the
++             * allocation's base, which is what Cache_DestroyCache() frees.
 +             */
 +            b = AllocVec(sizeof(struct BlockRange) + 31
                  + (c->block_size << RANGE_SHIFT), MEMF_PUBLIC);
-             b->use_count = 0;
-             b->state = BS_EMPTY;
-             b->num = 0;
--            b->data = (UBYTE *)b + sizeof(struct BlockRange);
-+            b->data = (UBYTE *)((((IPTR)b + sizeof(struct BlockRange)) + 31)
-+                & ~(IPTR)31);
- 
              if(b != NULL)
+             {
+                 b->use_count = 0;
+                 b->state = BS_EMPTY;
+                 b->num = 0;
+-                b->data = (UBYTE *)b + sizeof(struct BlockRange);
++                b->data = (UBYTE *)((((IPTR)b + sizeof(struct BlockRange))
++                    + 31) & ~(IPTR)31);
                  c->blocks[i] = b;
+                 AddTail((struct List *)&c->free_list,
+                     (struct Node *)&b->node2);

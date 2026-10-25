@@ -63,9 +63,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  3 files changed, 14 insertions(+), 11 deletions(-)
 
 diff --git a/rom/filesys/fat/direntry.c b/rom/filesys/fat/direntry.c
+index dc7bc34281..b2e08e5d63 100644
 --- a/rom/filesys/fat/direntry.c
 +++ b/rom/filesys/fat/direntry.c
-@@ -236,11 +236,13 @@
+@@ -236,11 +236,13 @@ LONG GetDirEntryByCluster(struct DirHandle *dh, ULONG cluster,
      /* Start at the start */
      RESET_DIRHANDLE(dh);
  
@@ -82,7 +83,7 @@ diff --git a/rom/filesys/fat/direntry.c b/rom/filesys/fat/direntry.c
          {
              D(bug("[fat] matched starting cluster at entry %ld, returning\n",
                  dh->cur_index));
-@@ -580,10 +582,7 @@
+@@ -588,10 +590,7 @@ void FillDirEntry(struct DirEntry *de, UBYTE attr, ULONG cluster,
  
      /* Little-endian on the way out. Upstream converts these on read
       * (FIRST_FILE_CLUSTER, lock.c) and not on write, which is a no-op on a
@@ -95,9 +96,10 @@ diff --git a/rom/filesys/fat/direntry.c b/rom/filesys/fat/direntry.c
      de->e.entry.first_cluster_hi = AROS_WORD2LE(cluster >> 16);
  
 diff --git a/rom/filesys/fat/ops.c b/rom/filesys/fat/ops.c
+index 5e74f35b7d..6d268f00b1 100644
 --- a/rom/filesys/fat/ops.c
 +++ b/rom/filesys/fat/ops.c
-@@ -595,9 +595,11 @@
+@@ -595,9 +595,11 @@ LONG OpRenameFile(struct ExtFileLock *sdirlock, UBYTE *sname,
       * entries for the new name, just overwrite the name */
  
      /* Make a new entry in the target dir */
@@ -110,11 +112,12 @@ diff --git a/rom/filesys/fat/ops.c b/rom/filesys/fat/ops.c
 +        sde.e.entry.attr | ATTR_ARCHIVE, FIRST_FILE_CLUSTER(&sde),
          &dde, glob)) != 0)
      {
-         ReleaseDirHandle(&ddh, glob);
+         /* The new name could not be made (directory or volume full): keep
 diff --git a/rom/filesys/fat/volume.c b/rom/filesys/fat/volume.c
+index 0a73f413c7..2081e19deb 100644
 --- a/rom/filesys/fat/volume.c
 +++ b/rom/filesys/fat/volume.c
-@@ -599,9 +599,11 @@
+@@ -660,9 +660,11 @@ LONG FormatFATVolume(const UBYTE *name, UWORD len, struct Globals *glob)
      ebpb->bs_bootsig = 0x29;
  
      /* Generate a pseudo-random serial number. Not the original algorithm,
