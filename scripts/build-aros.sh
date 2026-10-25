@@ -64,9 +64,11 @@ FP_STAMP="$BUILD/.bellatrix-frame-pointers"
 # one mesa-<version>-aros.diff per version and selects in configure, and
 # Bellatrix keeps its fixes per version beside them, in
 # aros/workbench/libs/mesa/bellatrix/. A version is only a working choice on
-# this target if a -bellatrix.diff exists for it.
+# this target if a -bellatrix.diff exists for it. Since pin 6f8fbf34ed upstream
+# carries one version, 26.2.5, so there is nothing to choose between until it
+# carries two again:
 #
-#   BELLATRIX_MESAGL=20.0.8 ./scripts/build-aros.sh full
+#   BELLATRIX_MESAGL=26.2.5 ./scripts/build-aros.sh full
 #
 # configure writes the version into make.cfg, so, as with frame pointers, a
 # change can only take effect by reconfiguring; MESAGL_STAMP enforces it.
@@ -651,6 +653,50 @@ if [ -n "$MESA_VERSION" ]; then
               "$MESA_PORTS/mesa-$MESA_VERSION"-*.diff
         mkdir -p "$MESA_PORTS"
         mesa_patches_digest "$MESA_VERSION" > "$stamp"
+    fi
+
+    # A different Mesa version leaves output behind that make never revisits.
+    # Seen on 26.0.0 -> 26.2.5 (ISSUE-0088), three ways:
+    #
+    #   - v3d generates sources into a directory with no version in its name:
+    #     per-generation wrappers that #include Mesa's files by absolute path
+    #     (so they keep including the old tree, still on disk), NIR algebraic
+    #     passes and packet headers made by the old version's generators.
+    #     Nothing depends on the version, so none of it is made again.
+    #   - .d files list headers of the old tree; once that tree is gone, make
+    #     stops with "No rule to make target", and while it is there they
+    #     declare an object up to date against headers it was never built with.
+    #
+    #   - the old version's library stays in the distribution tree under its
+    #     own name (mesa3dgl26-0.library beside mesa3dgl26-2.library), and
+    #     make-sdcard.sh copies the tree: 16 MB of a library nothing opens.
+    #
+    # So on a version change, v3d's generated sources go, every object whose
+    # .d names another version's tree goes, and so does any mesa3dgl library
+    # but this version's. The versioned output directories of the old version
+    # are left alone: nothing builds them and nothing copies them.
+    MESA_BUILT_STAMP="$BUILD/.bellatrix-mesa-built"
+    if [ "$(cat "$MESA_BUILT_STAMP" 2>/dev/null)" != "$MESA_VERSION" ]; then
+        GEN="$BUILD/bin/$TARGET/gen"
+        if [ -f "$MESA_BUILT_STAMP" ]; then
+            echo "[aros] Mesa was $(cat "$MESA_BUILT_STAMP"), now $MESA_VERSION —" \
+                 "dropping output that would outlive the change"
+        fi
+        rm -rf "$GEN/arch/arm-native/soc/broadcom/2708/hidd/v3d"
+        if [ -d "$GEN" ]; then
+            grep -rlE --include='*.d' "Ports/mesa/mesa-[0-9]" "$GEN" 2>/dev/null |
+            while read -r dep; do
+                if grep -oE "Ports/mesa/mesa-[^/]+/" "$dep" |
+                   grep -vqF "Ports/mesa/mesa-$MESA_VERSION/"; then
+                    rm -f "$dep" "${dep%.d}.o"
+                fi
+            done
+        fi
+        mesa_lib="mesa3dgl$(echo "$MESA_VERSION" | cut -d. -f1)-$(echo "$MESA_VERSION" | cut -d. -f2).library"
+        for lib in "$BUILD/bin/$TARGET/AROS/Libs"/mesa3dgl*.library; do
+            [ -e "$lib" ] && [ "$(basename "$lib")" != "$mesa_lib" ] && rm -f "$lib"
+        done
+        echo "$MESA_VERSION" > "$MESA_BUILT_STAMP"
     fi
 fi
 

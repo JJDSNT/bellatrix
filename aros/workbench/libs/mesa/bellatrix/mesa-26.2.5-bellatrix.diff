@@ -1,6 +1,5 @@
-diff -ruN mesa-26.0.0/src/gallium/auxiliary/cso_cache/cso_cache.h mesa-26.0.0.aros/src/gallium/auxiliary/cso_cache/cso_cache.h
---- mesa-26.0.0/src/gallium/auxiliary/cso_cache/cso_cache.h	2026-10-24 14:42:02.821140085 -0300
-+++ mesa-26.0.0.aros/src/gallium/auxiliary/cso_cache/cso_cache.h	2026-10-24 14:42:02.843369524 -0300
+--- mesa-26.2.5/src/gallium/auxiliary/cso_cache/cso_cache.h	2026-10-14 12:12:24.000000000 -0300
++++ mesa-26.2.5.aros/src/gallium/auxiliary/cso_cache/cso_cache.h	2026-10-25 05:56:08.146413024 -0300
 @@ -182,11 +182,17 @@
     const unsigned *ikey = (const unsigned *)key;
     unsigned num_elements = key_size / 4;
@@ -21,9 +20,8 @@ diff -ruN mesa-26.0.0/src/gallium/auxiliary/cso_cache/cso_cache.h mesa-26.0.0.ar
     return hash;
  }
  
-diff -ruN mesa-26.0.0/src/util/ralloc.c mesa-26.0.0.aros/src/util/ralloc.c
---- mesa-26.0.0/src/util/ralloc.c	2026-10-24 14:40:58.298611640 -0300
-+++ mesa-26.0.0.aros/src/util/ralloc.c	2026-10-24 14:41:09.716670989 -0300
+--- mesa-26.2.5/src/util/ralloc.c	2026-10-14 12:12:24.000000000 -0300
++++ mesa-26.2.5.aros/src/util/ralloc.c	2026-10-25 05:56:08.146697128 -0300
 @@ -34,6 +34,7 @@
  #include "util/u_printf.h"
  
@@ -102,3 +100,18 @@ diff -ruN mesa-26.0.0/src/util/ralloc.c mesa-26.0.0.aros/src/util/ralloc.c
  }
  
  void
+--- mesa-26.2.5/src/compiler/nir/nir_opt_varyings.c	2026-10-14 12:12:24.000000000 -0300
++++ mesa-26.2.5.aros/src/compiler/nir/nir_opt_varyings.c	2026-10-25 06:03:57.494153261 -0300
+@@ -3204,7 +3204,11 @@
+  * over the full struct are correct and efficient.
+  * If this assert fires, audit all nir_scalar assignments below.
+  */
+-static_assert(sizeof(dedup_entry) == (sizeof(void *) == 8 ? 48 : 28),
++/* AROS: the m68k ABI aligns pointers and ints to two bytes, so the trailing
++ * bool is padded to 26 bytes rather than 28. The invariant above is the same,
++ * with less padding to keep zeroed. */
++static_assert(sizeof(dedup_entry) == (sizeof(void *) == 8 ? 48 :
++                                      _Alignof(void *) == 2 ? 26 : 28),
+               "dedup_entry layout changed");
+ 
+ static uint32_t
