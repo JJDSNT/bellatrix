@@ -48,6 +48,11 @@ static void FNAME_BCMSDC(SDBusPostIRQInit)(struct sdcard_Bus *bus)
     if (bus->sdcb_IRQHandle)
     {
         bus->sdcb_IOWriteLong(SDHCI_INT_ENABLE, bus->sdcb_IntrMask, bus);
+        /* A card-insert latched for the card already in the slot would have
+           the bus task scan it again, sending it back to idle under whoever
+           is selecting it. Boot detection below covers that card.
+           Upstream 71623f789e, found on EMMC2; the code path is plain SDHCI. */
+        bus->sdcb_IOWriteLong(SDHCI_INT_STATUS, SDHCI_INT_CARD_INSERT | SDHCI_INT_CARD_REMOVE, bus);
         bus->sdcb_IOWriteLong(SDHCI_SIGNAL_ENABLE, bus->sdcb_IntrMask, bus);
     }
 
