@@ -764,7 +764,44 @@ appendix to M9:
   three of our patches touch.
 - There are also m68k-amiga ROM-space and trackdisk changes, and `dosboot`.
 
-M10 records its exact target when it starts.
+M10 is split in two, at the one commit that changes Mesa:
+
+- **M10a — `e9e1f786da`**, the commit before the Mesa update: 98 commits
+  past M9, the compositor and the RAM handler among them.
+- **M10b — `6f8fbf34ed`** (Mesa 26.2.5), then master as found when it
+  starts (`78a6c42c10` at the time of writing). Our Mesa fixes have to be
+  ported to a new `mesa-26.2.5-bellatrix.diff` first, so this half is not a
+  pin bump.
+
+### M10a — result (2026-10-25): done
+
+Pin `e9e1f786da`, 58 numbered patches.
+
+- **`0004` re-anchored**; upstream's dosboot mmakefile now passes `-pz`
+  itself.
+- **`0046` re-anchored** on `b72155e2bb`. `display_LoadViewPorts()` is
+  still the one place above every driver where a bitmap becomes frontmost,
+  so the report stays there: one call in the `ShowViewPorts()` branch, one
+  after the compositor returns a framebuffer.
+- **`0030` retired.** It was a diagnostic for ISSUE-0037, which is closed
+  with its cause found elsewhere (AllocMem(1) under `SIZE_ALIGN=4`), and the
+  RAM handler it instrumented was rewritten upstream (`df6a9f8e40`,
+  `f44a5135a1`).
+- **`nocomposition` is no longer needed.** `b72155e2bb` deleted
+  `DEVS:Monitors/Compositor`, which that argument kept from loading and
+  which left the screen on the Emu68 logo; `AROSMonDrvs` now ignores the
+  word. Booted both ways under QEMU: same desktop. `run.sh`,
+  `make-sdcard.sh` and the release bundle stop passing it (`e292636`).
+  Not yet checked on a Pi, where `vcgfx` finds an HVS and QEMU does not.
+- **Stale output.** The full build left the old `Devs/Monitors/Compositor`
+  from M9 in the dist tree; deleted by hand before making the card.
+- **Forks.** `scripts/upstream-forks.py` reports `pl011bt_init.c` and
+  `sdio_init.c`; both upstream changes are autodoc comments only
+  (`0491d0ad4c`, `561f68cfc1`). Nothing to port.
+- **QEMU.** Desktop; `sdwrite` (three files identical), `gl-info` (Mesa
+  26.0.0, softpipe) and `cpu-usage` pass, no alert or heap report. Free
+  memory on the title bar is about 1 MB lower than M8 (759.79M vs 760.85M),
+  in line with the compositor moving into `gfx.hidd`.
 
 # Read and set aside
 
