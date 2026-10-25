@@ -105,12 +105,23 @@ APTR emu68_DispatchFrame(void)
     emu68_CheckTaskFrame("restore", task, frame);
     if (task->tc_Flags & TF_EXCEPT) {
         ULONG originalPC = *(ULONG *)frame;
-        UBYTE *exceptionFrame = frame - sizeof(ULONG);
+        UWORD originalSR = *(UWORD *)(frame + sizeof(ULONG));
+        UBYTE *exceptionFrame = frame - 2 * sizeof(ULONG);
         unsigned int i;
+        /* Keep signals stable until Exec_Exception() starts. The
+         * cpu_Exception trampoline balances this Disable() on return:
+         * Exec_Exception() restores IDNestCnt around its own loop, so it
+         * never did. */
         Disable();
         if (exceptionFrame <= (UBYTE *)task->tc_SPLower) Alert(AT_DeadEnd | AN_StackProbe);
+        /* Restoring the shifted frame sets USP just past it. Keep the
+         * original CCR and PC there: the exception handler and Enable() may
+         * change comparison flags the interrupted code still needs.
+         * Upstream 4ac3fbc085, for its 66-byte frame; ours is 68. */
         for (i = 0; i < EMU68_TASK_FRAME_SIZE; i++) exceptionFrame[i] = frame[i];
-        *(ULONG *)(exceptionFrame + EMU68_TASK_FRAME_SIZE) = originalPC;
+        *(UWORD *)(exceptionFrame + EMU68_TASK_FRAME_SIZE) = originalSR;
+        *(UWORD *)(exceptionFrame + EMU68_TASK_FRAME_SIZE + 2) = 0;
+        *(ULONG *)(exceptionFrame + EMU68_TASK_FRAME_SIZE + 4) = originalPC;
         *(ULONG *)exceptionFrame = (ULONG)cpu_Exception;
         task->tc_SPReg = exceptionFrame;
         frame = exceptionFrame;

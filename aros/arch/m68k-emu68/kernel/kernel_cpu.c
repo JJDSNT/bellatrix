@@ -27,6 +27,12 @@ asm (
         "       movem.l %d0-%d1/%a0-%a1/%a6,%sp@-\n"
         "       move.l  (4),%a6\n"
         "       jsr     %a6@(-1 * 6 * 11 /* Exception */)\n"
+        /* Balance the Disable() context.c took before shifting the frame;
+         * Exec_Exception() restores IDNestCnt and so never did. */
+        "       jsr     %a6@(-1 * 6 * 21 /* Enable */)\n"
         "       movem.l %sp@+,%d0-%d1/%a0-%a1/%a6\n"
+        /* The interrupted code's CCR, saved by context.c beside its PC. */
+        "       move.w  %sp@+,%ccr\n"
+        "       addq.l  #2,%sp\n" /* skip the padding without touching CCR */
         "       rts\n"
 );
