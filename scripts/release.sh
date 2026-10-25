@@ -306,8 +306,8 @@ QEMU_KERNEL="${KERNEL_NAME%.gz}"
 # the command line does not ask for it. Turning it on here is one edit, and the
 # launchers below say which -- including the part that is not obvious, that the
 # divisor is not optional under QEMU.
-QEMU_BOOTARGS="nocomposition"
-QEMU_RIGEL_BOOTARGS="nocomposition rigel bellatrix.chipdiv=8"
+QEMU_BOOTARGS=""
+QEMU_RIGEL_BOOTARGS="rigel bellatrix.chipdiv=8"
 
 cp "$ROOT/out/images/$BUILT_KERNEL" "$QEMU_STAGE/$QEMU_KERNEL"
 cp "$FIRMWARE/bcm2710-rpi-3-b.dtb"  "$QEMU_STAGE/"
@@ -319,9 +319,6 @@ cat > "$QEMU_STAGE/run.sh" <<'LAUNCHER'
 #!/bin/sh
 # Boot Bellatrix under QEMU. Needs qemu-system-aarch64 (Debian/Ubuntu:
 # qemu-system-arm). Ctrl-A X quits. Anything passed here reaches qemu.
-#
-# nocomposition is not optional yet: with the compositor enabled the boot
-# finishes and the screen never changes.
 #
 # The classic chipset: change the -append line below to
 #     -append "@RIGEL_BOOTARGS@"
@@ -359,9 +356,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-rem nocomposition is not optional yet: with the compositor enabled the boot
-rem finishes and the screen never changes.
-rem
 rem The classic chipset: change the -append line below to
 rem     -append "@RIGEL_BOOTARGS@"
 rem The divisor is not optional under QEMU; README.txt says why.

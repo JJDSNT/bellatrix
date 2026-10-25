@@ -287,7 +287,7 @@ qemu-system-aarch64 \
   -dtb /path/to/bcm2710-rpi-3-b.dtb \
   -initrd bin/emu68-m68k/AROS/aros-emu68-m68k.elf \
   -drive file=sd.img,if=sd,format=raw \
-  -append "nocomposition" \
+  -append "" \
   -serial stdio -display gtk -no-reboot \
   -monitor unix:/tmp/emu68-monitor.sock,server,nowait
 ```
@@ -296,6 +296,13 @@ qemu-system-aarch64 \
 coming out on the terminal; close with `Ctrl-A` `X` in the terminal. Use
 `-display none` when only the log matters -- `screendump` on the monitor
 socket still works headless, which is how the desktop below was captured.
+
+> **Correction (2026-10-25).** What follows is no longer true. Upstream
+> `b72155e2bb` deleted `DEVS:Monitors/Compositor` -- every display now owns a
+> compositor inside `gfx.hidd` -- and `AROSMonDrvs` ignores `NOCOMPOSITION`.
+> At pin `e9e1f786da` a boot without the argument reaches the same desktop as a
+> boot with it (QEMU, ISSUE-0088 M10a). The measurement below is kept as the
+> record of why the argument was the default for two months.
 
 `nocomposition` is still **required** to see anything, and it is not
 `emu68gfx`'s fault -- which is what this file used to guess. Re-measured on

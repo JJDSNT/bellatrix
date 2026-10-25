@@ -201,8 +201,13 @@ chipset interrupts belong to Rigel — and delete `INT_shadow` outright, routing
 `$DFF09A` to Rigel through a generic bus hook. Anything reasoning about who owns
 INTENA/INTREQ should be written against that, not against the current dormancy.
 
-The `nocomposition` boot argument is currently required to see anything on the
-framebuffer.
+`nocomposition` is no longer needed and no longer read. It kept `AROSMonDrvs`
+from starting `DEVS:Monitors/Compositor`, which left the screen on the Emu68
+logo; upstream `b72155e2bb` deleted that program (every display now owns a
+compositor inside `gfx.hidd`). Since pin `e9e1f786da` the default command line
+carries only `rigel`, and older cards that still pass the word boot unchanged.
+A full build that predates the bump can leave the old `Devs/Monitors/Compositor`
+in the dist tree; `AROSMonDrvs` skips it, but delete it rather than ship it.
 
 ## The chipset is a boot argument, not a build option
 

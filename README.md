@@ -77,8 +77,8 @@ the chipset-less machine. Both halves read it, Emu68 for the address map and
 AROS for its memory layout, and both say which one they got on the serial line.
 
 ```
-nocomposition rigel        # cmdline.txt: classic chipset
-nocomposition              # cmdline.txt: no chipset, same card
+rigel                      # cmdline.txt: classic chipset
+                           # cmdline.txt empty: no chipset, same card
 ```
 
 The line is the authority: without the word there is no chipset, whatever the
@@ -308,8 +308,10 @@ Still being brought up:
   choice. Which devices, and why, is what is being worked on now.
 - **Storage.** The card is read correctly, but the driver stumbles once during
   start-up on real hardware and recovers by resetting the controller.
-- **The display path.** `nocomposition` is currently required; with the
-  compositor enabled the boot finishes but the screen never changes.
+- **The display path.** `nocomposition` is no longer needed: the compositor
+  that kept the screen from changing is gone from AROS, and the word is now
+  ignored, so older cards that carry it still boot. Checked under QEMU; not
+  yet on a Pi.
 
 Fifty-five issues are filed under [`AI_context/issues/`](AI_context/issues/),
 with the grep recipes for querying them in

@@ -651,7 +651,8 @@ EOF
     sed -i "s/KERNEL_IMAGE_PLACEHOLDER/$KERNEL_IMAGE.gz/" "$STAGE/config.txt"
 
     # One line, no trailing newline: the firmware hands this to Emu68 as the
-    # boot arguments, and nocomposition is what puts AROS on the screen.
+    # boot arguments. By default it carries only what the machine needs to
+    # know about itself -- the chipset, below.
     #
     # BELLATRIX_CMDLINE_EXTRA appends to it, for arguments a diagnostic run
     # wants and a shipped card must not carry. The ones worth knowing about:
@@ -665,11 +666,12 @@ EOF
     #   BELLATRIX_CMDLINE_EXTRA=mungwall ./scripts/make-sdcard.sh --pack
     #
     #
-    # BELLATRIX_CMDLINE replaces the whole line, for asking whether a default
-    # is still earned. `nocomposition` has been on since emu68gfx was the only
-    # display driver and the software compositor left the screen on the Emu68
-    # logo; with fbgfx and vcgfx in its place that premise wants re-testing,
-    # and a card that cannot be built without the flag cannot test it.
+    # BELLATRIX_CMDLINE replaces the start of the line (it used to default to
+    # `nocomposition`, which kept AROSMonDrvs from starting
+    # DEVS:Monitors/Compositor and so let anything reach the screen; upstream
+    # b72155e2bb deleted that program and AROSMonDrvs now ignores the word, so
+    # the default is empty -- ISSUE-0088, M10a). A card made before that still
+    # carries it, harmlessly.
     #
     # The chipset is a boot argument, read by both halves of the machine:
     # Emu68 builds the classic address map from it (src/machine/options.c) and
@@ -683,11 +685,11 @@ EOF
     if [ "${BELLATRIX_RIGEL:-$(cat "$ROOT/out/images/Emu68.config-rigel" 2>/dev/null || echo 0)}" = 1 ]; then
         RIGEL_BOOTARG=" rigel"
     fi
-    printf '%s%s%s' \
-        "${BELLATRIX_CMDLINE-nocomposition}" \
+    CMDLINE=$(printf '%s%s%s' \
+        "${BELLATRIX_CMDLINE-}" \
         "$RIGEL_BOOTARG" \
-        "${BELLATRIX_CMDLINE_EXTRA:+ $BELLATRIX_CMDLINE_EXTRA}" \
-        > "$STAGE/cmdline.txt"
+        "${BELLATRIX_CMDLINE_EXTRA:+ $BELLATRIX_CMDLINE_EXTRA}")
+    printf '%s' "${CMDLINE# }" > "$STAGE/cmdline.txt"
 fi
 
 # What this card is, written for the same reason config.txt is: a card outlives
