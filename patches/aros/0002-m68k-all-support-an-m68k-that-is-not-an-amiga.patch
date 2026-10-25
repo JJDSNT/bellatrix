@@ -28,7 +28,7 @@ diff --git a/arch/m68k-all/exec/cachecleare.c b/arch/m68k-all/exec/cachecleare.c
 index 5acf106afe..53bc35483b 100644
 --- a/arch/m68k-all/exec/cachecleare.c
 +++ b/arch/m68k-all/exec/cachecleare.c
-@@ -18,6 +18,39 @@
+@@ -18,6 +18,39 @@ extern void AROS_SLIB_ENTRY(CacheClearE_4060,Exec,LVOCacheClearE)(void);
  
  /* See rom/exec/cachecleare.c for documentation */
  
@@ -68,7 +68,7 @@ index 5acf106afe..53bc35483b 100644
  AROS_LH3(void, CacheClearE,
      AROS_LHA(APTR, address, A0),
      AROS_LHA(ULONG, length, D0),
-@@ -28,6 +61,77 @@
+@@ -28,6 +61,77 @@ AROS_LH3(void, CacheClearE,
  
      void (*func)();
  
@@ -167,25 +167,25 @@ index a00cb81280..d90c5a6d4d 100644
          /* We were called from PrepareExecBase. AttnFlags isn't set yet.
           * Do nothing or we would always install 68000 routine.
 diff --git a/arch/m68k-all/exec/dispatch.S b/arch/m68k-all/exec/dispatch.S
-index 5df84810e8..a076fb6ed1 100644
+index b9bf6b3a74..185c62f084 100644
 --- a/arch/m68k-all/exec/dispatch.S
 +++ b/arch/m68k-all/exec/dispatch.S
-@@ -45,6 +45,7 @@ __Dispatch_this:
-         move.l  %d0,%a5
+@@ -47,6 +47,7 @@ __Dispatch_this:
+         move.l  ThisTask(%a6),%a3
  
  2:
 +#ifndef __EMU68__
          tst.b   IDNestCnt(%a6)
          bmi.s   3f
          move.w  #0x4000,0xdff09a
-@@ -52,6 +53,7 @@ __Dispatch_this:
+@@ -54,6 +55,7 @@ __Dispatch_this:
  3:
          move.w  #0xc000,0xdff09a
  4:
 +#endif
-         lea.l   %a5@(66),%a2
-         move.l  %a2,%usp
-         move.l  %a5@+,%sp@-
+         /*
+          * Enter the task through ex_LaunchPoint, as Kickstart's Dispatch()
+          * does: A3 is the task, A5 its saved frame and A6 SysBase. Programs
 diff --git a/arch/m68k-all/exec/mmakefile.src b/arch/m68k-all/exec/mmakefile.src
 index be24b87aaa..07a85d625a 100644
 --- a/arch/m68k-all/exec/mmakefile.src
@@ -271,7 +271,7 @@ index 0000000000..65c9d645e7
 +                     m68k_Exec_ObtainSemaphoreShared);
 +}
 diff --git a/arch/m68k-all/exec/signal_fast.S b/arch/m68k-all/exec/signal_fast.S
-index 3cc604cd63..0de5b0a7b6 100644
+index 5a9e85567e..2b259f9b7c 100644
 --- a/arch/m68k-all/exec/signal_fast.S
 +++ b/arch/m68k-all/exec/signal_fast.S
 @@ -27,7 +27,9 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
@@ -284,9 +284,9 @@ index 3cc604cd63..0de5b0a7b6 100644
          addq.b  #1,IDNestCnt(%a6)
          cmp.l   tc_SigRecvd(%a1),%a0
          bne     .slow
-@@ -79,7 +81,9 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
-         ble.s   .done
-         bset.b  #7,AttnResched+1(%a6)
+@@ -80,7 +82,9 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
+         /* SFF_AttnSwitch is bit 15 of SysFlags: bit 7 of its first byte */
+         bset.b  #7,SysFlags(%a6)
          bne.s   .done
 +#ifndef __EMU68__
          move.w  #0x8004,0xdff09c
@@ -294,7 +294,7 @@ index 3cc604cd63..0de5b0a7b6 100644
          bra.s   .done
  
  .signal_only:
-@@ -87,17 +91,21 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
+@@ -88,17 +92,21 @@ AROS_SLIB_ENTRY(Signal,Exec,54):
  
  .done:
          subq.b  #1,IDNestCnt(%a6)

@@ -637,6 +637,50 @@ Pin `37313d8aa0`, 62 numbered patches.
 - **Records:** [ISSUE-0038](ISSUE-0038.md) (FAT typing). Its endianness
   half is upstream now.
 
+### M7 — result (2026-10-25): done
+
+Pin `b3404fa127`, 59 numbered patches.
+
+- **Exec scheduler (`ba01955a0b`).** This changes four contracts: the
+  scheduler flags move into `SysFlags` at Kickstart's bits (13, 14, 15),
+  interrupt handlers leave through the `ExitIntr()` vector with SysBase
+  pushed, `Schedule()` decides with interrupts masked, and tasks are
+  entered through `ex_LaunchPoint`. Our overrides, which the bump does not
+  reach, were brought along:
+  - `exec/dispatch.S` clears bit 14 with `bclr.b #6`, because
+    `SFF_QuantumClear` is gone. It reloads A3 from `ThisTask` after
+    `emu68_DispatchFrame` and enters through `ex_LaunchPoint`, with the
+    CPU accounting hook still before it.
+  - `Platform_Autovector_Direct` pushes SysBase and jumps through the
+    `ExitIntr()` vector, as upstream's `amiga_irq.c` does. Jumping
+    straight to `Exec_6_ExitIntr` would now pop a saved register as
+    SysBase.
+  - `0002` is re-anchored: its `__EMU68__` guard closes before the
+    `ex_LaunchPoint` entry, which runs everywhere. `0010` applies
+    unchanged.
+- **FAT.** `0006`, `0008` and `0023` are retired: upstream has every
+  conversion they made, checked site by site (`ops.c` 820, 978, 1115;
+  `direntry.c` 241 and 602; `date.c` 30; `volume.c` 672). They no longer
+  reverse-apply only because upstream's form is refined.
+- **`0039`.** Re-anchored around `7a9809157b`, and a bug of its own fixed:
+  the timing wrapper turned "fail if there is no block or relocation
+  fails" into `!addr || relocate()`, which let a failed `load_block()`
+  through.
+- **Forks.** Ported: `h4bthci`'s allocated ready signal, and deciding
+  before `Permit()` (`73eba4ee38`). Deferred: `pl011bt` following the
+  device tree (`73eba4ee38`, `ee2e5812c1`); our m68k `pl011bt` diverged
+  (similarity 0.48) and the change is about which UART and pins the radio
+  gets, so it wants a Pi.
+- **QEMU.** No Software Failure, alert or TLSF report in four boots, plus
+  the following:
+  - `sdwrite`: identical read-back.
+  - `gl-info`: Mesa 26.0.0.
+  - `cpu-usage`: accounting live through the new dispatch path.
+  - SD reads: 176 KB/s.
+  - Files written under QEMU still get FAT date 2106-01-01 after the date
+    series. The likely cause, not confirmed: QEMU has no clock, the system
+    starts in 1978, and that is before FAT's 1980 epoch.
+
 ## M8 — `7a69e65d61` (#1210, 2026-10-18): the rest of October
 
 - **Upstream:** mostly outside this port: network MIDI, mDNS, per-user

@@ -438,7 +438,14 @@ asm (
     "   jsr     Platform_Autovector\n"
     "   tst.w   %d0\n"
     "   beq     0f\n"
-    "   jmp     Exec_6_ExitIntr\n"
+    /* Leave through the ExitIntr() vector with SysBase pushed above the
+     * saved registers, the contract Kickstart's level handlers keep and
+     * upstream's m68k ExitIntr() expects since ba01955a0b: it pops SysBase
+     * first. A program that SetFunction()s ExitIntr() is then called on
+     * every interrupt exit, with the stack it expects. */
+    "   move.l  (4).w,%a6\n"
+    "   move.l  %a6,%sp@-\n"
+    "   jmp     %a6@(-36)\n"
     "0:\n"
     "   movem.l %sp@+,%d0/%d1/%a0/%a1/%a5/%a6\n"
     "   rte\n"
