@@ -578,6 +578,45 @@ instead of building.
   overlay page. Read `ca064a18a5` (E-clock reload) against our timer.
 - **Watch:** 2 KiB system stacks on a JIT that has failed on stack before.
 
+### M6 — result (2026-10-24): done
+
+Pin `37313d8aa0`, 62 numbered patches.
+
+- **FAT.** `0037` is retired in favour of upstream's volume-scaled cache
+  (`efbf24238c`). `0038` is refreshed, with the alignment now inside the
+  allocation check upstream added; the allocation base is still what gets
+  freed. `0023` is re-anchored and retires in M7. Measured: card reads at
+  boot went from 42-47 KB/s to **177 KB/s** (`2048 cmds, 16212 KB`). That
+  is a single run, but the size of the change is not noise. `sdwrite`
+  reads three files back identical.
+- **New `0105`.** GCC 6.5 hits an internal error on `con_handler.c` here
+  ("unable to find a register to spill in class ADDR_REGS"). Upstream
+  grew `CONMain()` past what the m68k address registers hold once `%a6`
+  is a frame pointer. Compiling the file both ways confirmed the cause.
+  The module now omits the frame pointer on m68k.
+- **Stacks (`b76276f7dc`).** Taken: the housekeeper and console.device
+  run on 2 KiB. Measured under load with `cpu-usage`: 164 of 2048 bytes
+  and 332 of 2052.
+- **TLSF O(1) (`6aa1da1cde`).** It applies beside `0007`, `0011` and
+  `0045`. No `[Kernel:TLSF]` report appeared in any M6 boot, including
+  `gl-info`'s 15 MB library load.
+- **Forks.**
+  - Ported: `bcm2708.h` (`2fce860abc`) and `videocore.h` (`eb67886d75`);
+    `vc4gallium`'s six VC4 commits of 2026-09-27, two hunks placed by hand
+    (an ARM `dsb` becomes our `__sync_synchronize()`, and the V3D check
+    reads the device tree's `brcm,vc4-v3d`, which the Pi 3 tree has).
+  - Deferred, both to be checked on a Pi because QEMU has no VC4 overlay:
+    the HVS4 half of `b1a906ce68` (deferred latch with `LatchWait`, which
+    our vcgfx lacks, so vc4gallium's no-wait present still waits inside
+    `vc4_hvs_overlay()`), and `ced37ca08f` (take a GL overlay down when
+    something draws over it, which needs every vcgfx draw path
+    instrumented).
+  - Rejected: `battclock` `28674a157b` (the Pi 5 RTC, and the DS3231 needs
+    an I2C driver this port lacks; the file-backed path is unchanged);
+    `ca064a18a5` (CIA E-clock relatch, not our timer); vcgfx's BCM2712
+    commits; `cf91862a8d` (Pi 5 SDIO).
+- **QEMU.** Desktop, the expected WiFi failures, `gl-info` on Mesa 26.0.0.
+
 ## M7 — `b3404fa127` (#798, 2026-10-08): the exec scheduler, and the hard part
 
 - **Upstream:** `ba01955a0b` *exec: keep the scheduler flags where
