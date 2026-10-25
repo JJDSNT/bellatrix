@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Sat, 24 Oct 2026 22:30:00 -0300
+Subject: [PATCH] console.handler: omit the frame pointer on m68k
+
+CONMain() grew with upstream's line editing and iconify work (e2c97e7c70,
+e736a64e31 and the fixes after them) until GCC 6.5 cannot compile it for
+m68k with %a6 reserved as a frame pointer: "unable to find a register to
+spill in class ADDR_REGS". m68k targets omit frame pointers by default, so
+upstream never meets this; the emu68 target keeps them for backtraces
+(0028). Give them up for this one module, on m68k only. Confirmed by
+compiling con_handler.c both ways with the build's own command line.
+---
+diff --git a/rom/filesys/console_handler/mmakefile.src b/rom/filesys/console_handler/mmakefile.src
+--- a/rom/filesys/console_handler/mmakefile.src
++++ b/rom/filesys/console_handler/mmakefile.src
+@@ -24,6 +24,14 @@
+ OPTIMIZATION_CFLAGS := $(ROM_OPTIMIZATION_CFLAGS)
+ endif
+ 
++# CONMain() is large enough that GCC 6.5 runs out of m68k address registers
++# ("unable to find a register to spill in class ADDR_REGS") once %a6 is kept
++# as a frame pointer. m68k targets omit it by default; a target that keeps it
++# for backtraces gives it up for this module.
++ifeq ($(AROS_TARGET_CPU),m68k)
++USER_CFLAGS += $(CFLAGS_OMIT_FP)
++endif
++
+ %build_module mmake=kernel-fs-con \
+     conffile=con_handler.conf modname=con modtype=handler \
+     files="$(FILES)"
