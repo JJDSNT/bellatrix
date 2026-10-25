@@ -243,23 +243,28 @@ Questions this leaves for the evaluation:
 
 # The plan this opens (owner, 2026-10-25)
 
-1. **Get chipset integration working, testing their AGA core or Rigel.**
-   With their source at hand, the two chipsets can be compared on the same
-   Bellatrix machine: same CPU, same apertures, same core. Their AGA core
+In this order:
+
+1. **Bring their chipset in whole and confirm it works for us.** Their AGA
+   core and its Emu68 glue, integrated into Bellatrix as they integrate it,
+   and run until it is shown working on this machine. Their AGA core
    (`machine/core`) is **GPL-2.0-only**, derived from UAE/WinUAE; a local
    test build is fine, but an Emu68 image that carries it is distributed
    under the GPL-2.0 (MPL-2.0 sec.3.3 allows the combination, and it is what
-   they do). So it would be a separate test build beside Rigel, not the
-   default.
-2. **Later, Musashi on a core for WHDLoad** (route 1, Saiph).
-3. **That core could be the one Emu68 gives the PPC.** Emu68 runs its
-   PowerPC JIT (WarpOS) on core 3 when `ppc_enable` is on
-   (`external/emu68/src/aarch64/start.c:465`). No WarpOS code runs while a
-   WHDLoad game owns the machine, so the two can take turns: when WHDLoad
-   takes over, the PPC is quiesced and Musashi comes up on that core; when
-   the game quits, the reverse. One thing to reconcile: Bellatrix uses core
-   3 today to drain the console (`patches/emu68/0020`) and core 1 is free;
-   the drainer is light and can move.
+   they do). So it is a separate test build beside Rigel, not the default.
+2. **Then find out why the Rigel integration does not work.** With a
+   working reference on the same machine, the comparison is like for like:
+   same CPU, same apertures, same core, one chipset swapped for the other.
+3. **Then improve the system as a whole, and WHDLoad support.** For WHDLoad,
+   Musashi on a core of its own (route 1, Saiph). That core could be the
+   one Emu68 gives the PPC: Emu68 runs its PowerPC JIT (WarpOS) on core 3
+   when `ppc_enable` is on (`external/emu68/src/aarch64/start.c:465`), and
+   no WarpOS code runs while a WHDLoad game owns the machine, so when
+   WHDLoad takes over the PPC is quiesced and Musashi comes up there, and
+   the reverse when the game quits. Bellatrix uses core 3 today to drain the
+   console (`patches/emu68/0020`) and core 1 is free; the drainer is light
+   and can move.
+4. **Later, AGA support in Rigel.**
 
 # Next
 
