@@ -525,6 +525,43 @@ moves the digest.
   `8a8d180631` (tick compare for the head `MICROHZ` request) against our
   `timer/ticks.c`.
 
+### M5 — result (2026-10-24): done
+
+Pin `19ba9b56bc`, 62 numbered patches.
+
+- **The IntETask build blocker.** New patch `0044` keeps the full structure
+  on emu68: `#ifndef __mc68000` becomes "not m68k, or `__EMU68__`", and
+  `ETaskAlertData()` keeps `iet_AlertData`. `0093` is re-anchored inside
+  the gated block. `tests/gl/cpu-usage` (TaskList late in boot) shows real
+  shares, for example input.device 42.84%, the Denise plane task 13.05%
+  and the Exec housekeeper 0.76%. `CPU Time` reads zero, as before: this
+  port fills the share, not `iet_CpuTime`.
+- **`0082` re-anchored.** Upstream starts WirelessManager with `NOGUI`
+  (`278a49ddc4`), and we keep our order. The visible effect is that the
+  Wireless Manager AppIcon is no longer on the desktop; the WiFi
+  preferences program drives the supplicant now. WiFi is still opened at
+  boot.
+- **`7c59bc3f94` taken as is.** It sizes `KrnCreateContext()` by FPU and
+  68080 presence, which is exactly what our `kernel/context.c` saves.
+- **Forks.** usb2otg took upstream's six commits of 2026-09-19 unchanged.
+  The SOF wake is on system timer channel 1, which is free here: our
+  heartbeat uses 3, VideoCore uses 0 and 2, and Emu68 reads only CLO. It
+  also took the `brcm,bcm2835-usb` binding left open by ISSUE-0058 §5.
+  `dwc2emu68` is still the card's default controller.
+- **Deferred, not rejected: `8a8d180631`** (arm the tick compare for the
+  head `MICROHZ` request). Here the compare channel belongs to the
+  platform heartbeat in the kernel, so `timer.device` re-arming it needs a
+  design of its own, not a port inside a bump. Until then a `Delay` waits
+  for the periodic tick, as it always has.
+- **QEMU.** The desktop comes up, with the same expected WiFi failures, SD
+  at 42 KB/s, and `gl-info` on Mesa 26.0.0.
+
+Also found while this ran: the CI toolchain job had been broken since
+`06fd8ad` (2026-08-24), because `build-aros.sh` built the USB drivers even
+for `--toolchain-only`. It is fixed on main, and the release
+`toolchain-8469c4648a37b6a6` is now published, so M4's toolchain downloads
+instead of building.
+
 ## M6 — `37313d8aa0` (#666, 2026-10-03): affinity, TLSF, FAT cache
 
 - **Upstream:** `task.resource` `SetTaskAffinity()` and inherited affinity;
