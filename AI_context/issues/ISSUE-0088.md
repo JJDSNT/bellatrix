@@ -803,6 +803,46 @@ Pin `e9e1f786da`, 58 numbered patches.
   memory on the title bar is about 1 MB lower than M8 (759.79M vs 760.85M),
   in line with the compositor moving into `gfx.hidd`.
 
+### M10b — result (2026-10-25): done; the pin is master
+
+Pin `78a6c42c10`, master on 2026-10-25, through `6f8fbf34ed`; 58 numbered
+patches, none of them touched.
+
+- **Mesa 26.2.5, the only version upstream now carries.** `e9e1f786da`
+  removed `mesa-20.0.8-aros.diff` and `6f8fbf34ed` renamed 26.0.0's, so
+  `--with-mesagl` has nothing to choose between today. Our
+  `mesa-20.0.8-` and `mesa-26.0.0-bellatrix.diff` are retired with them
+  (the decision of 2026-10-20 was to keep a version while upstream does).
+- **`mesa-26.2.5-bellatrix.diff`.** The ralloc and `cso_hash_key` fixes
+  carry over unchanged; their surroundings differ only in whitespace. One
+  new fix: `nir_opt_varyings.c` asserts `sizeof(dedup_entry)` is 28 on
+  32-bit hosts, and the m68k ABI makes it 26 (the trailing `bool` pads to
+  two bytes). The assert guards zeroed padding, which holds with less of
+  it, so it learns the ABI rather than going away.
+- **`vc4gallium.conf`** follows upstream to version 1.3. The rest of the
+  vc4gallium change is in the mmakefile `0079` patches, and applied.
+- **What a Mesa version change leaves behind**, each of which stopped or
+  polluted this build, now handled by `build-aros.sh` (stamp
+  `.bellatrix-mesa-built`):
+  - v3d's generated sources sit in an unversioned directory: wrappers
+    that include the old tree by absolute path, and NIR and packet code
+    made by the old generators;
+  - `.d` files that name the old tree (`No rule to make target` once it is
+    deleted, a false "up to date" while it exists);
+  - the old `mesa3dgl26-0.library` in the distribution tree, 16 MB that
+    `make-sdcard.sh` would copy.
+- **The seven commits after the Mesa update** are AutoDocs, a bound on
+  `Version`'s Resident scan and two build dependencies. No fork touched.
+- **QEMU.** Desktop; `gl-info` reports `Mesa 26.2.5`, softpipe;
+  `sdwrite` (three files identical) and `cpu-usage` pass; no alert or heap
+  report.
+
+With M10b the refresh reaches master. What stays open is recorded above
+and is not part of a pin bump: timer `8a8d180631`, the vcgfx HVS4 latch
+and overlay yield, pl011bt DT-following, the FAT 2106 date under QEMU,
+`flush_buf` alignment, [ISSUE-0089](ISSUE-0089.md), and `nocomposition`
+on a Pi.
+
 # Read and set aside
 
 These are recorded so the next pass does not re-read them. Everything BCM2712
