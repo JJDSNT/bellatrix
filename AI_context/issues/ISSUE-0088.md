@@ -691,6 +691,27 @@ Pin `b3404fa127`, 59 numbered patches.
   [ISSUE-0054](ISSUE-0054.md) and [ISSUE-0065](ISSUE-0065.md). Timer:
   `be37a66e96` (request lists locked, reply outside the lock).
 
+### M8 — result (2026-10-25): done
+
+Pin `7a69e65d61`, and the series applies unchanged (59 patches).
+
+- **Forks.**
+  - Ported:
+    - `bwfm` `bd0d438f7d`: join the BSSID the supplicant picked, which
+      matters in a mesh, and hold the link until the keys are in. One
+      hunk landed with fuzz beside our own trace line.
+    - `usb2otg` `fd3ad20c3a`: arm direct INT as INT on QEMU's DWC2.
+    - `sdcard_bcm2708init.c` `71623f789e`: clear a latched card-insert
+      before enabling its signal. It is plain SDHCI, so our Arasan backend
+      had the same order, and it is a candidate for ISSUE-0029's boot-time
+      timeout, to be confirmed on a Pi.
+  - Rejected: `be37a66e96` (timer request lists locked against other
+    cores; the guest has one), and two documentation-only commits
+    (`595121c85c`, `75659fb32b`).
+- **QEMU.** Desktop; the only failures are WiFi's expected ones (AROSTCP's
+  Syslog line is gone). SD reads at 204 KB/s. `sdwrite`, `gl-info` and
+  `cpu-usage` pass, with no alert or heap report.
+
 ## M9 — `a399fe2fc7` (#1243, 2026-10-19): SD speed and m68k interrupt nesting
 
 - **Upstream:** the rest of `6042b4a8ea` (sdhost in 127-block pieces, equal
