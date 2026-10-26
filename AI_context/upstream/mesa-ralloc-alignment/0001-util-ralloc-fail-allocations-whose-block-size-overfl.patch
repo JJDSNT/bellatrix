@@ -1,0 +1,79 @@
+From 211254fddde0f501c95cf9fac7f4ba19e44cf72f Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 26 Oct 2026 10:07:07 -0300
+Subject: [PATCH 1/2] util/ralloc: fail allocations whose block size overflows
+
+ralloc_size() and resize() computed the block size as
+align64(size + sizeof(ralloc_header), ...) without checking the addition.
+A size near SIZE_MAX wraps it to a small value, and the caller gets a
+block far smaller than it asked for. Compute it in one helper that checks
+for overflow and fails the allocation instead.
+---
+ src/util/ralloc.c | 28 ++++++++++++++++++++++++----
+ 1 file changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/src/util/ralloc.c b/src/util/ralloc.c
+index 5736dd6..a21c491 100644
+--- a/src/util/ralloc.c
++++ b/src/util/ralloc.c
+@@ -31,6 +31,7 @@
+ #include "util/list.h"
+ #include "util/macros.h"
+ #include "util/u_math.h"
++#include "util/u_overflow.h"
+ #include "util/u_printf.h"
+ 
+ #include "ralloc.h"
+@@ -86,6 +87,22 @@ get_header(const void *ptr)
+ 
+ #define PTR_FROM_HEADER(info) (((char *) info) + sizeof(ralloc_header))
+ 
++/* The size of the block holding a header and a payload of the given size,
++ * or 0 if that does not fit in a size_t.
++ */
++static size_t
++block_size(size_t size)
++{
++   size_t total;
++
++   if (util_add_overflow(size_t, size,
++                         sizeof(ralloc_header) + alignof(ralloc_header) - 1,
++                         &total))
++      return 0;
++
++   return total & ~(alignof(ralloc_header) - 1);
++}
++
+ static void
+ add_child(ralloc_header *parent, ralloc_header *info)
+ {
+@@ -115,8 +132,8 @@ ralloc_size(const void *ctx, size_t size)
+     *  - Allocations of a size that rounds up to a multiple of 8 bytes and
+     *    not 16 bytes, are only required to have at least 8 byte alignment.
+     */
+-   void *block = malloc(align64(size + sizeof(ralloc_header),
+-                                alignof(ralloc_header)));
++   size_t total = block_size(size);
++   void *block = likely(total != 0) ? malloc(total) : NULL;
+    ralloc_header *info;
+    ralloc_header *parent;
+ 
+@@ -162,10 +179,13 @@ static void *
+ resize(void *ptr, size_t size)
+ {
+    ralloc_header *child, *old, *info;
++   size_t total = block_size(size);
++
++   if (unlikely(total == 0))
++      return NULL;
+ 
+    old = get_header(ptr);
+-   info = realloc(old, align64(size + sizeof(ralloc_header),
+-                               alignof(ralloc_header)));
++   info = realloc(old, total);
+ 
+    if (info == NULL)
+       return NULL;
+-- 
+2.43.0
+

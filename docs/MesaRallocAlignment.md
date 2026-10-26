@@ -70,7 +70,8 @@ records what came out of it.
 
 ### Upstream
 
-One MR to gitlab.freedesktop.org/mesa/mesa, with two commits:
+One MR to gitlab.freedesktop.org/mesa/mesa, with two commits (kept in
+`AI_context/upstream/mesa-ralloc-alignment/`, with the submission steps):
 
 1. `util/ralloc: fail allocations whose block size overflows`
 2. `util/ralloc: don't assume malloc() aligns beyond max_align_t`, which also
