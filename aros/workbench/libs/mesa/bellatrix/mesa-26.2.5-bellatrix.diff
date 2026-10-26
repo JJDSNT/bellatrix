@@ -190,18 +190,3 @@
  }
  
  void
---- mesa-26.2.5/src/compiler/nir/nir_opt_varyings.c	2026-10-14 12:12:24.000000000 -0300
-+++ mesa-26.2.5.aros/src/compiler/nir/nir_opt_varyings.c	2026-10-25 06:03:57.494153261 -0300
-@@ -3204,7 +3204,11 @@
-  * over the full struct are correct and efficient.
-  * If this assert fires, audit all nir_scalar assignments below.
-  */
--static_assert(sizeof(dedup_entry) == (sizeof(void *) == 8 ? 48 : 28),
-+/* AROS: the m68k ABI aligns pointers and ints to two bytes, so the trailing
-+ * bool is padded to 26 bytes rather than 28. The invariant above is the same,
-+ * with less padding to keep zeroed. */
-+static_assert(sizeof(dedup_entry) == (sizeof(void *) == 8 ? 48 :
-+                                      _Alignof(void *) == 2 ? 26 : 28),
-               "dedup_entry layout changed");
- 
- static uint32_t

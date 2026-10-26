@@ -16,18 +16,17 @@ semantics or weakening the allocator checks.
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/compiler/crt/stdc/malloc.c b/compiler/crt/stdc/malloc.c
-index 93919846ae..ade55164d7 100644
+index bb48c99267..e7a70705e6 100644
 --- a/compiler/crt/stdc/malloc.c
 +++ b/compiler/crt/stdc/malloc.c
-@@ -83,7 +83,7 @@ int __init_memstuff(struct StdCIntBase *StdCBase)
-           FindTask(NULL), StdCBase
-     ));
- 
--    StdCBase->mempool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, 65536L, 4096L);
-+    StdCBase->mempool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, 1024L * 1024L, 4096L);
- 
-     D(bug("[%s] %s: StdCBase->mempool(0x%p)\n", STDCNAME, __func__, StdCBase->mempool));
- 
+@@ -145,7 +145,7 @@ int __init_memstuff(struct StdCIntBase *StdCBase)
+         ctx = AllocMem(sizeof(*ctx), MEMF_PUBLIC | MEMF_CLEAR);
+         if (ctx)
+         {
+-            ctx->pool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, 65536L, 4096L);
++            ctx->pool = CreatePool(MEMF_ANY | MEMF_SEM_PROTECTED, 1024L * 1024L, 4096L);
+             if (ctx->pool)
+             {
+                 ctx->task = me;
 -- 
 2.43.0
-
