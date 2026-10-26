@@ -1,7 +1,8 @@
 # Mesa 26.2.5 ralloc alignment: investigation and agent task
 
 Status: **implemented** in `mesa-26.2.5-bellatrix.diff` (2026-10-26). Verified
-on x86-64 and under QEMU. Not yet run on a Pi. Not yet submitted upstream.
+on x86-64 and under QEMU. Not yet run on a Pi. Offered to AROS as
+[#1869](https://github.com/aros-development-team/AROS/pull/1869) (2026-10-26).
 Scope: `aros/workbench/libs/mesa/bellatrix/mesa-26.2.5-bellatrix.diff`, specifically `src/util/ralloc.c`.
 Goal: replace the Bellatrix-specific workaround with a small, portable, upstreamable fix without breaking ralloc's tree invariants.
 
@@ -69,6 +70,12 @@ records what came out of it.
 - **Pi 3: not run.**
 
 ### Upstream
+
+**Decision (2026-10-26): the fix goes to AROS, not to Mesa.** AROS carries
+its Mesa patches in `workbench/libs/mesa/mesa-26.2.5-aros.diff`, and
+[AROS#1869](https://github.com/aros-development-team/AROS/pull/1869) adds the
+ralloc and `cso_cache.h` hunks there. The Mesa MR below was prepared but is
+not being submitted. Its patches and steps are kept in case that changes.
 
 One MR to gitlab.freedesktop.org/mesa/mesa, with two commits (kept in
 `AI_context/upstream/mesa-ralloc-alignment/`, with the submission steps):

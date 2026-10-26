@@ -837,6 +837,41 @@ patches, none of them touched.
   `sdwrite` (three files identical) and `cpu-usage` pass; no alert or heap
   report.
 
+### M11 — result (2026-10-26): done; the pin is master again
+
+Pin `033a3ac913`, master on 2026-10-26: 31 commits past `78a6c42c10`. The
+series is now 59 numbered patches.
+
+- **Redundancy check** (ISSUE-0058's method): all 58 patches survive
+  `rebase --empty=drop`. None became redundant.
+- **`0058` re-anchored.** `5e23fd2970` (#1809) moved stdc's malloc pool into
+  a per-program context created in a new function. The 1 MiB puddle now
+  applies to that pool's `CreatePool()`. The intent is unchanged.
+  `malloc()` still returns `AllocPooled() + AROS_ALIGN(sizeof(size_t))`, so
+  the ralloc alignment fix is still needed.
+- **New `0106`: upstream does not compile `usergroup.library`.**
+  `39e6db7502` (#1860, merged the same day) put each credential function's
+  `AROS_LHn()` header inside its AutoDoc block and kept the original header
+  below it. Eight functions open twice, and `credential.c` fails with
+  `expected declaration or statement at end of input`. `0106` drops the
+  second header. The same fix is on `JJDSNT:usergroup-credential-headers`,
+  ready to offer upstream.
+- **`mesa-26.2.5-bellatrix.diff`.** `a8c67a0c38` carries upstream's own fix
+  for the m68k `dedup_entry` size, so our `nir_opt_varyings.c` hunk is gone.
+  The ralloc and `cso_cache.h` hunks are offered upstream as
+  [AROS#1869](https://github.com/aros-development-team/AROS/pull/1869). They
+  stay here until it lands, after which the redundancy check of the next
+  bump removes them.
+- **Forks.** `upstream-forks.py` lists only `bwfm_init.c`, for two AutoDoc
+  commits with no code in them. Nothing to port.
+- **Toolchain digest** unchanged; `bcm2708.h` untouched upstream.
+- **QEMU** (`rigel bellatrix.chipdiv=8`):
+  - `gl-info` reports `Mesa 26.2.5`, softpipe, and the desktop follows,
+    with 570.48M free after GL has loaded;
+  - `sdwrite` writes three files that are identical to the originals;
+  - `cpu-usage` prints its task lists;
+  - no alert, guru or assertion.
+
 With M10b the refresh reaches master. What stays open is recorded above
 and is not part of a pin bump: timer `8a8d180631`, the vcgfx HVS4 latch
 and overlay yield, pl011bt DT-following, the FAT 2106 date under QEMU,
@@ -885,13 +920,13 @@ order of weight:
 4. **Housekeeping:**
    - the SD driver's rate report should print the in-command rate beside
      the wall-clock one, so it stops reading as card speed;
-   - `tests/gl/sdbench` still reads `mesa3dgl20-0.library`, which no longer
-     exists (fixed only in the `bellatrix-m2a` worktree, uncommitted);
+   - ~~`tests/gl/sdbench` still reads `mesa3dgl20-0.library`~~ — fixed in
+     M11;
    - the main tree's `out/` predates M2: its next build reconfigures and
      rebuilds everything;
-   - our Mesa fixes (`mesa-26.2.5-bellatrix.diff`) are candidates to offer
-     upstream now that the refresh is done, as the owner planned
-     (2026-10-20).
+   - ~~our Mesa fixes are candidates to offer upstream~~ — done in M11:
+     `nir_opt_varyings.c` is upstream's own now, and ralloc and `cso_cache.h`
+     are [AROS#1869](https://github.com/aros-development-team/AROS/pull/1869).
 
 # Read and set aside
 
