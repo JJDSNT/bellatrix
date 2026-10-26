@@ -1,0 +1,112 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Jaime Dias <jaimejosediasnt@gmail.com>
+Date: Mon, 26 Oct 2026 16:30:00 -0300
+Subject: [PATCH] usergroup: drop the function headers the autodoc duplicated
+
+39e6db7502 (#1860) moved eight credential functions to the AutoDoc
+layout, where the AROS_LHn() header sits inside the documentation block,
+but it left the original AROS_LHn() header below the block as well. Each
+function then opens twice, and credential.c no longer compiles:
+
+    credential.c:973:1: error: expected declaration or statement at end
+    of input
+
+Drop the second header. The one in the documentation block carries the
+same name, arguments and LVO.
+---
+ workbench/libs/usergroup/credential.c | 30 ---------------------------
+ 1 file changed, 30 deletions(-)
+
+diff --git a/workbench/libs/usergroup/credential.c b/workbench/libs/usergroup/credential.c
+index 3f446f9048..86f5438b24 100644
+--- a/workbench/libs/usergroup/credential.c
++++ b/workbench/libs/usergroup/credential.c
+@@ -227,9 +227,6 @@ static struct pcred *crfind(pid_t pid)
+         geteuid(), getgid(), setuid(), setreuid()
+ 
+ ******************************************************************************/
+-
+-AROS_LH0(uid_t, getuid,
+-          struct Library *, UserGroupBase, 8, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecGetUid((struct Library *)UserGroupBase, FALSE);
+@@ -261,9 +258,6 @@ AROS_LH0(uid_t, getuid,
+         getuid(), getegid(), setuid(), setreuid()
+ 
+ ******************************************************************************/
+-
+-AROS_LH0(uid_t, geteuid,
+-          struct Library *, UserGroupBase, 9, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecGetUid((struct Library *)UserGroupBase, TRUE);
+@@ -295,9 +289,6 @@ AROS_LH0(uid_t, geteuid,
+         getegid(), getuid(), setgid(), setregid()
+ 
+ ******************************************************************************/
+-
+-AROS_LH0(gid_t, getgid,
+-          struct Library *, UserGroupBase, 12, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecGetGid((struct Library *)UserGroupBase, FALSE);
+@@ -329,9 +320,6 @@ AROS_LH0(gid_t, getgid,
+         getgid(), geteuid(), setgid(), setregid()
+ 
+ ******************************************************************************/
+-
+-AROS_LH0(gid_t, getegid,
+-          struct Library *, UserGroupBase, 13, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecGetGid((struct Library *)UserGroupBase, TRUE);
+@@ -452,11 +440,6 @@ AROS_LH0(gid_t, getegid,
+         The setreuid() function appeared in 4.2BSD.
+ 
+ ******************************************************************************/
+-
+-AROS_LH2 (int, setreuid,
+-          AROS_LHA(uid_t, ruid, D0),
+-          AROS_LHA(uid_t, euid, D1),
+-          struct UserGroupBase *, UserGroupBase, 10, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecSetReUid((struct Library *)UserGroupBase, ruid, euid);
+@@ -543,10 +526,6 @@ AROS_LH2 (int, setreuid,
+         The setuid() function appeared in Version 6 AT&T UNIX.
+ 
+ ******************************************************************************/
+-
+-AROS_LH1 (int, setuid,
+-          AROS_LHA(uid_t, uid, D0),
+-          struct UserGroupBase *, UserGroupBase, 11, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecSetUid((struct Library *)UserGroupBase, uid);
+@@ -596,11 +575,6 @@ AROS_LH1 (int, setuid,
+         The setregid() function appeared in 4.2BSD.
+ 
+ ******************************************************************************/
+-
+-AROS_LH2 (int, setregid,
+-          AROS_LHA(gid_t, rgid, D0),
+-          AROS_LHA(gid_t, egid, D1),
+-          struct UserGroupBase *, UserGroupBase, 14, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecSetReGid((struct Library *)UserGroupBase, rgid, egid);
+@@ -676,10 +650,6 @@ AROS_LH2 (int, setregid,
+         The setgid() function appeared in Version 6 AT&T UNIX.
+ 
+ ******************************************************************************/
+-
+-AROS_LH1 (int, setgid,
+-          AROS_LHA(gid_t, gid, D0),
+-          struct UserGroupBase *, UserGroupBase, 15, Usergroup)
+ {
+     AROS_LIBFUNC_INIT
+     if (ugSecActive((struct Library *)UserGroupBase)) return ugSecSetGid((struct Library *)UserGroupBase, gid);
+-- 
+2.43.0
+
