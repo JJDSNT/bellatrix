@@ -21,82 +21,172 @@
  }
  
 --- mesa-26.2.5/src/util/ralloc.c	2026-10-14 12:12:24.000000000 -0300
-+++ mesa-26.2.5.aros/src/util/ralloc.c	2026-10-25 05:56:08.146697128 -0300
-@@ -34,6 +34,7 @@
++++ mesa-26.2.5.aros/src/util/ralloc.c	2026-10-26 10:12:25.000000000 -0300
+@@ -23,6 +23,7 @@
+ 
+ #include <assert.h>
+ #include <stdarg.h>
++#include <stddef.h>
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -30,7 +31,9 @@
+ 
+ #include "util/list.h"
+ #include "util/macros.h"
++#include "util/os_memory.h"
+ #include "util/u_math.h"
++#include "util/u_overflow.h"
  #include "util/u_printf.h"
  
  #include "ralloc.h"
-+#include "util/os_memory.h"
+@@ -55,9 +58,14 @@
+ #ifndef NDEBUG
+    /* A canary value used to determine whether a pointer is ralloc'd. */
+    unsigned canary;
+-   unsigned size;
+ #endif
  
- #define CANARY 0x5A1106
- 
-@@ -68,6 +69,12 @@
-    struct ralloc_header *next;
- 
-    void (*destructor)(void *);
++   /* The payload size. resize() needs it where it cannot use realloc(); see
++    * MALLOC_ALIGNS_HEADER. It fills padding the header has anyway, so it
++    * does not make the header bigger on 32- or 64-bit targets.
++    */
++   unsigned size;
 +
-+   /* AROS: the payload size, so resize() can copy without realloc(). The
-+    * header is aligned with alignas(), but malloc() on m68k AROS may hand
-+    * back an address that is 4 modulo 8, so blocks come from
-+    * os_malloc_aligned() instead, and that has no realloc. */
-+   size_t aros_size;
- };
+    struct ralloc_header *parent;
  
- typedef struct ralloc_header ralloc_header;
-@@ -115,8 +122,9 @@
+    /* The first child (head of a linked list) */
+@@ -86,6 +94,54 @@
+ 
+ #define PTR_FROM_HEADER(info) (((char *) info) + sizeof(ralloc_header))
+ 
++/* C11 only promises that malloc() returns memory aligned for max_align_t.
++ * Where that is less than the header's alignment (on m68k it is 2), blocks
++ * come from os_malloc_aligned() instead, and resize() allocates, copies and
++ * frees rather than calling realloc(). Everywhere else this is a constant
++ * true and the aligned path compiles away.
++ */
++#define MALLOC_ALIGNS_HEADER (alignof(max_align_t) >= alignof(ralloc_header))
++
++/* The size of the block holding a header and a payload of the given size,
++ * or 0 if that does not fit in a size_t.
++ */
++static size_t
++block_size(size_t size)
++{
++   size_t total;
++
++   /* The aligned path copies header->size bytes on resize, so the size has
++    * to be representable there.
++    */
++   if (!MALLOC_ALIGNS_HEADER && size != (unsigned) size)
++      return 0;
++
++   if (util_add_overflow(size_t, size,
++                         sizeof(ralloc_header) + alignof(ralloc_header) - 1,
++                         &total))
++      return 0;
++
++   return total & ~(alignof(ralloc_header) - 1);
++}
++
++static ralloc_header *
++block_alloc(size_t total)
++{
++   if (MALLOC_ALIGNS_HEADER)
++      return (ralloc_header *) malloc(total);
++
++   return (ralloc_header *) os_malloc_aligned(total, alignof(ralloc_header));
++}
++
++static void
++block_free(ralloc_header *info)
++{
++   if (MALLOC_ALIGNS_HEADER)
++      free(info);
++   else
++      os_free_aligned(info);
++}
++
+ static void
+ add_child(ralloc_header *parent, ralloc_header *info)
+ {
+@@ -115,8 +171,8 @@
      *  - Allocations of a size that rounds up to a multiple of 8 bytes and
      *    not 16 bytes, are only required to have at least 8 byte alignment.
      */
 -   void *block = malloc(align64(size + sizeof(ralloc_header),
 -                                alignof(ralloc_header)));
-+   void *block = os_malloc_aligned(align64(size + sizeof(ralloc_header),
-+                                           alignof(ralloc_header)),
-+                                   alignof(ralloc_header));
++   size_t total = block_size(size);
++   void *block = likely(total != 0) ? block_alloc(total) : NULL;
     ralloc_header *info;
     ralloc_header *parent;
  
-@@ -133,6 +141,7 @@
+@@ -133,6 +189,7 @@
     info->prev = NULL;
     info->next = NULL;
     info->destructor = NULL;
-+   info->aros_size = size;
++   info->size = size;
  
     parent = ctx != NULL ? get_header(ctx) : NULL;
  
-@@ -164,12 +173,16 @@
+@@ -140,7 +197,6 @@
+ 
+ #ifndef NDEBUG
+    info->canary = CANARY;
+-   info->size = size;
+ #endif
+ 
+    return PTR_FROM_HEADER(info);
+@@ -162,14 +218,30 @@
+ resize(void *ptr, size_t size)
+ {
     ralloc_header *child, *old, *info;
++   size_t total = block_size(size);
++
++   if (unlikely(total == 0))
++      return NULL;
  
     old = get_header(ptr);
 -   info = realloc(old, align64(size + sizeof(ralloc_header),
 -                               alignof(ralloc_header)));
-+   info = os_malloc_aligned(align64(size + sizeof(ralloc_header),
-+                                    alignof(ralloc_header)),
-+                            alignof(ralloc_header));
++
++   if (MALLOC_ALIGNS_HEADER) {
++      info = realloc(old, total);
++   } else {
++      /* The aligned allocator has no realloc() that keeps the old block
++       * when it fails, so copy by hand and free the old block only once
++       * the links below no longer point at it.
++       */
++      info = block_alloc(total);
++      if (info != NULL)
++         memcpy(info, old, sizeof(ralloc_header) + MIN2(old->size, size));
++   }
  
     if (info == NULL)
        return NULL;
  
-+   memcpy(info, old, sizeof(ralloc_header) + MIN2(old->aros_size, size));
-+   info->aros_size = size;
++   info->size = size;
 +
     /* Update parent and sibling's links to the reallocated node. */
     if (info != old && info->parent != NULL) {
        if (info->parent->child == old)
-@@ -186,6 +199,8 @@
+@@ -186,6 +258,9 @@
     for (child = info->child; child != NULL; child = child->next)
        child->parent = info;
  
-+   os_free_aligned(old);
++   if (!MALLOC_ALIGNS_HEADER)
++      block_free(old);
 +
     return PTR_FROM_HEADER(info);
  }
  
-@@ -323,7 +338,7 @@
+@@ -323,7 +398,7 @@
     if (info->destructor != NULL)
        info->destructor(PTR_FROM_HEADER(info));
  
 -   free(info);
-+   os_free_aligned(info);
++   block_free(info);
  }
  
  void
